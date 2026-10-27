@@ -29,7 +29,7 @@ namespace App.ControlPanel.Frames.InstallWizard
         private readonly ComboBox _category = new ComboBox
         {
             Name = "prerequisiteCategory", DropDownStyle = ComboBoxStyle.DropDownList,
-            Width = 310, AccessibleName = "Requirement category"
+            Width = 310, AccessibleName = "Prerequisite view or category"
         };
         private readonly DataGridView _requirements = new DataGridView
         {
@@ -54,12 +54,15 @@ namespace App.ControlPanel.Frames.InstallWizard
         };
         private DeploymentPrerequisiteReport _report;
         private bool _refreshingCategories;
+        private bool _viewChosen;
 
         private sealed class CategoryChoice
         {
+            public string Key { get; }
             public PrerequisiteCategory? Value { get; }
             private readonly string _label;
-            public CategoryChoice(PrerequisiteCategory? value, string label) { Value = value; _label = label; }
+            public CategoryChoice(string key, string label, PrerequisiteCategory? value = null)
+            { Key = key; Value = value; _label = label; }
             public override string ToString() => _label;
         }
 
@@ -121,6 +124,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             _requirements.Columns.Add(Column("Requirement", "Requirement", 45));
             _requirements.Columns.Add(Column("Identity", "Identity / type", 30));
             _requirements.Columns.Add(Column("Workloads", "Needed for", 25));
+            _requirements.Columns.Add(Column("Why", "Why needed", 35));
             _requirements.CurrentCellChanged += Requirements_CurrentCellChanged;
             _layout.Controls.Add(_requirements, 0, 6);
             var detailLayout = new TableLayoutPanel
@@ -192,9 +196,15 @@ namespace App.ControlPanel.Frames.InstallWizard
             _report = DeploymentPrerequisites.Build(config);
             var permissions = _report.Requirements.Count(r => r.Category == PrerequisiteCategory.ApplicationPermissions);
             var resources = _report.Requirements.Count(r => r.Category == PrerequisiteCategory.AzureResources);
-            _summary.Text = $"{_report.Workloads.Count} workloads  |  {permissions} application permissions  |  {resources} resource types";
+            _summary.Text = $"Selected imports: {_report.Workloads.Count}  |  Application permissions: {permissions}  |  Azure resource types: {resources}";
             _selection.Text = _report.Workloads.Count == 0 ? "No workloads selected. Choose workloads to build an import-specific request."
                 : "Selected: " + string.Join(", ", _report.Workloads);
+            _selection.Text += _report.OptionalComponents.Count == 0 ? "\r\nNo Text Analytics, Service Bus or Azure OpenAI add-on is selected."
+                : "\r\nSelected add-on services: " + string.Join("; ", _report.OptionalComponents.Select(c =>
+                    c.Name + (c.CanRemoveWithoutChangingImports ? "" : " (required for Calls)")))
+                + ". Review Selected optional resources to see what could be left out.";
+            if (config.SolutionConfig?.ImportTaskSettings?.Calls == true && !config.ServiceBusEnabled)
+                _selection.Text += "\r\nTeams calls import requires Service Bus, but Service Bus provisioning is currently off.";
             _status.Text = DeploymentPrerequisiteReport.PrivacyNotice;
             RefreshCategories();
             PopulateRequirements();
@@ -203,16 +213,20 @@ namespace App.ControlPanel.Frames.InstallWizard
 
         private void RefreshCategories()
         {
-            var previous = (_category.SelectedItem as CategoryChoice)?.Value;
+            var previous = _viewChosen ? (_category.SelectedItem as CategoryChoice)?.Key : null;
             _refreshingCategories = true;
             _category.BeginUpdate();
             try
             {
                 _category.Items.Clear();
-                _category.Items.Add(new CategoryChoice(null, "All requirements"));
+                if (_report.WorkloadPermissions.Count > 0)
+                    _category.Items.Add(new CategoryChoice("workloads", "Runtime API by workload"));
+                if (_report.OptionalComponents.Count > 0)
+                    _category.Items.Add(new CategoryChoice("optional-resources", "Selected optional resources"));
+                _category.Items.Add(new CategoryChoice("all", "All requirements"));
                 foreach (var category in _report.Requirements.Select(r => r.Category).Distinct().OrderBy(c => c))
-                    _category.Items.Add(new CategoryChoice(category, FilterTitle(category)));
-                _category.SelectedItem = _category.Items.Cast<CategoryChoice>().FirstOrDefault(c => c.Value == previous)
+                    _category.Items.Add(new CategoryChoice("category-" + category, FilterTitle(category), category));
+                _category.SelectedItem = _category.Items.Cast<CategoryChoice>().FirstOrDefault(c => c.Key == previous)
                     ?? _category.Items[0];
             }
             finally
@@ -245,25 +259,69 @@ namespace App.ControlPanel.Frames.InstallWizard
         {
             _requirements.Rows.Clear();
             if (_report == null) return;
-            var category = (_category.SelectedItem as CategoryChoice)?.Value;
-            _categoryHelp.Text = category.HasValue ? DeploymentPrerequisiteReport.CategoryDescription(category.Value)
-                : "Only applicable categories are shown. Each item's 'Who sets this up' separates automatic installer work from approvals and checks. Optional Copilot file, meeting and history features are listed only for the Copilot audit workload.";
-            foreach (var requirement in _report.Requirements.Where(r => !category.HasValue || r.Category == category.Value))
+            var choice = _category.SelectedItem as CategoryChoice;
+            var permissionsView = choice?.Key == "workloads";
+            var optionalView = choice?.Key == "optional-resources";
+            ConfigureColumns(permissionsView, optionalView);
+            if (permissionsView)
             {
-                var name = requirement.Category == PrerequisiteCategory.OptionalEnrichment ? "Optional: " + requirement.Name : requirement.Name;
-                var row = _requirements.Rows.Add(name, requirement.Identity, string.Join(", ", requirement.Workloads));
-                _requirements.Rows[row].Tag = requirement;
+                _categoryHelp.Text = "For each selected import, these are the runtime app's API permissions/connections and the reason it needs them. Graph and Office 365 Management APIs are different audiences. Optional extras are labelled; a 'None' row means no Graph/Activity API application grant, not that the workload needs no setup.";
+                foreach (var permission in _report.WorkloadPermissions)
+                {
+                    var name = permission.Requirement.Category == PrerequisiteCategory.OptionalEnrichment && !permission.NoApplicationGrant
+                        ? "Optional: " + permission.Permission : permission.Permission;
+                    var row = _requirements.Rows.Add(name, permission.ApiAndType, permission.Workload, permission.Why);
+                    _requirements.Rows[row].Tag = permission;
+                }
+            }
+            else if (optionalView)
+            {
+                _categoryHelp.Text = "These add-on services are currently selected. Review what functionality would be lost and where to turn provisioning off. Service Bus is required while Teams calls import is selected. " + DeploymentPrerequisiteReport.RemovalNotice;
+                foreach (var component in _report.OptionalComponents)
+                {
+                    var row = _requirements.Rows.Add(component.Name, component.Status, component.FunctionalityLost, component.HowToRemove);
+                    _requirements.Rows[row].Tag = component;
+                }
+            }
+            else
+            {
+                var category = choice?.Value;
+                _categoryHelp.Text = category.HasValue ? DeploymentPrerequisiteReport.CategoryDescription(category.Value)
+                    : "Only applicable categories are shown. Each item's 'Who sets this up' separates automatic installer work from approvals and checks. Optional Copilot file, meeting and history features are listed only for the Copilot audit workload.";
+                foreach (var requirement in _report.Requirements.Where(r => !category.HasValue || r.Category == category.Value))
+                {
+                    var name = requirement.Category == PrerequisiteCategory.OptionalEnrichment ? "Optional: " + requirement.Name : requirement.Name;
+                    var row = _requirements.Rows.Add(name, requirement.Identity, string.Join(", ", requirement.Workloads));
+                    _requirements.Rows[row].Tag = requirement;
+                }
             }
             if (_requirements.Rows.Count > 0) _requirements.CurrentCell = _requirements.Rows[0].Cells[0];
             ShowSelectedRequirement();
         }
 
+        private void ConfigureColumns(bool permissions, bool optional)
+        {
+            _requirements.Columns["Requirement"].HeaderText = optional ? "Selected component" : permissions ? "Runtime permission" : "Requirement";
+            _requirements.Columns["Identity"].HeaderText = optional ? "Can it be left out?" : permissions ? "API / type" : "Identity / type";
+            _requirements.Columns["Workloads"].HeaderText = optional ? "Functionality lost" : permissions ? "Workload" : "Needed for";
+            _requirements.Columns["Why"].HeaderText = optional ? "What to change" : "Why needed";
+            _requirements.Columns["Why"].Visible = permissions || optional;
+            _requirements.Columns["Requirement"].FillWeight = permissions || optional ? 28 : 45;
+            _requirements.Columns["Identity"].FillWeight = permissions || optional ? 22 : 30;
+            _requirements.Columns["Workloads"].FillWeight = optional ? 30 : permissions ? 22 : 25;
+            _requirements.Columns["Why"].FillWeight = optional ? 30 : 35;
+        }
+
         private void ShowSelectedRequirement()
         {
-            var requirement = _requirements.CurrentRow?.Tag as DeploymentRequirement;
-            _details.Text = requirement?.Details ?? "No requirements in this category for the current selections.";
-            _reference.Enabled = requirement != null;
-            _reference.Tag = requirement?.Reference;
+            var item = _requirements.CurrentRow?.Tag;
+            var requirement = item as DeploymentRequirement;
+            var permission = item as WorkloadPermissionRow;
+            var component = item as OptionalAzureComponent;
+            _details.Text = permission?.Details ?? component?.Details ?? requirement?.Details ?? "No requirements in this category for the current selections.";
+            _reference.Tag = permission?.Requirement.Reference ?? requirement?.Reference
+                ?? (component == null ? null : "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki");
+            _reference.Enabled = _reference.Tag != null;
         }
 
         public void ExportMarkdown(string fileName)
@@ -276,6 +334,7 @@ namespace App.ControlPanel.Frames.InstallWizard
         private void Category_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (_refreshingCategories) return;
+            _viewChosen = true;
             PopulateRequirements();
             UpdateLayoutHeight();
         }

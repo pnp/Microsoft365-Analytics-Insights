@@ -32,17 +32,53 @@ namespace App.ControlPanel.Engine.Prerequisites
         public string Reference { get; internal set; }
         public IReadOnlyList<string> Workloads => _workloads;
         private readonly List<string> _workloads = new List<string>();
+        private readonly Dictionary<string, string> _workloadPurposes = new Dictionary<string, string>();
 
-        internal void AddWorkload(string name)
+        internal void AddWorkload(string name, string purpose)
         {
             if (!_workloads.Contains(name)) _workloads.Add(name);
+            if (!_workloadPurposes.TryGetValue(name, out var existing)) _workloadPurposes.Add(name, purpose);
+            else if (!existing.Contains(purpose)) _workloadPurposes[name] = existing + " " + purpose;
         }
 
-        public string Details => Name + "\r\n\r\nCategory: " + DeploymentPrerequisiteReport.CategoryTitle(Category)
+        public string PurposeFor(string workload) => _workloadPurposes.TryGetValue(workload, out var purpose) ? purpose : Purpose;
+
+        public string Details => DetailsFor(null);
+
+        internal string DetailsFor(string workload) => Name + "\r\n\r\nCategory: " + DeploymentPrerequisiteReport.CategoryTitle(Category)
             + "\r\nIdentity / permission type: " + Identity
-            + "\r\nScope / audience: " + Scope + "\r\nNeeded for: " + string.Join(", ", Workloads)
-            + "\r\n\r\nWhy: " + Purpose + "\r\n\r\nWho sets this up: " + Responsibility
+            + "\r\nScope / audience: " + Scope + "\r\nNeeded for: " + (workload ?? string.Join(", ", Workloads))
+            + "\r\n\r\nWhy: " + (workload == null ? Purpose : PurposeFor(workload)) + "\r\n\r\nWho sets this up: " + Responsibility
             + "\r\n\r\nSetup notes and checks: " + AdminAction;
+    }
+
+    public sealed class WorkloadPermissionRow
+    {
+        public string Workload { get; internal set; }
+        public DeploymentRequirement Requirement { get; internal set; }
+        public bool NoApplicationGrant { get; internal set; }
+        public string Permission => NoApplicationGrant ? "None (Graph / Activity API app-only)" : Requirement.Name;
+        public string ApiAndType => NoApplicationGrant ? "No Graph / Activity API application grant" : Requirement.Identity;
+        public string Why => Requirement.PurposeFor(Workload);
+        public string Need => NoApplicationGrant ? "No app-only grant" :
+            Requirement.Category == PrerequisiteCategory.OptionalEnrichment ? "Optional extra" :
+            Requirement.Category == PrerequisiteCategory.DelegatedConnections ? "Delegated connection" : "Required application permission";
+        public string Details => NoApplicationGrant
+            ? Workload + "\r\n\r\n" + Permission + "\r\nWhy: " + Why + "\r\n\r\nWorkload setup:\r\n" + Requirement.DetailsFor(Workload)
+            : Requirement.DetailsFor(Workload);
+    }
+
+    public sealed class OptionalAzureComponent
+    {
+        public string Id { get; internal set; }
+        public string Name { get; internal set; }
+        public bool CanRemoveWithoutChangingImports { get; internal set; }
+        public string FunctionalityLost { get; internal set; }
+        public string HowToRemove { get; internal set; }
+        public string Status => CanRemoveWithoutChangingImports ? "Optional for base imports" : "Required while Teams calls import is selected";
+        public string Details => Name + "\r\n\r\nCurrently selected in the installer.\r\n" + Status
+            + "\r\n\r\nFunctionality lost: " + FunctionalityLost + "\r\n\r\nHow to leave it out: " + HowToRemove
+            + "\r\n\r\n" + DeploymentPrerequisiteReport.RemovalNotice;
     }
 
     public sealed class DeploymentPrerequisiteReport
@@ -50,11 +86,14 @@ namespace App.ControlPanel.Engine.Prerequisites
         public IReadOnlyList<string> Workloads { get; internal set; }
         public IReadOnlyList<DeploymentRequirement> Requirements { get; internal set; }
         public IReadOnlyList<string> ConfigurationChoices { get; internal set; }
+        public IReadOnlyList<WorkloadPermissionRow> WorkloadPermissions { get; internal set; } = Array.Empty<WorkloadPermissionRow>();
+        public IReadOnlyList<OptionalAzureComponent> OptionalComponents { get; internal set; } = Array.Empty<OptionalAzureComponent>();
 
         public const string ScopeNotice = "Planning guidance, not an access check. Based on the current workload and infrastructure selections. "
             + "No Azure or tenant discovery is performed. Each item distinguishes installer-managed setup from approvals and checks.";
         public const string PrivacyNotice = "Shareable by design: entered names, IDs, addresses, paths and credentials are excluded. "
             + "Administrators must identify the target tenant, apps, resources and scopes separately.";
+        public const string RemovalNotice = "This is a read-only review, not an automatic change. Turning provisioning off does not delete existing Azure resources, revoke existing grants or erase imported data. For an existing deployment, update the runtime configuration and have the resource owner retire unused services separately after checking dependencies.";
 
         public static string CategoryTitle(PrerequisiteCategory category)
         {
@@ -94,6 +133,7 @@ namespace App.ControlPanel.Engine.Prerequisites
         public string ToMarkdown()
         {
             var text = new StringBuilder("# Microsoft 365 Analytics Insights - deployment prerequisites\n\n");
+            text.AppendLine("[Runtime API permissions by workload](#runtime-api-permissions-by-selected-workload) | [Selected optional Azure components](#selected-azure-components-you-could-leave-out)").AppendLine();
             text.AppendLine("## What this document is for").AppendLine();
             text.AppendLine("Microsoft 365 Analytics Insights collects selected Microsoft 365 activity and usage data into an Azure SQL database and presents it in a web portal. A Windows App Service hosts that portal and two background import jobs; Azure Storage keeps checkpoints and connection state, and Application Insights records diagnostics. Optional services are added only when selected.").AppendLine();
             text.AppendLine("Use this document to agree the deployment with the relevant Entra, Azure, network, Exchange, SharePoint and billing owners. It describes the requested end state and who supplies it. It is not a script, an instruction for the recipient to provision everything manually, or evidence that access is already working.").AppendLine();
@@ -119,6 +159,33 @@ namespace App.ControlPanel.Engine.Prerequisites
             text.AppendLine("## Selected workloads").AppendLine();
             if (Workloads.Count == 0) text.AppendLine("No workloads selected. Shared infrastructure below is still part of this installer's deployment.");
             foreach (var workload in Workloads) text.Append("- ").AppendLine(workload);
+            text.AppendLine().AppendLine("## Selected Azure components you could leave out").AppendLine();
+            text.AppendLine("These services can add cost and access requirements even when their extra functionality is not wanted. Only components currently selected in the installer are listed. Service Bus is removable only if Teams calls import is not wanted.").AppendLine();
+            if (OptionalComponents.Count == 0)
+                text.AppendLine("Text Analytics, Service Bus and Azure OpenAI are not selected; there are no selected components from this optional set to review.");
+            else
+            {
+                text.AppendLine("| Selected component | Can it be left out? | Functionality lost | What to change |");
+                text.AppendLine("| --- | --- | --- | --- |");
+                foreach (var component in OptionalComponents)
+                    text.Append("| ").Append(Escape(component.Name)).Append(" | ").Append(Escape(component.Status))
+                        .Append(" | ").Append(Escape(component.FunctionalityLost)).Append(" | ")
+                        .Append(Escape(component.HowToRemove)).AppendLine(" |");
+            }
+            text.AppendLine().AppendLine(RemovalNotice).AppendLine();
+            text.AppendLine("## Runtime API permissions by selected workload").AppendLine();
+            text.AppendLine("This is the runtime app registration's permission list, not the deployment account's Azure roles. Each selected import is listed with the API, permission type and its own reason. Application permissions require admin consent; delegated rows additionally need the connected reader described later. Optional Copilot context/recovery permissions are labelled as extras, not prerequisites for raw audit ingestion. A broader permission already required by another selected import is shown when it covers a narrower one.").AppendLine();
+            if (Workloads.Count == 0) text.AppendLine("No workload imports are selected.");
+            foreach (var workload in Workloads)
+            {
+                text.Append("### ").AppendLine(workload).AppendLine();
+                text.AppendLine("| Runtime permission / connection | API / permission type | Required or optional? | Why this import needs it |");
+                text.AppendLine("| --- | --- | --- | --- |");
+                foreach (var permission in WorkloadPermissions.Where(p => p.Workload == workload))
+                    text.Append("| ").Append(Escape(permission.Permission)).Append(" | ").Append(Escape(permission.ApiAndType))
+                        .Append(" | ").Append(Escape(permission.Need)).Append(" | ").Append(Escape(permission.Why)).AppendLine(" |");
+                text.AppendLine();
+            }
             text.AppendLine().AppendLine("## Access boundaries").AppendLine();
             text.AppendLine("- Application permissions belong to the runtime app registration and require administrator consent. They are not Azure RBAC or user directory roles.");
             text.AppendLine("- Delegated connections also require a signed-in reader with access to the source. Consent does not grant that reader a new role.");
@@ -162,6 +229,21 @@ namespace App.ControlPanel.Engine.Prerequisites
         }
 
         private static string Escape(string value) => value.Replace("|", "\\|").Replace("\r", "").Replace("\n", "<br>");
+
+        internal void BuildWorkloadPermissions()
+        {
+            var rows = new List<WorkloadPermissionRow>();
+            foreach (var workload in Workloads)
+            {
+                var relevant = Requirements.Where(r => r.Workloads.Contains(workload)).ToArray();
+                if (!relevant.Any(r => r.Category == PrerequisiteCategory.ApplicationPermissions))
+                    rows.Add(new WorkloadPermissionRow { Workload = workload, Requirement = relevant.First(), NoApplicationGrant = true });
+                foreach (var requirement in relevant.Where(r => r.Category == PrerequisiteCategory.ApplicationPermissions
+                    || r.Category == PrerequisiteCategory.DelegatedConnections || r.Category == PrerequisiteCategory.OptionalEnrichment))
+                    rows.Add(new WorkloadPermissionRow { Workload = workload, Requirement = requirement });
+            }
+            WorkloadPermissions = rows;
+        }
     }
 
     /// <summary>
@@ -198,11 +280,11 @@ namespace App.ControlPanel.Engine.Prerequisites
             }),
             new WorkloadDefinition(nameof(ImportTaskSettings.GraphUsageReports), "Microsoft 365 usage reports", b =>
             {
-                b.Reports();
+                b.Reports("Read the Microsoft 365 activity reports for Teams, email, SharePoint, OneDrive, Viva Engage and app usage.");
             }),
             new WorkloadDefinition(nameof(ImportTaskSettings.GraphCopilotUsageReports), "Microsoft 365 Copilot usage reports", b =>
             {
-                b.Reports();
+                b.Reports("Read the official Microsoft 365 Copilot user-count summary/trend and per-user usage-detail reports.");
                 b.Check("copilot-reports-licence", "Copilot usage report availability", "Microsoft 365 administrator",
                     "Microsoft 365 global cloud", "The official Copilot usage reports need eligible Copilot licensing and report data; report publication is not immediate.",
                     "Confirm supported cloud, licences and report availability. Enable user inventory separately for licence/organisation context.", GraphReference);
@@ -235,10 +317,11 @@ namespace App.ControlPanel.Engine.Prerequisites
                     "The current Test Configuration checks the Entra Mail.Read token role. If retaining that grant, constrain it with a supported Application Access Policy. Exchange Application RBAC grants are additive: a scoped RBAC assignment does not restrict retained unscoped Entra consent. An RBAC-only alternative requires explicit validation of the importer and its permission checks. Prove allowed and denied mailbox access; never keep tenant-wide consent merely to silence a check.",
                     "https://learn.microsoft.com/exchange/permissions-exo/application-rbac");
             }),
-            new WorkloadDefinition(nameof(ImportTaskSettings.ActivityLog), "SharePoint / OneDrive audit", b => b.Audit(false)),
+            new WorkloadDefinition(nameof(ImportTaskSettings.ActivityLog), "SharePoint / OneDrive audit", b =>
+                b.Audit(false, "Read SharePoint and OneDrive audit events from the Audit.SharePoint content feed.")),
             new WorkloadDefinition(nameof(ImportTaskSettings.Copilot), "Microsoft 365 Copilot audit", b =>
             {
-                b.Audit(false);
+                b.Audit(false, "Read CopilotInteraction audit events from the Audit.General content feed.");
                 b.Add("copilot-file-enrichment", PrerequisiteCategory.OptionalEnrichment, "Sites.Read.All + User.Read.All",
                     Graph, GraphScope, "Resolve accessed SharePoint/OneDrive files and user context. Raw audit interaction import does not require these enrichment grants.",
                     "Request only if file-context enrichment is approved. A /shares driveItem lookup additionally documents Files.ReadWrite.All for app-only access: do not grant tenant-wide write access just to clear enrichment warnings; review that optional path separately.",
@@ -251,10 +334,11 @@ namespace App.ControlPanel.Engine.Prerequisites
                     Graph, GraphScope, "Optional historical Copilot recovery through the Graph audit search path.",
                     "Request only when enabling historical audit backfill in runtime settings. Confirm audit retention/licensing separately; the installer workload toggle alone does not enable every backfill option.", GraphReference);
             }),
-            new WorkloadDefinition(nameof(ImportTaskSettings.ImportPowerPlatform), "Power Platform audit activity", b => b.Audit(false)),
+            new WorkloadDefinition(nameof(ImportTaskSettings.ImportPowerPlatform), "Power Platform audit activity", b =>
+                b.Audit(false, "Read Power Apps, Power Automate, Power BI and Copilot Studio activity from the Audit.General content feed.")),
             new WorkloadDefinition(nameof(ImportTaskSettings.ImportDlp), "Microsoft Purview DLP events", b =>
             {
-                b.Audit(true);
+                b.Audit(true, "Read Microsoft Purview DLP policy events from the separate DLP.All content feed.");
                 b.Check("dlp-licence", "DLP policy and licence coverage", "Purview administrator", "DLP.All feed",
                     "The DLP feed is distinct from general audit and Copilot interaction blocking signals.",
                     "Confirm eligible Purview licensing, active DLP policies and supported locations. This feed is not a Copilot-agent-specific DLP feed.", AuditReference);
@@ -337,9 +421,10 @@ namespace App.ControlPanel.Engine.Prerequisites
             builder.CoverGroupReadPermissions();
             AddSelectedInfrastructure(builder, config, settings);
             AddPlatformChecks(builder, config, settings);
-            return new DeploymentPrerequisiteReport
+            var report = new DeploymentPrerequisiteReport
             {
                 Workloads = selected.Select(w => w.Name).ToArray(),
+                OptionalComponents = SelectedOptionalComponents(config, settings),
                 ConfigurationChoices = new[]
                 {
                     "Environment preset: " + config.EnvironmentType + ". Resource requests are described below; this is not a tenant-size capacity assessment.",
@@ -357,6 +442,39 @@ namespace App.ControlPanel.Engine.Prerequisites
                 },
                 Requirements = builder.Items.OrderBy(r => r.Category).ThenBy(r => r.Name, StringComparer.Ordinal).ToArray()
             };
+            report.BuildWorkloadPermissions();
+            return report;
+        }
+
+        private static IReadOnlyList<OptionalAzureComponent> SelectedOptionalComponents(SolutionInstallConfig config, ImportTaskSettings settings)
+        {
+            var components = new List<OptionalAzureComponent>();
+            if (config.CognitiveServicesEnabled)
+                components.Add(new OptionalAzureComponent
+                {
+                    Id = "language", Name = "Azure AI Language / Text Analytics", CanRemoveWithoutChangingImports = true,
+                    FunctionalityLost = "Azure Language sentiment scoring, detected language and key phrases where used, including sent-email sentiment and Copilot interaction-history prompt analysis. Base import records/statistics can still be collected without those extra scores.",
+                    HowToRemove = "Turn off Language / Text Analytics provisioning on Azure AI. For an existing deployment, also remove or replace its runtime endpoint/credential configuration; do not assume the checkbox deletes or disconnects an existing service."
+                });
+            if (config.ServiceBusEnabled)
+                components.Add(new OptionalAzureComponent
+                {
+                    Id = "service-bus", Name = "Azure Service Bus", CanRemoveWithoutChangingImports = !settings.Calls,
+                    FunctionalityLost = settings.Calls
+                        ? "Teams call-record notification buffering and call-record ingestion. Teams usage reports and Teams deep analytics are separate imports and do not require Service Bus."
+                        : "No loss for the currently selected imports: Teams call-record import is off. Teams usage reports and Teams deep analytics do not require Service Bus. Call-record features would need both Calls and Service Bus enabled later.",
+                    HowToRemove = settings.Calls
+                        ? "First deselect Teams calls / call-records import on Workloads, accepting loss of call-record analytics; then disable Service Bus on Database & storage. Leaving Calls selected without Service Bus is not a working smaller deployment."
+                        : "Teams calls import is not selected. Disable Service Bus on Database & storage if no other externally managed component uses the namespace."
+                });
+            if (config.FoundryPromptEnabled)
+                components.Add(new OptionalAzureComponent
+                {
+                    Id = "openai", Name = "Azure OpenAI account and model deployment", CanRemoveWithoutChangingImports = true,
+                    FunctionalityLost = "Prompt-category classification using the Azure OpenAI backend. Copilot audit collection and non-classification import statistics do not require this resource. Provisioning alone does not turn prompt categorisation on.",
+                    HowToRemove = "Turn off Azure OpenAI provisioning on Azure AI. If prompt categorisation is enabled in the portal/runtime, disable it or configure an approved alternative backend before removing an existing deployment."
+                });
+            return components;
         }
 
         private static void AddSharedRequirements(Builder b, SolutionInstallConfig config)
@@ -644,7 +762,7 @@ namespace App.ControlPanel.Engine.Prerequisites
                     });
                 else if (!item.Purpose.Contains(purpose))
                     item.Purpose += " " + purpose;
-                item.AddWorkload(Workload);
+                item.AddWorkload(Workload, purpose);
             }
 
             private static string DefaultResponsibility(PrerequisiteCategory category)
@@ -683,24 +801,25 @@ namespace App.ControlPanel.Engine.Prerequisites
                 if (!_items.TryGetValue("graph-" + permission, out var item)
                     || !_items.TryGetValue("graph-" + coveringPermission, out var covering)) return;
                 covering.Purpose += " Also covers " + permission + ": " + item.Purpose;
-                foreach (var workload in item.Workloads) covering.AddWorkload(workload);
+                foreach (var workload in item.Workloads)
+                    covering.AddWorkload(workload, coveringPermission + " also covers " + permission + " for this workload: " + item.PurposeFor(workload));
                 _items.Remove(item.Id);
             }
 
-            public void Reports()
+            public void Reports(string purpose)
             {
-                Permission("Reports.Read.All", "Read the selected Microsoft 365 usage-report endpoints; shared by general and Copilot usage reports.");
+                Permission("Reports.Read.All", purpose);
                 Check("report-identities", "Identifiable usage reports", "Microsoft 365 reports administrator",
                     "Microsoft 365 report privacy setting", "Per-person matching needs identifiable user names in report exports.",
                     "Review the tenant-wide setting that conceals user, group and site names before allowing identifiable reports. Do not change it without privacy approval.", GraphReference);
             }
 
-            public void Audit(bool dlp)
+            public void Audit(bool dlp, string purpose)
             {
                 Add(dlp ? "activity-dlp" : "activity-read", PrerequisiteCategory.ApplicationPermissions,
                     dlp ? "ActivityFeed.ReadDlp" : "ActivityFeed.Read", "Office 365 Management APIs - application, admin consent",
                     dlp ? "DLP.All feed / runtime app" : "Audit.SharePoint / Audit.General feeds / runtime app",
-                    dlp ? "DLP is a separate permission; ActivityFeed.Read does not grant it." : "Read the selected Management Activity audit feed; this is not the Microsoft Graph AuditLog.Read.All permission.",
+                    purpose + (dlp ? " ActivityFeed.Read does not grant DLP access." : " This is not the Microsoft Graph AuditLog.Read.All permission."),
                     "Grant the named Office 365 Management APIs application permission with admin consent. Enable unified auditing and confirm the workload's audit/licence coverage; do not assign an Entra administrator role to the runtime app.", AuditReference);
             }
 

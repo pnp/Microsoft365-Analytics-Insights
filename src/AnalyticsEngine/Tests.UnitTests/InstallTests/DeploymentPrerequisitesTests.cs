@@ -38,6 +38,8 @@ namespace Tests.UnitTests.InstallTests
                 Assert.AreEqual(1, report.Workloads.Count, property.Name);
                 Assert.IsTrue(report.Requirements.Any(r => r.Workloads.Contains(report.Workloads[0])),
                     property.Name + " must explain its own access or setup requirements.");
+                Assert.IsTrue(report.WorkloadPermissions.Any(p => p.Workload == report.Workloads[0]
+                    && !string.IsNullOrWhiteSpace(p.Why)), property.Name + " needs a visible per-workload API permission decision.");
             }
         }
 
@@ -104,6 +106,85 @@ namespace Tests.UnitTests.InstallTests
             report = DeploymentPrerequisites.Build(config);
             Assert.IsFalse(report.Requirements.Any(r => r.Name == "GroupMember.Read.All"));
             Assert.AreEqual(2, report.Requirements.Single(r => r.Name == "Group.Read.All").Workloads.Count);
+        }
+
+        [TestMethod]
+        public void PermissionRows_KeepReasonsSpecificToEachImportAndExplainCoveredGrants()
+        {
+            var config = MinimalConfig();
+            config.SolutionConfig.ImportTaskSettings.GraphUsageReports = true;
+            config.SolutionConfig.ImportTaskSettings.GraphCopilotUsageReports = true;
+            config.SolutionConfig.ImportTaskSettings.ActivityLog = true;
+            config.SolutionConfig.ImportTaskSettings.Copilot = true;
+            config.SolutionConfig.ImportTaskSettings.GraphUsersMetadata = true;
+            config.SolutionConfig.ImportTaskSettings.GraphTeams = true;
+            var report = DeploymentPrerequisites.Build(config);
+            var ordinaryReports = report.WorkloadPermissions.Single(p => p.Permission == "Reports.Read.All"
+                && p.Workload == "Microsoft 365 usage reports");
+            var copilotReports = report.WorkloadPermissions.Single(p => p.Permission == "Reports.Read.All"
+                && p.Workload == "Microsoft 365 Copilot usage reports");
+            StringAssert.Contains(ordinaryReports.Why, "email");
+            Assert.IsFalse(ordinaryReports.Why.Contains("Copilot user-count"));
+            StringAssert.Contains(copilotReports.Why, "Copilot user-count");
+            StringAssert.Contains(report.WorkloadPermissions.Single(p => p.Permission == "ActivityFeed.Read"
+                && p.Workload == "SharePoint / OneDrive audit").Why, "Audit.SharePoint");
+            StringAssert.Contains(report.WorkloadPermissions.Single(p => p.Permission == "ActivityFeed.Read"
+                && p.Workload == "Microsoft 365 Copilot audit").Why, "CopilotInteraction");
+            StringAssert.Contains(report.WorkloadPermissions.Single(p => p.Permission == "Directory.Read.All"
+                && p.Workload == "Teams deep analytics").Why, "Group.Read.All");
+            var markdown = report.ToMarkdown();
+            Assert.IsTrue(markdown.IndexOf("## Runtime API permissions by selected workload", StringComparison.Ordinal)
+                < markdown.IndexOf("## Runtime application permissions", StringComparison.Ordinal),
+                "The per-import list must be prominent, not buried in the consolidated categories.");
+        }
+
+        [TestMethod]
+        public void PermissionRows_ExplicitlyShowNoGraphGrantAndSeparateDelegatedAccess()
+        {
+            var config = MinimalConfig();
+            config.SolutionConfig.ImportTaskSettings.WebTraffic = true;
+            config.SolutionConfig.ImportTaskSettings.AzureCostManagement = true;
+            config.SolutionConfig.ImportTaskSettings.CopilotStudioCredits = true;
+            var report = DeploymentPrerequisites.Build(config);
+            Assert.AreEqual(3, report.WorkloadPermissions.Count(p => p.NoApplicationGrant));
+            Assert.IsTrue(report.WorkloadPermissions.Any(p => !p.NoApplicationGrant
+                && p.Requirement.Category == PrerequisiteCategory.DelegatedConnections));
+            StringAssert.Contains(report.WorkloadPermissions.Single(p => p.Workload == "SharePoint page traffic").Why, "no runtime Graph");
+            config.SolutionConfig.ImportTaskSettings.Copilot = true;
+            report = DeploymentPrerequisites.Build(config);
+            Assert.IsTrue(report.WorkloadPermissions.Where(p => p.Workload == "Microsoft 365 Copilot audit")
+                .Any(p => p.Need == "Optional extra" && p.Permission == "OnlineMeetings.Read.All"));
+            Assert.IsFalse(report.Requirements.Any(r => r.Category == PrerequisiteCategory.ApplicationPermissions
+                && r.Name == "OnlineMeetings.Read.All"));
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public void SelectedOptionalResources_ExplainRemovalAndCallsDependencyWithoutChangingSettings(bool calls)
+        {
+            var config = MinimalConfig();
+            config.CognitiveServicesEnabled = true;
+            config.FoundryPromptEnabled = true;
+            config.ServiceBusEnabled = true;
+            config.SolutionConfig.ImportTaskSettings.Calls = calls;
+            var before = config.SolutionConfig.ImportTaskSettings.ToSettingsString();
+            var report = DeploymentPrerequisites.Build(config);
+            Assert.AreEqual(3, report.OptionalComponents.Count);
+            var bus = report.OptionalComponents.Single(c => c.Id == "service-bus");
+            Assert.AreEqual(!calls, bus.CanRemoveWithoutChangingImports);
+            StringAssert.Contains(bus.FunctionalityLost, "call-record");
+            StringAssert.Contains(report.OptionalComponents.Single(c => c.Id == "language").FunctionalityLost, "sentiment");
+            StringAssert.Contains(report.OptionalComponents.Single(c => c.Id == "openai").FunctionalityLost, "Prompt-category");
+            var markdown = report.ToMarkdown();
+            StringAssert.Contains(markdown, "Selected Azure components you could leave out");
+            StringAssert.Contains(markdown, "does not delete existing Azure resources");
+            StringAssert.Contains(markdown, calls ? "First deselect Teams calls" : "Teams calls import is not selected");
+            Assert.AreEqual(before, config.SolutionConfig.ImportTaskSettings.ToSettingsString());
+            Assert.IsTrue(config.CognitiveServicesEnabled && config.FoundryPromptEnabled && config.ServiceBusEnabled);
+            config.CognitiveServicesEnabled = config.ServiceBusEnabled = config.FoundryPromptEnabled = false;
+            Assert.AreEqual(0, DeploymentPrerequisites.Build(config).OptionalComponents.Count,
+                "Only actually selected add-on services belong in the removal review.");
         }
 
         [TestMethod]
@@ -283,8 +364,12 @@ namespace Tests.UnitTests.InstallTests
                     if (scale != 1.0f) page.Font = new Font(page.Font.FontFamily, page.Font.Size * scale);
                     Application.DoEvents();
                     var grid = Find<DataGridView>(page, "prerequisiteRequirements");
-                    Assert.AreEqual(page.Report.Requirements.Count, grid.Rows.Count);
+                    Assert.AreEqual(page.Report.WorkloadPermissions.Count, grid.Rows.Count);
                     var category = Find<ComboBox>(page, "prerequisiteCategory");
+                    Assert.AreEqual("Runtime API by workload", category.SelectedItem.ToString(),
+                        "Runtime permissions must be the initial view when imports are selected.");
+                    Assert.IsTrue(grid.Columns["Why"].Visible);
+                    Assert.IsTrue(grid.Rows.Cast<DataGridViewRow>().All(row => row.Tag is WorkloadPermissionRow));
                     category.SelectedItem = category.Items.Cast<object>().Single(item => item.ToString() == "Application permissions");
                     Assert.IsTrue(category.Width >= category.Items.Cast<object>()
                         .Max(item => TextRenderer.MeasureText(item.ToString(), category.Font).Width) + 20,
@@ -336,6 +421,70 @@ namespace Tests.UnitTests.InstallTests
                         StringAssert.Contains(actual, "Administrator handoff checklist");
                     }
                     finally { if (File.Exists(path)) File.Delete(path); }
+                }
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow(700, 640, 1.0f)]
+        [DataRow(600, 500, 1.0f)]
+        [DataRow(900, 750, 1.5f)]
+        [DataRow(1200, 1000, 2.0f)]
+        public void ResourceAndPermissionViews_ShowSelectedTradeoffsAndReasonsWithoutClipping(int width, int height, float scale)
+        {
+            RunSta(() =>
+            {
+                var config = MinimalConfig();
+                config.ServiceBusEnabled = config.CognitiveServicesEnabled = config.FoundryPromptEnabled = true;
+                config.SolutionConfig.ImportTaskSettings.SentEmails = true;
+                config.SolutionConfig.ImportTaskSettings.Calls = true;
+                using (var page = new DeploymentPrerequisitesControl { Dock = DockStyle.Fill })
+                using (var host = new Form { ClientSize = new Size(width, height), ShowInTaskbar = false })
+                {
+                    page.RefreshConfiguration(config);
+                    host.Controls.Add(page);
+                    host.Show();
+                    if (scale != 1.0f) page.Font = new Font(page.Font.FontFamily, page.Font.Size * scale);
+                    Application.DoEvents();
+                    var views = Find<ComboBox>(page, "prerequisiteCategory");
+                    var grid = Find<DataGridView>(page, "prerequisiteRequirements");
+                    Assert.AreEqual("Runtime API by workload", views.SelectedItem.ToString());
+                    Assert.IsTrue(grid.Rows.Cast<DataGridViewRow>().Any(row =>
+                        (row.Tag as WorkloadPermissionRow)?.Permission == "Mail.Read"));
+                    Assert.IsTrue(grid.Rows.Cast<DataGridViewRow>().All(row => !string.IsNullOrWhiteSpace((string)row.Cells["Why"].Value)));
+                    StringAssert.Contains(Find<Label>(page, "prerequisiteWorkloads").Text, "Azure AI Language");
+                    StringAssert.Contains(Find<Label>(page, "prerequisiteWorkloads").Text, "required for Calls");
+                    var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+                    CaptureView("workload-permissions");
+                    views.SelectedItem = views.Items.Cast<object>().Single(item => item.ToString() == "Selected optional resources");
+                    Assert.AreEqual(3, grid.Rows.Count);
+                    Assert.IsTrue(grid.Rows.Cast<DataGridViewRow>().All(row => row.Tag is OptionalAzureComponent));
+                    var bus = grid.Rows.Cast<DataGridViewRow>().Single(row => ((OptionalAzureComponent)row.Tag).Id == "service-bus");
+                    grid.CurrentCell = bus.Cells[0];
+                    StringAssert.Contains(Find<TextBox>(page, "prerequisiteDetails").Text, "First deselect Teams calls");
+                    StringAssert.Contains(Find<Label>(page, "prerequisiteCategoryHelp").Text, "does not delete");
+                    Assert.IsFalse(page.HorizontalScroll.Visible);
+                    Assert.IsTrue(grid.Height >= 100);
+                    Assert.IsTrue(Find<Label>(page, "prerequisiteCategoryHelp").Height >=
+                        Find<Label>(page, "prerequisiteCategoryHelp").GetPreferredSize(new Size(grid.Width, 0)).Height);
+                    CaptureView("selected-resources");
+                    config.ServiceBusEnabled = config.CognitiveServicesEnabled = config.FoundryPromptEnabled = false;
+                    page.RefreshConfiguration(config);
+                    Assert.AreEqual("Runtime API by workload", views.SelectedItem.ToString());
+                    Assert.IsFalse(views.Items.Cast<object>().Any(item => item.ToString() == "Selected optional resources"));
+                    StringAssert.Contains(Find<Label>(page, "prerequisiteWorkloads").Text, "Service Bus provisioning is currently off");
+
+                    void CaptureView(string name)
+                    {
+                        if (string.IsNullOrEmpty(directory)) return;
+                        page.AutoScrollPosition = Point.Empty;
+                        Application.DoEvents();
+                        using (var image = new Bitmap(host.Width, host.Height))
+                        {
+                            host.DrawToBitmap(image, new Rectangle(Point.Empty, host.Size));
+                            image.Save(Path.Combine(directory, $"prerequisites-{name}-{width}-{scale}.png"));
+                        }
+                    }
                 }
             });
         }
