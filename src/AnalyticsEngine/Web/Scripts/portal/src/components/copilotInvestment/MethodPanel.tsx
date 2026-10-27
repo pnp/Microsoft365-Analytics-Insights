@@ -2,11 +2,12 @@ import { Card, Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableR
 import { formatNumber, useT } from '../../i18n';
 import type { CopilotInvestmentSummary } from '../../types/copilotInvestment';
 import { assumptionDisplay } from './ExecutivePanel';
-import { IMPACT_LABEL_KEYS, SectionHeading, formatShortDate, toneColour, trustText } from './investmentShared';
+import { IMPACT_LABEL_KEYS, SectionHeading, TRUST_AREAS, TRUST_AREA_LABEL_KEYS, TRUST_LEVEL_LABEL_KEYS, formatShortDate, toneColour, trustText } from './investmentShared';
 
 const useStyles = makeStyles({
   stack: { display: 'flex', flexDirection: 'column', gap: '20px' },
   card: { display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px' },
+  area: { display: 'flex', flexDirection: 'column', gap: '8px' },
   formula: {
     fontFamily: tokens.fontFamilyMonospace,
     fontSize: tokens.fontSizeBase200,
@@ -28,6 +29,8 @@ const FORMULA_KEYS = [
   'copilotInvestment.method.formula.roi',
   'copilotInvestment.method.formula.breakEven',
   'copilotInvestment.method.formula.daysPerSeat',
+  'copilotInvestment.method.formula.personBreakEven',
+  'copilotInvestment.method.formula.path',
 ] as const;
 
 const RULE_KEYS = [
@@ -125,20 +128,31 @@ export default function MethodPanel({ summary }: { summary: CopilotInvestmentSum
       </Card>
 
       <Card className={styles.card}>
-        <SectionHeading title={t('copilotInvestment.method.trust')} />
+        <SectionHeading title={t('copilotInvestment.method.trust')} description={t('copilotInvestment.exec.trust.description')} />
         {reasons.length === 0 ? (
           <Text size={200}>{t('copilotInvestment.method.trustEmpty')}</Text>
         ) : (
-          reasons.map(({ reason, text }) => (
-            <div
-              key={reason.code}
-              className={styles.reason}
-              style={{ borderLeftColor: toneColour(reason.impact === 'low' ? 'critical' : reason.impact === 'medium' ? 'warning' : 'neutral') }}
-            >
-              <Text size={100} className={styles.muted}>
-                {t(IMPACT_LABEL_KEYS[reason.impact] ?? 'copilotInvestment.impact.info')}
+          TRUST_AREAS.filter((area) => reasons.some((r) => r.reason.area === area)).map((area) => (
+            <div key={area} className={styles.area}>
+              <Text weight="semibold" size={300}>
+                {t(TRUST_AREA_LABEL_KEYS[area])}
+                {' \u00b7 '}
+                {t(TRUST_LEVEL_LABEL_KEYS[summary.trust.areas.find((a) => a.area === area)?.level ?? 'high'] ?? 'copilotInvestment.exec.trust.level.medium')}
               </Text>
-              <Text size={200}>{text}</Text>
+              {reasons
+                .filter((r) => r.reason.area === area)
+                .map(({ reason, text }) => (
+                  <div
+                    key={reason.code}
+                    className={styles.reason}
+                    style={{ borderLeftColor: toneColour(reason.impact === 'low' ? 'critical' : reason.impact === 'medium' ? 'warning' : 'neutral') }}
+                  >
+                    <Text size={100} className={styles.muted}>
+                      {t(IMPACT_LABEL_KEYS[reason.impact] ?? 'copilotInvestment.impact.info')}
+                    </Text>
+                    <Text size={200}>{text}</Text>
+                  </div>
+                ))}
             </div>
           ))
         )}

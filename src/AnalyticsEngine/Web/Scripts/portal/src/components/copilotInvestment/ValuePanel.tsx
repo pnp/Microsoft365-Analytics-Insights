@@ -22,6 +22,7 @@ import {
   formatMinutes,
   formatMoney,
   formatMultiple,
+  formatMultipleDelta,
   formatShare,
 } from './investmentShared';
 
@@ -62,8 +63,17 @@ export default function ValuePanel({ summary }: { summary: CopilotInvestmentSumm
     return (
       <div className={styles.stack}>
         <Card className={styles.card}>
-          <SectionHeading title={t('copilotInvestment.value.missing.title')} />
-          <Text>{t('copilotInvestment.value.missing.body', { fields: formatList(missing) })}</Text>
+          {value.unavailableReason === 'noMatchedHolders' ? (
+            <>
+              <SectionHeading title={t('copilotInvestment.value.unmatched.title')} />
+              <Text>{t('copilotInvestment.value.unmatched.body')}</Text>
+            </>
+          ) : (
+            <>
+              <SectionHeading title={t('copilotInvestment.value.missing.title')} />
+              <Text>{t('copilotInvestment.value.missing.body', { fields: formatList(missing) })}</Text>
+            </>
+          )}
         </Card>
         <Cohorts summary={summary} />
       </div>
@@ -77,6 +87,12 @@ export default function ValuePanel({ summary }: { summary: CopilotInvestmentSumm
   const realisationOf = (s: InvestmentScenario) => summary.assumptions.values?.realisation[s] ?? null;
   const breakEven = summary.breakEven;
   const sensitivity = summary.sensitivity;
+  const baseRoi = value.scenarios.find((s) => s.scenario === 'base')?.roiMultiple ?? null;
+  // Each lever with how far it moves the base case, so a small move is still visible as a move.
+  const lever = (roi: number | null): string => {
+    const delta = formatMultipleDelta(t, roi, baseRoi);
+    return delta === null ? formatMultiple(t, roi) : t('copilotInvestment.value.levers.delta', { value: formatMultiple(t, roi), delta });
+  };
 
   return (
     <div className={styles.stack}>
@@ -179,19 +195,19 @@ export default function ValuePanel({ summary }: { summary: CopilotInvestmentSumm
           <SectionHeading title={t('copilotInvestment.value.levers.title')} />
           <div className={styles.facts}>
             <Text size={200}>{t('copilotInvestment.value.levers.hourlyMinus')}</Text>
-            <Text weight="semibold">{formatMultiple(t, sensitivity.roiBaseHourlyMinus20)}</Text>
+            <Text weight="semibold">{lever(sensitivity.roiBaseHourlyMinus20)}</Text>
             <Text size={200}>{t('copilotInvestment.value.levers.hourlyPlus')}</Text>
-            <Text weight="semibold">{formatMultiple(t, sensitivity.roiBaseHourlyPlus20)}</Text>
+            <Text weight="semibold">{lever(sensitivity.roiBaseHourlyPlus20)}</Text>
             {sensitivity.roiBaseAfterReclaim !== null && (
               <>
                 <Text size={200}>{t('copilotInvestment.value.levers.afterReclaim')}</Text>
-                <Text weight="semibold">{formatMultiple(t, sensitivity.roiBaseAfterReclaim)}</Text>
+                <Text weight="semibold">{lever(sensitivity.roiBaseAfterReclaim)}</Text>
               </>
             )}
             {sensitivity.roiBaseIfBalancesMonthly !== null && (
               <>
                 <Text size={200}>{t('copilotInvestment.value.levers.ifMonthly')}</Text>
-                <Text weight="semibold">{formatMultiple(t, sensitivity.roiBaseIfBalancesMonthly)}</Text>
+                <Text weight="semibold">{lever(sensitivity.roiBaseIfBalancesMonthly)}</Text>
               </>
             )}
           </div>
@@ -231,6 +247,9 @@ function Cohorts({ summary }: { summary: CopilotInvestmentSummary }) {
   const t = useT();
   const currency = summary.investment.currency;
   const rows = summary.cohorts.filter((c) => c.holders > 0);
+  // A month at a time, like the headline figures, so a 7- or 90-day period reads on the same scale.
+  const months = summary.monthsInWindow > 0 ? summary.monthsInWindow : 1;
+  const monthly = (value: number | null): number | null => (value === null ? null : value / months);
   return (
     <Card className={styles.card}>
       <SectionHeading title={t('copilotInvestment.value.cohorts.title')} description={t('copilotInvestment.value.cohorts.description')} />
@@ -243,7 +262,7 @@ function Cohorts({ summary }: { summary: CopilotInvestmentSummary }) {
             <TableHeaderCell className={styles.num}>{t('copilotInvestment.value.col.medianDays')}</TableHeaderCell>
             <TableHeaderCell className={styles.num}>{t('copilotInvestment.value.col.shareOfDays')}</TableHeaderCell>
             <TableHeaderCell className={styles.num}>{t('copilotInvestment.value.col.cost')}</TableHeaderCell>
-            <TableHeaderCell className={styles.num}>{t('copilotInvestment.org.col.value')}</TableHeaderCell>
+            <TableHeaderCell className={styles.num}>{t('copilotInvestment.value.col.valueMonthly')}</TableHeaderCell>
             <TableHeaderCell className={styles.num}>{t('copilotInvestment.value.col.roi')}</TableHeaderCell>
             <TableHeaderCell className={styles.num}>{t('copilotInvestment.value.col.credits')}</TableHeaderCell>
             <TableHeaderCell className={styles.num}>{t('copilotInvestment.value.col.studio')}</TableHeaderCell>
@@ -257,8 +276,8 @@ function Cohorts({ summary }: { summary: CopilotInvestmentSummary }) {
               <TableCell className={styles.num}>{formatShare(c.shareOfHolders)}</TableCell>
               <TableCell className={styles.num}>{formatDecimal(c.medianActiveDays)}</TableCell>
               <TableCell className={styles.num}>{formatShare(c.shareOfActiveDays)}</TableCell>
-              <TableCell className={styles.num}>{formatMoney(c.cost, currency)}</TableCell>
-              <TableCell className={styles.num}>{formatMoney(c.valueBase, currency)}</TableCell>
+              <TableCell className={styles.num}>{formatMoney(monthly(c.cost), currency)}</TableCell>
+              <TableCell className={styles.num}>{formatMoney(monthly(c.valueBase), currency)}</TableCell>
               <TableCell className={styles.num}>{formatMultiple(t, c.roiBase)}</TableCell>
               <TableCell className={styles.num}>{formatCredits(c.credits)}</TableCell>
               <TableCell className={styles.num}>{formatCredits(c.studioCredits)}</TableCell>

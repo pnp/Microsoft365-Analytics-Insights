@@ -39,7 +39,6 @@ import {
   formatCredits,
   formatDecimal,
   formatMoney,
-  formatMultiple,
   formatShortDate,
 } from './investmentShared';
 
@@ -49,6 +48,12 @@ const SEARCH_DEBOUNCE_MS = 350;
 const useStyles = makeStyles({
   stack: { display: 'flex', flexDirection: 'column', gap: '16px' },
   card: { display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', overflowX: 'auto' },
+  // Wide enough for a sign-in name, scrolling sideways inside the card on a narrow screen rather than overlapping.
+  table: { minWidth: '1080px', tableLayout: 'auto' },
+  personCol: { width: '26%', minWidth: '220px' },
+  personLink: { textAlign: 'start', overflowWrap: 'anywhere' },
+  narrowCol: { width: '88px' },
+  signalCol: { width: '170px' },
   toolbar: { display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' },
   num: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
   flags: { display: 'flex', gap: '4px', flexWrap: 'wrap' },
@@ -62,6 +67,7 @@ const useStyles = makeStyles({
   weeks: { display: 'flex', gap: '3px', alignItems: 'flex-end', height: '44px' },
   week: { flex: '1 1 0', minWidth: '6px', backgroundColor: tokens.colorBrandBackground, borderRadius: '2px' },
   weekEmpty: { backgroundColor: tokens.colorNeutralBackground5 },
+  weekAxis: { display: 'flex', justifyContent: 'space-between' },
   chips: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
   list: { display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) auto', gap: '4px 16px' },
   code: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
@@ -172,7 +178,6 @@ export default function PeoplePanel({ query, filters, onFiltersChange }: {
             <option value="default">{t('copilotInvestment.people.sort.default')}</option>
             <option value="activeDays">{t('copilotInvestment.people.sort.activeDays')}</option>
             <option value="credits">{t('copilotInvestment.people.sort.credits')}</option>
-            <option value="valueToCost">{t('copilotInvestment.people.sort.valueToCost')}</option>
             <option value="gap">{t('copilotInvestment.people.sort.gap')}</option>
             <option value="user">{t('copilotInvestment.people.sort.user')}</option>
           </Select>
@@ -191,20 +196,19 @@ export default function PeoplePanel({ query, filters, onFiltersChange }: {
         ) : page && page.rows.length === 0 ? (
           <Text>{t('copilotInvestment.people.empty')}</Text>
         ) : page ? (
-          <Table size="small" aria-label={t('copilotInvestment.people.title')}>
+          <Table size="small" aria-label={t('copilotInvestment.people.title')} className={styles.table}>
             <TableHeader>
               <TableRow>
-                <TableHeaderCell>{t('copilotInvestment.people.col.person')}</TableHeaderCell>
-                <TableHeaderCell>{t('copilotInvestment.people.col.seat')}</TableHeaderCell>
-                <TableHeaderCell>{t('copilotInvestment.people.col.band')}</TableHeaderCell>
+                <TableHeaderCell className={styles.personCol}>{t('copilotInvestment.people.col.person')}</TableHeaderCell>
+                <TableHeaderCell className={styles.narrowCol}>{t('copilotInvestment.people.col.seat')}</TableHeaderCell>
+                <TableHeaderCell className={styles.narrowCol}>{t('copilotInvestment.people.col.band')}</TableHeaderCell>
                 <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.activeDays')}</TableHeaderCell>
+                <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.need')}</TableHeaderCell>
                 <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.apps')}</TableHeaderCell>
                 <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.cost')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.value')}</TableHeaderCell>
-                <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.ratio')}</TableHeaderCell>
                 <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.credits')}</TableHeaderCell>
                 <TableHeaderCell className={styles.num}>{t('copilotInvestment.people.col.studio')}</TableHeaderCell>
-                <TableHeaderCell>{t('copilotInvestment.people.col.signal')}</TableHeaderCell>
+                <TableHeaderCell className={styles.signalCol}>{t('copilotInvestment.people.col.signal')}</TableHeaderCell>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -212,8 +216,8 @@ export default function PeoplePanel({ query, filters, onFiltersChange }: {
                 const name = row.userPrincipalName ?? String(row.userId);
                 return (
                   <TableRow key={row.userId}>
-                    <TableCell>
-                      <Link as="button" onClick={() => setSelected(row)} aria-label={t('copilotInvestment.people.open', { name })}>
+                    <TableCell className={styles.personCol}>
+                      <Link as="button" className={styles.personLink} onClick={() => setSelected(row)} aria-label={t('copilotInvestment.people.open', { name })}>
                         {name}
                       </Link>
                       {row.department && (
@@ -225,13 +229,12 @@ export default function PeoplePanel({ query, filters, onFiltersChange }: {
                     <TableCell>{t(row.licensed ? 'copilotInvestment.people.seatHeld' : 'copilotInvestment.people.noSeat')}</TableCell>
                     <TableCell>{row.band && BAND_LABEL_KEYS[row.band] ? t(BAND_LABEL_KEYS[row.band]) : '\u2014'}</TableCell>
                     <TableCell className={styles.num}>{formatDecimal(row.activeDaysPerMonth)}</TableCell>
+                    <TableCell className={styles.num}>{formatDecimal(row.breakEvenDaysPerMonth)}</TableCell>
                     <TableCell className={styles.num}>{formatNumber(row.appsUsed)}</TableCell>
                     <TableCell className={styles.num}>{formatMoney(row.cost, currency)}</TableCell>
-                    <TableCell className={styles.num}>{formatMoney(row.valueBase, currency)}</TableCell>
-                    <TableCell className={styles.num}>{row.valueToCostBase === null ? '\u2014' : formatMultiple(t, row.valueToCostBase)}</TableCell>
                     <TableCell className={styles.num}>{formatCredits(row.credits)}</TableCell>
                     <TableCell className={styles.num}>{formatCredits(row.studioCredits)}</TableCell>
-                    <TableCell>
+                    <TableCell className={styles.signalCol}>
                       <div className={styles.flags}>
                         <Badge appearance="tint" color={signalColour(row.signal)}>
                           {SIGNAL_LABEL_KEYS[row.signal] ? t(SIGNAL_LABEL_KEYS[row.signal]) : row.signal}
@@ -342,6 +345,15 @@ function PersonDialog({ query, person, onClose }: { query: InvestmentQuery; pers
                       value={t('copilotInvestment.person.summary.weeksValue', { active: formatNumber(detail.activeWeeks), total: formatNumber(detail.weeks.length) })}
                     />
                     {row.cost !== null && <Figure label={t('copilotInvestment.person.summary.cost')} value={formatMoney(row.cost, currency)} />}
+                    {row.breakEvenDaysPerMonth !== null && (
+                      <Figure
+                        label={t('copilotInvestment.person.summary.need')}
+                        value={t('copilotInvestment.person.summary.needValue', {
+                          need: formatDecimal(row.breakEvenDaysPerMonth),
+                          actual: formatDecimal(row.activeDaysPerMonth),
+                        })}
+                      />
+                    )}
                     {row.valueBase !== null && (
                       <Figure
                         label={t('copilotInvestment.person.summary.value')}
@@ -391,6 +403,17 @@ function PersonDialog({ query, person, onClose }: { query: InvestmentQuery; pers
                         );
                       })}
                     </div>
+                    <div className={styles.weekAxis}>
+                      <Text size={100} className={styles.muted}>
+                        {formatShortDate(detail.weeks[0].weekStart)}
+                      </Text>
+                      <Text size={100} className={styles.muted}>
+                        {formatShortDate(detail.weeks[detail.weeks.length - 1].weekStart)}
+                      </Text>
+                    </div>
+                    <Text size={100} className={styles.muted}>
+                      {t('copilotInvestment.person.weeks.caption')}
+                    </Text>
                   </div>
                 )}
 

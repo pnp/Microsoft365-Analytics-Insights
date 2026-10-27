@@ -11,10 +11,15 @@ import type { InvestmentAction, InvestmentFinding, InvestmentTrustReason } from 
  * `serverAuthoredText.test.ts` rather than shipping as an identifier.
  */
 
-/** Money in the assumptions' currency, in the reader's number conventions. Whole units once it is large. */
+/** Whole units from 100 up, so amounts side by side read alike; cents only where they change the reading. */
+function moneyDigits(value: number): number {
+  return Math.abs(value) >= 100 ? 0 : 2;
+}
+
+/** Money in the assumptions' currency, in the reader's number conventions. */
 export function formatMoney(value: number | null | undefined, currency: string | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '\u2014';
-  const digits = Math.abs(value) >= 1000 ? 0 : 2;
+  const digits = moneyDigits(value);
   if (!currency) return formatNumber(value, { maximumFractionDigits: digits });
   try {
     return formatNumber(value, { style: 'currency', currency, maximumFractionDigits: digits, minimumFractionDigits: digits });
@@ -51,9 +56,33 @@ export function formatDecimal(value: number | null | undefined, digits = 1): str
   return formatNumber(value, { maximumFractionDigits: digits });
 }
 
+/**
+ * A return multiple to two decimals: one decimal hides exactly the movements a reader is weighing - reclaiming
+ * seats moving 0.80x to 0.84x would otherwise read as no change at all.
+ */
 export function formatMultiple(t: TFunction, value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return t('copilotInvestment.value.notAvailable');
-  return t('copilotInvestment.format.multiple', { value: formatNumber(value, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) });
+  return t('copilotInvestment.format.multiple', { value: formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) });
+}
+
+/** The change between two multiples, signed, for "what this lever does to the base case". */
+export function formatMultipleDelta(t: TFunction, value: number | null | undefined, base: number | null | undefined): string | null {
+  if (value === null || value === undefined || base === null || base === undefined || !Number.isFinite(value) || !Number.isFinite(base)) return null;
+  return t('copilotInvestment.format.multiple', {
+    value: formatNumber(value - base, { minimumFractionDigits: 2, maximumFractionDigits: 2, signDisplay: 'exceptZero' }),
+  });
+}
+
+/** Money with its sign shown, for a net figure that can be a surplus or a shortfall. */
+export function formatSignedMoney(value: number | null | undefined, currency: string | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '\u2014';
+  const digits = moneyDigits(value);
+  if (!currency) return formatNumber(value, { maximumFractionDigits: digits, signDisplay: 'exceptZero' });
+  try {
+    return formatNumber(value, { style: 'currency', currency, maximumFractionDigits: digits, minimumFractionDigits: digits, signDisplay: 'exceptZero' });
+  } catch {
+    return `${formatNumber(value, { maximumFractionDigits: digits, signDisplay: 'exceptZero' })}\u00a0${currency}`;
+  }
 }
 
 export function formatMinutes(t: TFunction, value: number | null | undefined): string {
@@ -79,6 +108,8 @@ export const SIGNAL_LABEL_KEYS: Record<string, TranslationKey> = {
   expandCandidate: 'copilotInvestment.signal.expandCandidate',
   metered: 'copilotInvestment.signal.metered',
   observedUnlicensed: 'copilotInvestment.signal.observedUnlicensed',
+  otherPeriod: 'copilotInvestment.signal.otherPeriod',
+  notAnalysed: 'copilotInvestment.signal.notAnalysed',
 };
 
 export const FLAG_LABEL_KEYS: Record<string, TranslationKey> = {
@@ -91,6 +122,11 @@ export const FLAG_LABEL_KEYS: Record<string, TranslationKey> = {
   reclaimExcluded: 'copilotInvestment.flag.reclaimExcluded',
   accountDisabled: 'copilotInvestment.flag.accountDisabled',
   reclaimCandidate: 'copilotInvestment.flag.reclaimCandidate',
+  idleReview: 'copilotInvestment.flag.idleReview',
+  belowBaseBreakEven: 'copilotInvestment.flag.belowBaseBreakEven',
+  expandEvidenced: 'copilotInvestment.flag.expandEvidenced',
+  limitBlockedEvidenced: 'copilotInvestment.flag.limitBlockedEvidenced',
+  meteredAboveSeat: 'copilotInvestment.flag.meteredAboveSeat',
 };
 
 export const BAND_LABEL_KEYS: Record<string, TranslationKey> = {
@@ -186,18 +222,57 @@ export const IMPACT_LABEL_KEYS: Record<string, TranslationKey> = {
   info: 'copilotInvestment.impact.info',
 };
 
-export const DISTRIBUTION_BUCKET_KEYS: Record<string, TranslationKey> = {
-  none: 'copilotInvestment.exec.distribution.bucket.none',
-  '1to2': 'copilotInvestment.exec.distribution.bucket.1to2',
-  '2to5': 'copilotInvestment.exec.distribution.bucket.2to5',
-  '5to10': 'copilotInvestment.exec.distribution.bucket.5to10',
-  '10to15': 'copilotInvestment.exec.distribution.bucket.10to15',
-  '15plus': 'copilotInvestment.exec.distribution.bucket.15plus',
+/** The questions confidence is answered for, in the order the page shows them. */
+export const TRUST_AREAS = ['evidence', 'cost', 'assumptions', 'balances'] as const;
+
+export const TRUST_AREA_LABEL_KEYS: Record<string, TranslationKey> = {
+  evidence: 'copilotInvestment.exec.trust.area.evidence',
+  cost: 'copilotInvestment.exec.trust.area.cost',
+  assumptions: 'copilotInvestment.exec.trust.area.assumptions',
+  balances: 'copilotInvestment.exec.trust.area.balances',
 };
+
+export const TRUST_LEVEL_LABEL_KEYS: Record<string, TranslationKey> = {
+  high: 'copilotInvestment.exec.trust.level.high',
+  medium: 'copilotInvestment.exec.trust.level.medium',
+  low: 'copilotInvestment.exec.trust.level.low',
+};
+
+/** What each action's monthly amount is. `serverAuthoredText.test.ts` keeps this equal to the C# list. */
+export const ACTION_EFFECT_KEYS: Record<string, TranslationKey | null> = {
+  freesSeatCost: 'copilotInvestment.action.effect.freesSeatCost',
+  idleSeatCost: 'copilotInvestment.action.effect.idleSeatCost',
+  valueShortfall: 'copilotInvestment.action.effect.valueShortfall',
+  addsSeatCost: 'copilotInvestment.action.effect.addsSeatCost',
+  balanceIfMonthly: 'copilotInvestment.action.effect.balanceIfMonthly',
+  meteredSpend: 'copilotInvestment.action.effect.meteredSpend',
+  none: null,
+};
+
+/** Why there is no weekly trend. `serverAuthoredText.test.ts` keeps this equal to the C# list. */
+export const TRAJECTORY_UNAVAILABLE_KEYS: Record<string, TranslationKey> = {
+  filtered: 'copilotInvestment.exec.trajectory.filtered',
+  noAudit: 'copilotInvestment.exec.trajectory.noAudit',
+  noData: 'copilotInvestment.exec.trajectory.noData',
+};
+
+/** Why value is not modelled; the page words each differently. */
+export const VALUE_UNAVAILABLE_REASONS = ['assumptions', 'noMatchedHolders'] as const;
+
+/** A distribution bucket's label from its two edges, in the reader's number format. */
+export function bucketLabel(t: TFunction, bucket: { key: string; minDaysPerMonth: number; maxDaysPerMonth: number | null }): string {
+  if (bucket.key === 'none') return t('copilotInvestment.exec.distribution.bucket.none');
+  if (bucket.maxDaysPerMonth === null) return t('copilotInvestment.exec.distribution.bucket.over', { min: formatDecimal(bucket.minDaysPerMonth) });
+  return t('copilotInvestment.exec.distribution.bucket.range', {
+    min: formatDecimal(bucket.minDaysPerMonth),
+    max: formatDecimal(bucket.maxDaysPerMonth),
+  });
+}
 
 /** Every action code the calculator can send. `serverAuthoredText.test.ts` keeps this equal to the C# list. */
 export const ACTION_CODES = [
   'reclaimIdle',
+  'reviewIdle',
   'enableBelowBreakEven',
   'enableLightEvidence',
   'expandEvidenced',
@@ -223,6 +298,8 @@ export const FINDING_CODES = [
   'assumptionsMissing',
   'balancesUnverified',
   'studioTrend',
+  'trajectory',
+  'noMatchedHolders',
   'noSeats',
 ] as const;
 
@@ -236,6 +313,7 @@ export const TRUST_CODES = [
   'assumptionsMissing',
   'assumptionsUnavailable',
   'scenarioApplied',
+  'assumedTimeValue',
   'seatsCurrentAssignments',
   'balancesUnverified',
   'creditCoverage',
@@ -243,8 +321,10 @@ export const TRUST_CODES = [
   'creditsPartial',
   'creditsUnresolved',
   'creditsMissing',
+  'creditsUnavailable',
   'shortWindow',
   'studioImportFailed',
+  'studioUnavailable',
 ] as const;
 
 function n(values: Record<string, number | null>, name: string): number | null {
@@ -288,6 +368,8 @@ export function findingText(t: TFunction, finding: InvestmentFinding, currency: 
     }
     case 'assumptionsMissing':
       return t('copilotInvestment.finding.assumptionsMissing', { count: count(n(v, 'missing')) });
+    case 'noMatchedHolders':
+      return t('copilotInvestment.finding.noMatchedHolders', { otherPeriod: count(n(v, 'otherPeriod')), notAnalysed: count(n(v, 'notAnalysed')) });
     case 'idleSeats':
       return (n(v, 'reclaimable') ?? 0) > 0 && n(v, 'monthly') !== null && n(v, 'roiAfter') !== null
         ? t('copilotInvestment.finding.idleSeatsReclaim', {
@@ -296,8 +378,16 @@ export function findingText(t: TFunction, finding: InvestmentFinding, currency: 
             reclaimable: count(n(v, 'reclaimable')),
             monthly: money('monthly'),
             roiAfter: formatMultiple(t, n(v, 'roiAfter')),
+            review: count(n(v, 'review')),
           })
-        : t('copilotInvestment.finding.idleSeats', { idle: count(n(v, 'idle')), share: formatShare(n(v, 'share')) });
+        : (n(v, 'tooNew') ?? 0) === 0
+          ? t('copilotInvestment.finding.idleSeatsNoneNew', { idle: count(n(v, 'idle')), share: formatShare(n(v, 'share')), review: count(n(v, 'review')) })
+          : t('copilotInvestment.finding.idleSeats', {
+              idle: count(n(v, 'idle')),
+              share: formatShare(n(v, 'share')),
+              review: count(n(v, 'review')),
+              tooNew: count(n(v, 'tooNew')),
+            });
     case 'evidenceConcentration':
       return t('copilotInvestment.finding.evidenceConcentration', { topFraction: formatShare(n(v, 'topFraction')), topShare: formatShare(n(v, 'topShare')) });
     case 'creditConcentration':
@@ -307,21 +397,43 @@ export function findingText(t: TFunction, finding: InvestmentFinding, currency: 
         consumers: count(n(v, 'consumers')),
       });
     case 'highSpendThinEvidence':
-      return t('copilotInvestment.finding.highSpendThinEvidence', { people: count(n(v, 'people')), credits: formatCredits(n(v, 'credits')) });
+      return n(v, 'people') === 1
+        ? t('copilotInvestment.finding.highSpendThinEvidenceOne', { credits: formatCredits(n(v, 'credits')) })
+        : t('copilotInvestment.finding.highSpendThinEvidence', { people: count(n(v, 'people')), credits: formatCredits(n(v, 'credits')) });
     case 'expandCandidates':
-      return n(v, 'evidenced') === 1
-        ? t('copilotInvestment.finding.expandEvidenced', { people: count(n(v, 'people')), monthly: money('monthly') })
+      if (n(v, 'evidenced') === 1)
+        return n(v, 'people') === 1
+          ? t('copilotInvestment.finding.expandEvidencedOne', { monthly: money('monthly') })
+          : t('copilotInvestment.finding.expandEvidenced', { people: count(n(v, 'people')), monthly: money('monthly') });
+      return n(v, 'people') === 1
+        ? t('copilotInvestment.finding.expandRecommendedOne')
         : t('copilotInvestment.finding.expandRecommended', { people: count(n(v, 'people')) });
     case 'limitBlocked':
-      return t('copilotInvestment.finding.limitBlocked', { people: count(n(v, 'people')), evidenced: count(n(v, 'evidenced')) });
-    case 'studioTrend':
-      return (n(v, 'prior') ?? 0) > 0
+      if (n(v, 'people') === 1)
+        return (n(v, 'evidenced') ?? 0) > 0 ? t('copilotInvestment.finding.limitBlockedOneEvidenced') : t('copilotInvestment.finding.limitBlockedOneThin');
+      if ((n(v, 'evidenced') ?? 0) === 0) return t('copilotInvestment.finding.limitBlockedNoneEvidenced', { people: count(n(v, 'people')) });
+      return n(v, 'evidenced') === 1
+        ? t('copilotInvestment.finding.limitBlockedOneOfThem', { people: count(n(v, 'people')) })
+        : t('copilotInvestment.finding.limitBlocked', { people: count(n(v, 'people')), evidenced: count(n(v, 'evidenced')) });
+    case 'studioTrend': {
+      const prior = n(v, 'prior');
+      if (prior === null) return t('copilotInvestment.finding.studioTrendNotComparable', { credits: formatCredits(n(v, 'credits')) });
+      return prior > 0
         ? t('copilotInvestment.finding.studioTrend', {
             credits: formatCredits(n(v, 'credits')),
-            prior: formatCredits(n(v, 'prior')),
+            prior: formatCredits(prior),
             change: formatNumber(n(v, 'change') ?? 0, { style: 'percent', maximumFractionDigits: 0, signDisplay: 'exceptZero' }),
           })
         : t('copilotInvestment.finding.studioTrendNoPrior', { credits: formatCredits(n(v, 'credits')) });
+    }
+    case 'trajectory':
+      return t('copilotInvestment.finding.trajectory', {
+        first: count(n(v, 'first')),
+        last: count(n(v, 'last')),
+        weeks: count(n(v, 'weeks')),
+        change: n(v, 'change') === null ? '\u2014' : formatNumber(n(v, 'change') ?? 0, { style: 'percent', maximumFractionDigits: 0, signDisplay: 'exceptZero' }),
+        share: formatShare(n(v, 'share')),
+      });
     case 'balancesUnverified':
       return n(v, 'roiIfMonthly') === null
         ? t('copilotInvestment.finding.balancesUnverified', { consumers: count(n(v, 'consumers')), credits: formatCredits(n(v, 'credits')) })
@@ -338,37 +450,48 @@ export function findingText(t: TFunction, finding: InvestmentFinding, currency: 
 /** One action's title and body. Null for a code this build does not know. */
 export function actionText(t: TFunction, action: InvestmentAction): { title: string; body: string } | null {
   const people = count(action.people);
+  const one = action.people === 1;
   switch (action.code) {
     case 'reclaimIdle':
-      return { title: t('copilotInvestment.action.reclaimIdle.title'), body: t('copilotInvestment.action.reclaimIdle.body', { people }) };
+      return { title: t('copilotInvestment.action.reclaimIdle.title'), body: one ? t('copilotInvestment.action.reclaimIdle.bodyOne') : t('copilotInvestment.action.reclaimIdle.body', { people }) };
+    case 'reviewIdle':
+      return { title: t('copilotInvestment.action.reviewIdle.title'), body: one ? t('copilotInvestment.action.reviewIdle.bodyOne') : t('copilotInvestment.action.reviewIdle.body', { people }) };
     case 'enableBelowBreakEven':
       return {
         title: t('copilotInvestment.action.enableBelowBreakEven.title'),
-        body: t('copilotInvestment.action.enableBelowBreakEven.body', { people, days: formatDecimal(action.metric) }),
+        body: one
+          ? t('copilotInvestment.action.enableBelowBreakEven.bodyOne', { days: formatDecimal(action.metric) })
+          : t('copilotInvestment.action.enableBelowBreakEven.body', { people, days: formatDecimal(action.metric) }),
       };
     case 'enableLightEvidence':
-      return { title: t('copilotInvestment.action.enableLightEvidence.title'), body: t('copilotInvestment.action.enableLightEvidence.body', { people }) };
+      return { title: t('copilotInvestment.action.enableLightEvidence.title'), body: one ? t('copilotInvestment.action.enableLightEvidence.bodyOne') : t('copilotInvestment.action.enableLightEvidence.body', { people }) };
     case 'expandEvidenced':
       return {
         title: t('copilotInvestment.action.expandEvidenced.title'),
-        body: t('copilotInvestment.action.expandEvidenced.body', { people, days: formatDecimal(action.metric) }),
+        body: one
+          ? t('copilotInvestment.action.expandEvidenced.bodyOne', { days: formatDecimal(action.metric) })
+          : t('copilotInvestment.action.expandEvidenced.body', { people, days: formatDecimal(action.metric) }),
       };
     case 'expandRecommended':
-      return { title: t('copilotInvestment.action.expandRecommended.title'), body: t('copilotInvestment.action.expandRecommended.body', { people }) };
+      return { title: t('copilotInvestment.action.expandRecommended.title'), body: one ? t('copilotInvestment.action.expandRecommended.bodyOne') : t('copilotInvestment.action.expandRecommended.body', { people }) };
     case 'reviewHighSpendThinEvidence':
       return {
         title: t('copilotInvestment.action.reviewHighSpendThinEvidence.title'),
-        body: t('copilotInvestment.action.reviewHighSpendThinEvidence.body', { people, credits: formatCredits(action.credits) }),
+        body: one
+          ? t('copilotInvestment.action.reviewHighSpendThinEvidence.bodyOne', { credits: formatCredits(action.credits) })
+          : t('copilotInvestment.action.reviewHighSpendThinEvidence.body', { people, credits: formatCredits(action.credits) }),
       };
     case 'raiseLimitEvidenced':
       return {
         title: t('copilotInvestment.action.raiseLimitEvidenced.title'),
-        body: t('copilotInvestment.action.raiseLimitEvidenced.body', { people, credits: formatCredits(action.credits) }),
+        body: one
+          ? t('copilotInvestment.action.raiseLimitEvidenced.bodyOne', { credits: formatCredits(action.credits) })
+          : t('copilotInvestment.action.raiseLimitEvidenced.body', { people, credits: formatCredits(action.credits) }),
       };
     case 'licenceMeteredHeavy':
-      return { title: t('copilotInvestment.action.licenceMeteredHeavy.title'), body: t('copilotInvestment.action.licenceMeteredHeavy.body', { people }) };
+      return { title: t('copilotInvestment.action.licenceMeteredHeavy.title'), body: one ? t('copilotInvestment.action.licenceMeteredHeavy.bodyOne') : t('copilotInvestment.action.licenceMeteredHeavy.body', { people }) };
     case 'improveCoverage':
-      return { title: t('copilotInvestment.action.improveCoverage.title'), body: t('copilotInvestment.action.improveCoverage.body', { people }) };
+      return { title: t('copilotInvestment.action.improveCoverage.title'), body: one ? t('copilotInvestment.action.improveCoverage.bodyOne') : t('copilotInvestment.action.improveCoverage.body', { people }) };
     case 'setAssumptions':
       return {
         title: t('copilotInvestment.action.setAssumptions.title'),
@@ -399,6 +522,8 @@ export function trustText(t: TFunction, reason: InvestmentTrustReason): string |
       return t('copilotInvestment.trust.assumptionsUnavailable');
     case 'scenarioApplied':
       return t('copilotInvestment.trust.scenarioApplied');
+    case 'assumedTimeValue':
+      return t('copilotInvestment.trust.assumedTimeValue');
     case 'seatsCurrentAssignments':
       return t('copilotInvestment.trust.seatsCurrentAssignments');
     case 'balancesUnverified':
@@ -413,10 +538,14 @@ export function trustText(t: TFunction, reason: InvestmentTrustReason): string |
       return t('copilotInvestment.trust.creditsUnresolved', { credits: formatCredits(n(v, 'credits')), objects: count(n(v, 'objects')) });
     case 'creditsMissing':
       return t('copilotInvestment.trust.creditsMissing');
+    case 'creditsUnavailable':
+      return t('copilotInvestment.trust.creditsUnavailable');
     case 'shortWindow':
       return t('copilotInvestment.trust.shortWindow', { days: count(n(v, 'days')) });
     case 'studioImportFailed':
       return t('copilotInvestment.trust.studioImportFailed');
+    case 'studioUnavailable':
+      return t('copilotInvestment.trust.studioUnavailable');
     default:
       return null;
   }

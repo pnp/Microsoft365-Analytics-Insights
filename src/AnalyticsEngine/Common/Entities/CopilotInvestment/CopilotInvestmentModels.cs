@@ -75,6 +75,14 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("sensitivity")]
         public CopilotInvestmentSensitivity Sensitivity { get; set; } = new CopilotInvestmentSensitivity();
 
+        /// <summary>What it would take to break even, and what reclaiming and reassigning seats would change.</summary>
+        [JsonProperty("path")]
+        public CopilotInvestmentPath Path { get; set; } = new CopilotInvestmentPath();
+
+        /// <summary>Weekly active seat holders over recent complete weeks. Tenant-wide, so only for an unfiltered view.</summary>
+        [JsonProperty("trajectory")]
+        public CopilotInvestmentTrajectory Trajectory { get; set; } = new CopilotInvestmentTrajectory();
+
         [JsonProperty("cohorts")]
         public List<CopilotInvestmentCohort> Cohorts { get; set; } = new List<CopilotInvestmentCohort>();
 
@@ -367,15 +375,36 @@ namespace Common.Entities.CopilotInvestment
 
         [JsonProperty("modelledMonthlyCost")]
         public double? ModelledMonthlyCost { get; set; }
+
+        /// <summary>The seat part of <see cref="ModelledMonthlyCost"/>: the analysed holders' seats, a month.</summary>
+        [JsonProperty("monthlySeatCost")]
+        public double? MonthlySeatCost { get; set; }
+
+        /// <summary>
+        /// The Copilot Studio part of <see cref="ModelledMonthlyCost"/>: the analysed holders' own billed credits, a month.
+        /// Null when no Studio price is set. Zero when the ledger could not be read, which the confidence section says.
+        /// </summary>
+        [JsonProperty("monthlyStudioCost")]
+        public double? MonthlyStudioCost { get; set; }
     }
 
     public sealed class CopilotInvestmentSeats
     {
+        /// <summary>Every seat holder in scope: analysed, measured only in another period, and not analysed.</summary>
         [JsonProperty("holders")]
         public int Holders { get; set; }
 
+        /// <summary>The holders whose activity was measured in this window: the population the return is about.</summary>
         [JsonProperty("analysedHolders")]
         public int AnalysedHolders { get; set; }
+
+        /// <summary>Holders whose use is known only from Microsoft's usage report, for its own period.</summary>
+        [JsonProperty("otherPeriodHolders")]
+        public int OtherPeriodHolders { get; set; }
+
+        /// <summary>Holders the adoption analysis did not score (its per-run cap).</summary>
+        [JsonProperty("notAnalysedHolders")]
+        public int NotAnalysedHolders { get; set; }
 
         /// <summary><c>licenceHistory</c>, <c>currentAssignments</c> or <c>mixed</c>.</summary>
         [JsonProperty("basis")]
@@ -393,7 +422,7 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("analysedWindowCost")]
         public double? AnalysedWindowCost { get; set; }
 
-        /// <summary>Seat run-rate divided by the seat holders with any Copilot activity in the window.</summary>
+        /// <summary>The analysed holders' seat cost a month, divided by those of them with any Copilot activity. Seats only.</summary>
         [JsonProperty("costPerActiveHolderMonthly")]
         public double? CostPerActiveHolderMonthly { get; set; }
     }
@@ -406,12 +435,15 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("credits")]
         public double Credits { get; set; }
 
-        /// <summary>The same ledger over the equal-length period before the window: a like-for-like comparison.</summary>
+        /// <summary>
+        /// The same ledger over the equal-length period before the window. Null unless the ledger reaches back over the
+        /// whole of that period, so a comparison is only made like for like.
+        /// </summary>
         [JsonProperty("priorCredits")]
-        public double PriorCredits { get; set; }
+        public double? PriorCredits { get; set; }
 
         [JsonProperty("priorUsers")]
-        public int PriorUsers { get; set; }
+        public int? PriorUsers { get; set; }
 
         [JsonProperty("holderCredits")]
         public double HolderCredits { get; set; }
@@ -537,9 +569,13 @@ namespace Common.Entities.CopilotInvestment
         public int Holders { get; set; }
     }
 
-    /// <summary>Seat holders by active days per month; <see cref="BreakEvenBucket"/> marks the one holding the break-even.</summary>
+    /// <summary>
+    /// Seat holders by active days per month. The seat-only break-even is itself a bucket edge, so every bucket is wholly
+    /// below it or wholly at or above it - <see cref="BelowBreakEven"/> says which, and is null when there is no break-even.
+    /// </summary>
     public sealed class CopilotInvestmentDistributionBucket
     {
+        /// <summary><c>none</c> for no use, otherwise <c>range</c>; the page words it from the two edges.</summary>
         [JsonProperty("key")]
         public string Key { get; set; }
 
@@ -552,14 +588,27 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("holders")]
         public int Holders { get; set; }
 
-        [JsonProperty("breakEvenBucket")]
-        public bool BreakEvenBucket { get; set; }
+        [JsonProperty("belowBreakEven")]
+        public bool? BelowBreakEven { get; set; }
+    }
+
+    public static class CopilotInvestmentValueUnavailable
+    {
+        /// <summary>A figure the value model needs has not been set.</summary>
+        public const string Assumptions = "assumptions";
+
+        /// <summary>No seat holder's activity was measured in this window, so there is nothing like for like to value.</summary>
+        public const string NoMatchedHolders = "noMatchedHolders";
     }
 
     public sealed class CopilotInvestmentValue
     {
         [JsonProperty("available")]
         public bool Available { get; set; }
+
+        /// <summary>Why value is not modelled (<see cref="CopilotInvestmentValueUnavailable"/>); null when it is.</summary>
+        [JsonProperty("unavailableReason")]
+        public string UnavailableReason { get; set; }
 
         [JsonProperty("missing")]
         public List<string> Missing { get; set; } = new List<string>();
@@ -649,14 +698,124 @@ namespace Common.Entities.CopilotInvestment
         public double? RoiBaseHourlyPlus20 { get; set; }
 
         /// <summary>
-        /// The base return if each seat holder's latest preview balance were one month of consumption, valued at the
-        /// credit price. An explicit what-if: the source period is unverified.
+        /// A stress case: the base return if each seat holder's latest preview balance were one month of extra spend on
+        /// top of everything else, valued at the credit price. A floor rather than an estimate - the source period is
+        /// unverified, and the balances may overlap consumption the Copilot Studio ledger already bills.
         /// </summary>
         [JsonProperty("roiBaseIfBalancesMonthly")]
         public double? RoiBaseIfBalancesMonthly { get; set; }
 
+        /// <summary>The base return without the seats that are safe to reclaim. Only their seat cost leaves: any Studio use stays billed.</summary>
         [JsonProperty("roiBaseAfterReclaim")]
         public double? RoiBaseAfterReclaim { get; set; }
+    }
+
+    /// <summary>
+    /// What it would take to break even on the base assumptions, and what the seat levers change. Every figure is
+    /// modelled from the same analysed holders as the return, a month at a time.
+    /// </summary>
+    public sealed class CopilotInvestmentPath
+    {
+        [JsonProperty("available")]
+        public bool Available { get; set; }
+
+        [JsonProperty("monthlyCost")]
+        public double? MonthlyCost { get; set; }
+
+        [JsonProperty("monthlyValueBase")]
+        public double? MonthlyValueBase { get; set; }
+
+        /// <summary>Monthly cost minus base monthly value: positive is a shortfall, negative a surplus.</summary>
+        [JsonProperty("monthlyGap")]
+        public double? MonthlyGap { get; set; }
+
+        /// <summary>The modelled value of one active day on the base assumptions.</summary>
+        [JsonProperty("valuePerActiveDay")]
+        public double? ValuePerActiveDay { get; set; }
+
+        /// <summary>The extra active seat-days a month that would close a shortfall on the base assumptions.</summary>
+        [JsonProperty("extraActiveDaysPerMonth")]
+        public double? ExtraActiveDaysPerMonth { get; set; }
+
+        /// <summary>The same, spread over the holders who already use Copilot.</summary>
+        [JsonProperty("extraDaysPerActiveHolder")]
+        public double? ExtraDaysPerActiveHolder { get; set; }
+
+        [JsonProperty("activeHolders")]
+        public int ActiveHolders { get; set; }
+
+        [JsonProperty("minutesNeeded")]
+        public double? MinutesNeeded { get; set; }
+
+        [JsonProperty("minutesAssumed")]
+        public double? MinutesAssumed { get; set; }
+
+        /// <summary>Idle seats that are safe to reclaim, and the seat cost a month they would free.</summary>
+        [JsonProperty("reclaimable")]
+        public int Reclaimable { get; set; }
+
+        [JsonProperty("reclaimMonthly")]
+        public double? ReclaimMonthly { get; set; }
+
+        [JsonProperty("roiAfterReclaim")]
+        public double? RoiAfterReclaim { get; set; }
+
+        /// <summary>People without a seat already active on at least the seat-only break-even days a month.</summary>
+        [JsonProperty("evidencedWithoutSeat")]
+        public int EvidencedWithoutSeat { get; set; }
+
+        /// <summary>How many of them reclaimed seats could cover, and the seats - and cost a month - still to buy.</summary>
+        [JsonProperty("reassignable")]
+        public int Reassignable { get; set; }
+
+        [JsonProperty("netNewSeats")]
+        public int NetNewSeats { get; set; }
+
+        [JsonProperty("netNewMonthly")]
+        public double? NetNewMonthly { get; set; }
+    }
+
+    /// <summary>Weekly active seat holders over recent complete weeks, from the adoption analysis' audit trend.</summary>
+    public sealed class CopilotInvestmentTrajectory
+    {
+        [JsonProperty("available")]
+        public bool Available { get; set; }
+
+        /// <summary>Why there is no trend (<see cref="CopilotInvestmentTrajectoryUnavailable"/>); null when there is one.</summary>
+        [JsonProperty("unavailableReason")]
+        public string UnavailableReason { get; set; }
+
+        /// <summary>The current seat holders the weekly counts are a share of.</summary>
+        [JsonProperty("seatHolders")]
+        public int SeatHolders { get; set; }
+
+        [JsonProperty("weeks")]
+        public List<CopilotInvestmentTrajectoryWeek> Weeks { get; set; } = new List<CopilotInvestmentTrajectoryWeek>();
+    }
+
+    public sealed class CopilotInvestmentTrajectoryWeek
+    {
+        [JsonProperty("weekStart")]
+        public DateTime WeekStart { get; set; }
+
+        /// <summary>Null for a week the audit import does not cover - absent, not zero.</summary>
+        [JsonProperty("activeHolders")]
+        public double? ActiveHolders { get; set; }
+
+        [JsonProperty("share")]
+        public double? Share { get; set; }
+    }
+
+    public static class CopilotInvestmentTrajectoryUnavailable
+    {
+        /// <summary>The view is narrowed by a filter, and the trend is tenant-wide.</summary>
+        public const string Filtered = "filtered";
+
+        /// <summary>The trend comes from the Copilot audit import, which is not available.</summary>
+        public const string NoAudit = "noAudit";
+
+        /// <summary>Fewer than two measured complete weeks.</summary>
+        public const string NoData = "noData";
     }
 
     public sealed class CopilotInvestmentSensitivityCell
@@ -790,9 +949,19 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("credits")]
         public CopilotInvestmentDistribution Credits { get; set; }
 
-        /// <summary>Credit consumers split by their own spend (above or below the median consumer) and evidence (active days).</summary>
+        /// <summary>
+        /// Credit consumers split at <see cref="QuadrantMedianCredits"/> (the median balance) and at
+        /// <see cref="QuadrantDaysPerMonth"/> active days a month. Deliberately different from the stricter
+        /// high-spend-thin-evidence flag, and labelled by these thresholds rather than by that flag's name.
+        /// </summary>
         [JsonProperty("quadrants")]
         public List<CopilotInvestmentQuadrant> Quadrants { get; set; } = new List<CopilotInvestmentQuadrant>();
+
+        [JsonProperty("quadrantMedianCredits")]
+        public double? QuadrantMedianCredits { get; set; }
+
+        [JsonProperty("quadrantDaysPerMonth")]
+        public double QuadrantDaysPerMonth { get; set; }
     }
 
     public sealed class CopilotInvestmentDistribution
@@ -1003,17 +1172,46 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("signal")]
         public string Signal { get; set; }
 
+        /// <summary>
+        /// The person flag carrying exactly this action's membership, so "See the N people" lists the same N people
+        /// the card counts. Null for an action about the tenant rather than people.
+        /// </summary>
         [JsonProperty("flag")]
         public string Flag { get; set; }
+
+        /// <summary>What <see cref="MonthlyAmount"/> is (<see cref="CopilotInvestmentActionEffects"/>): amounts of different kinds are never ranked against each other.</summary>
+        [JsonProperty("effect")]
+        public string Effect { get; set; }
 
         /// <summary>True when the figure rests on an explicit what-if the source does not confirm.</summary>
         [JsonProperty("assumesMonthlyBalances")]
         public bool AssumesMonthlyBalances { get; set; }
     }
 
+    /// <summary>What an action's monthly amount measures.</summary>
+    public static class CopilotInvestmentActionEffects
+    {
+        /// <summary>Seat cost a month made available: a cash saving only where seats can be reduced.</summary>
+        public const string FreesSeatCost = "freesSeatCost";
+        /// <summary>Seat cost a month held by seats nobody used, pending a review.</summary>
+        public const string IdleSeatCost = "idleSeatCost";
+        /// <summary>The modelled value a month still needed for these seats to break even.</summary>
+        public const string ValueShortfall = "valueShortfall";
+        /// <summary>Seat cost a month that would be added.</summary>
+        public const string AddsSeatCost = "addsSeatCost";
+        /// <summary>A balance valued as if it were a month's spend - an explicit what-if.</summary>
+        public const string BalanceIfMonthly = "balanceIfMonthly";
+        /// <summary>Billed Copilot Studio credits a month, valued at the Studio price.</summary>
+        public const string MeteredSpend = "meteredSpend";
+        public const string None = "none";
+
+        public static readonly string[] All = { FreesSeatCost, IdleSeatCost, ValueShortfall, AddsSeatCost, BalanceIfMonthly, MeteredSpend, None };
+    }
+
     public static class CopilotInvestmentActionCodes
     {
         public const string ReclaimIdle = "reclaimIdle";
+        public const string ReviewIdle = "reviewIdle";
         public const string EnableBelowBreakEven = "enableBelowBreakEven";
         public const string EnableLightEvidence = "enableLightEvidence";
         public const string ExpandEvidenced = "expandEvidenced";
@@ -1026,7 +1224,7 @@ namespace Common.Entities.CopilotInvestment
 
         public static readonly string[] All =
         {
-            ReclaimIdle, EnableBelowBreakEven, EnableLightEvidence, ExpandEvidenced, ExpandRecommended,
+            ReclaimIdle, ReviewIdle, EnableBelowBreakEven, EnableLightEvidence, ExpandEvidenced, ExpandRecommended,
             ReviewHighSpendThinEvidence, RaiseLimitEvidenced, LicenceMeteredHeavy, ImproveCoverage, SetAssumptions,
         };
     }
@@ -1059,23 +1257,52 @@ namespace Common.Entities.CopilotInvestment
         public const string AssumptionsMissing = "assumptionsMissing";
         public const string BalancesUnverified = "balancesUnverified";
         public const string StudioTrend = "studioTrend";
+        public const string Trajectory = "trajectory";
+        public const string NoMatchedHolders = "noMatchedHolders";
         public const string NoSeats = "noSeats";
 
         public static readonly string[] All =
         {
             RunRate, ValueRange, BreakEven, IdleSeats, EvidenceConcentration, CreditConcentration, HighSpendThinEvidence,
-            ExpandCandidates, LimitBlocked, AssumptionsMissing, BalancesUnverified, StudioTrend, NoSeats,
+            ExpandCandidates, LimitBlocked, AssumptionsMissing, BalancesUnverified, StudioTrend, Trajectory, NoMatchedHolders, NoSeats,
         };
     }
 
     public sealed class CopilotInvestmentTrust
     {
-        /// <summary><c>high</c>, <c>medium</c> or <c>low</c>.</summary>
+        /// <summary><c>high</c>, <c>medium</c> or <c>low</c>: the lowest of the areas.</summary>
         [JsonProperty("level")]
         public string Level { get; set; } = "high";
 
+        /// <summary>
+        /// Confidence per question, because one label cannot answer three: is the evidence of use complete, is the cost
+        /// complete, and whose assumptions are these. Preview balances are a fourth area, outside the return.
+        /// </summary>
+        [JsonProperty("areas")]
+        public List<CopilotInvestmentTrustArea> Areas { get; set; } = new List<CopilotInvestmentTrustArea>();
+
         [JsonProperty("reasons")]
         public List<CopilotInvestmentTrustReason> Reasons { get; set; } = new List<CopilotInvestmentTrustReason>();
+    }
+
+    public sealed class CopilotInvestmentTrustArea
+    {
+        /// <summary>One of <see cref="CopilotInvestmentTrustAreas"/>.</summary>
+        [JsonProperty("area")]
+        public string Area { get; set; }
+
+        [JsonProperty("level")]
+        public string Level { get; set; } = "high";
+    }
+
+    public static class CopilotInvestmentTrustAreas
+    {
+        public const string Evidence = "evidence";
+        public const string Cost = "cost";
+        public const string Assumptions = "assumptions";
+        public const string Balances = "balances";
+
+        public static readonly string[] All = { Evidence, Cost, Assumptions, Balances };
     }
 
     public sealed class CopilotInvestmentTrustReason
@@ -1083,9 +1310,13 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("code")]
         public string Code { get; set; }
 
-        /// <summary><c>low</c> or <c>medium</c>: how far this reason lowers confidence.</summary>
+        /// <summary><c>low</c>, <c>medium</c> or <c>info</c>: how far this reason lowers confidence.</summary>
         [JsonProperty("impact")]
         public string Impact { get; set; }
+
+        /// <summary>The question it affects (<see cref="CopilotInvestmentTrustAreas"/>).</summary>
+        [JsonProperty("area")]
+        public string Area { get; set; }
 
         [JsonProperty("values")]
         public Dictionary<string, double?> Values { get; set; } = new Dictionary<string, double?>(StringComparer.Ordinal);
@@ -1101,6 +1332,7 @@ namespace Common.Entities.CopilotInvestment
         public const string AssumptionsMissing = "assumptionsMissing";
         public const string AssumptionsUnavailable = "assumptionsUnavailable";
         public const string ScenarioApplied = "scenarioApplied";
+        public const string AssumedTimeValue = "assumedTimeValue";
         public const string SeatsCurrentAssignments = "seatsCurrentAssignments";
         public const string BalancesUnverified = "balancesUnverified";
         public const string CreditCoverage = "creditCoverage";
@@ -1108,14 +1340,17 @@ namespace Common.Entities.CopilotInvestment
         public const string CreditsPartial = "creditsPartial";
         public const string CreditsUnresolved = "creditsUnresolved";
         public const string CreditsMissing = "creditsMissing";
+        public const string CreditsUnavailable = "creditsUnavailable";
         public const string ShortWindow = "shortWindow";
         public const string StudioImportFailed = "studioImportFailed";
+        public const string StudioUnavailable = "studioUnavailable";
 
         public static readonly string[] All =
         {
             AdoptionUnavailable, AuditMissing, UsageReportSignal, FiguresIncomplete, HoldersNotAnalysed, AssumptionsMissing,
-            AssumptionsUnavailable, ScenarioApplied, SeatsCurrentAssignments, BalancesUnverified, CreditCoverage, CreditsStale,
-            CreditsPartial, CreditsUnresolved, CreditsMissing, ShortWindow, StudioImportFailed,
+            AssumptionsUnavailable, ScenarioApplied, AssumedTimeValue, SeatsCurrentAssignments, BalancesUnverified, CreditCoverage,
+            CreditsStale, CreditsPartial, CreditsUnresolved, CreditsMissing, CreditsUnavailable, ShortWindow, StudioImportFailed,
+            StudioUnavailable,
         };
     }
 
@@ -1236,7 +1471,14 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("valueToCostBase")]
         public double? ValueToCostBase { get; set; }
 
-        /// <summary>Extra active days a month this seat would need to reach the base break-even; 0 when it already does.</summary>
+        /// <summary>
+        /// Active days a month this person's own modelled cost (seat plus their billed Studio credits) needs to break even
+        /// on the base assumptions. Differs from the seat-only figure by exactly their Studio cost.
+        /// </summary>
+        [JsonProperty("breakEvenDaysPerMonth")]
+        public double? BreakEvenDaysPerMonth { get; set; }
+
+        /// <summary>Extra active days a month this seat would need to reach its own base break-even; 0 when it already does.</summary>
         [JsonProperty("breakEvenGapDaysPerMonth")]
         public double? BreakEvenGapDaysPerMonth { get; set; }
 
@@ -1265,10 +1507,16 @@ namespace Common.Entities.CopilotInvestment
         public const string Metered = "metered";
         public const string ObservedUnlicensed = "observedUnlicensed";
 
+        /// <summary>A seat holder whose use is known only from Microsoft's usage report, for its own period: not valued.</summary>
+        public const string OtherPeriod = "otherPeriod";
+
+        /// <summary>A seat holder the adoption analysis did not score (its per-run cap): not valued.</summary>
+        public const string NotAnalysed = "notAnalysed";
+
         public static readonly string[] All =
         {
             Supported, Plausible, BelowBreakEven, NoEvidence, TooNewToJudge, StrongEvidence, Developing, LightEvidence,
-            ExpandCandidate, Metered, ObservedUnlicensed,
+            ExpandCandidate, Metered, ObservedUnlicensed, OtherPeriod, NotAnalysed,
         };
     }
 
@@ -1284,10 +1532,26 @@ namespace Common.Entities.CopilotInvestment
         public const string AccountDisabled = "accountDisabled";
         public const string ReclaimCandidate = "reclaimCandidate";
 
+        /// <summary>An idle seat the adoption rules do not mark safe to reclaim: someone should look before deciding.</summary>
+        public const string IdleReview = "idleReview";
+
+        /// <summary>An active seat whose base-case value is below its own modelled cost.</summary>
+        public const string BelowBaseBreakEven = "belowBaseBreakEven";
+
+        /// <summary>No seat, but active on at least the days a month that would pay for one.</summary>
+        public const string ExpandEvidenced = "expandEvidenced";
+
+        /// <summary>At or near a credit limit while showing strong, regular use of their own.</summary>
+        public const string LimitBlockedEvidenced = "limitBlockedEvidenced";
+
+        /// <summary>No seat, and billed Copilot Studio credits already worth at least a seat each month.</summary>
+        public const string MeteredAboveSeat = "meteredAboveSeat";
+
         public static readonly string[] All =
         {
             LimitExhausted, NearLimit, NotEntitled, HighSpendThinEvidence, CreditsPartial, OtherUnit, ReclaimExcluded,
-            AccountDisabled, ReclaimCandidate,
+            AccountDisabled, ReclaimCandidate, IdleReview, BelowBaseBreakEven, ExpandEvidenced, LimitBlockedEvidenced,
+            MeteredAboveSeat,
         };
     }
 

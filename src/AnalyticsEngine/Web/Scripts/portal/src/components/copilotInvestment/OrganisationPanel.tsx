@@ -57,6 +57,9 @@ export default function OrganisationPanel({ summary, dimension, onDimensionChang
   const options: string[] = [...GROUPING_DIMENSIONS, ...extra];
   const source = { dimensions: customDimensions };
   const concentration = summary.concentration;
+  // A month at a time, like the headline figures, so every period reads on the same scale.
+  const months = summary.monthsInWindow > 0 ? summary.monthsInWindow : 1;
+  const monthly = (value: number | null): number | null => (value === null ? null : value / months);
 
   return (
     <div className={styles.stack}>
@@ -109,8 +112,8 @@ export default function OrganisationPanel({ summary, dimension, onDimensionChang
                   <TableCell className={styles.num}>{formatNumber(g.holders)}</TableCell>
                   <TableCell className={styles.num}>{formatShare(g.activeShare)}</TableCell>
                   <TableCell className={styles.num}>{formatDecimal(g.activeDaysPerHolderMonthly)}</TableCell>
-                  <TableCell className={styles.num}>{formatMoney(g.cost, currency)}</TableCell>
-                  <TableCell className={styles.num}>{formatMoney(g.valueBase, currency)}</TableCell>
+                  <TableCell className={styles.num}>{formatMoney(monthly(g.cost), currency)}</TableCell>
+                  <TableCell className={styles.num}>{formatMoney(monthly(g.valueBase), currency)}</TableCell>
                   <TableCell className={styles.num}>{formatMultiple(t, g.roiBase)}</TableCell>
                   <TableCell className={styles.num}>{formatCredits(g.credits)}</TableCell>
                   <TableCell className={styles.num}>{formatCredits(g.studioCredits)}</TableCell>
@@ -159,7 +162,13 @@ export default function OrganisationPanel({ summary, dimension, onDimensionChang
 
       {concentration.quadrants.length > 0 && (
         <Card className={styles.card}>
-          <SectionHeading title={t('copilotInvestment.quadrants.title')} description={t('copilotInvestment.quadrants.description')} />
+          <SectionHeading
+            title={t('copilotInvestment.quadrants.title')}
+            description={t('copilotInvestment.quadrants.description', {
+              median: formatCredits(concentration.quadrantMedianCredits),
+              days: formatDecimal(concentration.quadrantDaysPerMonth),
+            })}
+          />
           <div className={styles.quadrants}>
             {concentration.quadrants.map((q) => (
               <div key={q.key} className={`${styles.quadrant} ${q.key === 'highSpendThinEvidence' ? styles.quadrantWarning : ''}`}>

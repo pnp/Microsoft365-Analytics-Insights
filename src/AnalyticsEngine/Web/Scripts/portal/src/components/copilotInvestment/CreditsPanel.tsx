@@ -81,6 +81,14 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
                 })
               : t('copilotInvestment.sources.adoption.off')}
           </Text>
+          {(summary.investment.seats.otherPeriodHolders > 0 || summary.investment.seats.notAnalysedHolders > 0) && (
+            <Text size={200}>
+              {t('copilotInvestment.sources.adoption.unmatched', {
+                otherPeriod: formatNumber(summary.investment.seats.otherPeriodHolders),
+                notAnalysed: formatNumber(summary.investment.seats.notAnalysedHolders),
+              })}
+            </Text>
+          )}
         </Card>
         <Card className={styles.source}>
           <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -90,10 +98,11 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
             </Badge>
           </div>
           <Text size={200}>
-            {!credits.tablesPresent
-              ? t('copilotInvestment.sources.credits.tablesMissing')
-              : credits.failureCode
-                ? t('copilotInvestment.sources.credits.failed')
+            {/* A failed read is reported as such - before "not upgraded" or "no data", which would read as confirmed absence. */}
+            {credits.failureCode
+              ? t('copilotInvestment.sources.credits.failed')
+              : !credits.tablesPresent
+                ? t('copilotInvestment.sources.credits.tablesMissing')
                 : credits.hasData
                   ? t('copilotInvestment.sources.credits.ok', {
                       date: formatShortDate(credits.snapshotDate),
@@ -108,11 +117,13 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
         <Card className={styles.source}>
           <Text weight="semibold">{t('copilotInvestment.sources.studio')}</Text>
           <Text size={200}>
-            {sources.studio.lastImportFailed
-              ? t('copilotInvestment.sources.studio.failed')
-              : sources.studio.hasData
-                ? t('copilotInvestment.sources.studio.ok', { when: formatShortDate(sources.studio.lastImportUtc) })
-                : t('copilotInvestment.sources.studio.none')}
+            {sources.studio.failureCode
+              ? t('copilotInvestment.sources.studio.unreadable')
+              : sources.studio.lastImportFailed
+                ? t('copilotInvestment.sources.studio.failed')
+                : sources.studio.hasData
+                  ? t('copilotInvestment.sources.studio.ok', { when: formatShortDate(sources.studio.lastImportUtc) })
+                  : t('copilotInvestment.sources.studio.none')}
           </Text>
           {!sources.studio.importEnabled && <Text size={200}>{t('copilotInvestment.availability.studioDisabled')}</Text>}
         </Card>

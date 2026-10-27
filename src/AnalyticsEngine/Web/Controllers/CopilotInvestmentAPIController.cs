@@ -338,20 +338,27 @@ namespace Web.AnalyticsWeb.Controllers
 
         internal static IEnumerable<CopilotInvestmentPersonRow> SortPeople(IEnumerable<CopilotInvestmentPersonRow> rows, string sortBy, bool descending)
         {
-            Func<CopilotInvestmentPersonRow, object> key;
+            var keys = new List<Func<CopilotInvestmentPersonRow, object>>();
             switch ((sortBy ?? string.Empty).Trim())
             {
-                case "user": key = r => r.UserPrincipalName ?? string.Empty; break;
-                case "activeDays": key = r => r.ActiveDays; break;
-                case "credits": key = r => r.Credits ?? -1; break;
-                case "studioCredits": key = r => r.StudioCredits; break;
-                case "cost": key = r => r.Cost ?? -1; break;
-                case "valueBase": key = r => r.ValueBase ?? -1; break;
-                case "valueToCost": key = r => r.ValueToCostBase ?? -1; break;
-                case "gap": key = r => r.BreakEvenGapDaysPerMonth ?? -1; break;
-                default: key = r => (r.Cost ?? 0) + (r.CreditsValue ?? 0) + (r.Credits ?? 0) / 1000000 + r.StudioCredits / 1000000; break;
+                case "user": keys.Add(r => r.UserPrincipalName ?? string.Empty); break;
+                case "activeDays": keys.Add(r => r.ActiveDays); break;
+                case "credits": keys.Add(r => r.Credits ?? -1); break;
+                case "studioCredits": keys.Add(r => r.StudioCredits); break;
+                case "cost": keys.Add(r => r.Cost ?? -1); break;
+                case "valueBase": keys.Add(r => r.ValueBase ?? -1); break;
+                case "valueToCost": keys.Add(r => r.ValueToCostBase ?? -1); break;
+                case "gap": keys.Add(r => r.BreakEvenGapDaysPerMonth ?? -1); break;
+                default:
+                    // Modelled cost, then the latest balance, then Studio credits: ranked one after another and never
+                    // added, because a period cost and a balance in an unverified period are not the same kind of money.
+                    keys.Add(r => r.Cost ?? -1);
+                    keys.Add(r => r.Credits ?? -1);
+                    keys.Add(r => r.StudioCredits);
+                    break;
             }
-            var ordered = descending ? rows.OrderByDescending(key) : rows.OrderBy(key);
+            var ordered = descending ? rows.OrderByDescending(keys[0]) : rows.OrderBy(keys[0]);
+            foreach (var key in keys.Skip(1)) ordered = descending ? ordered.ThenByDescending(key) : ordered.ThenBy(key);
             return ordered.ThenBy(r => r.UserId);
         }
 

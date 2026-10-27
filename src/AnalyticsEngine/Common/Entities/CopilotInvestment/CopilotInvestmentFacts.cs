@@ -129,6 +129,12 @@ namespace Common.Entities.CopilotInvestment
         public string LastImportError { get; set; }
         public List<StudioUserFact> Users { get; set; } = new List<StudioUserFact>();
         public string FailureCode { get; set; }
+
+        /// <summary>The ledger's first day, whatever the window.</summary>
+        public DateTime? EarliestDate { get; set; }
+
+        /// <summary>Whether the ledger covers the whole equal-length period before the window, so the two compare like for like.</summary>
+        public bool PriorComplete { get; set; }
     }
 
     /// <summary>A sampled snapshot of balances: users observed on one date and the credits their balances showed.</summary>
@@ -245,12 +251,14 @@ namespace Common.Entities.CopilotInvestment
         /// The latest observation per directory object within the snapshot band, then three result sets: one row
         /// per object, the categories that matter (consumption, an unknown amount, a refusal or a non-credit unit),
         /// and the categories the source could not evaluate. Tenant-wide by design: rows carry the user id and
-        /// are narrowed in memory, so every reader's filter applies to the same cached read.
+        /// are narrowed in memory, so every reader's filter applies to the same cached read. The work table is keyed
+        /// like the observation and service tables (date, then object) so it joins them in their own order: at 200,000
+        /// synthetic users, 1.80M logical reads and 2.45 s on LocalDB against 2.38M and 2.89 s keyed on the object alone.
         /// </summary>
         public const string LatestBalancesSql =
             "SET NOCOUNT ON;\r\n" +
             "IF OBJECT_ID(N'tempdb..#latest_balance') IS NOT NULL DROP TABLE #latest_balance;\r\n" +
-            "CREATE TABLE #latest_balance (object_id uniqueidentifier NOT NULL PRIMARY KEY, observation_date date NOT NULL);\r\n" +
+            "CREATE TABLE #latest_balance (object_id uniqueidentifier NOT NULL, observation_date date NOT NULL, PRIMARY KEY (observation_date, object_id));\r\n" +
             "INSERT INTO #latest_balance (object_id, observation_date)\r\n" +
             "SELECT o.object_id, MAX(o.observation_date)\r\n" +
             "FROM dbo.copilot_cost_observations AS o\r\n" +
@@ -323,39 +331,69 @@ namespace Common.Entities.CopilotInvestment
 
         /// <summary>
         /// Balances on a bounded set of sample dates. Each sample covers only the people observed ON that date and
-        /// is never added to another: a balance curve, not a running total.
+        /// is never added to another: a balance curve, not a running total. Each date is read on its own, in the
+        /// tables' key order (a merge join and two stream aggregates, a 1 MB memory grant), so a narrow scope reads
+        /// only its own people. At 200,000 synthetic users on LocalDB, with identical results: 28 days 0.45 s and 42K
+        /// logical reads against 14.1 s and 20.8M with a lookup per observation; 90 days 273K reads against 29.7M and
+        /// 3-11 s against 17.5 s (it reads every service row of 13 days, which LocalDB's capped buffer pool cannot
+        /// hold); scoped to 20,000 people 0.74 s against 1.15 s. The result is cached per date set and scope.
         /// </summary>
         public const string TrendSql =
-            "SELECT o.observation_date AS Date, COUNT_BIG(*) AS ObservedUsers,\r\n" +
-            "       SUM(CASE WHEN sv.Credits > 0 THEN 1 ELSE 0 END) AS ConsumingUsers,\r\n" +
-            "       SUM(sv.Credits) AS Credits,\r\n" +
-            "       SUM(CASE WHEN sv.LimitRows > 0 THEN 1 ELSE 0 END) AS LimitExhaustedUsers\r\n" +
-            "FROM dbo.copilot_cost_observations AS o\r\n" +
-            "OUTER APPLY (SELECT SUM(CASE WHEN s.unit COLLATE Latin1_General_100_BIN2 = N'" + CreditUnit + "' THEN s.consumed_quantity END) AS Credits,\r\n" +
-            "                    SUM(CASE WHEN s.decision_reason COLLATE Latin1_General_100_BIN2 = N'limitExhausted' THEN 1 ELSE 0 END) AS LimitRows\r\n" +
-            "             FROM dbo.copilot_cost_services AS s\r\n" +
-            "             WHERE s.observation_date = o.observation_date AND s.object_id = o.object_id) AS sv\r\n" +
-            "WHERE o.observation_date IN (SELECT CONVERT(date, d.[value]) FROM OPENJSON(@dates) AS d)\r\n" +
-            "  /*scope: AND o.user_id IN {scopeUsers}*/\r\n" +
-            "GROUP BY o.observation_date\r\n" +
-            "ORDER BY o.observation_date;";
+            "SELECT t.observation_date AS Date, a.ObservedUsers, a.ConsumingUsers, a.Credits, a.LimitExhaustedUsers\r\n" +
+            "FROM (SELECT DISTINCT CONVERT(date, d.[value]) AS observation_date FROM OPENJSON(@dates) AS d) AS t\r\n" +
+            "CROSS APPLY (\r\n" +
+            "    SELECT COUNT_BIG(*) AS ObservedUsers,\r\n" +
+            "           SUM(CASE WHEN p.Credits > 0 THEN 1 ELSE 0 END) AS ConsumingUsers,\r\n" +
+            "           SUM(p.Credits) AS Credits,\r\n" +
+            "           SUM(CASE WHEN p.LimitRows > 0 THEN 1 ELSE 0 END) AS LimitExhaustedUsers\r\n" +
+            "    FROM (\r\n" +
+            "        SELECT o.object_id,\r\n" +
+            "               SUM(CASE WHEN s.unit COLLATE Latin1_General_100_BIN2 = N'" + CreditUnit + "' THEN s.consumed_quantity END) AS Credits,\r\n" +
+            "               SUM(CASE WHEN s.decision_reason COLLATE Latin1_General_100_BIN2 = N'limitExhausted' THEN 1 ELSE 0 END) AS LimitRows\r\n" +
+            "        FROM dbo.copilot_cost_observations AS o\r\n" +
+            "        LEFT JOIN dbo.copilot_cost_services AS s ON s.observation_date = o.observation_date AND s.object_id = o.object_id\r\n" +
+            "        WHERE o.observation_date = t.observation_date\r\n" +
+            "          /*scope: AND o.user_id IN {scopeUsers}*/\r\n" +
+            "        GROUP BY o.object_id) AS p) AS a\r\n" +
+            "WHERE a.ObservedUsers > 0\r\n" +
+            "ORDER BY t.observation_date;";
 
-        /// <summary>Billed Copilot Studio credits per person in the window and the equal-length period before it.</summary>
+        /// <summary>
+        /// Billed Copilot Studio credits per person in the window and the equal-length period before it. Days and agents
+        /// are counted in two plain aggregates rather than two COUNT(DISTINCT CASE ...) in one, which SQL Server answers
+        /// with table spools: at 200,000 synthetic users (600K ledger rows) 52K logical reads and 0.94 s against 1.77M
+        /// and 1.09 s for 90 days, 50K and 0.26 s against 511K and 0.38 s for 28. People the user import never matched
+        /// share one NULL user id, joined on a sentinel because NULL never equals NULL (user ids start at 1).
+        /// </summary>
         public const string StudioUsersSql =
-            "SELECT r.user_id AS UserId,\r\n" +
-            "       CAST(SUM(CASE WHEN r.usage_date >= @from THEN r.billed_credits ELSE 0 END) AS float) AS Credits,\r\n" +
-            "       CAST(SUM(CASE WHEN r.usage_date < @from THEN r.billed_credits ELSE 0 END) AS float) AS PriorCredits,\r\n" +
-            "       COUNT(DISTINCT CASE WHEN r.usage_date >= @from THEN r.usage_date END) AS ActiveDays,\r\n" +
-            "       COUNT(DISTINCT CASE WHEN r.usage_date >= @from THEN r.agent_id END) AS Agents\r\n" +
-            "FROM dbo.copilot_studio_credit_user_daily AS r\r\n" +
-            "WHERE r.usage_date >= @priorFrom AND r.usage_date < @toExclusive\r\n" +
-            "GROUP BY r.user_id;";
+            "WITH per_day AS (\r\n" +
+            "    SELECT r.user_id, r.usage_date, SUM(r.billed_credits) AS credits\r\n" +
+            "    FROM dbo.copilot_studio_credit_user_daily AS r\r\n" +
+            "    WHERE r.usage_date >= @priorFrom AND r.usage_date < @toExclusive\r\n" +
+            "    GROUP BY r.user_id, r.usage_date),\r\n" +
+            "agents AS (\r\n" +
+            "    SELECT r.user_id, COUNT(DISTINCT r.agent_id) AS agents\r\n" +
+            "    FROM dbo.copilot_studio_credit_user_daily AS r\r\n" +
+            "    WHERE r.usage_date >= @from AND r.usage_date < @toExclusive\r\n" +
+            "    GROUP BY r.user_id)\r\n" +
+            "SELECT p.user_id AS UserId,\r\n" +
+            "       CAST(SUM(CASE WHEN p.usage_date >= @from THEN p.credits ELSE 0 END) AS float) AS Credits,\r\n" +
+            "       CAST(SUM(CASE WHEN p.usage_date < @from THEN p.credits ELSE 0 END) AS float) AS PriorCredits,\r\n" +
+            "       SUM(CASE WHEN p.usage_date >= @from THEN 1 ELSE 0 END) AS ActiveDays,\r\n" +
+            "       ISNULL(MAX(a.agents), 0) AS Agents\r\n" +
+            "FROM per_day AS p\r\n" +
+            "LEFT JOIN agents AS a ON ISNULL(a.user_id, -1) = ISNULL(p.user_id, -1)\r\n" +
+            "GROUP BY p.user_id;";
 
         public const string StudioImportSql =
             "SELECT TOP (1) l.imported_utc AS ImportedUtc, l.error AS Error\r\n" +
             "FROM dbo.agent_cost_import_log AS l\r\n" +
             "WHERE l.import_name = @name\r\n" +
             "ORDER BY l.imported_utc DESC;";
+
+        /// <summary>The ledger's first day: a seek on the (usage_date, dimension_hash) index, so free at any size.</summary>
+        public const string StudioEarliestSql =
+            "SELECT MIN(r.usage_date) FROM dbo.copilot_studio_credit_user_daily AS r;";
 
         /// <summary>One person's Copilot turns per day, host and agent, through their own audit rows (an index seek on user id).</summary>
         public static readonly string PersonActivitySql =
@@ -654,6 +692,14 @@ namespace Common.Entities.CopilotInvestment
                     }
                 }
                 facts.HasData = facts.Users.Count > 0;
+                using (var cmd = Command(db, CopilotInvestmentSql.StudioEarliestSql))
+                {
+                    var earliest = await cmd.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+                    facts.EarliestDate = earliest == null || earliest is DBNull ? (DateTime?)null : (DateTime)earliest;
+                }
+                // Only a ledger that reaches back over the whole previous period can be compared with it: a ledger that
+                // starts part-way through would read as growth that is only the import starting.
+                facts.PriorComplete = facts.EarliestDate.HasValue && facts.EarliestDate.Value.Date <= from.Date.AddDays(-days);
                 using (var cmd = Command(db, CopilotInvestmentSql.StudioImportSql, "@name", AgentCostImportNames.CopilotStudioUserCredits))
                 using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                 {

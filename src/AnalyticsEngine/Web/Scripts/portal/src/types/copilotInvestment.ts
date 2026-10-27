@@ -103,6 +103,10 @@ export interface InvestmentSources {
 export interface InvestmentSeats {
   holders: number;
   analysedHolders: number;
+  /** Holders whose use is known only from Microsoft's usage report, for its own period: counted, not valued. */
+  otherPeriodHolders: number;
+  /** Holders the adoption analysis did not score (its cap): counted, not valued. */
+  notAnalysedHolders: number;
   basis: 'licenceHistory' | 'currentAssignments' | 'mixed' | null;
   seatDays: number;
   monthlyRunRate: number | null;
@@ -114,8 +118,9 @@ export interface InvestmentSeats {
 export interface InvestmentStudioSpend {
   users: number;
   credits: number;
-  priorCredits: number;
-  priorUsers: number;
+  /** Null unless the ledger covers the whole previous period, so a comparison is like for like. */
+  priorCredits: number | null;
+  priorUsers: number | null;
   holderCredits: number;
   windowValue: number | null;
   holderWindowValue: number | null;
@@ -143,14 +148,19 @@ export interface InvestmentSpend {
   credits: InvestmentCreditBalances;
   modelledWindowCost: number | null;
   modelledMonthlyCost: number | null;
+  /** The two parts of `modelledMonthlyCost`: the analysed holders' seats and their own billed Studio credits. */
+  monthlySeatCost: number | null;
+  monthlyStudioCost: number | null;
 }
 
+/** Seat holders by active days a month. The seat-only break-even is itself an edge, so each bucket is wholly on one side. */
 export interface InvestmentDistributionBucket {
-  key: 'none' | '1to2' | '2to5' | '5to10' | '10to15' | '15plus';
+  key: 'none' | 'range';
   minDaysPerMonth: number;
   maxDaysPerMonth: number | null;
   holders: number;
-  breakEvenBucket: boolean;
+  /** Null when there is no break-even (assumptions missing). */
+  belowBreakEven: boolean | null;
 }
 
 export interface InvestmentEvidence {
@@ -191,6 +201,8 @@ export interface InvestmentScenarioResult {
 
 export interface InvestmentValue {
   available: boolean;
+  /** Why value is not modelled; null when it is. */
+  unavailableReason: 'assumptions' | 'noMatchedHolders' | null;
   missing: string[];
   scenarios: InvestmentScenarioResult[];
   valuePerActiveHolderMonthly: number | null;
@@ -212,8 +224,39 @@ export interface InvestmentSensitivity {
   grid: { minutesScenario: InvestmentScenario; realisationScenario: InvestmentScenario; roiMultiple: number | null; value: number }[];
   roiBaseHourlyMinus20: number | null;
   roiBaseHourlyPlus20: number | null;
+  /** A stress floor: each latest balance as an extra month of spend on top of everything else. */
   roiBaseIfBalancesMonthly: number | null;
   roiBaseAfterReclaim: number | null;
+}
+
+/** What it would take to break even, and what the seat levers change - all a month, on the base assumptions. */
+export interface InvestmentPath {
+  available: boolean;
+  monthlyCost: number | null;
+  monthlyValueBase: number | null;
+  /** Positive is a shortfall, negative a surplus. */
+  monthlyGap: number | null;
+  valuePerActiveDay: number | null;
+  extraActiveDaysPerMonth: number | null;
+  extraDaysPerActiveHolder: number | null;
+  activeHolders: number;
+  minutesNeeded: number | null;
+  minutesAssumed: number | null;
+  reclaimable: number;
+  reclaimMonthly: number | null;
+  roiAfterReclaim: number | null;
+  evidencedWithoutSeat: number;
+  reassignable: number;
+  netNewSeats: number;
+  netNewMonthly: number | null;
+}
+
+/** Weekly active seat holders over recent complete weeks. Tenant-wide, so only for an unfiltered view. */
+export interface InvestmentTrajectory {
+  available: boolean;
+  unavailableReason: 'filtered' | 'noAudit' | 'noData' | null;
+  seatHolders: number;
+  weeks: { weekStart: string; activeHolders: number | null; share: number | null }[];
 }
 
 export interface InvestmentCohort {
@@ -267,7 +310,10 @@ export interface InvestmentDistribution {
 export interface InvestmentConcentration {
   activeDays: InvestmentDistribution | null;
   credits: InvestmentDistribution | null;
+  /** Split at the median balance and at `quadrantDaysPerMonth` active days a month - not the high-spend flag's thresholds. */
   quadrants: { key: string; people: number; credits: number }[];
+  quadrantMedianCredits: number | null;
+  quadrantDaysPerMonth: number;
 }
 
 export interface InvestmentMetered {
@@ -334,7 +380,10 @@ export interface InvestmentAction {
   roiBaseAfter: number | null;
   metric: number | null;
   signal: string | null;
+  /** The person flag carrying exactly this action's membership: the drill-down lists the same people the card counts. */
   flag: string | null;
+  /** What `monthlyAmount` is - amounts of different kinds are never ranked against each other. */
+  effect: string | null;
   assumesMonthlyBalances: boolean;
 }
 
@@ -344,14 +393,19 @@ export interface InvestmentFinding {
   values: Record<string, number | null>;
 }
 
+export type TrustArea = 'evidence' | 'cost' | 'assumptions' | 'balances';
+
 export interface InvestmentTrustReason {
   code: string;
   impact: 'low' | 'medium' | 'info';
+  area: TrustArea;
   values: Record<string, number | null>;
 }
 
 export interface InvestmentTrust {
+  /** The lowest of the areas that bear on the return (balances stay outside it). */
   level: 'high' | 'medium' | 'low';
+  areas: { area: TrustArea; level: 'high' | 'medium' | 'low' }[];
   reasons: InvestmentTrustReason[];
 }
 
@@ -372,6 +426,8 @@ export interface CopilotInvestmentSummary {
   value: InvestmentValue;
   breakEven: InvestmentBreakEven;
   sensitivity: InvestmentSensitivity;
+  path: InvestmentPath;
+  trajectory: InvestmentTrajectory;
   cohorts: InvestmentCohort[];
   organisation: InvestmentOrganisation;
   concentration: InvestmentConcentration;
@@ -424,6 +480,8 @@ export interface InvestmentPersonRow {
   valueBase: number | null;
   valueUpside: number | null;
   valueToCostBase: number | null;
+  /** Active days a month this person's own cost (seat plus their Studio credits) needs on the base assumptions. */
+  breakEvenDaysPerMonth: number | null;
   breakEvenGapDaysPerMonth: number | null;
   signal: string;
   flags: string[];

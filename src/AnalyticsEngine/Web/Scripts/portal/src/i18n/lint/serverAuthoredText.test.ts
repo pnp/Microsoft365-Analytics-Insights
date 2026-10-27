@@ -45,13 +45,18 @@ import { COPILOT_ADOPTION_SETTINGS_ERROR_KEYS } from '../../api/copilotAdoptionS
 import { COPILOT_INVESTMENT_SETTINGS_ERROR_KEYS } from '../../api/copilotInvestmentApi';
 import {
   ACTION_CODES as INVESTMENT_ACTION_CODES,
+  ACTION_EFFECT_KEYS as INVESTMENT_ACTION_EFFECT_KEYS,
   AVAILABILITY_NOTE_KEYS as INVESTMENT_AVAILABILITY_NOTE_KEYS,
   EVIDENCE_LABEL_KEYS as INVESTMENT_EVIDENCE_KEYS,
   FINDING_CODES as INVESTMENT_FINDING_CODES,
   FLAG_LABEL_KEYS as INVESTMENT_FLAG_KEYS,
   QUADRANT_LABEL_KEYS as INVESTMENT_QUADRANT_KEYS,
   SIGNAL_LABEL_KEYS as INVESTMENT_SIGNAL_KEYS,
+  TRAJECTORY_UNAVAILABLE_KEYS as INVESTMENT_TRAJECTORY_UNAVAILABLE_KEYS,
+  TRUST_AREAS as INVESTMENT_TRUST_AREAS,
+  TRUST_AREA_LABEL_KEYS as INVESTMENT_TRUST_AREA_KEYS,
   TRUST_CODES as INVESTMENT_TRUST_CODES,
+  VALUE_UNAVAILABLE_REASONS as INVESTMENT_VALUE_UNAVAILABLE_REASONS,
 } from '../../components/copilotInvestment/investmentShared';
 
 function sortedUnique(values: string[]): string[] {
@@ -2903,6 +2908,19 @@ describe('Copilot investment server codes', () => {
       csharpClassConstants(join(INVESTMENT_DIR, 'CopilotInvestmentCalculator.Sections.cs'), 'QuadrantKeys'),
     );
     expect(Object.values(INVESTMENT_QUADRANT_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+
+  it('words what every action amount is, every confidence area and every reason a figure is withheld', () => {
+    // An amount without its kind - freed seat cost, a value shortfall, added cost - would read as one column of savings.
+    expect(sortedUnique(Object.keys(INVESTMENT_ACTION_EFFECT_KEYS))).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentActionEffects'));
+    expect(Object.values(INVESTMENT_ACTION_EFFECT_KEYS).filter((key) => key !== null && !(key in EN_CATALOG))).toEqual([]);
+    expect(sortedUnique([...INVESTMENT_TRUST_AREAS])).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentTrustAreas'));
+    expect(sortedUnique(Object.keys(INVESTMENT_TRUST_AREA_KEYS))).toEqual(sortedUnique([...INVESTMENT_TRUST_AREAS]));
+    expect(Object.values(INVESTMENT_TRUST_AREA_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+    expect(sortedUnique(Object.keys(INVESTMENT_TRAJECTORY_UNAVAILABLE_KEYS))).toEqual(
+      csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentTrajectoryUnavailable'),
+    );
+    expect(sortedUnique([...INVESTMENT_VALUE_UNAVAILABLE_REASONS])).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentValueUnavailable'));
   });
 
   it('words every code the assumptions API and the report can be refused with, and every availability note', () => {

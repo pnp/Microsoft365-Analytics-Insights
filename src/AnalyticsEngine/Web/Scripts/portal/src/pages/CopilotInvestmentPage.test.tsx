@@ -77,7 +77,10 @@ function summary(overrides: Partial<CopilotInvestmentSummary> = {}): CopilotInve
     },
     investment: {
       currency: 'EUR',
-      seats: { holders: 240, analysedHolders: 240, basis: 'currentAssignments', seatDays: 6720, monthlyRunRate: 7200, windowCost: 6623, analysedWindowCost: 6623, costPerActiveHolderMonthly: 36 },
+      seats: {
+        holders: 240, analysedHolders: 240, otherPeriodHolders: 0, notAnalysedHolders: 0, basis: 'currentAssignments', seatDays: 6720,
+        monthlyRunRate: 7200, windowCost: 6623, analysedWindowCost: 6623, costPerActiveHolderMonthly: 36,
+      },
       studio: { users: 40, credits: 21000, priorCredits: 18000, priorUsers: 35, holderCredits: 9000, windowValue: 210, holderWindowValue: 90 },
       credits: {
         observedUsers: 400, consumingUsers: 150, credits: 18500, holderCredits: 15000, nonHolderCredits: 3500, balanceValue: 185,
@@ -85,6 +88,8 @@ function summary(overrides: Partial<CopilotInvestmentSummary> = {}): CopilotInve
       },
       modelledWindowCost: 6713,
       modelledMonthlyCost: 7300,
+      monthlySeatCost: 7200,
+      monthlyStudioCost: 100,
     },
     evidence: {
       holders: 240, analysedHolders: 240, activeHolders: 200, activeShare: 0.8333, idleHolders: 40, idleTooNewToJudge: 2, totalActiveDays: 1800,
@@ -93,16 +98,18 @@ function summary(overrides: Partial<CopilotInvestmentSummary> = {}): CopilotInve
       bands: [{ band: 'Champion', holders: 40 }],
       unlicensedActiveUsers: 30, unlicensedActiveDays: 120, recommendedCandidates: 9,
       distribution: [
-        { key: 'none', minDaysPerMonth: 0, maxDaysPerMonth: 0, holders: 40, breakEvenBucket: false },
-        { key: '1to2', minDaysPerMonth: 0, maxDaysPerMonth: 2, holders: 30, breakEvenBucket: false },
-        { key: '2to5', minDaysPerMonth: 2, maxDaysPerMonth: 5, holders: 50, breakEvenBucket: true },
-        { key: '5to10', minDaysPerMonth: 5, maxDaysPerMonth: 10, holders: 60, breakEvenBucket: false },
-        { key: '10to15', minDaysPerMonth: 10, maxDaysPerMonth: 15, holders: 40, breakEvenBucket: false },
-        { key: '15plus', minDaysPerMonth: 15, maxDaysPerMonth: null, holders: 20, breakEvenBucket: false },
+        { key: 'none', minDaysPerMonth: 0, maxDaysPerMonth: 0, holders: 40, belowBreakEven: true },
+        { key: 'range', minDaysPerMonth: 0, maxDaysPerMonth: 2, holders: 30, belowBreakEven: true },
+        { key: 'range', minDaysPerMonth: 2, maxDaysPerMonth: 2.4, holders: 20, belowBreakEven: true },
+        { key: 'range', minDaysPerMonth: 2.4, maxDaysPerMonth: 5, holders: 30, belowBreakEven: false },
+        { key: 'range', minDaysPerMonth: 5, maxDaysPerMonth: 10, holders: 60, belowBreakEven: false },
+        { key: 'range', minDaysPerMonth: 10, maxDaysPerMonth: 15, holders: 40, belowBreakEven: false },
+        { key: 'range', minDaysPerMonth: 15, maxDaysPerMonth: null, holders: 20, belowBreakEven: false },
       ],
     },
     value: {
       available: true,
+      unavailableReason: null,
       missing: [],
       scenarios: [
         { scenario: 'conservative', minutesPerActiveDay: 8, realisation: 0.3, assistedHours: 240, realisedHours: 72, value: 3600, monthlyValue: 3900, roiMultiple: 0.54, net: -3113, holdersAtOrAboveBreakEven: 40 },
@@ -121,6 +128,20 @@ function summary(overrides: Partial<CopilotInvestmentSummary> = {}): CopilotInve
       roiBaseIfBalancesMonthly: 1.64,
       roiBaseAfterReclaim: 1.95,
     },
+    path: {
+      available: true, monthlyCost: 7300, monthlyValueBase: 12200, monthlyGap: -4900, valuePerActiveDay: 6.25,
+      extraActiveDaysPerMonth: null, extraDaysPerActiveHolder: null, activeHolders: 200, minutesNeeded: 8.9, minutesAssumed: 15,
+      reclaimable: 38, reclaimMonthly: 1140, roiAfterReclaim: 1.95, evidencedWithoutSeat: 30, reassignable: 30, netNewSeats: 0, netNewMonthly: 0,
+    },
+    trajectory: {
+      available: true, unavailableReason: null, seatHolders: 240,
+      weeks: [
+        { weekStart: '2026-09-28T00:00:00Z', activeHolders: 150, share: 0.625 },
+        { weekStart: '2026-10-05T00:00:00Z', activeHolders: null, share: null },
+        { weekStart: '2026-10-12T00:00:00Z', activeHolders: 170, share: 0.7083 },
+        { weekStart: '2026-10-19T00:00:00Z', activeHolders: 180, share: 0.75 },
+      ],
+    },
     cohorts: [{ band: 'Champion', holders: 40, medianActiveDays: 18, activeDays: 720, shareOfHolders: 0.17, shareOfActiveDays: 0.4, cost: 1100, valueBase: 4500, roiBase: 4.1, credits: 6000, studioCredits: 3000 }],
     organisation: {
       dimension: 'department', dimensionName: null, foldedGroups: 1, minGroupSize: 5, hidden: false,
@@ -135,6 +156,8 @@ function summary(overrides: Partial<CopilotInvestmentSummary> = {}): CopilotInve
         { key: 'lowSpendStrongEvidence', people: 45, credits: 1500 },
         { key: 'lowSpendThinEvidence', people: 30, credits: 1000 },
       ],
+      quadrantMedianCredits: 42,
+      quadrantDaysPerMonth: 4,
     },
     metered: { people: 60, activeUsers: 30, activeDays: 120, studioUsers: 20, studioCredits: 12000, studioWindowValue: 120, creditUsers: 25, credits: 3500, creditBalanceValue: 35, studioAboveSeatPrice: 0, balanceAboveSeatPriceIfMonthly: 1, evidencedCandidates: 12, recommendedCandidates: 9 },
     services: [
@@ -146,14 +169,27 @@ function summary(overrides: Partial<CopilotInvestmentSummary> = {}): CopilotInve
     ],
     tenantBalances: [{ billingMethod: 'prepaidCredits', purchased: 150000, consumed: 10000, remaining: 140000, unit: 'copilotCredit', lastModified: '2026-10-26T04:30:00Z' }],
     actions: [
-      { code: 'reclaimIdle', people: 38, monthlyAmount: 1140, credits: null, roiBaseAfter: 1.95, metric: null, signal: null, flag: 'reclaimCandidate', assumesMonthlyBalances: false },
-      { code: 'reviewHighSpendThinEvidence', people: 4, monthlyAmount: 42, credits: 4200, roiBaseAfter: null, metric: null, signal: null, flag: 'highSpendThinEvidence', assumesMonthlyBalances: true },
+      { code: 'reclaimIdle', people: 38, monthlyAmount: 1140, credits: null, roiBaseAfter: 1.95, metric: null, signal: null, flag: 'reclaimCandidate', effect: 'freesSeatCost', assumesMonthlyBalances: false },
+      { code: 'reviewHighSpendThinEvidence', people: 4, monthlyAmount: 42, credits: 4200, roiBaseAfter: null, metric: null, signal: null, flag: 'highSpendThinEvidence', effect: 'balanceIfMonthly', assumesMonthlyBalances: true },
     ],
     findings: [
       { code: 'valueRange', tone: 'warning', values: { low: 3900, base: 12200, high: 28500, roiLow: 0.54, roiBase: 1.68, roiHigh: 3.91, cost: 7300 } },
       { code: 'highSpendThinEvidence', tone: 'warning', values: { people: 4, credits: 4200 } },
+      { code: 'trajectory', tone: 'good', values: { first: 150, last: 180, change: 0.2, weeks: 3, share: 0.75 } },
     ],
-    trust: { level: 'medium', reasons: [{ code: 'balancesUnverified', impact: 'medium', values: {} }] },
+    trust: {
+      level: 'medium',
+      areas: [
+        { area: 'evidence', level: 'high' },
+        { area: 'cost', level: 'medium' },
+        { area: 'assumptions', level: 'high' },
+        { area: 'balances', level: 'medium' },
+      ],
+      reasons: [
+        { code: 'seatsCurrentAssignments', impact: 'medium', area: 'cost', values: {} },
+        { code: 'balancesUnverified', impact: 'medium', area: 'balances', values: {} },
+      ],
+    },
     individualDataHidden: false,
     ...overrides,
   };
@@ -170,7 +206,7 @@ const people: InvestmentPeoplePage = {
       activeDays: 0, activeDaysPerMonth: 0, habitShare: 0, appsUsed: 0, agentsUsed: 0, coworkInteractions: 0, interactions: 0, lastActivityUtc: null,
       tooNewToJudge: false, reclaimEligibility: null, accountEnabled: true, recommendedForLicence: false, credits: 1050, creditsValue: 10.5,
       creditObservationDate: '2026-10-26', studioCredits: 0, studioCost: 0, seatCost: 27.6, cost: 27.6, hoursBase: 0, valueConservative: 0,
-      valueBase: 0, valueUpside: 0, valueToCostBase: 0, breakEvenGapDaysPerMonth: 2.4, signal: 'noEvidence', flags: ['highSpendThinEvidence'],
+      valueBase: 0, valueUpside: 0, valueToCostBase: 0, breakEvenDaysPerMonth: 2.4, breakEvenGapDaysPerMonth: 2.4, signal: 'noEvidence', flags: ['highSpendThinEvidence'],
     },
   ],
 };
@@ -184,24 +220,61 @@ beforeEach(() => {
 });
 
 describe('CopilotInvestmentPage', () => {
-  it('leads with modelled investment, value, return and break-even, each labelled as modelled', async () => {
+  it('leads with the answer and the modelled figures it rests on, each labelled as modelled', async () => {
     renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
 
-    expect(await screen.findByText('Seat run rate')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/the seats return 1\.68\u00d7 in the base case \(0\.54\u00d7 to 3\.91\u00d7\): \u20ac4,900 a month more than their modelled cost/),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Modelled cost a month')).toBeInTheDocument();
+    expect(screen.getByText('\u20ac7,200 in seats + \u20ac100 in Copilot Studio credits')).toBeInTheDocument();
     expect(screen.getByText('Modelled value (base)')).toBeInTheDocument();
-    expect(screen.getByText('Modelled return (base)')).toBeInTheDocument();
-    expect(screen.getByText('1.7\u00d7')).toBeInTheDocument();
+    expect(screen.getByText('+\u20ac4,900 a month')).toBeInTheDocument();
+    expect(screen.getByText('1.68\u00d7')).toBeInTheDocument();
     expect(screen.getByText('Break-even')).toBeInTheDocument();
-    expect(screen.getAllByText('Modelled').length).toBeGreaterThanOrEqual(4);
+    expect(screen.getAllByText('Modelled').length).toBeGreaterThanOrEqual(6);
     // Balances are reported beside the return, never inside it.
     expect(screen.getByText('150 people with a balance \u00b7 not part of the return')).toBeInTheDocument();
-    expect(screen.getByText(/Observed use is worth/)).toBeInTheDocument();
+    // The verdict says the value range once; the findings list does not repeat it.
+    expect(screen.queryByText(/is worth \u20ac3,900 to \u20ac28,500/)).not.toBeInTheDocument();
+    expect(screen.getByText(/More spend is not more evidence/)).toBeInTheDocument();
+  });
+
+  it('states what would change the answer, what each amount is and how far to trust each part', async () => {
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(
+      summary({
+        path: {
+          ...summary().path,
+          monthlyGap: 2190, extraActiveDaysPerMonth: 584, extraDaysPerActiveHolder: 2.36, minutesNeeded: 18.8,
+          reclaimable: 16, reclaimMonthly: 480, roiAfterReclaim: 0.84, evidencedWithoutSeat: 32, reassignable: 16, netNewSeats: 16, netNewMonthly: 480,
+        },
+      }),
+    );
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    expect(await screen.findByText(/\u20ac2,190 a month short of their modelled cost/)).toBeInTheDocument();
+    expect(
+      screen.getByText('Close the \u20ac2,190 a month shortfall with 584 more active seat-days a month - about 2.4 more for each holder who already uses Copilot.'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/frees \u20ac480 a month of seat cost and moves the base return to 0\.84\u00d7/)).toBeInTheDocument();
+    expect(screen.getByText(/Reclaimed seats could cover 16 of them; seats for the other 16 would add \u20ac480 a month/)).toBeInTheDocument();
+    // Amounts of different kinds never read as one column of savings.
+    expect(screen.getByText('Frees \u20ac1,140 a month of seat cost')).toBeInTheDocument();
+    expect(screen.getByText('\u20ac42.00 a month if the balances were a month\u2019s spend')).toBeInTheDocument();
+    // The bars under break-even are marked in words as well as colour.
+    expect(screen.getAllByText(/below break-even/).length).toBe(3);
+    expect(screen.getByText('150 of 240 analysed seat holders are at or above break-even; 50 use Copilot less often and 40 not at all.')).toBeInTheDocument();
+    // Confidence per question, and the weekly trend in words.
+    expect(screen.getByText('Evidence of use')).toBeInTheDocument();
+    expect(screen.getByText('Credit balances (preview)')).toBeInTheDocument();
+    expect(screen.getByText(/Weekly active seat holders went from 150 to 180/)).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: /not covered by the audit import/ })).toBeInTheDocument();
   });
 
   it('gives a reader without See PII the aggregates only: no people tab, no own filter, no named drill-down', async () => {
     renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
 
-    await screen.findByText('Seat run rate');
+    await screen.findByText('Modelled cost a month');
     expect(screen.queryByRole('tab', { name: 'People' })).not.toBeInTheDocument();
     expect(screen.queryByText(/See the \d+ people/)).not.toBeInTheDocument();
     expect(screen.queryByText('Edit assumptions')).not.toBeInTheDocument();
@@ -236,26 +309,42 @@ describe('CopilotInvestmentPage', () => {
   it('says which assumptions are missing instead of modelling money with figures nobody chose', async () => {
     vi.mocked(fetchInvestmentSummary).mockResolvedValue(
       summary({
-        value: { available: false, missing: ['hourlyCost'], scenarios: [], valuePerActiveHolderMonthly: null },
+        value: { available: false, unavailableReason: 'assumptions', missing: ['hourlyCost'], scenarios: [], valuePerActiveHolderMonthly: null },
         breakEven: { available: false, minutesPerActiveDay: null, marginOfSafety: null, activeDaysPerMonthPerSeat: null, minutesPerWeekdayPerSeat: null, holdersAtOrAbove: 0, holdersBelow: 0, holdersNoEvidence: 0, shareAtOrAbove: null },
+        path: { ...summary().path, available: false, monthlyGap: null, reclaimable: 0, evidencedWithoutSeat: 0 },
         findings: [{ code: 'assumptionsMissing', tone: 'warning', values: { missing: 1 } }],
-        actions: [{ code: 'setAssumptions', people: 0, monthlyAmount: null, credits: null, roiBaseAfter: null, metric: 1, signal: null, flag: null, assumesMonthlyBalances: false }],
+        actions: [{ code: 'setAssumptions', people: 0, monthlyAmount: null, credits: null, roiBaseAfter: null, metric: 1, signal: null, flag: null, effect: 'none', assumesMonthlyBalances: false }],
       }),
     );
     renderWithProvider(<CopilotInvestmentPage />, { access: { administration: true, seePii: true } });
 
-    expect(await screen.findByText('Value and return are not modelled: 1 assumptions are missing.')).toBeInTheDocument();
+    expect(await screen.findByText('Money is not modelled yet: 1 assumptions are missing. The evidence of use below does not depend on them.')).toBeInTheDocument();
     expect(screen.getByText('Value cannot be modelled until the assumptions are set.')).toBeInTheDocument();
+    expect(screen.getByText('Set the assumptions to see what would change the answer.')).toBeInTheDocument();
     expect(screen.getAllByText('Edit assumptions')[0]).toHaveAttribute('href', '#/admin/copilot-investment-assumptions');
+  });
+
+  it('says plainly when no seat holder\u2019s use was measured in this period, rather than valuing another period', async () => {
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(
+      summary({
+        value: { available: false, unavailableReason: 'noMatchedHolders', missing: [], scenarios: [], valuePerActiveHolderMonthly: null },
+        path: { ...summary().path, available: false, monthlyGap: null, reclaimable: 0, evidencedWithoutSeat: 0 },
+        findings: [{ code: 'noMatchedHolders', tone: 'warning', values: { otherPeriod: 240, notAnalysed: 0 } }],
+        actions: [],
+      }),
+    );
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    expect(await screen.findByText(/No seat holder\u2019s Copilot use was measured in this period, so value and return are not modelled/)).toBeInTheDocument();
   });
 
   it('reads in Spanish, with numbers in Spanish conventions and tenant names left as stored', async () => {
     await loadCatalog('es');
     renderWithProvider(<CopilotInvestmentPage />, { language: 'es', access: { administration: false, seePii: false } });
 
-    expect(await screen.findByText('Coste mensual de licencias')).toBeInTheDocument();
+    expect(await screen.findByText('Coste modelado al mes')).toBeInTheDocument();
     expect(screen.getByText('Rentabilidad modelada (central)')).toBeInTheDocument();
-    expect(screen.getByText('1,7\u00d7')).toBeInTheDocument();
+    expect(screen.getByText('1,68\u00d7')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Organización' }));
     expect(await screen.findByText('Ventas \u2013 \u0391\u03b8\u03ae\u03bd\u03b1')).toBeInTheDocument();
   });

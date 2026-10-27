@@ -202,8 +202,9 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
             var scoped = analysis == null ? null : CopilotAdoptionScopeFilter.FilterRows(analysis, adoptionScope);
             Func<int, bool> inScope = scope.IsRestricted ? (Func<int, bool>)scope.Includes : _ => true;
 
+            var notAnalysed = analysis?.LicensedUsersNotAnalysed?.Where(inScope).ToList();
             var people = CopilotInvestmentPeopleBuilder.Build(scoped, credits.Users, studio.Users, inScope,
-                id => DirectoryEntry(directory, id), out var recommended, out var scopedCredits);
+                id => DirectoryEntry(directory, id), out var recommended, out var scopedCredits, notAnalysed);
 
             var input = new CopilotInvestmentInput
             {
@@ -238,6 +239,10 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
                 Dimension = request.Dimension,
                 DimensionName = directory?.DimensionName(request.Dimension),
                 GroupOf = GroupFunction(directory, request.Dimension, people),
+                // The weekly trend is tenant-wide, so it is only shown when the view is too.
+                WeeklyActiveHolders = scope.IsRestricted ? null : ActiveSeatHolderWeeks(analysis),
+                WeeklyActiveHoldersUnavailable = scope.IsRestricted ? CopilotInvestmentTrajectoryUnavailable.Filtered
+                    : analysis == null || !(analysis.Summary?.DataSources?.AuditAvailable ?? false) ? CopilotInvestmentTrajectoryUnavailable.NoAudit : null,
             };
 
             var summary = CopilotInvestmentCalculator.Calculate(input);
@@ -252,6 +257,12 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
         private static string AnalysisIdentity(CopilotAdoptionAnalysis analysis) =>
             analysis == null ? "none" : RuntimeHelpers.GetHashCode(analysis).ToString(CultureInfo.InvariantCulture) + ":"
                 + (analysis.Summary?.GeneratedUtc.Ticks ?? 0).ToString(CultureInfo.InvariantCulture);
+
+        /// <summary>The adoption analysis' weekly series of distinct active seat holders (today's seats, audit-measured).</summary>
+        internal const string ActiveSeatHoldersSeries = "Active licensed users";
+
+        private static List<AdoptionTimePoint> ActiveSeatHolderWeeks(CopilotAdoptionAnalysis analysis) =>
+            analysis?.Summary?.WeeklyTrend?.FirstOrDefault(s => string.Equals(s.Name, ActiveSeatHoldersSeries, StringComparison.Ordinal))?.Points?.ToList();
 
         private async Task<UserDirectorySnapshot> ReadDirectoryAsync(CancellationToken cancellationToken)
         {

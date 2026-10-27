@@ -76,7 +76,8 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginTop: '12px' },
   spacer: { flexGrow: 1 },
   scope: { display: 'flex', gap: '12px', flexWrap: 'wrap', color: tokens.colorNeutralForeground3, marginTop: '8px' },
-  tabs: { marginTop: '16px', marginBottom: '16px' },
+  // The tab strip scrolls sideways on a narrow screen rather than widening the page past it.
+  tabs: { marginTop: '16px', marginBottom: '16px', overflowX: 'auto', maxWidth: '100%' },
   notes: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' },
 });
 

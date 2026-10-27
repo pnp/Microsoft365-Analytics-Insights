@@ -29,10 +29,19 @@ namespace Common.Entities.CopilotInvestment
         public string Manager { get; set; }
         public bool? AccountEnabled { get; set; }
 
-        /// <summary>Holds a Copilot seat and was scored by the adoption analysis.</summary>
+        /// <summary>Holds a Copilot seat today (current assignment).</summary>
         public bool Licensed { get; set; }
         public string SeatLicences { get; set; }
         public double? SeatHeldDays { get; set; }
+
+        /// <summary>
+        /// A seat holder whose Copilot use is known only from Microsoft's usage report, for that report's own period.
+        /// Their seat is counted, but their active days are not valued against this window's cost.
+        /// </summary>
+        public bool EvidenceOtherPeriod { get; set; }
+
+        /// <summary>A seat holder the adoption analysis did not score (its per-run cap): a seat, but no evidence to weigh.</summary>
+        public bool NotAnalysed { get; set; }
 
         /// <summary>The adoption band's enum name, for a seat holder.</summary>
         public string Band { get; set; }
@@ -106,6 +115,15 @@ namespace Common.Entities.CopilotInvestment
 
         /// <summary>The group a person falls in for <see cref="Dimension"/>; null when they hold no value.</summary>
         public Func<int, string> GroupOf { get; set; }
+
+        /// <summary>
+        /// Weekly active seat holders from the adoption analysis' audit trend, oldest first; a null value is a week the
+        /// audit import does not cover. Tenant-wide, so the service leaves it null for a filtered view.
+        /// </summary>
+        public List<AdoptionTimePoint> WeeklyActiveHolders { get; set; }
+
+        /// <summary>Why <see cref="WeeklyActiveHolders"/> is null, when it is (<c>filtered</c>, <c>noAudit</c>, <c>noData</c>).</summary>
+        public string WeeklyActiveHoldersUnavailable { get; set; }
     }
 
     /// <summary>Joins the adoption analysis' scored rows with the report's own facts, one person per user id.</summary>
@@ -115,6 +133,10 @@ namespace Common.Entities.CopilotInvestment
         /// <param name="inScope">Whether a user id is in the reader's scope - for the balances and ledger rows.</param>
         /// <param name="directory">Attributes for someone the analysis has no row for; may return null.</param>
         /// <param name="scopedCredits">Every in-scope balance, including the quiet ones that add no person.</param>
+        /// <param name="notAnalysedHolders">
+        /// Seat holders the analysis did not score (its cap). Someone among them who appears only through a balance or the
+        /// Studio ledger is still a seat holder - never shown as someone without a seat - but carries no evidence to weigh.
+        /// </param>
         public static List<CopilotInvestmentPerson> Build(
             CopilotAdoptionAnalysis scoped,
             IEnumerable<CreditUserFact> credits,
@@ -122,8 +144,10 @@ namespace Common.Entities.CopilotInvestment
             Func<int, bool> inScope,
             Func<int, CopilotInvestmentDirectoryEntry> directory,
             out int recommendedCandidates,
-            out List<CreditUserFact> scopedCredits)
+            out List<CreditUserFact> scopedCredits,
+            IEnumerable<int> notAnalysedHolders = null)
         {
+            var notAnalysed = new HashSet<int>(notAnalysedHolders ?? Enumerable.Empty<int>());
             var people = new Dictionary<int, CopilotInvestmentPerson>();
             foreach (var row in scoped?.LicensedUsers ?? new List<LicensedUserAdoptionRow>())
             {
@@ -140,6 +164,8 @@ namespace Common.Entities.CopilotInvestment
                     Licensed = true,
                     SeatLicences = row.SeatLicences,
                     SeatHeldDays = row.SeatHeldDays,
+                    // Microsoft's report covers its own period, not this window: the seat is real, the days are not comparable.
+                    EvidenceOtherPeriod = string.Equals(row.SignalSource, CopilotAdoptionScoring.SignalSourceUsageReport, StringComparison.Ordinal),
                     Band = row.Band.ToString(),
                     AdoptionScore = row.AdoptionScore,
                     SignalSource = row.SignalSource,
@@ -193,14 +219,14 @@ namespace Common.Entities.CopilotInvestment
                 // A whole directory is swept every day. Someone with no seat, no Copilot activity and a quiet balance
                 // is observed (and counted as such) but is not a person this report has anything to say about.
                 if (people.TryGetValue(fact.UserId.Value, out var known)) known.Credit = fact;
-                else if (Notable(fact)) Attach(people, fact.UserId.Value, directory).Credit = fact;
+                else if (Notable(fact)) Attach(people, fact.UserId.Value, directory, notAnalysed).Credit = fact;
             }
 
             foreach (var fact in studio ?? Enumerable.Empty<StudioUserFact>())
             {
                 if (!fact.UserId.HasValue || !inScope(fact.UserId.Value)) continue;
                 if (fact.Credits <= 0 && fact.PriorCredits <= 0) continue;
-                Attach(people, fact.UserId.Value, directory).Studio = fact;
+                Attach(people, fact.UserId.Value, directory, notAnalysed).Studio = fact;
             }
 
             return people.Values.OrderBy(p => p.UserId).ToList();
@@ -212,10 +238,11 @@ namespace Common.Entities.CopilotInvestment
             || fact.LimitExhaustedRows > 0 || fact.NearLimitRows > 0 || fact.NotEntitledRows > 0 || fact.Partial;
 
         private static CopilotInvestmentPerson Attach(Dictionary<int, CopilotInvestmentPerson> people, int userId,
-            Func<int, CopilotInvestmentDirectoryEntry> directory)
+            Func<int, CopilotInvestmentDirectoryEntry> directory, HashSet<int> notAnalysed)
         {
             if (people.TryGetValue(userId, out var person)) return person;
             var entry = directory?.Invoke(userId);
+            var holder = notAnalysed.Contains(userId);
             person = new CopilotInvestmentPerson
             {
                 UserId = userId,
@@ -226,6 +253,8 @@ namespace Common.Entities.CopilotInvestment
                 Company = entry?.Company,
                 Manager = entry?.Manager,
                 AccountEnabled = entry?.AccountEnabled,
+                Licensed = holder,
+                NotAnalysed = holder,
             };
             people[userId] = person;
             return person;

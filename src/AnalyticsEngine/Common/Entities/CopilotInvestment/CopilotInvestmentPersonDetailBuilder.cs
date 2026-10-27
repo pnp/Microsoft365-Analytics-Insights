@@ -102,11 +102,15 @@ namespace Common.Entities.CopilotInvestment
                 AgentId = a.AgentId, AgentName = a.AgentName, Credits = Math.Round(a.Credits, 6), ActiveDays = a.ActiveDays,
             }).OrderByDescending(a => a.Credits).ToList();
 
-            detail.Evidence = EvidenceFor(detail, person, fromUtc, toExclusiveUtc);
+            detail.Evidence = EvidenceFor(detail, person, byDay.Keys, fromUtc, toExclusiveUtc);
             return detail;
         }
 
-        private static List<string> EvidenceFor(CopilotInvestmentPersonDetail detail, CopilotInvestmentPersonRow person, DateTime fromUtc, DateTime toExclusiveUtc)
+        /// <summary>Halves shorter than this cannot show a direction of travel.</summary>
+        private const int MinTrendHalfDays = 14;
+
+        private static List<string> EvidenceFor(CopilotInvestmentPersonDetail detail, CopilotInvestmentPersonRow person,
+            IEnumerable<DateTime> activeDates, DateTime fromUtc, DateTime toExclusiveUtc)
         {
             var codes = new List<string>();
             if (detail.ActivityAssessed)
@@ -121,11 +125,20 @@ namespace Common.Entities.CopilotInvestment
                 if (detail.AgentTurns > 0) codes.Add(EvidenceCodes.AgentUse);
                 if (detail.CoworkTurns > 0) codes.Add(EvidenceCodes.CoworkUse);
 
-                var middle = fromUtc.Date.AddDays((toExclusiveUtc.Date - fromUtc.Date).TotalDays / 2);
-                var first = detail.Weeks.Where(w => w.WeekStart < middle).Sum(w => w.Turns);
-                var second = detail.Weeks.Where(w => w.WeekStart >= middle).Sum(w => w.Turns);
-                if (second >= 5 && second >= first * 1.25 && detail.Weeks.Count >= 4) codes.Add(EvidenceCodes.Growing);
-                else if (first >= 5 && second <= first * 0.5 && detail.Weeks.Count >= 4) codes.Add(EvidenceCodes.Declining);
+                // Two halves of exactly equal length, compared by active days rather than prompts: week buckets that
+                // straddle the window's edges would compare different spans and invent a trend from constant use.
+                var days = (int)(toExclusiveUtc.Date - fromUtc.Date).TotalDays;
+                var half = days / 2;
+                if (half >= MinTrendHalfDays)
+                {
+                    var start = fromUtc.Date;
+                    var end = toExclusiveUtc.Date;
+                    var dates = activeDates.Select(d => d.Date).Distinct().ToList();
+                    var first = dates.Count(d => d >= start && d < start.AddDays(half));
+                    var second = dates.Count(d => d >= end.AddDays(-half) && d < end);
+                    if (second >= 3 && second >= first * 1.5 && second - first >= 2) codes.Add(EvidenceCodes.Growing);
+                    else if (first >= 3 && second <= first * 0.5) codes.Add(EvidenceCodes.Declining);
+                }
             }
             if (detail.Prompts > 0) codes.Add(EvidenceCodes.PromptHistory);
             if (person?.Flags?.Contains(CopilotInvestmentFlags.LimitExhausted) == true) codes.Add(EvidenceCodes.LimitReached);

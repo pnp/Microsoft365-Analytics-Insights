@@ -10,6 +10,8 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using AdoptionScoring = Common.Entities.CopilotAdoption.CopilotAdoptionScoring;
+using AdoptionTimePoint = Common.Entities.CopilotAdoption.AdoptionTimePoint;
 using CopilotInvestmentAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotInvestmentAPIController;
 
 namespace Tests.UnitTests
@@ -318,6 +320,239 @@ namespace Tests.UnitTests
                         parts[names[i]] = reader.ReadToEnd();
             }
             return parts;
+        }
+
+        [TestMethod]
+        public void EverythingThePageReads_IsSerialisedWithTheNamesItExpects()
+        {
+            // Web API serialises with Newtonsoft defaults, so a property without [JsonProperty] reaches the page in
+            // PascalCase and silently reads as undefined there.
+            var people = new List<CopilotInvestmentPerson>
+            {
+                Holder(1, 10, credit: Balance(1, 50), studio: new StudioUserFact { UserId = 1, Credits = 10 }),
+                Holder(2, 0, "Dormant"),
+            };
+            var summary = CopilotInvestmentCalculator.Calculate(Input(people, Assumptions()));
+            var page = new CopilotInvestmentPeoplePage { Total = summary.People.Count, Rows = summary.People, Currency = "EUR", ValueAvailable = true };
+            var detail = CopilotInvestmentPersonDetailBuilder.Build(summary.People[0], new PersonDetailFacts(), "EUR", From, From.AddDays(28));
+
+            foreach (var payload in new object[] { summary, page, detail, new CreditTrendPoint() })
+            {
+                var names = ((Newtonsoft.Json.Linq.JContainer)Newtonsoft.Json.Linq.JToken.FromObject(payload)).Descendants().OfType<Newtonsoft.Json.Linq.JProperty>()
+                    .Where(p => !(p.Parent?.Parent is Newtonsoft.Json.Linq.JProperty owner && (owner.Name == "values" || owner.Name == "provenance")))
+                    .Select(p => p.Name).Distinct().ToList();
+                var wrong = names.Where(n => !char.IsLower(n[0])).ToList();
+                Assert.AreEqual(0, wrong.Count, payload.GetType().Name + ": " + string.Join(", ", wrong));
+            }
+            StringAssert.Contains(JsonConvert.SerializeObject(summary), "\"roiBaseIfBalancesMonthly\"");
+            Assert.IsFalse(JsonConvert.SerializeObject(summary).Contains("person1@contoso.example"), "The summary never carries the people.");
+        }
+
+        [TestMethod]
+        public void UsageReportHolders_CountAsSeats_ButStayOutOfValueAndReturn()
+        {
+            // Microsoft's report covers its own period: the seat is a cost, but its days are not this window's.
+            var otherPeriod = Holder(2, 25, "Champion");
+            otherPeriod.EvidenceOtherPeriod = true;
+            otherPeriod.SignalSource = AdoptionScoring.SignalSourceUsageReport;
+            var withOther = CopilotInvestmentCalculator.Calculate(Input(new List<CopilotInvestmentPerson> { Holder(1, 10), otherPeriod }, Assumptions()));
+            var alone = CopilotInvestmentCalculator.Calculate(Input(new List<CopilotInvestmentPerson> { Holder(1, 10) }, Assumptions()));
+
+            Assert.AreEqual(2, withOther.Investment.Seats.Holders);
+            Assert.AreEqual(1, withOther.Investment.Seats.AnalysedHolders);
+            Assert.AreEqual(1, withOther.Investment.Seats.OtherPeriodHolders);
+            Assert.AreEqual(alone.Investment.ModelledWindowCost, withOther.Investment.ModelledWindowCost, "Only the matched seat is in the cost.");
+            Assert.AreEqual(alone.Value.Scenarios.Single(s => s.Scenario == "base").RoiMultiple, withOther.Value.Scenarios.Single(s => s.Scenario == "base").RoiMultiple);
+            Assert.AreEqual(2 * 30d, withOther.Investment.Seats.MonthlyRunRate.Value, 0.001, "The run rate still counts every seat.");
+            var row = withOther.People.Single(p => p.UserId == 2);
+            Assert.AreEqual(CopilotInvestmentSignals.OtherPeriod, row.Signal);
+            Assert.IsNull(row.ValueBase);
+            Assert.IsTrue(withOther.Trust.Reasons.Any(r => r.Code == CopilotInvestmentTrustCodes.UsageReportSignal && r.Area == CopilotInvestmentTrustAreas.Evidence));
+
+            var onlyOther = CopilotInvestmentCalculator.Calculate(Input(new List<CopilotInvestmentPerson> { otherPeriod }, Assumptions()));
+            Assert.IsFalse(onlyOther.Value.Available);
+            Assert.AreEqual(CopilotInvestmentValueUnavailable.NoMatchedHolders, onlyOther.Value.UnavailableReason);
+            Assert.IsFalse(onlyOther.BreakEven.Available);
+            Assert.IsFalse(onlyOther.Path.Available);
+            Assert.IsTrue(onlyOther.Findings.Any(f => f.Code == CopilotInvestmentFindingCodes.NoMatchedHolders));
+            Assert.IsFalse(onlyOther.Findings.Any(f => f.Code == CopilotInvestmentFindingCodes.AssumptionsMissing), "The assumptions are all set.");
+        }
+
+        [TestMethod]
+        public void ASeatHolderTheAnalysisDidNotScore_IsNeverShownAsSomeoneWithoutASeat()
+        {
+            var credits = new List<CreditUserFact> { Balance(7, 400) };
+            var studio = new List<StudioUserFact> { new StudioUserFact { UserId = 8, Credits = 5000 } };
+            var people = CopilotInvestmentPeopleBuilder.Build(null, credits, studio, _ => true, _ => null, out _, out var scoped, new[] { 7, 8 });
+            Assert.IsTrue(people.All(p => p.Licensed && p.NotAnalysed));
+
+            var input = Input(people, Assumptions());
+            input.ScopedCredits = scoped;
+            input.HoldersNotAnalysed = 2;
+            var summary = CopilotInvestmentCalculator.Calculate(input);
+            Assert.AreEqual(2, summary.Investment.Seats.Holders, "Counted once, through the not-analysed total.");
+            Assert.AreEqual(0, summary.Investment.Seats.AnalysedHolders);
+            Assert.AreEqual(0, summary.Metered.People, "A seat holder is not metered use.");
+            Assert.IsTrue(summary.People.All(p => p.Licensed && p.Signal == CopilotInvestmentSignals.NotAnalysed));
+            Assert.IsFalse(summary.Actions.Any(a => a.Code == CopilotInvestmentActionCodes.LicenceMeteredHeavy));
+        }
+
+        [TestMethod]
+        public void AStudioLedgerThatCouldNotBeRead_LowersConfidence_RatherThanReadingAsZeroCost()
+        {
+            var input = Input(new List<CopilotInvestmentPerson> { Holder(1, 10) }, Assumptions());
+            input.Studio = new StudioFacts { FailureCode = "studioUnavailable" };
+            var summary = CopilotInvestmentCalculator.Calculate(input);
+
+            var reason = summary.Trust.Reasons.Single(r => r.Code == CopilotInvestmentTrustCodes.StudioUnavailable);
+            Assert.AreEqual("low", reason.Impact, "With a Studio price set, the cost behind the return is missing a part.");
+            Assert.AreEqual(CopilotInvestmentTrustAreas.Cost, reason.Area);
+            Assert.AreEqual("low", summary.Trust.Areas.Single(a => a.Area == CopilotInvestmentTrustAreas.Cost).Level);
+            Assert.AreEqual("low", summary.Trust.Level);
+
+            input.Credits = new CreditFacts { FailureCode = "creditsUnavailable" };
+            input.Studio = new StudioFacts();
+            var balances = CopilotInvestmentCalculator.Calculate(input);
+            Assert.IsTrue(balances.Trust.Reasons.Any(r => r.Code == CopilotInvestmentTrustCodes.CreditsUnavailable));
+            Assert.IsFalse(balances.Trust.Reasons.Any(r => r.Code == CopilotInvestmentTrustCodes.CreditsMissing), "Unreadable is not the same as empty.");
+            Assert.AreEqual("medium", balances.Trust.Level, "Balances are outside the return, so they do not lower its level.");
+        }
+
+        [TestMethod]
+        public void EachPersonsBreakEven_IsAgainstTheirOwnCost_AndActionsDrillToExactlyThePeopleTheyCount()
+        {
+            // Seat-only break-even: 30 / (15 / 60 x 0.5 x 60) = 4 active days a month.
+            var withStudio = Holder(3, 4, studio: new StudioUserFact { UserId = 3, Credits = 2000 });
+            var review = Holder(2, 0);
+            review.ReclaimEligibility = AdoptionScoring.ReclaimEligibilityTiers.Review;
+            var people = new List<CopilotInvestmentPerson>
+            {
+                Holder(1, 0),
+                review,
+                withStudio,
+                Holder(4, 20, "Champion", credit: Balance(4, 1200)),
+                new CopilotInvestmentPerson { UserId = 5, ActiveDays = 12 },
+                new CopilotInvestmentPerson { UserId = 6, Studio = new StudioUserFact { UserId = 6, Credits = 3000 } },
+            };
+            people[3].Credit.LimitExhaustedRows = 1;
+            var summary = CopilotInvestmentCalculator.Calculate(Input(people, Assumptions()));
+
+            var studioRow = summary.People.Single(p => p.UserId == 3);
+            var months = 28 / CopilotInvestmentCalculator.AverageMonthDays;
+            var ownCost = 30 * months + 2000 * 0.02;
+            Assert.AreEqual(ownCost / 7.5 / months, studioRow.BreakEvenDaysPerMonth.Value, 0.006);
+            Assert.IsTrue(studioRow.BreakEvenGapDaysPerMonth > 0, "Their Studio credits add days a seat alone would not need.");
+            Assert.IsTrue(studioRow.Flags.Contains(CopilotInvestmentFlags.BelowBaseBreakEven));
+
+            foreach (var action in summary.Actions.Where(a => a.Flag != null))
+                Assert.AreEqual(action.People, summary.People.Count(p => p.Flags.Contains(action.Flag)), action.Code);
+            CollectionAssert.IsSubsetOf(new[]
+            {
+                CopilotInvestmentActionCodes.ReclaimIdle, CopilotInvestmentActionCodes.ReviewIdle, CopilotInvestmentActionCodes.EnableBelowBreakEven,
+                CopilotInvestmentActionCodes.ExpandEvidenced, CopilotInvestmentActionCodes.RaiseLimitEvidenced, CopilotInvestmentActionCodes.LicenceMeteredHeavy,
+            }, summary.Actions.Select(a => a.Code).ToList());
+            Assert.IsTrue(summary.Actions.All(a => a.Effect != null && CopilotInvestmentActionEffects.All.Contains(a.Effect)));
+        }
+
+        [TestMethod]
+        public void ReclaimingSeats_FreesTheSeatCostOnly_AndThePathSaysWhatClosesTheGap()
+        {
+            var idle = Holder(1, 0, studio: new StudioUserFact { UserId = 1, Credits = 1000 });
+            var people = new List<CopilotInvestmentPerson> { idle, Holder(2, 3), new CopilotInvestmentPerson { UserId = 3, ActiveDays = 12 } };
+            var summary = CopilotInvestmentCalculator.Calculate(Input(people, Assumptions()));
+
+            var months = 28 / CopilotInvestmentCalculator.AverageMonthDays;
+            var seat = 30 * months;
+            var cost = 2 * seat + 1000 * 0.02;
+            var value = 3 * 7.5;
+            Assert.AreEqual(Math.Round(value / (cost - seat), 4), summary.Sensitivity.RoiBaseAfterReclaim.Value, 0.0001,
+                "The idle holder's Studio use is billed whether or not they keep a seat.");
+            var path = summary.Path;
+            Assert.IsTrue(path.Available);
+            Assert.AreEqual(Math.Round((cost - value) / months, 2), path.MonthlyGap.Value, 0.01);
+            Assert.AreEqual(Math.Round((cost - value) / months / 7.5, 1), path.ExtraActiveDaysPerMonth);
+            Assert.AreEqual(1, path.Reclaimable);
+            Assert.AreEqual(1, path.EvidencedWithoutSeat);
+            Assert.AreEqual(1, path.Reassignable);
+            Assert.AreEqual(0, path.NetNewSeats);
+            Assert.AreEqual(Math.Round(seat / months, 2), summary.Actions.Single(a => a.Code == CopilotInvestmentActionCodes.ReclaimIdle).MonthlyAmount);
+        }
+
+        [TestMethod]
+        public void TheDistribution_SplitsAtTheBreakEven_SoNoBarStraddlesIt()
+        {
+            // Break-even is 30 / 7 = 4.29 days a month. 28 days is 0.92 months, so 4 active days is 4.35 a month - just at
+            // or above it - and 3 is below it.
+            var people = new List<CopilotInvestmentPerson> { Holder(1, 0), Holder(2, 1), Holder(3, 3), Holder(4, 4), Holder(5, 12) };
+            var assumptions = Assumptions(a => a.MinutesPerActiveDay = new CopilotInvestmentRange { Conservative = 10, Base = 14, Upside = 30 });
+            var summary = CopilotInvestmentCalculator.Calculate(Input(people, assumptions));
+            var breakEven = 30 / (14 / 60d * 0.5 * 60);
+
+            var buckets = summary.Evidence.Distribution;
+            Assert.AreEqual(people.Count, buckets.Sum(b => b.Holders));
+            Assert.IsTrue(buckets.Any(b => b.MaxDaysPerMonth.HasValue && Math.Abs(b.MaxDaysPerMonth.Value - Math.Round(breakEven, 2)) < 0.01));
+            Assert.IsTrue(buckets.All(b => b.BelowBreakEven.HasValue));
+            Assert.IsFalse(buckets.Any(b => b.Key == "range" && b.MaxDaysPerMonth.HasValue && b.MaxDaysPerMonth.Value - b.MinDaysPerMonth < 1),
+                "The fixed edge at 5 gives way to the break-even rather than leaving a sliver beside it.");
+            var below = buckets.Where(b => b.BelowBreakEven == true).Sum(b => b.Holders);
+            var above = buckets.Where(b => b.BelowBreakEven == false).Sum(b => b.Holders);
+            var months = 28 / CopilotInvestmentCalculator.AverageMonthDays;
+            Assert.AreEqual(people.Count(p => p.ActiveDays / months >= breakEven), above);
+            Assert.AreEqual(people.Count - above, below);
+        }
+
+        [TestMethod]
+        public void StudioTrend_IsOnlyComparedLikeForLike_AndTheWeeklyTrendOnlyForTheWholeTenant()
+        {
+            var input = Input(new List<CopilotInvestmentPerson> { Holder(1, 10, studio: new StudioUserFact { UserId = 1, Credits = 500, PriorCredits = 50 }) }, Assumptions());
+            input.Studio = new StudioFacts { HasData = true, PriorComplete = false };
+            var partial = CopilotInvestmentCalculator.Calculate(input);
+            Assert.IsNull(partial.Investment.Studio.PriorCredits, "A ledger that starts inside the previous period would read as growth.");
+            Assert.IsNull(partial.Findings.Single(f => f.Code == CopilotInvestmentFindingCodes.StudioTrend).Values["prior"]);
+            input.Studio.PriorComplete = true;
+            Assert.AreEqual(50d, CopilotInvestmentCalculator.Calculate(input).Investment.Studio.PriorCredits);
+
+            input.WeeklyActiveHoldersUnavailable = CopilotInvestmentTrajectoryUnavailable.Filtered;
+            var filtered = CopilotInvestmentCalculator.Calculate(input);
+            Assert.IsFalse(filtered.Trajectory.Available);
+            Assert.AreEqual(CopilotInvestmentTrajectoryUnavailable.Filtered, filtered.Trajectory.UnavailableReason);
+
+            input.WeeklyActiveHoldersUnavailable = null;
+            input.WeeklyActiveHolders = Enumerable.Range(0, 14)
+                .Select(i => new AdoptionTimePoint { WeekStart = From.AddDays(7 * (i - 14)), Value = i == 5 ? (double?)null : 1 })
+                .ToList();
+            var tenant = CopilotInvestmentCalculator.Calculate(input);
+            Assert.IsTrue(tenant.Trajectory.Available);
+            Assert.AreEqual(CopilotInvestmentCalculator.TrajectoryWeeks, tenant.Trajectory.Weeks.Count, "The most recent weeks only.");
+            Assert.IsTrue(tenant.Trajectory.Weeks.Any(w => w.ActiveHolders == null), "A week the audit import misses stays absent, not zero.");
+            Assert.AreEqual(1d, tenant.Trajectory.Weeks.Last().Share);
+            Assert.IsTrue(tenant.Findings.Any(f => f.Code == CopilotInvestmentFindingCodes.Trajectory));
+        }
+
+        [TestMethod]
+        public void APersonsTrend_ComparesEqualHalvesOfTheWindow_SoSteadyUseIsNeverADecline()
+        {
+            var from = new DateTime(2026, 9, 30, 0, 0, 0, DateTimeKind.Utc);
+            var to = from.AddDays(28);
+            var person = new CopilotInvestmentPersonRow { UserId = 1, Licensed = true, Flags = new List<string>() };
+            PersonDetailFacts Facts(Func<DateTime, bool> active)
+            {
+                var facts = new PersonDetailFacts { ActivityAssessed = true };
+                for (var day = from; day < to; day = day.AddDays(1))
+                    if (day.DayOfWeek != DayOfWeek.Saturday && day.DayOfWeek != DayOfWeek.Sunday && active(day))
+                        facts.Activity.Add(new PersonActivityRow { ActivityDate = day, AppHost = "Word", Turns = day < from.AddDays(3) ? 40 : 2 });
+                return facts;
+            }
+
+            // Every working day, with a burst of prompts at the start: steady use, not a decline.
+            var steady = CopilotInvestmentPersonDetailBuilder.Build(person, Facts(_ => true), "EUR", from, to);
+            CollectionAssert.DoesNotContain(steady.Evidence, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Declining);
+            CollectionAssert.DoesNotContain(steady.Evidence, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Growing);
+
+            var fading = CopilotInvestmentPersonDetailBuilder.Build(person, Facts(d => d < from.AddDays(14)), "EUR", from, to);
+            CollectionAssert.Contains(fading.Evidence, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Declining);
+            var building = CopilotInvestmentPersonDetailBuilder.Build(person, Facts(d => d >= from.AddDays(14)), "EUR", from, to);
+            CollectionAssert.Contains(building.Evidence, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Growing);
         }
 
         [TestMethod]

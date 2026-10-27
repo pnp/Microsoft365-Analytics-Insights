@@ -105,7 +105,8 @@ namespace Common.Entities.CopilotInvestment
 
         private static CopilotInvestmentGroupRow GroupRow(Context context, List<CopilotInvestmentPerson> people)
         {
-            var holders = people.Where(p => p.Licensed).ToList();
+            // The matched holders only, so a group's return compares the same people's value and cost.
+            var holders = people.Where(Context.Matched).ToList();
             var active = holders.Count(h => h.ActiveDays > 0);
             var row = new CopilotInvestmentGroupRow
             {
@@ -129,23 +130,30 @@ namespace Common.Entities.CopilotInvestment
             return row;
         }
 
+        /// <summary>The active days a month the spend-against-evidence quadrants split at: about once a week.</summary>
+        public const double QuadrantDaysPerMonth = StrongEvidenceDaysPerMonth / 2;
+
         private static CopilotInvestmentConcentration Concentration(Context context)
         {
             var result = new CopilotInvestmentConcentration
             {
                 ActiveDays = CopilotInvestmentStatistics.Distribution(context.Holders.Select(h => (double)h.ActiveDays).ToList(), EvidenceTopFraction),
+                QuadrantDaysPerMonth = QuadrantDaysPerMonth,
             };
             var consumers = (context.Input.People ?? new List<CopilotInvestmentPerson>()).Where(p => (p.Credit?.Credits ?? 0) > 0).ToList();
             result.Credits = CopilotInvestmentStatistics.Distribution(consumers.Select(p => p.Credit.Credits.Value).ToList(), CreditTopFraction);
-            if (consumers.Count > 0)
+            // Spend against evidence needs evidence from this window, so seat holders measured elsewhere (or not at all) sit out.
+            var assessed = consumers.Where(p => !p.NotAnalysed && !p.EvidenceOtherPeriod).ToList();
+            if (assessed.Count > 0)
             {
-                var median = CopilotInvestmentStatistics.Median(consumers.Select(p => p.Credit.Credits.Value)).Value;
+                var median = CopilotInvestmentStatistics.Median(assessed.Select(p => p.Credit.Credits.Value)).Value;
+                result.QuadrantMedianCredits = Math.Round(median, 2);
                 foreach (var key in new[] { QuadrantKeys.HighSpendStrongEvidence, QuadrantKeys.HighSpendThinEvidence, QuadrantKeys.LowSpendStrongEvidence, QuadrantKeys.LowSpendThinEvidence })
                     result.Quadrants.Add(new CopilotInvestmentQuadrant { Key = key });
-                foreach (var person in consumers)
+                foreach (var person in assessed)
                 {
                     var high = person.Credit.Credits.Value >= median;
-                    var strong = context.ActiveDaysPerMonth(person) >= StrongEvidenceDaysPerMonth / 2;
+                    var strong = context.ActiveDaysPerMonth(person) >= QuadrantDaysPerMonth;
                     var key = high ? (strong ? QuadrantKeys.HighSpendStrongEvidence : QuadrantKeys.HighSpendThinEvidence)
                         : (strong ? QuadrantKeys.LowSpendStrongEvidence : QuadrantKeys.LowSpendThinEvidence);
                     var quadrant = result.Quadrants.Single(q => q.Key == key);
@@ -173,11 +181,11 @@ namespace Common.Entities.CopilotInvestment
             if (context.StudioPrice.HasValue) metered.StudioWindowValue = Money(metered.StudioCredits * context.StudioPrice.Value);
             if (context.CreditPrice.HasValue) metered.CreditBalanceValue = Money(metered.Credits * context.CreditPrice.Value);
             if (context.SeatPrice.HasValue && context.StudioPrice.HasValue)
-                metered.StudioAboveSeatPrice = people.Count(p => (p.Studio?.Credits ?? 0) * context.StudioPrice.Value / context.Months >= context.SeatPrice.Value);
+                metered.StudioAboveSeatPrice = people.Count(context.IsMeteredAboveSeat);
             if (context.SeatPrice.HasValue && context.CreditPrice.HasValue)
                 metered.BalanceAboveSeatPriceIfMonthly = people.Count(p => (p.Credit?.Credits ?? 0) * context.CreditPrice.Value >= context.SeatPrice.Value);
             if (context.BreakEvenDaysPerMonth.HasValue)
-                metered.EvidencedCandidates = people.Count(p => p.ActiveDays > 0 && context.ActiveDaysPerMonth(p) >= context.BreakEvenDaysPerMonth.Value);
+                metered.EvidencedCandidates = people.Count(context.IsExpandEvidenced);
             return metered;
         }
 
@@ -272,31 +280,50 @@ namespace Common.Entities.CopilotInvestment
             }).ToList();
         }
 
+        /// <summary>
+        /// The recommendations, in a fixed order by kind of decision - seats nobody uses, seats under-used, seats to add,
+        /// spend to review, then data and set-up. Amounts of different kinds are never ranked against each other: each
+        /// carries an <see cref="CopilotInvestmentAction.Effect"/> saying what its money is. Every action about people is
+        /// counted with the same predicate that flags them, so its drill-down lists exactly the people it counts.
+        /// </summary>
         private static List<CopilotInvestmentAction> Actions(CopilotInvestmentInput input, Context context, CopilotInvestmentSummary summary)
         {
             var actions = new List<CopilotInvestmentAction>();
             var holders = context.Holders;
-            var cost = ModelledCost(context);
-            var baseValue = context.ValueReady ? holders.Sum(h => context.Value(h, CopilotInvestmentScenarios.Base, CopilotInvestmentScenarios.Base)) : 0;
+            var people = input.People ?? new List<CopilotInvestmentPerson>();
+            double? SeatsMonthly(IEnumerable<CopilotInvestmentPerson> seats) =>
+                context.SeatPrice.HasValue ? Money(seats.Sum(h => context.SeatCost(h) ?? 0) / context.Months) : null;
 
             var reclaim = holders.Where(context.IsReclaimCandidate).ToList();
             if (reclaim.Count > 0)
             {
-                var reclaimCost = reclaim.Sum(h => context.Cost(h) ?? 0);
                 actions.Add(new CopilotInvestmentAction
                 {
                     Code = CopilotInvestmentActionCodes.ReclaimIdle,
                     People = reclaim.Count,
-                    MonthlyAmount = context.SeatPrice.HasValue ? Money(reclaim.Count * context.SeatPrice.Value) : null,
-                    RoiBaseAfter = context.ValueReady && cost.HasValue ? Ratio(baseValue, cost.Value - reclaimCost) : null,
+                    MonthlyAmount = SeatsMonthly(reclaim),
+                    RoiBaseAfter = summary.Sensitivity.RoiBaseAfterReclaim,
                     Flag = CopilotInvestmentFlags.ReclaimCandidate,
+                    Effect = CopilotInvestmentActionEffects.FreesSeatCost,
+                });
+            }
+
+            var review = holders.Where(context.IsIdleReview).ToList();
+            if (review.Count > 0)
+            {
+                actions.Add(new CopilotInvestmentAction
+                {
+                    Code = CopilotInvestmentActionCodes.ReviewIdle,
+                    People = review.Count,
+                    MonthlyAmount = SeatsMonthly(review),
+                    Flag = CopilotInvestmentFlags.IdleReview,
+                    Effect = CopilotInvestmentActionEffects.IdleSeatCost,
                 });
             }
 
             if (context.ValueReady)
             {
-                var below = holders.Where(h => h.ActiveDays > 0
-                    && context.Value(h, CopilotInvestmentScenarios.Base, CopilotInvestmentScenarios.Base) < (context.Cost(h) ?? 0)).ToList();
+                var below = holders.Where(context.IsBelowBaseBreakEven).ToList();
                 if (below.Count > 0)
                 {
                     actions.Add(new CopilotInvestmentAction
@@ -304,10 +331,10 @@ namespace Common.Entities.CopilotInvestment
                         Code = CopilotInvestmentActionCodes.EnableBelowBreakEven,
                         People = below.Count,
                         MonthlyAmount = Money(below.Sum(h => (context.Cost(h) ?? 0) - context.Value(h, CopilotInvestmentScenarios.Base, CopilotInvestmentScenarios.Base)) / context.Months),
-                        Metric = context.BreakEvenDaysPerMonth.HasValue
-                            ? CopilotInvestmentStatistics.Median(below.Select(h => Math.Max(0, context.BreakEvenDaysPerMonth.Value - context.ActiveDaysPerMonth(h))))
-                            : null,
-                        Signal = CopilotInvestmentSignals.BelowBreakEven,
+                        // Each person's own gap, against their own cost - the days that would actually close it.
+                        Metric = CopilotInvestmentStatistics.Median(below.Select(h => context.RowsById[h.UserId].BreakEvenGapDaysPerMonth ?? 0)),
+                        Flag = CopilotInvestmentFlags.BelowBaseBreakEven,
+                        Effect = CopilotInvestmentActionEffects.ValueShortfall,
                     });
                 }
             }
@@ -315,12 +342,16 @@ namespace Common.Entities.CopilotInvestment
             {
                 var light = holders.Count(h => h.ActiveDays > 0 && !BandAtLeast(h.Band, AdoptionBand.Developing));
                 if (light > 0)
-                    actions.Add(new CopilotInvestmentAction { Code = CopilotInvestmentActionCodes.EnableLightEvidence, People = light, Signal = CopilotInvestmentSignals.LightEvidence });
+                    actions.Add(new CopilotInvestmentAction
+                    {
+                        Code = CopilotInvestmentActionCodes.EnableLightEvidence, People = light, Signal = CopilotInvestmentSignals.LightEvidence,
+                        Effect = CopilotInvestmentActionEffects.None,
+                    });
             }
 
             if (context.BreakEvenDaysPerMonth.HasValue)
             {
-                var evidenced = context.NonHolders.Count(p => p.ActiveDays > 0 && context.ActiveDaysPerMonth(p) >= context.BreakEvenDaysPerMonth.Value);
+                var evidenced = context.NonHolders.Count(context.IsExpandEvidenced);
                 if (evidenced > 0)
                     actions.Add(new CopilotInvestmentAction
                     {
@@ -328,7 +359,8 @@ namespace Common.Entities.CopilotInvestment
                         People = evidenced,
                         MonthlyAmount = Money(evidenced * context.SeatPrice.Value),
                         Metric = Math.Round(context.BreakEvenDaysPerMonth.Value, 2),
-                        Signal = CopilotInvestmentSignals.ExpandCandidate,
+                        Flag = CopilotInvestmentFlags.ExpandEvidenced,
+                        Effect = CopilotInvestmentActionEffects.AddsSeatCost,
                     });
             }
             else if (input.RecommendedCandidates > 0)
@@ -339,6 +371,7 @@ namespace Common.Entities.CopilotInvestment
                     People = input.RecommendedCandidates,
                     MonthlyAmount = context.SeatPrice.HasValue ? Money(input.RecommendedCandidates * context.SeatPrice.Value) : null,
                     Signal = CopilotInvestmentSignals.ExpandCandidate,
+                    Effect = CopilotInvestmentActionEffects.AddsSeatCost,
                 });
             }
 
@@ -354,40 +387,46 @@ namespace Common.Entities.CopilotInvestment
                     MonthlyAmount = context.CreditPrice.HasValue ? Money(credits * context.CreditPrice.Value) : null,
                     AssumesMonthlyBalances = context.CreditPrice.HasValue,
                     Flag = CopilotInvestmentFlags.HighSpendThinEvidence,
+                    Effect = context.CreditPrice.HasValue ? CopilotInvestmentActionEffects.BalanceIfMonthly : CopilotInvestmentActionEffects.None,
                 });
             }
 
-            var blocked = (input.People ?? new List<CopilotInvestmentPerson>())
-                .Where(p => p.Credit != null && (p.Credit.LimitExhaustedRows > 0 || p.Credit.NearLimitRows > 0) && context.StrongEvidence(p)).ToList();
+            var blocked = people.Where(context.IsLimitBlockedEvidenced).ToList();
             if (blocked.Count > 0)
                 actions.Add(new CopilotInvestmentAction
                 {
                     Code = CopilotInvestmentActionCodes.RaiseLimitEvidenced,
                     People = blocked.Count,
                     Credits = Math.Round(blocked.Sum(p => p.Credit.Credits ?? 0), 6),
-                    Flag = CopilotInvestmentFlags.LimitExhausted,
+                    Flag = CopilotInvestmentFlags.LimitBlockedEvidenced,
+                    Effect = CopilotInvestmentActionEffects.None,
                 });
 
-            if (context.SeatPrice.HasValue && context.StudioPrice.HasValue)
-            {
-                var heavy = context.NonHolders.Where(p => (p.Studio?.Credits ?? 0) * context.StudioPrice.Value / context.Months >= context.SeatPrice.Value).ToList();
-                if (heavy.Count > 0)
-                    actions.Add(new CopilotInvestmentAction
-                    {
-                        Code = CopilotInvestmentActionCodes.LicenceMeteredHeavy,
-                        People = heavy.Count,
-                        MonthlyAmount = Money(heavy.Sum(p => p.Studio.Credits) * context.StudioPrice.Value / context.Months),
-                        Signal = CopilotInvestmentSignals.Metered,
-                    });
-            }
+            var heavy = context.NonHolders.Where(context.IsMeteredAboveSeat).ToList();
+            if (heavy.Count > 0)
+                actions.Add(new CopilotInvestmentAction
+                {
+                    Code = CopilotInvestmentActionCodes.LicenceMeteredHeavy,
+                    People = heavy.Count,
+                    MonthlyAmount = Money(heavy.Sum(p => p.Studio.Credits) * context.StudioPrice.Value / context.Months),
+                    Flag = CopilotInvestmentFlags.MeteredAboveSeat,
+                    Effect = CopilotInvestmentActionEffects.MeteredSpend,
+                });
 
             var sources = summary.Sources.Credits;
             var coverageGap = (sources.UnresolvedObjects ?? 0) + sources.PartialUsers + sources.StaleUsers;
             if (sources.HasData && coverageGap > 0)
-                actions.Add(new CopilotInvestmentAction { Code = CopilotInvestmentActionCodes.ImproveCoverage, People = coverageGap });
+                actions.Add(new CopilotInvestmentAction
+                {
+                    Code = CopilotInvestmentActionCodes.ImproveCoverage, People = coverageGap, Effect = CopilotInvestmentActionEffects.None,
+                });
 
             if (!context.ValueReady)
-                actions.Add(new CopilotInvestmentAction { Code = CopilotInvestmentActionCodes.SetAssumptions, People = 0, Metric = summary.Value.Missing.Count });
+                actions.Add(new CopilotInvestmentAction
+                {
+                    Code = CopilotInvestmentActionCodes.SetAssumptions, People = 0, Metric = summary.Value.Missing.Count,
+                    Effect = CopilotInvestmentActionEffects.None,
+                });
 
             return actions;
         }
@@ -427,6 +466,11 @@ namespace Common.Entities.CopilotInvestment
                         ("daysPerMonth", breakEven.ActiveDaysPerMonthPerSeat), ("shareAtOrAbove", breakEven.ShareAtOrAbove)));
                 }
             }
+            else if (summary.Value.UnavailableReason == CopilotInvestmentValueUnavailable.NoMatchedHolders)
+            {
+                findings.Add(Finding(CopilotInvestmentFindingCodes.NoMatchedHolders, "warning",
+                    ("otherPeriod", summary.Investment.Seats.OtherPeriodHolders), ("notAnalysed", summary.Investment.Seats.NotAnalysedHolders)));
+            }
             else
             {
                 findings.Add(Finding(CopilotInvestmentFindingCodes.AssumptionsMissing, "warning", ("missing", summary.Value.Missing.Count)));
@@ -437,9 +481,11 @@ namespace Common.Entities.CopilotInvestment
             {
                 var share = evidence.IdleHolders / (double)evidence.AnalysedHolders;
                 var reclaim = summary.Actions.FirstOrDefault(a => a.Code == CopilotInvestmentActionCodes.ReclaimIdle);
+                var review = summary.Actions.FirstOrDefault(a => a.Code == CopilotInvestmentActionCodes.ReviewIdle);
                 findings.Add(Finding(CopilotInvestmentFindingCodes.IdleSeats, share >= 0.25 ? "critical" : share >= 0.1 ? "warning" : "good",
                     ("idle", evidence.IdleHolders), ("share", Math.Round(share, 4)), ("reclaimable", reclaim?.People ?? 0),
-                    ("monthly", reclaim?.MonthlyAmount), ("roiAfter", reclaim?.RoiBaseAfter)));
+                    ("monthly", reclaim?.MonthlyAmount), ("roiAfter", reclaim?.RoiBaseAfter), ("review", review?.People ?? 0),
+                    ("tooNew", evidence.IdleTooNewToJudge)));
             }
 
             var concentration = summary.Concentration;
@@ -467,9 +513,22 @@ namespace Common.Entities.CopilotInvestment
             }
 
             var studio = summary.Investment.Studio;
-            if (studio.Credits > 0 || studio.PriorCredits > 0)
+            if (studio.Credits > 0 || (studio.PriorCredits ?? 0) > 0)
                 findings.Add(Finding(CopilotInvestmentFindingCodes.StudioTrend, "neutral", ("credits", studio.Credits), ("prior", studio.PriorCredits),
-                    ("change", studio.PriorCredits > 0 ? Math.Round(studio.Credits / studio.PriorCredits - 1, 4) : (double?)null)));
+                    ("change", (studio.PriorCredits ?? 0) > 0 ? Math.Round(studio.Credits / studio.PriorCredits.Value - 1, 4) : (double?)null)));
+
+            var trajectory = summary.Trajectory;
+            if (trajectory.Available)
+            {
+                var measured = trajectory.Weeks.Where(w => w.ActiveHolders.HasValue).ToList();
+                var first = measured.First();
+                var last = measured.Last();
+                var change = first.ActiveHolders.Value > 0 ? Math.Round(last.ActiveHolders.Value / first.ActiveHolders.Value - 1, 4) : (double?)null;
+                findings.Add(Finding(CopilotInvestmentFindingCodes.Trajectory,
+                    change.HasValue && change.Value >= 0.1 ? "good" : change.HasValue && change.Value <= -0.1 ? "warning" : "neutral",
+                    ("first", first.ActiveHolders), ("last", last.ActiveHolders), ("change", change), ("weeks", measured.Count),
+                    ("share", last.Share)));
+            }
 
             if (summary.Investment.Credits.ObservedUsers > 0 && summary.Investment.Credits.PeriodStatus != "verified")
                 findings.Add(Finding(CopilotInvestmentFindingCodes.BalancesUnverified, "neutral",
@@ -486,60 +545,83 @@ namespace Common.Entities.CopilotInvestment
             return finding;
         }
 
+        /// <summary>
+        /// How far to trust the conclusions, answered per question rather than as one label: is the evidence of use
+        /// complete, is the cost complete, whose assumptions drive the money, and how good are the preview balances.
+        /// </summary>
         private static CopilotInvestmentTrust Trust(CopilotInvestmentInput input, Context context, CopilotInvestmentSummary summary)
         {
             var trust = new CopilotInvestmentTrust();
-            void Add(string code, string impact, params (string Key, double? Value)[] values)
+            void Add(string area, string code, string impact, params (string Key, double? Value)[] values)
             {
-                var reason = new CopilotInvestmentTrustReason { Code = code, Impact = impact };
+                var reason = new CopilotInvestmentTrustReason { Code = code, Impact = impact, Area = area };
                 foreach (var value in values) reason.Values[value.Key] = value.Value;
                 trust.Reasons.Add(reason);
             }
+            const string evidenceArea = CopilotInvestmentTrustAreas.Evidence;
+            const string costArea = CopilotInvestmentTrustAreas.Cost;
+            const string assumptionsArea = CopilotInvestmentTrustAreas.Assumptions;
+            const string balancesArea = CopilotInvestmentTrustAreas.Balances;
 
             var adoption = summary.Sources.Adoption;
-            if (!adoption.Available) Add(CopilotInvestmentTrustCodes.AdoptionUnavailable, "low");
+            if (!adoption.Available) Add(evidenceArea, CopilotInvestmentTrustCodes.AdoptionUnavailable, "low");
             else if (!adoption.AuditAvailable)
-                Add(CopilotInvestmentTrustCodes.AuditMissing, adoption.UsageReportAvailable ? "medium" : "low");
+                Add(evidenceArea, CopilotInvestmentTrustCodes.AuditMissing, adoption.UsageReportAvailable ? "medium" : "low");
             if (adoption.UsageReportSignalHolders > 0)
-                Add(CopilotInvestmentTrustCodes.UsageReportSignal, "medium", ("holders", adoption.UsageReportSignalHolders));
-            if (adoption.FiguresIncomplete) Add(CopilotInvestmentTrustCodes.FiguresIncomplete, "low");
-            if (adoption.HoldersNotAnalysed > 0) Add(CopilotInvestmentTrustCodes.HoldersNotAnalysed, "medium", ("holders", adoption.HoldersNotAnalysed));
-
-            var assumptions = summary.Assumptions;
-            if (assumptions.Status == CopilotInvestmentAssumptionStatus.Unavailable) Add(CopilotInvestmentTrustCodes.AssumptionsUnavailable, "medium");
-            else if (assumptions.MissingForValue.Count > 0) Add(CopilotInvestmentTrustCodes.AssumptionsMissing, "medium", ("missing", assumptions.MissingForValue.Count));
-            if (assumptions.ScenarioApplied) Add(CopilotInvestmentTrustCodes.ScenarioApplied, "medium");
+                Add(evidenceArea, CopilotInvestmentTrustCodes.UsageReportSignal, "medium", ("holders", adoption.UsageReportSignalHolders));
+            if (adoption.FiguresIncomplete) Add(evidenceArea, CopilotInvestmentTrustCodes.FiguresIncomplete, "low");
+            if (adoption.HoldersNotAnalysed > 0) Add(evidenceArea, CopilotInvestmentTrustCodes.HoldersNotAnalysed, "medium", ("holders", adoption.HoldersNotAnalysed));
+            if (input.WindowDays <= 7) Add(evidenceArea, CopilotInvestmentTrustCodes.ShortWindow, "medium", ("days", input.WindowDays));
 
             var seats = summary.Investment.Seats;
             if (seats.Basis == SeatBases.CurrentAssignments || seats.Basis == SeatBases.Mixed)
-                Add(CopilotInvestmentTrustCodes.SeatsCurrentAssignments, "medium");
+                Add(costArea, CopilotInvestmentTrustCodes.SeatsCurrentAssignments, "medium");
+            var studio = summary.Sources.Studio;
+            if (studio.FailureCode != null)
+                // With a Studio price set, the return's cost is missing a part, so the return may be overstated.
+                Add(costArea, CopilotInvestmentTrustCodes.StudioUnavailable, context.StudioPrice.HasValue ? "low" : "medium");
+            else if (studio.LastImportFailed) Add(costArea, CopilotInvestmentTrustCodes.StudioImportFailed, "medium");
+
+            var assumptions = summary.Assumptions;
+            if (assumptions.Status == CopilotInvestmentAssumptionStatus.Unavailable) Add(assumptionsArea, CopilotInvestmentTrustCodes.AssumptionsUnavailable, "medium");
+            else if (assumptions.MissingForValue.Count > 0) Add(assumptionsArea, CopilotInvestmentTrustCodes.AssumptionsMissing, "medium", ("missing", assumptions.MissingForValue.Count));
+            if (assumptions.ScenarioApplied) Add(assumptionsArea, CopilotInvestmentTrustCodes.ScenarioApplied, "medium");
+            // Always said once value is modelled: it is time back valued at a cost, not a measured saving.
+            if (summary.Value.Available) Add(assumptionsArea, CopilotInvestmentTrustCodes.AssumedTimeValue, "info");
 
             var credits = summary.Sources.Credits;
-            if (!credits.HasData) Add(CopilotInvestmentTrustCodes.CreditsMissing, "medium");
+            if (credits.FailureCode != null) Add(balancesArea, CopilotInvestmentTrustCodes.CreditsUnavailable, "medium");
+            else if (!credits.HasData) Add(balancesArea, CopilotInvestmentTrustCodes.CreditsMissing, "medium");
             else
             {
-                if (summary.Investment.Credits.PeriodStatus != "verified") Add(CopilotInvestmentTrustCodes.BalancesUnverified, "medium");
+                if (summary.Investment.Credits.PeriodStatus != "verified") Add(balancesArea, CopilotInvestmentTrustCodes.BalancesUnverified, "medium");
                 if (credits.DirectoryUsers.HasValue && credits.DirectoryUsers.Value > 0 && credits.CollectorObserved.HasValue)
                 {
                     var coverage = credits.CollectorObserved.Value / (double)credits.DirectoryUsers.Value;
-                    if (coverage < 0.95) Add(CopilotInvestmentTrustCodes.CreditCoverage, "medium", ("coverage", Math.Round(coverage, 4)));
+                    if (coverage < 0.95) Add(balancesArea, CopilotInvestmentTrustCodes.CreditCoverage, "medium", ("coverage", Math.Round(coverage, 4)));
                 }
                 if (credits.SnapshotDate.HasValue && (input.ToUtc.Date - credits.SnapshotDate.Value.Date).TotalDays > 3)
-                    Add(CopilotInvestmentTrustCodes.CreditsStale, "medium", ("days", (input.ToUtc.Date - credits.SnapshotDate.Value.Date).TotalDays));
+                    Add(balancesArea, CopilotInvestmentTrustCodes.CreditsStale, "medium", ("days", (input.ToUtc.Date - credits.SnapshotDate.Value.Date).TotalDays));
                 if (credits.ObservedUsers > 0 && credits.PartialUsers / (double)credits.ObservedUsers > 0.05)
-                    Add(CopilotInvestmentTrustCodes.CreditsPartial, "medium", ("share", Math.Round(credits.PartialUsers / (double)credits.ObservedUsers, 4)));
+                    Add(balancesArea, CopilotInvestmentTrustCodes.CreditsPartial, "medium", ("share", Math.Round(credits.PartialUsers / (double)credits.ObservedUsers, 4)));
                 if ((credits.UnresolvedCredits ?? 0) > 0)
                 {
                     var total = summary.Investment.Credits.Credits + credits.UnresolvedCredits.Value;
                     // An unresolved balance below 5% of the total is reported but does not lower confidence.
-                    Add(CopilotInvestmentTrustCodes.CreditsUnresolved, total > 0 && credits.UnresolvedCredits.Value / total > 0.05 ? "medium" : "info",
+                    Add(balancesArea, CopilotInvestmentTrustCodes.CreditsUnresolved, total > 0 && credits.UnresolvedCredits.Value / total > 0.05 ? "medium" : "info",
                         ("credits", credits.UnresolvedCredits), ("objects", credits.UnresolvedObjects));
                 }
             }
-            if (input.WindowDays <= 7) Add(CopilotInvestmentTrustCodes.ShortWindow, "medium", ("days", input.WindowDays));
-            if (summary.Sources.Studio.LastImportFailed) Add(CopilotInvestmentTrustCodes.StudioImportFailed, "medium");
 
-            trust.Level = trust.Reasons.Any(r => r.Impact == "low") ? "low" : trust.Reasons.Any(r => r.Impact == "medium") ? "medium" : "high";
+            string LevelOf(IEnumerable<CopilotInvestmentTrustReason> reasons)
+            {
+                var list = reasons.ToList();
+                return list.Any(r => r.Impact == "low") ? "low" : list.Any(r => r.Impact == "medium") ? "medium" : "high";
+            }
+            foreach (var area in CopilotInvestmentTrustAreas.All)
+                trust.Areas.Add(new CopilotInvestmentTrustArea { Area = area, Level = LevelOf(trust.Reasons.Where(r => r.Area == area)) });
+            // The overall label is about the return, which the preview balances stay out of.
+            trust.Level = LevelOf(trust.Reasons.Where(r => r.Area != balancesArea));
             return trust;
         }
     }

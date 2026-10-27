@@ -54,6 +54,8 @@ namespace Common.Entities.CopilotInvestment
             summary.Value = Value(context);
             summary.BreakEven = BreakEven(context);
             summary.Sensitivity = Sensitivity(context);
+            summary.Path = Path(context, summary);
+            summary.Trajectory = Trajectory(input, summary);
             summary.Cohorts = Cohorts(context);
             summary.Organisation = Organisation(input, context);
             summary.Concentration = Concentration(context);
@@ -87,8 +89,11 @@ namespace Common.Entities.CopilotInvestment
                 Minutes = a?.MinutesPerActiveDay != null && a.MinutesPerActiveDay.IsComplete ? a.MinutesPerActiveDay : null;
                 Realisation = a?.Realisation != null && a.Realisation.IsComplete ? a.Realisation : null;
                 ValueReady = SeatPrice.HasValue && Hourly.HasValue && Minutes != null && Realisation != null;
-                if (ValueReady && Minutes.Base.Value > 0 && Realisation.Base.Value > 0)
-                    BreakEvenDaysPerMonth = SeatPrice.Value / (Minutes.Base.Value / 60 * Realisation.Base.Value * Hourly.Value);
+                if (ValueReady && Minutes.Base.Value > 0 && Realisation.Base.Value > 0 && Hourly.Value > 0)
+                {
+                    ValuePerActiveDay = Minutes.Base.Value / 60 * Realisation.Base.Value * Hourly.Value;
+                    BreakEvenDaysPerMonth = SeatPrice.Value / ValuePerActiveDay.Value;
+                }
             }
 
             public CopilotInvestmentInput Input { get; }
@@ -103,17 +108,32 @@ namespace Common.Entities.CopilotInvestment
             public CopilotInvestmentRange Minutes { get; }
             public CopilotInvestmentRange Realisation { get; }
             public bool ValueReady { get; }
+
+            /// <summary>The modelled value of one active day on the base assumptions.</summary>
+            public double? ValuePerActiveDay { get; }
+
+            /// <summary>Active days a month a seat on its own needs to break even on the base assumptions.</summary>
             public double? BreakEvenDaysPerMonth { get; }
 
+            /// <summary>
+            /// The matched population: seat holders whose activity was measured in this window. Every ratio - the return,
+            /// break-even, cohorts, groups - is about them, so numerator and denominator always cover the same people and days.
+            /// </summary>
             public List<CopilotInvestmentPerson> Holders { get; private set; } = new List<CopilotInvestmentPerson>();
+
+            /// <summary>Seat holders whose use is known only from Microsoft's report for its own period: counted, not valued.</summary>
+            public List<CopilotInvestmentPerson> OtherPeriodHolders { get; private set; } = new List<CopilotInvestmentPerson>();
             public List<CopilotInvestmentPerson> NonHolders { get; private set; } = new List<CopilotInvestmentPerson>();
             public List<CopilotInvestmentPersonRow> Rows { get; } = new List<CopilotInvestmentPersonRow>();
             public Dictionary<int, CopilotInvestmentPersonRow> RowsById { get; } = new Dictionary<int, CopilotInvestmentPersonRow>();
             public double? HighSpendThreshold { get; private set; }
 
+            public static bool Matched(CopilotInvestmentPerson person) =>
+                person.Licensed && !person.NotAnalysed && !person.EvidenceOtherPeriod;
+
             public double Value(CopilotInvestmentPerson person, string minutesScenario, string realisationScenario)
             {
-                if (!ValueReady || !person.Licensed) return 0;
+                if (!ValueReady || !Matched(person)) return 0;
                 return person.ActiveDays * Minutes.Value(minutesScenario).Value / 60 * Realisation.Value(realisationScenario).Value * Hourly.Value;
             }
 
@@ -149,7 +169,8 @@ namespace Common.Entities.CopilotInvestment
             public void ComputePeople()
             {
                 var people = Input.People ?? new List<CopilotInvestmentPerson>();
-                Holders = people.Where(p => p.Licensed).ToList();
+                Holders = people.Where(Matched).ToList();
+                OtherPeriodHolders = people.Where(p => p.Licensed && !p.NotAnalysed && p.EvidenceOtherPeriod).ToList();
                 NonHolders = people.Where(p => !p.Licensed).ToList();
 
                 var consumers = people.Where(p => (p.Credit?.Credits ?? 0) > 0).Select(p => p.Credit.Credits.Value).ToList();
@@ -204,7 +225,7 @@ namespace Common.Entities.CopilotInvestment
                     Cost = Money(person.Licensed ? Cost(person) : null),
                 };
 
-                if (ValueReady && person.Licensed)
+                if (ValueReady && Matched(person))
                 {
                     row.HoursBase = Math.Round(person.ActiveDays * Minutes.Base.Value / 60 * Realisation.Base.Value, 2);
                     row.ValueConservative = Money(Value(person, CopilotInvestmentScenarios.Conservative, CopilotInvestmentScenarios.Conservative));
@@ -212,8 +233,14 @@ namespace Common.Entities.CopilotInvestment
                     row.ValueUpside = Money(Value(person, CopilotInvestmentScenarios.Upside, CopilotInvestmentScenarios.Upside));
                     var cost = Cost(person);
                     row.ValueToCostBase = cost > 0 ? Math.Round(Value(person, CopilotInvestmentScenarios.Base, CopilotInvestmentScenarios.Base) / cost.Value, 4) : (double?)null;
-                    if (BreakEvenDaysPerMonth.HasValue)
-                        row.BreakEvenGapDaysPerMonth = Math.Round(Math.Max(0, BreakEvenDaysPerMonth.Value - ActiveDaysPerMonth(person)), 2);
+                    // Against this person's own cost - seat plus their billed Studio credits - not the seat alone, so the
+                    // days a support action asks for are the days that would actually close their gap.
+                    var needed = RequiredActiveDays(person);
+                    if (needed.HasValue)
+                    {
+                        row.BreakEvenDaysPerMonth = Math.Round(needed.Value / Months, 2);
+                        row.BreakEvenGapDaysPerMonth = Math.Round(Math.Max(0, needed.Value - person.ActiveDays) / Months, 2);
+                    }
                 }
 
                 row.Signal = SignalFor(person);
@@ -221,10 +248,20 @@ namespace Common.Entities.CopilotInvestment
                 return row;
             }
 
+            /// <summary>Active days in the window this person's own modelled cost needs on the base assumptions.</summary>
+            public double? RequiredActiveDays(CopilotInvestmentPerson person)
+            {
+                var cost = Cost(person);
+                if (!ValuePerActiveDay.HasValue || !cost.HasValue || !Matched(person)) return null;
+                return cost.Value / ValuePerActiveDay.Value;
+            }
+
             private string SignalFor(CopilotInvestmentPerson person)
             {
                 if (person.Licensed)
                 {
+                    if (person.NotAnalysed) return CopilotInvestmentSignals.NotAnalysed;
+                    if (person.EvidenceOtherPeriod) return CopilotInvestmentSignals.OtherPeriod;
                     if (person.ActiveDays <= 0)
                         return person.TooNewToJudge ? CopilotInvestmentSignals.TooNewToJudge : CopilotInvestmentSignals.NoEvidence;
                     if (ValueReady)
@@ -257,20 +294,51 @@ namespace Common.Entities.CopilotInvestment
                     if (credit.NotEntitledRows > 0) flags.Add(CopilotInvestmentFlags.NotEntitled);
                     if (credit.Partial) flags.Add(CopilotInvestmentFlags.CreditsPartial);
                     if (credit.OtherUnitRows > 0) flags.Add(CopilotInvestmentFlags.OtherUnit);
-                    if (HighSpendThreshold.HasValue && (credit.Credits ?? 0) > 0 && credit.Credits.Value >= HighSpendThreshold.Value && ThinEvidence(person))
+                    // Only someone whose evidence was weighed in this window can be said to have thin evidence.
+                    if (HighSpendThreshold.HasValue && (credit.Credits ?? 0) > 0 && credit.Credits.Value >= HighSpendThreshold.Value
+                        && !person.NotAnalysed && !person.EvidenceOtherPeriod && ThinEvidence(person))
                         flags.Add(CopilotInvestmentFlags.HighSpendThinEvidence);
                 }
                 if (person.Licensed && person.ReclaimEligibility == CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded)
                     flags.Add(CopilotInvestmentFlags.ReclaimExcluded);
                 if (person.AccountEnabled == false) flags.Add(CopilotInvestmentFlags.AccountDisabled);
                 if (IsReclaimCandidate(person)) flags.Add(CopilotInvestmentFlags.ReclaimCandidate);
+                if (IsIdleReview(person)) flags.Add(CopilotInvestmentFlags.IdleReview);
+                if (IsBelowBaseBreakEven(person)) flags.Add(CopilotInvestmentFlags.BelowBaseBreakEven);
+                if (IsExpandEvidenced(person)) flags.Add(CopilotInvestmentFlags.ExpandEvidenced);
+                if (IsLimitBlockedEvidenced(person)) flags.Add(CopilotInvestmentFlags.LimitBlockedEvidenced);
+                if (IsMeteredAboveSeat(person)) flags.Add(CopilotInvestmentFlags.MeteredAboveSeat);
                 return flags;
             }
 
+            // Each action's membership is one of these predicates, used both to count the action and to flag its people,
+            // so the card's number and the list behind "See the N people" can never disagree.
+
             public bool IsReclaimCandidate(CopilotInvestmentPerson person) =>
-                person.Licensed && person.ActiveDays <= 0 && !person.TooNewToJudge
+                Matched(person) && person.ActiveDays <= 0 && !person.TooNewToJudge
                 && (person.ReclaimEligibility == CopilotAdoptionScoring.ReclaimEligibilityTiers.Certain
                     || person.ReclaimEligibility == CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable);
+
+            /// <summary>Idle and old enough to judge, but not marked safe to reclaim (nor excluded): a person should decide.</summary>
+            public bool IsIdleReview(CopilotInvestmentPerson person) =>
+                Matched(person) && person.ActiveDays <= 0 && !person.TooNewToJudge && !IsReclaimCandidate(person)
+                && person.ReclaimEligibility != CopilotAdoptionScoring.ReclaimEligibilityTiers.Excluded;
+
+            public bool IsBelowBaseBreakEven(CopilotInvestmentPerson person) =>
+                ValueReady && Matched(person) && person.ActiveDays > 0
+                && Value(person, CopilotInvestmentScenarios.Base, CopilotInvestmentScenarios.Base) < (Cost(person) ?? 0);
+
+            public bool IsExpandEvidenced(CopilotInvestmentPerson person) =>
+                !person.Licensed && person.ActiveDays > 0 && BreakEvenDaysPerMonth.HasValue
+                && ActiveDaysPerMonth(person) >= BreakEvenDaysPerMonth.Value;
+
+            public bool IsLimitBlockedEvidenced(CopilotInvestmentPerson person) =>
+                person.Credit != null && (person.Credit.LimitExhaustedRows > 0 || person.Credit.NearLimitRows > 0)
+                && !person.NotAnalysed && !person.EvidenceOtherPeriod && StrongEvidence(person);
+
+            public bool IsMeteredAboveSeat(CopilotInvestmentPerson person) =>
+                !person.Licensed && SeatPrice.HasValue && StudioPrice.HasValue
+                && (person.Studio?.Credits ?? 0) * StudioPrice.Value / Months >= SeatPrice.Value;
         }
 
         public static class SeatBases
@@ -329,7 +397,7 @@ namespace Common.Entities.CopilotInvestment
                     LicensedUsersCapped = input.LicensedUsersCapped,
                     HoldersNotAnalysed = input.HoldersNotAnalysed,
                     AuditSignalHolders = context.Holders.Count(h => h.SignalSource == CopilotAdoptionScoring.SignalSourceAudit),
-                    UsageReportSignalHolders = context.Holders.Count(h => h.SignalSource == CopilotAdoptionScoring.SignalSourceUsageReport),
+                    UsageReportSignalHolders = context.OtherPeriodHolders.Count,
                     AnalysisGeneratedUtc = input.AnalysisGeneratedUtc,
                 },
             };
@@ -404,16 +472,20 @@ namespace Common.Entities.CopilotInvestment
         {
             var input = context.Input;
             var holders = context.Holders;
+            var others = context.OtherPeriodHolders;
             var people = input.People ?? new List<CopilotInvestmentPerson>();
             var spend = new CopilotInvestmentSpend { Currency = context.Currency };
 
-            var allHolders = holders.Count + input.HoldersNotAnalysed;
-            var seatDays = holders.Sum(h => context.SeatDays(h)) + input.HoldersNotAnalysed * (double)input.WindowDays;
+            // Every seat is a cost; only the matched holders' seats are what the return is measured against.
+            var allHolders = holders.Count + others.Count + input.HoldersNotAnalysed;
+            var seatDays = holders.Sum(h => context.SeatDays(h)) + others.Sum(h => context.SeatDays(h)) + input.HoldersNotAnalysed * (double)input.WindowDays;
             var activeHolders = holders.Count(h => h.ActiveDays > 0);
             spend.Seats = new CopilotInvestmentSeats
             {
                 Holders = allHolders,
                 AnalysedHolders = holders.Count,
+                OtherPeriodHolders = others.Count,
+                NotAnalysedHolders = input.HoldersNotAnalysed,
                 SeatDays = Math.Round(seatDays, 2),
                 Basis = holders.Count == 0 ? null
                     : holders.All(h => h.SeatHeldDays.HasValue) ? SeatBases.LicenceHistory
@@ -424,18 +496,24 @@ namespace Common.Entities.CopilotInvestment
                 spend.Seats.MonthlyRunRate = Money(allHolders * context.SeatPrice.Value);
                 spend.Seats.WindowCost = Money(context.SeatPrice.Value * seatDays / AverageMonthDays);
                 spend.Seats.AnalysedWindowCost = Money(holders.Sum(h => context.SeatCost(h) ?? 0));
-                spend.Seats.CostPerActiveHolderMonthly = activeHolders > 0 ? Money(holders.Count * context.SeatPrice.Value / activeHolders) : null;
+                spend.Seats.CostPerActiveHolderMonthly = activeHolders > 0
+                    ? Money(holders.Sum(h => context.SeatCost(h) ?? 0) / context.Months / activeHolders) : null;
             }
 
+            var studio = input.Studio ?? new StudioFacts();
             var studioPeople = people.Where(p => p.Studio != null).ToList();
             spend.Studio = new CopilotInvestmentStudioSpend
             {
                 Users = studioPeople.Count(p => p.Studio.Credits > 0),
                 Credits = Math.Round(studioPeople.Sum(p => p.Studio.Credits), 6),
-                PriorCredits = Math.Round(studioPeople.Sum(p => p.Studio.PriorCredits), 6),
-                PriorUsers = studioPeople.Count(p => p.Studio.PriorCredits > 0),
                 HolderCredits = Math.Round(studioPeople.Where(p => p.Licensed).Sum(p => p.Studio.Credits), 6),
             };
+            // A ledger that does not reach back over the whole previous period has no like-for-like comparison to offer.
+            if (studio.PriorComplete)
+            {
+                spend.Studio.PriorCredits = Math.Round(studioPeople.Sum(p => p.Studio.PriorCredits), 6);
+                spend.Studio.PriorUsers = studioPeople.Count(p => p.Studio.PriorCredits > 0);
+            }
             if (context.StudioPrice.HasValue)
             {
                 spend.Studio.WindowValue = Money(spend.Studio.Credits * context.StudioPrice.Value);
@@ -462,8 +540,12 @@ namespace Common.Entities.CopilotInvestment
 
             if (spend.Seats.AnalysedWindowCost.HasValue)
             {
-                spend.ModelledWindowCost = Money(spend.Seats.AnalysedWindowCost.Value + (spend.Studio.HolderWindowValue ?? 0));
+                // The matched holders' own Studio credits - the same people as the seats beside them.
+                var matchedStudio = context.StudioPrice.HasValue ? holders.Sum(h => context.StudioCost(h) ?? 0) : 0;
+                spend.ModelledWindowCost = Money(spend.Seats.AnalysedWindowCost.Value + matchedStudio);
                 spend.ModelledMonthlyCost = Money(spend.ModelledWindowCost.Value / context.Months);
+                spend.MonthlySeatCost = Money(spend.Seats.AnalysedWindowCost.Value / context.Months);
+                spend.MonthlyStudioCost = context.StudioPrice.HasValue ? Money(matchedStudio / context.Months) : null;
             }
             return spend;
         }
@@ -475,7 +557,7 @@ namespace Common.Entities.CopilotInvestment
             var activeDays = active.Select(h => (double)h.ActiveDays).ToList();
             var evidence = new CopilotInvestmentEvidence
             {
-                Holders = holders.Count + input.HoldersNotAnalysed,
+                Holders = holders.Count + context.OtherPeriodHolders.Count + input.HoldersNotAnalysed,
                 AnalysedHolders = holders.Count,
                 ActiveHolders = active.Count,
                 ActiveShare = holders.Count > 0 ? Math.Round(active.Count / (double)holders.Count, 4) : (double?)null,
@@ -497,25 +579,42 @@ namespace Common.Entities.CopilotInvestment
             foreach (var band in Enum.GetValues(typeof(AdoptionBand)).Cast<AdoptionBand>().OrderByDescending(b => b))
                 evidence.Bands.Add(new CopilotInvestmentBandCount { Band = band.ToString(), Holders = holders.Count(h => h.Band == band.ToString()) });
 
-            var edges = new[] { 0d, 2d, 5d, 10d, 15d };
-            var keys = new[] { "1to2", "2to5", "5to10", "10to15", "15plus" };
+            // The seat-only break-even is itself an edge, so no bar straddles it: each is wholly below or at-or-above.
+            // Buckets are (min, max], except that the break-even belongs to the bucket above it, as "at or above" does elsewhere.
+            // A fixed edge within a day of it gives way, rather than leaving a sliver of a bar ("4.8 to 5") beside it.
+            var breakEven = context.BreakEvenDaysPerMonth;
+            var edges = new List<double> { 0d, 2d, 5d, 10d, 15d };
+            double? breakEvenEdge = null;
+            if (breakEven.HasValue && breakEven.Value > 0)
+            {
+                edges.RemoveAll(e => e > 0 && Math.Abs(e - breakEven.Value) < 1);
+                edges.Add(breakEven.Value);
+                breakEvenEdge = breakEven.Value;
+            }
+            edges.Sort();
+            bool InBucket(double days, double min, double? max)
+            {
+                var lowerOk = breakEvenEdge.HasValue && min == breakEvenEdge.Value ? days >= min : days > min;
+                var upperOk = !max.HasValue || (breakEvenEdge.HasValue && max.Value == breakEvenEdge.Value ? days < max.Value : days <= max.Value);
+                return lowerOk && upperOk;
+            }
+
             evidence.Distribution.Add(new CopilotInvestmentDistributionBucket
             {
                 Key = "none", MinDaysPerMonth = 0, MaxDaysPerMonth = 0, Holders = holders.Count(h => h.ActiveDays <= 0),
+                BelowBreakEven = breakEvenEdge.HasValue ? true : (bool?)null,
             });
-            for (var i = 0; i < edges.Length; i++)
+            for (var i = 0; i < edges.Count; i++)
             {
                 var min = edges[i];
-                double? max = i + 1 < edges.Length ? edges[i + 1] : (double?)null;
+                double? max = i + 1 < edges.Count ? edges[i + 1] : (double?)null;
                 evidence.Distribution.Add(new CopilotInvestmentDistributionBucket
                 {
-                    Key = keys[i],
-                    MinDaysPerMonth = min,
-                    MaxDaysPerMonth = max,
-                    Holders = holders.Count(h => h.ActiveDays > 0 && context.ActiveDaysPerMonth(h) > min
-                        && (!max.HasValue || context.ActiveDaysPerMonth(h) <= max.Value)),
-                    BreakEvenBucket = context.BreakEvenDaysPerMonth.HasValue && context.BreakEvenDaysPerMonth.Value > min
-                        && (!max.HasValue || context.BreakEvenDaysPerMonth.Value <= max.Value),
+                    Key = "range",
+                    MinDaysPerMonth = Math.Round(min, 2),
+                    MaxDaysPerMonth = max.HasValue ? Math.Round(max.Value, 2) : (double?)null,
+                    Holders = holders.Count(h => h.ActiveDays > 0 && InBucket(context.ActiveDaysPerMonth(h), min, max)),
+                    BelowBreakEven = breakEvenEdge.HasValue ? max.HasValue && max.Value <= breakEvenEdge.Value : (bool?)null,
                 });
             }
             return evidence;
@@ -526,7 +625,14 @@ namespace Common.Entities.CopilotInvestment
             var result = new CopilotInvestmentValue();
             if (!context.ValueReady)
             {
+                result.UnavailableReason = CopilotInvestmentValueUnavailable.Assumptions;
                 result.Missing = MissingForValue(context.Input.Assumptions);
+                return result;
+            }
+            if (context.Holders.Count == 0)
+            {
+                // Seats whose use was measured in another period (or not at all) have nothing like for like to value.
+                result.UnavailableReason = CopilotInvestmentValueUnavailable.NoMatchedHolders;
                 return result;
             }
             result.Available = true;
@@ -575,7 +681,7 @@ namespace Common.Entities.CopilotInvestment
         private static CopilotInvestmentBreakEven BreakEven(Context context)
         {
             var result = new CopilotInvestmentBreakEven();
-            if (!context.ValueReady) return result;
+            if (!context.ValueReady || context.Holders.Count == 0) return result;
             result.Available = true;
             var cost = ModelledCost(context) ?? 0;
             var totalDays = context.Holders.Sum(h => (double)h.ActiveDays);
@@ -603,7 +709,7 @@ namespace Common.Entities.CopilotInvestment
         private static CopilotInvestmentSensitivity Sensitivity(Context context)
         {
             var result = new CopilotInvestmentSensitivity();
-            if (!context.ValueReady) return result;
+            if (!context.ValueReady || context.Holders.Count == 0) return result;
             var cost = ModelledCost(context);
             foreach (var minutes in CopilotInvestmentScenarios.All)
                 foreach (var realisation in CopilotInvestmentScenarios.All)
@@ -630,8 +736,72 @@ namespace Common.Entities.CopilotInvestment
                     result.RoiBaseIfBalancesMonthly = Ratio(baseValue, cost.Value + holderBalances * context.CreditPrice.Value * context.Months);
             }
 
-            var reclaim = context.Holders.Where(context.IsReclaimCandidate).Sum(h => context.Cost(h) ?? 0);
+            // Reclaiming frees the seat; whatever Copilot Studio use those people had is billed whether they hold one or not.
+            var reclaim = context.Holders.Where(context.IsReclaimCandidate).Sum(h => context.SeatCost(h) ?? 0);
             if (cost.HasValue && reclaim > 0) result.RoiBaseAfterReclaim = Ratio(baseValue, cost.Value - reclaim);
+            return result;
+        }
+
+        /// <summary>
+        /// The path to break-even: the shortfall (or surplus) a month on the base assumptions, the extra active days that
+        /// would close it, and what reclaiming idle seats and reassigning them to people already using Copilot would change.
+        /// </summary>
+        private static CopilotInvestmentPath Path(Context context, CopilotInvestmentSummary summary)
+        {
+            var result = new CopilotInvestmentPath();
+            var cost = ModelledCost(context);
+            if (!context.ValueReady || context.Holders.Count == 0 || !cost.HasValue || !context.ValuePerActiveDay.HasValue) return result;
+
+            result.Available = true;
+            var baseValue = context.Holders.Sum(h => context.Value(h, CopilotInvestmentScenarios.Base, CopilotInvestmentScenarios.Base));
+            var gap = (cost.Value - baseValue) / context.Months;
+            result.MonthlyCost = Money(cost.Value / context.Months);
+            result.MonthlyValueBase = Money(baseValue / context.Months);
+            result.MonthlyGap = Money(gap);
+            result.ValuePerActiveDay = Money(context.ValuePerActiveDay.Value);
+            result.ActiveHolders = context.Holders.Count(h => h.ActiveDays > 0);
+            if (gap > 0)
+            {
+                var extra = gap / context.ValuePerActiveDay.Value;
+                result.ExtraActiveDaysPerMonth = Math.Round(extra, 1);
+                if (result.ActiveHolders > 0) result.ExtraDaysPerActiveHolder = Math.Round(extra / result.ActiveHolders, 2);
+            }
+            result.MinutesNeeded = summary.BreakEven.MinutesPerActiveDay;
+            result.MinutesAssumed = context.Minutes.Base;
+
+            result.Reclaimable = context.Holders.Count(context.IsReclaimCandidate);
+            result.ReclaimMonthly = result.Reclaimable > 0 ? Money(context.Holders.Where(context.IsReclaimCandidate).Sum(h => context.SeatCost(h) ?? 0) / context.Months) : null;
+            result.RoiAfterReclaim = summary.Sensitivity.RoiBaseAfterReclaim;
+            result.EvidencedWithoutSeat = context.NonHolders.Count(context.IsExpandEvidenced);
+            result.Reassignable = Math.Min(result.Reclaimable, result.EvidencedWithoutSeat);
+            result.NetNewSeats = Math.Max(0, result.EvidencedWithoutSeat - result.Reclaimable);
+            result.NetNewMonthly = Money(result.NetNewSeats * context.SeatPrice.Value);
+            return result;
+        }
+
+        /// <summary>The last complete weeks of the adoption analysis' weekly active seat holders, as a share of today's seats.</summary>
+        public const int TrajectoryWeeks = 12;
+
+        private static CopilotInvestmentTrajectory Trajectory(CopilotInvestmentInput input, CopilotInvestmentSummary summary)
+        {
+            var result = new CopilotInvestmentTrajectory { SeatHolders = summary.Investment.Seats.Holders };
+            var points = input.WeeklyActiveHolders;
+            if (points == null || points.Count == 0)
+            {
+                result.UnavailableReason = input.WeeklyActiveHoldersUnavailable ?? CopilotInvestmentTrajectoryUnavailable.NoData;
+                return result;
+            }
+            foreach (var point in points.OrderBy(p => p.WeekStart).Skip(Math.Max(0, points.Count - TrajectoryWeeks)))
+            {
+                result.Weeks.Add(new CopilotInvestmentTrajectoryWeek
+                {
+                    WeekStart = point.WeekStart,
+                    ActiveHolders = point.Value,
+                    Share = point.Value.HasValue && result.SeatHolders > 0 ? Math.Round(point.Value.Value / result.SeatHolders, 4) : (double?)null,
+                });
+            }
+            result.Available = result.Weeks.Count(w => w.ActiveHolders.HasValue) >= 2;
+            if (!result.Available) result.UnavailableReason = CopilotInvestmentTrajectoryUnavailable.NoData;
             return result;
         }
     }

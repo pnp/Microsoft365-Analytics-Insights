@@ -80,10 +80,19 @@ describe('portal access navigation helpers', () => {
         '/admin/user-import', '/admin/user-scope', '/admin/user-orgs', '/admin/user-lookup',
       ] },
       { key: 'app.navGroup.reporting', paths: [
-        '/admin/global-filter', '/admin/copilot-adoption-settings', '/admin/leadership-cohort',
+        '/admin/global-filter', '/admin/copilot-adoption-settings', '/admin/copilot-investment-assumptions', '/admin/leadership-cohort',
         '/admin/prompt-categories', '/admin/copilot-audit-backfill', '/admin/agent365-catalog',
       ] },
     ]);
+  });
+
+  it('puts the investment report under Copilot for every reader, and its assumptions behind Administration only', () => {
+    const report = ROUTES.find(route => route.path === '/insights/copilot-investment')!;
+    const assumptions = ROUTES.find(route => route.path === '/admin/copilot-investment-assumptions')!;
+    expect(report.workload).toBe('copilot');
+    expect(missingPermission(report, restricted)).toBeNull();
+    expect(missingPermission(assumptions, restricted)).toBe('administration');
+    expect(missingPermission(assumptions, { ...restricted, administration: true })).toBeNull();
   });
 
   it('requires Administration, but not See PII, for the dedicated credit-history connection', () => {
