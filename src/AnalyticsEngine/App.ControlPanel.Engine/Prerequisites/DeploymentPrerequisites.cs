@@ -148,9 +148,6 @@ namespace App.ControlPanel.Engine.Prerequisites
             new WorkloadDefinition(nameof(ImportTaskSettings.GraphUsageReports), "Microsoft 365 usage reports", b =>
             {
                 b.Reports();
-                b.Check("report-identities", "Identifiable usage reports", "Microsoft 365 reports administrator",
-                    "Microsoft 365 report privacy setting", "Per-person matching needs identifiable user names in report exports.",
-                    "Review the tenant-wide setting that conceals user, group and site names before allowing identifiable reports. Do not change it without privacy approval.", GraphReference);
             }),
             new WorkloadDefinition(nameof(ImportTaskSettings.GraphCopilotUsageReports), "Microsoft 365 Copilot usage reports", b =>
             {
@@ -184,7 +181,7 @@ namespace App.ControlPanel.Engine.Prerequisites
                     "For a new deployment, enable User & licence inventory and approve its directory permissions, or supply an already populated supported inventory. Confirm Exchange Online mailboxes and apply mailbox access controls independently.", ProjectReference);
                 b.Check("mail-scope", "Mailbox access scope", "Exchange administrator", "Only the approved mailboxes",
                     "Mail.Read application consent can expose all mailboxes unless Exchange access controls restrict it. A user-group import filter is not an authorisation boundary.",
-                    "Restrict the app to approved mailboxes with supported Exchange application access controls; validate that the exact importer requests still work. Consent and an import filter alone are not mailbox scoping.",
+                    "The current Test Configuration checks the Entra Mail.Read token role. If retaining that grant, constrain it with a supported Application Access Policy. Exchange Application RBAC grants are additive: a scoped RBAC assignment does not restrict retained unscoped Entra consent. An RBAC-only alternative requires explicit validation of the importer and its permission checks. Prove allowed and denied mailbox access; never keep tenant-wide consent merely to silence a check.",
                     "https://learn.microsoft.com/exchange/permissions-exo/application-rbac");
             }),
             new WorkloadDefinition(nameof(ImportTaskSettings.ActivityLog), "SharePoint / OneDrive audit", b => b.Audit(false)),
@@ -467,7 +464,13 @@ namespace App.ControlPanel.Engine.Prerequisites
                 _items.Remove(item.Id);
             }
 
-            public void Reports() => Permission("Reports.Read.All", "Read the selected Microsoft 365 usage-report endpoints; shared by general and Copilot usage reports.");
+            public void Reports()
+            {
+                Permission("Reports.Read.All", "Read the selected Microsoft 365 usage-report endpoints; shared by general and Copilot usage reports.");
+                Check("report-identities", "Identifiable usage reports", "Microsoft 365 reports administrator",
+                    "Microsoft 365 report privacy setting", "Per-person matching needs identifiable user names in report exports.",
+                    "Review the tenant-wide setting that conceals user, group and site names before allowing identifiable reports. Do not change it without privacy approval.", GraphReference);
+            }
 
             public void Audit(bool dlp)
             {

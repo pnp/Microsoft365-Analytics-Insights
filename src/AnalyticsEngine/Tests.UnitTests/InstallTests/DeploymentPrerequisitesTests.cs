@@ -80,6 +80,7 @@ namespace Tests.UnitTests.InstallTests
             config.SolutionConfig.ImportTaskSettings.ImportPowerPlatform = true;
             var report = DeploymentPrerequisites.Build(config);
             Assert.AreEqual(2, report.Requirements.Single(r => r.Name == "Reports.Read.All").Workloads.Count);
+            Assert.AreEqual(2, report.Requirements.Single(r => r.Id == "check-report-identities").Workloads.Count);
             Assert.AreEqual(2, report.Requirements.Single(r => r.Name == "ActivityFeed.Read").Workloads.Count);
             Assert.AreEqual(report.Requirements.Count, report.Requirements.Select(r => r.Id).Distinct().Count());
             Assert.IsTrue(report.Requirements.Where(r => r.Category == PrerequisiteCategory.OptionalEnrichment)
