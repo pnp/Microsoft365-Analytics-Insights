@@ -203,7 +203,7 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
             Func<int, bool> inScope = scope.IsRestricted ? (Func<int, bool>)scope.Includes : _ => true;
 
             var people = CopilotInvestmentPeopleBuilder.Build(scoped, credits.Users, studio.Users, inScope,
-                id => DirectoryEntry(directory, id), out var recommended);
+                id => DirectoryEntry(directory, id), out var recommended, out var scopedCredits);
 
             var input = new CopilotInvestmentInput
             {
@@ -231,6 +231,7 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
                 AssumptionsUpdatedUtc = assumptions.Document?.UpdatedUtc,
                 AssumptionsDurable = assumptions.Durable,
                 Credits = credits,
+                ScopedCredits = scopedCredits,
                 CreditCollectionEnabled = CreditCollectionEnabled,
                 Studio = studio,
                 StudioImportEnabled = StudioImportEnabled,

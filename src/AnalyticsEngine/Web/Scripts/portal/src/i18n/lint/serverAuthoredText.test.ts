@@ -42,6 +42,17 @@ import { PORTAL_PERMISSION_ERROR_CODE } from '../../access';
 import { GLOBAL_FILTER_ERROR_KEYS } from '../../api/globalFilterApi';
 import { REPORT_SCOPE_ERROR_KEYS } from '../../api/http';
 import { COPILOT_ADOPTION_SETTINGS_ERROR_KEYS } from '../../api/copilotAdoptionSettingsApi';
+import { COPILOT_INVESTMENT_SETTINGS_ERROR_KEYS } from '../../api/copilotInvestmentApi';
+import {
+  ACTION_CODES as INVESTMENT_ACTION_CODES,
+  AVAILABILITY_NOTE_KEYS as INVESTMENT_AVAILABILITY_NOTE_KEYS,
+  EVIDENCE_LABEL_KEYS as INVESTMENT_EVIDENCE_KEYS,
+  FINDING_CODES as INVESTMENT_FINDING_CODES,
+  FLAG_LABEL_KEYS as INVESTMENT_FLAG_KEYS,
+  QUADRANT_LABEL_KEYS as INVESTMENT_QUADRANT_KEYS,
+  SIGNAL_LABEL_KEYS as INVESTMENT_SIGNAL_KEYS,
+  TRUST_CODES as INVESTMENT_TRUST_CODES,
+} from '../../components/copilotInvestment/investmentShared';
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
@@ -2859,5 +2870,50 @@ describe('Leadership comparison server keys', () => {
       'admin.leadershipCohort.error.',
       'admin error codes',
     );
+  });
+});
+
+/**
+ * The Copilot investment report sends codes, never sentences: every action, finding, caveat, signal, flag,
+ * evidence code, quadrant and availability note is written by the portal from its catalog. A code added on the
+ * server without a sentence here would reach the page as an identifier, or vanish from it.
+ */
+const INVESTMENT_DIR = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotInvestment');
+const INVESTMENT_MODELS_CS = join(INVESTMENT_DIR, 'CopilotInvestmentModels.cs');
+
+describe('Copilot investment server codes', () => {
+  it('words every action, finding and caveat the calculator can send', () => {
+    expect(sortedUnique([...INVESTMENT_ACTION_CODES])).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentActionCodes'));
+    expect(sortedUnique([...INVESTMENT_FINDING_CODES])).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentFindingCodes'));
+    expect(sortedUnique([...INVESTMENT_TRUST_CODES])).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentTrustCodes'));
+    for (const code of INVESTMENT_ACTION_CODES) expect(`copilotInvestment.action.${code}.title` in EN_CATALOG, code).toBe(true);
+    for (const code of INVESTMENT_TRUST_CODES) expect(`copilotInvestment.trust.${code}` in EN_CATALOG, code).toBe(true);
+  });
+
+  it('labels every signal, flag, evidence code and quadrant', () => {
+    expectMapsExactly(INVESTMENT_SIGNAL_KEYS, csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentSignals'), 'copilotInvestment.signal.', 'signals');
+    expectMapsExactly(INVESTMENT_FLAG_KEYS, csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentFlags'), 'copilotInvestment.flag.', 'flags');
+    expectMapsExactly(
+      INVESTMENT_EVIDENCE_KEYS,
+      csharpClassConstants(join(INVESTMENT_DIR, 'CopilotInvestmentPersonDetailBuilder.cs'), 'EvidenceCodes'),
+      'copilotInvestment.person.evidence.',
+      'evidence codes',
+    );
+    expect(sortedUnique(Object.keys(INVESTMENT_QUADRANT_KEYS))).toEqual(
+      csharpClassConstants(join(INVESTMENT_DIR, 'CopilotInvestmentCalculator.Sections.cs'), 'QuadrantKeys'),
+    );
+    expect(Object.values(INVESTMENT_QUADRANT_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+
+  it('words every code the assumptions API and the report can be refused with, and every availability note', () => {
+    const codes = csharpClassConstants(join(INVESTMENT_DIR, 'CopilotInvestmentAssumptions.cs'), 'CopilotInvestmentErrorCodes');
+    expect(codes.length).toBeGreaterThanOrEqual(10);
+    expect(sortedUnique([...COPILOT_INVESTMENT_SETTINGS_ERROR_KEYS.keys()].filter((c) => c !== 'loadFailed' && c !== 'saveFailed'))).toEqual(codes);
+    expect([...COPILOT_INVESTMENT_SETTINGS_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
+
+    const controller = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'CopilotInvestmentAPIController.cs'), 'utf8');
+    const notes = sortedUnique([...controller.matchAll(/notes\.Add\("([^"]+)"\)/g)].map((m) => m[1]));
+    expect(notes.length).toBeGreaterThanOrEqual(4);
+    expect(sortedUnique(Object.keys(INVESTMENT_AVAILABILITY_NOTE_KEYS))).toEqual(notes);
   });
 });

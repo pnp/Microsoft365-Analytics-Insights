@@ -184,7 +184,7 @@ namespace Common.Entities.CopilotInvestment
         private static List<CopilotInvestmentServiceRow> Services(CopilotInvestmentInput input, Context context)
         {
             var credits = input.Credits ?? new CreditFacts();
-            var objects = new HashSet<Guid>((input.People ?? new List<CopilotInvestmentPerson>()).Where(p => p.Credit != null).Select(p => p.Credit.ObjectId));
+            var objects = new HashSet<Guid>(ObservedCredits(input).Select(c => c.ObjectId));
             if (!input.Filtered)
                 foreach (var unresolved in credits.Users.Where(u => !u.UserId.HasValue)) objects.Add(unresolved.ObjectId);
 

@@ -176,7 +176,7 @@ namespace Tests.FakeDataGen.Demo
 
             // A scheduled agent spends on every working day once it is set up, whether or not its owner opens Copilot.
             if (profile == Profile.AutomationHeavy && working && age <= 40 + user.Id % 30)
-                credits[CoworkIndex] += 40 + 45 * Fraction(user.Id, d, 2430);
+                credits[CoworkIndex] += 50 + 45 * Fraction(user.Id, d, 2430);
             if (profile == Profile.MeteredHeavy && working && day.CopilotTurns == 0 && age <= 45
                 && DemoRandom.Value(_options.Seed, user.Id, d, 2431) % 100 < 30)
                 credits[Chat] += 10 + 15 * Fraction(user.Id, d, 2432);
@@ -197,7 +197,7 @@ namespace Tests.FakeDataGen.Demo
                 else if (agent == 2) credits[Chat] += 1.6 + 0.8 * jitter;
                 else if (agent == 4) credits[Chat] += 0.4 + 0.2 * jitter;
                 else if (agent == 1 && pilot) credits[SharePoint] += 2.2 + 1.1 * jitter;
-                if (profile == Profile.AgentPowerUser && agent >= 1 && agent <= 4) credits[Chat] += 9 + 7 * jitter;
+                if (profile == Profile.AgentPowerUser && agent >= 1 && agent <= 4) credits[Chat] += 12 + 8 * jitter;
                 if (pilot && agent > 0 && age <= PreviewServiceDays) credits[Preview] += 0.5 + jitter;
             }
             return credits;
@@ -367,6 +367,7 @@ namespace Tests.FakeDataGen.Demo
                 var rate = joiner ? 1 + (DemoRandom.Value(_options.Seed, i, 0, 2471) % 400) / 100d
                     : 6 + (DemoRandom.Value(_options.Seed, i, 0, 2472) % 2400) / 100d;
                 var appearDate = SweepDate(appears);
+                var seen = false;
                 for (int k = appears; k < _historyDays; k++)
                 {
                     if (_missing[k]) continue;
@@ -376,7 +377,7 @@ namespace Tests.FakeDataGen.Demo
                     var selection = Selection(date, observedAt);
                     CostUserObservation observation;
                     byte quality;
-                    if (joiner && k == appears)
+                    if (joiner && !seen)
                     {
                         // A brand-new account's group memberships have not reached the policy yet.
                         observation = Observation(-i, objectId, observedAt, selection, new List<CostServiceObservation>(),
@@ -409,6 +410,7 @@ namespace Tests.FakeDataGen.Demo
                         _tenantConsumed[k] += used;
                     }
                     WriteObservation(_runs[k], date, objectId, null, observation, quality);
+                    seen = true;
                     _sink.Write(DemoTables.CostWork, _runs[k], objectId, null, 1, observedAt.AddHours(1), quality == 2, true,
                         observation.Services.Count > 0, false, quality == 1, observation.UnevaluatedServices.Count, quality == 2 ? "observed" : "partial");
                 }

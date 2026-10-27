@@ -335,7 +335,7 @@ namespace Common.Entities.CopilotInvestment
             };
 
             var credits = input.Credits ?? new CreditFacts();
-            var observed = (input.People ?? new List<CopilotInvestmentPerson>()).Where(p => p.Credit != null).Select(p => p.Credit).ToList();
+            var observed = ObservedCredits(input);
             var unresolved = credits.Users.Where(u => !u.UserId.HasValue).ToList();
             var source = new CopilotInvestmentCreditSource
             {
@@ -396,6 +396,10 @@ namespace Common.Entities.CopilotInvestment
             return statuses.Count == 1 ? statuses[0] : "mixed";
         }
 
+        /// <summary>Every in-scope latest balance; from the people when a caller supplied no separate list.</summary>
+        internal static List<CreditUserFact> ObservedCredits(CopilotInvestmentInput input) =>
+            input.ScopedCredits ?? (input.People ?? new List<CopilotInvestmentPerson>()).Where(p => p.Credit != null).Select(p => p.Credit).ToList();
+
         private static CopilotInvestmentSpend Investment(Context context)
         {
             var input = context.Input;
@@ -438,20 +442,21 @@ namespace Common.Entities.CopilotInvestment
                 spend.Studio.HolderWindowValue = Money(spend.Studio.HolderCredits * context.StudioPrice.Value);
             }
 
-            var creditPeople = people.Where(p => p.Credit != null).ToList();
+            var observedCredits = ObservedCredits(input);
+            var holderIds = new HashSet<int>(holders.Select(h => h.UserId));
             spend.Credits = new CopilotInvestmentCreditBalances
             {
-                ObservedUsers = creditPeople.Count,
-                ConsumingUsers = creditPeople.Count(p => (p.Credit.Credits ?? 0) > 0),
-                Credits = Math.Round(creditPeople.Sum(p => p.Credit.Credits ?? 0), 6),
-                HolderCredits = Math.Round(creditPeople.Where(p => p.Licensed).Sum(p => p.Credit.Credits ?? 0), 6),
-                NonHolderCredits = Math.Round(creditPeople.Where(p => !p.Licensed).Sum(p => p.Credit.Credits ?? 0), 6),
-                PeriodStatus = PeriodStatus(creditPeople.Select(p => p.Credit)),
-                OtherUnitUsers = creditPeople.Count(p => p.Credit.OtherUnitRows > 0),
-                UnknownAmountUsers = creditPeople.Count(p => p.Credit.UnknownConsumptionRows > 0),
-                LimitExhaustedUsers = creditPeople.Count(p => p.Credit.LimitExhaustedRows > 0),
-                NearLimitUsers = creditPeople.Count(p => p.Credit.LimitExhaustedRows == 0 && p.Credit.NearLimitRows > 0),
-                NotEntitledUsers = creditPeople.Count(p => p.Credit.NotEntitledRows > 0),
+                ObservedUsers = observedCredits.Count,
+                ConsumingUsers = observedCredits.Count(c => (c.Credits ?? 0) > 0),
+                Credits = Math.Round(observedCredits.Sum(c => c.Credits ?? 0), 6),
+                HolderCredits = Math.Round(observedCredits.Where(c => c.UserId.HasValue && holderIds.Contains(c.UserId.Value)).Sum(c => c.Credits ?? 0), 6),
+                NonHolderCredits = Math.Round(observedCredits.Where(c => !c.UserId.HasValue || !holderIds.Contains(c.UserId.Value)).Sum(c => c.Credits ?? 0), 6),
+                PeriodStatus = PeriodStatus(observedCredits),
+                OtherUnitUsers = observedCredits.Count(c => c.OtherUnitRows > 0),
+                UnknownAmountUsers = observedCredits.Count(c => c.UnknownConsumptionRows > 0),
+                LimitExhaustedUsers = observedCredits.Count(c => c.LimitExhaustedRows > 0),
+                NearLimitUsers = observedCredits.Count(c => c.LimitExhaustedRows == 0 && c.NearLimitRows > 0),
+                NotEntitledUsers = observedCredits.Count(c => c.NotEntitledRows > 0),
             };
             if (context.CreditPrice.HasValue) spend.Credits.BalanceValue = Money(spend.Credits.Credits * context.CreditPrice.Value);
 
@@ -619,8 +624,10 @@ namespace Common.Entities.CopilotInvestment
 
             if (context.CreditPrice.HasValue && cost.HasValue)
             {
-                var monthlyBalances = context.Holders.Sum(h => h.Credit?.Credits ?? 0) * context.CreditPrice.Value;
-                result.RoiBaseIfBalancesMonthly = Ratio(baseValue, cost.Value + monthlyBalances * context.Months);
+                // Only a what-if when there is a balance to add: with none it would just repeat the base return.
+                var holderBalances = context.Holders.Sum(h => h.Credit?.Credits ?? 0);
+                if (holderBalances > 0)
+                    result.RoiBaseIfBalancesMonthly = Ratio(baseValue, cost.Value + holderBalances * context.CreditPrice.Value * context.Months);
             }
 
             var reclaim = context.Holders.Where(context.IsReclaimCandidate).Sum(h => context.Cost(h) ?? 0);

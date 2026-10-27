@@ -103,6 +103,13 @@ WHERE url_id=1 AND field_id=1;");
                         Assert.IsTrue(messages.Any(m => m.Contains("Global weekly profiling is skipped")));
                         Assert.AreEqual(options.Users * (run + 1) + 1L, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.users;"));
                         Assert.AreEqual(originalCounts, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.copilot_user_count_log;"));
+                        foreach (string table in new[] { "copilot_cost_control", "copilot_cost_runs", "copilot_cost_work",
+                            "copilot_cost_observations", "copilot_cost_services", "copilot_cost_history", "copilot_cost_context" })
+                        {
+                            Assert.IsTrue(originalRows[table] > 0, "The full demo must exercise " + table);
+                            Assert.AreEqual(originalRows[table], after[table],
+                                "An append must never add a second population's credit sweeps to the tenant's own: " + table);
+                        }
                         Assert.AreEqual(originalDepartments, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.user_departments;"));
                         Assert.AreEqual(originalLicences, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.license_types;"));
                         foreach (string table in namespacedObjects)

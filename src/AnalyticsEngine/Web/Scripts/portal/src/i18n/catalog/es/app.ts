@@ -48,6 +48,8 @@ const app: Record<keyof typeof en, string> = {
   'app.route.licenceActivity': 'Actividad de licencias',
   'app.route.activityAnalysis': 'Análisis de actividad',
   'app.route.agentCosts': 'Costes de agentes',
+  'app.route.copilotInvestment': 'Inversión en Copilot',
+  'app.route.copilotInvestmentAssumptions': 'Supuestos de inversión en Copilot',
   'app.route.dlp': 'Impacto de DLP',
   'app.route.health': 'Estado del servicio',
   'app.route.installLog': 'Registro de instalaci\u00f3n',

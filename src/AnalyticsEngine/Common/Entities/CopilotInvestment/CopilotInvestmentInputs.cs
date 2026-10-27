@@ -90,6 +90,13 @@ namespace Common.Entities.CopilotInvestment
         public bool AssumptionsDurable { get; set; }
 
         public CreditFacts Credits { get; set; }
+
+        /// <summary>
+        /// Every latest balance of a person in scope, whether or not it adds them to <see cref="People"/>. Coverage and
+        /// totals are counted from this, so a quiet, unlicensed person with a zero balance is counted as observed
+        /// without becoming a row of the report.
+        /// </summary>
+        public List<CreditUserFact> ScopedCredits { get; set; }
         public bool CreditCollectionEnabled { get; set; }
         public StudioFacts Studio { get; set; }
         public bool StudioImportEnabled { get; set; }
@@ -107,13 +114,15 @@ namespace Common.Entities.CopilotInvestment
         /// <param name="scoped">The adoption analysis, already narrowed to the reader's scope.</param>
         /// <param name="inScope">Whether a user id is in the reader's scope - for the balances and ledger rows.</param>
         /// <param name="directory">Attributes for someone the analysis has no row for; may return null.</param>
+        /// <param name="scopedCredits">Every in-scope balance, including the quiet ones that add no person.</param>
         public static List<CopilotInvestmentPerson> Build(
             CopilotAdoptionAnalysis scoped,
             IEnumerable<CreditUserFact> credits,
             IEnumerable<StudioUserFact> studio,
             Func<int, bool> inScope,
             Func<int, CopilotInvestmentDirectoryEntry> directory,
-            out int recommendedCandidates)
+            out int recommendedCandidates,
+            out List<CreditUserFact> scopedCredits)
         {
             var people = new Dictionary<int, CopilotInvestmentPerson>();
             foreach (var row in scoped?.LicensedUsers ?? new List<LicensedUserAdoptionRow>())
@@ -176,10 +185,15 @@ namespace Common.Entities.CopilotInvestment
             }
             recommendedCandidates = recommended;
 
+            scopedCredits = new List<CreditUserFact>();
             foreach (var fact in credits ?? Enumerable.Empty<CreditUserFact>())
             {
                 if (!fact.UserId.HasValue || !inScope(fact.UserId.Value)) continue;
-                Attach(people, fact.UserId.Value, directory).Credit = fact;
+                scopedCredits.Add(fact);
+                // A whole directory is swept every day. Someone with no seat, no Copilot activity and a quiet balance
+                // is observed (and counted as such) but is not a person this report has anything to say about.
+                if (people.TryGetValue(fact.UserId.Value, out var known)) known.Credit = fact;
+                else if (Notable(fact)) Attach(people, fact.UserId.Value, directory).Credit = fact;
             }
 
             foreach (var fact in studio ?? Enumerable.Empty<StudioUserFact>())
@@ -191,6 +205,11 @@ namespace Common.Entities.CopilotInvestment
 
             return people.Values.OrderBy(p => p.UserId).ToList();
         }
+
+        /// <summary>A balance worth a row of its own: spend, an amount the source could not state, a refusal or a gap.</summary>
+        internal static bool Notable(CreditUserFact fact) =>
+            (fact.Credits ?? 0) > 0 || fact.UnknownConsumptionRows > 0 || fact.OtherUnitRows > 0 || fact.NotAllowedRows > 0
+            || fact.LimitExhaustedRows > 0 || fact.NearLimitRows > 0 || fact.NotEntitledRows > 0 || fact.Partial;
 
         private static CopilotInvestmentPerson Attach(Dictionary<int, CopilotInvestmentPerson> people, int userId,
             Func<int, CopilotInvestmentDirectoryEntry> directory)

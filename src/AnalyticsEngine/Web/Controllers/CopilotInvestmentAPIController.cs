@@ -276,7 +276,7 @@ namespace Web.AnalyticsWeb.Controllers
                 catch (CopilotAdoptionScoreSettingsUnavailableException ex)
                 {
                     WebExceptionTelemetry.Report(ex, "CopilotInvestment.AdoptionSettings");
-                    throw ReportScopeFailure.Exception(Request, "adoptionSettingsUnavailable",
+                    throw ReportScopeFailure.Exception(Request, CopilotAdoptionScoreSettingsErrorCodes.ReportSettingsUnavailable,
                         "The Copilot Adoption score settings could not be read, so this report is not available right now. Try again shortly.");
                 }
             }

@@ -48,6 +48,8 @@ export const app = {
   'app.route.licenceActivity': 'Licence activity',
   'app.route.activityAnalysis': 'Activity analysis',
   'app.route.agentCosts': 'Agent costs',
+  'app.route.copilotInvestment': 'Copilot investment',
+  'app.route.copilotInvestmentAssumptions': 'Copilot investment assumptions',
   'app.route.dlp': 'DLP impact',
   'app.route.health': 'Service health',
   'app.route.installLog': 'Install log',

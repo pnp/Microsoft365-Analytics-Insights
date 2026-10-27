@@ -20,7 +20,8 @@ existing schema, and generates current overlapping licence assignments, daily
 workload coverage (including explicit zero rows), Copilot adoption and official
 D28 snapshots, metadata-only prompt/response pairs with default prompt categories, SharePoint/web facts, detailed
 Teams activity, sent email, Power Platform activity, billed Copilot Studio credits and
-daily Azure agent spend, and complete-week Power BI profiles. Actual Power BI report
+daily Azure agent spend, preview Copilot credit balance history, and complete-week Power BI
+profiles. Actual Power BI report
 views are separate from these profiling tables. It never reads a configured production
 connection.
 Exact completed reruns are read-only no-ops; other existing targets are refused.
@@ -77,11 +78,16 @@ Tests.FakeDataGen.exe append "<test-database-connection-string>" --areas powerbi
 ```
 
 `--areas all` is the default. Other keys are `directory`, `copilot`,
-`copilot-history`, `outlook`, `sent-email`, `sharepoint`, `web`, `onedrive`,
-`engage`, `office` and `dlp`. DLP includes prerequisite Copilot audit interactions
+`copilot-history`, `copilot-credits`, `outlook`, `sent-email`, `sharepoint`, `web`, `onedrive`,
+`engage`, `office` and `dlp`. `copilot-history` is Copilot *prompt* history (interaction
+history); `copilot-credits` is the preview Copilot *credit balance* history the Copilot
+investment report reads - see [Copilot credit history](#copilot-credit-history-preview).
+DLP includes prerequisite Copilot audit interactions
 and preserves the blocked-versus-audit-only policy scenarios. Shared users/licences and dependent dimensions accompany
 individual areas. Appends skip tenant-wide Copilot count snapshots, agent costs
-(Copilot Studio credits, the capacity snapshot and Azure agent spend) and global
+(Copilot Studio credits, the capacity snapshot and Azure agent spend), the preview
+credit balance history (its sweeps, balances, policies and tenant balances are
+tenant-wide snapshots) and global
 profile compilation rather than publishing partial-population totals as tenant
 data. Use a full new demo for a self-contained profiled database.
 
@@ -159,7 +165,8 @@ A finished run prints the two settings a web application needs:
 
 ```
   connectionStrings   SPOInsightsEntities = Server=(localdb)\MSSQLLocalDB;Database=ContosoDemo_X;Integrated Security=True
-  appSettings         ImportJobSettings = GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True;Calls=True;GraphTeams=True;SentEmails=True;ImportPowerPlatform=True;ImportDlp=True;CopilotStudioCredits=True;AzureCostManagement=True
+  appSettings         ImportJobSettings = GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True;Calls=True;GraphTeams=True;SentEmails=True;ImportPowerPlatform=True;ImportDlp=True;CopilotStudioCredits=True;AzureCostManagement=True;CopilotCostManagement=True
+  appSettings         CopilotCostConnectionEnabled = true
 ```
 
 **The portal decides which workloads it can measure from `ImportJobSettings`, not
@@ -232,6 +239,50 @@ Things worth knowing about that data:
   import. That is what lets the report tell *"the import has never run"* apart
   from *"the import ran, succeeded, and this tenant has no Copilot Studio
   agents"* - two states that otherwise both render as zero.
+
+#### Copilot credit history (preview)
+
+The `copilot-credits` area (part of `all`) fills the preview credit collector's own
+`copilot_cost_*` tables exactly as the collector leaves them, so the **Copilot
+investment** report (`#/insights/copilot-investment`) and the Copilot credit history
+connection page have data. It is generated after the Copilot activity, from the same
+synthetic people and IDs:
+
+- **One sweep a day of every directory object**, each person's latest reading per
+  service, the spending policies and tenant balances that sweep read, and the archived
+  publication behind every reading. History is bounded: at most 92 days, fewer for a
+  large population so the observation count stays near 1.5 million.
+- **Balances, not a daily bill.** A reading is what the source reports a person has
+  consumed in its current period; here that resets on the first of each month, so
+  balances climb through the month and drop to zero on the 1st. As on a live tenant,
+  `source_month` is NULL and `period_status` is `unverified`: the report never adds
+  successive readings together or infers a daily cost from them.
+- **Spend follows each person's own Copilot activity**, with deliberate
+  counter-examples so more spend is not read as more value: lightly evidenced seat
+  holders whose scheduled agent spends heavily on days they never open Copilot,
+  well-evidenced agent power users, people without a seat paying for metered agents,
+  heavy users who hit a pooled per-user limit, and disabled accounts that are refused.
+- **Imperfect, like a real sweep:** a few days have no sweep (absent, not zero), a
+  throttled day misses part of the directory, a degraded day leaves readings partial
+  with an unevaluated category, a few readings are corrected later the same day (both
+  publications archived), some readings lag a day, a recently enabled service reports a
+  unit this build does not know, and a handful of directory accounts the user import
+  never picked up carry balances that match no imported person.
+- Three policies (one unlimited pilot, one disabled with a Greek name) and two tenant
+  balances (prepaid and pay-as-you-go). Service IDs, policy names, limits and pools are
+  **illustrative synthetic values**, not Microsoft's catalogue or prices.
+
+The Copilot Studio ledger above and these preview balances are separate sources; the
+report shows them side by side and never adds them together. The report starts with
+**no prices or productivity assumptions**: until an administrator sets them under
+**Administration > Copilot investment assumptions** (which needs the `Storage`
+connection string, e.g. `UseDevelopmentStorage=true` with Azurite), it shows the
+evidence and withholds every money figure. Any reader can try figures for themselves
+with **What-if** without saving them. To view it, the web application needs
+`CopilotCostManagement=True` in `ImportJobSettings` and the separate app setting
+`CopilotCostConnectionEnabled = true`, both printed by the demo; otherwise the balances
+are labelled as retained history from a switched-off collector. Never connect a real
+Graph reader to a demo web application.
 
 ### Copilot activity
 

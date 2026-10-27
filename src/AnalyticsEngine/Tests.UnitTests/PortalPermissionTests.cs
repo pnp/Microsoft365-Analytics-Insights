@@ -105,6 +105,15 @@ namespace Tests.UnitTests
             ["CopilotCostConnectionAPIController.Probe"] = Admin,
             ["CopilotCostConnectionAPIController.ResetProbe"] = Admin,
 
+            ["CopilotInvestmentAPIController.Availability"] = Any,
+            ["CopilotInvestmentAPIController.Summary"] = Any,          // trims the people; a user filter or manager grouping needs See PII
+            ["CopilotInvestmentAPIController.Trend"] = Any,            // balance totals only; a user filter needs See PII
+            ["CopilotInvestmentAPIController.People"] = Pii,
+            ["CopilotInvestmentAPIController.Person"] = Pii,
+            ["CopilotInvestmentAPIController.ExportWorkbook"] = Any,   // trims the people sheet
+            ["CopilotInvestmentSettingsAPIController.Get"] = Admin,    // the history names who changed what
+            ["CopilotInvestmentSettingsAPIController.Save"] = Admin,
+
             ["DlpAPIController.Availability"] = Any,
             ["DlpAPIController.Summary"] = Any,                        // trims the top-users table
             ["DlpAPIController.Governance"] = Any,                     // tenant-level rates and model/plugin names only
@@ -664,6 +673,15 @@ namespace Tests.UnitTests
             (HttpMethod.Get, "api/CopilotAdoptionSettings", "administration"),
             (HttpMethod.Post, "api/CopilotAdoptionSettings", "administration"),
             (HttpMethod.Post, "api/CopilotAdoptionSettings/reset", "administration"),
+            (HttpMethod.Get, "api/CopilotInvestmentSettings", "administration"),
+            (HttpMethod.Post, "api/CopilotInvestmentSettings", "administration"),
+
+            (HttpMethod.Get, "api/CopilotInvestment/people", "seePii"),
+            (HttpMethod.Get, "api/CopilotInvestment/person/1", "seePii"),
+            (HttpMethod.Get, "api/CopilotInvestment/summary?dimension=manager", "seePii"),
+            (HttpMethod.Get, "api/CopilotInvestment/summary?userFilter=%5B%7B%22d%22%3A%22userName%22%2C%22v%22%3A%5B%22person1%40contoso.com%22%5D%7D%5D", "seePii"),
+            (HttpMethod.Get, "api/CopilotInvestment/trend?userFilter=%5B%7B%22d%22%3A%22department%22%2C%22v%22%3A%5B%22Sales%22%5D%7D%5D", "seePii"),
+            (HttpMethod.Get, "api/CopilotInvestment/export/workbook?userFilter=%5B%7B%22d%22%3A%22userName%22%2C%22v%22%3A%5B%22person1%40contoso.com%22%5D%7D%5D", "seePii"),
 
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users", "seePii"),
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users/export", "seePii"),

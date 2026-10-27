@@ -16,6 +16,7 @@ import enWebActivity from './en/webActivity';
 import enLicenceActivity from './en/licenceActivity';
 import enActivityAnalysis from './en/activityAnalysis';
 import enAgentCosts from './en/agentCosts';
+import enCopilotInvestment from './en/copilotInvestment';
 import enDlp from './en/dlp';
 import enErrors from './en/errors';
 import enHealth from './en/health';
@@ -68,6 +69,7 @@ export const EN_MODULES = {
   licenceActivity: enLicenceActivity,
   activityAnalysis: enActivityAnalysis,
   agentCosts: enAgentCosts,
+  copilotInvestment: enCopilotInvestment,
   dlp: enDlp,
   errors: enErrors,
   health: enHealth,
