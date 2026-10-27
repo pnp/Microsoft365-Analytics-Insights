@@ -21,6 +21,11 @@ namespace App.ControlPanel.Frames.InstallWizard
         private readonly Label _summary = new Label { Name = "prerequisiteSummary", AutoSize = true, Dock = DockStyle.Fill };
         private readonly Label _selection = new Label { Name = "prerequisiteWorkloads", AutoSize = true, Dock = DockStyle.Fill };
         private readonly Label _status = new Label { Name = "prerequisiteStatus", AutoSize = true, Dock = DockStyle.Fill };
+        private readonly Label _categoryHelp = new Label
+        {
+            Name = "prerequisiteCategoryHelp", AutoSize = true, Dock = DockStyle.Fill,
+            Margin = new Padding(0, 0, 0, 8)
+        };
         private readonly ComboBox _category = new ComboBox
         {
             Name = "prerequisiteCategory", DropDownStyle = ComboBoxStyle.DropDownList,
@@ -40,7 +45,7 @@ namespace App.ControlPanel.Frames.InstallWizard
         {
             Name = "prerequisiteDetails", Dock = DockStyle.Fill, Multiline = true, ReadOnly = true,
             ScrollBars = ScrollBars.Vertical, BackColor = SystemColors.Window,
-            AccessibleName = "Selected requirement, scope and administrator action"
+            AccessibleName = "Selected requirement, scope, setup responsibility and checks"
         };
         private readonly LinkLabel _reference = new LinkLabel
         {
@@ -48,6 +53,15 @@ namespace App.ControlPanel.Frames.InstallWizard
             AccessibleDescription = "Opens the reference for the selected requirement in your browser."
         };
         private DeploymentPrerequisiteReport _report;
+        private bool _refreshingCategories;
+
+        private sealed class CategoryChoice
+        {
+            public PrerequisiteCategory? Value { get; }
+            private readonly string _label;
+            public CategoryChoice(PrerequisiteCategory? value, string label) { Value = value; _label = label; }
+            public override string ToString() => _label;
+        }
 
         [Browsable(false), DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
         public Func<SolutionInstallConfig> ConfigurationProvider { get; set; }
@@ -64,10 +78,10 @@ namespace App.ControlPanel.Frames.InstallWizard
             _layout = new TableLayoutPanel
             {
                 Name = "prerequisiteLayout", Dock = DockStyle.Top, Padding = new Padding(16),
-                ColumnCount = 1, RowCount = 8, MinimumSize = new Size(0, Font.Height * 38)
+                ColumnCount = 1, RowCount = 9, MinimumSize = new Size(0, Font.Height * 38)
             };
             _layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            for (var row = 0; row < 5; row++) _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            for (var row = 0; row < 6; row++) _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             _layout.RowStyles.Add(new RowStyle(SizeType.Percent, 58));
             _layout.RowStyles.Add(new RowStyle(SizeType.Percent, 42));
             _layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -100,6 +114,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             export.Click += Export_Click;
             toolbar.Controls.Add(export);
             _layout.Controls.Add(toolbar, 0, 4);
+            _layout.Controls.Add(_categoryHelp, 0, 5);
             _requirements.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
             _requirements.DefaultCellStyle.Padding = new Padding(5);
             _requirements.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
@@ -107,7 +122,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             _requirements.Columns.Add(Column("Identity", "Identity / type", 30));
             _requirements.Columns.Add(Column("Workloads", "Needed for", 25));
             _requirements.CurrentCellChanged += Requirements_CurrentCellChanged;
-            _layout.Controls.Add(_requirements, 0, 5);
+            _layout.Controls.Add(_requirements, 0, 6);
             var detailLayout = new TableLayoutPanel
             {
                 Name = "prerequisiteDetailLayout", Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2,
@@ -119,19 +134,12 @@ namespace App.ControlPanel.Frames.InstallWizard
             detailLayout.Controls.Add(_details, 0, 0);
             detailLayout.Controls.Add(_reference, 0, 1);
             _reference.LinkClicked += Reference_LinkClicked;
-            _layout.Controls.Add(detailLayout, 0, 6);
+            _layout.Controls.Add(detailLayout, 0, 7);
             _status.Text = DeploymentPrerequisiteReport.PrivacyNotice;
             _status.Margin = new Padding(0, 8, 0, 0);
-            _layout.Controls.Add(_status, 0, 7);
+            _layout.Controls.Add(_status, 0, 8);
             Controls.Add(_layout);
-            _category.Items.Add("All requirements");
-            _category.Items.AddRange(new object[]
-            {
-                "Application permissions", "Delegated connections", "Azure resources", "RBAC & database access",
-                "Deployment privileges", "Licensing & setup", "Optional enrichment"
-            });
             _category.SelectedIndexChanged += Category_SelectedIndexChanged;
-            _category.SelectedIndex = 0;
             RefreshConfiguration(new SolutionInstallConfig());
         }
 
@@ -164,14 +172,14 @@ namespace App.ControlPanel.Frames.InstallWizard
         {
             if (_layout == null) return;
             if (_category.Items.Count > 0)
-                _category.Width = _category.Items.Cast<string>().Max(text => TextRenderer.MeasureText(text, _category.Font).Width)
+                _category.Width = _category.Items.Cast<object>().Max(item => TextRenderer.MeasureText(item.ToString(), _category.Font).Width)
                     + SystemInformation.VerticalScrollBarWidth + 24;
             var width = Math.Max(100, ClientSize.Width - _layout.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth);
             var headerAndFooter = _layout.Padding.Vertical;
             foreach (Control control in _layout.Controls)
             {
                 var row = _layout.GetRow(control);
-                if (row == 5 || row == 6) continue;
+                if (row == 6 || row == 7) continue;
                 headerAndFooter += control.GetPreferredSize(new Size(Math.Max(100, width - control.Margin.Horizontal), 0)).Height
                     + control.Margin.Vertical;
             }
@@ -188,8 +196,44 @@ namespace App.ControlPanel.Frames.InstallWizard
             _selection.Text = _report.Workloads.Count == 0 ? "No workloads selected. Choose workloads to build an import-specific request."
                 : "Selected: " + string.Join(", ", _report.Workloads);
             _status.Text = DeploymentPrerequisiteReport.PrivacyNotice;
+            RefreshCategories();
             PopulateRequirements();
             UpdateLayoutHeight();
+        }
+
+        private void RefreshCategories()
+        {
+            var previous = (_category.SelectedItem as CategoryChoice)?.Value;
+            _refreshingCategories = true;
+            _category.BeginUpdate();
+            try
+            {
+                _category.Items.Clear();
+                _category.Items.Add(new CategoryChoice(null, "All requirements"));
+                foreach (var category in _report.Requirements.Select(r => r.Category).Distinct().OrderBy(c => c))
+                    _category.Items.Add(new CategoryChoice(category, FilterTitle(category)));
+                _category.SelectedItem = _category.Items.Cast<CategoryChoice>().FirstOrDefault(c => c.Value == previous)
+                    ?? _category.Items[0];
+            }
+            finally
+            {
+                _category.EndUpdate();
+                _refreshingCategories = false;
+            }
+        }
+
+        private static string FilterTitle(PrerequisiteCategory category)
+        {
+            switch (category)
+            {
+                case PrerequisiteCategory.ApplicationPermissions: return "Application permissions";
+                case PrerequisiteCategory.DelegatedConnections: return "Delegated connections";
+                case PrerequisiteCategory.AzureResources: return "Azure resources";
+                case PrerequisiteCategory.RuntimeAccess: return "RBAC & database access";
+                case PrerequisiteCategory.DeploymentAccess: return "Deployment privileges";
+                case PrerequisiteCategory.OperationalChecks: return "Licensing & setup";
+                default: return "Copilot extras (optional)";
+            }
         }
 
         private void RefreshCurrentConfiguration()
@@ -201,8 +245,10 @@ namespace App.ControlPanel.Frames.InstallWizard
         {
             _requirements.Rows.Clear();
             if (_report == null) return;
-            var index = _category.SelectedIndex;
-            foreach (var requirement in _report.Requirements.Where(r => index <= 0 || (int)r.Category == index - 1))
+            var category = (_category.SelectedItem as CategoryChoice)?.Value;
+            _categoryHelp.Text = category.HasValue ? DeploymentPrerequisiteReport.CategoryDescription(category.Value)
+                : "Only applicable categories are shown. Each item's 'Who sets this up' separates automatic installer work from approvals and checks. Optional Copilot file, meeting and history features are listed only for the Copilot audit workload.";
+            foreach (var requirement in _report.Requirements.Where(r => !category.HasValue || r.Category == category.Value))
             {
                 var name = requirement.Category == PrerequisiteCategory.OptionalEnrichment ? "Optional: " + requirement.Name : requirement.Name;
                 var row = _requirements.Rows.Add(name, requirement.Identity, string.Join(", ", requirement.Workloads));
@@ -227,7 +273,12 @@ namespace App.ControlPanel.Frames.InstallWizard
         }
 
         private void Refresh_Click(object sender, EventArgs e) => RefreshCurrentConfiguration();
-        private void Category_SelectedIndexChanged(object sender, EventArgs e) => PopulateRequirements();
+        private void Category_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_refreshingCategories) return;
+            PopulateRequirements();
+            UpdateLayoutHeight();
+        }
         private void Requirements_CurrentCellChanged(object sender, EventArgs e) => ShowSelectedRequirement();
 
         private void Export_Click(object sender, EventArgs e)

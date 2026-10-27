@@ -85,7 +85,7 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual(report.Requirements.Count, report.Requirements.Select(r => r.Id).Distinct().Count());
             Assert.IsTrue(report.Requirements.Where(r => r.Category == PrerequisiteCategory.OptionalEnrichment)
                 .Any(r => r.Name == "OnlineMeetings.Read.All"));
-            StringAssert.Contains(report.ToMarkdown(), "Optional enrichment - not required for the base import");
+            StringAssert.Contains(report.ToMarkdown(), "Optional Copilot file, meeting and history features");
         }
 
         [TestMethod]
@@ -119,6 +119,7 @@ namespace Tests.UnitTests.InstallTests
             config.FoundryPromptEnabled = true;
             config.HealthMonitoring.Enabled = true;
             config.NetworkConfig.Enabled = true;
+            config.NetworkConfig.AllowPublicAccess = false;
             config.NetworkConfig.DeployDnsZones = false;
             config.SqlAuthMode = SqlServerAuthMode.EntraId;
             config.SQLEntraDatabaseUsers.Add(new SqlDatabaseUser { Login = "reader@contoso.example" });
@@ -138,6 +139,13 @@ namespace Tests.UnitTests.InstallTests
             config.SolutionConfig.ImportTaskSettings.Calls = true;
             StringAssert.Contains(DeploymentPrerequisites.Build(config).Requirements
                 .Single(r => r.Id == "resource-service-bus").AdminAction, "disabled");
+            StringAssert.Contains(DeploymentPrerequisites.Build(config).Requirements
+                .Single(r => r.Id == "resource-service-bus").Responsibility, "Not currently scheduled");
+            config.NetworkConfig.AllowPublicAccess = true;
+            Assert.IsFalse(DeploymentPrerequisites.Build(config).Requirements.Any(r => r.Id == "resource-hybrid-worker"),
+                "Publicly reachable data services do not require a new Hybrid Worker VM when none is selected.");
+            Assert.IsTrue(DeploymentPrerequisites.Build(config).Requirements.Any(r => r.Id == "resource-automation"),
+                "The installer still provisions Automation for usage reports without a Hybrid Worker.");
         }
 
         [TestMethod]
@@ -153,6 +161,74 @@ namespace Tests.UnitTests.InstallTests
             StringAssert.Contains(delegated.Single(r => r.Name == "CopilotCostManagement.Read.All").AdminAction, "Global Reader");
             Assert.IsFalse(report.Requirements.Any(r => r.Name == "Licensing.Read"));
             StringAssert.Contains(report.ToMarkdown(), "beta and not supported for production");
+        }
+
+        [TestMethod]
+        public void PlatformChecks_ListSelectedDestinationsAndProvidersWithoutUnrelatedServices()
+        {
+            var config = MinimalConfig();
+            config.DownloadLatestStable = false;
+            config.SolutionConfig.ImportTaskSettings.WebTraffic = true;
+            var report = DeploymentPrerequisites.Build(config);
+            Assert.IsFalse(report.Requirements.Any(r => r.Id == "check-network" || r.Id == "check-release-download"
+                || r.Id == "check-calls-network" || r.Id == "check-ai-network" || r.Id == "check-private-dns-routing"));
+            var providers = report.Requirements.Single(r => r.Id == "check-provider-registration").AdminAction;
+            StringAssert.Contains(providers, "Microsoft.Web");
+            Assert.IsFalse(providers.Contains("Microsoft.ServiceBus") || providers.Contains("Microsoft.Network")
+                || providers.Contains("Microsoft.CognitiveServices") || providers.Contains("Microsoft.Automation"));
+            var apis = report.Requirements.Single(r => r.Id == "check-runtime-api-network").AdminAction;
+            Assert.IsFalse(apis.Contains("manage.office.com") || apis.Contains("api.powerplatform.com"));
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "check-sql-network").Scope, "TCP 1433");
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "check-storage-network").Scope, ".table.core.windows.net");
+
+            config.DownloadLatestStable = true;
+            config.NetworkConfig.Enabled = true;
+            config.NetworkConfig.AllowPublicAccess = false;
+            config.CognitiveServicesEnabled = true;
+            config.FoundryPromptEnabled = true;
+            config.SolutionConfig.ImportTaskSettings.Calls = true;
+            config.SolutionConfig.ImportTaskSettings.Copilot = true;
+            config.SolutionConfig.ImportTaskSettings.CopilotStudioCredits = true;
+            config.SolutionConfig.ImportTaskSettings.GraphUsageReports = true;
+            report = DeploymentPrerequisites.Build(config);
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "check-calls-network").Scope, "TCP 5671");
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "check-calls-network").AdminAction, "only TCP 443 is not sufficient");
+            providers = report.Requirements.Single(r => r.Id == "check-provider-registration").AdminAction;
+            foreach (var provider in new[] { "Microsoft.ServiceBus", "Microsoft.Network", "Microsoft.CognitiveServices", "Microsoft.Automation" })
+                StringAssert.Contains(providers, provider);
+            apis = report.Requirements.Single(r => r.Id == "check-runtime-api-network").AdminAction;
+            foreach (var host in new[] { "graph.microsoft.com", "manage.office.com", "api.powerplatform.com", "reports.office.com" })
+                StringAssert.Contains(apis, host);
+            var dns = report.Requirements.Single(r => r.Id == "check-private-dns-routing").AdminAction;
+            StringAssert.Contains(dns, "privatelink.table.core.windows.net");
+            StringAssert.Contains(dns, "privatelink.openai.azure.com");
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "check-policy-compatibility").AdminAction, "SCM basic publishing");
+            Assert.IsTrue(report.Requirements.Any(r => r.Id == "check-release-download"));
+        }
+
+        [TestMethod]
+        public void Handoff_ExplainsAutomaticSetupAndManualExceptionsForANewReader()
+        {
+            var config = MinimalConfig();
+            config.SqlAuthMode = SqlServerAuthMode.EntraId;
+            config.SolutionConfig.ImportTaskSettings.AzureCostManagement = true;
+            config.SolutionConfig.ImportTaskSettings.GraphUsageReports = true;
+            config.NetworkConfig.Enabled = true;
+            config.NetworkConfig.AllowPublicAccess = false;
+            config.NetworkConfig.DeployDnsZones = false;
+            var report = DeploymentPrerequisites.Build(config);
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "resource-sql").Responsibility, "Installer creates");
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "sql-runtime").Responsibility, "Installer configures");
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "azure-cost-reader").Responsibility, "does not grant");
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "resource-hybrid-worker").Responsibility, "does not create the VM");
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "resource-private-dns").Responsibility, "Network owner supplies DNS");
+            var markdown = report.ToMarkdown();
+            foreach (var heading in new[] { "What this document is for", "How setup is divided",
+                "Identities and permission types", "Selected deployment options", "**Who sets this up:**", "**Setup notes and checks:**" })
+                StringAssert.Contains(markdown, heading);
+            Assert.IsFalse(markdown.Contains("**Administrator action:**"));
+            Assert.IsFalse(markdown.Contains("Connectivity, providers, policy and capacity"));
+            Assert.IsTrue(report.Requirements.All(r => !string.IsNullOrWhiteSpace(r.Responsibility)));
         }
 
         [TestMethod]
@@ -209,9 +285,9 @@ namespace Tests.UnitTests.InstallTests
                     var grid = Find<DataGridView>(page, "prerequisiteRequirements");
                     Assert.AreEqual(page.Report.Requirements.Count, grid.Rows.Count);
                     var category = Find<ComboBox>(page, "prerequisiteCategory");
-                    category.SelectedIndex = (int)PrerequisiteCategory.ApplicationPermissions + 1;
-                    Assert.IsTrue(category.Width >= category.Items.Cast<string>()
-                        .Max(text => TextRenderer.MeasureText(text, category.Font).Width) + 20,
+                    category.SelectedItem = category.Items.Cast<object>().Single(item => item.ToString() == "Application permissions");
+                    Assert.IsTrue(category.Width >= category.Items.Cast<object>()
+                        .Max(item => TextRenderer.MeasureText(item.ToString(), category.Font).Width) + 20,
                         "Category names must remain readable at enlarged fonts.");
                     Assert.IsTrue(grid.Rows.Count > 0);
                     Assert.IsTrue(grid.Rows.Cast<DataGridViewRow>().All(row =>
@@ -260,6 +336,60 @@ namespace Tests.UnitTests.InstallTests
                         StringAssert.Contains(actual, "Administrator handoff checklist");
                     }
                     finally { if (File.Exists(path)) File.Delete(path); }
+                }
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow(700, 640, 1.0f)]
+        [DataRow(900, 750, 1.5f)]
+        [DataRow(1200, 1000, 2.0f)]
+        public void OptionalCopilotCategory_ExplainsItsPurposeAndDisappearsWhenNotApplicable(int width, int height, float scale)
+        {
+            RunSta(() =>
+            {
+                var config = MinimalConfig();
+                config.SolutionConfig.ImportTaskSettings.Copilot = true;
+                using (var page = new DeploymentPrerequisitesControl { Dock = DockStyle.Fill })
+                using (var host = new Form { ClientSize = new Size(width, height), ShowInTaskbar = false })
+                {
+                    page.RefreshConfiguration(config);
+                    host.Controls.Add(page);
+                    host.Show();
+                    if (scale != 1.0f) page.Font = new Font(page.Font.FontFamily, page.Font.Size * scale);
+                    Application.DoEvents();
+                    var categories = Find<ComboBox>(page, "prerequisiteCategory");
+                    var grid = Find<DataGridView>(page, "prerequisiteRequirements");
+                    var optional = categories.Items.Cast<object>().Single(item => item.ToString() == "Copilot extras (optional)");
+                    categories.SelectedItem = optional;
+                    Assert.AreEqual(3, grid.Rows.Count);
+                    var help = Find<Label>(page, "prerequisiteCategoryHelp");
+                    StringAssert.Contains(help.Text, "readable file/site and meeting context");
+                    StringAssert.Contains(help.Text, "not required for raw audit ingestion");
+                    Assert.IsTrue(help.Height >= help.GetPreferredSize(new Size(help.Width, 0)).Height);
+                    Assert.IsTrue(grid.Rows.Cast<DataGridViewRow>().All(row =>
+                        ((DeploymentRequirement)row.Tag).Category == PrerequisiteCategory.OptionalEnrichment));
+                    var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        using (var image = new Bitmap(host.Width, host.Height))
+                        {
+                            host.DrawToBitmap(image, new Rectangle(Point.Empty, host.Size));
+                            image.Save(Path.Combine(directory, $"prerequisites-copilot-extras-{scale}.png"));
+                        }
+                    }
+                    config.SolutionConfig.ImportTaskSettings.Copilot = false;
+                    page.RefreshConfiguration(config);
+                    Assert.IsFalse(categories.Items.Cast<object>().Any(item => item.ToString() == "Copilot extras (optional)"));
+                    Assert.AreEqual("All requirements", categories.SelectedItem.ToString());
+                    Assert.IsFalse(page.Report.ToMarkdown().Contains("## Optional Copilot"));
+                    foreach (var item in categories.Items.Cast<object>().ToArray())
+                    {
+                        categories.SelectedItem = item;
+                        Assert.IsTrue(grid.Rows.Count > 0, "Empty categories must not be offered.");
+                        Assert.IsTrue(grid.Rows.Cast<DataGridViewRow>().All(row =>
+                            row.Tag is DeploymentRequirement && !string.IsNullOrEmpty(((DeploymentRequirement)row.Tag).Responsibility)));
+                    }
                 }
             });
         }

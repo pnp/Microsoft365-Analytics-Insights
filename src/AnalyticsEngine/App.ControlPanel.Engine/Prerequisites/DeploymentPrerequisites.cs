@@ -28,6 +28,7 @@ namespace App.ControlPanel.Engine.Prerequisites
         public string Scope { get; internal set; }
         public string Purpose { get; internal set; }
         public string AdminAction { get; internal set; }
+        public string Responsibility { get; internal set; }
         public string Reference { get; internal set; }
         public IReadOnlyList<string> Workloads => _workloads;
         private readonly List<string> _workloads = new List<string>();
@@ -40,16 +41,18 @@ namespace App.ControlPanel.Engine.Prerequisites
         public string Details => Name + "\r\n\r\nCategory: " + DeploymentPrerequisiteReport.CategoryTitle(Category)
             + "\r\nIdentity / permission type: " + Identity
             + "\r\nScope / audience: " + Scope + "\r\nNeeded for: " + string.Join(", ", Workloads)
-            + "\r\n\r\nWhy: " + Purpose + "\r\n\r\nAdministrator action: " + AdminAction;
+            + "\r\n\r\nWhy: " + Purpose + "\r\n\r\nWho sets this up: " + Responsibility
+            + "\r\n\r\nSetup notes and checks: " + AdminAction;
     }
 
     public sealed class DeploymentPrerequisiteReport
     {
         public IReadOnlyList<string> Workloads { get; internal set; }
         public IReadOnlyList<DeploymentRequirement> Requirements { get; internal set; }
+        public IReadOnlyList<string> ConfigurationChoices { get; internal set; }
 
         public const string ScopeNotice = "Planning guidance, not an access check. Based on the current workload and infrastructure selections. "
-            + "No Azure or tenant discovery is performed. Optional enrichment is not part of the minimum import request.";
+            + "No Azure or tenant discovery is performed. Each item distinguishes installer-managed setup from approvals and checks.";
         public const string PrivacyNotice = "Shareable by design: entered names, IDs, addresses, paths and credentials are excluded. "
             + "Administrators must identify the target tenant, apps, resources and scopes separately.";
 
@@ -63,14 +66,56 @@ namespace App.ControlPanel.Engine.Prerequisites
                 case PrerequisiteCategory.RuntimeAccess: return "Runtime RBAC & database access";
                 case PrerequisiteCategory.DeploymentAccess: return "One-time deployment access";
                 case PrerequisiteCategory.OperationalChecks: return "Licensing & setup checks";
-                default: return "Optional enrichment - not required for the base import";
+                default: return "Optional Copilot file, meeting and history features";
+            }
+        }
+
+        public static string CategoryDescription(PrerequisiteCategory category)
+        {
+            switch (category)
+            {
+                case PrerequisiteCategory.ApplicationPermissions:
+                    return "Permissions for the runtime app to read the selected Microsoft 365 data without a signed-in user. An Entra consent administrator grants these; the installer does not grant API consent.";
+                case PrerequisiteCategory.DelegatedConnections:
+                    return "Features that read on behalf of a connected person. An Entra administrator approves delegated consent, then a portal operator connects the reader after deployment. Application permissions alone cannot replace that connection.";
+                case PrerequisiteCategory.AzureResources:
+                    return "The installer creates or reuses these services during deployment. This is not a request to create every resource by hand. The Azure owner reviews cost, policy and capacity first; exceptions such as an existing Hybrid Worker VM are called out.";
+                case PrerequisiteCategory.RuntimeAccess:
+                    return "The access the running solution needs after deployment. The installer configures the solution's Azure and SQL grants; external billing scopes need their own owner. These are separate from Microsoft 365 API consent.";
+                case PrerequisiteCategory.DeploymentAccess:
+                    return "Access used to install or upgrade, not standing runtime privileges. The deployment identity must be authorised before the run; vault/database permissions that the installer can configure are identified separately.";
+                case PrerequisiteCategory.OperationalChecks:
+                    return "Checks for the named service, network or subscription owner. They do not all require a configuration change: if the stated condition is already met, no action is needed. This offline document has not tested those conditions.";
+                default:
+                    return "Only relevant to the Microsoft 365 Copilot audit workload: extra Graph access can add readable file/site and meeting context to audit events, or recover older audit history. These are not required for raw audit ingestion. They call graph.microsoft.com over HTTPS (TCP 443). Viewing this category enables nothing; historical recovery also needs runtime configuration. Azure AI Language/OpenAI options are listed separately under Azure resources.";
             }
         }
 
         public string ToMarkdown()
         {
             var text = new StringBuilder("# Microsoft 365 Analytics Insights - deployment prerequisites\n\n");
+            text.AppendLine("## What this document is for").AppendLine();
+            text.AppendLine("Microsoft 365 Analytics Insights collects selected Microsoft 365 activity and usage data into an Azure SQL database and presents it in a web portal. A Windows App Service hosts that portal and two background import jobs; Azure Storage keeps checkpoints and connection state, and Application Insights records diagnostics. Optional services are added only when selected.").AppendLine();
+            text.AppendLine("Use this document to agree the deployment with the relevant Entra, Azure, network, Exchange, SharePoint and billing owners. It describes the requested end state and who supplies it. It is not a script, an instruction for the recipient to provision everything manually, or evidence that access is already working.").AppendLine();
             text.AppendLine(ScopeNotice).AppendLine().AppendLine(PrivacyNotice).AppendLine();
+            text.AppendLine("## How setup is divided").AppendLine();
+            text.AppendLine("| Stage | Who | What happens |");
+            text.AppendLine("| --- | --- | --- |");
+            text.AppendLine("| Before deployment | Tenant / subscription owners | Approve the selected data access, prepare the two app registrations and API consent, authorise the deployment identity, and confirm the network/provider/policy/capacity checks below. Existing compliant settings need no change. |");
+            text.AppendLine("| During deployment | Installer operator running the installer | The installer creates or reuses the Azure services, configures supported runtime roles and database access, applies selected schema/content tasks and can deploy the SharePoint tracker. Manual resource creation is not normally required. |");
+            text.AppendLine("| After deployment | Portal operator and any required reader | Connect selected Teams or billing readers, set workload-specific runtime options, and validate the first import. The installer does not sign a delegated reader in for you. |").AppendLine();
+            text.AppendLine("## Identities and permission types").AppendLine();
+            text.AppendLine("| Identity / term | Meaning |");
+            text.AppendLine("| --- | --- |");
+            text.AppendLine("| Deployment app | Separate Entra application used by the installer to create/configure Azure resources and perform upgrades. Its management privileges are not required by the runtime app. |");
+            text.AppendLine("| Runtime app | Entra application used by the portal/importers to read Microsoft 365 APIs and obtain service-principal tokens. Application API permissions need tenant admin consent; Azure RBAC is a different grant. |");
+            text.AppendLine("| Managed identity | Azure identity attached to App Service or Automation. The installer uses it for the documented Key Vault/SQL access; it does not replace the runtime app's Microsoft 365 permissions. |");
+            text.AppendLine("| Delegated reader | A signed-in person whose source-data rights are used by Teams/billing connections. App consent does not grant that person a new directory or billing role. |");
+            text.AppendLine("| Azure RBAC / SQL roles | Azure roles govern resource management or data-plane access. SQL contained-user roles govern database access. Neither is a Microsoft Graph permission. |").AppendLine();
+            text.AppendLine("## Selected deployment options").AppendLine();
+            foreach (var choice in ConfigurationChoices) text.Append("- ").AppendLine(choice);
+            text.AppendLine().AppendLine("Host patterns below describe this build's Azure/Microsoft 365 public-cloud application traffic. Replace brace placeholders with the agreed resource names privately; they are not literal firewall destinations. Keep the underlying App Service/Hybrid Worker platform dependencies allowed according to Microsoft's network guidance as well.");
+            text.AppendLine();
             text.AppendLine("## Selected workloads").AppendLine();
             if (Workloads.Count == 0) text.AppendLine("No workloads selected. Shared infrastructure below is still part of this installer's deployment.");
             foreach (var workload in Workloads) text.Append("- ").AppendLine(workload);
@@ -85,6 +130,7 @@ namespace App.ControlPanel.Engine.Prerequisites
                 var requirements = Requirements.Where(r => r.Category == category).ToList();
                 if (requirements.Count == 0) continue;
                 text.AppendLine().Append("## ").AppendLine(CategoryTitle(category)).AppendLine();
+                text.AppendLine(CategoryDescription(category)).AppendLine();
                 text.AppendLine("| Requirement | Identity / type | Scope / audience | Needed for |");
                 text.AppendLine("| --- | --- | --- | --- |");
                 foreach (var requirement in requirements)
@@ -97,16 +143,21 @@ namespace App.ControlPanel.Engine.Prerequisites
                 {
                     text.AppendLine().Append("### ").AppendLine(requirement.Name).AppendLine()
                         .AppendLine(requirement.Purpose).AppendLine()
-                        .Append("**Administrator action:** ").AppendLine(requirement.AdminAction).AppendLine()
+                        .Append("**Identity / permission type:** ").AppendLine(requirement.Identity).AppendLine()
+                        .Append("**Scope / traffic path:** ").AppendLine(requirement.Scope).AppendLine()
+                        .Append("**Applies to:** ").AppendLine(string.Join(", ", requirement.Workloads)).AppendLine()
+                        .Append("**Who sets this up:** ").AppendLine(requirement.Responsibility).AppendLine()
+                        .Append("**Setup notes and checks:** ").AppendLine(requirement.AdminAction).AppendLine()
                         .Append("[Reference](").Append(requirement.Reference).AppendLine(")");
                 }
             }
             text.AppendLine().AppendLine("## Administrator handoff checklist").AppendLine();
             text.AppendLine("1. Confirm the selected workloads and optional infrastructure; remove unneeded options in the installer and regenerate this report.");
             text.AppendLine("2. Identify the runtime app, deployment app, managed identities and any delegated readers out of band. Approve only the listed audiences, permission types and scopes.");
-            text.AppendLine("3. Grant consent and scoped Azure/database access; register the required callbacks and connect any delegated readers after deployment.");
-            text.AppendLine("4. Verify licensing, audit availability, privacy settings, networking and quotas. Complete every administrator-review item; a role assignment alone does not prove API access.");
-            text.AppendLine("5. Run Test Configuration, then validate the selected workloads in the deployed portal and importer logs. Some delegated and billing imports are not covered by Test Configuration.");
+            text.AppendLine("3. Have the relevant owners confirm consent, deployment privileges, licensing, privacy, network paths, provider registration, policy compatibility and capacity. A satisfied check requires no change; unresolved items need an owner before deployment.");
+            text.AppendLine("4. Run the installer with the approved configuration. Let it create/reuse resources and configure the documented runtime grants; do not duplicate that work manually unless a pre-provisioned deployment has been agreed.");
+            text.AppendLine("5. After deployment, connect any selected delegated readers and configure the workload-specific runtime settings. Confirm allowed and denied access where data is scoped.");
+            text.AppendLine("6. Run Test Configuration, then validate the selected workloads in the portal and importer logs. Some delegated and billing imports are not covered by Test Configuration; a permission grant or resource existing is not proof of a successful import.");
             return text.ToString();
         }
 
@@ -249,7 +300,8 @@ namespace App.ControlPanel.Engine.Prerequisites
                     "Each approved AzureCostScopes scope, not the whole tenant",
                     "Read Azure spend using the management.azure.com audience. The deployment resource-group Reader assignment does not cover external billing scopes.",
                     "Assign Cost Management Reader at each supported subscription/resource-group scope. EA/MCA billing scopes have separate billing-role rules; ask the billing owner to approve access, not assume a subscription role covers them.",
-                    "https://learn.microsoft.com/azure/cost-management-billing/costs/assign-access-acm-data");
+                    "https://learn.microsoft.com/azure/cost-management-billing/costs/assign-access-acm-data",
+                    "The owner of each external Azure/billing scope grants read access separately. The installer does not grant access to those cost scopes.");
                 b.Check("azure-cost-scopes", "Explicit billing scopes and meter filters", "Azure billing administrator", "App Service runtime settings",
                     "The installer does not populate AzureCostScopes. With no meter filter every meter in the configured scope can be imported.",
                     "Set AzureCostScopes explicitly; review AzureCostGroupBy, service/meter filters and billing tags. Isolate workloads by scope when billing cannot distinguish them. Prepaid capacity is not Azure pay-as-you-go spend.", ProjectReference);
@@ -284,9 +336,25 @@ namespace App.ControlPanel.Engine.Prerequisites
             }
             builder.CoverGroupReadPermissions();
             AddSelectedInfrastructure(builder, config, settings);
+            AddPlatformChecks(builder, config, settings);
             return new DeploymentPrerequisiteReport
             {
                 Workloads = selected.Select(w => w.Name).ToArray(),
+                ConfigurationChoices = new[]
+                {
+                    "Environment preset: " + config.EnvironmentType + ". Resource requests are described below; this is not a tenant-size capacity assessment.",
+                    "SQL authentication selection: " + (config.SqlAuthMode == SqlServerAuthMode.EntraId ? "Microsoft Entra ID" : "legacy SQL login") + ". Existing-server authentication is detected during deployment, not converted by this report.",
+                    "Networking: " + (config.NetworkConfig?.Enabled == true
+                        ? config.NetworkConfig.AllowPublicAccess ? "VNet/private endpoints selected, with public access also allowed." : "VNet/private endpoints selected, with public data-service access disabled."
+                        : "public service endpoints; no VNet/private endpoints selected."),
+                    "Optional services: Service Bus " + (config.ServiceBusEnabled ? "selected" : "off")
+                        + "; Azure AI Language " + (config.CognitiveServicesEnabled ? "selected" : "off")
+                        + "; Azure OpenAI " + (config.FoundryPromptEnabled ? "selected" : "off")
+                        + "; health alerts " + (config.HealthMonitoring?.Enabled == true ? "selected" : "off") + ".",
+                    "Installer tasks: release content " + (config.TasksConfig?.InstallLatestSolutionContent == true ? "selected" : "not selected")
+                        + "; database schema upgrade " + (config.TasksConfig?.UpgradeSchema == true ? "selected" : "not selected") + ".",
+                    "Package source: " + (config.DownloadLatestStable ? "latest stable GitHub release." : "local release ZIPs; automatic GitHub downloads are not selected.")
+                },
                 Requirements = builder.Items.OrderBy(r => r.Category).ThenBy(r => r.Name, StringComparer.Ordinal).ToArray()
             };
         }
@@ -296,10 +364,12 @@ namespace App.ControlPanel.Engine.Prerequisites
             b.Check("runtime-app", "Runtime Entra app registration", "Entra application administrator / consent administrator",
                 "Runtime app, separate from deployment app",
                 "The importer and portal authenticate to Microsoft 365 as this application. The installer uses its client-secret credential for runtime Azure RBAC fallback; this is not DefaultAzureCredential.",
-                "Create the app, configure the supported credential and portal HTTPS Web redirect URI, and grant only the selected API permissions with tenant admin consent. API consent does not follow from Azure Owner. An appropriately privileged consent administrator (for example Privileged Role Administrator for Graph application permissions) approves; the runtime app needs no Entra administrator directory role.", GraphReference);
+                "Create the app, configure the supported credential and portal HTTPS Web redirect URI, and grant only the selected API permissions with tenant admin consent. API consent does not follow from Azure Owner. An appropriately privileged consent administrator (for example Privileged Role Administrator for Graph application permissions) approves; the runtime app needs no Entra administrator directory role.", GraphReference,
+                "App-registration owner prepares the deployment/runtime applications and credentials; Entra consent administrator approves API access. The installer consumes those details; it does not create the registrations.");
             b.Check("portal-roles", "Portal.Administration / Portal.SeePII", "Portal users and groups - app roles", "Runtime enterprise application",
                 "Portal administration and access to identifiable-person analytics are independent permissions; neither implies the other.",
-                "Define and assign the documented app roles to approved users/groups. Assign Administration to operators and SeePII only to authorised analysts; aggregates do not require SeePII. Do not substitute Entra Global Administrator for portal access.", ProjectReference);
+                "Define and assign the documented app roles to approved users/groups. Assign Administration to operators and SeePII only to authorised analysts; aggregates do not require SeePII. Do not substitute Entra Global Administrator for portal access.", ProjectReference,
+                "App-registration / enterprise-application owner defines the portal app roles and assigns approved users/groups. Azure resource provisioning does not make these user-access decisions.");
             var production = config.EnvironmentType == Models.EnvironmentTypeEnum.Production;
             b.Resource("app-service", "Windows App Service plan + web app", "Portal and both continuous WebJobs",
                 (production ? "This installer requests Basic B2 for Production. " : "This installer requests Basic B1 for Testing. ")
@@ -354,9 +424,6 @@ namespace App.ControlPanel.Engine.Prerequisites
                 "Migrations and configuration registration create/alter schema. Entra installs use the deployment app as the default server Entra administrator, or bootstrap it as a contained db_owner on an existing server.",
                 "Have the DBA approve the selected authentication path and grant database deployment access. Do not replace an existing server's Entra administrator just to grant a person access. Directory Readers on the SQL server identity is only a fallback when SQL must resolve principals by name, not a blanket prerequisite.",
                 ProjectReference);
-            b.Check("network", "Connectivity, providers, policy and capacity", "Azure / network administrators", "Installer host, runtime host and selected services",
-                "Successful API consent does not prove network reachability, regional capacity or resource-policy approval.",
-                "Allow required Entra, Graph and selected API egress, ARM and Kudu deployment, database connectivity and chosen data-service endpoints. Register Microsoft.Web, Microsoft.Sql, Microsoft.Storage, Microsoft.KeyVault, Microsoft.Insights and Microsoft.OperationalInsights plus selected optional providers. Validate production sizing, region and policy before deployment.", ProjectReference);
         }
 
         private static void AddSelectedInfrastructure(Builder b, SolutionInstallConfig config, ImportTaskSettings settings)
@@ -367,7 +434,8 @@ namespace App.ControlPanel.Engine.Prerequisites
                 b.Resource("service-bus", "Azure Service Bus namespace + graphcalls queue", "Teams call-record notification buffer",
                     config.ServiceBusEnabled
                         ? "Selected in Database & storage. Required by Calls; otherwise optional and removable. Register Microsoft.ServiceBus; VNet/private endpoints require Premium."
-                        : "Required by the selected Calls workload, but Service Bus is disabled. Enable it before deployment. Register Microsoft.ServiceBus; private endpoints require Premium.");
+                        : "Required by the selected Calls workload, but Service Bus is disabled. Enable it before deployment. Register Microsoft.ServiceBus; private endpoints require Premium.",
+                    config.ServiceBusEnabled ? null : "Not currently scheduled: the operator must enable Service Bus first. The installer then creates or reuses the namespace/queue; it will not do so while this option is off.");
                 b.Access("service-bus", "Azure Service Bus Data Owner", "Runtime app - Azure RBAC", "Deployment resource group (current installer)",
                     "Webhook sends and importer receives. This is the current installer's broader built-in grant, not the theoretical minimum for those two actions.",
                     "For a manually managed solution, review Data Sender + Data Receiver scoped to the queue. The current installer assigns Data Owner whenever Service Bus is enabled; it does not apply the narrower pair.");
@@ -408,21 +476,154 @@ namespace App.ControlPanel.Engine.Prerequisites
                 b.Resource("private-dns", "Private DNS and resolution paths", "Selected private networking",
                     config.NetworkConfig.DeployDnsZones
                         ? "Installer-managed zone links for selected services. Check existing shared zones and ownership before changing DNS."
-                        : "Private DNS creation is disabled. The network owner must provide equivalent records/forwarding, including Blob, Table and SCM resolution.");
+                        : "Private DNS creation is disabled. The network owner must provide equivalent records/forwarding, including Blob, Table and SCM resolution.",
+                    config.NetworkConfig.DeployDnsZones ? null : "Network owner supplies DNS; automatic private DNS creation is not selected.");
                 b.Check("private-reachability", "Private-network reachability review", "Network administrator", "Installer host, App Service and Automation",
                     "Private endpoints require working DNS and a connected deployment host. Public-network settings do not automatically privatise Application Insights or Log Analytics.",
                     "Provide VPN/peering or an in-network installer host, configure App Service integration, and review Azure Monitor Private Link Scope separately if required. Public Graph callbacks/browser tracking still need an approved reachable route; do not assume private-only hosting works for Calls or page tracking.", ProjectReference);
-                if (settings.GraphUsageReports)
+                if (settings.GraphUsageReports && (!config.NetworkConfig.AllowPublicAccess
+                    || !string.IsNullOrWhiteSpace(config.NetworkConfig.HybridWorkerVmResourceId)))
                     b.Resource("hybrid-worker", "Connected Windows Hybrid Runbook Worker VM", "Automation with private data services",
                         string.IsNullOrWhiteSpace(config.NetworkConfig.HybridWorkerVmResourceId)
                             ? "No worker selected. For private-only data services, supply an existing connected VM; the installer registers the worker but does not create that VM."
-                            : "An existing worker VM is selected. Approve extension/VM rights at its own scope, managed identity, DNS and access to SQL/private endpoints.");
+                            : "An existing worker VM is selected. Approve extension/VM rights at its own scope, managed identity, DNS and access to SQL/private endpoints.",
+                        "Azure/network owner supplies an existing connected VM. The installer registers its worker group/extension; it does not create the VM.");
             }
             if (settings.ActivityLog || settings.WebTraffic)
                 b.Add("deploy-sharepoint", PrerequisiteCategory.DeploymentAccess, "SharePoint administrator + target site-collection administrator",
                     "Interactive SharePoint deployment user, not runtime app", "Tenant app catalog and selected sites",
                     "The current SharePoint deployment path is available for selected audit/page-traffic workloads. Raw audit-feed reads do not themselves need site script deployment.",
                     "Use the built-in SharePoint Online Management Shell sign-in app if permitted. The supported custom public-client setup uses the http://localhost redirect and SharePoint delegated AllSites.FullControl with consent. This is the interactive deployment user's app, not a runtime Graph application grant; confirm tenant policy and remove deployment-only access when no longer needed.", ProjectReference);
+        }
+
+        private static void AddPlatformChecks(Builder b, SolutionInstallConfig config, ImportTaskSettings settings)
+        {
+            b.Workload = "Shared solution / selected services";
+            var privateNetwork = config.NetworkConfig?.Enabled == true;
+            var privateOnly = privateNetwork && !config.NetworkConfig.AllowPublicAccess;
+            b.Check("installer-https", "Installer outbound HTTPS and deployment endpoint", "Network / proxy owner",
+                "Installer host -> login.microsoftonline.com, management.azure.com and {web-app}.scm.azurewebsites.net / TCP 443",
+                "The installer obtains Entra tokens, manages Azure resources and uploads release ZIPs to the App Service SCM (Kudu) endpoint. Successful portal browsing alone does not prove that the installer can deploy.",
+                "Before the run, allow these HTTPS destinations through the host firewall/proxy. Resolve the SCM host from the installer machine and confirm its TLS connection and publishing access. With private App Service access, the installer must be connected to the VNet and resolve both the web-app and SCM names privately. The proxy setting in the installer applies to deployment requests; it does not configure the deployed web app's outbound network.",
+                "https://learn.microsoft.com/azure/app-service/deploy-zip");
+            if (config.DownloadLatestStable)
+                b.Check("release-download", "Stable release download access", "Network / proxy owner",
+                    "Installer host -> api.github.com, github.com and release asset redirect hosts / TCP 443",
+                    "Latest stable release is selected, so the installer reads GitHub release metadata and follows the download URLs for the release ZIPs.",
+                    "Allow the public repository's GitHub API and release downloads, including the asset host reached by redirects (commonly release-assets.githubusercontent.com). Verify an actual ZIP download from the installer machine, not just github.com home-page access. If that path is not approved, download the release through an approved process and choose local packages in Release & packages.",
+                    ProjectReference);
+
+            var sqlNetwork = privateOnly
+                ? "The SQL name must resolve to the private endpoint from the installer, App Service and any Hybrid Worker. Do not enable a public SQL firewall exception as a substitute for private routing."
+                : "Confirm that SQL firewall rules admit the installer host and the runtime host's applicable outbound addresses; those addresses are supplied separately, not exported here.";
+            b.Check("sql-network", "SQL connection path and connection policy", "Network owner + database owner",
+                "Installer, App Service and selected Automation execution host -> {sql-server}.database.windows.net / TCP 1433 initially",
+                "Schema upgrades, imports and portal queries all open database connections. SQL authentication cannot work if DNS, routing or the SQL firewall blocks the connection.",
+                sqlNetwork + " Check the server's actual connection policy: public-endpoint Redirect also requires regional SQL destinations on TCP 11000-11999; Proxy uses TCP 1433. Private-endpoint Redirect has its own documented port requirements, so do not assume public ranges apply. Prove an authenticated database connection from each execution location before scheduling deployment.",
+                "https://learn.microsoft.com/azure/azure-sql/database/connectivity-architecture");
+            b.Check("storage-network", "Blob and Table data endpoints", "Network / storage owner",
+                "App Service and importer -> {storage-account}.blob.core.windows.net and {storage-account}.table.core.windows.net / TCP 443",
+                "Blob data and Table state use separate service endpoints. A working Blob connection does not prove that delta tokens, checkpoints or delegated connections can use Table storage.",
+                (privateNetwork
+                    ? "Provide both Blob and Table private endpoints and private DNS; check resolution from App Service, not only the administrator's workstation. "
+                    : "Confirm both services permit the runtime network path under the storage firewall settings. ")
+                + "Prove read/write access to the solution's Blob containers and AnalyticsState table with the configured runtime identity. An Azure management-plane Reader assignment is not that data-access test.",
+                "https://learn.microsoft.com/azure/storage/common/storage-private-endpoints");
+            b.Check("vault-network", "Key Vault secret and certificate endpoint", "Network / Key Vault owner",
+                "Installer and App Service -> {key-vault}.vault.azure.net / TCP 443",
+                "The installer writes the runtime secret; the deployed application reads the configured secret/certificate using the documented vault identities.",
+                (privateOnly
+                    ? "Run the installer on a connected private-network host and verify the vault name resolves privately. "
+                    : "Confirm the vault firewall admits the installer and App Service paths; access to management.azure.com does not prove data-plane vault access. ")
+                + "Verify a permitted secret operation as each relevant identity. DNS/firewall access and Key Vault data permissions must both work; do not broaden roles to troubleshoot a blocked route.",
+                "https://learn.microsoft.com/azure/key-vault/general/network-security");
+            b.Check("monitor-network", "Application Insights query and telemetry endpoints", "Network / monitoring owner",
+                "App Service -> api.applicationinsights.io and the configured Application Insights ingestion endpoint / TCP 443",
+                "The importer/portal query Application Insights and send diagnostics. The ingestion host comes from the resource connection string and can be regional; it is not the query API host.",
+                "Permit HTTPS to api.applicationinsights.io and the exact IngestionEndpoint selected for the resource. Use the current Azure Monitor endpoint/service-tag guidance rather than a copied IP list. "
+                + (settings.WebTraffic ? "Tracked SharePoint browsers must also reach the telemetry endpoint and portal over HTTPS. " : "")
+                + (config.HealthMonitoring?.Enabled == true ? "If using availability checks, permit the approved Azure Monitor probe source to reach the configured web-app check URL. " : "")
+                + "The installer leaves Application Insights and Log Analytics public even in private-only mode. If policy requires them private, have the monitoring/network owner design and configure Azure Monitor Private Link Scope separately.",
+                "https://learn.microsoft.com/azure/azure-monitor/fundamentals/azure-monitor-network-access");
+
+            var apiHosts = new List<string> { "login.microsoftonline.com (token acquisition)" };
+            if (b.Items.Any(r => r.Category == PrerequisiteCategory.ApplicationPermissions && r.Identity == Graph)
+                || settings.GraphTeams || settings.CopilotCostManagement)
+                apiHosts.Add("graph.microsoft.com (selected Microsoft Graph reads)");
+            if (settings.UsesActivityApi) apiHosts.Add("manage.office.com (selected Office 365 Management Activity feeds)");
+            if (settings.GraphUsageReports || settings.GraphCopilotUsageReports)
+                apiHosts.Add("the pre-authenticated CSV download host returned by Graph usage reports (commonly reports.office.com)");
+            if (settings.CopilotStudioCredits) apiHosts.Add("api.powerplatform.com (Copilot Studio billing)");
+            if (settings.AzureCostManagement) apiHosts.Add("management.azure.com (Azure Cost Management)");
+            b.Check("runtime-api-network", "Selected Microsoft 365 / billing API egress", "Network / proxy owner",
+                "App Service / WebJobs -> selected public-cloud API hosts / TCP 443",
+                "The background importers make outbound API requests independently of the desktop installer. A successful installer sign-in does not test their egress path.",
+                "Allow: " + string.Join("; ", apiHosts) + ". Resolve and test these from the App Service execution environment. "
+                + "Private endpoints for SQL/Storage/Key Vault do not provide private routing to Microsoft Graph or these billing/audit APIs. A corporate proxy or TLS inspection rule must support the actual token and API requests, including selected report download redirects.",
+                ProjectReference);
+            if (settings.Calls)
+                b.Check("calls-network", "Calls queue transport and inbound Graph validation", "Network / Teams owner",
+                    "App Service webhook + importer -> {service-bus}.servicebus.windows.net / TCP 5671 and HTTPS 443",
+                    "The current ServiceBusClient uses the SDK's default AMQP/TLS transport, not AMQP-over-WebSockets. Graph also sends inbound HTTPS validation and call notifications to the portal webhook.",
+                    "Allow outbound AMQP/TLS TCP 5671 to the namespace plus HTTPS for token/SDK operations; opening only TCP 443 is not sufficient for this build's queue transport. Keep the approved webhook URL reachable by Microsoft Graph over HTTPS without an interactive sign-in challenge. For private Service Bus, use Premium and prove the namespace resolves to its private endpoint from App Service. Validate the subscription and an end-to-end notification after deployment.",
+                    "https://learn.microsoft.com/azure/service-bus-messaging/service-bus-faq");
+            if (config.CognitiveServicesEnabled || config.FoundryPromptEnabled)
+            {
+                var aiHosts = new List<string>();
+                if (config.CognitiveServicesEnabled) aiHosts.Add("{language-account}.cognitiveservices.azure.com (Language)");
+                if (config.FoundryPromptEnabled) aiHosts.Add("{openai-account}.openai.azure.com (OpenAI)");
+                b.Check("ai-network", "Selected Azure AI data endpoints", "Network / Azure AI owner",
+                    "App Service / importer -> selected AI resource endpoints / TCP 443",
+                    "AI resource provisioning is an ARM operation; sentiment/key-phrase analysis and prompt categorisation use different data endpoints.",
+                    "For the selected services, permit HTTPS to " + string.Join("; ", aiHosts) + ". "
+                    + (privateNetwork ? "Resolve the selected resource's private DNS name from App Service and route through its private endpoint. " : "Confirm its public-network/firewall settings permit the runtime path. ")
+                    + "Before enabling AI processing, verify the resource endpoint and inference/data-plane identity together. Merely creating the resource does not enable every AI processing option.",
+                    ProjectReference);
+            }
+
+            var providers = new List<string> { "Microsoft.Web", "Microsoft.Sql", "Microsoft.Storage", "Microsoft.KeyVault", "Microsoft.Insights", "Microsoft.OperationalInsights" };
+            if (config.ServiceBusEnabled || settings.Calls) providers.Add("Microsoft.ServiceBus");
+            if (config.CognitiveServicesEnabled || config.FoundryPromptEnabled) providers.Add("Microsoft.CognitiveServices");
+            if (settings.GraphUsageReports) providers.Add("Microsoft.Automation");
+            if (privateNetwork) providers.Add("Microsoft.Network");
+            b.Check("provider-registration", "Subscription resource-provider registration", "Azure subscription owner",
+                "Target Azure subscription",
+                "Azure must have the namespaces for the selected resource types registered. Resource-group Contributor access does not automatically authorise subscription-wide registration.",
+                "Confirm registrationState is Registered for: " + string.Join(", ", providers) + ". "
+                + "Use Subscription > Resource providers, or az provider show --namespace {namespace} --subscription {subscription-id}. Only if needed, a subscription owner registers that namespace. No registration change is needed for an already Registered provider; the installer does not need permanent subscription Owner just for this check.",
+                "https://learn.microsoft.com/azure/azure-resource-manager/management/resource-providers-and-types");
+            b.Check("policy-compatibility", "Azure Policy checks for this deployment method", "Azure policy / subscription owner",
+                "Target subscription, resource group and any shared network resources",
+                "A role grant does not override Azure Policy denies. The installer can reuse resources, but cannot bypass a policy that prohibits a requested setting.",
+                "Before deployment, check the selected resource types, allowed locations/SKUs, required tags and role-assignment conditions. "
+                + (privateOnly ? "The selected data services disable public access, but Application Insights/Log Analytics remain public unless AMPLS is configured separately. " : "Public service access is selected; confirm that the relevant publicNetworkAccess settings are permitted. ")
+                + "The Windows App Service needs Always On. The current content-deployment path enables SCM basic publishing credentials for ZIP deployment and disables FTP publishing; a policy forbidding SCM basic publishing needs an approved compatible deployment approach, not a wider runtime role. "
+                + "Confirm that the chosen Key Vault RBAC/access-policy model and the required runtime role assignments are allowed. The installer supports credential-free Table/Blob access when shared keys are disabled. Resolve any incompatible policy through its owner before the run; do not request blanket policy exemptions.",
+                "https://learn.microsoft.com/azure/governance/policy/overview");
+            var production = config.EnvironmentType == Models.EnvironmentTypeEnum.Production;
+            b.Check("capacity-approval", "Requested SKUs, regional availability and spending approval", "Azure subscription / service owner",
+                "Chosen deployment region and subscription; actual names supplied separately",
+                "Permission to deploy is not a reservation of compute, database or AI capacity, and it does not approve ongoing charges.",
+                "For new resources this preset requests App Service " + (production ? "Basic B2" : "Basic B1")
+                + " and Azure SQL " + (production || privateNetwork ? "S2" : "Basic") + ". "
+                + (config.ServiceBusEnabled || settings.Calls ? "Service Bus requests " + (privateNetwork ? "Premium for private endpoints" : "Standard") + "; an existing namespace may need a separate approved upgrade. " : "")
+                + (config.FoundryPromptEnabled ? "For OpenAI, check the selected model/version and deployment type are offered in the region and that the subscription has sufficient deployment/token-rate quota for the selected capacity. " : "")
+                + "Check available App Service workers, SQL/server quota, any selected Service Bus/AI quota and approval for recurring storage/telemetry/alert costs. Existing resources may keep their tier. At a 200,000-user tenant, review expected ingest volume and retention with the service owner; these presets are not a performance guarantee.",
+                "https://learn.microsoft.com/azure/azure-resource-manager/management/azure-subscription-service-limits");
+            if (privateNetwork)
+            {
+                var zones = new List<string> { "privatelink.database.windows.net", "privatelink.azurewebsites.net", "privatelink.blob.core.windows.net", "privatelink.table.core.windows.net", "privatelink.vaultcore.azure.net" };
+                if (config.ServiceBusEnabled || settings.Calls) zones.Add("privatelink.servicebus.windows.net");
+                if (config.CognitiveServicesEnabled) zones.Add("privatelink.cognitiveservices.azure.com");
+                if (config.FoundryPromptEnabled) zones.Add("privatelink.openai.azure.com");
+                if (settings.GraphUsageReports) zones.Add("privatelink.azure-automation.net");
+                b.Check("private-dns-routing", "Private DNS and routing acceptance checks", "Network / DNS owner",
+                    "Installer host, App Service integration subnet and any Hybrid Worker",
+                    "Private endpoint records must be visible from each execution network. A private endpoint in Azure is not proof that the installer or web app can use it.",
+                    (config.NetworkConfig.DeployDnsZones ? "Installer-managed zone creation is selected. Verify the resulting links/records and any corporate DNS forwarding. " : "Automatic zone creation is off: the network owner supplies the zone records, links and forwarding. ")
+                    + "Selected zone names: " + string.Join(", ", zones) + ". Resolve each resource FQDN from the installer host and the App Service console, and confirm the private IP and allowed route/port. Include separate web-app and SCM records, and both Blob and Table services. Verify VNet integration and NSG/UDR rules rather than assuming a private endpoint gives App Service outbound connectivity. For private Automation data access, use the connected Hybrid Worker described under Azure resources.",
+                    "https://learn.microsoft.com/azure/private-link/private-endpoint-dns");
+            }
         }
 
         private sealed class Builder
@@ -432,17 +633,39 @@ namespace App.ControlPanel.Engine.Prerequisites
             public string Workload { get; set; }
 
             public void Add(string id, PrerequisiteCategory category, string name, string identity, string scope,
-                string purpose, string action, string reference)
+                string purpose, string action, string reference, string responsibility = null)
             {
                 if (!_items.TryGetValue(id, out var item))
                     _items.Add(id, item = new DeploymentRequirement
                     {
                         Id = id, Category = category, Name = name, Identity = identity, Scope = scope,
-                        Purpose = purpose, AdminAction = action, Reference = reference
+                        Purpose = purpose, AdminAction = action, Reference = reference,
+                        Responsibility = responsibility ?? DefaultResponsibility(category)
                     });
                 else if (!item.Purpose.Contains(purpose))
                     item.Purpose += " " + purpose;
                 item.AddWorkload(Workload);
+            }
+
+            private static string DefaultResponsibility(PrerequisiteCategory category)
+            {
+                switch (category)
+                {
+                    case PrerequisiteCategory.ApplicationPermissions:
+                        return "Entra consent administrator, before deployment. The installer does not add or consent these API permissions.";
+                    case PrerequisiteCategory.DelegatedConnections:
+                        return "Entra consent administrator approves permissions; an authorised portal operator connects the reader after deployment.";
+                    case PrerequisiteCategory.AzureResources:
+                        return "Installer creates or reuses/configures the service during deployment. Azure owner approves policy, cost and capacity beforehand.";
+                    case PrerequisiteCategory.RuntimeAccess:
+                        return "Installer configures the solution's runtime grants during deployment, using the authorised deployment identity. External-scope exceptions are stated below.";
+                    case PrerequisiteCategory.DeploymentAccess:
+                        return "Deployment owner arranges the installer's authority before the run. The installer can then configure the supported vault/SQL permissions described in the setup notes.";
+                    case PrerequisiteCategory.OptionalEnrichment:
+                        return "Workload/security owner decides whether the extra feature is wanted; Entra consent administrator grants only approved extra access. The installer does not consent it.";
+                    default:
+                        return "The named service or network owner checks this condition at the stated stage. If it is already satisfied, no configuration change is needed.";
+                }
             }
 
             public void Permission(string name, string purpose) => Add("graph-" + name,
@@ -481,14 +704,14 @@ namespace App.ControlPanel.Engine.Prerequisites
                     "Grant the named Office 365 Management APIs application permission with admin consent. Enable unified auditing and confirm the workload's audit/licence coverage; do not assign an Entra administrator role to the runtime app.", AuditReference);
             }
 
-            public void Resource(string id, string name, string purpose, string action) =>
-                Add("resource-" + id, PrerequisiteCategory.AzureResources, name, "Azure resources", "Dedicated solution resource group unless noted", purpose, action, ProjectReference);
+            public void Resource(string id, string name, string purpose, string action, string responsibility = null) =>
+                Add("resource-" + id, PrerequisiteCategory.AzureResources, name, "Azure resources", "Dedicated solution resource group unless noted", purpose, action, ProjectReference, responsibility);
 
             public void Access(string id, string name, string identity, string scope, string purpose, string action) =>
                 Add("access-" + id, PrerequisiteCategory.RuntimeAccess, name, identity, scope, purpose, action, RbacReference);
 
-            public void Check(string id, string name, string identity, string scope, string purpose, string action, string reference) =>
-                Add("check-" + id, PrerequisiteCategory.OperationalChecks, name, identity, scope, purpose, action, reference);
+            public void Check(string id, string name, string identity, string scope, string purpose, string action, string reference, string responsibility = null) =>
+                Add("check-" + id, PrerequisiteCategory.OperationalChecks, name, identity, scope, purpose, action, reference, responsibility);
         }
     }
 }
