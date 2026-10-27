@@ -421,7 +421,7 @@ function OverviewPanel({ summary, customDimensions, onOpenTab }: {
       <Card className={styles.card}>
         <SectionHeading
           title={t('copilotSpend.overview.topGroups')}
-          description={t('copilotSpend.overview.topGroupsDescription', {
+          description={t(summary.studio.available ? 'copilotSpend.overview.topGroupsDescription' : 'copilotSpend.overview.topGroupsDescriptionReadings', {
             dimension: dimensionLabel(t, summary.organisation.dimension, { dimensions: customDimensions, names: { [summary.organisation.dimension]: summary.organisation.dimensionName ?? '' } }),
           })}
         />

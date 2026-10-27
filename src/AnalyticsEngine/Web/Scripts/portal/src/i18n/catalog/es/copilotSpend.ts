@@ -128,6 +128,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   // Overview and organisation
   'copilotSpend.overview.topGroups': 'Dónde se consume',
   'copilotSpend.overview.topGroupsDescription': 'Los grupos con más créditos facturados de Copilot Studio, por {dimension}.',
+  'copilotSpend.overview.topGroupsDescriptionReadings': 'Los grupos con más créditos consumidos en la última lectura, por {dimension}.',
   'copilotSpend.overview.allGroups': 'Ver todos los grupos',
   'copilotSpend.org.title': 'Organización',
   'copilotSpend.org.description':

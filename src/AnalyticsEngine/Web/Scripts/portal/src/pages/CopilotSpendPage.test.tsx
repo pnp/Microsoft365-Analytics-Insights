@@ -269,6 +269,8 @@ describe('CopilotSpendPage', () => {
         renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
 
         expect(await screen.findByText('The Copilot Studio credit import is turned off, so there is no billed usage to show.')).toBeInTheDocument();
+    // Without the ledger the groups are ordered by consumed credits, and the heading says so.
+    expect(screen.getByText('The groups with the most consumed credits at the latest reading, by Department.')).toBeInTheDocument();
         expect(screen.queryByText(/people with billed usage/)).not.toBeInTheDocument();
         const table = screen.getByRole('table', { name: 'Organisation' });
         expect(within(table).getAllByRole('img', { name: 'Not available' })).toHaveLength(2);

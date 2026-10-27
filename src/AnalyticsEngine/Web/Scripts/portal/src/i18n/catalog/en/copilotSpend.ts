@@ -121,6 +121,7 @@ export const copilotSpend = {
   // Overview and organisation
   'copilotSpend.overview.topGroups': 'Where it is consumed',
   'copilotSpend.overview.topGroupsDescription': 'The groups with the most billed Copilot Studio credits, by {dimension}.',
+  'copilotSpend.overview.topGroupsDescriptionReadings': 'The groups with the most consumed credits at the latest reading, by {dimension}.',
   'copilotSpend.overview.allGroups': 'See every group',
   'copilotSpend.org.title': 'Organisation',
   'copilotSpend.org.description':
