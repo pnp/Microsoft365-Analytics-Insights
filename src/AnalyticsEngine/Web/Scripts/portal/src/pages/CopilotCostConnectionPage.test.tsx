@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProvider } from '../test/renderWithProvider';
 import CopilotCostConnectionPage from './CopilotCostConnectionPage';
-import { changeCostConnection, fetchCostCollection, fetchCostConnection, type CostCollectionStatus, type CostConnectionStatus } from '../api/copilotCostConnectionApi';
+import { changeCostConnection, costConnectionText, fetchCostCollection, fetchCostConnection, type CostCollectionStatus, type CostConnectionStatus } from '../api/copilotCostConnectionApi';
 
 vi.mock('../api/copilotCostConnectionApi', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/copilotCostConnectionApi')>();
@@ -13,44 +13,47 @@ const connected: CostConnectionStatus = { status: 'connected', csrfToken: 'test-
 
 describe('CopilotCostConnectionPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    vi.mocked(fetchCostConnection).mockResolvedValue({ status: 'disconnected', csrfToken: 'test-csrf' });
     window.location.hash = '';
   });
 
-  it('does not contact storage or expose controls until status is requested', () => {
+  it('loads status automatically without starting a data check or reading SQL history', async () => {
     renderWithProvider(<CopilotCostConnectionPage />);
-    expect(fetchCostConnection).not.toHaveBeenCalled();
+    expect(await screen.findByText('No dedicated reader is connected.')).toBeVisible();
+    expect(fetchCostConnection).toHaveBeenCalledTimes(1);
     expect(fetchCostCollection).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: 'Connect reader' })).not.toBeInTheDocument();
+    expect(changeCostConnection).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Connect reader' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Run or resume data check' })).toBeDisabled();
     expect(screen.getByText('Copilot credit history (preview)')).toBeVisible();
     expect(screen.queryByText(/not supported for production/)).not.toBeInTheDocument();
   });
 
   it.each(['en', 'es'] as const)('explains portal, reader and runtime permissions in %s before connecting', async (language) => {
     renderWithProvider(<CopilotCostConnectionPage />, { language });
-    expect(await screen.findByText(language === 'es' ? 'Permisos y configuración de la conexión' : 'Connection permissions and setup')).toBeVisible();
+    fireEvent.click(await screen.findByText(language === 'es' ? 'Permisos y configuración de la conexión' : 'Connection permissions and setup'));
     expect(screen.getByText(/Portal\.Administration/)).toBeVisible();
     expect(screen.getByText(/CopilotCostManagement-UserData.Read.All/)).toHaveTextContent('CopilotCostManagement-Policy.Read.All');
     expect(screen.getByText(/CopilotCostManagement-Assignment.Read.All/)).toHaveTextContent('CopilotCostManagement.Read.All');
-    expect(screen.getByText(/Global Reader/)).toBeVisible();
+    expect(screen.getAllByText(/Global Reader/).length).toBeGreaterThan(0);
     expect(screen.getByText(/User.Read.All/)).toHaveTextContent('Storage Table Data Contributor');
     expect(screen.getByText(/\/copilot-cost\/callback/)).toBeVisible();
-    expect(fetchCostConnection).not.toHaveBeenCalled();
+    expect(changeCostConnection).not.toHaveBeenCalled();
   });
 
   it('keeps missing storage unavailable instead of offering an in-memory connection', async () => {
     vi.mocked(fetchCostConnection).mockResolvedValue({ status: 'storageRequired' });
     renderWithProvider(<CopilotCostConnectionPage />, { language: 'es' });
-    fireEvent.click(await screen.findByRole('button', { name: 'Comprobar conexión' }));
     expect(await screen.findByText(/No existe alternativa en memoria/)).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Conectar lector' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/se ha podido leer la configuración guardada/)).not.toBeInTheDocument();
   });
 
   it('requires confirmation before disconnecting and preserves the history warning', async () => {
     vi.mocked(fetchCostConnection).mockResolvedValueOnce(connected).mockResolvedValue({ status: 'disconnected', csrfToken: 'test-csrf' });
     vi.mocked(changeCostConnection).mockResolvedValue({});
     renderWithProvider(<CopilotCostConnectionPage />);
-    fireEvent.click(screen.getByRole('button', { name: 'Check connection' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Disconnect reader' }));
     expect(changeCostConnection).not.toHaveBeenCalled();
     expect(screen.getByText(/Historical SQL data is preserved/)).toBeVisible();
@@ -67,18 +70,21 @@ describe('CopilotCostConnectionPage', () => {
     vi.mocked(fetchCostConnection).mockResolvedValueOnce(connected).mockResolvedValueOnce(connected).mockResolvedValue(completed);
     vi.mocked(changeCostConnection).mockResolvedValue({});
     renderWithProvider(<CopilotCostConnectionPage />);
-    fireEvent.click(screen.getByRole('button', { name: 'Check connection' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Run or resume read-only probe' }));
+    await screen.findByText('Connected — account saved');
+    fireEvent.click(screen.getByRole('button', { name: 'Run or resume data check' }));
     expect(changeCostConnection).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
-    expect(await screen.findByText(/completion alone does not establish full coverage/)).toBeVisible();
+    expect(await screen.findByText(/Finishing does not confirm that all users were covered/)).toBeVisible();
+    expect(screen.getByText(/all pages were read using the application/)).toBeVisible();
+    expect(screen.getByText(/Some users could not be fully checked/)).toBeVisible();
     expect(changeCostConnection).toHaveBeenCalledTimes(1);
     expect(changeCostConnection).toHaveBeenCalledWith('probe', 'test-csrf');
   });
 
-  it('announces callback failures without displaying unknown server text', () => {
+  it('announces callback failures without displaying unknown server text', async () => {
     window.location.hash = '#/admin/copilot-cost-connection?costConnection=untrusted-payload';
     renderWithProvider(<CopilotCostConnectionPage />);
+    await screen.findByText('No dedicated reader is connected.');
     expect(screen.getByRole('alert')).toHaveTextContent('An unrecognised connection state');
     expect(screen.queryByText('untrusted-payload')).not.toBeInTheDocument();
   });
@@ -91,10 +97,11 @@ describe('CopilotCostConnectionPage', () => {
     };
     vi.mocked(fetchCostCollection).mockResolvedValue(inventory);
     renderWithProvider(<CopilotCostConnectionPage />);
+    await screen.findByText('No dedicated reader is connected.');
     fireEvent.click(screen.getByRole('button', { name: 'Check scheduled collection' }));
-    expect(await screen.findByText(/Building a complete directory inventory/)).toBeVisible();
-    expect(screen.getByText(/directory count is provisional/)).toBeVisible();
-    expect(fetchCostConnection).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Reading the user list/)).toBeVisible();
+    expect(screen.getByText(/user count is provisional/)).toBeVisible();
+    expect(fetchCostConnection).toHaveBeenCalledTimes(1);
     expect(changeCostConnection).not.toHaveBeenCalled();
   });
 
@@ -105,8 +112,47 @@ describe('CopilotCostConnectionPage', () => {
       measured: 70, empty: 10, partial: 0, unevaluated: 0,
     });
     renderWithProvider(<CopilotCostConnectionPage />);
+    await screen.findByText('No dedicated reader is connected.');
     fireEvent.click(screen.getByRole('button', { name: 'Check scheduled collection' }));
     expect(await screen.findByText(/unrecognised collector phase/)).toBeVisible();
     expect(screen.queryByText('untrusted-phase')).not.toBeInTheDocument();
+  });
+
+  it.each(['en', 'es'] as const)('refreshes saved progress after a failed data check and explains the failure in %s', async (language) => {
+    const failed: CostConnectionStatus = {
+      ...connected, probe: { phase: 'context', directoryUsers: 0, inventoryComplete: false,
+        observed: 0, measured: 0, empty: 0, partial: 0, unevaluated: 0, failed: 0, denied: 0,
+        lastOutcome: 'invalidResponse' },
+    };
+    vi.mocked(fetchCostConnection).mockResolvedValueOnce(connected).mockResolvedValueOnce(connected).mockResolvedValue(failed);
+    renderWithProvider(<CopilotCostConnectionPage />, { language });
+    await screen.findByText(language === 'es' ? 'Conectado: cuenta guardada' : 'Connected — account saved');
+    vi.mocked(changeCostConnection).mockRejectedValue(new Error(costConnectionText('invalidResponse')));
+    fireEvent.click(screen.getByRole('button', { name: language === 'es' ? 'Ejecutar o reanudar comprobación de datos' : 'Run or resume data check' }));
+    fireEvent.click(screen.getByRole('button', { name: language === 'es' ? 'Confirmar' : 'Confirm' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(language === 'es' ? 'ni demuestra por sí solo un problema de permisos' : 'does not by itself prove a permissions problem');
+    expect(await screen.findByText(language === 'es' ? /Paso actual o último paso:/ : /Current or last step:/)).toHaveTextContent(language === 'es' ? 'directivas de gasto' : 'spending policies');
+    expect(screen.getByText(language === 'es' ? /Lista de usuarios: aún no se ha comprobado/ : /User list: not checked yet/)).toBeVisible();
+    expect(fetchCostConnection).toHaveBeenCalledTimes(3);
+    expect(changeCostConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not leave a green connected panel visible when refreshing status fails', async () => {
+    vi.mocked(fetchCostConnection).mockResolvedValueOnce(connected).mockRejectedValue(new Error('Synthetic status failure'));
+    renderWithProvider(<CopilotCostConnectionPage />);
+    await screen.findByText('Connected — account saved');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh status' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Synthetic status failure');
+    expect(screen.queryByText('Connected — account saved')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run or resume data check' })).toBeDisabled();
+  });
+
+  it('shows a reconnect action without a green connected panel when sign-in is required', async () => {
+    vi.mocked(fetchCostConnection).mockResolvedValue({ status: 'reconnectRequired', csrfToken: 'test-csrf' });
+    renderWithProvider(<CopilotCostConnectionPage />);
+    expect(await screen.findByText(/Microsoft needs the connected account/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Reconnect same reader' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Run or resume data check' })).toBeDisabled();
+    expect(screen.queryByText('Connected — account saved')).not.toBeInTheDocument();
   });
 });
