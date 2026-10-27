@@ -26,7 +26,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             StorageAccountResource storageAccount = null;
             try
             {
-                var accRepsonse = await Container.GetStorageAccountAsync(name);
+                var accRepsonse = await Container.GetStorageAccountAsync(name, cancellationToken: CancellationToken);
                 storageAccount = accRepsonse.Value;
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
@@ -42,7 +42,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     PublicNetworkAccess = _allowPublicAccess ? StoragePublicNetworkAccess.Enabled : StoragePublicNetworkAccess.Disabled
                 };
                 EnsureTagsOnNew(newAccountInfo.Tags);
-                var storageAccountReq = await Container.GetStorageAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, newAccountInfo);
+                var storageAccountReq = await Container.GetStorageAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, newAccountInfo, cancellationToken: CancellationToken);
                 storageAccount = storageAccountReq.Value;
 
                 _logger.LogInformation($"Created storage-account '{storageAccount.Data.Name}' (public access: {(_allowPublicAccess ? "enabled" : "disabled")}).");
@@ -82,7 +82,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
                 if (needsPatch)
                 {
-                    await storageAccount.UpdateAsync(patch);
+                    await storageAccount.UpdateAsync(patch, cancellationToken: CancellationToken);
                 }
 
                 _logger.LogInformation($"Found existing storage-account '{storageAccount.Data.Name}'.");

@@ -99,6 +99,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             foreach (var user in users)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (user == null) continue;
 
                 var validationError = user.GetValidationError();
@@ -118,7 +119,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                             ? null
                             : await _resolver.ResolveObjectIdAsync(user, cancellationToken).ConfigureAwait(false);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                     {
                         _logger.LogWarning($"Could not look up database user '{user.Login}' in Microsoft Entra ID: {ex.Message}");
                         looked = null;
@@ -162,12 +163,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var granted = 0;
             try
             {
-                using (var connection = AzureSqlTokenAuth.CreateConnection(connectionString))
+                using (var connection = AzureSqlTokenAuth.CreateConnection(connectionString, cancellationToken))
                 {
                     await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
                     foreach (var entry in resolved)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         var sql = SqlContainedUserScript.CreateUserAndGrantRoles(
                             entry.Key.Login, entry.Value, DatabaseUserRoles, entry.Key.IsGroup);
 
@@ -189,7 +191,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 _logger.LogWarning(
                     $"Could not grant the configured database users access: {ex.Message}. The people listed in the installer " +
@@ -255,6 +257,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             foreach (var account in _candidates)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     var credential = new Azure.Identity.ClientSecretCredential(account.DirectoryId, account.ClientId, account.Secret);
@@ -266,7 +269,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
                     if (objectId != null) return objectId;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     // Typically a missing directory-read grant on this particular app registration. Keep the
                     // reason for the final message, but try the other one before giving up.
@@ -341,6 +344,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             foreach (var account in _candidates)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     var credential = new Azure.Identity.ClientSecretCredential(account.DirectoryId, account.ClientId, account.Secret);
@@ -353,7 +357,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     var appId = ParseId(sp?.AppId);
                     if (appId != null) return appId;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     lastFailure = ex;
                 }

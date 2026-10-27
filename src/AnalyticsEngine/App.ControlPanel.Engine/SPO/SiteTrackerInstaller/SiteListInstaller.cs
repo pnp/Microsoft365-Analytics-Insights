@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
@@ -11,6 +12,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
     public abstract class AbstractSiteListInstaller<WEBTYPE>
     {
         protected readonly ILogger _logger;
+        public CancellationToken CancellationToken { get; set; }
 
         public AbstractSiteListInstaller(ILogger logger)
         {
@@ -19,12 +21,14 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
 
         public async Task InstallToSites(IEnumerable<string> siteUrls, FileInfo aiTrackerFileName, string appInsightsConnectionString, string docLibTitle, string solutionWebsiteBaseUrl)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             if (!aiTrackerFileName.Exists)
                 throw new ArgumentException($"Can't find AITracker file '{aiTrackerFileName}'", nameof(aiTrackerFileName));
             var fileContents = System.IO.File.ReadAllBytes(aiTrackerFileName.FullName);
 
             foreach (var siteUrl in siteUrls)
             {
+                CancellationToken.ThrowIfCancellationRequested();
                 using (var adaptor = GetAdaptor(siteUrl))
                 {
                     var cfg = new TrackerInstallConfig(appInsightsConnectionString, docLibTitle, fileContents);
@@ -66,7 +70,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
 
         public override ISiteInstallAdaptor<SpoWeb> GetAdaptor(string siteUrl)
         {
-            return new SpoSiteInstallAdaptor(siteUrl, _authenticator, _logger);
+            return new SpoSiteInstallAdaptor(siteUrl, _authenticator, _logger) { CancellationToken = CancellationToken };
         }
     }
 }

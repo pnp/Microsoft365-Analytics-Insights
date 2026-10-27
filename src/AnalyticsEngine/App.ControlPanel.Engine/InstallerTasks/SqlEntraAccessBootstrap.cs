@@ -88,6 +88,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public static async Task<bool> TryRepairInstallerAccessAsync(string connectionString, string tenantId,
             Guid installerClientId, ILogger logger, CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(connectionString)) return false;
 
             if (installerClientId == Guid.Empty)
@@ -123,19 +124,19 @@ namespace App.ControlPanel.Engine.InstallerTasks
             {
                 adminToken = await AcquireAdminTokenAsync(tenantId, logger, cancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 logger?.LogError(
                     $"The administrator sign-in was cancelled or did not complete within {SignInTimeout.TotalMinutes:0} minutes, " +
                     "so the installer could not repair its database access.");
                 return false;
             }
-            catch (AuthenticationFailedException ex)
+            catch (AuthenticationFailedException ex) when (!cancellationToken.IsCancellationRequested)
             {
                 logger?.LogError($"The administrator sign-in failed, so the installer could not repair its database access: {ex.Message}");
                 return false;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 logger?.LogError($"Could not sign in to repair the installer's database access: {ex.Message}");
                 return false;
@@ -158,7 +159,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     }
                 }
             }
-            catch (SqlException ex)
+            catch (SqlException ex) when (!cancellationToken.IsCancellationRequested)
             {
                 // 18456 here means the person who signed in is not an administrator of this server either,
                 // which is a different problem from the one we set out to fix - so name it rather than
@@ -176,7 +177,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 }
                 return false;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 logger?.LogError($"Could not create the installer's database user: {ex.Message}");
                 return false;
@@ -240,7 +241,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 {
                     throw;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!timeout.IsCancellationRequested)
                 {
                     logger?.LogWarning(
                         $"Could not sign in with a browser ({ex.Message}). Falling back to device-code sign-in.");

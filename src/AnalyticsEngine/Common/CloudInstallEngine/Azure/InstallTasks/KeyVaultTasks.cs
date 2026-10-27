@@ -42,7 +42,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 throw new InstallException($"Invalid tenant ID '{tenantIdStr}' given to {nameof(KeyVaultTask)}");
 
             KeyVaultResource r = null;
-            foreach (var server in Container.GetKeyVaults())
+            foreach (var server in Container.GetKeyVaults().GetAll(cancellationToken: CancellationToken))
             {
                 if (server.Data.Name == name)
                 {
@@ -66,7 +66,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var newKeyVaultInfo = new KeyVaultCreateOrUpdateContent(AzureLocation, props);
                 EnsureTagsOnNew(newKeyVaultInfo.Tags);
 
-                var serverCreateResult = await Container.GetKeyVaults().CreateOrUpdateAsync(WaitUntil.Completed, name, newKeyVaultInfo);
+                var serverCreateResult = await Container.GetKeyVaults().CreateOrUpdateAsync(WaitUntil.Completed, name, newKeyVaultInfo, cancellationToken: CancellationToken);
                 r = serverCreateResult.Value;
             }
             else
@@ -94,7 +94,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     };
                     try
                     {
-                        var updateResult = await r.UpdateAsync(patch);
+                        var updateResult = await r.UpdateAsync(patch, cancellationToken: CancellationToken);
                         r = updateResult.Value;
                     }
                     catch (RequestFailedException ex) when (IsDisallowedByPolicy(ex))
@@ -182,7 +182,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 new KeyVaultAccessPolicy(tenantId, objectId, access)
             }));
-            await vaultResource.UpdateAccessPolicyAsync(AccessPolicyUpdateKind.Add, pol);
+            await vaultResource.UpdateAccessPolicyAsync(AccessPolicyUpdateKind.Add, pol, cancellationToken: CancellationToken);
         }
 
         /// <summary>
@@ -236,9 +236,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // once per role per task. Fall back to a full scan if the server-side filter returns nothing.
             var roleDefinitions = vaultResource.GetAuthorizationRoleDefinitions();
             var roleDefinition = roleDefinitions
-                .GetAll($"roleName eq '{roleName}'")
+                .GetAll($"roleName eq '{roleName}'", cancellationToken: CancellationToken)
                 .FirstOrDefault(rd => string.Equals(rd.Data.RoleName, roleName, StringComparison.OrdinalIgnoreCase))
-                ?? roleDefinitions.FirstOrDefault(rd => string.Equals(rd.Data.RoleName, roleName, StringComparison.OrdinalIgnoreCase));
+                ?? roleDefinitions.GetAll(cancellationToken: CancellationToken)
+                    .FirstOrDefault(rd => string.Equals(rd.Data.RoleName, roleName, StringComparison.OrdinalIgnoreCase));
 
             if (roleDefinition == null)
             {
@@ -267,7 +268,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             try
             {
-                await roleAssignments.CreateOrUpdateAsync(WaitUntil.Completed, assignmentName, content);
+                await roleAssignments.CreateOrUpdateAsync(WaitUntil.Completed, assignmentName, content, cancellationToken: CancellationToken);
                 _logger.LogInformation($"Assigned role '{roleName}' on key vault '{vaultResource.Data.Name}' to principal '{principalId}'. Note: data-plane role assignments can take a minute to propagate.");
             }
             catch (RequestFailedException ex) when (ex.Status == 409 || string.Equals(ex.ErrorCode, "RoleAssignmentExists", StringComparison.OrdinalIgnoreCase))
@@ -358,7 +359,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // Extract object Id by getting a token from the credentials passed. Only log the
             // resolution on the first lookup; subsequent KV access-policy adds for the same SP would
             // otherwise print an identical "Detected client ID..." line.
-            var (objectIdValue, wasCached) = await ServicePrincipalResolver.GetObjectIdFromClientCredentialsWithCacheInfo(tenantId.ToString(), clientId, secret);
+            var (objectIdValue, wasCached) = await ServicePrincipalResolver.GetObjectIdFromClientCredentialsWithCacheInfo(tenantId.ToString(), clientId, secret, cancellationToken: CancellationToken);
             if (!wasCached)
             {
                 _logger.LogInformation($"Detected client ID '{clientId}' has object ID '{objectIdValue}'");
@@ -412,7 +413,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var webAppName = _config.GetConfigValue(CONFIG_KEY_WEB_APP_NAME);
             var tenantId = TenantGuidFromConfig();
 
-            var webAppWithManagedIdentity = Container.GetWebSites().AsEnumerable().Where(s => s.Data.Name == webAppName).SingleOrDefault();
+            var webAppWithManagedIdentity = Container.GetWebSites().GetAll(cancellationToken: CancellationToken).Where(s => s.Data.Name == webAppName).SingleOrDefault();
             if (webAppWithManagedIdentity == null)
                 throw new InstallException($"Can't find web-app with name '{webAppName}'");
 
@@ -507,7 +508,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 return await AddRuntimeSecretAsync(vault, name);
             }
-            catch (Exception ex) when (TransportFailureDetector.IsTransportOrDnsFailure(ex, out var leafMessage))
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested &&
+                TransportFailureDetector.IsTransportOrDnsFailure(ex, out var leafMessage))
             {
                 // DNS/network transport failure reaching the Key Vault data-plane endpoint
                 // (e.g. "The remote name could not be resolved: '<vault>.vault.azure.net'"), as opposed
@@ -546,7 +548,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // handled after the write retries are exhausted.
             try
             {
-                var existing = await client.GetSecretAsync(name);
+                var existing = await client.GetSecretAsync(name, cancellationToken: CancellationToken);
                 if (existing?.Value != null && string.Equals(existing.Value.Value, val, StringComparison.Ordinal))
                 {
                     _logger.LogInformation($"Key vault secret '{name}' in '{vault.Data.Name}' is already up-to-date; skipping write.");
@@ -577,7 +579,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 try
                 {
-                    await client.SetSecretAsync(new KeyVaultSecret(name, val));
+                    await client.SetSecretAsync(new KeyVaultSecret(name, val), cancellationToken: CancellationToken);
                     if (attempt > 0)
                     {
                         _logger.LogInformation($"Secret '{name}' written to '{vault.Data.Name}' on retry attempt {attempt + 1}.");
@@ -615,7 +617,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                         var delaySeconds = retryDelaysSeconds[attempt];
                         _logger.LogInformation($"Key vault secret write got 403/Forbidden (attempt {attempt + 1} of {retryDelaysSeconds.Length + 1}). " +
                             $"This usually means the access policy or role assignment added moments earlier has not yet propagated through Entra ID. Waiting {delaySeconds}s and retrying...");
-                        await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+                        await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken: CancellationToken);
                     }
                 }
             }
@@ -659,10 +661,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
             string publicAccess = null;
             try
             {
-                var fresh = (await vault.GetAsync()).Value;
+                var fresh = (await vault.GetAsync(cancellationToken: CancellationToken)).Value;
                 publicAccess = fresh.Data.Properties?.PublicNetworkAccess;
             }
-            catch (Exception probeEx)
+            catch (Exception probeEx) when (!CancellationToken.IsCancellationRequested)
             {
                 _logger.LogWarning($"Could not re-read key vault state to diagnose 403: {probeEx.Message}");
             }

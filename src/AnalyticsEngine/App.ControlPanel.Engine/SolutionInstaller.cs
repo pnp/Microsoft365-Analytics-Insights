@@ -36,11 +36,12 @@ namespace App.ControlPanel.Engine
 
         /// <summary>
         /// Main execution entrypoint. Accepts an optional <see cref="CancellationToken"/> so the UI
-        /// can request cancellation via a Cancel button. Cancellation is co-operative and takes
-        /// effect at phase / task boundaries — in-flight Azure SDK calls complete first.
+        /// can request cancellation via a Cancel button. Cooperative cancellation interrupts
+        /// requests and waits as well as preventing subsequent tasks from starting.
         /// </summary>
         public async Task InstallOrUpdate(CancellationToken ct = default(CancellationToken))
         {
+            CancellationToken = ct;
             InstallerNetworkProxy.ApplyProcessWide(_proxyConfig, _logger);
 
             // Wrap the inbound logger so every WARN/ERROR raised during the run is captured
@@ -52,10 +53,10 @@ namespace App.ControlPanel.Engine
             log.LogInformation($"Starting install. Authenticating & selecting subscription '{this.Config.Subscription.DisplayName}'...");
 
             // Setup the things. Catch as specific exceptions as possible; Azure & our own exceptions
-            var azureSub = BaseAnalyticsSolutionInstallJob.FromConfig(this.Config);
             try
             {
                 ct.ThrowIfCancellationRequested();
+                var azureSub = BaseAnalyticsSolutionInstallJob.FromConfig(this.Config, ct);
                 log.LogInformation("=== Phase: Azure backend resources ===");
                 // Get/create AppService + SQL and supporting Azure resources. Binaries installed post-create.
                 var azureBackeEndCreationJob = new AzurePaaSInstallJob(log, Config, azureSub,
@@ -85,6 +86,7 @@ namespace App.ControlPanel.Engine
                 // Run stuff now everything in Azure is created
                 log.LogInformation("=== Phase: App Service configuration & content deploy ===");
                 var tasks = new ConfigureAzureComponentsTasks(Config, log, _proxyConfig, InstalledByUsername, _softwareConfig, _configPassword);
+                tasks.CancellationToken = ct;
                 await tasks.RunPostCreatePaaSTasks(
                     azureBackeEndCreationJob.CreatedWebSiteResource,
                     azureBackeEndCreationJob.CreatedAppServicePlan,
@@ -123,6 +125,7 @@ namespace App.ControlPanel.Engine
                     _proxyConfig,
                     log,
                     ct);
+                ct.ThrowIfCancellationRequested();
 
                 log.LogInformation($"Reminder: Ensure Azure AD app registration for the runtime account has correct authentication configuration (see 'Configure Reply URLs' of deployment guide).");
 
@@ -142,7 +145,7 @@ namespace App.ControlPanel.Engine
             }
             catch (OperationCanceledException)
             {
-                log.LogWarning("Install cancelled by user — stopped at the next safe checkpoint.");
+                log.LogWarning("Install cancelled by user. No further installation tasks will run. Azure operations already accepted may still finish; cancellation does not roll back changes.");
                 PrintFinalStatus(summary, cancelled: true);
                 return;
             }

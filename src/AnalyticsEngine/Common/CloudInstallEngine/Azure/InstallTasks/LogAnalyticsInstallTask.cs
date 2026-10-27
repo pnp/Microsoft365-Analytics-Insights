@@ -25,7 +25,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public async override Task<LogWorkspaceInfo> ExecuteTaskReturnResult(object contextArg)
         {
             var name = base._config.GetNameConfigValue();
-            var insightsLogs = Container.GetOperationalInsightsWorkspaces().AsEnumerable()
+            var insightsLogs = Container.GetOperationalInsightsWorkspaces().GetAll(cancellationToken: CancellationToken)
                             .Where(r => r.Data.Name == name).SingleOrDefault();
 
             if (insightsLogs == null)
@@ -35,7 +35,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var newWsInfo = new OperationalInsightsWorkspaceData(AzureLocation);
 
                 base.EnsureTagsOnNew(newWsInfo.Tags);     // Add configured tags
-                var result = await Container.GetOperationalInsightsWorkspaces().CreateOrUpdateAsync(WaitUntil.Completed, name, newWsInfo);
+                var result = await Container.GetOperationalInsightsWorkspaces().CreateOrUpdateAsync(WaitUntil.Completed, name, newWsInfo, cancellationToken: CancellationToken);
 
                 insightsLogs = result.Value;
             }

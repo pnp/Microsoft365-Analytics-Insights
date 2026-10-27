@@ -17,7 +17,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         public override async Task<object> ExecuteTask(object contextArg)
         {
-            // Pass context to child job
+            CancellationToken.ThrowIfCancellationRequested();
+            _job.CancellationToken = CancellationToken;
             await _job.Install(contextArg);
             return null;
         }

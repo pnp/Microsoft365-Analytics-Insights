@@ -483,13 +483,12 @@ namespace App.ControlPanel.Frames
         }
 
         /// <summary>
-        /// User clicked Cancel — request co-operative cancellation. The install engine checks the token
-        /// between phases / task batches; in-flight Azure SDK calls will complete before we stop.
+        /// User clicked Cancel — cancel current requests and prevent subsequent tasks from starting.
         /// </summary>
         private void InstallSolutionControl1_CancelRequested(object sender, EventArgs e)
         {
             if (_runCts == null || _runCts.IsCancellationRequested) return;
-            _logger.LogWarning("Cancellation requested — install will stop at the next safe checkpoint. In-flight Azure operations will complete first.");
+            _logger.LogWarning("Cancellation requested — stopping the current task. Azure operations already accepted may still finish; changes are not rolled back. If the site was stopped for an upgrade, it will be restarted before returning.");
             try { _runCts.Cancel(); } catch (ObjectDisposedException) { /* race with completion */ }
         }
 

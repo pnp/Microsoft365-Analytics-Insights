@@ -7,12 +7,14 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.InstallerTasks
 {
     public class SqlInstallerTasks
     {
+        public CancellationToken CancellationToken { get; set; }
         private readonly SolutionInstallConfig _config;
         private readonly FileInfo _exeFile;
         private readonly DatabasePaaSInfo _dbInfo;
@@ -35,6 +37,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         public async Task UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(FileInfo installerExeFile, List<InstallLogEventArgs> installLogEvents)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             // Init DB schema with downloaded control panel app?
             if (_config.TasksConfig.UpgradeSchema)
             {
@@ -43,6 +46,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 else _logger.LogError("Couldn't find installer application to initialise database with.");
             }
 
+            CancellationToken.ThrowIfCancellationRequested();
             // Register events & config via downloaded installer
             if (_config.TasksConfig.RegisterConfig)
             {
@@ -162,7 +166,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var tempFileName = Path.GetTempFileName();
             File.WriteAllText(tempFileName, status.ToBase64());
 
-            var result = await SendMsgToInstaller(InstallerConstants.PARAM_REGISTERCONFIG, tempFileName.Base64Encode());
+            ChildResult result;
+            try
+            {
+                result = await SendMsgToInstaller(InstallerConstants.PARAM_REGISTERCONFIG, tempFileName.Base64Encode());
+            }
+            finally
+            {
+                File.Delete(tempFileName);
+            }
 
             if (!result.Success)
             {
@@ -186,6 +198,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         async Task<ChildResult> SendMsgToInstaller(string param, string val)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             // Test
             bool sqlTestWorked = await _verifySqlCallback(_dbInfo.ConnectionString);
             if (!sqlTestWorked)
@@ -195,6 +208,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 return new ChildResult { Success = false, ExitCode = -1 };
             }
 
+            CancellationToken.ThrowIfCancellationRequested();
             Console.WriteLine($"Starting '{_exeFile.FullName}' with params '{param} <args-redacted>'");
 
             // Redirect stdout/stderr so we can echo the child's progress into the install log
@@ -230,7 +244,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 proc.BeginOutputReadLine();
                 proc.BeginErrorReadLine();
 
-                await Task.Run(() => proc.WaitForExit());
+                await WaitForChildExitAsync(proc, CancellationToken, _logger);
 
                 return new ChildResult
                 {
@@ -240,6 +254,30 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     StandardError = stderr.ToString(),
                 };
             }
+        }
+
+        internal static async Task WaitForChildExitAsync(Process process, CancellationToken cancellationToken, ILogger logger)
+        {
+            using (cancellationToken.Register(() =>
+            {
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        logger.LogWarning("Stopping the downloaded installer. Database changes already committed are not rolled back; re-run the installer to finish the upgrade.");
+                        process.Kill();
+                    }
+                }
+                catch (InvalidOperationException) { }
+                catch (System.ComponentModel.Win32Exception ex)
+                {
+                    logger.LogWarning("Could not stop the downloaded installer: {Message}. Waiting for it to exit before returning.", ex.Message);
+                }
+            }))
+            {
+                await Task.Run(() => process.WaitForExit());
+            }
+            cancellationToken.ThrowIfCancellationRequested();
         }
 
         internal static LogLevel ChildOutputLevel(string line)

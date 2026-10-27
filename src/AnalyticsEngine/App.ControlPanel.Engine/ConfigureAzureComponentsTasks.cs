@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine
@@ -49,7 +50,7 @@ namespace App.ControlPanel.Engine
             KeyVaultResource keyVault, string serviceBusConnectionString, SubscriptionResource subscription,
             SqlServerResource sqlServer = null, SqlAuthDecision sqlAuthDecision = null, Guid installerObjectId = default(Guid))
         {
-            // Configure app-service connection-strings, etc
+            CancellationToken.ThrowIfCancellationRequested();
             await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, cognitiveServicesInfo, foundryPromptInfo, appInsights, serviceBusConnectionString, keyVault);
 
             // Download/extract the release while the App Service is still available. Kudu/SCM
@@ -97,24 +98,27 @@ namespace App.ControlPanel.Engine
 
             var sqlInstallerTasks = new SqlInstallerTasks(Config, installerExeFile, dbInfo, _logger, _installedByUsername, _configPassword,
                 async (connectionString) => await VerifySqlWithFirewallSelfHeal(connectionString, repairFirewall));
+            sqlInstallerTasks.CancellationToken = CancellationToken;
             await RunUpgradeDeploymentAsync(Config.TasksConfig.InstallLatestSolutionContent, Config.TasksConfig.UpgradeSchema,
                 async () =>
                 {
-                    var settings = (await webApp.GetApplicationSettingsAsync()).Value;
+                    var settings = (await webApp.GetApplicationSettingsAsync(CancellationToken)).Value;
                     PauseUpgradeWebJobs(settings.Properties);
-                    await webApp.UpdateApplicationSettingsAsync(settings);
+                    await webApp.UpdateApplicationSettingsAsync(settings, CancellationToken);
                 },
                 async () =>
                 {
-                    var settings = (await webApp.GetApplicationSettingsAsync()).Value;
+                    var settings = (await webApp.GetApplicationSettingsAsync(CancellationToken)).Value;
                     ResumeUpgradeWebJobs(settings.Properties);
-                    await webApp.UpdateApplicationSettingsAsync(settings);
+                    await webApp.UpdateApplicationSettingsAsync(settings, CancellationToken);
                 },
-                async () => { await webApp.StopAsync(); },
+                async () => { await webApp.StopAsync(CancellationToken); },
+                // Recovery must finish even when the operation was cancelled after stopping the site.
                 async () => { await webApp.StartAsync(); },
                 () => sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLogEvents),
-                () => InstallSolutionContent(solutionSources, subscription, automationAccount), _logger);
+                () => InstallSolutionContent(solutionSources, subscription, automationAccount), _logger, CancellationToken);
 
+            CancellationToken.ThrowIfCancellationRequested();
             if (this.Config.SolutionConfig.ImportTaskSettings.WebTraffic)
             {
                 if (this.Config.TasksConfig.InstallLatestSolutionContent)
@@ -123,6 +127,7 @@ namespace App.ControlPanel.Engine
                     var aiTrackerDownload = solutionSources.GetSolutionComponentLocation(SoftwareComponent.AITracker);
 
                     var spTasks = new SharePointWebComponentsInstallJob(Config, _logger, webApp.Data.DefaultHostName);
+                    spTasks.CancellationToken = CancellationToken;
                     await spTasks.InstallAITracker(this.Config.SharePointConfig, aiTrackerDownload, appInsights.ConnectionString);
                 }
                 else
@@ -134,7 +139,7 @@ namespace App.ControlPanel.Engine
 
         internal static async Task RunUpgradeDeploymentAsync(bool installContent, bool upgradeSchema,
             Func<Task> pauseWebJobs, Func<Task> resumeWebJobs, Func<Task> stopSite, Func<Task> startSite,
-            Func<Task> upgradeDatabase, Func<Task> deployContent, ILogger logger)
+            Func<Task> upgradeDatabase, Func<Task> deployContent, ILogger logger, CancellationToken cancellationToken = default(CancellationToken))
         {
             var elapsed = Stopwatch.StartNew();
             var stage = "pause";
@@ -142,8 +147,10 @@ namespace App.ControlPanel.Engine
             Exception upgradeFailure = null;
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (installContent || upgradeSchema)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     await pauseWebJobs();
                 }
 
@@ -151,13 +158,16 @@ namespace App.ControlPanel.Engine
                 {
                     if (installContent || upgradeSchema)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         stage = "stop";
                         // A failed response does not prove Azure failed to stop the site.
                         stopAttempted = true;
                         await stopSite();
                     }
                     stage = "schema";
+                    cancellationToken.ThrowIfCancellationRequested();
                     await upgradeDatabase();
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch (Exception ex)
                 {
@@ -188,10 +198,13 @@ namespace App.ControlPanel.Engine
 
                 if (installContent)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     stage = "content";
                     await deployContent();
+                    cancellationToken.ThrowIfCancellationRequested();
                     stage = "resume";
                     await resumeWebJobs();
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
                 else if (upgradeSchema)
                 {
@@ -201,6 +214,12 @@ namespace App.ControlPanel.Engine
                 }
                 logger.LogInformation("UpgradeDeployment: stage=complete outcome=Succeeded elapsedMs={ElapsedMs} schemaSelected={SchemaSelected} contentSelected={ContentSelected}.",
                     elapsed.ElapsedMilliseconds, upgradeSchema, installContent);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning("UpgradeDeployment: stage={Stage} outcome=Cancelled; no further deployment tasks will run. If WebJobs were paused, keep WEBJOBS_STOPPED=1 until the schema and matching binaries are verified; re-run the installer to complete the upgrade.",
+                    stage);
+                throw;
             }
             catch (Exception ex)
             {
@@ -251,9 +270,9 @@ namespace App.ControlPanel.Engine
             WebSiteResource current;
             try
             {
-                current = await webApp.GetAsync();
+                current = await webApp.GetAsync(CancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 _logger.LogWarning($"Could not re-read the App Service to find its managed identity: {ex.Message}");
                 current = webApp;
@@ -270,6 +289,7 @@ namespace App.ControlPanel.Engine
             }
 
             var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver(), BuildManagedIdentitySource());
+            task.CancellationToken = CancellationToken;
             await task.GrantDatabaseAccessAsync(
                 dbInfo.ConnectionString,
                 ManagedIdentityOwner.AppService,
@@ -301,9 +321,9 @@ namespace App.ControlPanel.Engine
             AutomationAccountResource current;
             try
             {
-                current = await automationAccount.GetAsync();
+                current = await automationAccount.GetAsync(CancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 _logger.LogWarning($"Could not re-read the Automation account to find its managed identity: {ex.Message}");
                 current = automationAccount;
@@ -328,6 +348,7 @@ namespace App.ControlPanel.Engine
             }
 
             var task = new SqlIdentityAccessTask(_logger, BuildPrincipalResolver(), BuildManagedIdentitySource());
+            task.CancellationToken = CancellationToken;
             await task.GrantDatabaseAccessAsync(
                 dbInfo.ConnectionString,
                 ManagedIdentityOwner.AutomationAccount,
@@ -399,7 +420,7 @@ namespace App.ControlPanel.Engine
             var resolver = BuildPrincipalResolver();
             var task = new SqlDatabaseUserGrantTask(_logger, resolver);
 
-            await task.GrantConfiguredUsersAsync(dbInfo.ConnectionString, configured);
+            await task.GrantConfiguredUsersAsync(dbInfo.ConnectionString, configured, CancellationToken);
         }
 
         /// <summary>
@@ -437,7 +458,7 @@ namespace App.ControlPanel.Engine
             }
 
             return () => SqlEntraAccessBootstrap.TryRepairInstallerAccessAsync(
-                dbInfo.ConnectionString, account.DirectoryId, installerClientId, _logger);
+                dbInfo.ConnectionString, account.DirectoryId, installerClientId, _logger, CancellationToken);
         }
 
         /// <summary>
@@ -469,7 +490,7 @@ namespace App.ControlPanel.Engine
                 {
                     var rules = sqlServer.GetSqlFirewallRules();
 
-                    var existing = rules.AsEnumerable()
+                    var existing = rules.GetAll(cancellationToken: CancellationToken)
                         .Where(r => r.Data.Name == AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME)
                         .Select(r => new SqlFirewallRuleRange(r.Data.Name, r.Data.StartIPAddress, r.Data.EndIPAddress))
                         .SingleOrDefault();
@@ -494,13 +515,13 @@ namespace App.ControlPanel.Engine
                             Name = AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME,
                             StartIPAddress = clientIp,
                             EndIPAddress = clientIp,
-                        });
+                        }, CancellationToken);
 
                     _logger.LogInformation(
                         $"SQL Server firewall rule '{AzurePaaSInstallJob.INSTALLER_FIREWALL_RULE_NAME}' updated to allow {clientIp}.");
                     return true;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
                 {
                     _logger.LogError(
                         $"Could not update the SQL Server firewall rule to allow {clientIp}: {ex.Message}. " +
@@ -512,14 +533,15 @@ namespace App.ControlPanel.Engine
 
         FileInfo GetInstallerExe(LocalStorageBlobInfo localStorageBlobInfo)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             // Get control-panel
             FileInfo installerExeFile = null;
             DirectoryInfo zipContentsDirControlPanel = null;
             try
             {
-                zipContentsDirControlPanel = ZipFileTasks.Unzip(localStorageBlobInfo, _logger);
+                zipContentsDirControlPanel = ZipFileTasks.Unzip(localStorageBlobInfo, _logger, CancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 // Give context to the error
                 throw new ApplicationException($"Could not extract control-panel app: '{ex.Message}'");
@@ -556,7 +578,7 @@ namespace App.ControlPanel.Engine
                 appServiceContentInstallJob = new UseLocalAppServiceContentInstallJob(_logger, subscription, this.Config.LocalSourceOverride, _proxyConfig, this.Config, downloadReleaseOnly, automationAccount);
             }
 
-            // Install or just download, depending on config above
+            appServiceContentInstallJob.CancellationToken = CancellationToken;
             await appServiceContentInstallJob.Install();
 
             return appServiceContentInstallJob.LocalStorageInstallSourceInfo;
@@ -575,6 +597,7 @@ namespace App.ControlPanel.Engine
                 this.Config,
                 downloadReleaseOnly: false,
                 automationAccount: automationAccount);
+            installJob.CancellationToken = CancellationToken;
             await installJob.Install();
         }
 
@@ -670,18 +693,18 @@ namespace App.ControlPanel.Engine
             var siteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku);
             try
             {
-                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = siteConfig });
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = siteConfig }, CancellationToken);
             }
             catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
             {
                 _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan?.Data?.Name ?? Config.AppServicePlanName, appServicePlan?.Data?.Sku));
-                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku, includePlanSensitiveSettings: false) });
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku, includePlanSensitiveSettings: false) }, CancellationToken);
             }
             await PreserveUnmanagedAppSettingsAsync(webApp, appSettings);
-            await webApp.UpdateApplicationSettingsAsync(appSettings);
+            await webApp.UpdateApplicationSettingsAsync(appSettings, CancellationToken);
             // The App Service connection string PUT replaces the collection with the dictionary supplied
             // here. Obsolete installer-managed connection strings are deliberately absent on upgrades.
-            await webApp.UpdateConnectionStringsAsync(connectionStrings);
+            await webApp.UpdateConnectionStringsAsync(connectionStrings, CancellationToken);
 
             _logger.LogInformation("App Service connection-strings & app-settings configured");
         }
@@ -773,9 +796,9 @@ namespace App.ControlPanel.Engine
             Response<AppServiceConfigurationDictionary> existing;
             try
             {
-                existing = await webApp.GetApplicationSettingsAsync();
+                existing = await webApp.GetApplicationSettingsAsync(CancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 throw new InvalidOperationException(
                     "Could not read the existing App Service application settings, so this deployment was "

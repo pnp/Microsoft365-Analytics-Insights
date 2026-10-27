@@ -608,8 +608,11 @@ namespace Tests.UnitTests.InstallTests
             });
         }
 
-        [TestMethod]
-        public void DeploymentReview_RequiresAcknowledgementAndValidInput_AndHasSafeDefault()
+        [DataTestMethod]
+        [DataRow(1.0f)]
+        [DataRow(1.5f)]
+        [DataRow(2.0f)]
+        public void DeploymentReview_RequiresAcknowledgementAndValidInput_AndHasSafeDefault(float scale)
         {
             RunSta(() =>
             {
@@ -619,11 +622,33 @@ namespace Tests.UnitTests.InstallTests
                 using (var review = new DeploymentReviewForm(config, new[] { "Copilot interactions" }))
                 {
                     review.Show();
+                    if (scale != 1.0f)
+                    {
+                        review.Scale(new SizeF(scale, scale));
+                        review.Font = new Font(review.Font.FontFamily, review.Font.Size * scale);
+                    }
+                    Application.DoEvents();
                     Assert.IsFalse(Find<Button>(review, "confirmDeployment").Enabled);
                     Assert.IsNull(review.AcceptButton);
                     Assert.AreEqual(DialogResult.Cancel, ((Button)review.CancelButton).DialogResult);
+                    var deploy = Find<Button>(review, "confirmDeployment");
+                    var back = Find<Button>(review, "cancelReview");
+                    Assert.IsNotNull(deploy.Image, "Deployment needs its action icon.");
+                    Assert.IsTrue(deploy.Left >= back.Right, "Deploy must be the right-hand next action.");
+                    Assert.IsTrue(back.TabIndex < deploy.TabIndex, "Keyboard order must follow the visual order.");
+                    Assert.IsTrue(deploy.Parent.ClientRectangle.Contains(deploy.Bounds));
+                    Assert.IsTrue(back.Parent.ClientRectangle.Contains(back.Bounds));
                     Find<CheckBox>(review, "acknowledgeDeployment").Checked = true;
                     Assert.IsTrue(Find<Button>(review, "confirmDeployment").Enabled);
+                    var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        using (var image = new Bitmap(review.Width, review.Height))
+                        {
+                            review.DrawToBitmap(image, new Rectangle(Point.Empty, review.Size));
+                            image.Save(Path.Combine(directory, $"deployment-review-{scale}.png"));
+                        }
+                    }
                     Find<CheckBox>(review, "acknowledgeDeployment").Checked = false;
                     Assert.IsFalse(Find<Button>(review, "confirmDeployment").Enabled);
                     Find<Button>(review, "cancelReview").PerformClick();
@@ -642,6 +667,45 @@ namespace Tests.UnitTests.InstallTests
                     Find<CheckBox>(review, "acknowledgeDeployment").Checked = true;
                     Find<Button>(review, "confirmDeployment").PerformClick();
                     Assert.AreEqual(DialogResult.OK, review.DialogResult);
+                }
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow(1.0f)]
+        [DataRow(1.5f)]
+        [DataRow(2.0f)]
+        public void ProxyAddress_ExplainsAcceptedFormatsWithoutClipping(float scale)
+        {
+            RunSta(() =>
+            {
+                using (var form = new ProxyConfigForm())
+                {
+                    form.ProxyConfig = new InstallerProxyConfig
+                    {
+                        UseProxy = true, Host = "proxy.contoso.com", Port = 8080, IntegratedAuth = true
+                    };
+                    form.Show();
+                    if (scale != 1.0f) form.Font = new Font(form.Font.FontFamily, form.Font.Size * scale);
+                    Application.DoEvents();
+                    var hint = Find<Label>(form, "proxyAddressHint");
+                    StringAssert.Contains(Find<Label>(form, "label2").Text, "URL");
+                    StringAssert.Contains(hint.Text, "proxy.contoso.com");
+                    StringAssert.Contains(hint.Text, "http://");
+                    StringAssert.Contains(hint.Text, "Port is required");
+                    Assert.IsTrue(hint.Parent.ClientRectangle.Contains(hint.Bounds));
+                    Assert.IsTrue(hint.Top >= Find<TextBox>(form, "txtProxyPort").Bottom);
+                    Assert.IsTrue(hint.Bottom <= Find<CheckBox>(form, "chkBasicAuthentication").Top);
+                    Assert.IsTrue(Find<Label>(form, "label2").Right <= Find<TextBox>(form, "txtProxyHost").Left);
+                    var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        using (var image = new Bitmap(form.Width, form.Height))
+                        {
+                            form.DrawToBitmap(image, new Rectangle(Point.Empty, form.Size));
+                            image.Save(Path.Combine(directory, $"proxy-address-{scale}.png"));
+                        }
+                    }
                 }
             });
         }

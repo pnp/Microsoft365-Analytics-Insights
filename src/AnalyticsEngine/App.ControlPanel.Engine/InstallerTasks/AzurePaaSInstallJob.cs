@@ -435,6 +435,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </summary>
         public override async Task Install(object previousRunResult)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             var vnetEnabled = _config.NetworkConfig?.Enabled == true;
             if (!vnetEnabled)
             {
@@ -526,9 +527,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 try
                 {
                     objectId = await ServicePrincipalResolver.GetObjectIdFromClientCredentials(
-                        _config.InstallerAccount.DirectoryId, _config.InstallerAccount.ClientId, _config.InstallerAccount.Secret);
+                        _config.InstallerAccount.DirectoryId, _config.InstallerAccount.ClientId, _config.InstallerAccount.Secret, CancellationToken);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
                 {
                     Logger.LogError(
                         "Could not resolve the installer service principal's object ID, so the SQL Server cannot be created with " +
@@ -574,7 +575,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _sqlAuthDecision = await SqlServerAuthReader.DetectAsync(
                 CreatedSqlServer, _config.SQLServerAdminPassword, _config.SqlAuthMode, Logger,
                 _installerObjectId,
-                _config.SQLEntraDatabaseUsers != null && _config.SQLEntraDatabaseUsers.Count > 0);
+                _config.SQLEntraDatabaseUsers != null && _config.SQLEntraDatabaseUsers.Count > 0, CancellationToken);
 
             await RepairAutomationSqlCredentialIfNeeded();
         }
@@ -602,12 +603,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
             try
             {
                 var raw = await ServicePrincipalResolver.GetObjectIdFromClientCredentials(
-                    account.DirectoryId, account.ClientId, account.Secret);
+                    account.DirectoryId, account.ClientId, account.Secret, CancellationToken);
 
                 Guid parsed;
                 return Guid.TryParse(raw, out parsed) ? parsed : Guid.Empty;
             }
-            catch (Exception)
+            catch (Exception) when (!CancellationToken.IsCancellationRequested)
             {
                 return Guid.Empty;
             }
@@ -659,9 +660,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     AutomationAccountTask.CRED_SQL_NAME, _config.SQLServerAdminUsername, _config.SQLServerAdminPassword);
 
                 await automationAccount.GetAutomationCredentials()
-                    .CreateOrUpdateAsync(WaitUntil.Completed, AutomationAccountTask.CRED_SQL_NAME, credential);
+                    .CreateOrUpdateAsync(WaitUntil.Completed, AutomationAccountTask.CRED_SQL_NAME, credential, CancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 Logger.LogWarning($"Could not create the Automation account's SQL credential: {ex.Message}");
             }
@@ -752,7 +753,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             try
             {
                 var resources = resourceGroup
-                    .GetGenericResources(filter: LeftoverRedisResourceWarning.ResourceTypeFilter)
+                    .GetGenericResources(filter: LeftoverRedisResourceWarning.ResourceTypeFilter, cancellationToken: CancellationToken)
                     .Select(r => new RedisResourceWarningInfo(r.Data.Name, r.Data.ResourceType.ToString()));
 
                 foreach (var warning in LeftoverRedisResourceWarning.BuildWarnings(resources, resourceGroup.Data.Name))
@@ -760,7 +761,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     _logger.LogWarning(warning);
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 _logger.LogWarning($"Could not check for unused Azure Cache for Redis resources in resource group '{resourceGroup.Data.Name}': {ex.Message}");
             }

@@ -30,7 +30,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             // Get database
             SqlDatabaseResource db = null;
-            foreach (var existingDb in sqlServer.GetSqlDatabases())
+            foreach (var existingDb in sqlServer.GetSqlDatabases().GetAll(cancellationToken: CancellationToken))
             {
                 if (existingDb.Data.Name == databaseName)
                 {
@@ -53,7 +53,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 };
 
                 base.EnsureTagsOnNew(dbInfo.Tags);
-                var dbCreateResp = await sqlServer.GetSqlDatabases().CreateOrUpdateAsync(WaitUntil.Completed, databaseName, dbInfo);
+                var dbCreateResp = await sqlServer.GetSqlDatabases().CreateOrUpdateAsync(WaitUntil.Completed, databaseName, dbInfo, cancellationToken: CancellationToken);
                 db = dbCreateResp.Value;
 
                 Console.WriteLine($"Created SQL Database '{db.Data.Name}' on server '{sqlServer.Data.FullyQualifiedDomainName}'.");

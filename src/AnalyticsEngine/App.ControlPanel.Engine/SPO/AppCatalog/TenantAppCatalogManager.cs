@@ -7,6 +7,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.SPO.AppCatalog
@@ -26,6 +27,7 @@ namespace App.ControlPanel.Engine.SPO.AppCatalog
         readonly ILogger _logger;
         readonly HttpClient _httpClient;
         readonly bool _ownsHttpClient;
+        public CancellationToken CancellationToken { get; set; }
 
         public TenantAppCatalogManager(ISpoAuthenticator authenticator, ILogger logger)
             : this(authenticator, logger, NewHttpClient(), ownsHttpClient: true)
@@ -118,6 +120,7 @@ namespace App.ControlPanel.Engine.SPO.AppCatalog
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
+                CancellationToken.ThrowIfCancellationRequested();
                 using (var request = new HttpRequestMessage(HttpMethod.Get, url))
                 {
                     request.Headers.Add("accept", ACCEPT_JSON);
@@ -126,9 +129,9 @@ namespace App.ControlPanel.Engine.SPO.AppCatalog
                     HttpResponseMessage response;
                     try
                     {
-                        response = await _httpClient.SendAsync(request);
+                        response = await _httpClient.SendAsync(request, CancellationToken);
                     }
-                    catch (Exception ex) when (IsTransportFailure(ex))
+                    catch (Exception ex) when (!CancellationToken.IsCancellationRequested && IsTransportFailure(ex))
                     {
                         throw new SpoAppCatalogException($"Couldn't reach the app catalog at '{appCatalogUrl}' while waiting for app {appId} to become available. {ex.Message}", ex);
                     }
@@ -148,7 +151,7 @@ namespace App.ControlPanel.Engine.SPO.AppCatalog
                 if (attempt < maxAttempts)
                 {
                     _logger.LogInformation($"App {appId} isn't available in the catalog yet - waiting {waitBetweenAttempts.TotalSeconds:N0}s (attempt {attempt}/{maxAttempts})...");
-                    await Task.Delay(waitBetweenAttempts);
+                    await Task.Delay(waitBetweenAttempts, CancellationToken);
                 }
             }
 
@@ -275,15 +278,16 @@ namespace App.ControlPanel.Engine.SPO.AppCatalog
 
         async Task<string> SendAsync(HttpRequestMessage request, string appCatalogUrl, string operationDescription)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             request.Headers.Add("accept", ACCEPT_JSON);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await GetTokenAsync(appCatalogUrl));
 
             HttpResponseMessage response;
             try
             {
-                response = await _httpClient.SendAsync(request);
+                response = await _httpClient.SendAsync(request, CancellationToken);
             }
-            catch (Exception ex) when (IsTransportFailure(ex))
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested && IsTransportFailure(ex))
             {
                 throw new SpoAppCatalogException(
                     $"Couldn't {operationDescription} at '{appCatalogUrl}' - the request failed or timed out. {ex.Message}", ex);

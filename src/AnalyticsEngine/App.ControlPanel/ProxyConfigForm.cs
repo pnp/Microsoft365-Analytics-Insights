@@ -10,6 +10,21 @@ namespace App.ControlPanel
         public ProxyConfigForm()
         {
             InitializeComponent();
+            label2.Text = "Host / URL:";
+            var hint = new Label
+            {
+                Name = "proxyAddressHint",
+                AutoSize = true,
+                MaximumSize = new System.Drawing.Size(grpProxy.ClientSize.Width - 48, 0),
+                Location = new System.Drawing.Point(27, txtProxyPort.Bottom + 6),
+                Text = "Use proxy.contoso.com or http://proxy.contoso.com:8080. No paths.\r\n" +
+                    "Port is required: enter it above or include it in the URL."
+            };
+            grpProxy.Controls.Add(hint);
+            var offset = Math.Max(0, hint.Bottom + 10 - chkBasicAuthentication.Top);
+            foreach (var control in new Control[] { chkBasicAuthentication, label4, txtProxyUsername, label5, txtProxyPassword })
+                control.Top += offset;
+            grpProxy.Height += offset;
         }
 
         public InstallerProxyConfig ProxyConfig

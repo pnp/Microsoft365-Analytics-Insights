@@ -22,9 +22,7 @@ namespace CloudInstallEngine
         public Dictionary<BaseInstallTask, object> TaskResults { get; set; } = new Dictionary<BaseInstallTask, object>();
 
         /// <summary>
-        /// Optional cancellation token honored between tasks. The loop calls
-        /// <c>ThrowIfCancellationRequested</c> immediately before each task is executed, so cancel
-        /// takes effect at task boundaries — in-flight Azure SDK calls are not interrupted.
+        /// Cancellation token shared by the loader, tasks and nested jobs.
         /// </summary>
         public CancellationToken CancellationToken { get; set; } = CancellationToken.None;
 
@@ -45,13 +43,14 @@ namespace CloudInstallEngine
                     try
                     {
                         previousRunResult = await ProcessTask(thisTask, previousRunResult);
+                        CancellationToken.ThrowIfCancellationRequested();
                     }
                     catch (OperationCanceledException)
                     {
                         // Surface cancellation cleanly to the caller — no error log spam.
                         throw;
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
                     {
                         if (!thisTask.IsCritical)
                         {
@@ -97,7 +96,7 @@ namespace CloudInstallEngine
 
         protected virtual async Task<object> ProcessTask(BaseInstallTask thisTask, object previousRunResult)
         {
-            // Execute task
+            thisTask.CancellationToken = CancellationToken;
             return await thisTask.ExecuteTask(previousRunResult);
         }
     }
@@ -131,8 +130,11 @@ namespace CloudInstallEngine
 
         public async override Task Install(object previousRunResult)
         {
-            // Ensure container exists 1st
+            CancellationToken.ThrowIfCancellationRequested();
+            if (_containerLoader is BaseInstallTask loader)
+                loader.CancellationToken = CancellationToken;
             var resourcesContainer = await _containerLoader.ExecuteTaskReturnResult(null);
+            CancellationToken.ThrowIfCancellationRequested();
             if (resourcesContainer == null)
             {
                 throw new ArgumentNullException(nameof(resourcesContainer));
