@@ -89,12 +89,12 @@ namespace Common.Entities.CopilotSpend
         //
         // Each statement that takes @userId carries OPTION (RECOMPILE), because one person's rows can outnumber another's ten
         // thousand times and the right plan differs between them. Measured on a synthetic database of 200,000 people (2M
-        // interactions, 3M phrase links, 1.6M Copilot turns, 3.7M audit rows) plus one outlier with 10,000 prompts and 10,000
+        // interactions, 3M phrase links, 1.6M Copilot turns, 3.8M audit rows) plus one outlier with 10,000 prompts and 10,000
         // turns in 120 days; medians of 3 warm runs, plan cache cleared per case. Without it, the plan compiled for the
         // outlier was reused for the next typical person and scanned whole tables: their prompt totals went from 3 logical
-        // reads (0.3 ms) to 29,688 (74 ms). With it, a typical person's statements each read under 160 pages in under 8 ms,
-        // compile included (the compile is 1-7 ms of that), and the outlier's each stay within about 45K reads and 0.3 s over
-        // 90 days.
+        // reads (0.3 ms) to 29,688 (74 ms). With it, a typical person's statements each read under 160 pages in about 8 ms or
+        // less, compile included (the compile is 1-7 ms of that), and the outlier's each stay within about 45K reads and 0.3 s
+        // over 90 days.
 
         /// <summary>Which of the optional tables the drill-down reads exist: one round trip, so a database that never imported them reads "not assessed".</summary>
         public const string PersonTablesSql =
