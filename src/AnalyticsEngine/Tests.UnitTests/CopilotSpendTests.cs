@@ -7,6 +7,7 @@ using Common.Entities.Localisation;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using AdoptionResourceTypeRow = Common.Entities.CopilotAdoption.AdoptionResourceTypeRow;
@@ -15,6 +16,8 @@ using CopilotResourceTypeKind = Common.Entities.Copilot.CopilotResourceTypeKind;
 using CopilotSpendAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotSpendAPIController;
 using CopilotTurnSql = Common.Entities.Copilot.CopilotTurnSql;
 using PromptCategoryDefinition = Common.Entities.PromptCategories.PromptCategoryDefinition;
+using WorkbookCell = Tests.UnitTests.CopilotInvestmentWorkbookLanguageTests.Cell;
+using XlsxCellStyle = Common.Entities.Xlsx.XlsxCellStyle;
 
 namespace Tests.UnitTests
 {
@@ -348,7 +351,7 @@ namespace Tests.UnitTests
 
             var es = PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, PortalLanguage.Spanish);
             var sheets = CopilotInvestmentWorkbookLanguageTests.Sheets(spanish);
-            CollectionAssert.AreEqual(new[] { "summary", "organisation", "studio", "balances", "people" }
+            CollectionAssert.AreEqual(new[] { "summary", "organisation", "studio", "balances", "distribution", "top", "lowest", "people" }
                 .Select(k => es.Text("copilotSpend.workbook.sheet." + k)).ToList(), sheets.Select(s => s.Name).ToList());
             var texts = CopilotInvestmentWorkbookLanguageTests.Texts(sheets);
             CollectionAssert.Contains(texts, es.Text("copilotSpend.workbook.summary.sourcesNote"));
@@ -362,9 +365,9 @@ namespace Tests.UnitTests
             Assert.AreEqual(CopilotSpendWorkbook.FileName(summary), CopilotSpendWorkbook.FileName(summary, PortalLanguage.English));
             StringAssert.StartsWith(CopilotSpendWorkbook.FileName(summary, PortalLanguage.Spanish), "gasto-copilot-");
 
-            // Without See PII: no people sheet, and no sign-in name anywhere.
+            // Without See PII: no top spenders, lowest spenders or people sheet, and no sign-in name anywhere.
             var aggregates = CopilotInvestmentWorkbookLanguageTests.Sheets(CopilotSpendWorkbook.Build(summary.WithoutIndividualData(), false, "test", PortalLanguage.Spanish));
-            Assert.AreEqual(sheets.Count - 1, aggregates.Count);
+            Assert.AreEqual(sheets.Count - 3, aggregates.Count);
             Assert.IsFalse(CopilotInvestmentWorkbookLanguageTests.Texts(aggregates).Any(t => t.Contains("@contoso.example")));
             CollectionAssert.Contains(CopilotInvestmentWorkbookLanguageTests.Texts(aggregates), es.Text("copilotSpend.workbook.summary.personDataExcluded"));
 
@@ -385,6 +388,186 @@ namespace Tests.UnitTests
             Assert.AreEqual("text/plain", response.Content.Headers.ContentType.MediaType);
             Assert.AreEqual(PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, PortalLanguage.Spanish).Text("copilotSpend.workbook.error.invalid"),
                 response.Content.ReadAsStringAsync().Result);
+        }
+
+        [TestMethod]
+        public void TheDistributionSheet_GivesAReaderWithoutSeePiiTheAnonymisedFigures_AndLeavesAWithheldFigureEmptyWithItsReason()
+        {
+            var summary = CopilotSpendCalculator.Calculate(Input());
+            summary.Studio.Distribution = CopilotSpendCalculator.Distribution(WorkedExample(), p => p.StudioCredits, null);
+            var trimmed = summary.WithoutIndividualData();
+
+            var english = CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.English);
+            var spanish = CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.Spanish);
+            CopilotInvestmentWorkbookLanguageTests.AssertSpanishCounterpart(english, spanish, CopilotSpendWorkbook.CatalogModule);
+
+            var fewerThanFive = ("count", "5");
+            foreach (var (language, book) in new[] { (PortalLanguage.English, english), (PortalLanguage.Spanish, spanish) })
+            {
+                var text = PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, language);
+                string W(string key) => text.Text("copilotSpend.workbook." + key);
+                var sheets = CopilotInvestmentWorkbookLanguageTests.Sheets(book);
+                CollectionAssert.AreEqual(new[] { "summary", "organisation", "studio", "balances", "distribution" }.Select(k => W("sheet." + k)).ToList(),
+                    sheets.Select(s => s.Name).ToList(), language + ": no sheet that names anyone.");
+                Assert.IsFalse(CopilotInvestmentWorkbookLanguageTests.Texts(sheets).Any(t => t.Contains("@contoso.example")), language.ToString());
+
+                var rows = SheetRows(sheets.Single(s => s.Name == W("sheet.distribution")).Cells);
+                var consumers = RowsLabelled(rows, W("dist.consumers"));
+                Assert.AreEqual(2, consumers.Count, "One section per source.");
+                Assert.AreEqual(10d, CellNumber(consumers[0], "B"), 1e-9);
+                Assert.AreEqual(ThousandsStyle, consumers[0]["B"].Style, "A count of people.");
+                Assert.AreEqual(200d, CellNumber(RowsLabelled(rows, W("dist.total")).Single(), "B"), 1e-9);
+                Assert.AreEqual(5d, CellNumber(RowsLabelled(rows, W("dist.median")).Single(), "B"), 1e-9);
+                Assert.AreEqual(20d, CellNumber(RowsLabelled(rows, W("dist.mean")).Single(), "B"), 1e-9);
+                var gini = RowsLabelled(rows, W("dist.gini")).Single();
+                Assert.AreEqual(0.665, CellNumber(gini, "B"), 1e-9);
+                Assert.AreEqual(W("dist.giniNote"), CellText(gini, "D"));
+                foreach (var key in new[] { "dist.p90", "dist.top10", "dist.top20" })
+                {
+                    var row = RowsLabelled(rows, W(key)).Single();
+                    Assert.IsFalse(row.ContainsKey("B"), key + ": a withheld figure is an empty cell, never a 0.");
+                    Assert.AreEqual(text.Text("copilotSpend.workbook.dist.figureWithheld", fewerThanFive), CellText(row, "D"), key);
+                }
+                var half = RowsLabelled(rows, W("dist.half")).Single();
+                Assert.IsFalse(half.ContainsKey("B"));
+                Assert.AreEqual(text.Text("copilotSpend.workbook.dist.halfFewer", fewerThanFive), CellText(half, "D"));
+
+                // The bands are combined until each holds at least five people, and carry no credits: so there is no credits column.
+                Assert.AreEqual(1, RowsLabelled(rows, text.Text("copilotSpend.workbook.dist.bandsCombined", fewerThanFive)).Count);
+                var bands = rows.FindIndex(r => CellText(r, "A") == W("dist.col.from"));
+                Assert.IsFalse(rows[bands].ContainsKey("D"), "No credits column.");
+                AssertClose(new[] { 1d, 200d, 10d }, new[] { "A", "B", "C" }.Select(c => CellNumber(rows[bands + 1], c)).ToList(), "The one band.");
+                Assert.IsFalse(rows[bands + 1].ContainsKey("D"));
+
+                // Only the cuts at least five people apart, and not the curve's origin.
+                var pareto = rows.FindIndex(r => CellText(r, "A") == W("dist.col.people"));
+                AssertClose(new[] { 5d, 0.5, 0.925 }, new[] { "A", "B", "C" }.Select(c => CellNumber(rows[pareto + 1], c)).ToList(), "Five people.");
+                AssertClose(new[] { 10d, 1, 1 }, new[] { "A", "B", "C" }.Select(c => CellNumber(rows[pareto + 2], c)).ToList(), "Everyone.");
+                Assert.AreEqual(PercentStyle, rows[pareto + 1]["C"].Style);
+                Assert.AreEqual(W("summary.col.balances"), CellText(rows[pareto + 3], "A"), "Then the other source, on its own.");
+
+                // Two balance consumers are too few to describe: the counts, then why there is nothing more.
+                Assert.AreEqual(2d, CellNumber(consumers[1], "B"), 1e-9);
+                Assert.AreEqual(1d, CellNumber(RowsLabelled(rows, W("dist.zeroPeople")).Single(), "B"), 1e-9);
+                Assert.AreEqual(text.Text("copilotSpend.workbook.dist.withheld", fewerThanFive), CellText(rows.Last(), "A"));
+                Assert.IsFalse(rows.SelectMany(r => r.Values).Any(c => c.Type == null && double.Parse(c.Value, CultureInfo.InvariantCulture) == 0),
+                    language + ": no zero anywhere on the sheet.");
+            }
+        }
+
+        [TestMethod]
+        public void ADistributionThatIsWithheldOrNotAvailable_IsSaidInWords_NeverWrittenAsZero()
+        {
+            // Three Studio consumers are too few to describe without See PII, and there are no balance readings at all.
+            var input = Input();
+            input.Credits = new CreditFacts { TablesPresent = false };
+            var trimmed = CopilotSpendCalculator.Calculate(input).WithoutIndividualData();
+            Assert.IsTrue(trimmed.Studio.Distribution.Withheld);
+            Assert.IsNull(trimmed.Balances.Distribution);
+
+            var es = PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, PortalLanguage.Spanish);
+            var cells = CopilotInvestmentWorkbookLanguageTests.Sheets(CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.Spanish))
+                .Single(s => s.Name == es.Text("copilotSpend.workbook.sheet.distribution")).Cells;
+            AssertClose(new[] { 3d }, cells.Where(c => c.Type == null).Select(c => double.Parse(c.Value, CultureInfo.InvariantCulture)).ToList(),
+                "Only the count of consumers is a number: nothing withheld or unknown is written as 0.");
+            var texts = cells.Where(c => c.Text != null).Select(c => c.Text).ToList();
+            CollectionAssert.Contains(texts, es.Text("copilotSpend.workbook.dist.withheld", ("count", "5")));
+            CollectionAssert.Contains(texts, es.Text("copilotSpend.workbook.dist.notAvailable"));
+            CollectionAssert.DoesNotContain(texts, es.Text("copilotSpend.workbook.dist.total"));
+
+            // A readable ledger with no charges: no one consumed any, a known zero, and every sheet says so.
+            input = Input();
+            input.Studio.Users.Clear();
+            var idle = CopilotSpendCalculator.Calculate(input);
+            Assert.AreEqual(0, idle.Studio.Distribution.Consumers);
+            var idleSheets = CopilotInvestmentWorkbookLanguageTests.Sheets(CopilotSpendWorkbook.Build(idle, true, "test", PortalLanguage.Spanish));
+            foreach (var key in new[] { "distribution", "top", "lowest" })
+                CollectionAssert.Contains(CopilotInvestmentWorkbookLanguageTests.Texts(idleSheets.Where(s => s.Name == es.Text("copilotSpend.workbook.sheet." + key))),
+                    es.Text("copilotSpend.workbook.dist.noConsumers"), key);
+        }
+
+        [TestMethod]
+        public void TheTopAndLowestSpenderSheets_NameEachSourcesLargestAndSmallestConsumers_ForAReaderWithSeePii()
+        {
+            var summary = CopilotSpendCalculator.Calculate(Input());
+            summary.Studio.Distribution = CopilotSpendCalculator.Distribution(WorkedExample(), p => p.StudioCredits, null);
+
+            var english = CopilotSpendWorkbook.Build(summary, true, "test", PortalLanguage.English);
+            var spanish = CopilotSpendWorkbook.Build(summary, true, "test", PortalLanguage.Spanish);
+            CopilotInvestmentWorkbookLanguageTests.AssertSpanishCounterpart(english, spanish, CopilotSpendWorkbook.CatalogModule);
+
+            // A tie on 5 credits is ordered by sign-in name, whatever its case, in both lists.
+            var largest = new[] { "person01", "person02", "person03", "person04", "anna", "Bea", "person07", "person08", "person09", "person10" };
+            var smallest = new[] { "person10", "person09", "person08", "person07", "anna", "Bea", "person04", "person03", "person02", "person01" };
+            foreach (var (language, book) in new[] { (PortalLanguage.English, english), (PortalLanguage.Spanish, spanish) })
+            {
+                var text = PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, language);
+                string W(string key) => text.Text("copilotSpend.workbook." + key);
+                var sheets = CopilotInvestmentWorkbookLanguageTests.Sheets(book);
+                CollectionAssert.AreEqual(new[] { "summary", "organisation", "studio", "balances", "distribution", "top", "lowest", "people" }
+                    .Select(k => W("sheet." + k)).ToList(), sheets.Select(s => s.Name).ToList(), language.ToString());
+
+                foreach (var top in new[] { true, false })
+                {
+                    var rows = SheetRows(sheets.Single(s => s.Name == W(top ? "sheet.top" : "sheet.lowest")).Cells);
+                    Assert.AreEqual(W(top ? "ranked.topTitle" : "ranked.lowestTitle"), CellText(rows[0], "A"));
+                    Assert.AreEqual(text.Text("copilotSpend.workbook.ranked.intro", ("count", "10")), CellText(rows[1], "A"));
+
+                    // One list per source, each with its own credits column: never added together.
+                    var headers = Enumerable.Range(0, rows.Count).Where(i => CellText(rows[i], "A") == W("people.col.upn")).ToList();
+                    Assert.AreEqual(2, headers.Count, "Studio, then balances.");
+                    Assert.AreEqual(W("people.col.studioCredits"), CellText(rows[headers[0]], "C"));
+                    Assert.AreEqual(W("summary.col.balances"), CellText(rows[headers[1] - 1], "A"));
+                    Assert.AreEqual(W("people.col.balance"), CellText(rows[headers[1]], "C"));
+
+                    var studio = rows.Skip(headers[0] + 1).Take(headers[1] - headers[0] - 2).ToList();
+                    CollectionAssert.AreEqual((top ? largest : smallest).Select(n => n + "@contoso.example").ToList(), studio.Select(r => CellText(r, "A")).ToList(),
+                        top ? "Largest first." : "Smallest above zero first.");
+                    Assert.AreEqual(GreekDepartment, CellText(studio[0], "B"), "Tenant text as stored.");
+                    Assert.AreEqual(top ? 100d : 1d, CellNumber(studio[0], "C"), 1e-9);
+                    Assert.IsNull(studio[0]["C"].Style, "Credits as a plain number.");
+                    Assert.AreEqual(top ? 0.5 : 0.005, CellNumber(studio[0], "D"), 1e-9, "A share of the credits matched to the people in view.");
+                    Assert.AreEqual(PercentStyle, studio[0]["D"].Style);
+
+                    var balances = rows.Skip(headers[1] + 1).ToList();
+                    CollectionAssert.AreEqual(top ? new[] { "person1@contoso.example", "person4@contoso.example" } : new[] { "person4@contoso.example", "person1@contoso.example" },
+                        balances.Select(r => CellText(r, "A")).ToList());
+                    Assert.AreEqual(top ? 100d / 170 : 70d / 170, CellNumber(balances[0], "D"), 1e-4, "Of the 170 matched, not the account no user matches.");
+                }
+
+                // With See PII the bands keep their credits.
+                var distribution = SheetRows(sheets.Single(s => s.Name == W("sheet.distribution")).Cells);
+                var bands = distribution.FindIndex(r => CellText(r, "A") == W("dist.col.from"));
+                Assert.AreEqual(W("dist.col.credits"), CellText(distribution[bands], "D"));
+                Assert.AreEqual(W("dist.bandsNote"), CellText(distribution[bands - 1], "A"));
+                AssertClose(new[] { 1d, 2d, 1d, 1d }, new[] { "A", "B", "C", "D" }.Select(c => CellNumber(distribution[bands + 1], c)).ToList(), "The first band.");
+                Assert.AreEqual(50d, CellNumber(RowsLabelled(distribution, W("dist.p90"))[0], "B"), 1e-9);
+                var top10 = RowsLabelled(distribution, W("dist.top10"))[0];
+                Assert.AreEqual(0.5, CellNumber(top10, "B"), 1e-9);
+                Assert.AreEqual(PercentStyle, top10["B"].Style);
+            }
+        }
+
+        private static readonly string ThousandsStyle = ((int)XlsxCellStyle.Thousands).ToString(CultureInfo.InvariantCulture);
+        private static readonly string PercentStyle = ((int)XlsxCellStyle.Percent).ToString(CultureInfo.InvariantCulture);
+
+        /// <summary>A sheet's rows in order, each cell by its column letter. A blank row has no cells, so it is not listed.</summary>
+        private static List<Dictionary<string, WorkbookCell>> SheetRows(IEnumerable<WorkbookCell> cells) =>
+            cells.GroupBy(c => int.Parse(new string(c.Ref.Where(char.IsDigit).ToArray()), CultureInfo.InvariantCulture))
+                .OrderBy(g => g.Key)
+                .Select(g => g.ToDictionary(c => new string(c.Ref.Where(char.IsLetter).ToArray())))
+                .ToList();
+
+        private static List<Dictionary<string, WorkbookCell>> RowsLabelled(List<Dictionary<string, WorkbookCell>> rows, string label) =>
+            rows.Where(r => CellText(r, "A") == label).ToList();
+
+        private static string CellText(Dictionary<string, WorkbookCell> row, string column) => row.TryGetValue(column, out var cell) ? cell.Text : null;
+
+        private static double CellNumber(Dictionary<string, WorkbookCell> row, string column)
+        {
+            Assert.IsTrue(row.TryGetValue(column, out var cell), "A value in column " + column + ".");
+            Assert.IsNull(cell.Type, "A typed number, not text: " + cell.Text);
+            return double.Parse(cell.Value, NumberStyles.Float, CultureInfo.InvariantCulture);
         }
 
         private static CopilotSpendPersonRow Row(int id, double? studio, double? balance = null, string upn = null) => new CopilotSpendPersonRow

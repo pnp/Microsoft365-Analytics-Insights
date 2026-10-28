@@ -13,9 +13,9 @@ namespace Common.Entities.CopilotSpend
     /// page, numbers and dates as typed cells, and tenant text (names, departments, agents, categories) exactly as stored.
     /// </summary>
     /// <remarks>
-    /// Text cells are inline strings, which Excel never evaluates, so a value that starts with <c>=</c> stays text. The people
-    /// sheet is written only for a reader with See PII; without it the workbook carries aggregates only, like the page. Every
-    /// list is written in full - nothing is paged away.
+    /// Text cells are inline strings, which Excel never evaluates, so a value that starts with <c>=</c> stays text. The sheets
+    /// that name people (the top and lowest spenders, and everyone) are written only for a reader with See PII; without it the
+    /// workbook carries aggregates only, like the page. Every list is written in full - nothing is paged away.
     /// </remarks>
     public static class CopilotSpendWorkbook
     {
@@ -43,7 +43,13 @@ namespace Common.Entities.CopilotSpend
                 WriteOrganisation(workbook, summary, words);
                 WriteStudio(workbook, summary, words);
                 WriteBalances(workbook, summary, words);
-                if (includeIndividualData) WritePeople(workbook, summary, words);
+                WriteDistribution(workbook, summary, words);
+                if (includeIndividualData)
+                {
+                    WriteRanked(workbook, summary, true, words);
+                    WriteRanked(workbook, summary, false, words);
+                    WritePeople(workbook, summary, words);
+                }
                 return workbook.ToArray();
             }
         }
@@ -263,6 +269,115 @@ namespace Common.Entities.CopilotSpend
             if (quantity != null && quantity.Kind == CopilotInvestmentQuantityKinds.Limited && quantity.Value.HasValue)
                 return (words.Num(quantity.Value.Value, 6) + " " + (quantity.Unit ?? string.Empty)).TrimEnd();
             return words.Shared("copilotInvestment.value.unknown", null);
+        }
+
+        /// <summary>
+        /// How each source's credits are spread across the people who consumed them, one section per source and never added
+        /// together. A reader without See PII is sent the anonymised distributions, so this sheet is never less redacted than the page.
+        /// </summary>
+        private static void WriteDistribution(XlsxWriter workbook, CopilotSpendSummary summary, Words words)
+        {
+            var sheet = workbook.AddSheet(words.W("sheet.distribution"));
+            sheet.SetColumnWidths(48, 18, 14, 80);
+            sheet.AddTitle(words.W("dist.title"));
+            sheet.AddRow(XlsxCell.Wrapped(words.W("dist.intro")));
+            WriteDistribution(sheet, words.W("summary.col.studio"), summary.Studio.Distribution, false, words);
+            WriteDistribution(sheet, words.W("summary.col.balances"), summary.Balances.Distribution, true, words);
+        }
+
+        /// <summary>One source's figures. A figure the distribution does not carry is an empty cell that says why: never a zero.</summary>
+        private static void WriteDistribution(XlsxSheet sheet, string source, CopilotSpendDistribution d, bool balances, Words words)
+        {
+            sheet.AddBlankRow();
+            sheet.AddHeaderRow(source, words.W("col.value"), words.W("col.unit"), words.W("col.note"));
+            if (d == null)
+            {
+                sheet.AddRow(words.W("dist.notAvailable"));
+                return;
+            }
+            var credits = words.W("unit.credits");
+            var people = words.W("unit.people");
+            var minPeople = ("count", words.Count(d.MinPeople));
+            sheet.AddRow(words.W("dist.consumers"), XlsxCell.Number(d.Consumers), people, words.W("dist.consumersNote"));
+            if (balances) sheet.AddRow(words.W("dist.zeroPeople"), Count(d.ZeroPeople), people, words.W("dist.zeroPeopleNote"));
+            if (d.Consumers == 0)
+            {
+                sheet.AddRow(words.W("dist.noConsumers"));
+                return;
+            }
+            if (d.Withheld)
+            {
+                sheet.AddRow(words.W("dist.withheld", minPeople));
+                return;
+            }
+
+            var withheld = words.W("dist.figureWithheld", minPeople);
+            sheet.AddRow(words.W("dist.total"), d.Total, credits,
+                d.Total.HasValue ? words.W(balances ? "dist.totalBalancesNote" : "dist.totalStudioNote") : withheld);
+            sheet.AddRow(words.W("dist.median"), d.Median, credits, d.Median.HasValue ? null : withheld);
+            sheet.AddRow(words.W("dist.mean"), d.Mean, credits, d.Mean.HasValue ? null : withheld);
+            sheet.AddRow(words.W("dist.p90"), d.P90, credits, d.P90.HasValue ? words.W("dist.p90Note") : withheld);
+            sheet.AddRow(words.W("dist.gini"), d.Gini, null, d.Gini.HasValue ? words.W("dist.giniNote") : withheld);
+            sheet.AddRow(words.W("dist.top10"), Percent(d.Top10Share), null, d.Top10Share.HasValue ? null : withheld);
+            sheet.AddRow(words.W("dist.top20"), Percent(d.Top20Share), null, d.Top20Share.HasValue ? null : withheld);
+            sheet.AddRow(words.W("dist.half"), Count(d.PeopleForHalf), people,
+                d.HalfFromFewerThanMin ? words.W("dist.halfFewer", minPeople) : d.PeopleForHalf.HasValue ? null : withheld);
+
+            if (d.Bands.Count > 0)
+            {
+                // Bands combined for a reader without See PII carry no credits, so the column is left out rather than left empty.
+                var withCredits = d.Bands.Any(b => b.Credits.HasValue);
+                sheet.AddBlankRow();
+                sheet.AddRow(words.W("dist.bandsTitle"));
+                sheet.AddRow(XlsxCell.Wrapped(withCredits ? words.W("dist.bandsNote") : words.W("dist.bandsCombined", minPeople)));
+                var headers = new List<string> { words.W("dist.col.from"), words.W("dist.col.to"), words.W("dist.col.people") };
+                if (withCredits) headers.Add(words.W("dist.col.credits"));
+                sheet.AddHeaderRow(headers.ToArray());
+                foreach (var band in d.Bands)
+                    sheet.AddRow(band.From, band.To, XlsxCell.Number(band.People), withCredits ? band.Credits : null);
+            }
+
+            // The curve's origin, no one holding nothing, says nothing as a row.
+            var points = d.Pareto.Where(p => p.People > 0).ToList();
+            if (points.Count > 0)
+            {
+                sheet.AddBlankRow();
+                sheet.AddRow(words.W("dist.paretoTitle"));
+                sheet.AddRow(XlsxCell.Wrapped(words.W("dist.paretoNote")));
+                sheet.AddHeaderRow(words.W("dist.col.people"), words.W("dist.col.peopleShare"), words.W("dist.col.creditShare"));
+                foreach (var point in points)
+                    sheet.AddRow(XlsxCell.Number(point.People), XlsxCell.Percent(point.PeopleShare), XlsxCell.Percent(point.CreditShare));
+            }
+        }
+
+        /// <summary>The largest or the smallest consumers above zero, named, per source: only for a reader with See PII.</summary>
+        private static void WriteRanked(XlsxWriter workbook, CopilotSpendSummary summary, bool top, Words words)
+        {
+            var sheet = workbook.AddSheet(words.W(top ? "sheet.top" : "sheet.lowest"));
+            sheet.SetColumnWidths(40, 30, 24, 18);
+            sheet.AddTitle(words.W(top ? "ranked.topTitle" : "ranked.lowestTitle"));
+            sheet.AddRow(XlsxCell.Wrapped(words.W("ranked.intro", ("count", words.Count(CopilotSpendCalculator.DistributionListSize)))));
+            WriteRanked(sheet, words.W("summary.col.studio"), words.W("people.col.studioCredits"), summary.Studio.Distribution, top, words);
+            WriteRanked(sheet, words.W("summary.col.balances"), words.W("people.col.balance"), summary.Balances.Distribution, top, words);
+        }
+
+        private static void WriteRanked(XlsxSheet sheet, string source, string creditsColumn, CopilotSpendDistribution d, bool top, Words words)
+        {
+            sheet.AddBlankRow();
+            sheet.AddRow(source);
+            if (d == null)
+            {
+                sheet.AddRow(words.W("dist.notAvailable"));
+                return;
+            }
+            if (d.Consumers == 0)
+            {
+                sheet.AddRow(words.W("dist.noConsumers"));
+                return;
+            }
+            sheet.AddHeaderRow(words.W("people.col.upn"), words.W("people.col.department"), creditsColumn, words.W("ranked.col.share"));
+            foreach (var person in top ? d.Top : d.Lowest)
+                sheet.AddRow(person.UserPrincipalName, person.Department, person.Credits, XlsxCell.Percent(person.Share));
         }
 
         private static void WritePeople(XlsxWriter workbook, CopilotSpendSummary summary, Words words)
