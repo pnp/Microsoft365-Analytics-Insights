@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import { renderWithProvider } from '../test/renderWithProvider';
 import CopilotSpendPage from './CopilotSpendPage';
@@ -312,6 +312,21 @@ const part = (scope: HTMLElement, heading: string) => within(scope).getByRole('h
 /** One of the dialog's headline figures, by its label. */
 const kpi = (dialog: HTMLElement, label: string) => within(within(dialog).getByText(label).parentElement!);
 
+/**
+ * The person dialog, once focus is inside it. Without layout, Fluent finds nothing to focus in jsdom and focuses the
+ * surface itself, which never activates the focus manager's modal; about 250 ms later the manager hides the inactive
+ * dialog from assistive technology, so a run slower than that loses every role query inside it (CI run 40758824589).
+ * Focusing Close, which stays mounted while the details load, activates it as Fluent intends. The page behind is then
+ * hidden until about 250 ms after the dialog closes, so query the page with findBy* after closing.
+ */
+async function openedDialog(): Promise<HTMLElement> {
+  const dialog = await screen.findByRole('dialog', { hidden: true });
+  const close = within(dialog).getByRole('button', { name: 'Close', hidden: true });
+  act(() => close.focus());
+  await waitFor(() => expect(dialog).not.toHaveAttribute('aria-hidden'));
+  return dialog;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(fetchSpendSummary).mockResolvedValue(summary());
@@ -413,7 +428,7 @@ describe('CopilotSpendPage', () => {
       studioEnvironments: [{ environmentId: 'env-1', environmentName: 'Contoso (default)', credits: 120.5, activeDays: 4 }],
     });
     fireEvent.click(screen.getByRole('button', { name: 'Open the consumption of person7@contoso.example' }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await openedDialog();
     expect(within(dialog).getByText('Billed Copilot Studio usage by environment')).toBeInTheDocument();
     expect(within(dialog).getByText('Contoso (default)')).toBeInTheDocument();
     expect(within(dialog).getByText(/^\d[\d,.]* credits on 4 days$/)).toBeInTheDocument();
@@ -575,7 +590,7 @@ describe('CopilotSpendPage', () => {
     expect(within(largestReadings).getByRole('columnheader', { name: 'Consumed credits (latest reading)' })).toBeInTheDocument();
 
     fireEvent.click(within(largestReadings).getByRole('button', { name: 'Open the consumption of person7@contoso.example' }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await openedDialog();
     expect(within(dialog).getByText('Copilot consumption of person7@contoso.example')).toBeInTheDocument();
     expect(vi.mocked(fetchSpendPerson).mock.calls[0][1]).toBe(7);
   });
@@ -647,7 +662,7 @@ describe('CopilotSpendPage', () => {
 
     fireEvent.click(await screen.findByRole('tab', { name: 'People' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Open the consumption of person7@contoso.example' }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await openedDialog();
     await within(dialog).findByText('Billed Copilot Studio credits (period)');
     expect(within(dialog).getByText('Sales \u00b7 Analyst \u00b7 Manager: lead3@contoso.example')).toBeInTheDocument();
 
@@ -751,7 +766,7 @@ describe('CopilotSpendPage', () => {
 
     fireEvent.click(await screen.findByRole('tab', { name: 'People' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Open the consumption of person7@contoso.example' }));
-    let dialog = await screen.findByRole('dialog');
+    let dialog = await openedDialog();
     expect(await within(dialog).findByText('What this person used Copilot for could not be read just now.')).toBeInTheDocument();
     const partFailed = 'Not available: this could not be read just now, so it is unknown, not none.';
     // The prompts and what Copilot referenced failed; the interactions that were read are still shown.
@@ -763,8 +778,8 @@ describe('CopilotSpendPage', () => {
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'Open the consumption of person9@contoso.example' }));
-    dialog = await screen.findByRole('dialog');
+    fireEvent.click(await screen.findByRole('button', { name: 'Open the consumption of person9@contoso.example' }));
+    dialog = await openedDialog();
     expect(
       await within(dialog).findByText('Not available: the Copilot audit data is not available on this deployment, so this is unknown, not none.'),
     ).toBeInTheDocument();

@@ -230,7 +230,8 @@ beforeEach(() => {
 /**
  * A dialog opened again in the same test. Fluent's focus manager hides a dialog from assistive technology until focus is
  * inside it, and a busy parallel run can query it before that has happened; moving focus in, as Fluent itself does on
- * open, settles it - and the dialog must then be fully accessible.
+ * open, settles it - and the dialog must then be fully accessible. The page behind is hidden in turn until about 250 ms
+ * after the dialog closes, so query the page with findBy* after closing one.
  */
 async function reopenedDialog(): Promise<HTMLElement> {
   const dialog = await screen.findByRole('dialog', { hidden: true });
@@ -425,7 +426,7 @@ describe('CopilotInvestmentPage', () => {
     expect(screen.queryByText(/Illustrative example figures are in use/)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: 'What-if (1 changed)' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'What-if (1 changed)' }));
     fireEvent.click(within(await reopenedDialog()).getByRole('button', { name: 'Back to organisation defaults' }));
     await waitFor(() => expect(vi.mocked(fetchInvestmentSummary).mock.calls.at(-1)![0].scenario).toBeNull());
   });
