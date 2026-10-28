@@ -9,6 +9,7 @@ using Common.Entities.State;
 using Common.Entities.UserFilters;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -22,6 +23,7 @@ using System.Web.Http;
 using AdoptionCache = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisCache;
 using AdoptionCoordinator = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionAnalysisCoordinator;
 using AdoptionRunner = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisRunner;
+using CopilotAgentOriginKeys = Common.Entities.Copilot.CopilotAgentOriginKeys;
 using CopilotInvestmentAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotInvestmentAPIController;
 using CopilotInvestmentFactsCache = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotInvestment.CopilotInvestmentFactsCache;
 using CopilotInvestmentReportService = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotInvestment.CopilotInvestmentReportService;
@@ -283,6 +285,140 @@ namespace Tests.UnitTests
             var texts = WorkbookTexts(CopilotSpendWorkbook.Build(noDirectory, true, "test", PortalLanguage.Spanish));
             CollectionAssert.Contains(texts, PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, PortalLanguage.Spanish)
                 .Text("copilotSpend.workbook.org.unavailable.directoryUnavailable"));
+        }
+
+        /// <summary>
+        /// Person 1's own facts: turns in Teams with no agent and with agent 11 on the window's second day, in Word with agent 12
+        /// on its third, five prompts in Teams, a chat reading and one balance.
+        /// </summary>
+        private static PersonDetailFacts PersonFacts(CopilotAdoptionDateRange range)
+        {
+            var day = range.FromUtc.Date;
+            return new PersonDetailFacts
+            {
+                ActivityAssessed = true,
+                PromptsAssessed = true,
+                Activity =
+                {
+                    new PersonActivityRow { ActivityDate = day.AddDays(1), AppHost = "Teams", Turns = 4 },
+                    new PersonActivityRow { ActivityDate = day.AddDays(1), AppHost = "Teams", AgentId = 11, Turns = 3 },
+                    new PersonActivityRow { ActivityDate = day.AddDays(2), AppHost = "Word", AgentId = 12, Turns = 1 },
+                },
+                Prompts = { new PersonPromptRow { AppClass = "Teams", InteractionType = CopilotSpendSql.PromptInteractionType, Interactions = 5, Days = 2 } },
+                CreditServices = { new CreditServiceFact { Category = "chat", Consumed = 10, Unit = CopilotInvestmentSql.CreditUnit, Allowed = true } },
+                Balances = { new PersonBalancePoint { Date = Snapshot, Credits = 10, Quality = 2 } },
+            };
+        }
+
+        [TestMethod]
+        public async Task APersonsUsageThatCannotBeRead_LeavesTheRestOfTheirDrillDown_AndReadsAsNotAvailableRatherThanZero()
+        {
+            var range = Range();
+            var facts = new FakeFacts(Credits(1, 2, 3, 4, 5, 6), Studio(1, 2)) { PersonDetail = PersonFacts(range) };
+            var spend = new FakeSpend
+            {
+                Usage = () => new CopilotSpendPersonFacts
+                {
+                    StudioAssessed = true,
+                    StudioDays = { new CopilotSpendDay { Date = Snapshot, Credits = 1 } },
+                    PromptsAssessed = true,
+                    PromptTotals = new CopilotSpendPromptTotals { Prompts = 5, Days = 2 },
+                    CategoriesAssessed = true,
+                    PhrasesAssessed = true,
+                    ResourcesAssessed = true,
+                },
+            };
+            var service = SpendService(Directory(), facts, spend);
+            var request = new CopilotSpendRequest { Range = range, Scope = ReportScope.Unrestricted };
+
+            // The control: read, the person's usage is all there.
+            var read = await service.PersonAsync(request, 1, CancellationToken.None);
+            Assert.IsNull(read.UsageFailureCode);
+            Assert.IsNotNull(read.StudioDays);
+            Assert.AreEqual(5L, read.Usage.Prompts.Prompts);
+            Assert.IsTrue(read.Usage.CategoriesAssessed && read.Usage.PhrasesAssessed && read.Usage.ResourcesAssessed);
+
+            spend.Usage = () => throw new InvalidOperationException("Synthetic usage read failure.");
+            var detail = await service.PersonAsync(request, 1, CancellationToken.None);
+
+            Assert.IsNotNull(detail, "A failed usage read never takes the rest of the drill-down with it.");
+            Assert.AreEqual("personUsageUnavailable", detail.UsageFailureCode);
+            Assert.IsNull(detail.StudioDays, "Studio days that were not read are not a run of days with nothing billed.");
+            Assert.IsNull(detail.Usage.Prompts, "Prompts that were not read are not zero prompts.");
+            Assert.IsFalse(detail.Usage.CategoriesAssessed);
+            Assert.IsFalse(detail.Usage.PhrasesAssessed);
+            Assert.IsFalse(detail.Usage.ResourcesAssessed);
+
+            // What comes with the person's own facts, which were read, is still there.
+            Assert.AreEqual(1, detail.Person.UserId);
+            Assert.IsTrue(detail.Usage.TurnsAssessed);
+            Assert.AreEqual(8L, detail.Usage.Turns);
+            Assert.IsTrue(detail.Usage.PromptsAssessed, "The prompts by app are read with the person's facts, not with their usage.");
+            Assert.AreEqual(5L, detail.Usage.PromptApps.Single().Count);
+            Assert.AreEqual(10d, detail.Balances.Single().Credits);
+            Assert.AreEqual("chat", detail.Services.Single().Category);
+            Assert.AreEqual(2, detail.Ranks.StudioRank, "Of the two Studio consumers, person 1 has the smaller amount.");
+        }
+
+        [TestMethod]
+        public async Task AgentNamesThatCannotBeRead_LeaveThePersonsAgentsListed_Unnamed()
+        {
+            var range = Range();
+            var facts = new FakeFacts(Credits(1, 2, 3, 4, 5, 6), Studio(1, 2)) { PersonDetail = PersonFacts(range) };
+            var spend = new FakeSpend
+            {
+                Agents = () => new List<CopilotSpendAgentFact>
+                {
+                    new CopilotSpendAgentFact { Id = 11, AgentId = "contoso-helpdesk", Name = "Contoso helpdesk" },
+                    new CopilotSpendAgentFact { Id = 12, AgentId = "contoso-policies", Name = "\u03a0\u03bf\u03bb\u03b9\u03c4\u03b9\u03ba\u03ad\u03c2 Contoso" },
+                },
+            };
+            var service = SpendService(Directory(), facts, spend);
+            var request = new CopilotSpendRequest { Range = range, Scope = ReportScope.Unrestricted };
+
+            // The control: the agents the person used are asked for by their stored ids, and named.
+            var named = await service.PersonAsync(request, 1, CancellationToken.None);
+            CollectionAssert.AreEquivalent(new[] { 11, 12 }, spend.AgentRequests.Single());
+            CollectionAssert.AreEqual(new[] { "Contoso helpdesk", "\u03a0\u03bf\u03bb\u03b9\u03c4\u03b9\u03ba\u03ad\u03c2 Contoso" },
+                named.Usage.Agents.Select(a => a.Name).ToList());
+
+            spend.Agents = () => throw new InvalidOperationException("Synthetic agent read failure.");
+            var detail = await service.PersonAsync(request, 1, CancellationToken.None);
+
+            Assert.IsNotNull(detail, "Agent names that cannot be read never take the drill-down with them.");
+            Assert.AreEqual(2, spend.AgentRequests.Count);
+            CollectionAssert.AreEqual(new[] { 11, 12 }, detail.Usage.Agents.Select(a => a.Id).ToList(), "The agents are still listed.");
+            CollectionAssert.AreEqual(new long[] { 3, 1 }, detail.Usage.Agents.Select(a => a.Turns).ToList());
+            foreach (var agent in detail.Usage.Agents)
+            {
+                Assert.IsNull(agent.Name);
+                Assert.IsNull(agent.AgentId);
+                Assert.AreEqual(CopilotSpendAgentKindKeys.Unknown, agent.KindKey);
+                Assert.AreEqual(CopilotAgentOriginKeys.Unknown, agent.OriginKey);
+            }
+            Assert.IsNull(detail.UsageFailureCode, "Unnamed agents are not a usage read that failed.");
+        }
+
+        [TestMethod]
+        public async Task ADrillDownForSomeoneOutsideTheReadersView_IsNotFound_SoItIsNeverAWayRoundTheFilter()
+        {
+            var directory = Directory();
+            var service = SpendService(directory, new FakeFacts(Credits(1, 2, 3, 4, 5, 6, 100), Studio(1, 2)));
+            var controller = Controller(new ReportScopeResolver(GlobalFilterProviders.None, new FixedDirectory(directory)), service, seePii: true);
+            const string bossesReports = "[{\"d\":\"manager\",\"v\":[\"" + Boss + "\"]}]";
+
+            async Task<HttpResponseMessage> Read(int userId, string userFilter = null) =>
+                await (await controller.Person(userId, 28, userFilter, CancellationToken.None)).ExecuteAsync(CancellationToken.None);
+
+            // The controls: the manager is in the whole report, and one of their reports is in the filtered one.
+            Assert.AreEqual(HttpStatusCode.OK, (await Read(100)).StatusCode);
+            Assert.AreEqual(HttpStatusCode.OK, (await Read(1, bossesReports)).StatusCode);
+
+            foreach (var refused in new[] { await Read(100, bossesReports), await Read(99) })
+            {
+                Assert.AreEqual(HttpStatusCode.NotFound, refused.StatusCode);
+                Assert.AreEqual("personNotFound", (string)JObject.Parse(await refused.Content.ReadAsStringAsync())["code"]);
+            }
         }
 
         [TestMethod]
