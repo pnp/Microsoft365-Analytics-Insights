@@ -32,6 +32,26 @@ taxonomy, including directing and supervising modes, without calling a model or 
 live classification. The category report still requires ten distinct people per group;
 small populations or narrow filters can legitimately be empty. Use a new database name
 after rebuilding: older completed demos are not backfilled by an exact rerun.
+
+Since format `contoso-demo-v6` the Copilot interaction history is persona-driven, so the
+per-person view of the Copilot spend report has something to say:
+
+- **Categories** follow the person's department, the app the prompt was typed in and the agent
+  answering (Finance mostly *analysis*, Legal *document editing*, Engineering and IT *delegated
+  problem solving*), with about 4% *other*.
+- **Key phrases**: every analysed prompt has 1-3 distinct phrases in `copilot_interaction_keywords`,
+  drawn from department vocabularies that include Greek phrases. Unanalysed prompts and Copilot's
+  responses have none, as with Azure AI Language.
+- **Prompt shape**: word counts, attachments, links and mentions follow the category and the app.
+- **Files and sites**: Copilot reads department documents, mail, Teams posts and sites
+  (`copilot_event_accessed_resources`), including Greek file names and external web pages.
+- **Credit estimates**: `copilot_chats` carries the importer's own audit credit estimate, computed
+  by `CopilotCreditEstimation`. It is positive on the four custom-engine Copilot Studio agents and
+  averages close to what each agent is billed per turn. It is 0 on Cowork and plain Copilot turns.
+  Plain Copilot turns have no JSON, to keep a million-user database small.
+
+A database generated in v5 or earlier has none of this. Generate a new one.
+
 The operator guide lives in the wiki: [Synthetic demo data](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Synthetic-demo-data).
 
 The same demo is the **first option on the interactive menu**, so it can be run

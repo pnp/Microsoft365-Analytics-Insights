@@ -19,7 +19,11 @@ namespace Tests.FakeDataGen.Demo
         //          contoso-demo-v5 - Copilot credit balance history (preview collector tables): daily sweeps,
         //                            per-service balances that reset monthly, policies, tenant balance and
         //                            the archived publications, under the new copilot-credits area.
-        public const string FormatVersion = "contoso-demo-v5";
+        //          contoso-demo-v6 - what each person uses Copilot for: prompt categories by department and
+        //                            app, 1-3 key phrases per analysed prompt, prompt/response shapes, department
+        //                            files and sites as accessed resources, and credit estimates on recognised
+        //                            Copilot Studio custom-engine agent ids (DemoCopilotPersonas).
+        public const string FormatVersion = "contoso-demo-v6";
 
         // Accepted ranges, shared with the interactive menu (DemoInteractive) so the two entry points
         // cannot drift apart and offer a value the other refuses.

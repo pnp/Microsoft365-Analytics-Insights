@@ -146,8 +146,11 @@ namespace Tests.FakeDataGen.Demo
         public static readonly DemoTable InteractionSessions = T("copilot_interaction_sessions", true,
             I("id"), N("session_ref", 450), I("user_id"));
         public static readonly DemoTable Audit = T("audit_events", false, G("id"), I("user_id"), I("operation_id"), D("time_stamp"));
+        // The credit estimate is what the importer's CopilotCreditEstimation works out for the turn: a total on
+        // every row, and its JSON breakdown on agent turns (see DemoCopilotPersonas.Chat).
         public static readonly DemoTable Chats = T("copilot_chats", false, G("event_id"), N("app_host"), I("agent_id"),
-            N("thread_id", 450), N("client_region", 50), N("copilot_log_version", 50), I("user_id"), D("time_stamp"));
+            N("thread_id", 450), N("client_region", 50), N("copilot_log_version", 50), I("user_id"), D("time_stamp"),
+            I("copilot_credit_estimate_total"), N("copilot_credit_estimate_json", -1));
         public static readonly DemoTable Resources = T("copilot_event_accessed_resources", false,
             G("copilot_chat_id"), I("resource_name_id"), I("resource_site_url_id"), I("resource_type_id"));
         // DLP. Declared after Chats/ResourceNames/ResourceTypes because dependency order is also the
@@ -177,6 +180,9 @@ namespace Tests.FakeDataGen.Demo
             N("version", 64), N("categories_json", -1));
         public static readonly DemoTable PromptClassifications = T("copilot_prompt_classifications", false,
             I("interaction_id"), N("category_id", 40), N("taxonomy_version", 64), N("human_mode", 20));
+        // Key phrases Azure AI Language extracted from a user prompt. The table's own identity id is left to SQL.
+        public static readonly DemoTable InteractionKeywords = T("copilot_interaction_keywords", false,
+            I("interaction_id"), I("keyword_id"));
         public static readonly DemoTable Teams = Daily("teams_user_activity_log", L("private_chat_count"), L("team_chat_count"),
             L("post_messages"), L("reply_messages"), L("urgent_messages"), L("calls_count"), L("meetings_count"),
             L("adhoc_meetings_attended_count"), L("adhoc_meetings_organized_count"), L("meetings_attended_count"),

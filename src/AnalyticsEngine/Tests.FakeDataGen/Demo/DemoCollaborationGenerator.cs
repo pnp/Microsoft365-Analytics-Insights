@@ -65,7 +65,12 @@ namespace Tests.FakeDataGen.Demo
             if (_options.Includes(DemoArea.Teams)) WriteTeamDimensions();
             if (_options.Includes(DemoArea.Teams | DemoArea.Web | DemoArea.CopilotHistory))
                 WriteNames(DemoTables.Languages, LanguageNames);
-            if (_options.Includes(DemoArea.Teams | DemoArea.CopilotHistory)) WriteNames(DemoTables.Keywords, KeywordNames);
+            if (_options.Includes(DemoArea.Teams | DemoArea.CopilotHistory))
+            {
+                WriteNames(DemoTables.Keywords, KeywordNames);
+                // Copilot prompt key phrases follow the Teams channel keywords, which keep ids 1-5.
+                DemoCopilotPersonas.WriteKeywords(_sink, KeywordNames);
+            }
             // Page metadata/comments/likes arrive as AppInsights custom events under WebTraffic,
             // not through the SharePoint management audit or Graph usage-report import.
             if (_options.Includes(DemoArea.Web)) WritePageDimensions();

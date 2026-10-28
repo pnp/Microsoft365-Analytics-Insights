@@ -243,7 +243,7 @@ WHERE class=0 AND name LIKE N'M365AnalyticsSyntheticDemo%';"));
                                 sink.Write(DemoTables.Sessions, 1, session, 1);
                                 sink.Write(DemoTables.InteractionSessions, 1, thread, 1);
                                 sink.Write(DemoTables.Audit, id, 1, 1, options.AsOf);
-                                sink.Write(DemoTables.Chats, id, "Contoso", null, thread, "US", "1", 1, options.AsOf);
+                                sink.Write(DemoTables.Chats, id, "Contoso", null, thread, "US", "1", 1, options.AsOf, null, null);
                                 sink.Write(DemoTables.Interactions, graph, 1, 1, id.ToString("N"), 1, 1, 1,
                                     options.AsOf, 10, 2, 0, 0, 0, 0, null, null, null, 1);
                                 sink.Flush();
