@@ -139,8 +139,9 @@ namespace Web.AnalyticsWeb.Models.CopilotSpend
 
             var range = request.Range;
             var lastDay = CopilotInvestmentWindow.LastDay(range);
+            // Goals are read with the person's usage, by taxonomy version, so the investment goal counts are not asked for.
             var factsTask = _facts.Source.GetPersonDetailAsync(userId, person.CreditObjectId, person.BalanceDate,
-                range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: true, cancellationToken);
+                range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: true, withPromptCategories: false, cancellationToken);
             var usageTask = ReadUsageAsync(userId, range.FromUtc, range.ToExclusiveUtc, lastDay, cancellationToken);
             await Task.WhenAll(factsTask, usageTask).ConfigureAwait(false);
             var facts = factsTask.Result;

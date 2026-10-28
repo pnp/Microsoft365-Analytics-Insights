@@ -92,7 +92,8 @@ namespace Tests.UnitTests
                 Task.FromResult(new List<CreditTrendPoint>());
 
             public Task<PersonDetailFacts> GetPersonDetailAsync(int userId, Guid? objectId, DateTime? creditDate, DateTime from, DateTime toExclusive,
-                DateTime lastDay, bool withCreditEstimate, CancellationToken cancellationToken) => Task.FromResult(new PersonDetailFacts());
+                DateTime lastDay, bool withCreditEstimate, bool withPromptCategories, CancellationToken cancellationToken) =>
+                Task.FromResult(new PersonDetailFacts());
         }
 
         private sealed class NoDirectory : IUserDirectorySource

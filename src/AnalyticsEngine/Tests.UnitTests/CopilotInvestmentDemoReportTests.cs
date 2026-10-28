@@ -191,7 +191,7 @@ namespace Tests.UnitTests
                 var person = report.People.First(p => p.Licensed && p.ActiveDays > 3 && (p.Credits ?? 0) > 0);
                 var lastDay = CopilotInvestmentWindow.LastDay(range);
                 var detail = await source.GetPersonDetailAsync(person.UserId, person.CreditObjectId, person.CreditObservationDate,
-                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: false, CancellationToken.None);
+                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: false, withPromptCategories: true, CancellationToken.None);
                 Assert.IsTrue(detail.ActivityAssessed && detail.Activity.Count > 0, "The drill-down must show where the person used Copilot.");
                 Assert.IsTrue(detail.Activity.All(a => a.EstimateCredits == null && a.PricedTurns == 0),
                     "The Investment drill-down does not ask for the estimate, so its rows carry none.");
@@ -199,7 +199,7 @@ namespace Tests.UnitTests
                 Assert.IsTrue(detail.Balances.Count > 1, "A person's balance history is a curve, not one reading.");
 
                 var sentinelDetail = await source.GetPersonDetailAsync(sentinelUser, sentinelObject, sentinelRow.CreditObservationDate,
-                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: false, CancellationToken.None);
+                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: false, withPromptCategories: true, CancellationToken.None);
                 Assert.IsTrue(sentinelDetail.Balances.Count > 0 && sentinelDetail.Balances.All(b => b.Date <= lastDay),
                     "The drill-down's balance curve stops at the window's last day.");
                 Assert.IsFalse(sentinelDetail.StudioEnvironments.Any(e => e.EnvironmentId == SentinelEnvironment), "Nor does its Studio ledger reach the day after.");
@@ -258,9 +258,11 @@ namespace Tests.UnitTests
                 var expected = usageTotals[spendPerson.UserId];
 
                 var plain = await source.GetPersonDetailAsync(spendPerson.UserId, spendPerson.CreditObjectId, spendPerson.BalanceDate,
-                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: false, CancellationToken.None);
+                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: false, withPromptCategories: false, CancellationToken.None);
                 var estimated = await source.GetPersonDetailAsync(spendPerson.UserId, spendPerson.CreditObjectId, spendPerson.BalanceDate,
-                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: true, CancellationToken.None);
+                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: true, withPromptCategories: false, CancellationToken.None);
+                Assert.AreEqual(0, plain.PromptCategories.Count + estimated.PromptCategories.Count,
+                    "The Spend drill-down reads goals by taxonomy version itself, so it does not ask for the investment goal counts.");
                 CollectionAssert.AreEqual(plain.Activity.Select(ActivityKey).OrderBy(k => k, StringComparer.Ordinal).ToList(),
                     estimated.Activity.Select(ActivityKey).OrderBy(k => k, StringComparer.Ordinal).ToList(),
                     "Asking for the estimate changes the plan, never the turns.");
@@ -279,6 +281,10 @@ namespace Tests.UnitTests
                 Assert.IsTrue(usage.Recent.All(r => r.CreatedUtc >= range.FromUtc && r.CreatedUtc < range.ToExclusiveUtc
                     && r.Phrases.Count <= SqlCopilotSpendFactsSource.PhrasesPerPrompt));
                 Assert.IsTrue(usage.Categories.Count > 0 && usage.Taxonomies.Count > 0 && usage.Categories.Sum(c => c.Prompts) <= expected.Prompts);
+                var withGoals = await source.GetPersonDetailAsync(spendPerson.UserId, spendPerson.CreditObjectId, spendPerson.BalanceDate,
+                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: false, withPromptCategories: true, CancellationToken.None);
+                Assert.AreEqual(usage.Categories.Sum(c => c.Prompts), withGoals.PromptCategories.Sum(c => c.Prompts),
+                    "The control: the same person has classified prompts, which the Investment drill-down still reads.");
                 Assert.IsTrue(usage.Phrases.Count > 0 && usage.Phrases.Count <= SqlCopilotSpendFactsSource.TopPhraseCount);
                 Assert.IsTrue(usage.ResourceTypes.Count > 0, "Copilot read files and sites for them.");
 

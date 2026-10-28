@@ -165,7 +165,8 @@ namespace Web.AnalyticsWeb.Controllers
 
                 var range = request.Request.Range;
                 var facts = await Service.Facts.Source.GetPersonDetailAsync(userId, person.CreditObjectId, person.CreditObservationDate,
-                    range.FromUtc, range.ToExclusiveUtc, CopilotInvestmentWindow.LastDay(range), withCreditEstimate: false, cancellationToken);
+                    range.FromUtc, range.ToExclusiveUtc, CopilotInvestmentWindow.LastDay(range), withCreditEstimate: false,
+                    withPromptCategories: true, cancellationToken);
                 return Ok(CopilotInvestmentPersonDetailBuilder.Build(person, facts, report.Investment.Currency, range.FromUtc, range.ToExclusiveUtc));
             });
 

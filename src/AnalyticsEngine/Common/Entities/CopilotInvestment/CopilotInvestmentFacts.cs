@@ -524,10 +524,12 @@ namespace Common.Entities.CopilotInvestment
         /// <paramref name="toExclusive"/>); balances and the Studio ledger are kept by day and read through
         /// <paramref name="lastDay"/>, the window's last calendar day (<see cref="CopilotInvestmentWindow.LastDay"/>).
         /// <paramref name="withCreditEstimate"/> adds the importer's credit estimate to each activity row, which costs a heavy
-        /// person's drill-down extra reads, so only a page that shows it asks.
+        /// person's drill-down extra reads, so only a page that shows it asks. <paramref name="withPromptCategories"/> reads
+        /// the person's classified goals into <see cref="PersonDetailFacts.PromptCategories"/>; a page that reads goals its
+        /// own way (the Copilot Spend drill-down reads them by taxonomy version) passes false and skips that read.
         /// </summary>
         Task<PersonDetailFacts> GetPersonDetailAsync(int userId, Guid? objectId, DateTime? creditDate, DateTime from, DateTime toExclusive,
-            DateTime lastDay, bool withCreditEstimate, CancellationToken cancellationToken);
+            DateTime lastDay, bool withCreditEstimate, bool withPromptCategories, CancellationToken cancellationToken);
     }
 
     /// <summary>The SQL implementation. Each read is one bounded statement; nothing loops a query per person.</summary>
@@ -795,7 +797,7 @@ namespace Common.Entities.CopilotInvestment
         }
 
         public async Task<PersonDetailFacts> GetPersonDetailAsync(int userId, Guid? objectId, DateTime? creditDate, DateTime from,
-            DateTime toExclusive, DateTime lastDay, bool withCreditEstimate, CancellationToken cancellationToken)
+            DateTime toExclusive, DateTime lastDay, bool withCreditEstimate, bool withPromptCategories, CancellationToken cancellationToken)
         {
             var detail = new PersonDetailFacts();
             using (var db = _connection())
@@ -847,7 +849,7 @@ namespace Common.Entities.CopilotInvestment
                     }
                     detail.PromptsAssessed = true;
 
-                    if (await TableExistsAsync(db, "copilot_prompt_classifications", cancellationToken))
+                    if (withPromptCategories && await TableExistsAsync(db, "copilot_prompt_classifications", cancellationToken))
                     {
                         using (var cmd = Command(db, CopilotInvestmentSql.PersonCategoriesSql, "@userId", userId, "@from", from, "@toExclusive", toExclusive))
                         using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))

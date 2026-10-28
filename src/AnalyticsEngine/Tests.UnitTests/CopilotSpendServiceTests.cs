@@ -19,6 +19,10 @@ using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
+using AdoptionCache = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisCache;
+using AdoptionCoordinator = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionAnalysisCoordinator;
+using AdoptionRunner = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionAnalysisRunner;
+using CopilotInvestmentAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotInvestmentAPIController;
 using CopilotInvestmentFactsCache = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotInvestment.CopilotInvestmentFactsCache;
 using CopilotInvestmentReportService = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotInvestment.CopilotInvestmentReportService;
 using CopilotInvestmentRequest = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotInvestment.CopilotInvestmentRequest;
@@ -28,6 +32,7 @@ using CopilotSpendRequest = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotSpend.C
 using GlobalFilterApplication = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.GlobalFilterApplication;
 using GlobalFilterProviders = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.GlobalFilterProviders;
 using IUserDirectorySource = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.IUserDirectorySource;
+using NullAnalysisTelemetry = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.NullCopilotAdoptionAnalysisTelemetry;
 using PortalAccessPolicy = AnalyticsWeb::Web.AnalyticsWeb.Security.PortalAccessPolicy;
 using PortalRoles = AnalyticsWeb::Web.AnalyticsWeb.Security.PortalRoles;
 using ReportScope = AnalyticsWeb::Web.AnalyticsWeb.Models.UserFilters.ReportScope;
@@ -280,6 +285,65 @@ namespace Tests.UnitTests
                 .Text("copilotSpend.workbook.org.unavailable.directoryUnavailable"));
         }
 
+        [TestMethod]
+        public async Task TheSpendDrillDown_DoesNotAskForTheInvestmentGoalCounts_WhichTheInvestmentDrillDownStillReads()
+        {
+            var directory = Directory();
+            var facts = new FakeFacts(Credits(1, 2, 3, 4, 5, 6), Studio(1, 2));
+
+            var spend = await SpendService(directory, facts)
+                .PersonAsync(new CopilotSpendRequest { Range = Range(), Scope = ReportScope.Unrestricted }, 1, CancellationToken.None);
+            Assert.IsNotNull(spend);
+            CollectionAssert.AreEqual(new[] { false }, facts.PersonDetailCategoryRequests, "The Spend drill-down reads goals with the person's usage.");
+            CollectionAssert.AreEqual(new[] { true }, facts.PersonDetailEstimateRequests);
+
+            var name = Guid.NewGuid().ToString("N");
+            var investment = new CopilotInvestmentReportService(
+                new CopilotInvestmentFactsCache(facts, new MemoryCache("investment-facts-" + name)),
+                () => new CopilotInvestmentAssumptionsStore(new InMemoryKeyValueStore(), isDurable: true), new FixedDirectory(directory),
+                () => new ImportTaskSettings { CopilotStudioCredits = true, CopilotCostManagement = true }, () => true,
+                new MemoryCache("investment-results-" + name));
+            var response = await (await InvestmentController(new ReportScopeResolver(GlobalFilterProviders.None, new FixedDirectory(directory)), investment)
+                .Person(1, 28, null, CancellationToken.None)).ExecuteAsync(CancellationToken.None);
+
+            Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, await response.Content.ReadAsStringAsync());
+            CollectionAssert.AreEqual(new[] { false, true }, facts.PersonDetailCategoryRequests, "The investment drill-down still shows the goal counts.");
+            CollectionAssert.AreEqual(new[] { true, false }, facts.PersonDetailEstimateRequests);
+        }
+
+        private static CopilotInvestmentAPIController InvestmentController(ReportScopeResolver resolver, CopilotInvestmentReportService service)
+        {
+            var configuration = new HttpConfiguration();
+            configuration.Properties[typeof(PortalAccessPolicy)] = PortalAccessPolicy.Enforcing;
+            var request = new HttpRequestMessage(HttpMethod.Get, "https://contoso.example/api/CopilotInvestment/person/1");
+            request.SetConfiguration(configuration);
+            var identity = new ClaimsIdentity("Test");
+            identity.AddClaim(new Claim("upn", "reader@contoso.example"));
+            identity.AddClaim(new Claim("roles", PortalRoles.SeePii));
+            // No adoption evidence on this deployment, so the analysis coordinator is never asked.
+            var coordinator = new AdoptionCoordinator(new NoAdoption(), new NoAdoption(), (windowDays, hasOverride) => NullAnalysisTelemetry.Instance,
+                TimeSpan.FromMinutes(10));
+            return new CopilotInvestmentAPIController(coordinator, resolver, () => service)
+            {
+                Request = request,
+                Configuration = configuration,
+                User = new ClaimsPrincipal(identity),
+            };
+        }
+
+        private sealed class NoAdoption : AdoptionRunner, AdoptionCache
+        {
+            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates,
+                List<int> seatLicenceTypeIds, CopilotAdoptionEffectiveScoreSettings scoreSettings, ICopilotAdoptionRunTelemetry telemetry) =>
+                throw new AssertFailedException("No adoption analysis is run on a deployment without adoption evidence.");
+
+            public bool TryGet(string key, out CopilotAdoptionAnalysis analysis) =>
+                throw new AssertFailedException("No adoption analysis is read on a deployment without adoption evidence.");
+
+            public void Set(string key, CopilotAdoptionAnalysis analysis, TimeSpan ttl) =>
+                throw new AssertFailedException("No adoption analysis is stored on a deployment without adoption evidence.");
+        }
+
         private static CopilotSpendAPIController Controller(ReportScopeResolver resolver, CopilotSpendReportService service, bool seePii)
         {
             var configuration = new HttpConfiguration();
@@ -321,10 +385,17 @@ namespace Tests.UnitTests
             /// <summary>The <c>withCreditEstimate</c> of each drill-down read, in order.</summary>
             internal List<bool> PersonDetailEstimateRequests { get; } = new List<bool>();
 
+            /// <summary>The <c>withPromptCategories</c> of each drill-down read, in order.</summary>
+            internal List<bool> PersonDetailCategoryRequests { get; } = new List<bool>();
+
             public Task<PersonDetailFacts> GetPersonDetailAsync(int userId, Guid? objectId, DateTime? creditDate, DateTime from, DateTime toExclusive,
-                DateTime lastDay, bool withCreditEstimate, CancellationToken cancellationToken)
+                DateTime lastDay, bool withCreditEstimate, bool withPromptCategories, CancellationToken cancellationToken)
             {
-                PersonDetailEstimateRequests.Add(withCreditEstimate);
+                lock (PersonDetailEstimateRequests)
+                {
+                    PersonDetailEstimateRequests.Add(withCreditEstimate);
+                    PersonDetailCategoryRequests.Add(withPromptCategories);
+                }
                 return Task.FromResult(PersonDetail);
             }
         }
