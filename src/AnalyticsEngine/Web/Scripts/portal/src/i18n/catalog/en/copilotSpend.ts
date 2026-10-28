@@ -261,6 +261,7 @@ export const copilotSpend = {
   'copilotSpend.distribution.anonymised':
     'Naming the largest and smallest consumers needs the See PII permission. Without it, each band covers at least {count} people and no single person\u2019s amount is shown.',
   'copilotSpend.distribution.col.share': 'Share',
+  'copilotSpend.distribution.noDepartment': 'Department not set',
   'copilotSpend.distribution.barsNote':
     'Each bar compares the person with the largest consumer in this view. Share is of all the credits in this view.',
   'copilotSpend.person.managedBy': 'Manager: {manager}',

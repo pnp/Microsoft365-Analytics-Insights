@@ -27,7 +27,7 @@ const useStyles = makeStyles({
   muted: { color: tokens.colorNeutralForeground3 },
   layout: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))',
     gap: '20px',
     alignItems: 'start',
   },
@@ -51,18 +51,21 @@ const useStyles = makeStyles({
   },
   tileValue: { fontSize: tokens.fontSizeBase500, lineHeight: tokens.lineHeightBase500, fontWeight: tokens.fontWeightSemibold, fontVariantNumeric: 'tabular-nums' },
   section: { display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 },
-  tables: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '20px', alignItems: 'start' },
+  tables: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(340px, 100%), 1fr))', gap: '20px', alignItems: 'start' },
   tableWrap: { overflowX: 'auto' },
-  colPerson: { width: '42%' },
-  colDepartment: { width: '24%' },
-  colCredits: { width: '16%' },
-  colShare: { width: '18%' },
+  // Three columns, with the department under the person: these tables sit two to a row, and a fourth column left
+  // "Departamento" and "Créditos facturados" overlapping on a phone and touching on a 1,100px laptop.
+  colPerson: { width: '50%' },
+  colCredits: { width: '25%' },
+  colShare: { width: '25%' },
+  personCell: { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '2px', paddingBlock: '4px', minWidth: 0 },
   personLink: { textAlign: 'start', overflowWrap: 'anywhere' },
-  wrapText: { overflowWrap: 'anywhere' },
+  department: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, lineHeight: tokens.lineHeightBase200, overflowWrap: 'anywhere' },
   num: { textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' },
   numHeader: { textAlign: 'right', justifyContent: 'flex-end' },
-  shareCell: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px' },
-  shareTrack: { width: '56px', height: '6px', borderRadius: '3px', backgroundColor: tokens.colorNeutralBackground4, overflow: 'hidden', flexShrink: 0 },
+  // The figure sits above its bar rather than beside it, so a narrow cell cannot push the bar over the credits column.
+  shareCell: { display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '4px', minWidth: 0 },
+  shareTrack: { height: '6px', borderRadius: '3px', backgroundColor: tokens.colorNeutralBackground4, overflow: 'hidden' },
   shareBar: { height: '100%', backgroundColor: tokens.colorBrandBackground },
 });
 
@@ -261,7 +264,6 @@ function RankedTable({
           <TableHeader>
             <TableRow>
               <TableHeaderCell className={styles.colPerson}>{t('copilotSpend.people.col.person')}</TableHeaderCell>
-              <TableHeaderCell className={styles.colDepartment}>{t('copilotSpend.people.col.department')}</TableHeaderCell>
               <TableHeaderCell className={mergeClasses(styles.colCredits, styles.numHeader)} button={{ className: styles.numHeader }}>
                 {t(source === 'studio' ? 'copilotSpend.studio.col.credits' : 'copilotSpend.people.col.balance')}
               </TableHeaderCell>
@@ -277,25 +279,27 @@ function RankedTable({
               return (
                 <TableRow key={row.userId}>
                   <TableCell>
-                    <Link
-                      as="button"
-                      className={styles.personLink}
-                      onClick={() => onOpenPerson(row.userId, name)}
-                      aria-label={t('copilotSpend.people.open', { name })}
-                    >
-                      {breakableName(name)}
-                    </Link>
+                    <div className={styles.personCell}>
+                      <Link
+                        as="button"
+                        className={styles.personLink}
+                        onClick={() => onOpenPerson(row.userId, name)}
+                        aria-label={t('copilotSpend.people.open', { name })}
+                      >
+                        {breakableName(name)}
+                      </Link>
+                      <span className={styles.department}>{row.department ?? t('copilotSpend.distribution.noDepartment')}</span>
+                    </div>
                   </TableCell>
-                  <TableCell className={styles.wrapText}>{row.department ?? t('copilotSpend.org.notSet')}</TableCell>
                   <TableCell className={styles.num} aria-label={credits(row.credits)}>
                     {formatCredits(row.credits)}
                   </TableCell>
                   <TableCell>
                     <div className={styles.shareCell}>
+                      <span className={styles.num}>{formatShareAboveZero(row.share)}</span>
                       <div className={styles.shareTrack} aria-hidden="true">
                         <div className={styles.shareBar} style={{ width: `${bar * 100}%` }} />
                       </div>
-                      <span className={styles.num}>{formatShareAboveZero(row.share)}</span>
                     </div>
                   </TableCell>
                 </TableRow>

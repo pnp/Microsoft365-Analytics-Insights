@@ -556,8 +556,10 @@ describe('CopilotSpendPage', () => {
     expect(within(largest).getByRole('columnheader', { name: 'Billed credits' })).toBeInTheDocument();
     expect(within(largest).getByRole('cell', { name: '340 credits' })).toBeInTheDocument();
     expect(within(largest).getByText('28%')).toBeInTheDocument();
+    // The department reads under the person, in the same cell, rather than in a column of its own.
+    expect(within(largest).getByRole('cell', { name: /person3@contoso\.example\s*Finance$/ })).toBeInTheDocument();
     const smallest = within(panel).getByRole('table', { name: 'Smallest consumers above zero' });
-    expect(within(smallest).getByText('Not set')).toBeInTheDocument();
+    expect(within(smallest).getByText('Department not set')).toBeInTheDocument();
     // A share too small to show as 0.1% is still above zero, and says so.
     expect(within(smallest).getByText('<0.1%')).toBeInTheDocument();
     expect(within(panel).getByText('Each bar compares the person with the largest consumer in this view. Share is of all the credits in this view.')).toBeInTheDocument();

@@ -271,6 +271,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.distribution.anonymised':
     'Para nombrar a quienes más y menos consumen se necesita el permiso Ver PII. Sin él, cada tramo abarca al menos {count} personas y no se muestra el importe de ninguna persona.',
   'copilotSpend.distribution.col.share': 'Parte',
+  'copilotSpend.distribution.noDepartment': 'Departamento sin definir',
   'copilotSpend.distribution.barsNote':
     'Cada barra compara a la persona con quien más consumió en esta vista. La parte es del total de créditos de esta vista.',
   'copilotSpend.person.managedBy': 'Responsable: {manager}',
