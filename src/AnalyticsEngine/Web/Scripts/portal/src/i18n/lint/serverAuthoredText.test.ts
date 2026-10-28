@@ -58,6 +58,8 @@ import {
   TRUST_CODES as INVESTMENT_TRUST_CODES,
   VALUE_UNAVAILABLE_REASONS as INVESTMENT_VALUE_UNAVAILABLE_REASONS,
 } from '../../components/copilotInvestment/investmentShared';
+import { SPEND_AGENT_KIND_KEYS } from '../../components/copilotSpend/SpendPersonDialog';
+import { GROUPING_UNAVAILABLE_KEYS as SPEND_GROUPING_UNAVAILABLE_KEYS } from '../../pages/CopilotSpendPage';
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
@@ -2933,6 +2935,23 @@ describe('Copilot investment server codes', () => {
     const notes = sortedUnique([...controller.matchAll(/notes\.Add\("([^"]+)"\)/g)].map((m) => m[1]));
     expect(notes.length).toBeGreaterThanOrEqual(4);
     expect(sortedUnique(Object.keys(INVESTMENT_AVAILABILITY_NOTE_KEYS))).toEqual(notes);
+  });
+});
+
+describe('Copilot spend server keys', () => {
+  const SPEND_MODELS_CS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotSpend', 'CopilotSpendModels.cs');
+
+  it('words every agent kind the person drill-down can send', () => {
+    expectMapsExactly(SPEND_AGENT_KIND_KEYS, csharpClassConstants(SPEND_MODELS_CS, 'CopilotSpendAgentKindKeys'), 'copilotSpend.person.usage.kind.', 'agent kinds');
+  });
+
+  it('explains every reason the people cannot be grouped', () => {
+    expectMapsExactly(
+      SPEND_GROUPING_UNAVAILABLE_KEYS,
+      csharpClassConstants(SPEND_MODELS_CS, 'CopilotSpendGroupingUnavailable'),
+      'copilotSpend.org.unavailable.',
+      'grouping failures',
+    );
   });
 });
 

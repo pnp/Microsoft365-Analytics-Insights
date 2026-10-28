@@ -51,6 +51,12 @@ export function formatShare(value: number | null | undefined): string {
   return formatNumber(value, { style: 'percent', maximumFractionDigits: value < 0.1 && value > 0 ? 1 : 0 });
 }
 
+/** As {@link formatShare}, but a share above zero too small to show is written as below 0.1%, never rounded to 0%. */
+export function formatShareAboveZero(value: number | null | undefined): string {
+  if (value !== null && value !== undefined && value > 0 && value < 0.0005) return `<${formatShare(0.001)}`;
+  return formatShare(value);
+}
+
 export function formatDecimal(value: number | null | undefined, digits = 1): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '\u2014';
   return formatNumber(value, { maximumFractionDigits: digits });
@@ -611,7 +617,7 @@ const useVisualStyles = makeStyles({
   legendItem: { display: 'inline-flex', gap: '6px', alignItems: 'center' },
   swatchCost: { width: '3px', height: '14px', backgroundColor: tokens.colorNeutralForeground1 },
   swatchValue: { width: '18px', height: '10px', backgroundColor: tokens.colorBrandBackground2, border: `1px dashed ${tokens.colorBrandStroke1}` },
-  bars: { display: 'grid', gridTemplateColumns: 'minmax(90px, 160px) 1fr auto', gap: '8px 12px', alignItems: 'center' },
+  bars: { display: 'grid', gridTemplateColumns: 'fit-content(160px) minmax(64px, 1fr) minmax(0, auto)', gap: '8px 12px', alignItems: 'center' },
   barTrack: { height: '16px', borderRadius: '8px', backgroundColor: tokens.colorNeutralBackground3, overflow: 'hidden' },
   bar: { height: '100%', borderRadius: '8px', backgroundColor: tokens.colorBrandBackground, minWidth: '2px' },
   barMarked: { backgroundColor: tokens.colorPaletteYellowBorderActive },
@@ -693,7 +699,9 @@ function BarRow({ row, max }: { row: BarRowData; max: number }) {
         {row.label}
       </Text>
       <div className={styles.barTrack} aria-hidden="true">
-        <div className={mergeClasses(styles.bar, row.marked && styles.barMarked)} style={{ width: `${(row.value / max) * 100}%` }} />
+        {row.value > 0 && (
+          <div className={mergeClasses(styles.bar, row.marked && styles.barMarked)} style={{ width: `${(row.value / max) * 100}%` }} />
+        )}
       </div>
       <Text size={200} className={mergeClasses(styles.barValue, row.marked && styles.marked)}>
         {row.display}

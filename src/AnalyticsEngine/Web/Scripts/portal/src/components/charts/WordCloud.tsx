@@ -17,7 +17,10 @@ const useStyles = makeStyles({
   },
   word: {
     cursor: 'default',
-    whiteSpace: 'nowrap',
+    maxWidth: '100%',
+    textAlign: 'center',
+    // A phrase stays on one line unless it is wider than the cloud itself, as on a phone, where it wraps rather than being cut off.
+    overflowWrap: 'anywhere',
     transition: 'opacity 120ms ease',
     ':hover': {
       opacity: 0.65,
@@ -38,6 +41,11 @@ type WordCloudProps = {
   categories: ReportCategory[];
   /** Unit shown in the tooltip, e.g. "Mentions". */
   valueLabel: string;
+  /**
+   * Show each label exactly as given. For tenant text such as key phrases from a person's prompts, where a phrase that
+   * happens to match a server placeholder must still read as the phrase.
+   */
+  literalLabels?: boolean;
 };
 
 /**
@@ -52,9 +60,10 @@ type WordCloudProps = {
  * one dominant phrase would otherwise flatten everything else to the minimum size and the cloud would
  * convey nothing.
  */
-export default function WordCloud({ categories, valueLabel }: WordCloudProps) {
+export default function WordCloud({ categories, valueLabel, literalLabels = false }: WordCloudProps) {
   const t = useT();
   const styles = useStyles();
+  const labelText = (label: string) => (literalLabels ? label : serverPlaceholderText(t, label));
 
   if (categories.length === 0) {
     return <div className={styles.empty}>{t('charts.empty.noDataForPeriod')}</div>;
@@ -82,14 +91,14 @@ export default function WordCloud({ categories, valueLabel }: WordCloudProps) {
         <Text
           key={c.label}
           className={styles.word}
-          title={t('charts.wordCloud.wordTitle', { label: serverPlaceholderText(t, c.label), value: formatValue(c.value), valueLabel })}
+          title={t('charts.wordCloud.wordTitle', { label: labelText(c.label), value: formatValue(c.value), valueLabel })}
           style={{
             fontSize: `${fontFor(c.value).toFixed(1)}px`,
             color: seriesColor(i),
             fontWeight: c.value >= max * 0.6 ? 600 : 400,
           }}
         >
-          {serverPlaceholderText(t, c.label)}
+          {labelText(c.label)}
         </Text>
       ))}
     </div>

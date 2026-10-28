@@ -5,12 +5,6 @@ import {
   Body1,
   Button,
   Card,
-  Dialog,
-  DialogActions,
-  DialogBody,
-  DialogContent,
-  DialogSurface,
-  DialogTitle,
   Field,
   Input,
   Link,
@@ -31,11 +25,12 @@ import {
   Title3,
   Tooltip,
   makeStyles,
+  mergeClasses,
   tokens,
   type SelectTabEventHandler,
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular, ArrowDownload16Regular } from '@fluentui/react-icons';
-import { formatNumber, useI18n, useT, type TFunction, type TranslationKey } from '../i18n';
+import { formatNumber, plural, useI18n, useT, type TFunction, type TranslationKey } from '../i18n';
 import { usePortalAccess } from '../access';
 import Spinner from '../components/Spinner';
 import PrintButton from '../components/shared/PrintButton';
@@ -46,18 +41,22 @@ import { useUserFilterDimensions } from '../components/userFilter/useUserFilterD
 import { parseUserFilter, serializeUserFilter } from '../components/userFilter/userFilterModel';
 import { dimensionLabel } from '../components/userFilter/describeUserFilter';
 import { EMPTY_USER_FILTER, type UserFilter, type UserFilterDimension } from '../types/userFilter';
-import { fetchSpendPeople, fetchSpendPerson, fetchSpendSummary, fetchSpendTrend, spendWorkbookUrl, type SpendQuery } from '../api/copilotSpendApi';
-import type { CopilotSpendSummary, SpendPeopleFilters, SpendPeoplePage, SpendPersonDetail, SpendPersonRow, SpendTrend } from '../types/copilotSpend';
+import { fetchSpendPeople, fetchSpendSummary, fetchSpendTrend, spendWorkbookUrl, type SpendQuery } from '../api/copilotSpendApi';
+import type { CopilotSpendSummary, SpendDay, SpendPeopleFilters, SpendPeoplePage, SpendPersonRow, SpendTrend } from '../types/copilotSpend';
 import { GROUPING_DIMENSIONS } from '../components/copilotInvestment/OrganisationPanel';
 import {
   BILLING_METHOD_KEYS,
+  LabelledBars,
   POLICY_STATUS_KEYS,
-  REASON_LABEL_KEYS,
   SectionHeading,
   formatCredits,
-  formatShare,
+  formatShareAboveZero,
   formatShortDate,
+  type BarRowData,
 } from '../components/copilotInvestment/investmentShared';
+import SpendLineChart, { type SpendLinePoint } from '../components/copilotSpend/SpendLineChart';
+import SpendDistributionPanel, { breakableName } from '../components/copilotSpend/SpendDistributionPanel';
+import SpendPersonDialog from '../components/copilotSpend/SpendPersonDialog';
 
 type SpendTab = 'overview' | 'studio' | 'balances' | 'organisation' | 'people';
 
@@ -99,25 +98,18 @@ const useStyles = makeStyles({
   num: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
   numHeader: { justifyContent: 'flex-end', textAlign: 'right' },
   facts: { display: 'grid', gridTemplateColumns: 'minmax(200px, 360px) auto', justifyContent: 'start', gap: '6px 24px', alignItems: 'baseline' },
-  chart: { display: 'flex', alignItems: 'flex-end', gap: '2px', height: '120px', paddingTop: '8px', borderBottom: `1px solid ${tokens.colorNeutralStroke1}` },
-  bar: { flex: '1 1 0', minWidth: '3px', backgroundColor: tokens.colorBrandBackground, borderRadius: '2px 2px 0 0' },
-  barEmpty: { backgroundColor: tokens.colorNeutralBackground5 },
-  barUnreported: {
-    backgroundColor: 'transparent',
-    border: `1px dashed ${tokens.colorNeutralStroke1}`,
-    boxSizing: 'border-box',
-  },
-  axis: { display: 'flex', justifyContent: 'space-between' },
+  chartBlock: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 },
   toolbarRow: { display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' },
   table: { minWidth: '900px' },
   personCol: { minWidth: '200px' },
   nowrap: { whiteSpace: 'nowrap' },
   personLink: { textAlign: 'start', overflowWrap: 'anywhere' },
   pager: { display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'flex-end' },
-  dialog: { maxWidth: 'min(860px, calc(100vw - 32px))', width: '100%' },
-  section: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px' },
-  list: { display: 'grid', gridTemplateColumns: 'minmax(140px, 1fr) auto', gap: '4px 16px' },
   code: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
+  // A share drawn beside its figure: decoration only, the figure itself is the text.
+  shareCell: { display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', whiteSpace: 'nowrap' },
+  shareTrack: { width: '56px', height: '6px', borderRadius: '3px', backgroundColor: tokens.colorNeutralBackground4, overflow: 'hidden', flexShrink: 0 },
+  shareBar: { display: 'block', height: '100%', backgroundColor: tokens.colorBrandBackground },
 });
 
 export default function CopilotSpendPage() {
@@ -218,6 +210,30 @@ function SpendView({ userFilter: controlledFilter, onUserFilterChange }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryKey, reloadKey]);
 
+  // The readings over time feed the Overview's small chart and the readings tab, so they load once for both.
+  // Grouping does not change them: only the period, the people in view and a refresh do.
+  const [trend, setTrend] = useState<SpendTrend | null>(null);
+  const [trendError, setTrendError] = useState<string | null>(null);
+  const trendKey = `${windowDays}|${userFilterParam ?? ''}|${reloadKey}`;
+  useEffect(() => {
+    const controller = new AbortController();
+    setTrend(null);
+    setTrendError(null);
+    fetchSpendTrend(query, controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) setTrend(result);
+      })
+      .catch((e: unknown) => {
+        if (!controller.signal.aborted) setTrendError(e instanceof Error ? e.message : String(e));
+      });
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trendKey]);
+
+  // One person's consumption opens over whichever tab named them: the people list or the highest and lowest consumers.
+  const [person, setPerson] = useState<{ userId: number; name: string } | null>(null);
+  const openPerson = useCallback((userId: number, name: string) => setPerson({ userId, name }), []);
+
   const visibleTabs = (Object.keys(TAB_LABEL_KEYS) as SpendTab[]).filter((value) => canSeePii || value !== 'people');
   const activeTab: SpendTab = visibleTabs.includes(tab) ? tab : 'overview';
   const onTabSelect: SelectTabEventHandler = (_e, data) => setTab(data.value as SpendTab);
@@ -309,9 +325,19 @@ function SpendView({ userFilter: controlledFilter, onUserFilterChange }: {
 
       {current && (
         <div data-print="flow">
-          {activeTab === 'overview' && <OverviewPanel summary={current} customDimensions={filterDimensions?.dimensions ?? []} onOpenTab={setTab} />}
+          {activeTab === 'overview' && (
+            <OverviewPanel
+              summary={current}
+              customDimensions={filterDimensions?.dimensions ?? []}
+              onOpenTab={setTab}
+              trend={trend}
+              trendError={trendError}
+              canSeePii={canSeePii}
+              onOpenPerson={openPerson}
+            />
+          )}
           {activeTab === 'studio' && <StudioPanel summary={current} />}
-          {activeTab === 'balances' && <BalancesPanel summary={current} query={query} reloadKey={reloadKey} />}
+          {activeTab === 'balances' && <BalancesPanel summary={current} trend={trend} trendError={trendError} />}
           {activeTab === 'organisation' && (
             <OrganisationSpendPanel
               summary={current}
@@ -322,18 +348,28 @@ function SpendView({ userFilter: controlledFilter, onUserFilterChange }: {
               regrouping={regrouping}
             />
           )}
-          {activeTab === 'people' && canSeePii && <SpendPeoplePanel query={query} filters={peopleFilters} onFiltersChange={setPeopleFilters} />}
+          {activeTab === 'people' && canSeePii && (
+            <SpendPeoplePanel query={query} filters={peopleFilters} onFiltersChange={setPeopleFilters} onOpenPerson={openPerson} />
+          )}
         </div>
+      )}
+
+      {person && canSeePii && (
+        <SpendPersonDialog query={query} userId={person.userId} name={person.name} onClose={() => setPerson(null)} />
       )}
     </div>
   );
 }
 
 /** Where each source stands: its total, who it covers, how complete and how fresh it is. Never one figure for both. */
-function OverviewPanel({ summary, customDimensions, onOpenTab }: {
+function OverviewPanel({ summary, customDimensions, onOpenTab, trend, trendError, canSeePii, onOpenPerson }: {
   summary: CopilotSpendSummary;
   customDimensions: UserFilterDimension[];
   onOpenTab: (tab: SpendTab) => void;
+  trend: SpendTrend | null;
+  trendError: string | null;
+  canSeePii: boolean;
+  onOpenPerson: (userId: number, name: string) => void;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -365,7 +401,7 @@ function OverviewPanel({ summary, customDimensions, onOpenTab }: {
               {t('copilotSpend.overview.unmatched', { credits: formatCredits(studio.unmatchedCredits) })}
             </Text>
           )}
-          <DayChart summary={summary} />
+          <StudioDaysChart summary={summary} height={150} />
         </Card>
         <Card className={styles.card}>
           <SectionHeading
@@ -415,8 +451,23 @@ function OverviewPanel({ summary, customDimensions, onOpenTab }: {
               })}
             </Text>
           )}
+          {balances.hasData && (
+            <div className={styles.chartBlock}>
+              <Text size={200} weight="semibold">
+                {t('copilotSpend.balances.trendTitle')}
+              </Text>
+              <ReadingsTrendChart trend={trend} error={trendError} height={150} />
+              <Text size={100} block className={styles.muted}>
+                {t('copilotSpend.overview.trendNote')}
+              </Text>
+            </div>
+          )}
         </Card>
       </div>
+
+      <SpendDistributionPanel studio={studio.distribution} balances={balances.distribution} canSeePii={canSeePii} onOpenPerson={onOpenPerson} />
+
+      <ConsumedOnCard summary={summary} onOpenTab={onOpenTab} />
 
       <Card className={styles.card}>
         <SectionHeading
@@ -486,52 +537,218 @@ function BalanceStatus({ summary }: { summary: CopilotSpendSummary }) {
   );
 }
 
+/** One calendar day of the Studio ledger as a chart point: a day with no charges is zero, a day not reported yet is a gap. */
+function studioDayPoint(t: TFunction, day: SpendDay): SpendLinePoint {
+  const date = formatShortDate(day.date);
+  if (day.status === 'recorded') {
+    return {
+      date: day.date,
+      values: [day.credits],
+      label: t(plural(day.people ?? 0, 'copilotSpend.studio.dayCell.one', 'copilotSpend.studio.dayCell.other'), {
+        date,
+        credits: formatCredits(day.credits),
+        people: formatNumber(day.people ?? 0),
+      }),
+    };
+  }
+  if (day.status === 'noneRecorded') return { date: day.date, values: [0], label: t('copilotSpend.studio.dayNoneRecorded', { date }) };
+  return { date: day.date, values: [null], notReported: true, label: t('copilotSpend.studio.dayNotReported', { date }) };
+}
+
 /**
  * Billed credits for every calendar day of the period, so weekends and quiet days keep their place. A day the ledger holds
- * no charges for is drawn as a short empty bar; a day after the ledger's latest stored day is drawn as an outline, because
- * it is not reported yet, which is not zero. Every bar says so in words, for a screen reader and on hover.
+ * no charges for is drawn at zero; a day after the ledger's latest stored day is hatched with diagonal stripes and breaks the
+ * line, because it is not reported yet, which is not zero. Every point is also read out in words.
  */
-function DayChart({ summary }: { summary: CopilotSpendSummary }) {
+function StudioDaysChart({ summary, height = 200 }: { summary: CopilotSpendSummary; height?: number }) {
   const styles = useStyles();
   const t = useT();
   const studio = summary.studio;
   if (!studio.available) return null;
   if (studio.breakdownFailureCode) return <Text size={200}>{t('copilotSpend.studio.breakdownUnavailable')}</Text>;
   if (studio.days.length === 0) return <Text size={200}>{t('copilotSpend.studio.noDays')}</Text>;
-  const max = Math.max(...studio.days.map((d) => d.credits ?? 0), 0) || 1;
-  const label = (d: (typeof studio.days)[number]) =>
-    d.status === 'recorded'
-      ? t('copilotSpend.studio.dayCell', { date: formatShortDate(d.date), credits: formatCredits(d.credits), people: formatNumber(d.people ?? 0) })
-      : d.status === 'noneRecorded'
-        ? t('copilotSpend.studio.dayNoneRecorded', { date: formatShortDate(d.date) })
-        : t('copilotSpend.studio.dayNotReported', { date: formatShortDate(d.date) });
   return (
-    <div>
+    <div className={styles.chartBlock}>
       <Text size={200} weight="semibold">
         {t('copilotSpend.studio.daysTitle')}
       </Text>
-      <div className={styles.chart} role="list" aria-label={t('copilotSpend.studio.daysTitle')}>
-        {studio.days.map((d) => {
-          const text = label(d);
-          const className =
-            d.status === 'recorded' ? styles.bar : d.status === 'noneRecorded' ? `${styles.bar} ${styles.barEmpty}` : `${styles.bar} ${styles.barUnreported}`;
-          const height = d.status === 'recorded' ? Math.max(2, ((d.credits ?? 0) / max) * 100) : d.status === 'noneRecorded' ? 2 : 100;
-          return <div key={d.date} role="listitem" aria-label={text} title={text} className={className} style={{ height: `${height}%` }} />;
-        })}
-      </div>
-      <div className={styles.axis}>
-        <Text size={100} className={styles.muted}>
-          {formatShortDate(studio.days[0].date)}
-        </Text>
-        <Text size={100} className={styles.muted}>
-          {formatShortDate(studio.days[studio.days.length - 1].date)}
-        </Text>
-      </div>
+      <SpendLineChart
+        points={studio.days.map((d) => studioDayPoint(t, d))}
+        series={[{ label: t('copilotSpend.studio.daysSeries'), colorIndex: 0 }]}
+        ariaLabel={t('copilotSpend.studio.daysAria')}
+        listLabel={t('copilotSpend.studio.daysList')}
+        height={height}
+        area
+        notReportedLabel={t('copilotSpend.studio.notReported')}
+      />
       <Text size={100} block className={styles.muted}>
         {studio.latestDate ? `${t('copilotSpend.studio.latestDay', { date: formatShortDate(studio.latestDate) })} ` : ''}
         {t('copilotSpend.studio.dayLegend')}
       </Text>
     </div>
+  );
+}
+
+/**
+ * The consumed credits read on each date of the period. Each point is a total as of its date, not a day's spend, so the
+ * points are joined as a line and never added together.
+ */
+function ReadingsTrendChart({ trend, error, height = 200 }: { trend: SpendTrend | null; error: string | null; height?: number }) {
+  const t = useT();
+  if (error) {
+    return (
+      <MessageBar intent="error">
+        <MessageBarBody>{error}</MessageBarBody>
+      </MessageBar>
+    );
+  }
+  if (!trend) return <FluentSpinner size="tiny" label={t('copilotSpend.balances.trendLoading')} />;
+  if (trend.points.length === 0) return <Text size={200}>{t('copilotSpend.balances.noData')}</Text>;
+  // ISO dates sort correctly as plain strings, whatever the reader's language.
+  const points: SpendLinePoint[] = [...trend.points]
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    .map((p) => {
+      const date = formatShortDate(p.date);
+      const details = [
+        t(plural(p.consumingUsers, 'copilotSpend.balances.trendPeople.one', 'copilotSpend.balances.trendPeople.other'), {
+          people: formatNumber(p.consumingUsers),
+          observed: formatNumber(p.observedUsers),
+        }),
+      ];
+      if (p.limitExhaustedUsers > 0) details.push(t('copilotSpend.balances.trendAtLimit', { people: formatNumber(p.limitExhaustedUsers) }));
+      return {
+        date: p.date,
+        values: [p.credits],
+        details,
+        label:
+          p.credits === null
+            ? t('copilotSpend.balances.trendPointUnknown', { date })
+            : t(plural(p.consumingUsers, 'copilotSpend.balances.trendPoint.one', 'copilotSpend.balances.trendPoint.other'), {
+                date,
+                credits: formatCredits(p.credits),
+                people: formatNumber(p.consumingUsers),
+              }),
+      };
+    });
+  return (
+    <SpendLineChart
+      points={points}
+      series={[{ label: t('copilotSpend.balances.trendSeries'), colorIndex: 1 }]}
+      ariaLabel={t('copilotSpend.balances.trendAria')}
+      listLabel={t('copilotSpend.balances.trendList')}
+      height={height}
+      area
+      missingLabel={t('copilotSpend.flag.unknown')}
+    />
+  );
+}
+
+const CONSUMED_ON_ROWS = 5;
+
+/**
+ * What the credits went on, in each source's own breakdown, largest first: billed Studio credits by environment and by
+ * agent, and consumed credits by category. Each share is of its own breakdown; the three are never added together.
+ */
+function ConsumedOnCard({ summary, onOpenTab }: { summary: CopilotSpendSummary; onOpenTab: (tab: SpendTab) => void }) {
+  const styles = useStyles();
+  const t = useT();
+  const studio = summary.studio;
+  const balances = summary.balances;
+  const value = (credits: number, total: number | null) =>
+    t('copilotSpend.overview.consumedOn.value', { credits: formatCredits(credits), share: formatShareAboveZero(total ? credits / total : null) });
+
+  const studioReadable = studio.available && !studio.breakdownFailureCode;
+  const environments: BarRowData[] = studioReadable
+    ? studio.environments
+        .filter((e) => e.credits !== null && e.credits > 0 && !e.withheld)
+        .slice(0, CONSUMED_ON_ROWS)
+        .map((e, i) => ({
+          key: `${e.emptyKey ?? e.environmentId ?? '-'}-${i}`,
+          label:
+            e.emptyKey === 'otherEnvironments'
+              ? t('copilotSpend.studio.otherEnvironments', { count: formatNumber(e.folded) })
+              : (e.environmentName ?? t('copilotSpend.studio.unnamedEnvironment')),
+          value: e.credits ?? 0,
+          display: value(e.credits ?? 0, studio.credits),
+        }))
+    : [];
+  const agents: BarRowData[] =
+    studioReadable && studio.agents
+      ? [...studio.agents]
+          .filter((a) => a.credits > 0)
+          .sort((a, b) => b.credits - a.credits)
+          .slice(0, CONSUMED_ON_ROWS)
+          .map((a, i) => ({
+            key: `${a.agentId ?? '-'}-${i}`,
+            label: a.agentName ?? t('copilotSpend.studio.unnamedAgent'),
+            value: a.credits,
+            display: value(a.credits, studio.agentLedgerCredits),
+          }))
+      : [];
+  const credited = balances.available ? balances.services.filter((s) => s.unit === CREDIT_UNIT && s.quantity > 0) : [];
+  const categoryTotal = credited.reduce((sum, s) => sum + s.quantity, 0);
+  const categories: BarRowData[] = [...credited]
+    .sort((a, b) => b.quantity - a.quantity)
+    .slice(0, CONSUMED_ON_ROWS)
+    .map((s) => ({ key: s.category, label: s.category, value: s.quantity, display: value(s.quantity, categoryTotal) }));
+
+  if (environments.length === 0 && agents.length === 0 && categories.length === 0) return null;
+  return (
+    <Card className={styles.card}>
+      <SectionHeading title={t('copilotSpend.overview.consumedOn.title')} description={t('copilotSpend.overview.consumedOn.description')} />
+      <div className={styles.sources}>
+        {environments.length > 0 && (
+          <div className={styles.chartBlock}>
+            <Text size={200} weight="semibold">
+              {t('copilotSpend.overview.consumedOn.environments')}
+            </Text>
+            <LabelledBars rows={environments} />
+          </div>
+        )}
+        {agents.length > 0 && (
+          <div className={styles.chartBlock}>
+            <Text size={200} weight="semibold">
+              {t('copilotSpend.overview.consumedOn.agents')}
+            </Text>
+            <LabelledBars rows={agents} />
+          </div>
+        )}
+        {categories.length > 0 && (
+          <div className={styles.chartBlock}>
+            <Text size={200} weight="semibold">
+              {t('copilotSpend.overview.consumedOn.categories')}
+            </Text>
+            <LabelledBars rows={categories} />
+          </div>
+        )}
+      </div>
+      <div className={styles.badges} data-print="hide">
+        {environments.length + agents.length > 0 && (
+          <Button appearance="secondary" onClick={() => onOpenTab('studio')}>
+            {t('copilotSpend.overview.consumedOn.openStudio')}
+          </Button>
+        )}
+        {categories.length > 0 && (
+          <Button appearance="secondary" onClick={() => onOpenTab('balances')}>
+            {t('copilotSpend.overview.consumedOn.openBalances')}
+          </Button>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/** A share drawn as a short bar beside its figure. The bar is decoration only: the figure is the text. */
+function ShareCell({ share, text }: { share: number | null; text: string }) {
+  const styles = useStyles();
+  const width = share === null || !Number.isFinite(share) ? 0 : Math.max(0, Math.min(1, share));
+  return (
+    <span className={styles.shareCell}>
+      <span aria-hidden="true" className={styles.shareTrack}>
+        <span className={styles.shareBar} style={{ width: `${width * 100}%` }} />
+      </span>
+      {text}
+    </span>
   );
 }
 
@@ -562,7 +779,7 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
           <Text size={200}>{t('copilotSpend.studio.lastImport')}</Text>
           <Text weight="semibold">{studio.lastImportUtc ? formatShortDate(studio.lastImportUtc) : '\u2014'}</Text>
         </div>
-        <DayChart summary={summary} />
+        <StudioDaysChart summary={summary} />
       </Card>
       <Card className={styles.card}>
         <SectionHeading title={t('copilotSpend.studio.environmentsTitle')} description={t('copilotSpend.studio.environmentsDescription')} />
@@ -595,12 +812,18 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
                       </Text>
                     )}
                     {e.environmentId && (
-                      <Text size={100} block className={`${styles.muted} ${styles.code}`}>
+                      <Text size={100} block className={mergeClasses(styles.muted, styles.code)}>
                         {e.environmentId}
                       </Text>
                     )}
                   </TableCell>
-                  <TableCell className={styles.num}>{formatCredits(e.credits)}</TableCell>
+                  <TableCell className={styles.num}>
+                    {e.credits === null ? (
+                      formatCredits(e.credits)
+                    ) : (
+                      <ShareCell share={studio.credits ? e.credits / studio.credits : null} text={formatCredits(e.credits)} />
+                    )}
+                  </TableCell>
                   <TableCell className={styles.num}>{formatNumber(e.people)}</TableCell>
                   <TableCell className={styles.num}>{e.days === null ? '\u2014' : formatNumber(e.days)}</TableCell>
                 </TableRow>
@@ -642,12 +865,14 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
                   <TableCell>
                     {a.agentName ?? t('copilotSpend.studio.unnamedAgent')}
                     {a.agentId && (
-                      <Text size={100} block className={`${styles.muted} ${styles.code}`}>
+                      <Text size={100} block className={mergeClasses(styles.muted, styles.code)}>
                         {a.agentId}
                       </Text>
                     )}
                   </TableCell>
-                  <TableCell className={styles.num}>{formatCredits(a.credits)}</TableCell>
+                  <TableCell className={styles.num}>
+                    <ShareCell share={studio.agentLedgerCredits ? a.credits / studio.agentLedgerCredits : null} text={formatCredits(a.credits)} />
+                  </TableCell>
                   <TableCell className={styles.num}>{formatNumber(a.days)}</TableCell>
                 </TableRow>
               ))}
@@ -660,28 +885,10 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
 }
 
 /** The latest balances: when they were read, how complete and fresh they are, by category, and the tenant's own context. */
-function BalancesPanel({ summary, query, reloadKey }: { summary: CopilotSpendSummary; query: SpendQuery; reloadKey: number }) {
+function BalancesPanel({ summary, trend, trendError }: { summary: CopilotSpendSummary; trend: SpendTrend | null; trendError: string | null }) {
   const styles = useStyles();
   const t = useT();
   const balances = summary.balances;
-  const [trend, setTrend] = useState<SpendTrend | null>(null);
-  const [trendError, setTrendError] = useState<string | null>(null);
-  const trendKey = `${query.windowDays}|${query.userFilter ?? ''}|${reloadKey}`;
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setTrend(null);
-    setTrendError(null);
-    fetchSpendTrend(query, controller.signal)
-      .then(setTrend)
-      .catch((e: unknown) => {
-        if (!controller.signal.aborted) setTrendError(e instanceof Error ? e.message : String(e));
-      });
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trendKey]);
-
-  const maxTrend = Math.max(1, ...(trend?.points ?? []).map((p) => p.credits ?? 0));
   return (
     <div className={styles.stack}>
       <Card className={styles.card}>
@@ -740,45 +947,7 @@ function BalancesPanel({ summary, query, reloadKey }: { summary: CopilotSpendSum
 
       <Card className={styles.card}>
         <SectionHeading title={t('copilotSpend.balances.trendTitle')} description={t('copilotSpend.balances.trendDescription')} />
-        {trendError ? (
-          <MessageBar intent="error">
-            <MessageBarBody>{trendError}</MessageBarBody>
-          </MessageBar>
-        ) : !trend ? (
-          <FluentSpinner size="tiny" label={t('copilotSpend.balances.trendLoading')} />
-        ) : trend.points.length === 0 ? (
-          <Text size={200}>{t('copilotSpend.balances.noData')}</Text>
-        ) : (
-          <div>
-            <div className={styles.chart} role="list" aria-label={t('copilotSpend.balances.trendTitle')}>
-              {trend.points.map((p) => {
-                const label = t('copilotSpend.balances.trendPoint', {
-                  date: formatShortDate(p.date),
-                  credits: formatCredits(p.credits),
-                  people: formatNumber(p.consumingUsers),
-                });
-                return (
-                  <div
-                    key={p.date}
-                    role="listitem"
-                    aria-label={label}
-                    title={label}
-                    className={styles.bar}
-                    style={{ height: `${Math.max(2, ((p.credits ?? 0) / maxTrend) * 100)}%` }}
-                  />
-                );
-              })}
-            </div>
-            <div className={styles.axis} aria-hidden="true">
-              <Text size={100} className={styles.muted}>
-                {formatShortDate(trend.points[0].date)}
-              </Text>
-              <Text size={100} className={styles.muted}>
-                {formatShortDate(trend.points[trend.points.length - 1].date)}
-              </Text>
-            </div>
-          </div>
-        )}
+        <ReadingsTrendChart trend={trend} error={trendError} />
       </Card>
 
       <Card className={styles.card}>
@@ -920,9 +1089,13 @@ function GroupTable({ summary, groups, customDimensions }: { summary: CopilotSpe
               </TableCell>
               <TableCell className={styles.num}>{formatNumber(g.people)}</TableCell>
               <TableCell className={styles.num}>{cell(formatCredits(g.studioCredits), g.studioCredits === null, reason)}</TableCell>
-              <TableCell className={styles.num}>{cell(formatShare(g.shareOfStudio), g.studioCredits === null, reason)}</TableCell>
+              <TableCell className={styles.num}>
+                {g.studioCredits === null ? cell('', true, reason) : <ShareCell share={g.shareOfStudio} text={formatShareAboveZero(g.shareOfStudio)} />}
+              </TableCell>
               <TableCell className={styles.num}>{cell(formatCredits(g.balanceCredits), g.balanceCredits === null, reason)}</TableCell>
-              <TableCell className={styles.num}>{cell(formatShare(g.shareOfBalances), g.balanceCredits === null, reason)}</TableCell>
+              <TableCell className={styles.num}>
+                {g.balanceCredits === null ? cell('', true, reason) : <ShareCell share={g.shareOfBalances} text={formatShareAboveZero(g.shareOfBalances)} />}
+              </TableCell>
               <TableCell className={styles.num}>
                 {cell(g.unknownAmountPeople === null ? '' : formatNumber(g.unknownAmountPeople), g.unknownAmountPeople === null, reason)}
               </TableCell>
@@ -988,7 +1161,8 @@ function OrganisationSpendPanel({ summary, dimension, onDimensionChange, canSeeP
   );
 }
 
-const GROUPING_UNAVAILABLE_KEYS: Record<'directoryUnavailable' | 'dimensionUnknown', TranslationKey> = {
+/** The server's reasons the people cannot be grouped (`CopilotSpendGroupingUnavailable`), each with its wording. */
+export const GROUPING_UNAVAILABLE_KEYS: Record<'directoryUnavailable' | 'dimensionUnknown', TranslationKey> = {
   directoryUnavailable: 'copilotSpend.org.unavailable.directoryUnavailable',
   dimensionUnknown: 'copilotSpend.org.unavailable.dimensionUnknown',
 };
@@ -1018,10 +1192,11 @@ function personFlags(t: TFunction, row: SpendPersonRow): string[] {
   return flags;
 }
 
-function SpendPeoplePanel({ query, filters, onFiltersChange }: {
+function SpendPeoplePanel({ query, filters, onFiltersChange, onOpenPerson }: {
   query: SpendQuery;
   filters: SpendPeopleFilters;
   onFiltersChange: (filters: SpendPeopleFilters) => void;
+  onOpenPerson: (userId: number, name: string) => void;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -1030,7 +1205,6 @@ function SpendPeoplePanel({ query, filters, onFiltersChange }: {
   const [paging, setPaging] = useState<{ key: string; skip: number }>({ key: '', skip: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<SpendPersonRow | null>(null);
 
   // Typing is debounced so a search sends one request, not one per keystroke.
   useEffect(() => {
@@ -1139,8 +1313,8 @@ function SpendPeoplePanel({ query, filters, onFiltersChange }: {
                 return (
                   <TableRow key={row.userId}>
                     <TableCell className={styles.personCol}>
-                      <Link as="button" className={styles.personLink} onClick={() => setSelected(row)} aria-label={t('copilotSpend.people.open', { name })}>
-                        {name}
+                      <Link as="button" className={styles.personLink} onClick={() => onOpenPerson(row.userId, name)} aria-label={t('copilotSpend.people.open', { name })}>
+                        {breakableName(name)}
                       </Link>
                       {row.jobTitle && (
                         <Text size={100} block className={styles.muted}>
@@ -1174,7 +1348,7 @@ function SpendPeoplePanel({ query, filters, onFiltersChange }: {
                         formatCredits(row.balanceCredits)
                       )}
                     </TableCell>
-                    <TableCell className={`${styles.num} ${styles.nowrap}`}>{row.balanceDate ? formatShortDate(row.balanceDate) : '\u2014'}</TableCell>
+                    <TableCell className={mergeClasses(styles.num, styles.nowrap)}>{row.balanceDate ? formatShortDate(row.balanceDate) : '\u2014'}</TableCell>
                     <TableCell>
                       <div className={styles.badges}>
                         {flags.map((f) => (
@@ -1202,123 +1376,6 @@ function SpendPeoplePanel({ query, filters, onFiltersChange }: {
           </div>
         )}
       </Card>
-
-      {selected && <SpendPersonDialog query={query} person={selected} onClose={() => setSelected(null)} />}
     </div>
-  );
-}
-
-/** One person's consumption: their latest balance by category and over time, and their billed Studio use by environment. */
-function SpendPersonDialog({ query, person, onClose }: { query: SpendQuery; person: SpendPersonRow; onClose: () => void }) {
-  const styles = useStyles();
-  const t = useT();
-  const [detail, setDetail] = useState<SpendPersonDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const name = person.userPrincipalName ?? String(person.userId);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchSpendPerson(query, person.userId, controller.signal)
-      .then(setDetail)
-      .catch((e: unknown) => {
-        if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query.windowDays, query.userFilter, person.userId]);
-
-  return (
-    <Dialog open onOpenChange={(_e, data) => !data.open && onClose()}>
-      <DialogSurface className={styles.dialog}>
-        <DialogBody>
-          <DialogTitle>{t('copilotSpend.person.title', { name })}</DialogTitle>
-          <DialogContent>
-            {error && (
-              <MessageBar intent="error">
-                <MessageBarBody>{error}</MessageBarBody>
-              </MessageBar>
-            )}
-            {!detail && !error && <FluentSpinner size="small" label={t('copilotSpend.person.loading')} />}
-            {detail && (
-              <>
-                <div className={styles.section}>
-                  <Text weight="semibold">{t('copilotSpend.person.studioTitle')}</Text>
-                  {detail.studioEnvironments.length === 0 ? (
-                    <Text size={200}>{t('copilotSpend.person.noStudio')}</Text>
-                  ) : (
-                    <div className={styles.list}>
-                      {detail.studioEnvironments.map((e) => (
-                        <AgentLine
-                          key={e.environmentId ?? '-'}
-                          name={e.environmentName ?? e.environmentId ?? t('copilotSpend.studio.unnamedEnvironment')}
-                          text={t('copilotSpend.person.studioRow', { credits: formatCredits(e.credits), days: formatNumber(e.activeDays) })}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className={styles.section}>
-                  <Text weight="semibold">{t('copilotSpend.person.balanceTitle')}</Text>
-                  {detail.services.length === 0 ? (
-                    <Text size={200}>{t('copilotSpend.person.noBalance')}</Text>
-                  ) : (
-                    <div className={styles.list}>
-                      {detail.services.map((s) => (
-                        <AgentLine
-                          key={s.category}
-                          name={s.category}
-                          text={
-                            s.unevaluatedReason
-                              ? `${t('copilotInvestment.person.credits.unevaluated')} \u00b7 ${t(REASON_LABEL_KEYS[s.unevaluatedReason] ?? 'copilotInvestment.reason.other')}`
-                              : [
-                                  s.consumed === null ? t('copilotSpend.flag.unknown') : formatCredits(s.consumed),
-                                  s.unit && s.unit !== CREDIT_UNIT ? t('copilotInvestment.services.unitOther', { unit: s.unit }) : null,
-                                  s.decisionReason ? t(REASON_LABEL_KEYS[s.decisionReason] ?? 'copilotInvestment.reason.other') : null,
-                                ]
-                                  .filter(Boolean)
-                                  .join(' \u00b7 ')
-                          }
-                        />
-                      ))}
-                    </div>
-                  )}
-                  {detail.balances.length > 0 && (
-                    <>
-                      <Text size={200} weight="semibold">
-                        {t('copilotSpend.person.historyTitle')}
-                      </Text>
-                      <Text size={200}>
-                        {detail.balances
-                          .map((b) => t('copilotSpend.person.historyPoint', { date: formatShortDate(b.date), credits: b.credits === null ? '\u2014' : formatCredits(b.credits) }))
-                          .join(' \u00b7 ')}
-                      </Text>
-                      <Text size={100} className={styles.muted}>
-                        {t('copilotSpend.person.historyNote')}
-                      </Text>
-                    </>
-                  )}
-                </div>
-              </>
-            )}
-          </DialogContent>
-          <DialogActions>
-            <Button appearance="primary" onClick={onClose}>
-              {t('copilotSpend.person.close')}
-            </Button>
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
-  );
-}
-
-/** A name from the tenant (an environment, a category) shown verbatim, beside a translated description. */
-function AgentLine({ name, text }: { name: string; text: string }) {
-  const styles = useStyles();
-  return (
-    <>
-      <span className={styles.code}>{name}</span>
-      <Text size={200}>{text}</Text>
-    </>
   );
 }

@@ -27,7 +27,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.controls.excelReady':
     'Descargue el resumen, el modelo de valor, la vista por organización, las fuentes de créditos, los supuestos y el método en un libro de Excel, con la hoja de personas.',
   'copilotInvestment.controls.excelReadyNoPii':
-    'Descargue todas las cifras agregadas, los supuestos y el método en un libro de Excel. Las personas con nombre se omiten: para eso hace falta el permiso See PII.',
+    'Descargue todas las cifras agregadas, los supuestos y el método en un libro de Excel. Las personas con nombre se omiten: para eso hace falta el permiso Ver PII.',
   'copilotInvestment.controls.excelLoading': 'Disponible cuando se haya cargado el informe.',
   'copilotInvestment.controls.print': 'Imprima esta pestaña o guárdela como PDF.',
   'copilotInvestment.controls.whatIf': 'Simulación',
@@ -393,7 +393,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.org.col.unlicensedActive': 'Activos sin licencia',
   'copilotInvestment.org.folded': 'Se combinan {count} grupos más pequeños.',
   'copilotInvestment.org.empty': 'Ningún grupo tiene titulares suficientes para mostrarse.',
-  'copilotInvestment.org.hidden': 'Este desglose nombra a responsables, para lo que hace falta el permiso See PII.',
+  'copilotInvestment.org.hidden': 'Este desglose nombra a responsables, para lo que hace falta el permiso Ver PII.',
 
   'copilotInvestment.concentration.title': 'Concentración',
   'copilotInvestment.concentration.description':
@@ -884,7 +884,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.exec.confidence': 'Fiabilidad',
   'copilotInvestment.workbook.exec.personData': 'Datos por persona',
   'copilotInvestment.workbook.exec.personDataIncluded': 'Incluidos',
-  'copilotInvestment.workbook.exec.personDataExcluded': 'No incluidos (requiere el permiso See PII)',
+  'copilotInvestment.workbook.exec.personDataExcluded': 'No incluidos (requiere el permiso Ver PII)',
   'copilotInvestment.workbook.exec.money': 'Dinero',
   'copilotInvestment.workbook.exec.moneyNote':
     'Cada importe se modela a partir de los precios y el coste por hora de la hoja de supuestos. Ninguno es una factura ni un ahorro medido.',
@@ -1078,7 +1078,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.cohort.col.shareOfSeats': 'Proporción de licencias',
   'copilotInvestment.workbook.org.groupedBy': 'Agrupado por',
   'copilotInvestment.workbook.org.minGroup': 'Los grupos de menos de {count} personas se combinan.',
-  'copilotInvestment.workbook.org.hidden': 'Esta agrupación nombra a personas, así que requiere el permiso See PII.',
+  'copilotInvestment.workbook.org.hidden': 'Esta agrupación nombra a personas, así que requiere el permiso Ver PII.',
   'copilotInvestment.workbook.org.col.active': 'Activos',
   'copilotInvestment.workbook.org.col.idle': 'Sin uso',
   'copilotInvestment.workbook.org.col.activeShare': 'Proporción activa',
