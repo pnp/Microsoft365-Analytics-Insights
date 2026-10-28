@@ -668,5 +668,17 @@ namespace Tests.UnitTests
                 Thread.CurrentThread.CurrentCulture = previous;
             }
         }
+
+        [TestMethod]
+        public void Ranks_CountTheExactFraction_EvenWhereFloatingPointLandsJustAboveAWholeNumber()
+        {
+            int people = 100;
+            double fraction = 0.07;
+            Assert.AreEqual(8d, Math.Ceiling(people * fraction), "The premise: 100 x 0.07 is 7.000000000000001, so a plain ceiling is one too many.");
+            Assert.AreEqual(7, CopilotInvestmentStatistics.TopCount(people, fraction));
+            Assert.AreEqual(7, CopilotInvestmentStatistics.NearestRank(people, fraction));
+
+            Assert.AreEqual(3, CopilotInvestmentStatistics.TopCount(30, 0.1), "30 x 0.1 is exactly 3: the fractions the reports use are unaffected.");
+        }
     }
 }

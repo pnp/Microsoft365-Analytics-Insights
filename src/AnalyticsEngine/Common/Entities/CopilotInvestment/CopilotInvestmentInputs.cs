@@ -264,7 +264,10 @@ namespace Common.Entities.CopilotInvestment
     /// <summary>Small, exact statistics over a population. Pure functions, so every figure can be checked by hand.</summary>
     public static class CopilotInvestmentStatistics
     {
-        // 30 x 0.1 is 3.0000000000000004 in floating point: without this, the top tenth of 30 people would be 4 of them.
+        // Defensive: a fraction with no exact binary form can put count x fraction just above a whole number, whose ceiling
+        // is then one too many - 100 x 0.07 is 7.000000000000001, so the top 7% of 100 people would be 8 of them. The
+        // fractions the reports use (0.1, 0.2, 0.25, 0.75, 0.9) never do this for any population up to 200,000 (checked
+        // exhaustively), so no current figure depends on it.
         private const double RankTolerance = 1e-9;
 
         /// <summary>The 1-based nearest rank of percentile <paramref name="p"/> (0..1) in an ascending list of <paramref name="count"/>; 0 when empty.</summary>
