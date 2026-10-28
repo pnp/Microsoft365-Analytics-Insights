@@ -106,10 +106,10 @@ namespace Tests.UnitTests
             return studio;
         }
 
-        private static CopilotSpendReportService SpendService(UserDirectorySnapshot directory, FakeFacts facts)
+        private static CopilotSpendReportService SpendService(UserDirectorySnapshot directory, FakeFacts facts, FakeSpend spend = null)
         {
             var name = Guid.NewGuid().ToString("N");
-            return new CopilotSpendReportService(new CopilotInvestmentFactsCache(facts, new MemoryCache("spend-facts-" + name)), new FakeSpend(),
+            return new CopilotSpendReportService(new CopilotInvestmentFactsCache(facts, new MemoryCache("spend-facts-" + name)), spend ?? new FakeSpend(),
                 new FixedDirectory(directory), () => new ImportTaskSettings { CopilotStudioCredits = true, CopilotCostManagement = true }, () => true,
                 new MemoryCache("spend-results-" + name));
         }
@@ -315,14 +315,40 @@ namespace Tests.UnitTests
             public Task<List<CreditTrendPoint>> GetCreditTrendAsync(IReadOnlyList<DateTime> dates, ReportUserScope scope, CancellationToken cancellationToken) =>
                 Task.FromResult(new List<CreditTrendPoint>());
 
+            /// <summary>What a person's drill-down reads; empty unless a test sets it.</summary>
+            internal PersonDetailFacts PersonDetail { get; set; } = new PersonDetailFacts();
+
+            /// <summary>The <c>withCreditEstimate</c> of each drill-down read, in order.</summary>
+            internal List<bool> PersonDetailEstimateRequests { get; } = new List<bool>();
+
             public Task<PersonDetailFacts> GetPersonDetailAsync(int userId, Guid? objectId, DateTime? creditDate, DateTime from, DateTime toExclusive,
-                DateTime lastDay, CancellationToken cancellationToken) => Task.FromResult(new PersonDetailFacts());
+                DateTime lastDay, bool withCreditEstimate, CancellationToken cancellationToken)
+            {
+                PersonDetailEstimateRequests.Add(withCreditEstimate);
+                return Task.FromResult(PersonDetail);
+            }
         }
 
         private sealed class FakeSpend : ICopilotSpendFactsSource
         {
             public Task<CopilotSpendStudioBreakdown> GetStudioBreakdownAsync(DateTime from, DateTime toExclusive, ReportUserScope scope,
                 CancellationToken cancellationToken) => Task.FromResult(new CopilotSpendStudioBreakdown { Agents = new List<CopilotSpendAgent>() });
+
+            /// <summary>A person's prompts and Studio days; a test makes it throw to stand for a failed read.</summary>
+            internal Func<CopilotSpendPersonFacts> Usage { get; set; } = () => new CopilotSpendPersonFacts();
+
+            internal Func<List<CopilotSpendAgentFact>> Agents { get; set; } = () => new List<CopilotSpendAgentFact>();
+
+            internal List<int[]> AgentRequests { get; } = new List<int[]>();
+
+            public Task<CopilotSpendPersonFacts> GetPersonUsageAsync(int userId, DateTime from, DateTime toExclusive, DateTime lastDay,
+                CancellationToken cancellationToken) => Task.FromResult(Usage());
+
+            public Task<List<CopilotSpendAgentFact>> GetAgentsAsync(IReadOnlyCollection<int> ids, CancellationToken cancellationToken)
+            {
+                AgentRequests.Add(ids.ToArray());
+                return Task.FromResult(Agents());
+            }
         }
 
         internal sealed class FixedDirectory : IUserDirectorySource

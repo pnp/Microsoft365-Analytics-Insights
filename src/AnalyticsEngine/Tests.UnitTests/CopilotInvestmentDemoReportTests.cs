@@ -191,13 +191,15 @@ namespace Tests.UnitTests
                 var person = report.People.First(p => p.Licensed && p.ActiveDays > 3 && (p.Credits ?? 0) > 0);
                 var lastDay = CopilotInvestmentWindow.LastDay(range);
                 var detail = await source.GetPersonDetailAsync(person.UserId, person.CreditObjectId, person.CreditObservationDate,
-                    range.FromUtc, range.ToExclusiveUtc, lastDay, CancellationToken.None);
+                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: false, CancellationToken.None);
                 Assert.IsTrue(detail.ActivityAssessed && detail.Activity.Count > 0, "The drill-down must show where the person used Copilot.");
+                Assert.IsTrue(detail.Activity.All(a => a.EstimateCredits == null && a.PricedTurns == 0),
+                    "The Investment drill-down does not ask for the estimate, so its rows carry none.");
                 Assert.IsTrue(detail.CreditServices.Count > 0);
                 Assert.IsTrue(detail.Balances.Count > 1, "A person's balance history is a curve, not one reading.");
 
                 var sentinelDetail = await source.GetPersonDetailAsync(sentinelUser, sentinelObject, sentinelRow.CreditObservationDate,
-                    range.FromUtc, range.ToExclusiveUtc, lastDay, CancellationToken.None);
+                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: false, CancellationToken.None);
                 Assert.IsTrue(sentinelDetail.Balances.Count > 0 && sentinelDetail.Balances.All(b => b.Date <= lastDay),
                     "The drill-down's balance curve stops at the window's last day.");
                 Assert.IsFalse(sentinelDetail.StudioEnvironments.Any(e => e.EnvironmentId == SentinelEnvironment), "Nor does its Studio ledger reach the day after.");
@@ -245,6 +247,71 @@ namespace Tests.UnitTests
                 Assert.IsNull(spendSales.Studio.Agents, "The agent ledger is not kept per person, so a filtered view cannot have its share of it.");
                 Assert.IsNull(spendSales.Studio.AgentLedgerCredits);
                 Assert.IsTrue(spendSales.Balances.Policies.Count == 0 && spendSales.Balances.TenantBalances.Count == 0 && spendSales.Balances.UnresolvedAccounts == null);
+
+                // One person's Spend drill-down: their turns with the importer's estimate, and what they used Copilot for, read by
+                // the drill-down's own SQL and checked against the same tables counted directly.
+                var usageTotals = PersonUsageTotals(connection, range.FromUtc, range.ToExclusiveUtc);
+                var spendPerson = spendReport.People
+                    .Where(p => usageTotals.TryGetValue(p.UserId, out var totals) && totals.Priced > 0 && totals.Prompts > 0)
+                    .OrderByDescending(p => usageTotals[p.UserId].Turns).ThenBy(p => p.UserId).FirstOrDefault();
+                Assert.IsNotNull(spendPerson, "The demo must have someone in the spend report who used a priced agent and wrote prompts.");
+                var expected = usageTotals[spendPerson.UserId];
+
+                var plain = await source.GetPersonDetailAsync(spendPerson.UserId, spendPerson.CreditObjectId, spendPerson.BalanceDate,
+                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: false, CancellationToken.None);
+                var estimated = await source.GetPersonDetailAsync(spendPerson.UserId, spendPerson.CreditObjectId, spendPerson.BalanceDate,
+                    range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: true, CancellationToken.None);
+                CollectionAssert.AreEqual(plain.Activity.Select(ActivityKey).OrderBy(k => k, StringComparer.Ordinal).ToList(),
+                    estimated.Activity.Select(ActivityKey).OrderBy(k => k, StringComparer.Ordinal).ToList(),
+                    "Asking for the estimate changes the plan, never the turns.");
+                Assert.AreEqual(expected.Turns, estimated.Activity.Sum(a => a.Turns));
+                Assert.AreEqual(expected.Estimate, estimated.Activity.Sum(a => a.EstimateCredits ?? 0), 1e-6 * Math.Max(1, expected.Estimate));
+                Assert.AreEqual(expected.Priced, estimated.Activity.Sum(a => a.PricedTurns));
+
+                var usage = await new SqlCopilotSpendFactsSource(() => new SqlConnection(connection))
+                    .GetPersonUsageAsync(spendPerson.UserId, range.FromUtc, range.ToExclusiveUtc, lastDay, CancellationToken.None);
+                Assert.IsTrue(usage.StudioAssessed && usage.PromptsAssessed && usage.CategoriesAssessed && usage.PhrasesAssessed && usage.ResourcesAssessed,
+                    "Every table the demo writes is read.");
+                Assert.AreEqual(expected.Prompts, usage.PromptTotals.Prompts);
+                Assert.AreEqual(Math.Min(SqlCopilotSpendFactsSource.RecentPromptCount, expected.Prompts), usage.Recent.Count);
+                Assert.IsTrue(usage.Recent.Zip(usage.Recent.Skip(1), (newer, older) => newer.CreatedUtc >= older.CreatedUtc).All(ordered => ordered),
+                    "The latest prompts, newest first.");
+                Assert.IsTrue(usage.Recent.All(r => r.CreatedUtc >= range.FromUtc && r.CreatedUtc < range.ToExclusiveUtc
+                    && r.Phrases.Count <= SqlCopilotSpendFactsSource.PhrasesPerPrompt));
+                Assert.IsTrue(usage.Categories.Count > 0 && usage.Taxonomies.Count > 0 && usage.Categories.Sum(c => c.Prompts) <= expected.Prompts);
+                Assert.IsTrue(usage.Phrases.Count > 0 && usage.Phrases.Count <= SqlCopilotSpendFactsSource.TopPhraseCount);
+                Assert.IsTrue(usage.ResourceTypes.Count > 0, "Copilot read files and sites for them.");
+
+                var personDetail = await spendService.PersonAsync(new CopilotSpendRequest { Range = range, Scope = ReportScope.Unrestricted },
+                    spendPerson.UserId, CancellationToken.None);
+                Assert.IsNotNull(personDetail);
+                Assert.IsNull(personDetail.UsageFailureCode);
+                Assert.AreEqual(expected.Turns, personDetail.Usage.Turns);
+                Assert.AreEqual(expected.Estimate, personDetail.Usage.EstimateCredits ?? 0, 1e-5 * Math.Max(1, expected.Estimate));
+                Assert.AreEqual(personDetail.Usage.EstimateCredits ?? 0, personDetail.Usage.Agents.Sum(a => a.EstimateCredits ?? 0),
+                    1e-5 * Math.Max(1, expected.Estimate), "The importer prices agents' turns only, so the agents carry the whole estimate.");
+                Assert.IsTrue(personDetail.Usage.Agents.Where(a => a.EstimateCredits > 0)
+                    .All(a => a.Name != null && a.KindKey == CopilotSpendAgentKindKeys.CustomEngine), "A priced agent is a named custom-engine agent.");
+                Assert.AreEqual((lastDay.Date - range.FromUtc.Date).Days + 1, personDetail.Usage.Days.Count, "Every day of the window keeps its place.");
+                Assert.AreEqual(expected.Turns, personDetail.Usage.Days.Sum(d => d.Turns));
+                Assert.AreEqual(expected.Prompts, personDetail.Usage.Prompts.Prompts);
+                Assert.IsTrue(personDetail.Usage.Recent.All(r => r.CategoryId == null
+                    || r.CategoryId == CopilotSpendPersonDetailBuilder.NotClassifiedCategoryId || r.CategoryName != null),
+                    "A classified prompt is named from the taxonomy that classified it.");
+                if ((spendPerson.StudioCredits ?? 0) > 0)
+                {
+                    Assert.IsNotNull(personDetail.StudioDays);
+                    Assert.AreEqual(spendPerson.StudioCredits.Value, personDetail.StudioDays.Sum(d => d.Credits ?? 0), 0.01,
+                        "Their billed days add up to their Studio credits.");
+                }
+                if ((spendPerson.BalanceCredits ?? 0) > 0)
+                    Assert.IsTrue(personDetail.Ranks.BalanceRank >= 1 && personDetail.Ranks.BalanceShare > 0);
+
+                // Never a way round the filter: someone outside Sales has no drill-down in the Sales view.
+                var outsider = spendReport.People.First(p => p.Department != "Sales");
+                Assert.IsNull(await spendService.PersonAsync(new CopilotSpendRequest { Range = range, Scope = new ReportScope(null, null, sales, "sales") },
+                    outsider.UserId, CancellationToken.None));
+
                 CopilotInvestmentWorkbookLanguageTests.AssertSpanishCounterpart(
                     CopilotSpendWorkbook.Build(spendReport, true, "test", PortalLanguage.English),
                     CopilotSpendWorkbook.Build(spendReport, true, "test", PortalLanguage.Spanish), CopilotSpendWorkbook.CatalogModule);
@@ -300,6 +367,52 @@ SELECT @user, @object;";
                     }
                 }
             }
+        }
+
+        private static string ActivityKey(PersonActivityRow row) => $"{row.ActivityDate:yyyy-MM-dd}|{row.AppHost}|{row.AgentId}|{row.Turns}";
+
+        /// <summary>
+        /// Each person's counted Copilot turns, estimate and priced turns over the window, and their prompts, counted straight
+        /// from the tables: what the drill-down's own SQL must agree with.
+        /// </summary>
+        private static Dictionary<int, (long Turns, double Estimate, long Priced, long Prompts)> PersonUsageTotals(string connection,
+            DateTime from, DateTime toExclusive)
+        {
+            var totals = new Dictionary<int, (long Turns, double Estimate, long Priced, long Prompts)>();
+            using (var db = new SqlConnection(connection))
+            {
+                db.Open();
+                using (var command = db.CreateCommand())
+                {
+                    command.CommandText = @"
+SELECT a.user_id, COUNT_BIG(*), ISNULL(SUM(CAST(c.copilot_credit_estimate_total AS float)), 0),
+       COUNT_BIG(CASE WHEN c.copilot_credit_estimate_total > 0 THEN 1 END)
+FROM dbo.copilot_chats AS c
+JOIN dbo.audit_events AS a ON a.id = c.event_id
+WHERE a.user_id IS NOT NULL AND a.time_stamp >= @from AND a.time_stamp < @to AND c.time_stamp >= @from AND c.time_stamp < @to
+  AND NOT EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates AS d WHERE d.time_stamp = c.time_stamp AND d.event_id = c.event_id)
+GROUP BY a.user_id;
+SELECT i.user_id, COUNT_BIG(*)
+FROM dbo.copilot_interactions AS i
+JOIN dbo.copilot_interaction_types AS t ON t.id = i.interaction_type_id
+WHERE t.name = N'userPrompt' AND i.created_utc >= @from AND i.created_utc < @to
+GROUP BY i.user_id;";
+                    command.Parameters.AddWithValue("@from", from);
+                    command.Parameters.AddWithValue("@to", toExclusive);
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                            totals[reader.GetInt32(0)] = (reader.GetInt64(1), reader.GetDouble(2), reader.GetInt64(3), 0L);
+                        reader.NextResult();
+                        while (reader.Read())
+                        {
+                            totals.TryGetValue(reader.GetInt32(0), out var row);
+                            totals[reader.GetInt32(0)] = (row.Turns, row.Estimate, row.Priced, reader.GetInt64(1));
+                        }
+                    }
+                }
+            }
+            return totals;
         }
 
         private static void Drop(string name)

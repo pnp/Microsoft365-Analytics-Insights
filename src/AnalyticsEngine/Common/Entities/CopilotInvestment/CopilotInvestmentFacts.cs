@@ -179,6 +179,16 @@ namespace Common.Entities.CopilotInvestment
         public string AppHost { get; set; }
         public int? AgentId { get; set; }
         public long Turns { get; set; }
+
+        /// <summary>
+        /// The importer's own credit estimate summed over these turns (<c>copilot_chats.copilot_credit_estimate_total</c>);
+        /// null when none of them carries one, or when the caller did not ask for it. An estimate, never billed credits: it
+        /// prices customer-built custom-engine agents only, and is 0 by design for everything else.
+        /// </summary>
+        public double? EstimateCredits { get; set; }
+
+        /// <summary>Of <see cref="Turns"/>, those the estimate priced above zero; 0 when the estimate was not asked for.</summary>
+        public long PricedTurns { get; set; }
     }
 
     public sealed class PersonPromptRow
@@ -398,18 +408,39 @@ namespace Common.Entities.CopilotInvestment
         public const string StudioEarliestSql =
             "SELECT MIN(r.usage_date), MAX(r.usage_date) FROM dbo.copilot_studio_credit_user_daily AS r;";
 
-        /// <summary>One person's Copilot turns per day, host and agent, through their own audit rows (an index seek on user id).</summary>
-        public static readonly string PersonActivitySql =
+        /// <summary>
+        /// One person's Copilot turns per day, host and agent, through their own audit rows. The turns' time, host and agent
+        /// are all in the (time_stamp, user_id) index on <c>copilot_chats</c>, so no chat row is read. This and the other
+        /// statements that take <c>@userId</c> carry OPTION (RECOMPILE): see the per-person drill-down in
+        /// <see cref="CopilotSpend.CopilotSpendSql"/>, which measured a plan cached for a heavy person scanning whole tables
+        /// for the next typical one. Here that was 82 logical reads becoming 6,968 to 22,498.
+        /// </summary>
+        public static readonly string PersonActivitySql = PersonActivity(withEstimate: false);
+
+        /// <summary>
+        /// <see cref="PersonActivitySql"/> with the importer's credit estimate for the turns, for the Copilot Spend drill-down
+        /// only. The estimate is not in the index that covers the turns, so for a person with many turns the chats are read
+        /// instead. Measured on the same synthetic database: a typical person is unchanged (82 reads); the outlier with 10,000
+        /// turns went from 7.0K to 17.0K reads (70 to 134 ms) over 28 days and from 22.5K to 24.5K (216 to 257 ms) over 90.
+        /// </summary>
+        public static readonly string PersonActivityWithEstimateSql = PersonActivity(withEstimate: true);
+
+        private static string PersonActivity(bool withEstimate) =>
             "SELECT CAST(c.time_stamp AS date) AS ActivityDate,\r\n" +
             "       CAST(ISNULL(c.app_host, N'') AS nvarchar(100)) AS AppHost,\r\n" +
             "       c.agent_id AS AgentId,\r\n" +
-            "       COUNT_BIG(*) AS Turns\r\n" +
+            (withEstimate
+                ? "       COUNT_BIG(*) AS Turns,\r\n" +
+                  "       SUM(CAST(c.copilot_credit_estimate_total AS float)) AS EstimateCredits,\r\n" +
+                  "       COUNT_BIG(CASE WHEN c.copilot_credit_estimate_total > 0 THEN 1 END) AS PricedTurns\r\n"
+                : "       COUNT_BIG(*) AS Turns\r\n") +
             "FROM dbo.audit_events AS a\r\n" +
             "JOIN dbo.copilot_chats AS c ON c.event_id = a.id\r\n" +
             "WHERE a.user_id = @userId AND a.time_stamp >= @from AND a.time_stamp < @toExclusive\r\n" +
             "  AND c.time_stamp >= @from AND c.time_stamp < @toExclusive\r\n" +
             "  AND " + Copilot.CopilotTurnSql.CountedTurn("c") + "\r\n" +
-            "GROUP BY CAST(c.time_stamp AS date), CAST(ISNULL(c.app_host, N'') AS nvarchar(100)), c.agent_id;";
+            "GROUP BY CAST(c.time_stamp AS date), CAST(ISNULL(c.app_host, N'') AS nvarchar(100)), c.agent_id\r\n" +
+            "OPTION (RECOMPILE);";
 
         public const string CoworkAgentIdsSql = CopilotAdoption.CopilotAdoptionSql.CoworkAgentIdsSql;
 
@@ -421,7 +452,8 @@ namespace Common.Entities.CopilotInvestment
             "LEFT JOIN dbo.copilot_interaction_types AS t ON t.id = i.interaction_type_id\r\n" +
             "LEFT JOIN dbo.copilot_interaction_app_classes AS ac ON ac.id = i.app_class_id\r\n" +
             "WHERE i.user_id = @userId AND i.created_utc >= @from AND i.created_utc < @toExclusive\r\n" +
-            "GROUP BY ac.name, t.name;";
+            "GROUP BY ac.name, t.name\r\n" +
+            "OPTION (RECOMPILE);";
 
         /// <summary>One person's classified prompt goals in the window. Counts only; no prompt text exists to read.</summary>
         public const string PersonCategoriesSql =
@@ -429,7 +461,8 @@ namespace Common.Entities.CopilotInvestment
             "FROM dbo.copilot_interactions AS i\r\n" +
             "JOIN dbo.copilot_prompt_classifications AS pc ON pc.interaction_id = i.id\r\n" +
             "WHERE i.user_id = @userId AND i.created_utc >= @from AND i.created_utc < @toExclusive\r\n" +
-            "GROUP BY pc.category_id;";
+            "GROUP BY pc.category_id\r\n" +
+            "OPTION (RECOMPILE);";
 
         /// <summary>Every category of one directory object's latest balance, including zero rows.</summary>
         public const string PersonCreditServicesSql =
@@ -464,7 +497,8 @@ namespace Common.Entities.CopilotInvestment
             "       CAST(SUM(r.billed_credits) AS float) AS Credits, COUNT(DISTINCT r.usage_date) AS ActiveDays\r\n" +
             "FROM dbo.copilot_studio_credit_user_daily AS r\r\n" +
             "WHERE r.user_id = @userId AND r.usage_date >= @from AND r.usage_date < @toExclusive\r\n" +
-            "GROUP BY r.environment_id;";
+            "GROUP BY r.environment_id\r\n" +
+            "OPTION (RECOMPILE);";
 
         /// <summary>The sample dates for a balance trend: every k-th day back from the snapshot, at most <see cref="MaxTrendPoints"/>.</summary>
         public static List<DateTime> TrendDates(DateTime from, DateTime snapshot)
@@ -489,9 +523,11 @@ namespace Common.Entities.CopilotInvestment
         /// One person's evidence. Activity and prompts are timestamps read over [<paramref name="from"/>,
         /// <paramref name="toExclusive"/>); balances and the Studio ledger are kept by day and read through
         /// <paramref name="lastDay"/>, the window's last calendar day (<see cref="CopilotInvestmentWindow.LastDay"/>).
+        /// <paramref name="withCreditEstimate"/> adds the importer's credit estimate to each activity row, which costs a heavy
+        /// person's drill-down extra reads, so only a page that shows it asks.
         /// </summary>
         Task<PersonDetailFacts> GetPersonDetailAsync(int userId, Guid? objectId, DateTime? creditDate, DateTime from, DateTime toExclusive,
-            DateTime lastDay, CancellationToken cancellationToken);
+            DateTime lastDay, bool withCreditEstimate, CancellationToken cancellationToken);
     }
 
     /// <summary>The SQL implementation. Each read is one bounded statement; nothing loops a query per person.</summary>
@@ -759,7 +795,7 @@ namespace Common.Entities.CopilotInvestment
         }
 
         public async Task<PersonDetailFacts> GetPersonDetailAsync(int userId, Guid? objectId, DateTime? creditDate, DateTime from,
-            DateTime toExclusive, DateTime lastDay, CancellationToken cancellationToken)
+            DateTime toExclusive, DateTime lastDay, bool withCreditEstimate, CancellationToken cancellationToken)
         {
             var detail = new PersonDetailFacts();
             using (var db = _connection())
@@ -771,18 +807,25 @@ namespace Common.Entities.CopilotInvestment
                     using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) detail.CoworkAgentIds.Add(reader.GetInt32(0));
 
-                    using (var cmd = Command(db, CopilotInvestmentSql.PersonActivitySql, "@userId", userId, "@from", from, "@toExclusive", toExclusive))
+                    var activitySql = withCreditEstimate ? CopilotInvestmentSql.PersonActivityWithEstimateSql : CopilotInvestmentSql.PersonActivitySql;
+                    using (var cmd = Command(db, activitySql, "@userId", userId, "@from", from, "@toExclusive", toExclusive))
                     using (var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
                     {
                         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                         {
-                            detail.Activity.Add(new PersonActivityRow
+                            var row = new PersonActivityRow
                             {
                                 ActivityDate = DateTime.SpecifyKind(reader.GetDateTime(0), DateTimeKind.Utc),
                                 AppHost = reader.GetString(1),
                                 AgentId = reader.IsDBNull(2) ? (int?)null : reader.GetInt32(2),
                                 Turns = reader.GetInt64(3),
-                            });
+                            };
+                            if (withCreditEstimate)
+                            {
+                                row.EstimateCredits = reader.IsDBNull(4) ? (double?)null : reader.GetDouble(4);
+                                row.PricedTurns = reader.GetInt64(5);
+                            }
+                            detail.Activity.Add(row);
                         }
                     }
                     detail.ActivityAssessed = true;

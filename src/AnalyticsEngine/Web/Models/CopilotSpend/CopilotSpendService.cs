@@ -8,6 +8,7 @@ using DataUtils.Sql;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Runtime.Caching;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -122,6 +123,76 @@ namespace Web.AnalyticsWeb.Models.CopilotSpend
             // filter echo withholds people's names from the second - so the echoes belong to each request (ForThisReader).
             _results.Set(cacheKey, summary, DateTimeOffset.UtcNow.AddMinutes(2));
             return ForThisReader(summary, scope);
+        }
+
+        /// <summary>
+        /// One person's drill-down, or null when they are not in this reader's report: the drill-down is never a way round the
+        /// filter. Their balances, environments and turns fail the request when they cannot be read. Their Studio days,
+        /// prompts, goals, phrases and resources are read alongside and are best-effort, so a failure there leaves the rest of
+        /// the drill-down showing, with one reason in place of what is missing.
+        /// </summary>
+        public async Task<CopilotSpendPersonDetail> PersonAsync(CopilotSpendRequest request, int userId, CancellationToken cancellationToken)
+        {
+            var report = await BuildAsync(request, cancellationToken).ConfigureAwait(false);
+            var person = report.People.FirstOrDefault(p => p.UserId == userId);
+            if (person == null) return null;
+
+            var range = request.Range;
+            var lastDay = CopilotInvestmentWindow.LastDay(range);
+            var factsTask = _facts.Source.GetPersonDetailAsync(userId, person.CreditObjectId, person.BalanceDate,
+                range.FromUtc, range.ToExclusiveUtc, lastDay, withCreditEstimate: true, cancellationToken);
+            var usageTask = ReadUsageAsync(userId, range.FromUtc, range.ToExclusiveUtc, lastDay, cancellationToken);
+            await Task.WhenAll(factsTask, usageTask).ConfigureAwait(false);
+            var facts = factsTask.Result;
+            var usage = usageTask.Result;
+
+            var agentIds = facts.Activity.Where(a => a.AgentId.HasValue).Select(a => a.AgentId.Value).Distinct().ToList();
+            var agents = await ReadAgentsAsync(agentIds, cancellationToken).ConfigureAwait(false);
+            return CopilotSpendPersonDetailBuilder.Build(new CopilotSpendPersonDetailInput
+            {
+                Person = person,
+                People = report.People,
+                StudioAvailable = report.Studio.Available,
+                BalancesAvailable = report.Balances.Available,
+                Facts = facts,
+                Usage = usage.Facts,
+                Agents = agents,
+                FromUtc = range.FromUtc,
+                ToExclusiveUtc = range.ToExclusiveUtc,
+                LastDay = lastDay,
+                StudioEarliest = report.Studio.EarliestDate,
+                StudioLatest = report.Studio.LatestDate,
+                UsageFailureCode = usage.FailureCode,
+            });
+        }
+
+        private async Task<(CopilotSpendPersonFacts Facts, string FailureCode)> ReadUsageAsync(int userId, DateTime from, DateTime toExclusive,
+            DateTime lastDay, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return (await _spend.GetPersonUsageAsync(userId, from, toExclusive, lastDay, cancellationToken).ConfigureAwait(false), null);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                WebExceptionTelemetry.Report(ex, "CopilotSpend.PersonUsage");
+                return (null, CopilotSpendErrorCodes.PersonUsageUnavailable);
+            }
+        }
+
+        /// <summary>The names and kinds of the agents the person used. Without them the agents still show, unnamed.</summary>
+        private async Task<List<CopilotSpendAgentFact>> ReadAgentsAsync(IReadOnlyCollection<int> ids, CancellationToken cancellationToken)
+        {
+            if (ids.Count == 0) return new List<CopilotSpendAgentFact>();
+            try
+            {
+                return await _spend.GetAgentsAsync(ids, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                WebExceptionTelemetry.Report(ex, "CopilotSpend.PersonAgents");
+                return new List<CopilotSpendAgentFact>();
+            }
         }
 
         /// <summary>The cached summary with this request's filter echoes, on a copy; the cached object never holds them.</summary>

@@ -121,17 +121,12 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 var request = await PrepareAsync(windowDays, userFilter, null, cancellationToken);
                 if (request.Refusal != null) return ResponseMessage(request.Refusal);
-                var report = await Service.BuildAsync(request.Request, cancellationToken);
 
                 // Only someone this reader's scope covers: the drill-down is never a way round the filter.
-                var person = report.People.FirstOrDefault(p => p.UserId == userId);
-                if (person == null)
+                var detail = await Service.PersonAsync(request.Request, userId, cancellationToken);
+                if (detail == null)
                     return Content(HttpStatusCode.NotFound, new ApiErrorModel("The person is not in this report.", "personNotFound"));
-
-                var range = request.Request.Range;
-                var facts = await Service.Facts.Source.GetPersonDetailAsync(userId, person.CreditObjectId, person.BalanceDate,
-                    range.FromUtc, range.ToExclusiveUtc, CopilotInvestmentWindow.LastDay(range), cancellationToken);
-                return Ok(CopilotSpendCalculator.Detail(person, facts));
+                return Ok(detail);
             });
 
         [HttpGet, Route("export/workbook")]

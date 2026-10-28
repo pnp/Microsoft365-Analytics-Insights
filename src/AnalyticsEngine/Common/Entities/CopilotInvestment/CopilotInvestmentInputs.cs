@@ -264,13 +264,23 @@ namespace Common.Entities.CopilotInvestment
     /// <summary>Small, exact statistics over a population. Pure functions, so every figure can be checked by hand.</summary>
     public static class CopilotInvestmentStatistics
     {
+        // 30 x 0.1 is 3.0000000000000004 in floating point: without this, the top tenth of 30 people would be 4 of them.
+        private const double RankTolerance = 1e-9;
+
+        /// <summary>The 1-based nearest rank of percentile <paramref name="p"/> (0..1) in an ascending list of <paramref name="count"/>; 0 when empty.</summary>
+        public static int NearestRank(int count, double p) =>
+            count <= 0 ? 0 : Math.Max(1, Math.Min(count, (int)Math.Ceiling(Math.Max(0, Math.Min(1, p)) * count - RankTolerance)));
+
+        /// <summary>How many members the largest <paramref name="fraction"/> of <paramref name="count"/> is: at least one; 0 when empty.</summary>
+        public static int TopCount(int count, double fraction) =>
+            count <= 0 ? 0 : Math.Max(1, Math.Min(count, (int)Math.Ceiling(count * fraction - RankTolerance)));
+
         /// <summary>Nearest-rank percentile (0..1) of an unsorted list; null when empty.</summary>
         public static double? Percentile(IEnumerable<double> values, double p)
         {
             var sorted = (values ?? Enumerable.Empty<double>()).OrderBy(v => v).ToList();
             if (sorted.Count == 0) return null;
-            var rank = (int)Math.Ceiling(Math.Max(0, Math.Min(1, p)) * sorted.Count);
-            return sorted[Math.Max(0, rank - 1)];
+            return sorted[NearestRank(sorted.Count, p) - 1];
         }
 
         public static double? Median(IEnumerable<double> values)
@@ -299,8 +309,7 @@ namespace Common.Entities.CopilotInvestment
             var sorted = (values ?? Enumerable.Empty<double>()).Select(v => Math.Max(0, v)).OrderByDescending(v => v).ToList();
             var total = sorted.Sum();
             if (sorted.Count == 0 || total <= 0) return 0;
-            var count = Math.Max(1, (int)Math.Ceiling(sorted.Count * fraction));
-            return sorted.Take(count).Sum() / total;
+            return sorted.Take(TopCount(sorted.Count, fraction)).Sum() / total;
         }
 
         /// <summary>Cumulative share of the total held by the bottom 0%, 10%, ... 100%: eleven points.</summary>

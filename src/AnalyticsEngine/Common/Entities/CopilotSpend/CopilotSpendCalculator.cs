@@ -1,6 +1,7 @@
 using Common.Entities.CopilotInvestment;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 
 namespace Common.Entities.CopilotSpend
@@ -126,7 +127,142 @@ namespace Common.Entities.CopilotSpend
             summary.Studio = Studio(input, studio, studioAvailable, studioByUser.Values.ToList(), unmatchedStudio);
             summary.Balances = Balances(input, credits, balancesAvailable, balances.Values.ToList(), unresolved);
             summary.Organisation = Organisation(input, people, studioAvailable, balancesAvailable);
+            if (studioAvailable) summary.Studio.Distribution = Distribution(people, p => p.StudioCredits, null);
+            if (balancesAvailable)
+            {
+                // A plain zero: a reading of nothing consumed, with no amount the source could not state.
+                var zero = balances.Values.Count(b => b.Credits.HasValue && b.Credits.Value <= 0 && !Consumed(b));
+                summary.Balances.Distribution = Distribution(people, p => p.BalanceCredits, zero);
+            }
             return summary;
+        }
+
+        /// <summary>How many of the largest and of the smallest consumers a distribution names.</summary>
+        public const int DistributionListSize = 10;
+
+        /// <summary>The most points a concentration curve has, besides (0, 0).</summary>
+        public const int ParetoPoints = 50;
+
+        /// <summary>The most bands a distribution has on the 1-2-5 scale before it falls back to one band a decade.</summary>
+        public const int MaxBands = 24;
+
+        /// <summary>
+        /// How one source's amounts are spread across the people in view who consumed any of it. Ordered largest first, ties
+        /// by sign-in name and user id, so the named lists are stable. Shares are of the total matched to people in view.
+        /// </summary>
+        internal static CopilotSpendDistribution Distribution(IEnumerable<CopilotSpendPersonRow> people, Func<CopilotSpendPersonRow, double?> amount,
+            int? zeroPeople)
+        {
+            var consumers = people.Select(p => new { Person = p, Credits = amount(p) ?? 0 })
+                .Where(p => p.Credits > 0)
+                .OrderByDescending(p => p.Credits)
+                .ThenBy(p => p.Person.UserPrincipalName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(p => p.Person.UserId)
+                .ToList();
+            var n = consumers.Count;
+            var distribution = new CopilotSpendDistribution { Consumers = n, ZeroPeople = zeroPeople, MinPeople = DefaultMinGroupSize };
+            if (n == 0)
+            {
+                distribution.Total = 0;
+                return distribution;
+            }
+
+            var values = consumers.Select(c => c.Credits).ToList();
+            var total = values.Sum();
+            var cumulative = new double[n + 1];
+            for (var i = 0; i < n; i++) cumulative[i + 1] = cumulative[i] + values[i];
+            double Share(double part) => Math.Round(part / total, 4);
+
+            distribution.Total = Math.Round(total, 6);
+            distribution.Mean = Math.Round(total / n, 6);
+            distribution.Median = Math.Round(CopilotInvestmentStatistics.Median(values).Value, 6);
+            distribution.P90 = Math.Round(values[n - CopilotInvestmentStatistics.NearestRank(n, 0.9)], 6);
+            distribution.Max = Math.Round(values[0], 6);
+            distribution.Min = Math.Round(values[n - 1], 6);
+            distribution.Gini = Math.Round(CopilotInvestmentStatistics.Gini(values), 4);
+            distribution.Top10Share = Share(cumulative[CopilotInvestmentStatistics.TopCount(n, CopilotSpendDistribution.Top10Fraction)]);
+            distribution.Top20Share = Share(cumulative[CopilotInvestmentStatistics.TopCount(n, CopilotSpendDistribution.Top20Fraction)]);
+            // Floating-point sums can fall a hair short of the half they equal.
+            distribution.PeopleForHalf = Enumerable.Range(1, n).First(k => cumulative[k] >= total / 2 - 1e-9);
+
+            distribution.Pareto.Add(new CopilotSpendParetoPoint { People = 0, PeopleShare = 0, CreditShare = 0 });
+            for (var i = 1; i <= Math.Min(n, ParetoPoints); i++)
+            {
+                var k = n <= ParetoPoints ? i : (int)Math.Round((double)n * i / ParetoPoints, MidpointRounding.AwayFromZero);
+                distribution.Pareto.Add(new CopilotSpendParetoPoint
+                {
+                    People = k,
+                    PeopleShare = Math.Round((double)k / n, 4),
+                    CreditShare = k == n ? 1 : Share(cumulative[k]),
+                });
+            }
+
+            distribution.Bands = Bands(values.AsEnumerable().Reverse().ToList());
+            distribution.Top = consumers.Take(DistributionListSize).Select(c => Ranked(c.Person, c.Credits, total)).ToList();
+            distribution.Lowest = consumers.OrderBy(c => c.Credits)
+                .ThenBy(c => c.Person.UserPrincipalName ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(c => c.Person.UserId)
+                .Take(DistributionListSize)
+                .Select(c => Ranked(c.Person, c.Credits, total))
+                .ToList();
+            return distribution;
+        }
+
+        private static CopilotSpendRankedPerson Ranked(CopilotSpendPersonRow person, double credits, double total) => new CopilotSpendRankedPerson
+        {
+            UserId = person.UserId,
+            UserPrincipalName = person.UserPrincipalName,
+            Department = person.Department,
+            Credits = Math.Round(credits, 6),
+            Share = Math.Round(credits / total, 4),
+        };
+
+        /// <summary>
+        /// Positive amounts, smallest first, counted in bands whose edges run 1, 2, 5, 10, 20, 50... so a person who consumed
+        /// 3 credits and one who consumed 30,000 are both readable on one chart. The first band starts at the largest edge
+        /// at or below the smallest amount (0 when that is below 0.01) and the last ends at the first edge above the largest;
+        /// a band with no one in it between the two keeps its place. An amount on an edge is in the band that starts there.
+        /// </summary>
+        internal static List<CopilotSpendBand> Bands(IReadOnlyList<double> ascending)
+        {
+            var bands = new List<CopilotSpendBand>();
+            if (ascending == null || ascending.Count == 0) return bands;
+            var min = ascending[0];
+            var max = ascending[ascending.Count - 1];
+            var floor = Math.Max(min, 0.01);
+            var edges = BandEdges(floor, max, new[] { 1, 2, 5 });
+            if (edges.Count - 1 > MaxBands) edges = BandEdges(floor, max, new[] { 1 });
+
+            for (var i = 0; i < edges.Count - 1; i++) bands.Add(new CopilotSpendBand { From = edges[i], To = edges[i + 1], Credits = 0 });
+            if (min < edges[0]) bands[0].From = 0;
+            var band = 0;
+            foreach (var value in ascending)
+            {
+                while (band < bands.Count - 1 && value >= bands[band + 1].From) band++;
+                bands[band].People++;
+                bands[band].Credits += value;
+            }
+            foreach (var b in bands) b.Credits = Math.Round(b.Credits.Value, 6);
+            return bands;
+        }
+
+        /// <summary>The largest edge at or below <paramref name="floor"/>, then every edge up to the first above both it and <paramref name="max"/>.</summary>
+        private static List<double> BandEdges(double floor, double max, int[] mantissas)
+        {
+            var edges = new List<double>();
+            var ceiling = Math.Max(max, floor);
+            // Parsed rather than multiplied, so 0.05 is the 0.05 a reader types, not 5 x 0.01 one bit away from it.
+            for (var exponent = (int)Math.Floor(Math.Log10(floor)) - 1; edges.Count == 0 || edges[edges.Count - 1] <= ceiling; exponent++)
+            {
+                foreach (var mantissa in mantissas)
+                {
+                    edges.Add(double.Parse(mantissa.ToString(CultureInfo.InvariantCulture) + "E" + exponent.ToString(CultureInfo.InvariantCulture),
+                        NumberStyles.Float, CultureInfo.InvariantCulture));
+                    if (edges[edges.Count - 1] > ceiling) break;
+                }
+            }
+            var start = edges.FindLastIndex(e => e <= floor);
+            return edges.Skip(Math.Max(0, start)).ToList();
         }
 
         /// <summary>
@@ -183,21 +319,22 @@ namespace Common.Entities.CopilotSpend
         /// in view is <c>noneRecorded</c> (the ledger has nothing, which is all it can say); a day outside those - before it
         /// starts, or after its latest stored day - is <c>notReported</c>, which is not zero.
         /// </summary>
-        internal static List<CopilotSpendDay> CalendarDays(CopilotSpendInput input, StudioFacts studio, IEnumerable<CopilotSpendDay> rows)
+        internal static List<CopilotSpendDay> CalendarDays(CopilotSpendInput input, StudioFacts studio, IEnumerable<CopilotSpendDay> rows) =>
+            CalendarDays(input.FromUtc, input.LastDay ?? input.ToUtc, studio.EarliestDate, studio.LatestDate, rows);
+
+        /// <summary>Every calendar day from <paramref name="from"/> to <paramref name="last"/>, inclusive, as <see cref="CalendarDays(CopilotSpendInput, StudioFacts, IEnumerable{CopilotSpendDay})"/>.</summary>
+        internal static List<CopilotSpendDay> CalendarDays(DateTime from, DateTime last, DateTime? earliest, DateTime? latest, IEnumerable<CopilotSpendDay> rows)
         {
             var recorded = (rows ?? Enumerable.Empty<CopilotSpendDay>()).GroupBy(d => d.Date.Date).ToDictionary(g => g.Key, g => g.First());
-            var first = input.FromUtc.Date;
-            var last = (input.LastDay ?? input.ToUtc).Date;
             var days = new List<CopilotSpendDay>();
-            for (var day = first; day <= last; day = day.AddDays(1))
+            for (var day = from.Date; day <= last.Date; day = day.AddDays(1))
             {
                 if (recorded.TryGetValue(day, out var row))
                 {
                     days.Add(new CopilotSpendDay { Date = day, Status = CopilotSpendDayStatus.Recorded, Credits = row.Credits, People = row.People });
                     continue;
                 }
-                var stored = studio.EarliestDate.HasValue && studio.LatestDate.HasValue
-                    && day >= studio.EarliestDate.Value.Date && day <= studio.LatestDate.Value.Date;
+                var stored = earliest.HasValue && latest.HasValue && day >= earliest.Value.Date && day <= latest.Value.Date;
                 days.Add(new CopilotSpendDay { Date = day, Status = stored ? CopilotSpendDayStatus.NoneRecorded : CopilotSpendDayStatus.NotReported });
             }
             return days;
@@ -356,15 +493,6 @@ namespace Common.Entities.CopilotSpend
         }
 
         private static string NullIfBlank(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
-
-        /// <summary>One person's drill-down from their own facts: balance by category, balance over time, Studio by environment.</summary>
-        public static CopilotSpendPersonDetail Detail(CopilotSpendPersonRow person, PersonDetailFacts facts) => new CopilotSpendPersonDetail
-        {
-            Person = person,
-            Services = CopilotInvestmentPersonDetailBuilder.CreditServices(facts),
-            Balances = (facts ?? new PersonDetailFacts()).Balances.OrderBy(b => b.Date).ToList(),
-            StudioEnvironments = CopilotInvestmentPersonDetailBuilder.StudioEnvironments(facts),
-        };
     }
 
     /// <summary>The scoped Studio breakdown read in SQL.</summary>
