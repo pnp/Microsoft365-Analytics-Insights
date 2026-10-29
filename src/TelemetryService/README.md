@@ -297,7 +297,7 @@ your approved secure backup system.
 
 ### Prerequisites
 
-- PowerShell 7, Azure CLI, .NET 10 SDK and Node.js 24 (the repo-wide pin — see the
+- PowerShell 7, Azure CLI, .NET 10 SDK and Node.js 26.13.0 (the repo-wide pin — see the
   *Node.js version* section of [`CONTRIBUTING.md`](../../CONTRIBUTING.md)).
 - Azure CLI signed into the target tenant and subscription.
 - Permission to create resources and role assignments in the subscription.
