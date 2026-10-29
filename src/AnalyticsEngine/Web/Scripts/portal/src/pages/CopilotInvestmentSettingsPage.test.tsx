@@ -59,6 +59,13 @@ async function switchToSpanish() {
   await user.click(await screen.findByRole('menuitemradio', { name: 'Espa\u00f1ol' }));
 }
 
+/** The same switch the other way, for a page that opened in Spanish. */
+async function switchToEnglish() {
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: /Idioma: Espa\u00f1ol/ }));
+  await user.click(await screen.findByRole('menuitemradio', { name: 'English' }));
+}
+
 describe('CopilotInvestmentSettingsPage', () => {
   it('saves what the administrator typed, decimal commas included, against the version they loaded', async () => {
     vi.mocked(saveInvestmentSettings).mockImplementation(async (_version, assumptions) => ({
@@ -162,5 +169,85 @@ describe('CopilotInvestmentSettingsPage', () => {
 
     expect(await screen.findByText('No se pudieron cargar los supuestos.')).toBeInTheDocument();
     expect(fetchInvestmentSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('words a message about the typed figures in the language it is read in, not the one it was raised in', async () => {
+    renderWithProvider(
+      <>
+        <LanguageSwitcher />
+        <CopilotInvestmentSettingsPage />
+      </>,
+    );
+    fireEvent.change(await screen.findByLabelText('Licence price a month'), { target: { value: 'thirty' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save assumptions' }));
+    expect(await screen.findByText('Enter a number, using a full stop or comma for decimals.')).toBeInTheDocument();
+
+    await switchToSpanish();
+
+    expect(await screen.findByText('Escriba un n\u00famero, con punto o coma para los decimales.')).toBeInTheDocument();
+    expect(screen.queryByText('Enter a number, using a full stop or comma for decimals.')).not.toBeInTheDocument();
+    expect(saveInvestmentSettings).not.toHaveBeenCalled();
+  });
+
+  it('words the rules the server applied in the language they are read in', async () => {
+    vi.mocked(saveInvestmentSettings).mockRejectedValueOnce(new InvestmentSettingsError('invalidRequest', ['currencyRequired']));
+    renderWithProvider(
+      <>
+        <LanguageSwitcher />
+        <CopilotInvestmentSettingsPage />
+      </>,
+    );
+    fireEvent.change(await screen.findByLabelText('Licence price a month'), { target: { value: '30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save assumptions' }));
+    expect(await screen.findByText('Set a currency for the prices and the hourly cost.')).toBeInTheDocument();
+
+    await switchToSpanish();
+
+    expect(await screen.findByText('Indique una moneda para los precios y el coste por hora.')).toBeInTheDocument();
+    expect(screen.queryByText('Set a currency for the prices and the hourly cost.')).not.toBeInTheDocument();
+  });
+
+  it('words the saved notice in the language it is read in', async () => {
+    vi.mocked(saveInvestmentSettings).mockImplementation(async (_version, assumptions) => ({
+      ...neverSaved,
+      version: 1,
+      assumptions,
+      updatedBy: 'admin@contoso.example',
+      updatedUtc: '2026-10-27T10:00:00Z',
+    }));
+    renderWithProvider(
+      <>
+        <LanguageSwitcher />
+        <CopilotInvestmentSettingsPage />
+      </>,
+    );
+    fireEvent.change(await screen.findByLabelText('Licence price a month'), { target: { value: '30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save assumptions' }));
+    expect(await screen.findByText('Assumptions saved (version 1).')).toBeInTheDocument();
+
+    await switchToSpanish();
+
+    expect(await screen.findByText('Supuestos guardados (versi\u00f3n 1).')).toBeInTheDocument();
+    expect(screen.queryByText('Assumptions saved (version 1).')).not.toBeInTheDocument();
+  });
+
+  it('reads a decimal typed before a language switch as the same number after it', async () => {
+    vi.mocked(saveInvestmentSettings).mockImplementation(async (_version, assumptions) => ({ ...neverSaved, version: 1, assumptions }));
+    renderWithProvider(
+      <>
+        <LanguageSwitcher />
+        <CopilotInvestmentSettingsPage />
+      </>,
+      { language: 'es' },
+    );
+    // A decimal comma, as a Spanish reader types it; the text is not re-formatted when the language changes.
+    fireEvent.change(await screen.findByLabelText('Coste por hora con cargas'), { target: { value: '52,5' } });
+
+    await switchToEnglish();
+
+    expect(await screen.findByLabelText('Fully loaded hourly cost')).toHaveValue('52,5');
+    fireEvent.click(screen.getByRole('button', { name: 'Save assumptions' }));
+    await waitFor(() => expect(saveInvestmentSettings).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(saveInvestmentSettings).mock.calls[0][1].hourlyCost).toBe(52.5);
   });
 });
