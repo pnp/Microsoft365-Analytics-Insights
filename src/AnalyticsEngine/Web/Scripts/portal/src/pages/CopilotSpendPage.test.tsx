@@ -398,6 +398,22 @@ describe('CopilotSpendPage', () => {
     expect(screen.getByRole('table', { name: 'By environment' })).toBeInTheDocument();
   });
 
+  it.each(['en', 'es'] as const)('keeps translated people notes on one line inside their badges (%s)', async (language) => {
+    await loadCatalog(language);
+    vi.mocked(fetchSpendPeople).mockResolvedValue({
+      ...people,
+      rows: [{ ...people.rows[0], balancePartial: true, unknownAmounts: true, otherUnits: true, notEntitled: true }],
+    });
+    renderWithProvider(<CopilotSpendPage />, { language });
+
+    fireEvent.click(await screen.findByRole('tab', { name: language === 'es' ? 'Personas' : 'People' }));
+    const table = await screen.findByRole('table', { name: language === 'es' ? 'Personas' : 'People' });
+    expect(within(table).getByText(language === 'es' ? 'En el límite de créditos' : 'At credit limit')).toBeInTheDocument();
+    const badges = table.querySelectorAll('.fui-Badge');
+    expect(badges).toHaveLength(5);
+    for (const badge of badges) expect(badge).toHaveStyle({ whiteSpace: 'nowrap', flexShrink: '0' });
+  });
+
   it('lists people for a reader with See PII, sorted on the server by any column header, with no reading shown as absent', async () => {
     renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: true } });
 

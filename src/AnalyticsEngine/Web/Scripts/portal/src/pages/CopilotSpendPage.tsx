@@ -95,6 +95,7 @@ const useStyles = makeStyles({
   kpiRow: { display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' },
   muted: { color: tokens.colorNeutralForeground3 },
   badges: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
+  badge: { whiteSpace: 'nowrap', flexShrink: 0 },
   num: { textAlign: 'right', fontVariantNumeric: 'tabular-nums' },
   numHeader: { justifyContent: 'flex-end', textAlign: 'right' },
   facts: { display: 'grid', gridTemplateColumns: 'minmax(200px, 360px) auto', justifyContent: 'start', gap: '6px 24px', alignItems: 'baseline' },
@@ -1352,7 +1353,7 @@ function SpendPeoplePanel({ query, filters, onFiltersChange, onOpenPerson }: {
                     <TableCell>
                       <div className={styles.badges}>
                         {flags.map((f) => (
-                          <Badge key={f} appearance="outline" color="warning">
+                          <Badge key={f} className={styles.badge} appearance="outline" color="warning">
                             {f}
                           </Badge>
                         ))}

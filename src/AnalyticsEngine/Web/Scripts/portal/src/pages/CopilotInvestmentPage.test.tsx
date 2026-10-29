@@ -328,6 +328,22 @@ describe('CopilotInvestmentPage', () => {
     expect(within(dialog).getByText(/not how productive anyone is/)).toBeInTheDocument();
   });
 
+  it.each(['en', 'es'] as const)('keeps translated signal and flag labels on one line inside their badges (%s)', async (language) => {
+    await loadCatalog(language);
+    vi.mocked(fetchInvestmentPeople).mockResolvedValue({
+      ...people,
+      rows: [{ ...people.rows[0], flags: ['highSpendThinEvidence', 'limitExhausted', 'nearLimit'] }],
+    });
+    renderWithProvider(<CopilotInvestmentPage />, { language });
+
+    fireEvent.click(await screen.findByRole('tab', { name: language === 'es' ? 'Personas' : 'People' }));
+    const table = await screen.findByRole('table', { name: language === 'es' ? 'Personas' : 'People' });
+    expect(within(table).getByText(language === 'es' ? 'En el límite de créditos' : 'At credit limit')).toBeInTheDocument();
+    const badges = table.querySelectorAll('.fui-Badge');
+    expect(badges).toHaveLength(4);
+    for (const badge of badges) expect(badge).toHaveStyle({ whiteSpace: 'nowrap', flexShrink: '0' });
+  });
+
   it('sorts the whole list by any column header, from the mouse or the keyboard, and keeps the sort control in step', async () => {
     renderWithProvider(<CopilotInvestmentPage />, { access: { administration: true, seePii: true } });
 

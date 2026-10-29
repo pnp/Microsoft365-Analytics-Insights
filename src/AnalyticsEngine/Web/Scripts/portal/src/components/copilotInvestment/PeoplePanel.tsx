@@ -63,6 +63,7 @@ const useStyles = makeStyles({
   licensed: { color: tokens.colorPaletteGreenForeground1 },
   notLicensed: { color: tokens.colorNeutralForeground3 },
   flags: { display: 'flex', gap: '4px', flexWrap: 'wrap' },
+  badge: { whiteSpace: 'nowrap', flexShrink: 0 },
   pager: { display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'flex-end' },
   muted: { color: tokens.colorNeutralForeground3 },
   dialog: { maxWidth: 'min(960px, calc(100vw - 32px))', width: '100%' },
@@ -304,13 +305,13 @@ export default function PeoplePanel({ query, filters, onFiltersChange, licenceKn
                     <TableCell className={styles.num}>{formatCredits(row.studioCredits)}</TableCell>
                     <TableCell className={styles.signalCol}>
                       <div className={styles.flags}>
-                        <Badge appearance="tint" color={signalColour(row.signal)}>
+                        <Badge className={styles.badge} appearance="tint" color={signalColour(row.signal)}>
                           {SIGNAL_LABEL_KEYS[row.signal] ? t(SIGNAL_LABEL_KEYS[row.signal]) : row.signal}
                         </Badge>
                         {row.flags
                           .filter((f) => FLAG_LABEL_KEYS[f])
                           .map((f) => (
-                            <Badge key={f} appearance="outline" color={f === 'highSpendThinEvidence' || f === 'limitExhausted' ? 'warning' : 'informative'}>
+                            <Badge key={f} className={styles.badge} appearance="outline" color={f === 'highSpendThinEvidence' || f === 'limitExhausted' ? 'warning' : 'informative'}>
                               {t(FLAG_LABEL_KEYS[f])}
                             </Badge>
                           ))}
