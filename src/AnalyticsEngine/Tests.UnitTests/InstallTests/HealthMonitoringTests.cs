@@ -297,6 +297,7 @@ namespace Tests.UnitTests.InstallTests
             foreach (var query in new[]
             {
                 HealthMonitoringInstallTask.ImporterHealthQuery(ImporterHeartbeat.ActivityJob, 15),
+                HealthMonitoringInstallTask.ImporterHealthQuery(ImporterHeartbeat.ActivityJob, 15, latestContentDeployed: false),
                 HealthMonitoringInstallTask.ImporterHealthQuery(ImporterHeartbeat.WebTrafficJob, 1440),
                 HealthMonitoringInstallTask.MissingHeartbeatQuery(ImporterHeartbeat.ActivityJob, 30),
                 HealthMonitoringInstallTask.LoggedFailuresQuery
