@@ -415,14 +415,17 @@ describe('CopilotInvestmentPage', () => {
 
     // One click applies the example as this reader's what-if: nothing is saved as the organisation's figures.
     fireEvent.click(within(dialog).getByRole('button', { name: 'Try illustrative example figures' }));
-    await waitFor(() => expect(vi.mocked(fetchInvestmentSummary).mock.calls.at(-1)![0].scenario).toEqual({ ...ILLUSTRATIVE_SCENARIO }));
+    await waitFor(() => expect(vi.mocked(fetchInvestmentSummary).mock.calls.at(-1)![0].scenario).toEqual({
+      ...ILLUSTRATIVE_SCENARIO, hourlyCost: 60, minutesLow: 15, minutesBase: 30, minutesHigh: 45,
+    }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(saveInvestmentSettings).not.toHaveBeenCalled();
     expect(await screen.findByText(/Illustrative example figures are in use/)).toBeInTheDocument();
     // The Excel export models the same figures as the page.
-    await waitFor(() => expect(screen.getByText('Excel report').closest('a')?.getAttribute('href')).toContain('hourlyCost=45'));
+    await waitFor(() => expect(screen.getByText('Excel report').closest('a')?.getAttribute('href')).toContain('hourlyCost=60'));
     const href = new URL(screen.getByText('Excel report').closest('a')!.getAttribute('href')!, 'https://contoso.example');
     expect(href.searchParams.get('realisationBase')).toBe('0.5');
+    expect(href.searchParams.get('minutesBase')).toBe('30');
     expect(href.searchParams.get('seatPrice')).toBe(String(ILLUSTRATIVE_SCENARIO.seatPrice));
 
     // Clearing the example returns to the organisation's (empty) figures.

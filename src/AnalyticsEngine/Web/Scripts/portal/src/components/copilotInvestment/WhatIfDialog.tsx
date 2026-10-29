@@ -79,8 +79,8 @@ const REALISATION_FIELDS: NumericField[] = [
 const ALL_FIELDS = [...REQUIRED_PRICE_FIELDS, ...OPTIONAL_PRICE_FIELDS, ...MINUTE_FIELDS, ...REALISATION_FIELDS];
 
 /**
- * Illustrative figures for trying the page on a deployment nobody has configured. Round numbers chosen to read as an
- * example: they are not Microsoft prices, not any organisation's figures and not measured savings. Applied only as the
+ * Optimistic illustrative figures for trying the page on a deployment nobody has configured. Round numbers chosen to read
+ * as an example: they are not Microsoft prices, not any organisation's figures and not measured savings. Applied only as the
  * reader's own what-if, in this browser tab, and only when they ask - never saved, never a default.
  */
 export const ILLUSTRATIVE_SCENARIO: Readonly<InvestmentScenarioOverrides> = Object.freeze({
@@ -88,10 +88,10 @@ export const ILLUSTRATIVE_SCENARIO: Readonly<InvestmentScenarioOverrides> = Obje
   seatPrice: 25,
   studioCreditPrice: 0.01,
   creditPrice: 0.01,
-  hourlyCost: 45,
-  minutesLow: 8,
-  minutesBase: 15,
-  minutesHigh: 25,
+  hourlyCost: 60,
+  minutesLow: 15,
+  minutesBase: 30,
+  minutesHigh: 45,
   realisationLow: 0.3,
   realisationBase: 0.5,
   realisationHigh: 0.7,
