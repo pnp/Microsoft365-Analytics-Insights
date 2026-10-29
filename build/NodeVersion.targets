@@ -33,13 +33,13 @@
 
     <PropertyGroup>
       <_RequiredNodeVersionRaw>@(_NodeVersionFileLine)</_RequiredNodeVersionRaw>
-      <!-- Tolerates the plain forms nvm accepts: "24", "v24", "24.21.0". Aliases such as
-           "lts/krypton" are deliberately not supported - the pin must name a major. -->
+      <!-- Tolerates the plain forms nvm accepts: "26", "v26", "26.13.0". Aliases such as
+           "lts/lithium" are deliberately not supported - the pin must name a major. -->
       <RequiredNodeMajor>$([System.Text.RegularExpressions.Regex]::Match($(_RequiredNodeVersionRaw), '[0-9]+').Value)</RequiredNodeMajor>
     </PropertyGroup>
 
     <Error Condition="'$(RequiredNodeMajor)' == ''"
-           Text="Could not read a Node.js major version from '$(NodeVersionFile)' (contents: '$(_RequiredNodeVersionRaw)'). Expected something like '24'." />
+           Text="Could not read a Node.js major version from '$(NodeVersionFile)' (contents: '$(_RequiredNodeVersionRaw)'). Expected something like '26'." />
 
     <Exec Command="node --version" ContinueOnError="true" ConsoleToMSBuild="true" StandardOutputImportance="low">
       <Output TaskParameter="ExitCode" PropertyName="_NodeExitCode" />

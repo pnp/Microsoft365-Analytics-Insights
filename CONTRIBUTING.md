@@ -34,7 +34,7 @@ This is a Windows-based .NET Framework solution. To build it you will need:
 * **Visual Studio 2022** (17.8 or later) with the *.NET desktop development*,
   *ASP.NET and web development*, and *Azure development* workloads — or a
   matching **MSBuild** install.
-* **Node.js 24 (the current LTS)** — required to build the admin web app
+* **Node.js 26.13.0 (Lithium LTS)** — required to build the admin web app
   (`src/AnalyticsEngine/Web/Scripts/portal`) and the SharePoint AI Tracker
   (`src/SPO/AITracker`). The major is pinned repo-wide in
   [`.nvmrc`](.nvmrc); see [Node.js version](#nodejs-version) below.
@@ -76,17 +76,17 @@ msbuild ".\O365 Advanced Analytics Engine.sln" /t:Build /p:Configuration=Debug
 
 Every part of the repository that runs `node` or `npm` builds on the **same
 Node.js major**, and that major lives in exactly one place: the
-[`.nvmrc`](.nvmrc) at the repository root (currently **24**, the active LTS).
+[`.nvmrc`](.nvmrc) at the repository root (currently **26.13.0**, Lithium LTS).
 
 If you use `nvm`, `nvm-windows` or `fnm`, run this once from the repository
 root and you are on the right version:
 
 ```powershell
-nvm install 24
-nvm use 24
+nvm install 26.13.0
+nvm use 26.13.0
 ```
 
-Otherwise install Node.js 24 from [nodejs.org](https://nodejs.org/).
+Otherwise install Node.js 26.13.0 from [nodejs.org](https://nodejs.org/).
 
 The pin is enforced, not merely documented, so a mismatch fails fast with a
 clear message instead of producing a subtly different bundle:
@@ -109,7 +109,7 @@ each `package.json`; nothing else hardcodes a version.
 
 `src/SPO/ModernPagesAITrackerExtension` is a SharePoint Framework project, and
 SPFx supports only the Node major that Microsoft ships support for — currently
-**Node 22**, not 24. It therefore keeps its own `.nvmrc` and its own
+**Node 22**, not 26. It therefore keeps its own `.nvmrc` and its own
 `engines.node` range, and is deliberately excluded from the repo-wide pin. It is
 not built by CI. Run `nvm use` from *that* directory before building it, and
 raise the pin only when the SPFx version in its `package.json` supports a newer
