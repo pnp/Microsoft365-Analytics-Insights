@@ -92,7 +92,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 var request = await PrepareAsync(windowDays, userFilter, dimension, cancellationToken);
                 if (request.Refusal != null) return ResponseMessage(request.Refusal);
-                var report = await ReportAsync(request.Request, FirstResponseBudget, cancellationToken);
+                var report = await ReportAsync(request.Request, FirstResponseBudget, withPeople: false, cancellationToken);
                 if (report == null) return ResponseMessage(StillBuilding());
                 return Ok(CanSeeIndividuals() ? report : report.WithoutIndividualData());
             });
@@ -132,7 +132,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 var request = await PrepareAsync(windowDays, userFilter, dimension, cancellationToken);
                 if (request.Refusal != null) return ResponseMessage(request.Refusal);
-                var report = await ReportAsync(request.Request, FirstResponseBudget, cancellationToken);
+                var report = await ReportAsync(request.Request, FirstResponseBudget, withPeople: true, cancellationToken);
                 if (report == null) return ResponseMessage(StillBuilding());
 
                 var rows = FilterPeople(report.People, signals, flag, seat, search);
@@ -155,7 +155,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 var request = await PrepareAsync(windowDays, userFilter, null, cancellationToken);
                 if (request.Refusal != null) return ResponseMessage(request.Refusal);
-                var report = await ReportAsync(request.Request, FirstResponseBudget, cancellationToken);
+                var report = await ReportAsync(request.Request, FirstResponseBudget, withPeople: true, cancellationToken);
                 if (report == null) return ResponseMessage(StillBuilding());
 
                 // Only someone this reader's scope covers: the drill-down is never a way round the filter.
@@ -181,7 +181,8 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 var request = await PrepareAsync(windowDays, userFilter, dimension, cancellationToken);
                 if (request.Refusal != null) return request.Refusal;
-                var report = await ReportAsync(request.Request, ExportWaitBudget, cancellationToken);
+                var includePeople = CanSeeIndividuals();
+                var report = await ReportAsync(request.Request, ExportWaitBudget, includePeople, cancellationToken);
                 if (report == null)
                 {
                     var notReady = WorkbookError(HttpStatusCode.ServiceUnavailable, "notReady", lang);
@@ -189,7 +190,6 @@ namespace Web.AnalyticsWeb.Controllers
                     return notReady;
                 }
 
-                var includePeople = CanSeeIndividuals();
                 var bytes = CopilotInvestmentWorkbook.Build(includePeople ? report : report.WithoutIndividualData(), includePeople, BuildConstants.BuildLabel, lang);
                 var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) };
                 response.Content.Headers.ContentType = new MediaTypeHeaderValue(CopilotInvestmentWorkbook.ContentType);
@@ -283,8 +283,12 @@ namespace Web.AnalyticsWeb.Controllers
             };
         }
 
-        /// <summary>The report, or null while the shared adoption evidence is still being built.</summary>
-        private async Task<CopilotInvestmentSummary> ReportAsync(CopilotInvestmentRequest request, TimeSpan budget, CancellationToken cancellationToken)
+        /// <summary>
+        /// The report, or null while the shared adoption evidence is still being built. <paramref name="withPeople"/> asks for the
+        /// per-person rows too: only the See PII people views and workbook sheet use them.
+        /// </summary>
+        private async Task<CopilotInvestmentSummary> ReportAsync(CopilotInvestmentRequest request, TimeSpan budget, bool withPeople,
+            CancellationToken cancellationToken)
         {
             var service = Service;
             CopilotAdoptionAnalysis analysis = null;
@@ -303,7 +307,7 @@ namespace Web.AnalyticsWeb.Controllers
                         "The Copilot Adoption score settings could not be read, so this report is not available right now. Try again shortly.");
                 }
             }
-            return await service.BuildAsync(request, analysis, cancellationToken);
+            return await service.BuildAsync(request, analysis, cancellationToken, withPeople);
         }
 
         /// <summary>
