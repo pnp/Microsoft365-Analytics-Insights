@@ -11,6 +11,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AdoptionScoring = Common.Entities.CopilotAdoption.CopilotAdoptionScoring;
+using AdoptionDateRange = Common.Entities.CopilotAdoption.CopilotAdoptionDateRange;
 using AdoptionTimePoint = Common.Entities.CopilotAdoption.AdoptionTimePoint;
 using CopilotInvestmentAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotInvestmentAPIController;
 
@@ -553,6 +554,56 @@ namespace Tests.UnitTests
             CollectionAssert.Contains(fading.Evidence, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Declining);
             var building = CopilotInvestmentPersonDetailBuilder.Build(person, Facts(d => d >= from.AddDays(14)), "EUR", from, to);
             CollectionAssert.Contains(building.Evidence, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Growing);
+        }
+
+        [TestMethod]
+        public void APersonsTrend_IsShownForTheDefaultRollingWindow_WhichEndsPartwayThroughToday()
+        {
+            // The portal's default: 28 days ending now. Its exclusive bound is a time of day, not a midnight, and the
+            // controller hands it straight to the builder. Cut at today's midnight the window read as 27 days, so each
+            // half was 13 - under the minimum - and no trend was ever shown for it. A window that ends on a midnight,
+            // as the test above builds, never showed that. Explicit dates are checked alongside: they must not change.
+            var now = new DateTime(2026, 10, 28, 15, 30, 0, DateTimeKind.Utc);
+            var person = new CopilotInvestmentPersonRow { UserId = 1, Licensed = true, Flags = new List<string>() };
+
+            foreach (var range in new[] { AdoptionDateRange.Create(28, null, null, now), AdoptionDateRange.Create(28, "2026-10-01", "2026-10-28", now.AddDays(3)) })
+            {
+                var label = range.UsesExplicitDates ? "explicit dates" : "rolling window";
+                var lastDay = CopilotInvestmentWindow.LastDay(range);
+                var middle = range.FromUtc.AddDays(14);
+
+                List<string> Evidence(Func<DateTime, bool> active)
+                {
+                    var facts = new PersonDetailFacts { ActivityAssessed = true };
+                    for (var day = range.FromUtc; day <= lastDay; day = day.AddDays(1))
+                        if (day.DayOfWeek != DayOfWeek.Saturday && day.DayOfWeek != DayOfWeek.Sunday && active(day))
+                            facts.Activity.Add(new PersonActivityRow { ActivityDate = day, AppHost = "Word", Turns = 2 });
+                    return CopilotInvestmentPersonDetailBuilder.Build(person, facts, "EUR", range.FromUtc, range.ToExclusiveUtc).Evidence;
+                }
+
+                var steady = Evidence(_ => true);
+                CollectionAssert.DoesNotContain(steady, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Declining, label);
+                CollectionAssert.DoesNotContain(steady, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Growing, label);
+                CollectionAssert.Contains(Evidence(d => d < middle), CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Declining, label);
+                CollectionAssert.Contains(Evidence(d => d >= middle), CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Growing, label);
+            }
+        }
+
+        [TestMethod]
+        public void ARollingWindowsTrend_CountsTodayInItsSecondHalf()
+        {
+            // Active only on the last three days of a 90-day window, today among them: new use, however recent. Today is
+            // part of a rolling window, so the second half must reach it; ending at today's midnight counted two days.
+            var now = new DateTime(2026, 10, 28, 15, 30, 0, DateTimeKind.Utc);
+            var range = AdoptionDateRange.Create(90, null, null, now);
+            var person = new CopilotInvestmentPersonRow { UserId = 1, Licensed = true, Flags = new List<string>() };
+            var facts = new PersonDetailFacts { ActivityAssessed = true };
+            foreach (var daysAgo in new[] { 0, 1, 2 })
+                facts.Activity.Add(new PersonActivityRow { ActivityDate = now.Date.AddDays(-daysAgo), AppHost = "Word", Turns = 5 });
+
+            var detail = CopilotInvestmentPersonDetailBuilder.Build(person, facts, "EUR", range.FromUtc, range.ToExclusiveUtc);
+
+            CollectionAssert.Contains(detail.Evidence, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Growing);
         }
 
         [TestMethod]

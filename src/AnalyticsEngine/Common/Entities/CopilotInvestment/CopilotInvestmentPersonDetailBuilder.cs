@@ -140,12 +140,15 @@ namespace Common.Entities.CopilotInvestment
 
                 // Two halves of exactly equal length, compared by active days rather than prompts: week buckets that
                 // straddle the window's edges would compare different spans and invent a trend from constant use.
-                var days = (int)(toExclusiveUtc.Date - fromUtc.Date).TotalDays;
+                // In whole calendar days: a rolling window ends at "now", partway through today, and today is part of
+                // it. Cutting at today's midnight made the default 28 days read as 27 - half of 13, under the minimum -
+                // so no trend was ever shown for it, and left today out of the second half of a longer window.
+                var start = fromUtc.Date;
+                var end = toExclusiveUtc.TimeOfDay == TimeSpan.Zero ? toExclusiveUtc.Date : toExclusiveUtc.Date.AddDays(1);
+                var days = (int)(end - start).TotalDays;
                 var half = days / 2;
                 if (half >= MinTrendHalfDays)
                 {
-                    var start = fromUtc.Date;
-                    var end = toExclusiveUtc.Date;
                     var dates = activeDates.Select(d => d.Date).Distinct().ToList();
                     var first = dates.Count(d => d >= start && d < start.AddDays(half));
                     var second = dates.Count(d => d >= end.AddDays(-half) && d < end);
