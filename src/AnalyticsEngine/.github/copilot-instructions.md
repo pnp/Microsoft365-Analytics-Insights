@@ -30,7 +30,7 @@ The portal at [`Web/Scripts/portal`](../Web/Scripts/portal/README.md) ships in *
 
 Existing component tests assert English wording, and `renderWithProvider` pins the language to English, so **a translation change that breaks a test means the English text changed** — restore the English rather than editing the test.
 
-Both checks run in CI: `tests.yml` builds the solution (which runs `npm run build`, hence `tsc`) and then runs `npm run test` in the portal directory, inside `test_dotnet (Release)` — a required check on `dev` and `main`. A branch that leaves a string untranslated cannot be merged. The `release-manager` agent runs them again before cutting a release and refuses to release on a failure.
+Both checks run in `tests.yml`'s parallel portal job, alongside `npm run typecheck:tests`. The required `test_dotnet (Release)` check on `dev` and `main` waits for that job and all .NET test shards. A branch that leaves a string untranslated cannot be merged. The `release-manager` agent runs the translation checks again before cutting a release and refuses to release on a failure.
 
 ## Portal permissions — every Web API endpoint decides who may call it
 The portal has two permissions on top of "can sign in" (issues #660, #661), granted by **Entra ID app roles** on the runtime app registration and enforced unless the `EnforcePortalRoles` app setting is `false`:

@@ -2,189 +2,28 @@ name: PR build
 
 on:
   pull_request:
-    # See issue #270: `ready_for_review` on its own never fires for a PR opened directly as
-    # non-draft (that emits `opened`), so this build simply never ran for most pull requests.
-    # `synchronize` also gets the artifacts rebuilt when new commits are pushed.
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - ready_for_review
-    # Unlike tests.yml this workflow is NOT a required status check, so keeping the path filter
-    # is safe - a PR that never triggers it is not blocked by its absence.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - src/AnalyticsEngine/**
-      - src/SPO/AITracker/**
+      - src/SPO/**
       - reports/**
-      - .github/workflows/pr.yml
-      - .github/scripts/Build-ReleasePackage.ps1
+      - build/**
+      - .nvmrc
+      - .github/ci-paths.json
+      - .github/actions/**
+      - .github/scripts/**
+      - .github/workflows/**
   workflow_dispatch:
 
-env:
-  Solution_Directory: src\AnalyticsEngine\
-  Build_Platform: Any CPU
-  Build_ProcessorArchitecture: x86
-  ClientID: ${{ secrets.APP_CLIENTID }}
-  ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
-  TenantGUID: ${{ secrets.APP_TENANTGUID }}
-  TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
-  CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
-  CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
-  ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
-  Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
-  SoftwareDownloadURL: ${{ secrets.SOFTWAREDOWNLOADURL }}
-  StatsApiSecret: ${{ secrets.STATSAPISECRET }}
-  StatsApiUrl: ${{ secrets.STATSAPIURL }}
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-packages-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build_dotnet:
-    # Preparation:
-    #   - Transform configuration files
-    #   - Restore dependencies
-    # Build:
-    #   - Build .Net projects
-    # Output:
-    #   - Clean .Net builds
-    #   - Copy PS scripts
-    #   - Zip files
-    #   - Publish artifacts
-    runs-on: windows-latest
-    # Drafts are still work in progress - do not spend four Windows runners on them.
+  packages:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    strategy:
-      matrix:
-        configuration: [Release] # [Debug, Release]
-        project:
-          - name: WebJob.AppInsightsImporter
-            file: WebJob.AppInsightsImporter.csproj
-            outDir: AppInsightsImporter
-            compressFolder: AppInsightsImporter
-          - name: WebJob.Office365ActivityImporter
-            file: WebJob.Office365ActivityImporter.csproj
-            outDir: Office365ActivityImporter
-            compressFolder: Office365ActivityImporter
-          - name: Web
-            file: Web.csproj
-            outDir: Website
-            compressFolder: Website\_PublishedWebsites\Web
-          - name: App.ControlPanel
-            file: App.ControlPanel.WinForms.csproj
-            outDir: ControlPanelApp
-            compressFolder: ControlPanelApp
-    steps:
-      - name: Prepare build
-        id: prep
-        shell: bash
-        run: |
-          mkdir -p "${{ env.Zips_Folder }}"
-          echo "ZIPS_FOLDER=${{ env.Zips_Folder }}" >> "$GITHUB_OUTPUT"
-        env:
-          Zips_Folder: ${{ runner.temp }}/zips/
-
-      - name: Checkout source
-        uses: actions/checkout@v6
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v3
-      # Building Web.csproj runs `npm install` + `npm run build` for the portal SPA via MSBuild, so
-      # this job needs the same pinned Node as every other npm step. The version comes from the
-      # repo-root .nvmrc - never hardcode it here.
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: src/AnalyticsEngine/Web/Scripts/portal/package-lock.json
-
-      # Configuration files
-      - name: Year substitution
-        shell: bash
-        run: |
-          year=$(date +%Y)
-          find ./src -name AssemblyInfo.cs | xargs sed -i "s/© __year__/© $year/"
-      - name: Config substitutions
-        uses: devops-actions/variable-substitution@v2.0.0
-        with:
-          files: '${{ env.Solution_Directory }}\*\App.Release.config, ${{ env.Solution_Directory }}\Web\Web.Release.config'
-
-      # Build the project
-      - name: Restore the application
-        run: msbuild ${{ env.Solution_Directory }}\${{ matrix.project.name }}\${{ matrix.project.file }} -t:Restore `
-          -p:Configuration=${{ matrix.configuration }} `
-          -p:Platform="${{ env.Build_Platform }}" `
-          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
-
-      - name: Build ${{ matrix.project.name }}
-        run: msbuild ${{ env.Solution_Directory }}\${{ matrix.project.name }}\${{ matrix.project.file }} `
-          -p:Configuration=${{ matrix.configuration }} `
-          -p:Platform="${{ env.Build_Platform }}" `
-          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
-          -p:OutDir=${{ runner.temp }}\${{ matrix.project.outDir }} `
-          -p:OutputPath=${{ matrix.configuration }} `
-          -p:AllowedReferenceRelatedFileExtensions=none `
-          -p:EmitCompilerGeneratedFiles=false
-
-      - name: Copy Automation scripts (WebJob.Office365ActivityImporter only)
-        if: matrix.project.name == 'WebJob.Office365ActivityImporter'
-        run: |
-          Copy-Item -Verbose -Force -Recurse `
-          -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS" `
-          -Destination "${{ runner.temp }}\Office365ActivityImporter\"
-
-      - name: Archive ${{ matrix.project.name }}
-        run: |
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\AppInsightsImporter\_PublishedWebsites"
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
-          # Same packaging as ci.yml, so a PR build fails here if it would ship a dependency that
-          # doesn't belong in a package.
-          ./.github/scripts/Build-ReleasePackage.ps1 `
-            -Path "${{ runner.temp }}\${{ matrix.project.compressFolder }}" `
-            -Package "${{ matrix.project.outDir }}" `
-            -DestinationPath "${{ env.folder }}\${{ matrix.project.outDir }}.zip"
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
-
-      # Wrap up
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          path: ${{ env.folder }}
-          name: drop_${{ matrix.project.name }}
-          if-no-files-found: error
-        env:
-          folder: ${{ steps.prep.outputs.ZIPS_FOLDER }}
-
-  build_aitracker:
-    # NPM ai tracker
-    # Build:
-    #   - Build AI Tracker
-    # Output:
-    #   - Clean AI Tracker
-    #   - Zip files
-    #   - Publish artifacts
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v6
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: src/SPO/AITracker/TypeScript/package-lock.json
-      - name: Build AITracker
-        run: |
-          cd src/SPO/AITracker/TypeScript
-          npm ci
-          npm run build:prod
-          cd ../..
-          rm -rf AITracker/TypeScript
-          zip -r AITrackerInstaller.zip AITracker
-      # Wrap up
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          path: src/SPO/AITrackerInstaller.zip
-          name: drop_aitracker
-          if-no-files-found: error
+    uses: ./.github/workflows/build-packages.yml
+    secrets: inherit
