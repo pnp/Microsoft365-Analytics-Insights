@@ -126,12 +126,15 @@ export default function CopilotInvestmentSettingsPage() {
   const t = useT();
   const [model, setModel] = useState<InvestmentSettingsModel | null>(null);
   const [text, setText] = useState<FormText | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<{ code: string | null } | null>(null);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [saved, setSaved] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
+  // Loads when the page opens and when the administrator asks for the latest - never because the language
+  // changed: a refetch would overwrite what they are typing. So `t` stays out of these dependencies, and a
+  // failure is kept as its code and worded at render time, in whatever language is showing then.
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
@@ -144,12 +147,12 @@ export default function CopilotInvestmentSettingsPage() {
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        setLoadError(e instanceof InvestmentSettingsError ? errorText(t, e.code) : t('copilotInvestment.settings.error.loadFailed'));
+        setLoadError({ code: e instanceof InvestmentSettingsError ? e.code : null });
       });
     return () => {
       cancelled = true;
     };
-  }, [reloadKey, t]);
+  }, [reloadKey]);
 
   const save = async () => {
     if (!model || !text) return;
@@ -197,7 +200,7 @@ export default function CopilotInvestmentSettingsPage() {
 
       {loadError && (
         <MessageBar intent="error">
-          <MessageBarBody>{loadError}</MessageBarBody>
+          <MessageBarBody>{loadError.code === null ? t('copilotInvestment.settings.error.loadFailed') : errorText(t, loadError.code)}</MessageBarBody>
         </MessageBar>
       )}
       {!model && !loadError && <Spinner size={48} label={t('copilotInvestment.settings.loading')} />}
