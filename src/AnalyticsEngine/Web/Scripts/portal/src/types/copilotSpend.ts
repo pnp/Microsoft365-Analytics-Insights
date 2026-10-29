@@ -76,10 +76,10 @@ export interface SpendEnvironment {
   /** `otherEnvironments` on the row combining environments too small to show to a reader without See PII. */
   emptyKey: 'otherEnvironments' | null;
   folded: number;
-  /** A combined row still too small to show figures for: credits and days are null. */
+  /** The combined row, which never carries figures: credits and days are null, and people only when one environment is combined. */
   withheld: boolean;
   credits: number | null;
-  people: number;
+  people: number | null;
   days: number | null;
 }
 

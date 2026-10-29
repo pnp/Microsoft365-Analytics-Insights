@@ -66,7 +66,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.studio.noDays': 'Sin uso facturado en este periodo.',
   'copilotSpend.studio.environmentsTitle': 'Por entorno',
   'copilotSpend.studio.environmentsDescription':
-    'Créditos facturados por cada entorno de Power Platform en el periodo, para las personas de esta vista. Microsoft notifica el uso de cada persona por entorno, no por agente, así que suman el total anterior.',
+    'Créditos facturados por cada entorno de Power Platform en el periodo, para las personas de esta vista. Microsoft notifica el uso de cada persona por entorno, no por agente, así que suman el total anterior, salvo una fila combinada de entornos con muy pocas personas, que no muestra cifras.',
   'copilotSpend.studio.col.environment': 'Entorno',
   'copilotSpend.studio.unnamedEnvironment': 'Nombre del entorno no disponible',
   'copilotSpend.studio.otherEnvironments': 'Otros entornos ({count})',
@@ -430,7 +430,8 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.workbook.studio.day.notReported': 'Aún no está en el registro (no es cero)',
   'copilotSpend.workbook.studio.col.credits': 'Créditos facturados',
   'copilotSpend.workbook.studio.col.people': 'Personas',
-  'copilotSpend.workbook.studio.environmentsTitle': 'Por entorno de Power Platform (registro por persona: suma el total diario)',
+  'copilotSpend.workbook.studio.environmentsTitle':
+    'Por entorno de Power Platform (registro por persona: suma el total diario, salvo una fila combinada de entornos con muy pocas personas)',
   'copilotSpend.workbook.studio.col.environment': 'Entorno',
   'copilotSpend.workbook.studio.col.environmentId': 'Id. del entorno',
   'copilotSpend.workbook.studio.unnamedEnvironment': '(nombre del entorno no disponible)',

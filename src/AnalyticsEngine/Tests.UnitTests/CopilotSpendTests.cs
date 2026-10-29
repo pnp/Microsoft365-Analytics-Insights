@@ -304,6 +304,41 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void SeveralSmallEnvironments_AreCombinedWithNoFiguresAndNoCount_BecauseThePeopleInThemOverlap()
+        {
+            // Three environments of two people each add up to six, but the same two people can be in all three. The ledger
+            // keeps each environment's own distinct count and none for the combination, so nothing shows it reaches the
+            // smallest group the report shows: it must not pass on a sum.
+            var input = Input();
+            input.StudioBreakdown.Environments.Clear();
+            input.StudioBreakdown.Environments.Add(new CopilotSpendEnvironment { EnvironmentId = "env-1", EnvironmentName = "Contoso (default)", Credits = 50, People = 12, Days = 9 });
+            foreach (var n in new[] { 2, 3, 4 })
+                input.StudioBreakdown.Environments.Add(new CopilotSpendEnvironment { EnvironmentId = "env-" + n, EnvironmentName = "Contoso sandbox " + n, Credits = 7.5, People = 2, Days = 4 });
+            var summary = CopilotSpendCalculator.Calculate(input);
+
+            var trimmed = summary.WithoutIndividualData();
+
+            var combined = trimmed.Studio.Environments.Single(e => e.EmptyKey == CopilotSpendGroupKeys.OtherEnvironments);
+            Assert.AreEqual(3, combined.Folded);
+            Assert.IsTrue(combined.Withheld, "Six is a sum of three counts that can overlap, not a count of people.");
+            Assert.IsNull(combined.Credits);
+            Assert.IsNull(combined.Days);
+            Assert.IsNull(combined.People, "No distinct count of the combination exists, so none is stated.");
+            Assert.IsFalse(trimmed.Studio.Environments.Any(e => (e.EnvironmentName ?? string.Empty).Contains("sandbox")), "No small environment keeps its name.");
+
+            var shown = trimmed.Studio.Environments.Single(e => e.EnvironmentId == "env-1");
+            Assert.AreEqual(50d, shown.Credits, "An environment of enough people on its own keeps its name and figures.");
+            Assert.AreEqual(12, shown.People);
+            Assert.IsFalse(shown.Withheld);
+            Assert.AreEqual(4, summary.Studio.Environments.Count, "The cached summary, which a reader with See PII is given, is never edited.");
+
+            var texts = CopilotInvestmentWorkbookLanguageTests.Texts(CopilotInvestmentWorkbookLanguageTests.Sheets(
+                CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.English)));
+            CollectionAssert.Contains(texts, PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, PortalLanguage.English).Text("copilotSpend.workbook.studio.environmentsWithheld"));
+            Assert.IsFalse(texts.Any(t => t.Contains("sandbox")), "The workbook names no small environment either.");
+        }
+
+        [TestMethod]
         public void AReaderWithoutSeePii_GetsAggregatesOnly_OnACopy()
         {
             var summary = CopilotSpendCalculator.Calculate(Input());

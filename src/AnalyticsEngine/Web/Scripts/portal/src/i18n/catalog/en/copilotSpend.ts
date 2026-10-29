@@ -61,7 +61,7 @@ export const copilotSpend = {
   'copilotSpend.studio.noDays': 'No billed usage in this period.',
   'copilotSpend.studio.environmentsTitle': 'By environment',
   'copilotSpend.studio.environmentsDescription':
-    'Billed credits per Power Platform environment in the period, for the people in this view. Microsoft reports each person\u2019s usage by environment, not by agent, so these add up to the total above.',
+    'Billed credits per Power Platform environment in the period, for the people in this view. Microsoft reports each person\u2019s usage by environment, not by agent, so these add up to the total above, apart from a combined row of environments with too few people, which shows no figures.',
   'copilotSpend.studio.col.environment': 'Environment',
   'copilotSpend.studio.unnamedEnvironment': 'Environment name not available',
   'copilotSpend.studio.otherEnvironments': 'Other environments ({count})',
@@ -418,7 +418,8 @@ export const copilotSpend = {
   'copilotSpend.workbook.studio.day.notReported': 'Not in the ledger yet (not zero)',
   'copilotSpend.workbook.studio.col.credits': 'Billed credits',
   'copilotSpend.workbook.studio.col.people': 'People',
-  'copilotSpend.workbook.studio.environmentsTitle': 'By Power Platform environment (per-person ledger: adds up to the daily total)',
+  'copilotSpend.workbook.studio.environmentsTitle':
+    'By Power Platform environment (per-person ledger: adds up to the daily total, apart from a combined row of environments with too few people)',
   'copilotSpend.workbook.studio.col.environment': 'Environment',
   'copilotSpend.workbook.studio.col.environmentId': 'Environment ID',
   'copilotSpend.workbook.studio.unnamedEnvironment': '(environment name not available)',

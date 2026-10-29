@@ -195,8 +195,13 @@ namespace Common.Entities.CopilotSpend
 
         /// <summary>
         /// A copy whose environments used by fewer than <paramref name="minPeople"/> people are combined into one row, named
-        /// by the report rather than by the tenant, and whose figures are withheld if the combination is still that small:
-        /// a developer's own environment would otherwise show one person's charges under a name that identifies them.
+        /// by the report rather than by the tenant, with no figures: a developer's own environment would otherwise show one
+        /// person's charges under a name that identifies them.
+        /// <para>The row is always withheld because nothing here can show the combination is large enough. Each
+        /// environment's count is its own distinct people, so someone who used two of them is in both counts: adding them
+        /// overstates the combination, and the ledger query keeps no distinct count of it. Every environment folded here
+        /// is below <paramref name="minPeople"/> on its own, so the largest of them proves nothing either. The count is
+        /// stated only when one environment is folded, where it is exact.</para>
         /// </summary>
         public CopilotSpendStudio WithSmallEnvironmentsCombined(int minPeople)
         {
@@ -204,20 +209,13 @@ namespace Common.Entities.CopilotSpend
             var small = Environments.Where(e => e.EmptyKey == null && e.People < minPeople).ToList();
             if (small.Count == 0) return copy;
             copy.Environments = Environments.Except(small).ToList();
-            var people = small.Sum(e => e.People);
-            var combined = new CopilotSpendEnvironment
+            copy.Environments.Add(new CopilotSpendEnvironment
             {
                 EmptyKey = CopilotSpendGroupKeys.OtherEnvironments,
                 Folded = small.Count,
-                People = people,
-                Withheld = people < minPeople,
-            };
-            if (!combined.Withheld)
-            {
-                combined.Credits = Math.Round(small.Sum(e => e.Credits ?? 0), 6);
-                combined.Days = small.Max(e => e.Days);
-            }
-            copy.Environments.Add(combined);
+                People = small.Count == 1 ? small[0].People : (int?)null,
+                Withheld = true,
+            });
             return copy;
         }
     }
@@ -269,15 +267,16 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("folded")]
         public int Folded { get; set; }
 
-        /// <summary>True when the combined row is still too small to show figures for: its credits and days are null.</summary>
+        /// <summary>True on the combined row, which is never shown with figures: its credits and days are null (see <see cref="CopilotSpendStudio.WithSmallEnvironmentsCombined"/>).</summary>
         [JsonProperty("withheld")]
         public bool Withheld { get; set; }
 
         [JsonProperty("credits")]
         public double? Credits { get; set; }
 
+        /// <summary>People who used the environment. Null on a combined row of several environments: it has no distinct count.</summary>
         [JsonProperty("people")]
-        public int People { get; set; }
+        public int? People { get; set; }
 
         [JsonProperty("days")]
         public int? Days { get; set; }

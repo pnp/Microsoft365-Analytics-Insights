@@ -827,7 +827,7 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
                       <ShareCell share={studio.credits ? e.credits / studio.credits : null} text={formatCredits(e.credits)} />
                     )}
                   </TableCell>
-                  <TableCell className={styles.num}>{formatNumber(e.people)}</TableCell>
+                  <TableCell className={styles.num}>{e.people === null ? '\u2014' : formatNumber(e.people)}</TableCell>
                   <TableCell className={styles.num}>{e.days === null ? '\u2014' : formatNumber(e.days)}</TableCell>
                 </TableRow>
               ))}
