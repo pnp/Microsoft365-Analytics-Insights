@@ -41,6 +41,7 @@ namespace Common.Entities.CopilotCosts
         public DateTimeOffset? RefreshedAt { get; set; }
         public CostAuthorization Pending { get; set; }
         public CostProbeProgress Probe { get; set; }
+        public CostApiHealth CollectionHealth { get; set; }
     }
 
     public sealed class CostAuthorization

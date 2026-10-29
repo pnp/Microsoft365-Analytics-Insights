@@ -34,6 +34,7 @@ vi.mock('../api/userFilterApi', () => ({
   fetchUserFilterDimensions: vi.fn(async () => ({ people: 400, loadedUtc: '2026-10-27T00:00:00Z', dimensions: [] })),
   fetchUserFilterValues: vi.fn(async () => ({ values: [], truncated: false })),
 }));
+vi.mock('../api/costApiHealthApi', () => ({ fetchCostApiHealth: vi.fn(async () => []) }));
 
 const GREEK = '\u0391\u03b8\u03ae\u03bd\u03b1';
 

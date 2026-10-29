@@ -424,6 +424,7 @@
   <ItemGroup>
     <Compile Include="App_Start\Startup.CopilotCosts.cs" />
     <Compile Include="Controllers\CopilotCostConnectionAPIController.cs" />
+    <Compile Include="Controllers\CopilotCostHealthAPIController.cs" />
     <Compile Include="Controllers\CopilotInvestmentAPIController.cs" />
     <Compile Include="Controllers\CopilotInvestmentSettingsAPIController.cs" />
     <Compile Include="Controllers\CopilotSpendAPIController.cs" />

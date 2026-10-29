@@ -104,6 +104,7 @@ namespace Tests.UnitTests
             ["CopilotCostConnectionAPIController.Disconnect"] = Admin,
             ["CopilotCostConnectionAPIController.Probe"] = Admin,
             ["CopilotCostConnectionAPIController.ResetProbe"] = Admin,
+            ["CopilotCostHealthAPIController.Get"] = Any,              // connection outcomes and timestamps only; no account or tenant identifiers
 
             ["CopilotInvestmentAPIController.Availability"] = Any,
             ["CopilotInvestmentAPIController.Summary"] = Any,          // trims the people; a user filter or manager grouping needs See PII

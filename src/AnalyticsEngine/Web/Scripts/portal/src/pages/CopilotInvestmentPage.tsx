@@ -21,6 +21,7 @@ import { formatNumber, useI18n, useT, type TranslationKey } from '../i18n';
 import { usePortalAccess } from '../access';
 import Spinner from '../components/Spinner';
 import PrintButton from '../components/shared/PrintButton';
+import CostApiWarnings from '../components/shared/CostApiWarnings';
 import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 import UserFilterBar from '../components/userFilter/UserFilterBar';
 import UserFilterPrintSummary from '../components/userFilter/UserFilterPrintSummary';
@@ -290,6 +291,7 @@ function InvestmentView({ userFilter: controlledFilter, onUserFilterChange }: {
       )}
 
       <GlobalFilterBar />
+      <CostApiWarnings />
 
       {canSeePii && (
         <>

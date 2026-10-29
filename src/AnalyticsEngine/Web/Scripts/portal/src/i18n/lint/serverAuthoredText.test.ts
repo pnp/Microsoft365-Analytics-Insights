@@ -12,6 +12,7 @@ import {
   BLOB_CHECKPOINT_REASON_KEYS,
   DEFAULT_HEALTH_REASON_KEYS,
   AGENT_COST_CONNECTION_REASON_KEYS,
+  COST_API_REASON_KEYS,
   HEALTH_COMPONENT_LABEL_KEYS,
   translateHealthComponentDetailText,
   translateHealthReasonText,
@@ -86,6 +87,23 @@ describe('Default runtime health diagnostics', () => {
 });
 
 describe('Delegated billing import diagnostics', () => {
+  it('translates every cost API health reason and its component roll-up', async () => {
+    await loadCatalog('es');
+    const source = readFileSync(join(process.cwd(), '..', '..', '..', 'Common', 'Entities',
+      'CopilotCosts', 'CostApiHealthReader.cs'), 'utf8');
+    expect(translationKeysIn(source, 'costApi.')).toEqual(Object.keys(COST_API_REASON_KEYS).sort());
+    const es: TFunction = (key, values) => translateStatic('es', key, values);
+    for (const key of Object.values(COST_API_REASON_KEYS)) {
+      expect(source).toContain(`"${EN_CATALOG[key]}"`);
+      expect(translateHealthComponentDetailText(EN_CATALOG[key], es)).toBe(es(key));
+      expect(es(key)).not.toBe(EN_CATALOG[key]);
+    }
+    expect(translateHealthReasonText(`CopilotCostApi is degraded: ${EN_CATALOG['health.reason.costApiFailing']}`, es))
+      .toBe(es('health.reason.componentDegraded', {
+        component: es('health.component.CopilotCostApi'), detail: es('health.reason.costApiFailing'),
+      }));
+  });
+
   it('translates every billing connection health state and its overall roll-up', async () => {
     await loadCatalog('es');
     const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'Health', 'HealthService.cs'), 'utf8');
@@ -720,7 +738,7 @@ function healthComponentKeys(): string[] {
 describe('Health component display names', () => {
   it('translates every concrete component name the server can send today', () => {
     const serverKeys = healthComponentKeys();
-    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'Credential', 'MessageTracing', 'PowerPlatformConnection', 'ServiceBus', 'Sql']);
+    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'CopilotCostApi', 'CopilotStudioConsumption', 'Credential', 'MessageTracing', 'PowerPlatformConnection', 'ServiceBus', 'Sql']);
 
     const missingMapEntries = serverKeys.filter((key) => !(key in HEALTH_COMPONENT_LABEL_KEYS));
     const missingCatalogEntries = serverKeys

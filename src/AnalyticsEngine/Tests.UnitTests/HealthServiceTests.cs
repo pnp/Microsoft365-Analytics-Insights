@@ -4,6 +4,7 @@ using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Models.Health;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.CopilotCosts;
 using Common.Entities.Entities.UsageReports;
 using DataUtils.AppInsights;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -32,7 +33,28 @@ namespace Tests.UnitTests
     public class HealthServiceTests
     {
         private static HealthService Build(FakeHealthDataSource source, InMemoryHealthCache cache)
-            => new HealthService(source, cache);
+            => new HealthService(source, cache, costApiHealth: NoCostApiHealth);
+
+        private static Task<CostApiConnectionHealth[]> NoCostApiHealth(AppConfig config, CancellationToken token)
+            => Task.FromResult(new CostApiConnectionHealth[0]);
+
+        [TestMethod]
+        public async Task CostApiRefusalDegradesHealthEvenWhenSavedConnectionIsConnected()
+        {
+            var service = new HealthService(new FakeHealthDataSource(), new InMemoryHealthCache(),
+                _ => Task.FromResult("connected"),
+                (_, __) => Task.FromResult(new[]
+                {
+                    CostApiHealthReader.Build("graph", "permissionDenied", new CostApiHealth()),
+                    CostApiHealthReader.Build("studio", "disabled", null)
+                }));
+            var components = await service.LoadComponentsAsync(AgentCostHealthConfig(true, false));
+            var row = components.ComponentHealth.Single(c => c.Component == "CopilotCostApi");
+            Assert.AreEqual("Unhealthy", row.Status);
+            Assert.AreEqual("costApi.permissionDenied", row.ReasonKey);
+            Assert.IsFalse(components.ComponentHealth.Any(c => c.Component == "CopilotStudioConsumption"));
+            Assert.AreEqual("Unhealthy", components.Status);
+        }
 
         [DataTestMethod]
         [DataRow("connected", "Healthy", "agentCostConnection.connected")]
@@ -46,7 +68,7 @@ namespace Tests.UnitTests
             {
                 reads++;
                 return Task.FromResult(connectionStatus);
-            });
+            }, costApiHealth: NoCostApiHealth);
             var config = AgentCostHealthConfig(true, false);
 
             var components = await service.LoadComponentsAsync(config);
@@ -69,7 +91,7 @@ namespace Tests.UnitTests
         {
             var reads = 0;
             var service = new HealthService(new FakeHealthDataSource(), new InMemoryHealthCache(),
-                _ => { reads++; return Task.FromResult("disconnected"); });
+                _ => { reads++; return Task.FromResult("disconnected"); }, costApiHealth: NoCostApiHealth);
             var components = await service.LoadComponentsAsync(AgentCostHealthConfig(false, azureCosts));
             Assert.AreEqual(0, reads, "Disabled credit tracking must not access the connection store.");
             Assert.IsFalse(components.ComponentHealth.Any(c => c.Component == "PowerPlatformConnection"));
@@ -84,7 +106,7 @@ namespace Tests.UnitTests
             var service = new HealthService(new FakeHealthDataSource(), new InMemoryHealthCache(),
                 _ => status == null
                     ? Task.FromException<string>(new InvalidOperationException("Private diagnostic"))
-                    : Task.FromResult(status));
+                    : Task.FromResult(status), costApiHealth: NoCostApiHealth);
             var components = await service.LoadComponentsAsync(AgentCostHealthConfig(true, false));
             var row = components.ComponentHealth.Single(c => c.Component == "PowerPlatformConnection");
             Assert.AreEqual("agentCostConnection.checkFailed", row.ReasonKey);

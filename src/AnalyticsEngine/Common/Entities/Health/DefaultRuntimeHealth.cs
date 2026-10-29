@@ -1,4 +1,5 @@
 using Common.Entities.Config;
+using Common.Entities.CopilotCosts;
 using DataUtils;
 using DataUtils.Health;
 using DataUtils.Sql;
@@ -23,13 +24,20 @@ namespace Common.Entities.Health
         public static IDisposable Start(AppConfig config, AnalyticsLogger logger, string jobName)
         {
             if (!config.EnableDefaultHealthChecks) return null;
-            return new RuntimeHealthMonitor(
-                new Dictionary<HealthComponent, Func<CancellationToken, Task<RuntimeHealthResult>>>
+            var checks = new Dictionary<HealthComponent, Func<CancellationToken, Task<RuntimeHealthResult>>>
                 {
                     [HealthComponent.Sql] = token => CheckSqlAsync(config.ConnectionStrings.DatabaseConnectionString, token),
                     [HealthComponent.Credential] = token => RuntimeCredentialHealth.CheckAsync(config.TenantGUID.ToString(),
                         config.ClientID, config.ClientSecret, config.UseClientCertificate, config.KeyVaultUrl, token)
-                },
+                };
+            if (jobName == ImporterHeartbeat.ActivityJob)
+            {
+                checks[HealthComponent.CopilotCostApi] = async token =>
+                    (await CostApiHealthReader.ReadGraphAsync(config, token).ConfigureAwait(false)).ToRuntimeResult(DateTimeOffset.UtcNow);
+                checks[HealthComponent.CopilotStudioConsumption] = async token =>
+                    (await CostApiHealthReader.ReadStudioAsync(config).ConfigureAwait(false)).ToRuntimeResult(DateTimeOffset.UtcNow);
+            }
+            return new RuntimeHealthMonitor(checks,
                 (component, result) => logger.TrackHealthCheck(component, result.Status, result.Detail,
                     result.DaysToExpiry, result.ReasonKey, jobName));
         }

@@ -36,6 +36,7 @@ vi.mock('../api/userFilterApi', () => ({
   fetchUserFilterDimensions: vi.fn(async () => ({ people: 400, loadedUtc: '2026-10-27T00:00:00Z', dimensions: [] })),
   fetchUserFilterValues: vi.fn(async () => ({ values: [], truncated: false })),
 }));
+vi.mock('../api/costApiHealthApi', () => ({ fetchCostApiHealth: vi.fn(async () => []) }));
 
 /** A synthetic Contoso report: illustrative test inputs and rounded counts, no real tenant data. */
 function summary(overrides: Partial<CopilotInvestmentSummary> = {}): CopilotInvestmentSummary {
