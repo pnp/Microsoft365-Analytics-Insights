@@ -208,6 +208,37 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void ACombinedRowOfTooFewPeople_IsWrittenAsItsReasonAlone_InEitherLanguage()
+        {
+            // Three people in two small groups, against a minimum of four: the row says why it has no figures, and has none.
+            var summary = CopilotInvestmentCalculator.Calculate(CopilotInvestmentCalculatorTests.SmallGroupsInput(minGroupSize: 4));
+            var english = CopilotInvestmentWorkbook.Build(summary.WithoutIndividualData(), false, "test", PortalLanguage.English);
+            var spanish = CopilotInvestmentWorkbook.Build(summary.WithoutIndividualData(), false, "test", PortalLanguage.Spanish);
+            AssertSpanishCounterpart(english, spanish);
+
+            foreach (var (language, book) in new[] { (PortalLanguage.English, english), (PortalLanguage.Spanish, spanish) })
+            {
+                var text = PortalCatalog.For(Module, language);
+                var organisation = Sheets(book)[Array.IndexOf(SheetKeys, "organisation")].Cells;
+                var reason = organisation.Single(c => c.Text == text.Text("copilotInvestment.workbook.org.combinedWithheld", ("count", "4")));
+
+                var row = Regex.Match(reason.Ref, "\\d+").Value;
+                Assert.AreEqual(1, organisation.Count(c => Regex.Match(c.Ref, "\\d+").Value == row), language + ": the reason is alone on its row.");
+                CollectionAssert.DoesNotContain(Texts(new[] { ("Organisation", organisation) }), text.Text("copilotInvestment.workbook.org.combined"), language.ToString());
+                Assert.IsFalse(organisation.Any(c => c.Value == "7777"), language + ": the balance of the one person in Legal is not written.");
+                Assert.IsTrue(organisation.Any(c => c.Text == "Sales"), language + ": a group that reaches the minimum is written as ever.");
+            }
+
+            // Once the same three people reach the minimum the row is an ordinary one: its label and its figures, no reason.
+            var enough = CopilotInvestmentCalculator.Calculate(CopilotInvestmentCalculatorTests.SmallGroupsInput(minGroupSize: 3));
+            var plain = Sheets(CopilotInvestmentWorkbook.Build(enough.WithoutIndividualData(), false, "test", PortalLanguage.English))[Array.IndexOf(SheetKeys, "organisation")].Cells;
+            var en = PortalCatalog.For(Module, PortalLanguage.English);
+            var label = plain.Single(c => c.Text == en.Text("copilotInvestment.workbook.org.combined"));
+            Assert.IsTrue(plain.Any(c => c.Ref != label.Ref && c.Value == "7777"), "The combined row's credits are written.");
+            Assert.IsFalse(plain.Any(c => c.Text != null && c.Text.Contains("figures not shown")));
+        }
+
+        [TestMethod]
         public void TheCoverageLine_DescribesBothFilters_InTheReadersLanguage()
         {
             var summary = Summary();

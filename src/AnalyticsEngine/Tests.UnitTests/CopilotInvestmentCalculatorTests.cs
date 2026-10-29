@@ -232,6 +232,68 @@ namespace Tests.UnitTests
                 "An aggregate grouping by department is not individual data.");
         }
 
+        /// <summary>
+        /// Five people in Sales, one in Legal (holding a distinctive balance) and two in Finance. Legal and Finance each fall
+        /// short of a minimum of three or more, and together they are exactly three people.
+        /// </summary>
+        internal static CopilotInvestmentInput SmallGroupsInput(int minGroupSize)
+        {
+            var people = Enumerable.Range(1, 5).Select(id => Holder(id, 10, department: "Sales")).ToList();
+            people.Add(Holder(6, 9, credit: Balance(6, 7777), department: "Legal"));
+            people.Add(Holder(7, 4, department: "Finance"));
+            people.Add(Holder(8, 2, department: "Finance"));
+            var input = Input(people, Assumptions());
+            input.MinGroupSize = minGroupSize;
+            return input;
+        }
+
+        [TestMethod]
+        public void TheCombinedRowOfSmallGroups_ShowsNoFigures_WhenItIsMadeOfFewerPeopleThanTheMinimum()
+        {
+            // A minimum of four: Legal and Finance are three people between them - fewer than a group needs to be shown.
+            var summary = CopilotInvestmentCalculator.Calculate(SmallGroupsInput(minGroupSize: 4));
+            var groups = summary.Organisation.Groups;
+
+            Assert.AreEqual(2, groups.Count);
+            Assert.AreEqual("Sales", groups[0].Label);
+            Assert.IsFalse(groups[0].Withheld, "A group that reaches the minimum is shown as it always was.");
+            Assert.AreEqual(5, groups[0].Holders);
+
+            var combined = groups[1];
+            Assert.AreEqual(CopilotInvestmentCalculator.GroupKeys.OtherSmallGroups, combined.EmptyKey);
+            Assert.IsTrue(combined.Withheld, "Three people in two groups are fewer than a minimum of four.");
+            Assert.AreEqual(2, summary.Organisation.FoldedGroups, "How many groups were combined is still said.");
+            Assert.IsNull(combined.Label);
+            Assert.AreEqual(0, combined.Holders + combined.ActiveHolders + combined.IdleHolders + combined.CreditConsumers + combined.UnlicensedActiveUsers);
+            Assert.AreEqual(0, combined.Credits, "The one balance among the three people is not shown.");
+            Assert.AreEqual(0, combined.StudioCredits);
+            Assert.IsNull(combined.ActiveShare);
+            Assert.IsNull(combined.ActiveDaysPerHolderMonthly);
+            Assert.IsNull(combined.Cost);
+            Assert.IsNull(combined.ValueBase);
+            Assert.IsNull(combined.RoiBase);
+
+            var json = JsonConvert.SerializeObject(combined);
+            StringAssert.Contains(json, "\"withheld\":true");
+            Assert.IsFalse(json.Contains("7777"), "Nothing of the three people leaves the server: " + json);
+        }
+
+        [TestMethod]
+        public void TheCombinedRowOfSmallGroups_ShowsItsFigures_OnceItReachesTheMinimum()
+        {
+            // A minimum of three: the same three people are enough, so the row is described like any other group.
+            var summary = CopilotInvestmentCalculator.Calculate(SmallGroupsInput(minGroupSize: 3));
+            var combined = summary.Organisation.Groups.Single(g => g.EmptyKey == CopilotInvestmentCalculator.GroupKeys.OtherSmallGroups);
+
+            Assert.IsFalse(combined.Withheld);
+            Assert.AreEqual(3, combined.Holders);
+            Assert.AreEqual(7777, combined.Credits);
+            Assert.AreEqual(1, combined.CreditConsumers);
+            Assert.IsNotNull(combined.Cost);
+            Assert.AreEqual(2, summary.Organisation.FoldedGroups);
+            StringAssert.Contains(JsonConvert.SerializeObject(combined), "\"withheld\":false");
+        }
+
         [TestMethod]
         public void AFilteredView_WithholdsTenantOnlyFacts()
         {

@@ -85,7 +85,7 @@ namespace Common.Entities.CopilotInvestment
 
             foreach (var group in shown)
             {
-                var row = GroupRow(context, group.People);
+                var row = GroupRow(context, group.People, organisation.MinGroupSize);
                 if (group.Label == null) row.EmptyKey = GroupKeys.NotSet;
                 else row.Label = group.Label;
                 organisation.Groups.Add(row);
@@ -93,7 +93,7 @@ namespace Common.Entities.CopilotInvestment
 
             if (folded.Count > 0)
             {
-                var row = GroupRow(context, folded.SelectMany(g => g.People).ToList());
+                var row = GroupRow(context, folded.SelectMany(g => g.People).ToList(), organisation.MinGroupSize);
                 row.EmptyKey = GroupKeys.OtherSmallGroups;
                 organisation.Groups.Add(row);
                 organisation.FoldedGroups = folded.Count;
@@ -103,8 +103,15 @@ namespace Common.Entities.CopilotInvestment
 
         private static string NullIfBlank(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
-        private static CopilotInvestmentGroupRow GroupRow(Context context, List<CopilotInvestmentPerson> people)
+        /// <summary>
+        /// One group's figures. A row with fewer people than the smallest group shown - only ever a combination of small
+        /// groups, since a shown group has at least that many - shows none at all, so the combined row cannot single out
+        /// the one to four people it is made of. The same rule, and the same unit (everybody in the group), as Copilot Spend.
+        /// </summary>
+        private static CopilotInvestmentGroupRow GroupRow(Context context, List<CopilotInvestmentPerson> people, int minGroupSize)
         {
+            if (people.Count < minGroupSize) return new CopilotInvestmentGroupRow { Withheld = true };
+
             // The matched holders only, so a group's return compares the same people's value and cost.
             var holders = people.Where(Context.Matched).ToList();
             var active = holders.Count(h => h.ActiveDays > 0);

@@ -13,7 +13,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { formatNumber, useT } from '../../i18n';
-import type { CopilotInvestmentSummary } from '../../types/copilotInvestment';
+import type { CopilotInvestmentSummary, InvestmentGroupRow } from '../../types/copilotInvestment';
 import type { UserFilterDimension } from '../../types/userFilter';
 import { dimensionLabel } from '../userFilter/describeUserFilter';
 import {
@@ -60,6 +60,16 @@ export default function OrganisationPanel({ summary, dimension, onDimensionChang
   // A month at a time, like the headline figures, so every period reads on the same scale.
   const months = summary.monthsInWindow > 0 ? summary.monthsInWindow : 1;
   const monthly = (value: number | null): number | null => (value === null ? null : value / months);
+  const withheld = t('copilotInvestment.org.withheld', { count: formatNumber(organisation.minGroupSize) });
+  // A combined row of too few people shows a dash with its reason - never a zero, which would read as a measurement.
+  const figure = (g: InvestmentGroupRow, text: string) =>
+    g.withheld ? (
+      <span role="img" aria-label={withheld} title={withheld}>
+        {'\u2014'}
+      </span>
+    ) : (
+      text
+    );
 
   return (
     <div className={styles.stack}>
@@ -108,16 +118,21 @@ export default function OrganisationPanel({ summary, dimension, onDimensionChang
                       : g.emptyKey === 'otherSmallGroups'
                         ? t('copilotInvestment.value.otherSmallGroups')
                         : g.label}
+                    {g.withheld && (
+                      <Text size={100} block className={styles.muted}>
+                        {withheld}
+                      </Text>
+                    )}
                   </TableCell>
-                  <TableCell className={styles.num}>{formatNumber(g.holders)}</TableCell>
-                  <TableCell className={styles.num}>{formatShare(g.activeShare)}</TableCell>
-                  <TableCell className={styles.num}>{formatDecimal(g.activeDaysPerHolderMonthly)}</TableCell>
-                  <TableCell className={styles.num}>{formatMoney(monthly(g.cost), currency)}</TableCell>
-                  <TableCell className={styles.num}>{formatMoney(monthly(g.valueBase), currency)}</TableCell>
-                  <TableCell className={styles.num}>{formatMultiple(t, g.roiBase)}</TableCell>
-                  <TableCell className={styles.num}>{formatCredits(g.credits)}</TableCell>
-                  <TableCell className={styles.num}>{formatCredits(g.studioCredits)}</TableCell>
-                  <TableCell className={styles.num}>{formatNumber(g.unlicensedActiveUsers)}</TableCell>
+                  <TableCell className={styles.num}>{figure(g, formatNumber(g.holders))}</TableCell>
+                  <TableCell className={styles.num}>{figure(g, formatShare(g.activeShare))}</TableCell>
+                  <TableCell className={styles.num}>{figure(g, formatDecimal(g.activeDaysPerHolderMonthly))}</TableCell>
+                  <TableCell className={styles.num}>{figure(g, formatMoney(monthly(g.cost), currency))}</TableCell>
+                  <TableCell className={styles.num}>{figure(g, formatMoney(monthly(g.valueBase), currency))}</TableCell>
+                  <TableCell className={styles.num}>{figure(g, formatMultiple(t, g.roiBase))}</TableCell>
+                  <TableCell className={styles.num}>{figure(g, formatCredits(g.credits))}</TableCell>
+                  <TableCell className={styles.num}>{figure(g, formatCredits(g.studioCredits))}</TableCell>
+                  <TableCell className={styles.num}>{figure(g, formatNumber(g.unlicensedActiveUsers))}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

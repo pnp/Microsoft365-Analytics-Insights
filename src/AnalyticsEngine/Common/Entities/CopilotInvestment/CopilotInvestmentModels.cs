@@ -920,6 +920,13 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("emptyKey")]
         public string EmptyKey { get; set; }
 
+        /// <summary>
+        /// True when a combined row still has fewer people than the smallest group shown (<see cref="CopilotInvestmentOrganisation.MinGroupSize"/>):
+        /// it carries no figures at all, so a handful of people cannot be read off it. Every other row has at least that many.
+        /// </summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
+
         [JsonProperty("holders")]
         public int Holders { get; set; }
 
