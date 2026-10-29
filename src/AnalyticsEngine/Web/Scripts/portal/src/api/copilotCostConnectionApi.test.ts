@@ -27,3 +27,10 @@ it('reports a failed scheduled-status read without starting a collection', async
   await expect(fetchCostCollection()).rejects.toThrow(/preview database migration/);
   expect(apiFetch).toHaveBeenCalledWith('/api/CopilotCostConnection/collection', { headers: { Accept: 'application/json' } });
 });
+
+it('distinguishes an unreadable response from an unsafe paging link', async () => {
+  vi.mocked(apiFetch).mockResolvedValueOnce(new Response(JSON.stringify({ status: 'invalidResponse' }), { status: 503 }));
+  await expect(changeCostConnection('probe', 'csrf')).rejects.toThrow(/missing required fields/);
+  vi.mocked(apiFetch).mockResolvedValueOnce(new Response(JSON.stringify({ status: 'invalidPage' }), { status: 503 }));
+  await expect(changeCostConnection('probe', 'csrf')).rejects.toThrow(/unexpected or repeated link/);
+});
