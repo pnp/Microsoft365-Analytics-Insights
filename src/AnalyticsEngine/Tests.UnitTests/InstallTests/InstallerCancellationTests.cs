@@ -299,6 +299,24 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
+        public async Task ATimeoutWhileNobodyPressedCancel_IsFatal_NotReportedAsCancelledByTheUser()
+        {
+            // An HttpClient timeout surfaces as a TaskCanceledException, an OperationCanceledException, though the
+            // token the Cancel button owns is still live. It is a failure, and the log must show it as one.
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var logger = new CapturingLogger();
+                var installer = new InstallerWhoseSignInRuns(logger, ct =>
+                    throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 100 seconds elapsing."));
+
+                await installer.InstallOrUpdate(cancellation.Token);
+
+                Assert.IsFalse(cancellation.IsCancellationRequested);
+                AssertReportedAsFatal(logger, nameof(TaskCanceledException));
+            }
+        }
+
+        [TestMethod]
         public async Task ASqlFailureThatIsNotACancel_IsStillFatal()
         {
             // A SqlException on its own is not a cancel: the exception type must never be what decides it.

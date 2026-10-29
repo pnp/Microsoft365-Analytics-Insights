@@ -144,12 +144,14 @@ namespace App.ControlPanel.Engine
                         $"See 'Configure Filtered URLs' in deployment guide for more info.");
                 }
             }
-            catch (Exception ex) when (ex is OperationCanceledException || ct.IsCancellationRequested)
+            catch (Exception ex) when (ct.IsCancellationRequested)
             {
                 // The token decides, not the exception type. SqlClient reports a command that is cancelled
                 // in flight as a SqlException ("Operation cancelled by user"); only a token that was already
                 // cancelled before the call gives an OperationCanceledException. Catching just that type
-                // reported a Cancel during a database step as a FATAL unexpected error.
+                // reported a Cancel during a database step as a FATAL unexpected error. The other way round
+                // holds too: an OperationCanceledException while the token is still live is a timeout (an
+                // HttpClient's, say), a real failure, and is left to the FATAL handler below with its type shown.
                 log.LogWarning("Install cancelled by user. No further installation tasks will run. Azure operations already accepted may still finish; cancellation does not roll back changes.");
                 if (!(ex is OperationCanceledException))
                 {
