@@ -636,6 +636,45 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void EveryApiThatTakesAUserFilter_HasTheLargeQueryStringAllowanceInTheHostConfig()
+        {
+            // A <location> allowance covers one controller's route prefix and nothing else: api/CopilotSpend shipped with a
+            // free-form userFilter on four routes and no block of its own, so a long (but valid) filter got IIS's bare 404.15.
+            // The pins above name one controller each; this one finds every controller that takes a filter, so the next one
+            // cannot ship without its block.
+            var withFilter = PortalTestHost.WebControllers()
+                .Where(c => c.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+                    .Any(m => m.GetParameters().Any(p => p.Name == "userFilter" && p.ParameterType == typeof(string))))
+                .ToList();
+            CollectionAssert.IsSubsetOf(
+                new[] { "CopilotAdoptionAPIController", "CopilotInvestmentAPIController", "CopilotSpendAPIController", "ActivityAnalysisAPIController" },
+                withFilter.Select(c => c.Name).ToList(),
+                "The scan no longer finds the controllers known to take a userFilter, so it would pass vacuously.");
+
+            var directory = new System.IO.DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+            string config = null;
+            while (directory != null && config == null)
+            {
+                var candidate = System.IO.Path.Combine(directory.FullName, "Web", "Web.Template.config");
+                config = System.IO.File.Exists(candidate) ? System.IO.File.ReadAllText(candidate) : null;
+                directory = directory.Parent;
+            }
+
+            Assert.IsNotNull(config, "Web.Template.config was not found.");
+            foreach (var controller in withFilter)
+            {
+                var prefix = controller.GetCustomAttributes(typeof(System.Web.Http.RoutePrefixAttribute), true)
+                    .Cast<System.Web.Http.RoutePrefixAttribute>().Single().Prefix;
+                var location = System.Text.RegularExpressions.Regex.Match(config,
+                    "<location path=\"" + System.Text.RegularExpressions.Regex.Escape(prefix) + "\">(.*?)</location>",
+                    System.Text.RegularExpressions.RegexOptions.Singleline);
+                Assert.IsTrue(location.Success, $"Web.Template.config has no <location path=\"{prefix}\"> block, but {controller.Name} takes a free-form userFilter on the query string.");
+                StringAssert.Contains(location.Groups[1].Value, "maxQueryStringLength=\"16384\"", prefix);
+                StringAssert.Contains(location.Groups[1].Value, "maxQueryString=\"16384\"", prefix);
+            }
+        }
+
+        [TestMethod]
         public void AReadersWhatIf_ReplacesOnlyWhatItSets_SaysWhereEachFigureCameFrom_AndParsesInvariantly()
         {
             var tenant = Assumptions(a => a.CreditPrice = null);
