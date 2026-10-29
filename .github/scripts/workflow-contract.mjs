@@ -70,7 +70,7 @@ export function jobs(text) {
   }));
 }
 
-/** The status checks `dev` and `main` require. Branch protection matches these names exactly. */
+/** The status checks protected branches wait for. Branch protection matches these names exactly; which branch requires which is a GitHub setting, not something this repository records. */
 export const requiredChecks = [
   ['tests.yml', 'test_dotnet (Release)'],
   ['tests.yml', 'test_aitracker'],
