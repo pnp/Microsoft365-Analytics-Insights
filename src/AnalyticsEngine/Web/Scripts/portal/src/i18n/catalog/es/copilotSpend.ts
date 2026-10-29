@@ -134,7 +134,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.overview.allGroups': 'Ver todos los grupos',
   'copilotSpend.org.title': 'Organización',
   'copilotSpend.org.description':
-    'Créditos facturados de Copilot Studio y créditos consumidos en la última lectura por grupo, uno junto al otro y nunca sumados. Los grupos de menos de {count} personas se combinan, y una combinación que siga por debajo de {count} personas no muestra cifras, así que ninguna fila describe a menos de {count} personas.',
+    'Créditos facturados de Copilot Studio y créditos consumidos en la última lectura por grupo, uno junto al otro y nunca sumados. Los grupos de menos de {count} personas se combinan, y una combinación que siga por debajo de {count} personas muestra cuántas personas reúne, pero ninguna cifra.',
   'copilotSpend.org.descriptionEveryGroup':
     'Créditos facturados de Copilot Studio y créditos consumidos en la última lectura por grupo, uno junto al otro y nunca sumados. Se muestran todos los grupos: esta agrupación nombra a personas, así que solo la ven los lectores autorizados a ver datos individuales.',
   'copilotSpend.org.groupBy': 'Agrupar por',

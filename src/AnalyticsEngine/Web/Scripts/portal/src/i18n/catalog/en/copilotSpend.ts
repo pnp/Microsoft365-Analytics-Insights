@@ -127,7 +127,7 @@ export const copilotSpend = {
   'copilotSpend.overview.allGroups': 'See every group',
   'copilotSpend.org.title': 'Organisation',
   'copilotSpend.org.description':
-    'Billed Copilot Studio credits and consumed credits at the latest reading, by group, side by side and never added. Groups of fewer than {count} people are combined, and a combination still under {count} people shows no figures, so no row describes fewer than {count} people.',
+    'Billed Copilot Studio credits and consumed credits at the latest reading, by group, side by side and never added. Groups of fewer than {count} people are combined, and a combination still under {count} people shows how many people it holds but no figures.',
   'copilotSpend.org.descriptionEveryGroup':
     'Billed Copilot Studio credits and consumed credits at the latest reading, by group, side by side and never added. Every group is listed: this grouping names people, so only readers allowed to see individuals are shown it.',
   'copilotSpend.org.groupBy': 'Group by',
