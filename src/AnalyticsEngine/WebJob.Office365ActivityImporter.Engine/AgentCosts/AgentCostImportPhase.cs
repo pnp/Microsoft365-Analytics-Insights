@@ -73,6 +73,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         private readonly Func<CopilotStudioCreditImporter> _creditImporterFactory;
         private readonly Func<AzureCostImporter> _azureCostImporterFactory;
         private readonly Func<Task<string>> _creditConnectionVersion;
+        private readonly Func<string, string, Task> _creditHealth;
 
         public AgentCostImportPhase(
             ILogger logger,
@@ -81,7 +82,8 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             Func<CopilotStudioCreditImporter> creditImporterFactory,
             Func<AzureCostImporter> azureCostImporterFactory,
             IClock clock = null,
-            Func<Task<string>> creditConnectionVersion = null)
+            Func<Task<string>> creditConnectionVersion = null,
+            Func<string, string, Task> creditHealth = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -90,6 +92,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             _azureCostImporterFactory = azureCostImporterFactory ?? throw new ArgumentNullException(nameof(azureCostImporterFactory));
             _clock = clock ?? SystemClock.Instance;
             _creditConnectionVersion = creditConnectionVersion;
+            _creditHealth = creditHealth;
         }
 
         /// <summary>
@@ -110,26 +113,35 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 return;
             }
 
+            string version = null;
+            var attempted = false;
+            var consumptionFinished = false;
             try
             {
                 // A new connection (including disconnect) gets its own gate. An older run cannot stamp it.
-                var version = _creditConnectionVersion == null ? null : await _creditConnectionVersion();
+                version = _creditConnectionVersion == null ? null : await _creditConnectionVersion();
                 var suffix = version == null ? "" : "_" + version;
                 var cadenceKey = CopilotStudioCreditsLastImportedKey + suffix;
                 var retryAfterKey = CopilotStudioCreditsRetryAfterKey + suffix;
                 var intervalHours = _settings.CopilotStudioCreditsIntervalHours;
                 if (!await IsDueAsync(cadenceKey, intervalHours, "Copilot Studio credit import", retryAfterKey))
                     return;
+                attempted = true;
                 var importer = _creditImporterFactory();
 
                 var consumptionResult = await importer.ImportConsumptionAsync();
                 var consumption = consumptionResult.Agents;
+                var users = consumptionResult.Users;
+                if (!consumption.IsConnectionRequired && !users.IsConnectionRequired)
+                    await RecordCreditHealth(version,
+                        consumption.IsAuthorisationFailure || users.IsAuthorisationFailure ? "permissionDenied"
+                        : consumption.Succeeded && users.Succeeded ? null : "sourceUnavailable");
+                consumptionFinished = true;
                 var capacity = await importer.ImportCapacityAsync();
 
                 // The per-user read is BEST EFFORT and deliberately excluded from the cadence decision: the
                 // per-agent figures are derived from the same reads, and the failure is not swallowed - it is
                 // written to agent_cost_import_log and surfaced on the Health page and the report.
-                var users = consumptionResult.Users;
                 if (!users.Succeeded)
                 {
                     _logger.LogWarning("The per-user Copilot Studio credit read did not succeed. "
@@ -158,10 +170,21 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
             }
             catch (Exception ex)
             {
+                if (attempted && !consumptionFinished) await RecordCreditHealth(version, "sourceFailure");
                 // The importer handles its own errors, so reaching here means construction failed - bad
                 // configuration, or a token that could not be acquired at all.
                 _logger.LogError(ex, $"Copilot Studio credit import could not start: {ex.Message}. "
                     + "No other import is affected.");
+            }
+        }
+
+        private async Task RecordCreditHealth(string version, string failureCode)
+        {
+            if (_creditHealth == null || version == null) return;
+            try { await _creditHealth(version, failureCode); }
+            catch (Exception)
+            {
+                _logger.LogWarning("Copilot Studio consumption health could not be saved.");
             }
         }
 

@@ -181,7 +181,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     ["properties"] = new JObject
                     {
                         ["displayName"] = jobs[i] + " health needs attention",
-                        ["description"] = "Missing heartbeat/check telemetry, no cycle completion in 24h, SQL/schema failure, invalid credential or certificate expiry <14d. Not proof of data freshness or API permissions. Expected shutdowns require an alert processing rule or opt-out.",
+                        ["description"] = "Missing heartbeat/check telemetry, no cycle completion in 24h, SQL/schema failure, invalid credential, certificate expiry <14d, delegated cost API refusal or persistent collection failure. Cost recovery requires a successful API read, not token refresh. Expected shutdowns require an alert processing rule or opt-out.",
                         ["enabled"] = active, ["severity"] = 2,
                         ["evaluationFrequency"] = "PT5M", ["windowSize"] = "PT5M",
                         ["overrideQueryTimeRange"] = "P2D",
@@ -311,6 +311,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
         {
             // Reuse the allow-list and bounds checks rather than interpolating arbitrary identifiers.
             MissingHeartbeatQuery(job, minutes);
+            var expectedChecks = job == "Office365ActivityImporter"
+                ? "'Sql', 'Credential', 'CopilotCostApi', 'CopilotStudioConsumption'"
+                : "'Sql', 'Credential'";
             return "let Heartbeats = customEvents | where timestamp > ago(2d) " +
                 "| where name == 'ImporterHeartbeat' and tostring(customDimensions.JobName) == '" + job + "'; " +
                 "let Checks = customEvents | where timestamp > ago(30m) | where name == 'HealthCheck' " +
@@ -326,7 +329,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 "(Checks | where tostring(customDimensions.Status) == 'Unhealthy' " +
                 "or (Component == 'Credential' and toint(customDimensions.DaysToExpiry) < 14) " +
                 "| project Signal=strcat(Component, 'UnhealthyOrExpiring')), " +
-                "(datatable(Component:string) ['Sql', 'Credential'] | join kind=leftanti (Checks) on Component " +
+                "(datatable(Component:string) [" + expectedChecks + "] | join kind=leftanti (Checks) on Component " +
                 "| project Signal=strcat(Component, 'HealthCheckMissing'))";
         }
 

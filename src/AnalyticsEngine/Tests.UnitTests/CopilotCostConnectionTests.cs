@@ -23,6 +23,9 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.Owin;
 using System.Web.Helpers;
 using Common.Entities.CopilotCosts;
+using Common.Entities;
+using Common.Entities.Config;
+using DataUtils.Health;
 
 namespace Tests.UnitTests
 {
@@ -33,6 +36,90 @@ namespace Tests.UnitTests
         private const string Client = "00000000-0000-0000-0000-000000000002";
         private const string UserId = "00000000-0000-0000-0000-000000000003";
         private static readonly CancellationToken Ct = CancellationToken.None;
+
+        [DataTestMethod]
+        [DataRow("reconnectRequired")]
+        [DataRow("permissionDenied")]
+        [DataRow("identityUnavailable")]
+        public async Task TokenFailuresBeforeSqlRemainVisibleAfterTokenRefreshAlone(string failure)
+        {
+            var store = new MemoryStore();
+            var identity = new Identity();
+            var now = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+            var service = Service(store, identity, () => now);
+            await Connect(service);
+            identity.RefreshFailure = failure;
+            var called = false;
+            await Fails(failure, () => service.RunWithTokenAsync((_, __, ___) =>
+            { called = true; return Task.CompletedTask; }, Ct));
+            Assert.IsFalse(called, "No SQL or source work starts when token acquisition fails.");
+            var failed = (await service.ReadAsync(Ct)).CollectionHealth;
+            Assert.AreEqual(failure, failed.FailureCode);
+            Assert.AreEqual(now, failed.FailureSince);
+            Assert.IsNull(failed.LastSuccessfulRead);
+
+            now = now.AddMinutes(20);
+            identity.RefreshFailure = null;
+            await service.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct);
+            var refreshed = await service.ReadAsync(Ct);
+            Assert.AreEqual(failure, refreshed.CollectionHealth.FailureCode);
+            Assert.AreEqual(failed.FailureSince, refreshed.CollectionHealth.FailureSince);
+            Assert.AreEqual(HealthStatus.Unhealthy,
+                CostApiHealthReader.Build("graph", refreshed.Status, refreshed.CollectionHealth).ToRuntimeResult(now).Status);
+            await Connect(service);
+            var reconnected = await service.ReadAsync(Ct);
+            Assert.AreNotEqual(refreshed.Generation, reconnected.Generation);
+            Assert.AreEqual(failure, reconnected.CollectionHealth.FailureCode,
+                "Interactive reconnect is not proof of API recovery either.");
+        }
+
+        [TestMethod]
+        public async Task HealthReaderOmitsCredentialsAndDisabledConnectionsDoNotOpenStorage()
+        {
+            var config = new AppConfig
+            {
+                CopilotCostConnectionEnabled = false,
+                ImportJobSettings = new ImportTaskSettings { CopilotCostManagement = true }
+            };
+            Assert.AreEqual("disabled", (await CostApiHealthReader.ReadGraphAsync(config, Ct,
+                () => throw new AssertFailedException("Disabled collection must not open storage."))).Status);
+            config.CopilotCostConnectionEnabled = true;
+            var store = new MemoryStore();
+            var identity = new Identity { RefreshFailure = "identityUnavailable" };
+            var service = Service(store, identity);
+            await Connect(service);
+            await Fails("identityUnavailable", () => service.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct));
+            var health = await CostApiHealthReader.ReadGraphAsync(config, Ct, () => store);
+            Assert.AreEqual("failing", health.Status);
+            var json = JObject.FromObject(health);
+            CollectionAssert.AreEquivalent(new[] { "source", "status", "lastAttempt", "lastSuccessfulRead", "failureSince", "failureCode" },
+                json.Properties().Select(p => p.Name).ToArray());
+            Assert.IsFalse(json.ToString().Contains("reader"));
+            Assert.IsFalse(json.ToString().Contains("access"));
+        }
+
+        [TestMethod]
+        public async Task SliceBudgetExpiringDuringTokenAcquisitionDoesNotLeaveConnectionLookingHealthy()
+        {
+            var store = new MemoryStore();
+            var identity = new Identity();
+            var service = Service(store, identity);
+            await Connect(service);
+            using (var budget = new CancellationTokenSource())
+            {
+                identity.OnRefresh = () =>
+                {
+                    budget.Cancel();
+                    budget.Token.ThrowIfCancellationRequested();
+                    return Task.CompletedTask;
+                };
+                await Assert.ThrowsExceptionAsync<OperationCanceledException>(() =>
+                    service.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, budget.Token));
+            }
+            var health = (await service.ReadAsync(Ct)).CollectionHealth;
+            Assert.AreEqual("identityUnavailable", health.FailureCode);
+            Assert.IsNull(health.LastSuccessfulRead);
+        }
 
         [DataTestMethod]
         [DataRow("GET")]

@@ -33,6 +33,8 @@ namespace Tests.FakeDataGen.Demo
             write("To view this data, point a web application at it with:");
             write($"  connectionStrings   SPOInsightsEntities = Server=(localdb)\\MSSQLLocalDB;Database={database};Integrated Security=True");
             write("  appSettings         ImportJobSettings = " + ImportSettings(areas));
+            if ((areas & DemoArea.CopilotCredits) != 0)
+                write("  appSettings         CopilotCostConnectionEnabled = true");
             write(string.Empty);
             write("Those toggles are how the portal decides which sources exist; they are all opt-in and");
             write("default to false.");
@@ -48,6 +50,13 @@ namespace Tests.FakeDataGen.Demo
                 write("Likewise the Agent costs report leads with \"Neither agent cost import is switched on\"");
                 write("until CopilotStudioCredits and AzureCostManagement are set, no matter how much billing");
                 write("data the database holds - that banner is read from this setting, never from the rows.");
+            }
+            if ((areas & DemoArea.CopilotCredits) != 0)
+            {
+                write("The Copilot investment report reads the synthetic credit balances whatever the settings, but");
+                write("labels them as retained history from a switched-off collector unless CopilotCostManagement=True");
+                write("is in ImportJobSettings AND the separate app setting CopilotCostConnectionEnabled = true.");
+                write("Do NOT connect a real Graph reader to a demo web application: the balances are synthetic.");
             }
             write("Use these flags on the demo portal, not on live import jobs connected to the synthetic database.");
         }
@@ -78,6 +87,7 @@ namespace Tests.FakeDataGen.Demo
                 flags.Add("CopilotStudioCredits=True");
                 flags.Add("AzureCostManagement=True");
             }
+            if ((areas & DemoArea.CopilotCredits) != 0) flags.Add("CopilotCostManagement=True");
             return string.Join(";", flags);
         }
 

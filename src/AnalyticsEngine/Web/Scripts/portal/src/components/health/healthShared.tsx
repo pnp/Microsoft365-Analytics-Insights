@@ -59,6 +59,17 @@ export const AGENT_COST_CONNECTION_REASON_KEYS: Record<string, keyof typeof enHe
   'agentCostConnection.checkFailed': 'health.reason.agentCostConnectionCheckFailed',
 };
 
+export const COST_API_REASON_KEYS: Record<string, keyof typeof enHealth> = {
+  'costApi.healthy': 'health.reason.costApiHealthy',
+  'costApi.disabled': 'health.reason.costApiDisabled',
+  'costApi.disconnected': 'health.reason.costApiDisconnected',
+  'costApi.pending': 'health.reason.costApiPending',
+  'costApi.reconnectRequired': 'health.reason.costApiReconnectRequired',
+  'costApi.permissionDenied': 'health.reason.costApiPermissionDenied',
+  'costApi.failing': 'health.reason.costApiFailing',
+  'costApi.unavailable': 'health.reason.costApiUnavailable',
+};
+
 export const HEALTH_COMPONENT_LABEL_KEYS: Record<string, TranslationKey> = {
   Sql: 'health.component.Sql',
   Credential: 'health.component.Credential',
@@ -67,6 +78,8 @@ export const HEALTH_COMPONENT_LABEL_KEYS: Record<string, TranslationKey> = {
   CopilotAuditBackfill: 'health.component.CopilotAuditBackfill',
   MessageTracing: 'health.component.MessageTracing',
   PowerPlatformConnection: 'health.component.PowerPlatformConnection',
+  CopilotCostApi: 'health.component.CopilotCostApi',
+  CopilotStudioConsumption: 'health.component.CopilotStudioConsumption',
 };
 
 export const COPILOT_AUDIT_BACKFILL_REASON_KEYS: Record<string, TranslationKey> = {
@@ -311,7 +324,7 @@ export function translateHealthComponentDetailText(detail: string | null | undef
   if (detail === enHealth['health.reason.messageTracingDisabled']) return t('health.reason.messageTracingDisabled');
   if (detail === enHealth['health.reason.messageTracingInvalidPattern']) return t('health.reason.messageTracingInvalidPattern');
   if (detail === enHealth['health.reason.messageTracingStorageUnavailable']) return t('health.reason.messageTracingStorageUnavailable');
-  for (const key of Object.values(AGENT_COST_CONNECTION_REASON_KEYS)) {
+  for (const key of [...Object.values(AGENT_COST_CONNECTION_REASON_KEYS), ...Object.values(COST_API_REASON_KEYS)]) {
     if (detail === enHealth[key]) return t(key);
   }
 
@@ -359,6 +372,8 @@ export function translateHealthComponentDetail(component: ComponentHealthRow, t:
   if (messageTracingKey) return t(messageTracingKey);
   const agentCostConnectionKey = component.reasonKey ? AGENT_COST_CONNECTION_REASON_KEYS[component.reasonKey] : null;
   if (agentCostConnectionKey) return t(agentCostConnectionKey);
+  const costApiKey = component.reasonKey ? COST_API_REASON_KEYS[component.reasonKey] : null;
+  if (costApiKey) return t(costApiKey);
 
   return translateHealthComponentDetailText(component.detail, t);
 }
