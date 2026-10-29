@@ -125,12 +125,17 @@ namespace Tests.UnitTests
             var failing = 1;
             var firstIsBuilding = new ManualResetEventSlim();
             var letTheFirstFail = new ManualResetEventSlim();
+            var anotherBuildStarted = new ManualResetEventSlim();
             bool CreditCollection()
             {
                 if (Interlocked.Increment(ref builds) == 1)
                 {
                     firstIsBuilding.Set();
                     letTheFirstFail.Wait(TimeSpan.FromSeconds(30));
+                }
+                else
+                {
+                    anotherBuildStarted.Set();
                 }
                 if (Volatile.Read(ref failing) == 1) throw new InvalidOperationException("Synthetic build failure.");
                 return true;
@@ -142,7 +147,10 @@ namespace Tests.UnitTests
                 var first = Task.Run(() => service.BuildAsync(Request(), null, CancellationToken.None, withPeople: false));
                 Assert.IsTrue(firstIsBuilding.Wait(TimeSpan.FromSeconds(30)), "The first request never reached its build.");
                 var waiting = Task.Run(() => service.BuildAsync(Request(), null, CancellationToken.None, withPeople: false));
-                await Task.Delay(300); // time for the second request to find the build in progress and wait on it
+                // It must be waiting on the first build. A request that built for itself would fail at once, the build
+                // failing for everyone, and so look just like one that was given the first's failure afterwards.
+                Assert.IsFalse(anotherBuildStarted.Wait(TimeSpan.FromSeconds(1)), "The second request started a build of its own instead of waiting on the first.");
+                Assert.IsFalse(waiting.IsCompleted, "The second request is waiting on the first build, not finished without it.");
                 letTheFirstFail.Set();
 
                 foreach (var request in new[] { first, waiting })
