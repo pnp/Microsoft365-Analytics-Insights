@@ -100,6 +100,38 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task StudioCreditsWithoutAStorageAccount_AreNotConnected_AndDoNotRaiseTheImporterAlarm()
+        {
+            // Storage is optional (StateStore.IsConfigured), and the importer then runs capacity-only. With no store
+            // nothing can be connected - not "health could not be read", which is Unhealthy and raises the importer's
+            // Sev-2 alert on every install that has Studio credits on but no Storage account.
+            var config = new AppConfig { ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true } };
+            config.ConnectionStrings.StorageConnectionString = null;
+
+            var health = await CostApiHealthReader.ReadStudioAsync(config);   // the real open path, no seam
+
+            Assert.AreEqual("disconnected", health.Status);
+            Assert.AreEqual(HealthStatus.Degraded, health.ToRuntimeResult(DateTimeOffset.UtcNow).Status);
+
+            var registered = Common.Entities.Health.DefaultRuntimeHealth.BuildChecks(config, DataUtils.Health.ImporterHeartbeat.ActivityJob);
+            var reported = await registered[HealthComponent.CopilotStudioConsumption](CancellationToken.None);
+            Assert.AreNotEqual(HealthStatus.Unhealthy, reported.Status, "The check the importer actually emits must stay quiet.");
+        }
+
+        [TestMethod]
+        public async Task StudioHealthThatCannotBeReadFromAConfiguredStore_StillRaisesTheAlarm()
+        {
+            // The other direction: only a missing store is "not connected". A store that is configured but fails is a fault.
+            var config = new AppConfig { ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true } };
+
+            var unreadable = await CostApiHealthReader.ReadStudioAsync(config,
+                () => throw new InvalidOperationException("Synthetic storage failure."));
+
+            Assert.AreEqual("unavailable", unreadable.Status);
+            Assert.AreEqual(HealthStatus.Unhealthy, unreadable.ToRuntimeResult(DateTimeOffset.UtcNow).Status);
+        }
+
+        [TestMethod]
         public async Task ASourceThatAnswers_KeepsItsAnswer_WhenTheOtherReadMissesTheDeadline()
         {
             // A source that is switched off answers at once, and the portal keeps "disabled" quiet. A slow read of the

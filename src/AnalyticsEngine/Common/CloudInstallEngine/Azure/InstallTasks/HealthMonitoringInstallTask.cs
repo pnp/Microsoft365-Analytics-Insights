@@ -311,6 +311,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
         {
             // Reuse the allow-list and bounds checks rather than interpolating arbitrary identifiers.
             MissingHeartbeatQuery(job, minutes);
+            // Must equal the HealthComponent names DefaultRuntimeHealth.BuildChecks registers for the job (this assembly
+            // cannot reference the enum). A rename or a removed check would otherwise leave a permanent Sev-2, and a
+            // new one would never be watched; HealthMonitoringTests pins the two lists together.
             var expectedChecks = job == "Office365ActivityImporter"
                 ? "'Sql', 'Credential', 'CopilotCostApi', 'CopilotStudioConsumption'"
                 : "'Sql', 'Credential'";

@@ -310,6 +310,27 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [DataTestMethod]
+        [DataRow(ImporterHeartbeat.ActivityJob)]
+        [DataRow(ImporterHeartbeat.WebTrafficJob)]
+        public void MissingHealthCheckAlert_RequiresExactlyTheChecksTheImporterRegisters(string job)
+        {
+            // The alert's list lives in the installer assembly, which cannot reference HealthComponent, so only this test
+            // ties it to what the importer emits (Component = HealthComponent.ToString()). A rename or a removed check
+            // would leave "<name>HealthCheckMissing" firing at Sev-2 for ever; a new check would never be watched.
+            var emitted = Common.Entities.Health.DefaultRuntimeHealth.BuildChecks(new Common.Entities.Config.AppConfig(), job)
+                .Keys.Select(component => component.ToString()).OrderBy(name => name, StringComparer.Ordinal).ToArray();
+            var list = System.Text.RegularExpressions.Regex.Match(HealthMonitoringInstallTask.ImporterHealthQuery(job, 30),
+                @"datatable\(Component:string\) \[(?<names>[^\]]*)\]");
+            Assert.IsTrue(list.Success, "The alert no longer lists the checks it requires.");
+            var required = list.Groups["names"].Value.Split(',').Select(name => name.Trim().Trim('\''))
+                .OrderBy(name => name, StringComparer.Ordinal).ToArray();
+
+            CollectionAssert.AreEqual(emitted, required,
+                $"The {job} alert requires [{string.Join(", ", required)}] but the importer registers [{string.Join(", ", emitted)}]. "
+                + "Update HealthMonitoringInstallTask.ImporterHealthQuery or DefaultRuntimeHealth.BuildChecks so they agree.");
+        }
+
+        [DataTestMethod]
         [DataRow(true, false)]
         [DataRow(false, true)]
         public async Task Provisioning_RealSdkListsAllOwnedResourceTypes_AndSendsIncrementalDeployment(bool enabled, bool existing)
