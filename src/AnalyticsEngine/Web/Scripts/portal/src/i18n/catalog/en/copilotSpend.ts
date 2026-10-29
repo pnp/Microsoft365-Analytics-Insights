@@ -61,7 +61,7 @@ export const copilotSpend = {
   'copilotSpend.studio.noDays': 'No billed usage in this period.',
   'copilotSpend.studio.environmentsTitle': 'By environment',
   'copilotSpend.studio.environmentsDescription':
-    'Billed credits per Power Platform environment in the period, for the people in this view. Microsoft reports each person\u2019s usage by environment, not by agent, so these add up to the total above, apart from a combined row of environments with too few people, which shows no figures.',
+    'Billed credits per Power Platform environment in the period, for the people in this view. Microsoft reports each person\u2019s usage by environment, not by agent, so these add up to the total above, apart from a combined row of environments with too few people, which shows no credits, and shows how many people it holds only when it combines a single environment.',
   'copilotSpend.studio.col.environment': 'Environment',
   'copilotSpend.studio.unnamedEnvironment': 'Environment name not available',
   'copilotSpend.studio.otherEnvironments': 'Other environments ({count})',
@@ -492,7 +492,7 @@ export const copilotSpend = {
   'copilotSpend.workbook.balances.col.remaining': 'Remaining',
   'copilotSpend.workbook.balances.col.lastModified': 'Source last changed (UTC)',
   'copilotSpend.workbook.org.groupedBy': 'Grouped by',
-  'copilotSpend.workbook.org.minGroup': 'Groups of fewer than {count} people are combined; a combination still under {count} shows no figures.',
+  'copilotSpend.workbook.org.minGroup': 'Groups of fewer than {count} people are combined; a combination still under {count} shows how many people it holds but no figures.',
   'copilotSpend.workbook.org.everyGroup': 'Every group is listed.',
   'copilotSpend.workbook.org.unavailable.directoryUnavailable': 'The people could not be grouped: the user directory could not be read.',
   'copilotSpend.workbook.org.unavailable.dimensionUnknown': 'The people could not be grouped by this: the directory no longer holds it.',

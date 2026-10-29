@@ -66,7 +66,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.studio.noDays': 'Sin uso facturado en este periodo.',
   'copilotSpend.studio.environmentsTitle': 'Por entorno',
   'copilotSpend.studio.environmentsDescription':
-    'Créditos facturados por cada entorno de Power Platform en el periodo, para las personas de esta vista. Microsoft notifica el uso de cada persona por entorno, no por agente, así que suman el total anterior, salvo una fila combinada de entornos con muy pocas personas, que no muestra cifras.',
+    'Créditos facturados por cada entorno de Power Platform en el periodo, para las personas de esta vista. Microsoft notifica el uso de cada persona por entorno, no por agente, así que suman el total anterior, salvo una fila combinada de entornos con muy pocas personas, que no muestra créditos y solo indica cuántas personas reúne cuando combina un único entorno.',
   'copilotSpend.studio.col.environment': 'Entorno',
   'copilotSpend.studio.unnamedEnvironment': 'Nombre del entorno no disponible',
   'copilotSpend.studio.otherEnvironments': 'Otros entornos ({count})',
@@ -505,7 +505,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.workbook.balances.col.lastModified': 'Última modificación en la fuente (UTC)',
   'copilotSpend.workbook.org.groupedBy': 'Agrupado por',
   'copilotSpend.workbook.org.minGroup':
-    'Los grupos de menos de {count} personas se combinan; una combinación que siga por debajo de {count} no muestra cifras.',
+    'Los grupos de menos de {count} personas se combinan; una combinación que siga por debajo de {count} muestra cuántas personas reúne, pero ninguna cifra.',
   'copilotSpend.workbook.org.everyGroup': 'Se muestran todos los grupos.',
   'copilotSpend.workbook.org.unavailable.directoryUnavailable': 'No se pudo agrupar a las personas: no se pudo leer el directorio de usuarios.',
   'copilotSpend.workbook.org.unavailable.dimensionUnknown': 'No se pudo agrupar a las personas por este campo: el directorio ya no lo contiene.',
