@@ -1,0 +1,38 @@
+{
+  "dotnet": [
+    "src/AnalyticsEngine/**",
+    "scripts/CopilotAdoption/**",
+    "reports/**",
+    ".nvmrc",
+    "build/**",
+    ".github/ci-paths.json",
+    ".github/scripts/**",
+    ".github/actions/**",
+    ".github/workflows/**"
+  ],
+  "portal": [
+    "src/AnalyticsEngine/**",
+    ".nvmrc",
+    "build/**",
+    ".github/ci-paths.json",
+    ".github/scripts/**",
+    ".github/actions/**",
+    ".github/workflows/**"
+  ],
+  "aitracker": [
+    "src/SPO/AITracker/**",
+    ".nvmrc",
+    "build/**",
+    ".github/ci-paths.json",
+    ".github/scripts/**",
+    ".github/actions/**",
+    ".github/workflows/**"
+  ],
+  "spfx": [
+    "src/SPO/ModernPagesAITrackerExtension/**",
+    "src/SPO/AITracker/spoinsights-modern-ui-aitracker.sppkg",
+    ".github/scripts/Test-SpfxPackage.ps1",
+    ".github/ci-paths.json",
+    ".github/workflows/**"
+  ]
+}

@@ -1,0 +1,193 @@
+name: Build packages
+
+on:
+  workflow_call:
+    inputs:
+      build_label:
+        type: string
+        default: DEV_BUILD
+      sign_installer:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  ClientID: ${{ secrets.APP_CLIENTID }}
+  ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
+  TenantGUID: ${{ secrets.APP_TENANTGUID }}
+  TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
+  CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
+  CognitiveKey: ${{ secrets.APP_COGNITIVEKEY }}
+  ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
+  Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
+  SoftwareDownloadURL: ${{ secrets.SOFTWAREDOWNLOADURL }}
+  StatsApiSecret: ${{ secrets.STATSAPISECRET }}
+  StatsApiUrl: ${{ secrets.STATSAPIURL }}
+
+jobs:
+  build_dotnet:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - name: WebJob.AppInsightsImporter
+            file: WebJob.AppInsightsImporter.csproj
+            package: AppInsightsImporter
+            content: AppInsightsImporter
+          - name: WebJob.Office365ActivityImporter
+            file: WebJob.Office365ActivityImporter.csproj
+            package: Office365ActivityImporter
+            content: Office365ActivityImporter
+          - name: Web
+            file: Web.csproj
+            package: Website
+            content: Website\_PublishedWebsites\Web
+          - name: App.ControlPanel
+            file: App.ControlPanel.WinForms.csproj
+            package: ControlPanelApp
+            content: ControlPanelApp
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: src/AnalyticsEngine/Web/Scripts/portal/package-lock.json
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~\.nuget\packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/packages.config', '**/packages.lock.json', '**/NuGet.Config', '**/Directory.*.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+      - name: Set copyright year and build label
+        shell: pwsh
+        env:
+          BUILD_LABEL: ${{ inputs.build_label }}
+        run: |
+          Get-ChildItem src -Filter AssemblyInfo.cs -Recurse | ForEach-Object {
+            $text = [IO.File]::ReadAllText($_.FullName).Replace('__year__', (Get-Date).Year.ToString())
+            [IO.File]::WriteAllText($_.FullName, $text)
+          }
+          if ($env:BUILD_LABEL -notmatch '^(DEV_BUILD|Build [0-9]+)$') { throw 'Invalid build label.' }
+          $path = Join-Path $env:GITHUB_WORKSPACE 'src\AnalyticsEngine\Common\Entities\BuildConstants.cs'
+          [IO.File]::WriteAllText($path, [IO.File]::ReadAllText($path).Replace('"DEV_BUILD"', '"' + $env:BUILD_LABEL + '"'))
+      - name: Configure packages
+        uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
+        with:
+          files: src/AnalyticsEngine/*/App.Release.config, src/AnalyticsEngine/Web/Web.Release.config
+      - name: Restore and build
+        shell: pwsh
+        env:
+          PROJECT: ${{ matrix.project.name }}
+          PROJECT_FILE: ${{ matrix.project.file }}
+          PACKAGE: ${{ matrix.project.package }}
+        run: |
+          msbuild "src\AnalyticsEngine\$env:PROJECT\$env:PROJECT_FILE" /restore `
+            /p:Configuration=Release '/p:Platform=Any CPU' /p:ProcessorArchitecture=x86 `
+            "/p:OutDir=$env:RUNNER_TEMP\$env:PACKAGE" /p:OutputPath=Release `
+            /p:AllowedReferenceRelatedFileExtensions=none /p:EmitCompilerGeneratedFiles=false
+          if ($LASTEXITCODE -ne 0) { throw 'Package build failed.' }
+      - name: Copy automation scripts
+        if: matrix.project.package == 'Office365ActivityImporter'
+        shell: pwsh
+        run: Copy-Item -Recurse -Force src\AnalyticsEngine\WebJob.Office365ActivityImporter\AutomationPS "$env:RUNNER_TEMP\Office365ActivityImporter"
+      - name: Setup SignTool
+        if: inputs.sign_installer && matrix.project.package == 'ControlPanelApp'
+        uses: KamaranL/add-signtool-action@d0027a4cf430f8dfdb15fba53410d0c76b7566f4 # v1
+        id: signtool
+      - name: Test private-CA signature verification
+        if: matrix.project.package == 'ControlPanelApp'
+        shell: pwsh
+        run: ./.github/scripts/Test-InstallerSignature.Tests.ps1
+      - name: Sign and verify installer
+        if: inputs.sign_installer && matrix.project.package == 'ControlPanelApp'
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.PFX_BASE64 }}
+          PFX_KEY: ${{ secrets.PFX_KEY }}
+          SIGNTOOL: ${{ steps.signtool.outputs.signtool-x64 }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'installer-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+            $tool = if ($env:SIGNTOOL) { $env:SIGNTOOL } else { 'signtool.exe' }
+            $exe = Join-Path $env:RUNNER_TEMP 'ControlPanelApp\AnalyticsInstaller.exe'
+            & $tool sign /fd SHA256 /a /t http://timestamp.digicert.com /f $pfx /p $env:PFX_KEY $exe
+            if ($LASTEXITCODE -ne 0) { throw 'Installer signing failed.' }
+            $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+              $pfx, $env:PFX_KEY, [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+            try {
+              ./.github/scripts/Test-InstallerSignature.ps1 -Path $exe -ExpectedThumbprint $certificate.Thumbprint
+            }
+            finally { $certificate.Dispose() }
+          }
+          finally {
+            if (Test-Path -LiteralPath $pfx) { Remove-Item -LiteralPath $pfx -Force }
+          }
+      - name: Validate and archive package
+        shell: pwsh
+        env:
+          PACKAGE: ${{ matrix.project.package }}
+          CONTENT: ${{ matrix.project.content }}
+        run: |
+          foreach ($path in @('AppInsightsImporter\_PublishedWebsites', 'Office365ActivityImporter\_PublishedWebsites', 'Website\_PublishedWebsites\Web\bin\Scripts')) {
+            $target = Join-Path $env:RUNNER_TEMP $path
+            if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
+          }
+          $zips = Join-Path $env:RUNNER_TEMP 'zips'
+          New-Item -ItemType Directory -Force -Path $zips | Out-Null
+          ./.github/scripts/Build-ReleasePackage.ps1 -Path (Join-Path $env:RUNNER_TEMP $env:CONTENT) `
+            -Package $env:PACKAGE -DestinationPath (Join-Path $zips "$env:PACKAGE.zip")
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          path: ${{ runner.temp }}/zips
+          name: drop_${{ matrix.project.name }}
+          retention-days: 7
+          if-no-files-found: error
+
+  verify_packages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [build_dotnet, build_aitracker]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: drop_*
+          merge-multiple: true
+          path: ${{ runner.temp }}/packages
+      - name: Verify the complete download set
+        shell: pwsh
+        run: ./.github/scripts/Test-ReleasePackages.ps1 -Path "$env:RUNNER_TEMP/packages"
+
+  build_aitracker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Check committed SPFx package
+        shell: pwsh
+        run: ./.github/scripts/Test-SpfxPackage.ps1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: src/SPO/AITracker/TypeScript/package-lock.json
+      - name: Build and archive AITracker
+        run: |
+          cd src/SPO/AITracker/TypeScript
+          npm ci
+          npm run build:prod
+          cd ../..
+          rm -rf AITracker/TypeScript
+          zip -r AITrackerInstaller.zip AITracker
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          path: src/SPO/AITrackerInstaller.zip
+          name: drop_aitracker
+          retention-days: 7
+          if-no-files-found: error

@@ -190,8 +190,8 @@
     toolchain and never say so.
   -->
   <Target Name="NpmInstall" DependsOnTargets="CheckNodeVersion" Inputs="$(SpaRoot)package.json;$(SpaRoot)package-lock.json" Outputs="$(NpmInstallStampFile)">
-    <Message Importance="high" Text="Restoring portal dependencies using 'npm'. This may take several minutes..." />
-    <Exec Command="npm install" WorkingDirectory="$(SpaRoot)" />
+    <Message Importance="high" Text="Restoring locked portal dependencies using 'npm ci'. This may take several minutes..." />
+    <Exec Command="npm ci" WorkingDirectory="$(SpaRoot)" />
     <Touch Files="$(NpmInstallStampFile)" AlwaysCreate="true" />
   </Target>
   <!-- The bundle itself. Re-runs whenever any SPA source file is newer than the emitted index.html. -->

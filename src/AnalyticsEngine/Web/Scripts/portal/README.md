@@ -751,10 +751,12 @@ SharePoint, Power BI…), technical identifiers (SQL, CSV, GUID, UPN, DLP), unit
 ordinary English word added there defeats the whole mechanism, so additions are expected to be
 challenged in review — and the `release-manager` agent reads every change to it in a release diff.
 
-Both checks run in CI on every pull request. `tests.yml` builds the solution (which runs
-`npm run build`, and therefore `tsc`) and then runs `npm run test` in this directory, inside the
-`test_dotnet (Release)` job — a required status check on `dev` and `main`. A branch that leaves a
-string untranslated cannot be merged.
+Both checks run in CI on every applicable pull request. `tests.yml` runs `npm run lint`,
+`npm run typecheck:tests` and the complete `npm run test` suite in a parallel portal job.
+The required `test_dotnet (Release)` status on `dev` and `main` waits for that job as well as
+the .NET test shards. A branch that leaves a string untranslated cannot be merged.
+`typecheck:tests` uses `tsconfig.tests.json` to check test fixtures and helpers too; the production
+config excludes those files, and Vitest transpiles them without checking their types.
 
 ### Adding a language
 

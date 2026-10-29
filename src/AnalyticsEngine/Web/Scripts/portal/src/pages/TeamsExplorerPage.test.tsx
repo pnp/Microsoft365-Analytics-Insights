@@ -42,11 +42,13 @@ const window28: TeamsWindow = {
 const availability = (over: Partial<TeamsAvailability> = {}): TeamsAvailability => ({
   usageReportsAvailable: true,
   callsAvailable: true,
+  serviceBusAvailable: true,
   teamsAnalyticsAvailable: true,
   cognitiveAvailable: true,
   userMetadataAvailable: true,
   authorisedTeams: 3,
   totalTeams: 5,
+  teamCountsKnown: true,
   available: true,
   reasons: [],
   ...over,
