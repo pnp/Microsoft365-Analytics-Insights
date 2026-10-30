@@ -314,7 +314,7 @@ jobs:
             --logger "trx;LogFileName=net10-stable-1857.trx" `
             --results-directory "$env:RUNNER_TEMP\testresults\stable-1857" `
             --blame-hang --blame-hang-timeout 8m --blame-hang-dump-type none `
-            --filter "FullyQualifiedName~CopilotInvestment|FullyQualifiedName~CopilotSpend|FullyQualifiedName~DeploymentPrerequisitesTests|FullyQualifiedName~AzureResourceProviderPreflightTests|FullyQualifiedName~InstallerCancellationTests"
+            --filter "FullyQualifiedName~CopilotInvestment|FullyQualifiedName~CopilotSpend|FullyQualifiedName~DemoContainerAppsTests|FullyQualifiedName~DeploymentPrerequisitesTests|FullyQualifiedName~AzureResourceProviderPreflightTests|FullyQualifiedName~InstallerCancellationTests"
           exit $LASTEXITCODE
 
       - name: Check stable credit collector SQL invariants

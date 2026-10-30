@@ -62,7 +62,7 @@ param sqlServerFqdn string
 param sqlDatabaseName string
 
 @description('Which workloads the portal treats as imported. Every flag defaults to false in the product, so without this the portal reports the synthetic data as "not measured". Must equal DemoPortalReadiness.RequiredImportJobSettings - DemoContainerAppsTests fails when the two drift.')
-param importJobSettings string = 'GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True;Calls=True;GraphTeams=True;SentEmails=True;ImportPowerPlatform=True;ImportDlp=True;CopilotStudioCredits=True;AzureCostManagement=True'
+param importJobSettings string = 'GraphUsersMetadata=True;GraphUsageReports=True;GraphCopilotUsageReports=True;Copilot=True;CopilotInteractionHistory=True;ActivityLog=True;WebTraffic=True;Calls=True;GraphTeams=True;SentEmails=True;ImportPowerPlatform=True;ImportDlp=True;CopilotStudioCredits=True;AzureCostManagement=True;CopilotCostManagement=True'
 
 @description('Portal replicas kept warm. 0 scales to zero when idle (cheapest; the first visit then waits for a cold start and signs in again). 1 keeps it always on.')
 @minValue(0)
@@ -165,6 +165,7 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'TenantDomain', value: tenantDomain }
             { name: 'WebAppURL', value: 'https://${webFqdn}' }
             { name: 'ImportJobSettings', value: importJobSettings }
+            { name: 'CopilotCostConnectionEnabled', value: 'true' }
             { name: 'ConnectionStrings__SPOInsightsEntities', value: sqlConnectionString }
             // No Storage connection string: without one the portal keeps its runtime state (Teams
             // tokens, the user-import checkpoint, org import change logs) in memory. A placeholder such

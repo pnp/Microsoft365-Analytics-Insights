@@ -28,6 +28,9 @@ namespace Tests.UnitTests
             Assert.IsTrue(match.Success, "apps.bicep must declare an importJobSettings parameter with a default.");
             Assert.AreEqual(DemoPortalReadiness.RequiredImportJobSettings, match.Groups[1].Value,
                 "Update the importJobSettings default in infra/ContainerAppsDemo/apps.bicep to the generator's current flags.");
+            StringAssert.Matches(template,
+                new Regex(@"\{\s*name:\s*'CopilotCostConnectionEnabled'\s*,\s*value:\s*'true'\s*\}"),
+                "The synthetic credit source also needs CopilotCostConnectionEnabled=true on the demo web app.");
         }
 
         /// <summary>The nightly job's reset is only allowed on a ContosoDemo_ database; the deployment's default must be one.</summary>
