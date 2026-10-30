@@ -699,16 +699,14 @@ namespace App.ControlPanel.Engine.Prerequisites
                     ProjectReference);
             }
 
-            var providers = new List<string> { "Microsoft.Web", "Microsoft.Sql", "Microsoft.Storage", "Microsoft.KeyVault", "Microsoft.Insights", "Microsoft.OperationalInsights" };
-            if (config.ServiceBusEnabled || settings.Calls) providers.Add("Microsoft.ServiceBus");
-            if (config.CognitiveServicesEnabled || config.FoundryPromptEnabled) providers.Add("Microsoft.CognitiveServices");
-            if (settings.GraphUsageReports) providers.Add("Microsoft.Automation");
-            if (privateNetwork) providers.Add("Microsoft.Network");
+            var providers = AzureResourceProviderPreflight.RequiredProviders(config);
             b.Check("provider-registration", "Subscription resource-provider registration", "Azure subscription owner",
                 "Target Azure subscription",
                 "Azure must have the namespaces for the selected resource types registered. Resource-group Contributor access does not automatically authorise subscription-wide registration.",
-                "Confirm registrationState is Registered for: " + string.Join(", ", providers) + ". "
-                + "Use Subscription > Resource providers, or az provider show --namespace {namespace} --subscription {subscription-id}. Only if needed, a subscription owner registers that namespace. No registration change is needed for an already Registered provider; the installer does not need permanent subscription Owner just for this check.",
+                "Test Configuration and deployment both read registrationState for: " + string.Join(", ", providers) + ". "
+                + "Deployment stops before resource changes for a confirmed unregistered or unregistering provider. Registering warns but does not block because registration completes per region. "
+                + "If status cannot be read, the installer warns and continues; this is not confirmation of registration. "
+                + "Use Subscription > Resource providers, or az provider show --namespace {namespace} --subscription {subscription-id}. Only if needed, an administrator with subscription-scope register/action permission registers that namespace. The installer never registers providers automatically and does not need permanent subscription Owner just for this check.",
                 "https://learn.microsoft.com/azure/azure-resource-manager/management/resource-providers-and-types");
             b.Check("policy-compatibility", "Azure Policy checks for this deployment method", "Azure policy / subscription owner",
                 "Target subscription, resource group and any shared network resources",
