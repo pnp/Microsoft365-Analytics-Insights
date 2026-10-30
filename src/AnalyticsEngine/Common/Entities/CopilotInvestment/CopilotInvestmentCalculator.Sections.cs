@@ -104,17 +104,26 @@ namespace Common.Entities.CopilotInvestment
         private static string NullIfBlank(string value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
         /// <summary>
-        /// One group's figures. A row with fewer people than the smallest group shown - only ever a combination of small
-        /// groups, since a shown group has at least that many - shows none at all, so the combined row cannot single out
-        /// the one to four people it is made of. The same rule, and the same unit (everybody in the group), as Copilot Spend.
+        /// One group's figures. In addition to the group-size minimum, every non-empty contributor population behind a
+        /// figure must meet that minimum; otherwise a small set of holders or consumers could be isolated within a larger group.
         /// </summary>
         private static CopilotInvestmentGroupRow GroupRow(Context context, List<CopilotInvestmentPerson> people, int minGroupSize)
         {
-            if (people.Count < minGroupSize) return new CopilotInvestmentGroupRow { Withheld = true };
-
-            // The matched holders only, so a group's return compares the same people's value and cost.
             var holders = people.Where(Context.Matched).ToList();
             var active = holders.Count(h => h.ActiveDays > 0);
+            var creditConsumers = people.Count(p => (p.Credit?.Credits ?? 0) > 0);
+            var creditContributors = people.Count(p => (p.Credit?.Credits ?? 0) != 0);
+            var studioContributors = people.Count(p => (p.Studio?.Credits ?? 0) != 0);
+            var unlicensedActiveUsers = people.Count(p => !p.Licensed && p.ActiveDays > 0);
+            if (people.Count < minGroupSize
+                || HasSmallContributorPopulation(holders.Count, minGroupSize)
+                || HasSmallContributorPopulation(active, minGroupSize)
+                || HasSmallContributorPopulation(creditContributors, minGroupSize)
+                || HasSmallContributorPopulation(studioContributors, minGroupSize)
+                || HasSmallContributorPopulation(unlicensedActiveUsers, minGroupSize))
+                return new CopilotInvestmentGroupRow { Withheld = true };
+
+            // The matched holders only, so a group's return compares the same people's value and cost.
             var row = new CopilotInvestmentGroupRow
             {
                 Holders = holders.Count,
@@ -123,9 +132,9 @@ namespace Common.Entities.CopilotInvestment
                 ActiveShare = holders.Count > 0 ? Math.Round(active / (double)holders.Count, 4) : (double?)null,
                 ActiveDaysPerHolderMonthly = holders.Count > 0 ? Math.Round(holders.Sum(h => h.ActiveDays) / (double)holders.Count / context.Months, 2) : (double?)null,
                 Credits = Math.Round(people.Sum(p => p.Credit?.Credits ?? 0), 6),
-                CreditConsumers = people.Count(p => (p.Credit?.Credits ?? 0) > 0),
+                CreditConsumers = creditConsumers,
                 StudioCredits = Math.Round(people.Sum(p => p.Studio?.Credits ?? 0), 6),
-                UnlicensedActiveUsers = people.Count(p => !p.Licensed && p.ActiveDays > 0),
+                UnlicensedActiveUsers = unlicensedActiveUsers,
             };
             if (context.SeatPrice.HasValue) row.Cost = Money(holders.Sum(h => context.Cost(h) ?? 0));
             if (context.ValueReady)
@@ -136,6 +145,9 @@ namespace Common.Entities.CopilotInvestment
             }
             return row;
         }
+
+        private static bool HasSmallContributorPopulation(int count, int minGroupSize) =>
+            count > 0 && count < minGroupSize;
 
         /// <summary>The active days a month the spend-against-evidence quadrants split at: about once a week.</summary>
         public const double QuadrantDaysPerMonth = StrongEvidenceDaysPerMonth / 2;

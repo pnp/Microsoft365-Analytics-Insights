@@ -84,7 +84,7 @@ function renderPanel(groups: InvestmentGroupRow[], foldedGroups: number, languag
   );
 }
 
-const WITHHELD = 'Fewer than 5 people: figures not shown';
+const WITHHELD = 'Fewer than 5 people contribute to at least one figure: figures not shown';
 
 describe('OrganisationPanel: the combined row of smaller groups', () => {
   it('shows a combination of too few people as dashes with the reason, never as figures or zeros', () => {
@@ -126,7 +126,8 @@ describe('OrganisationPanel: the combined row of smaller groups', () => {
     renderPanel([group({}), WITHHELD_ROW], 3, 'es');
 
     const combined = screen.getByRole('row', { name: /Grupos pequeños combinados/ });
-    expect(within(combined).getByText('Menos de 5 personas: cifras no mostradas')).toBeInTheDocument();
-    expect(within(combined).getAllByRole('img', { name: 'Menos de 5 personas: cifras no mostradas' })).toHaveLength(9);
+    const withheld = 'Menos de 5 personas contribuyen a alguna cifra: no se muestran las cifras';
+    expect(within(combined).getByText(withheld)).toBeInTheDocument();
+    expect(within(combined).getAllByRole('img', { name: withheld })).toHaveLength(9);
   });
 });

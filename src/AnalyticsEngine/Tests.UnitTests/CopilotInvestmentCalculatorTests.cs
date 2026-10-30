@@ -240,8 +240,8 @@ namespace Tests.UnitTests
         {
             var people = Enumerable.Range(1, 5).Select(id => Holder(id, 10, department: "Sales")).ToList();
             people.Add(Holder(6, 9, credit: Balance(6, 7777), department: "Legal"));
-            people.Add(Holder(7, 4, department: "Finance"));
-            people.Add(Holder(8, 2, department: "Finance"));
+            people.Add(Holder(7, 4, credit: Balance(7, 100), department: "Finance"));
+            people.Add(Holder(8, 2, credit: Balance(8, 200), department: "Finance"));
             var input = Input(people, Assumptions());
             input.MinGroupSize = minGroupSize;
             return input;
@@ -281,17 +281,46 @@ namespace Tests.UnitTests
         [TestMethod]
         public void TheCombinedRowOfSmallGroups_ShowsItsFigures_OnceItReachesTheMinimum()
         {
-            // A minimum of three: the same three people are enough, so the row is described like any other group.
+            // A minimum of three: all three people in the combined group contribute to the credit total.
             var summary = CopilotInvestmentCalculator.Calculate(SmallGroupsInput(minGroupSize: 3));
             var combined = summary.Organisation.Groups.Single(g => g.EmptyKey == CopilotInvestmentCalculator.GroupKeys.OtherSmallGroups);
 
             Assert.IsFalse(combined.Withheld);
             Assert.AreEqual(3, combined.Holders);
-            Assert.AreEqual(7777, combined.Credits);
-            Assert.AreEqual(1, combined.CreditConsumers);
+            Assert.AreEqual(8077, combined.Credits);
+            Assert.AreEqual(3, combined.CreditConsumers);
             Assert.IsNotNull(combined.Cost);
             Assert.AreEqual(2, summary.Organisation.FoldedGroups);
             StringAssert.Contains(JsonConvert.SerializeObject(combined), "\"withheld\":false");
+        }
+
+        [TestMethod]
+        public void AGroupWithEnoughPeople_WithholdsFiguresWhenTheirContributorPopulationIsTooSmall()
+        {
+            var creditPeople = Enumerable.Range(1, 5).Select(id => Holder(id, 0)).ToList();
+            creditPeople[0].Credit = Balance(1, 10);
+            var creditGroup = Group(creditPeople);
+            Assert.IsTrue(creditGroup.Withheld, "A single credit consumer cannot be isolated by the group's total headcount.");
+            Assert.AreEqual(0, creditGroup.CreditConsumers);
+            Assert.AreEqual(0, creditGroup.Credits);
+
+            var studioPeople = Enumerable.Range(1, 5).Select(id => Holder(id, 0)).ToList();
+            studioPeople[0].Studio = new StudioUserFact { Credits = 10 };
+            Assert.IsTrue(Group(studioPeople).Withheld, "A single Studio consumer cannot be isolated by the group's total headcount.");
+
+            var activePeople = Enumerable.Range(1, 5).Select(id => Holder(id, 0)).ToList();
+            activePeople[0].ActiveDays = 1;
+            Assert.IsTrue(Group(activePeople).Withheld, "A single active holder cannot be isolated by the group's total headcount.");
+
+            var noContributors = Enumerable.Range(1, 5).Select(id => Holder(id, 0)).ToList();
+            Assert.IsFalse(Group(noContributors).Withheld, "An empty contributor population does not disclose an individual.");
+        }
+
+        private static CopilotInvestmentGroupRow Group(List<CopilotInvestmentPerson> people)
+        {
+            var input = Input(people, Assumptions());
+            input.MinGroupSize = 5;
+            return CopilotInvestmentCalculator.Calculate(input).Organisation.Groups.Single();
         }
 
         [TestMethod]

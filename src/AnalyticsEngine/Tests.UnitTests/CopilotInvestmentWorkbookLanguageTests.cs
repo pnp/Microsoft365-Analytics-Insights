@@ -234,8 +234,36 @@ namespace Tests.UnitTests
             var plain = Sheets(CopilotInvestmentWorkbook.Build(enough.WithoutIndividualData(), false, "test", PortalLanguage.English))[Array.IndexOf(SheetKeys, "organisation")].Cells;
             var en = PortalCatalog.For(Module, PortalLanguage.English);
             var label = plain.Single(c => c.Text == en.Text("copilotInvestment.workbook.org.combined"));
-            Assert.IsTrue(plain.Any(c => c.Ref != label.Ref && c.Value == "7777"), "The combined row's credits are written.");
+            Assert.IsTrue(plain.Any(c => c.Ref != label.Ref && c.Value == "8077"), "The combined row's credits are written.");
             Assert.IsFalse(plain.Any(c => c.Text != null && c.Text.Contains("figures not shown")));
+        }
+
+        [TestMethod]
+        public void AGroupWithTooFewContributors_IsWithheldFromTheWorkbookInEitherLanguage()
+        {
+            var people = Enumerable.Range(1, 5)
+                .Select(id => CopilotInvestmentCalculatorTests.Holder(id, 0, department: "Sales"))
+                .ToList();
+            people[0].Credit = CopilotInvestmentCalculatorTests.Balance(1, 7777);
+            var input = CopilotInvestmentCalculatorTests.Input(people, CopilotInvestmentCalculatorTests.Assumptions());
+            input.MinGroupSize = 5;
+            var summary = CopilotInvestmentCalculator.Calculate(input);
+            Assert.IsTrue(summary.Organisation.Groups.Single().Withheld);
+
+            var english = CopilotInvestmentWorkbook.Build(summary.WithoutIndividualData(), false, "test", PortalLanguage.English);
+            var spanish = CopilotInvestmentWorkbook.Build(summary.WithoutIndividualData(), false, "test", PortalLanguage.Spanish);
+            AssertSpanishCounterpart(english, spanish);
+
+            foreach (var (language, book) in new[] { (PortalLanguage.English, english), (PortalLanguage.Spanish, spanish) })
+            {
+                var text = PortalCatalog.For(Module, language);
+                var cells = Sheets(book)[Array.IndexOf(SheetKeys, "organisation")].Cells;
+                var reason = cells.Single(c => c.Text == text.Text("copilotInvestment.workbook.org.combinedWithheld", ("count", "5")));
+                var row = Regex.Match(reason.Ref, "\\d+").Value;
+                Assert.AreEqual(1, cells.Count(c => Regex.Match(c.Ref, "\\d+").Value == row), language + ": the withholding reason is alone on its row.");
+                Assert.IsFalse(cells.Any(c => c.Value == "7777"), language + ": the single credit consumer's balance is withheld.");
+                Assert.IsFalse(cells.Any(c => c.Text == "Sales"), language + ": the row label is withheld too.");
+            }
         }
 
         [TestMethod]

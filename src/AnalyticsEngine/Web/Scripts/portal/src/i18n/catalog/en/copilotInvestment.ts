@@ -383,7 +383,7 @@ export const copilotInvestment = {
   'copilotInvestment.org.col.studio': 'Studio credits (period)',
   'copilotInvestment.org.col.unlicensedActive': 'Active without a licence',
   'copilotInvestment.org.folded': '{count} smaller groups are combined.',
-  'copilotInvestment.org.withheld': 'Fewer than {count} people: figures not shown',
+  'copilotInvestment.org.withheld': 'Fewer than {count} people contribute to at least one figure: figures not shown',
   'copilotInvestment.org.empty': 'No group has enough licensed users to show.',
   'copilotInvestment.org.hidden': 'This breakdown names managers, which needs See PII.',
 
@@ -1054,7 +1054,7 @@ export const copilotInvestment = {
   'copilotInvestment.workbook.org.col.unlicensed': 'Unlicensed Copilot users',
   'copilotInvestment.workbook.org.notSet': '(not set)',
   'copilotInvestment.workbook.org.combined': '(smaller groups combined)',
-  'copilotInvestment.workbook.org.combinedWithheld': '(smaller groups combined: fewer than {count} people, figures not shown)',
+  'copilotInvestment.workbook.org.combinedWithheld': '(fewer than {count} people contribute to at least one figure: figures not shown)',
   'copilotInvestment.workbook.credits.title': 'Copilot credits consumed (preview readings) and Copilot Studio ledger',
   'copilotInvestment.workbook.credits.intro':
     'Consumed credits are point-in-time readings in the source\u2019s own period, which the source does not identify. They are never added across days and never treated as daily or monthly spend.',
