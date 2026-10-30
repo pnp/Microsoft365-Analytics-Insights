@@ -305,10 +305,15 @@ jobs:
           exit $LASTEXITCODE
 
       - name: Check stable build 1857 investment and spend ports
+        timeout-minutes: 20
         shell: pwsh
         run: |
           dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
             -c Release --no-build --nologo `
+            --logger "console;verbosity=normal" `
+            --logger "trx;LogFileName=net10-stable-1857.trx" `
+            --results-directory "$env:RUNNER_TEMP\testresults\stable-1857" `
+            --blame-hang --blame-hang-timeout 8m --blame-hang-dump-type none `
             --filter "FullyQualifiedName~CopilotInvestment|FullyQualifiedName~CopilotSpend|FullyQualifiedName~DeploymentPrerequisitesTests|FullyQualifiedName~AzureResourceProviderPreflightTests|FullyQualifiedName~InstallerCancellationTests"
           exit $LASTEXITCODE
 
@@ -373,5 +378,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: net10-test-results
-          path: ${{ runner.temp }}/testresults/**/*.trx
+          path: |
+            ${{ runner.temp }}/testresults/**/*.trx
+            ${{ runner.temp }}/testresults/**/Sequence_*.xml
           if-no-files-found: ignore
