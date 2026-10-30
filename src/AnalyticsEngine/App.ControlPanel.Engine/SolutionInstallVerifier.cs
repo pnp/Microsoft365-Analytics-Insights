@@ -1,6 +1,7 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
 using App.ControlPanel.Engine.Models;
+using App.ControlPanel.Engine.Prerequisites;
 using Azure;
 using Azure.Identity;
 using Azure.ResourceManager;
@@ -337,6 +338,7 @@ namespace App.ControlPanel.Engine
                     _logger.LogInformation($"Authenticating & selecting subscription '{Config.Subscription.DisplayName}'...");
 
                     var sub = AzureInstallJob.FromTokenCredential(creds, Config.Subscription.SubId);
+                    await AzureResourceProviderPreflight.CheckAsync(sub, Config, _logger);
                     var rgTestOnlyJob = new ResourceGroupTestOnlyInstallJob(_logger, Config.AzureLocation, sub, Config.ResourceGroupName);
 
                     // Try and get Az group

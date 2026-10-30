@@ -1,5 +1,6 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks.Tasks;
+using App.ControlPanel.Engine.Prerequisites;
 using Azure.Identity;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Automation;
@@ -436,6 +437,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public override async Task Install(object previousRunResult)
         {
             CancellationToken.ThrowIfCancellationRequested();
+            if (!await AzureResourceProviderPreflight.CheckAsync(Subscription, _config, Logger, CancellationToken))
+                throw new InstallException("Installation stopped before changing Azure resources because required Azure resource providers " +
+                    "are not registered. Follow the registration guidance above, then retry.");
+
             var vnetEnabled = _config.NetworkConfig?.Enabled == true;
             if (!vnetEnabled)
             {
