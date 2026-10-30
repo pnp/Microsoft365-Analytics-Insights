@@ -175,11 +175,13 @@ jobs:
         uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
         with:
           files: src/AnalyticsEngine/Tests.UnitTests/bin/Release/Tests.UnitTests.dll.config
+        # Dependabot and fork PRs cannot read Actions secrets. Keep their synthetic identity
+        # parseable instead of replacing it with empty values before offline tests run.
         env:
-          ClientID: ${{ secrets.APP_CLIENTID }}
+          ClientID: ${{ secrets.APP_CLIENTID || '00000000-0000-0000-0000-000000000000' }}
           ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
-          TenantGUID: ${{ secrets.APP_TENANTGUID }}
-          TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
+          TenantGUID: ${{ secrets.APP_TENANTGUID || '00000000-0000-0000-0000-000000000000' }}
+          TenantDomain: ${{ secrets.APP_TENANTDOMAIN || 'contoso.onmicrosoft.com' }}
           CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
           CognitiveKey: ${{ secrets.APP_COGNITIVEKEY }}
           ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
