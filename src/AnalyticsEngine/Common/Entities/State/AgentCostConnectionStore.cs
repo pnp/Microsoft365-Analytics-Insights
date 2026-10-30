@@ -1,4 +1,5 @@
 using Common.Entities.Config;
+using Common.Entities.CopilotCosts;
 using Newtonsoft.Json;
 using System;
 using System.Threading.Tasks;
@@ -44,8 +45,17 @@ namespace Common.Entities.State
 
         public async Task ConnectAsync(string encryptedCache)
         {
+            var old = await GetHeadAsync().ConfigureAwait(false);
+            var health = old?.Connected == true ? await GetHealthAsync(old.Version).ConfigureAwait(false) : null;
+            if (old?.Connected == true && await NeedsReconnectAsync(old.Version).ConfigureAwait(false))
+            {
+                health = health ?? new CostApiHealth();
+                health.RecordFailure("reconnectRequired", DateTimeOffset.UtcNow);
+            }
             var head = new AgentCostConnectionHead { Version = Guid.NewGuid().ToString("N"), Connected = true };
             await SaveCacheAsync(head.Version, encryptedCache).ConfigureAwait(false);
+            if (health != null)
+                await _store.SetStringAsync("Health_" + head.Version, JsonConvert.SerializeObject(health), CacheLifetime).ConfigureAwait(false);
             await _store.SetStringAsync(HeadKey, JsonConvert.SerializeObject(head)).ConfigureAwait(false);
         }
 
@@ -69,6 +79,23 @@ namespace Common.Entities.State
         public Task RequireReconnectAsync(string version) =>
             _store.SetStringAsync(ErrorKey(version), "reconnectNeeded", CacheLifetime);
         public Task<bool> NeedsReconnectAsync(string version) => _store.ExistsAsync(ErrorKey(version));
+
+        public async Task<CostApiHealth> GetHealthAsync(string version)
+        {
+            var value = await _store.GetStringAsync("Health_" + version).ConfigureAwait(false);
+            return value == null ? null : JsonConvert.DeserializeObject<CostApiHealth>(value);
+        }
+
+        public async Task RecordHealthAsync(string version, string failureCode, DateTimeOffset now)
+        {
+            if (string.IsNullOrEmpty(version)) return;
+            var health = await GetHealthAsync(version).ConfigureAwait(false) ?? new CostApiHealth();
+            health.LastAttempt = now;
+            if (failureCode == null) health.RecordSuccess(now);
+            else health.RecordFailure(failureCode, now);
+            // Like the token cache, health belongs to a connection generation, never to the head.
+            await _store.SetStringAsync("Health_" + version, JsonConvert.SerializeObject(health), CacheLifetime).ConfigureAwait(false);
+        }
 
         private static string CacheKey(string version) => "Cache_" + version;
         private static string ErrorKey(string version) => "Error_" + version;

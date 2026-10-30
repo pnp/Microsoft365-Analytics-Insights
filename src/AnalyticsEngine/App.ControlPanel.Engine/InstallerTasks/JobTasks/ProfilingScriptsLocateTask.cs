@@ -62,9 +62,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
             DirectoryInfo zipContentsDir;
             try
             {
-                zipContentsDir = ZipFileTasks.Unzip(localStorageBlobInfo, _logger);
+                zipContentsDir = ZipFileTasks.Unzip(localStorageBlobInfo, _logger, CancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 // Give context to the error
                 throw new ApplicationException($"Could not extract control-panel app: '{ex.Message}'");

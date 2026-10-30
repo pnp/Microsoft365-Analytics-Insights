@@ -1,5 +1,6 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks.Tasks;
+using App.ControlPanel.Engine.Prerequisites;
 using Azure.Identity;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Automation;
@@ -267,9 +268,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var activityExpected = Common.Entities.ImportTaskSettings.GetImportPropertyInfos()
                 .Any(p => p.Name != nameof(Common.Entities.ImportTaskSettings.WebTraffic) &&
                     (bool)p.GetValue(config.SolutionConfig.ImportTaskSettings));
+            // The alert is provisioned before the importers are deployed, and a run that does not update the release content
+            // leaves whichever importer build is already there, which may not emit the newer health checks.
             this.AddTask(new HealthMonitoringInstallTask(healthConfig, logger, Location, tagDic,
                 health.Enabled, health.NotificationEmail, health.MissingHeartbeatMinutes, activityExpected,
-                config.SolutionConfig.ImportTaskSettings.WebTraffic));
+                config.SolutionConfig.ImportTaskSettings.WebTraffic,
+                latestContentDeployed: config.TasksConfig?.InstallLatestSolutionContent ?? true));
 
             // Cognitive
             if (config.CognitiveServicesEnabled)
@@ -435,6 +439,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </summary>
         public override async Task Install(object previousRunResult)
         {
+            CancellationToken.ThrowIfCancellationRequested();
+            if (!await AzureResourceProviderPreflight.CheckAsync(Subscription, _config, Logger, CancellationToken))
+                throw new InstallException("Installation stopped before changing Azure resources because required Azure resource providers " +
+                    "are not registered. Follow the registration guidance above, then retry.");
+
             var vnetEnabled = _config.NetworkConfig?.Enabled == true;
             if (!vnetEnabled)
             {
@@ -526,9 +535,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 try
                 {
                     objectId = await ServicePrincipalResolver.GetObjectIdFromClientCredentials(
-                        _config.InstallerAccount.DirectoryId, _config.InstallerAccount.ClientId, _config.InstallerAccount.Secret);
+                        _config.InstallerAccount.DirectoryId, _config.InstallerAccount.ClientId, _config.InstallerAccount.Secret, CancellationToken);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
                 {
                     Logger.LogError(
                         "Could not resolve the installer service principal's object ID, so the SQL Server cannot be created with " +
@@ -574,7 +583,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _sqlAuthDecision = await SqlServerAuthReader.DetectAsync(
                 CreatedSqlServer, _config.SQLServerAdminPassword, _config.SqlAuthMode, Logger,
                 _installerObjectId,
-                _config.SQLEntraDatabaseUsers != null && _config.SQLEntraDatabaseUsers.Count > 0);
+                _config.SQLEntraDatabaseUsers != null && _config.SQLEntraDatabaseUsers.Count > 0, CancellationToken);
 
             await RepairAutomationSqlCredentialIfNeeded();
         }
@@ -602,12 +611,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
             try
             {
                 var raw = await ServicePrincipalResolver.GetObjectIdFromClientCredentials(
-                    account.DirectoryId, account.ClientId, account.Secret);
+                    account.DirectoryId, account.ClientId, account.Secret, CancellationToken);
 
                 Guid parsed;
                 return Guid.TryParse(raw, out parsed) ? parsed : Guid.Empty;
             }
-            catch (Exception)
+            catch (Exception) when (!CancellationToken.IsCancellationRequested)
             {
                 return Guid.Empty;
             }
@@ -659,9 +668,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     AutomationAccountTask.CRED_SQL_NAME, _config.SQLServerAdminUsername, _config.SQLServerAdminPassword);
 
                 await automationAccount.GetAutomationCredentials()
-                    .CreateOrUpdateAsync(WaitUntil.Completed, AutomationAccountTask.CRED_SQL_NAME, credential);
+                    .CreateOrUpdateAsync(WaitUntil.Completed, AutomationAccountTask.CRED_SQL_NAME, credential, CancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 Logger.LogWarning($"Could not create the Automation account's SQL credential: {ex.Message}");
             }
@@ -752,7 +761,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             try
             {
                 var resources = resourceGroup
-                    .GetGenericResources(filter: LeftoverRedisResourceWarning.ResourceTypeFilter)
+                    .GetGenericResources(filter: LeftoverRedisResourceWarning.ResourceTypeFilter, cancellationToken: CancellationToken)
                     .Select(r => new RedisResourceWarningInfo(r.Data.Name, r.Data.ResourceType.ToString()));
 
                 foreach (var warning in LeftoverRedisResourceWarning.BuildWarnings(resources, resourceGroup.Data.Name))
@@ -760,7 +769,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     _logger.LogWarning(warning);
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 _logger.LogWarning($"Could not check for unused Azure Cache for Redis resources in resource group '{resourceGroup.Data.Name}': {ex.Message}");
             }

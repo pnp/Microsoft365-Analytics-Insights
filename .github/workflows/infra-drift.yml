@@ -40,12 +40,13 @@ jobs:
   filter_tests:
     name: Test the drift filter
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
 
@@ -57,6 +58,7 @@ jobs:
     name: Check deployed resources against the template
     needs: filter_tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Never from a pull request (no Azure access from forks, and no secrets on PR runs) and never
     # from a fork of this repository.
     if: >
@@ -69,7 +71,7 @@ jobs:
       name: telemetry-service
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Everything identifying the environment comes from repository variables/secrets, never from
       # the repository itself - this repo is public.
@@ -89,7 +91,7 @@ jobs:
 
       - name: Azure login
         if: steps.config.outputs.configured == 'true'
-        uses: azure/login@v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -97,7 +99,7 @@ jobs:
 
       - name: Set up Node
         if: steps.config.outputs.configured == 'true'
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
 

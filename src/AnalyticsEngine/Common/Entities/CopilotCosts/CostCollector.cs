@@ -32,6 +32,8 @@ namespace Common.Entities.CopilotCosts
                 Func<CancellationToken, Task> guard = c => _connection.AssertOwnershipAsync(state, c);
                 var run = await _store.AcquireRunAsync(state.Generation, DateTimeOffset.UtcNow, cancellation, guard);
                 if (run == null) { outcome = "idle"; return; }
+                var readSucceeded = false;
+                var apiFailed = false;
                 try
                 {
                     var source = new CostGraphSource(_http, token, assertAccess: guard);
@@ -67,11 +69,17 @@ namespace Common.Entities.CopilotCosts
                         try
                         {
                             var observation = await source.ReadUserAsync(item.UserId.ToString(), cancellation);
+                            readSucceeded = true;
                             await _store.PublishAsync(run, observation, guard, cancellation);
                         }
                         catch (CostConnectionException ex)
                         {
                             outcome = ex.Status;
+                            if (ex.Status != "notFound" && ex.Status != "busy")
+                            {
+                                apiFailed = true;
+                                state.CollectionHealth.RecordFailure(ex.Status, DateTimeOffset.UtcNow);
+                            }
                             if (ex.Status == "busy" || ex.Status == "databaseUnavailable" || ex.Status == "storageUnavailable") throw;
                             await _store.RecordFailureAsync(run, item, ex.Status, DateTimeOffset.UtcNow, cancellation, ex.RetryAfter);
                             // Permission/connection failures are not permission to skip the population.
@@ -82,6 +90,8 @@ namespace Common.Entities.CopilotCosts
                         catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
                         {
                             outcome = "sourceUnavailable";
+                            apiFailed = true;
+                            state.CollectionHealth.RecordFailure(outcome, DateTimeOffset.UtcNow);
                             await _store.RecordFailureAsync(run, item, outcome, DateTimeOffset.UtcNow, cancellation);
                         }
                         catch (OperationCanceledException)
@@ -107,6 +117,8 @@ namespace Common.Entities.CopilotCosts
                 }
                 finally
                 {
+                    if (readSucceeded && !apiFailed)
+                        state.CollectionHealth.RecordSuccess(DateTimeOffset.UtcNow);
                     using (var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
                         await _store.ReleaseAsync(run, cleanup.Token);
                 }

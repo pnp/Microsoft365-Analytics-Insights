@@ -76,6 +76,20 @@ FROM dbo.copilot_studio_credit_user_daily WHERE user_id IS NULL;"),
                         "Exactly one synthetic person has left the directory and must still report their spend.");
                     Assert.IsTrue(Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.copilot_studio_credit_daily
 WHERE agent_name LIKE N'%Καλημέρα%';") > 0, "nvarchar agent names must survive the round trip.");
+
+                    // What a person uses Copilot for: key phrases on analysed prompts only, Greek phrases and
+                    // file names through the real nvarchar columns, and the importer's estimate on agent turns.
+                    Assert.IsTrue(Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.copilot_interaction_keywords;") > 0);
+                    Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.copilot_interaction_keywords k
+JOIN dbo.copilot_interactions i ON i.id = k.interaction_id
+JOIN dbo.copilot_interaction_types t ON t.id = i.interaction_type_id
+WHERE t.name <> 'userPrompt' OR i.language_id IS NULL;"));
+                    Assert.AreEqual(1L, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.keywords WHERE name = N'Προϋπολογισμός 2027';"));
+                    Assert.AreEqual(1L, Scalar(connection,
+                        "SELECT COUNT_BIG(*) FROM dbo.copilot_event_accessed_resource_names WHERE name = N'Προσφορά πελάτη – Contoso.docx';"));
+                    Assert.IsTrue(Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.copilot_chats WHERE copilot_credit_estimate_total > 0;") > 0);
+                    Assert.AreEqual(0L, Scalar(connection, @"SELECT COUNT_BIG(*) FROM dbo.copilot_chats
+WHERE copilot_credit_estimate_total IS NULL OR (agent_id IS NULL AND copilot_credit_estimate_total <> 0);"));
                 }
                 using (var raw = new RawContext(SqlDemoDatabase.LocalConnection(name)))
                 {

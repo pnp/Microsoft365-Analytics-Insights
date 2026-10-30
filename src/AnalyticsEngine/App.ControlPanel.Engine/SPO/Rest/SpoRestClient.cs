@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.SPO.Rest
@@ -33,6 +34,7 @@ namespace App.ControlPanel.Engine.SPO.Rest
         readonly ILogger _logger;
         readonly HttpClient _httpClient;
         readonly bool _ownsHttpClient;
+        public CancellationToken CancellationToken { get; set; }
 
         public SpoRestClient(ISpoAuthenticator authenticator, ILogger logger)
             : this(authenticator, logger, new HttpClient { Timeout = TimeSpan.FromMinutes(5) }, true) { }
@@ -132,21 +134,24 @@ namespace App.ControlPanel.Engine.SPO.Rest
 
         async Task<RawResponse> SendRawAsync(HttpRequestMessage request, string url)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             request.Headers.Add("accept", ACCEPT_JSON);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", await _authenticator.GetAccessTokenAsync(url));
 
             try
             {
-                var response = await _httpClient.SendAsync(request);
-                return new RawResponse
+                using (var response = await _httpClient.SendAsync(request, CancellationToken))
                 {
-                    Status = response.StatusCode,
-                    Reason = response.ReasonPhrase,
-                    Body = response.Content == null ? string.Empty : await response.Content.ReadAsStringAsync(),
-                    IsSuccess = response.IsSuccessStatusCode
-                };
+                    return new RawResponse
+                    {
+                        Status = response.StatusCode,
+                        Reason = response.ReasonPhrase,
+                        Body = response.Content == null ? string.Empty : await response.Content.ReadAsStringAsync(),
+                        IsSuccess = response.IsSuccessStatusCode
+                    };
+                }
             }
-            catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException || ex is IOException)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested && (ex is HttpRequestException || ex is TaskCanceledException || ex is IOException))
             {
                 throw new SpoRestException($"Couldn't reach SharePoint at '{url}'. {ex.Message}", ex);
             }

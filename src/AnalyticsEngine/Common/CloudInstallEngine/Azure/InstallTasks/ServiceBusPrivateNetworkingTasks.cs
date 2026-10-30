@@ -39,6 +39,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 Container = base.Container,
                 Networking = Networking,
+                CancellationToken = CancellationToken,
             };
             return await innerTask.ExecuteTaskReturnResult(contextArg);
         }
@@ -76,6 +77,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             {
                 Container = base.Container,
                 Networking = Networking,
+                CancellationToken = CancellationToken,
             };
             return await innerTask.ExecuteTaskReturnResult(contextArg);
         }

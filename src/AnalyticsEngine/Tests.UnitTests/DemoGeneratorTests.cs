@@ -1,3 +1,4 @@
+using Common.Entities.Copilot;
 using Common.Entities.CopilotAdoption;
 using Common.Entities.Entities.AgentCosts;
 using Common.Entities.PromptCategories;
@@ -897,6 +898,157 @@ namespace Tests.UnitTests
             Assert.IsTrue(sink.For(DemoTables.AgentCostImports)
                 .Where(r => (string)r[Col(DemoTables.AgentCostImports, "import_name")] == AgentCostImportNames.CopilotStudioCredits)
                 .All(r => (int)r[Col(DemoTables.AgentCostImports, "rows_saved")] == 0));
+        }
+
+        [TestMethod]
+        public void PromptKeyPhrases_AreOneToThreeDistinctPhrasesOnAnalysedPromptsOnly()
+        {
+            var options = DemoOptions.Parse(new[] { "--preview", "--users", "120", "--days", "35",
+                "--as-of", "2026-09-01", "--areas", "copilot-history" }, DateTime.UtcNow);
+            var sink = Generate(options, t => t == DemoTables.Interactions || t == DemoTables.InteractionKeywords
+                || t == DemoTables.Keywords);
+            var keywords = sink.For(DemoTables.Keywords).ToDictionary(r => (int)r[0], r => (string)r[1]);
+            Assert.AreEqual(DemoCopilotPersonas.FirstKeywordId - 1 + DemoCopilotPersonas.KeywordCount, keywords.Count,
+                "The prompt key phrases follow the Teams channel keywords, which keep ids 1-5.");
+            Assert.IsTrue(keywords.Count <= 205, "Key phrases must stay a bounded vocabulary.");
+            Assert.IsTrue(keywords.Values.Any(k => k.Contains("Προϋπολογισμός")),
+                "A key phrase is customer text, so the demo must carry Unicode ones.");
+
+            var phrases = sink.For(DemoTables.InteractionKeywords).GroupBy(r => (int)r[0])
+                .ToDictionary(g => g.Key, g => g.Select(r => (int)r[1]).ToList());
+            int analysed = 0, unanalysed = 0;
+            foreach (var row in sink.For(DemoTables.Interactions))
+            {
+                phrases.TryGetValue((int)row[Col(DemoTables.Interactions, "id")], out var ids);
+                bool prompt = (int)row[Col(DemoTables.Interactions, "interaction_type_id")] == 1;
+                if (!prompt || row[Col(DemoTables.Interactions, "language_id")] == null)
+                {
+                    Assert.IsNull(ids, "Azure AI Language only extracts key phrases from the user prompts it analysed.");
+                    if (prompt) unanalysed++;
+                    continue;
+                }
+                analysed++;
+                Assert.IsNotNull(ids, "Every analysed prompt must carry key phrases.");
+                Assert.IsTrue(ids.Count >= 1 && ids.Count <= DemoCopilotPersonas.MaxKeywordsPerPrompt);
+                Assert.AreEqual(ids.Count, ids.Distinct().Count(), "(interaction_id, keyword_id) is unique in the real schema.");
+                Assert.IsTrue(ids.All(k => k >= DemoCopilotPersonas.FirstKeywordId && keywords.ContainsKey(k)),
+                    "Prompt key phrases must not reuse the Teams channel keywords.");
+            }
+            Assert.IsTrue(analysed > 0 && unanalysed > 0, "The fixture must contain analysed and unanalysed prompts.");
+            Assert.AreEqual(analysed, phrases.Count);
+            Assert.IsTrue(phrases.Values.Any(p => p.Count == 1) && phrases.Values.Any(p => p.Count == 3));
+        }
+
+        [TestMethod]
+        public void PromptCategories_FollowTheDepartmentPersonaWithASmallOtherShare()
+        {
+            var options = DemoOptions.Parse(new[] { "--preview", "--users", "300", "--days", "35",
+                "--as-of", "2026-09-01", "--areas", "copilot-history" }, DateTime.UtcNow);
+            var sink = Generate(options, t => t == DemoTables.Interactions || t == DemoTables.PromptClassifications);
+            var population = new DemoPopulation(options);
+            var department = sink.For(DemoTables.Interactions).ToDictionary(r => (int)r[Col(DemoTables.Interactions, "id")],
+                r => SeedDataCatalogue.Departments[population.User((int)r[Col(DemoTables.Interactions, "user_id")]).Department]);
+            var facts = sink.For(DemoTables.PromptClassifications);
+            foreach (var group in facts.GroupBy(f => department[(int)f[0]]).OrderBy(g => g.Key))
+                TestContext.WriteLine("{0}: {1}", group.Key, string.Join(", ", group.GroupBy(f => (string)f[1])
+                    .OrderByDescending(c => c.Count()).Select(c => c.Key + " " + (c.Count() / (double)group.Count()).ToString("P0"))));
+            var top = facts.GroupBy(f => department[(int)f[0]]).ToDictionary(g => g.Key,
+                g => g.GroupBy(f => (string)f[1]).OrderByDescending(c => c.Count()).First().Key);
+            Assert.AreEqual("analysis", top["Finance"]);
+            Assert.AreEqual("content-drafting", top["Sales"]);
+            Assert.AreEqual("document-editing", top["Legal"]);
+            Assert.AreEqual("delegated-problem-solving", top["Engineering"]);
+            Assert.AreEqual("content-drafting", top["Marketing"]);
+
+            double other = facts.Count(f => (string)f[1] == "other") / (double)facts.Count;
+            Assert.IsTrue(other > 0.02 && other < 0.06, "'other' must stay a small residue, not " + other.ToString("P1"));
+        }
+
+        [TestMethod]
+        public void AgentTurns_CarryTheImportersCreditEstimate_GroundedExactlyWhenATenantResourceWasRead()
+        {
+            var sink = Generate(Options(), t => t == DemoTables.Chats || t == DemoTables.Resources || t == DemoTables.Agents);
+            var agents = sink.For(DemoTables.Agents).ToDictionary(r => (int)r[0],
+                r => CopilotAgentClassifier.ClassifyStoredAgentId((string)r[Col(DemoTables.Agents, "agent_id")]));
+            for (int agent = 1; agent < DemoCopilotPersonas.CoworkAgent; agent++)
+            {
+                Assert.AreEqual(CopilotAgentKind.CustomEngine, agents[agent].Kind, "Only a custom-engine agent is priced.");
+                Assert.AreEqual(CopilotAgentOrigin.CustomerBuilt, agents[agent].Origin);
+            }
+            Assert.AreEqual(CopilotAgentOrigin.Microsoft, agents[DemoCopilotPersonas.CoworkAgent].Origin);
+
+            var read = sink.For(DemoTables.Resources).GroupBy(r => (Guid)r[0]).ToDictionary(g => g.Key, g => g.ToList());
+            Assert.IsTrue(read.Values.All(r => r.Count <= 2 && r.Select(x => x[1]).Distinct().Count() == r.Count),
+                "A turn lists at most two distinct resources.");
+            int priced = 0, grounded = 0, ungroundedWithResource = 0;
+            foreach (var chat in sink.For(DemoTables.Chats))
+            {
+                int total = (int)chat[Col(DemoTables.Chats, "copilot_credit_estimate_total")];
+                var json = (string)chat[Col(DemoTables.Chats, "copilot_credit_estimate_json")];
+                var agent = chat[Col(DemoTables.Chats, "agent_id")];
+                if (agent == null)
+                {
+                    Assert.AreEqual(0, total, "Copilot without an agent is not billed in Copilot Credits.");
+                    Assert.IsNull(json);
+                    continue;
+                }
+                var estimate = Newtonsoft.Json.Linq.JObject.Parse(json);
+                Assert.AreEqual(total, (int)estimate["TotalCredits"], "The column and its JSON must agree, as the importer stores them.");
+                if ((int)agent == DemoCopilotPersonas.CoworkAgent)
+                {
+                    Assert.AreEqual(0, total);
+                    Assert.AreEqual("MicrosoftAgent", (string)estimate["AgentCreditBasis"]);
+                    continue;
+                }
+                if (total > 0) priced++;
+                if ((string)estimate["AgentCreditBasis"] != "CustomEngine")
+                {
+                    Assert.AreEqual("NoMessages", (string)estimate["AgentCreditBasis"]);
+                    Assert.AreEqual(0, total);
+                    continue;
+                }
+                read.TryGetValue((Guid)chat[0], out var resources);
+                bool tenant = resources != null && resources.Any(r => IsTenantResource((int)r[1]));
+                bool charged = (int)estimate["TenantGraphGroundedAnswers"] > 0;
+                Assert.AreEqual(tenant, charged, "The +10 grounding charge applies exactly when the turn read tenant content.");
+                if (charged) grounded++;
+                else if (resources != null) ungroundedWithResource++;
+            }
+            Assert.IsTrue(priced > 0 && grounded > 0 && ungroundedWithResource > 0,
+                "The fixture must price agent turns, ground some on tenant content and read the public web on others.");
+        }
+
+        private static bool IsTenantResource(int resource) =>
+            CopilotAccessedResourceTaxonomy.IsTenantContentUrl(DemoCopilotPersonas.ResourceSiteUrl(resource))
+            || CopilotAccessedResourceTaxonomy.Classify(DemoCopilotPersonas.ResourceTypeName(resource)) == CopilotResourceTypeKind.TenantContent;
+
+        [TestMethod]
+        public void AgentCreditEstimates_AverageCloseToWhatEachAgentIsBilledPerTurn()
+        {
+            var options = DemoOptions.Parse(new[] { "--preview", "--users", "300", "--days", "120",
+                "--as-of", "2026-09-01", "--areas", "copilot" }, DateTime.UtcNow);
+            var sink = Generate(options, t => t == DemoTables.Chats);
+            var turns = new int[DemoCopilotPersonas.CoworkAgent + 1];
+            var credits = new long[DemoCopilotPersonas.CoworkAgent + 1];
+            foreach (var chat in sink.For(DemoTables.Chats))
+            {
+                var agent = chat[Col(DemoTables.Chats, "agent_id")];
+                if (agent == null) continue;
+                turns[(int)agent]++;
+                credits[(int)agent] += (int)chat[Col(DemoTables.Chats, "copilot_credit_estimate_total")];
+            }
+            for (int agent = 1; agent <= DemoAgentCosts.Agents.Length; agent++)
+            {
+                var billed = (double)DemoAgentCosts.Agents[agent - 1].CreditsPerTurn;
+                double mean = credits[agent] / (double)turns[agent];
+                TestContext.WriteLine("{0}: {1} turns, mean estimate {2:0.00} vs billed {3:0.00} credits per turn",
+                    DemoAgentCosts.Agents[agent - 1].AgentName, turns[agent], mean, billed);
+                Assert.IsTrue(turns[agent] >= 50, "Too few turns to judge agent " + agent);
+                Assert.IsTrue(mean >= billed * 0.75 && mean <= billed * 1.25,
+                    "The estimate must tell the same story as the billed ledger for agent " + agent);
+            }
+            Assert.IsTrue(turns[DemoCopilotPersonas.CoworkAgent] > 0);
+            Assert.AreEqual(0L, credits[DemoCopilotPersonas.CoworkAgent], "Microsoft's own agents are never priced.");
         }
 
         private static string TrafficKey(string agentId, DateTime date) =>

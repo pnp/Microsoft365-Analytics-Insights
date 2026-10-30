@@ -26,6 +26,17 @@
          pinned by EmbeddedResourceNameTests - do not "tidy" this into a Link. -->
     <EmbeddedResource Include="..\..\..\Clean Old Data Data.sql" />
     <EmbeddedResource Include="Resources\Product_names_and_service_plan_identifiers_for_licensing.csv" LogicalName="Common.Entities.Resources.Product_names_and_service_plan_identifiers_for_licensing.csv" />
+    <!-- The portal's own translation catalog: the Copilot investment and Copilot spend workbooks are written from it (Localisation\PortalCatalog.cs). -->
+    <EmbeddedResource Include="..\..\Web\Scripts\portal\src\i18n\catalog\en\copilotInvestment.ts" LogicalName="Common.Entities.PortalCatalog.en.copilotInvestment.ts" />
+    <EmbeddedResource Include="..\..\Web\Scripts\portal\src\i18n\catalog\es\copilotInvestment.ts" LogicalName="Common.Entities.PortalCatalog.es.copilotInvestment.ts" />
+    <EmbeddedResource Include="..\..\Web\Scripts\portal\src\i18n\catalog\en\userFilter.ts" LogicalName="Common.Entities.PortalCatalog.en.userFilter.ts" />
+    <EmbeddedResource Include="..\..\Web\Scripts\portal\src\i18n\catalog\es\userFilter.ts" LogicalName="Common.Entities.PortalCatalog.es.userFilter.ts" />
+    <EmbeddedResource Include="..\..\Web\Scripts\portal\src\i18n\catalog\en\globalFilter.ts" LogicalName="Common.Entities.PortalCatalog.en.globalFilter.ts" />
+    <EmbeddedResource Include="..\..\Web\Scripts\portal\src\i18n\catalog\es\globalFilter.ts" LogicalName="Common.Entities.PortalCatalog.es.globalFilter.ts" />
+    <EmbeddedResource Include="..\..\Web\Scripts\portal\src\i18n\catalog\en\common.ts" LogicalName="Common.Entities.PortalCatalog.en.common.ts" />
+    <EmbeddedResource Include="..\..\Web\Scripts\portal\src\i18n\catalog\es\common.ts" LogicalName="Common.Entities.PortalCatalog.es.common.ts" />
+    <EmbeddedResource Include="..\..\Web\Scripts\portal\src\i18n\catalog\en\copilotSpend.ts" LogicalName="Common.Entities.PortalCatalog.en.copilotSpend.ts" />
+    <EmbeddedResource Include="..\..\Web\Scripts\portal\src\i18n\catalog\es\copilotSpend.ts" LogicalName="Common.Entities.PortalCatalog.es.copilotSpend.ts" />
   </ItemGroup>
 
   <ItemGroup>

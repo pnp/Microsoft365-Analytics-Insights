@@ -106,7 +106,8 @@ namespace App.ControlPanel.Engine.InstallerTasks.JobTasks
         {
             var context = base.EnsureContextArgType<RunbookFileLocalLocations>(contextArg);
 
-            var automationAccount = Container.GetAutomationAccounts().SingleOrDefault(s => s.Data.Name == _config[CONFIG_PARAM_AUTOMATION_ACCOUNT_NAME]);
+            var automationAccount = Container.GetAutomationAccounts().GetAll(cancellationToken: CancellationToken)
+                .SingleOrDefault(s => s.Data.Name == _config[CONFIG_PARAM_AUTOMATION_ACCOUNT_NAME]);
             if (automationAccount == null)
             {
                 throw new UnexpectedInstallException($"Automation account '{_config[CONFIG_PARAM_AUTOMATION_ACCOUNT_NAME]}' not found.");
@@ -143,17 +144,17 @@ namespace App.ControlPanel.Engine.InstallerTasks.JobTasks
                     };
                     base.EnsureTagsOnNew(newRunbookInfo.Tags);
 
-                    var createReq = await runbooks.CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newRunbookInfo);
+                    var createReq = await runbooks.CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newRunbookInfo, cancellationToken: CancellationToken);
                     var runbook = createReq.Value;
 
                     // 2. Upload the script body into the draft.
                     using (var fileStream = File.OpenRead(localPath))
                     {
-                        await runbook.ReplaceContentRunbookDraftAsync(WaitUntil.Completed, fileStream);
+                        await runbook.ReplaceContentRunbookDraftAsync(WaitUntil.Completed, fileStream, cancellationToken: CancellationToken);
                     }
 
                     // 3. Publish the draft so it becomes the live version that Hybrid Runbook Workers can invoke.
-                    await runbook.PublishAsync(WaitUntil.Completed);
+                    await runbook.PublishAsync(WaitUntil.Completed, cancellationToken: CancellationToken);
 
                     _logger.LogInformation($"Created/updated runbook '{runbook.Data.Name}' successfully");
                     await base.EnsureTagsOnExisting(runbook.Data.Tags, runbook.GetTagResource());
@@ -165,12 +166,12 @@ namespace App.ControlPanel.Engine.InstallerTasks.JobTasks
                     // different kind. Delete it and let the loop retry with a clean create.
                     _logger.LogWarning($"Attempt {attempt}/{MAX_ATTEMPTS}: runbook '{_config.ResourceName}' exists with a different kind; deleting so it can be recreated as {RUNBOOK_TYPE}.");
                     await TryDeleteRunbookAsync(runbooks);
-                    await Task.Delay(RETRY_DELAY);
+                    await Task.Delay(RETRY_DELAY, cancellationToken: CancellationToken);
                 }
                 catch (RequestFailedException ex) when (attempt < MAX_ATTEMPTS)
                 {
                     _logger.LogWarning($"Attempt {attempt}/{MAX_ATTEMPTS}: Failed to create/update runbook '{_config.ResourceName}' - {ex.Message}. Retrying in {RETRY_DELAY.TotalSeconds:0}s...");
-                    await Task.Delay(RETRY_DELAY);
+                    await Task.Delay(RETRY_DELAY, cancellationToken: CancellationToken);
                 }
             }
 
@@ -190,7 +191,7 @@ namespace App.ControlPanel.Engine.InstallerTasks.JobTasks
         /// </summary>
         async Task DeleteIfDifferentKindAsync(AutomationRunbookCollection runbooks)
         {
-            var existing = await runbooks.GetIfExistsAsync(_config.ResourceName);
+            var existing = await runbooks.GetIfExistsAsync(_config.ResourceName, cancellationToken: CancellationToken);
             if (!existing.HasValue)
             {
                 return;
@@ -203,17 +204,17 @@ namespace App.ControlPanel.Engine.InstallerTasks.JobTasks
             }
 
             _logger.LogWarning($"Runbook '{_config.ResourceName}' already exists as kind '{existingKind}', which can't be updated in place to {RUNBOOK_TYPE}. Deleting and recreating it. NOTE: its job history and any manually-created schedule-to-runbook links will be lost - re-link the runbook to its schedule after the install completes.");
-            await existing.Value.DeleteAsync(WaitUntil.Completed);
+            await existing.Value.DeleteAsync(WaitUntil.Completed, cancellationToken: CancellationToken);
         }
 
         async Task TryDeleteRunbookAsync(AutomationRunbookCollection runbooks)
         {
             try
             {
-                var existing = await runbooks.GetIfExistsAsync(_config.ResourceName);
+                var existing = await runbooks.GetIfExistsAsync(_config.ResourceName, cancellationToken: CancellationToken);
                 if (existing.HasValue)
                 {
-                    await existing.Value.DeleteAsync(WaitUntil.Completed);
+                    await existing.Value.DeleteAsync(WaitUntil.Completed, cancellationToken: CancellationToken);
                 }
             }
             catch (RequestFailedException delEx)

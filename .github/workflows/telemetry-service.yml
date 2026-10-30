@@ -8,15 +8,7 @@ name: Telemetry Service
 # runs on Linux: the published output is framework-dependent and portable, web.config included.
 
 on:
-  # Only main builds automatically. Merging to `dev` no longer re-runs this: the pull request that
-  # produced the merge has already built and tested exactly that code, so a push-triggered run on
-  # `dev` is a duplicate that competes for runners. Use `Run workflow` (workflow_dispatch) to build
-  # `dev` on demand.
-  #
-  # Be aware that unlike the other workflows, a dispatch here does not just build. The `deploy` job
-  # below still accepts `dev` (see its `if:`), and `main` and `dev` share one App Service via
-  # `vars.TELEMETRY_APP_NAME` - so running this on `dev` publishes `dev` over whatever `main` last
-  # deployed. Previously every push to `dev` did that automatically; now it is at least deliberate.
+  # Main keeps continuous delivery. Manual runs are build-only unless a deployment is selected.
   push:
     branches:
       - main
@@ -24,6 +16,8 @@ on:
       - src/TelemetryService/**
       - src/AnalyticsEngine/Common/UsageReporting/**
       - .github/workflows/telemetry-service.yml
+      - .github/scripts/telemetry-deployment*
+      - .nvmrc
   pull_request:
     branches:
       - main
@@ -32,7 +26,15 @@ on:
       - src/TelemetryService/**
       - src/AnalyticsEngine/Common/UsageReporting/**
       - .github/workflows/telemetry-service.yml
+      - .github/scripts/telemetry-deployment*
+      - .nvmrc
   workflow_dispatch:
+    inputs:
+      deployment:
+        description: Explicit deployment target (none only builds and tests)
+        type: choice
+        options: [none, development, production]
+        default: none
 
 # Least privilege by default. id-token is needed by azure/login for OIDC (no stored credentials).
 permissions:
@@ -53,12 +55,15 @@ jobs:
   build_and_test:
     name: Build and test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      deployment: ${{ steps.target.outputs.target }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -66,11 +71,19 @@ jobs:
       # and a developer machine all agree. It used to carry its own '22.x', which drifted from the
       # rest of the repo the moment either side moved.
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: ${{ env.CLIENT_DIR }}/package-lock.json
+
+      - name: Validate deployment intent
+        id: target
+        env:
+          CI_EVENT: ${{ github.event_name }}
+          CI_REF: ${{ github.ref }}
+          DEPLOYMENT: ${{ inputs.deployment || 'none' }}
+        run: node .github/scripts/telemetry-deployment.mjs target >> "$GITHUB_OUTPUT"
 
       # ---- Client -------------------------------------------------------------------
       - name: Install client dependencies
@@ -99,7 +112,7 @@ jobs:
       - name: Upload test results
         # Results are most useful precisely when the tests failed.
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: telemetry-test-results
           path: ${{ runner.temp }}/test-results
@@ -115,7 +128,7 @@ jobs:
           --output ${{ runner.temp }}/publish
 
       - name: Upload site artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: telemetry-site
           path: ${{ runner.temp }}/publish
@@ -125,21 +138,38 @@ jobs:
     name: Deploy to App Service
     needs: build_and_test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Never deploy from a fork or from a pull request - only from pushes to this repository, and
     # only from the branches that represent a deployable state.
     if: >
-      github.event_name != 'pull_request'
-      && github.repository == 'pnp/Microsoft365-Analytics-Insights'
-      && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
+      github.repository == 'pnp/Microsoft365-Analytics-Insights'
+      && needs.build_and_test.outputs.deployment != 'none'
+      && needs.build_and_test.outputs.deployment != ''
     permissions:
       contents: read
       id-token: write # OIDC federated credential for azure/login
     environment:
-      name: telemetry-service
+      name: ${{ needs.build_and_test.outputs.deployment == 'development' && 'telemetry-service-dev' || 'telemetry-service' }}
       url: ${{ steps.deploy.outputs.webapp-url }}
+    concurrency:
+      group: telemetry-deploy-${{ needs.build_and_test.outputs.deployment }}
+      cancel-in-progress: false
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: Require an isolated configured destination
+        id: destination
+        env:
+          DEPLOYMENT: ${{ needs.build_and_test.outputs.deployment }}
+          PRODUCTION_APP: ${{ vars.TELEMETRY_APP_NAME }}
+          PRODUCTION_GROUP: ${{ vars.TELEMETRY_RESOURCE_GROUP }}
+          DEVELOPMENT_APP: ${{ vars.TELEMETRY_DEV_APP_NAME }}
+          DEVELOPMENT_GROUP: ${{ vars.TELEMETRY_DEV_RESOURCE_GROUP }}
+        run: node .github/scripts/telemetry-deployment.mjs resource >> "$GITHUB_OUTPUT"
       - name: Download site artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: telemetry-site
           path: publish
@@ -148,7 +178,7 @@ jobs:
       # here needs a federated credential for this repository and environment, plus Contributor
       # (or Website Contributor) on the target App Service.
       - name: Azure login
-        uses: azure/login@v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -156,10 +186,10 @@ jobs:
 
       - name: Deploy
         id: deploy
-        uses: azure/webapps-deploy@v3
+        uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3
         with:
-          app-name: ${{ vars.TELEMETRY_APP_NAME }}
-          resource-group-name: ${{ vars.TELEMETRY_RESOURCE_GROUP }}
+          app-name: ${{ steps.destination.outputs.app }}
+          resource-group-name: ${{ steps.destination.outputs.group }}
           package: publish
 
       # The site is anonymous-friendly on /health, so this is a genuine end-to-end check that the

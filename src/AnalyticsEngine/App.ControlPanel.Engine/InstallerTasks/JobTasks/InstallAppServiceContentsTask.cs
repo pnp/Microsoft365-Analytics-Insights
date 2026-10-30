@@ -17,6 +17,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.InstallerTasks
@@ -46,13 +47,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
         {
             var localSources = EnsureContextArgType<LocalStorageInstallSourceInfo>(contextArg);
 
-            var webApp = Container.GetWebSites().Get(_config.ResourceName);
+            var webApp = await Container.GetWebSites().GetAsync(_config.ResourceName, CancellationToken);
             if (webApp.Value == null) throw new InstallException($"Can't find web-app with name '{_config.ResourceName}'");
 
             _logger.LogInformation("Configuring web-jobs in App Service ...");
 
-            var publishingProfile = webApp.Value.GetPublishingProfileXmlWithSecrets(
-                new CsmPublishingProfile { Format = PublishingProfileFormat.WebDeploy });
+            var publishingProfile = await webApp.Value.GetPublishingProfileXmlWithSecretsAsync(
+                new CsmPublishingProfile { Format = PublishingProfileFormat.WebDeploy }, CancellationToken);
             using (var ms = new StreamReader(publishingProfile.Value))
             {
                 var profileData = publishData.FromXml(ms);
@@ -65,7 +66,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation);
 
                 _logger.LogInformation("Building App Service deployment package...");
-                var deploymentPackage = BuildDeploymentPackage(localSources, _logger);
+                var deploymentPackage = BuildDeploymentPackage(localSources, _logger, CancellationToken);
                 _logger.LogInformation("Deploying web-jobs and website to App Service over HTTPS...");
                 await PublishZipAsync(kuduDetails, deploymentPackage, _proxyConfig);
             }
@@ -84,9 +85,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _logger.LogInformation("Restarting App Service so the newly deployed binaries load into a clean worker process...");
             try
             {
-                await webApp.Value.RestartAsync(softRestart: false, synchronous: true);
+                await webApp.Value.RestartAsync(softRestart: false, synchronous: true, cancellationToken: CancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 // Not fatal: the app pool will recycle eventually, and the warm-up that follows retries 5xx
                 // for three minutes. Warn so a 500 during warm-up is attributable rather than mysterious.
@@ -100,23 +101,39 @@ namespace App.ControlPanel.Engine.InstallerTasks
             return localSources;
         }
 
-        internal static FileInfo BuildDeploymentPackage(LocalStorageInstallSourceInfo localSources, ILogger logger)
+        internal static FileInfo BuildDeploymentPackage(LocalStorageInstallSourceInfo localSources, ILogger logger,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var deploymentRootPath = Path.Combine(DataUtils.StringUtils.TempDirPath, "AppServiceDeployment");
             ResetDirectory(deploymentRootPath);
 
             var websiteContents = ZipFileTasks.Unzip(
-                localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite), logger);
-            CopyDirectory(websiteContents.FullName, deploymentRootPath);
+                localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite), logger, cancellationToken);
+            CopyDirectory(websiteContents.FullName, deploymentRootPath, cancellationToken);
 
-            AddWebJobToPackage(localSources, SoftwareComponent.WebJobActivity, deploymentRootPath, logger);
-            AddWebJobToPackage(localSources, SoftwareComponent.WebJobAppInsights, deploymentRootPath, logger);
+            AddWebJobToPackage(localSources, SoftwareComponent.WebJobActivity, deploymentRootPath, logger, cancellationToken);
+            AddWebJobToPackage(localSources, SoftwareComponent.WebJobAppInsights, deploymentRootPath, logger, cancellationToken);
 
             var packagePath = Path.Combine(DataUtils.StringUtils.TempDirPath, "AppServiceDeployment.zip");
             if (File.Exists(packagePath))
                 File.Delete(packagePath);
 
-            ZipFile.CreateFromDirectory(deploymentRootPath, packagePath, CompressionLevel.Optimal, false);
+            using (var archive = ZipFile.Open(packagePath, ZipArchiveMode.Create))
+            {
+                foreach (var path in Directory.EnumerateFileSystemEntries(deploymentRootPath, "*", SearchOption.AllDirectories))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var entryName = path.Substring(deploymentRootPath.Length + 1).Replace('\\', '/');
+                    if (Directory.Exists(path))
+                    {
+                        if (!Directory.EnumerateFileSystemEntries(path).Any())
+                            archive.CreateEntry(entryName + "/");
+                    }
+                    else
+                        archive.CreateEntryFromFile(path, entryName, CompressionLevel.Optimal);
+                }
+            }
             return new FileInfo(packagePath);
         }
 
@@ -124,16 +141,16 @@ namespace App.ControlPanel.Engine.InstallerTasks
             LocalStorageInstallSourceInfo localSources,
             SoftwareComponent component,
             string deploymentRootPath,
-            ILogger logger)
+            ILogger logger, CancellationToken cancellationToken)
         {
-            var webJobContents = ZipFileTasks.Unzip(localSources.GetSolutionComponentLocation(component), logger);
+            var webJobContents = ZipFileTasks.Unzip(localSources.GetSolutionComponentLocation(component), logger, cancellationToken);
             var webJobPath = Path.Combine(
                 deploymentRootPath,
                 "app_data",
                 "jobs",
                 "continuous",
                 webJobContents.Name);
-            CopyDirectory(webJobContents.FullName, webJobPath);
+            CopyDirectory(webJobContents.FullName, webJobPath, cancellationToken);
         }
 
         private async Task PublishZipAsync(KuduPublishInfo publishInfo, FileInfo deploymentPackage, InstallerProxyConfig proxyConfig)
@@ -153,7 +170,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 HttpResponseMessage response;
                 try
                 {
-                    response = await client.PostAsync(publishUri, content);
+                    response = await client.PostAsync(publishUri, content, CancellationToken);
                 }
                 catch (HttpRequestException ex)
                 {
@@ -162,7 +179,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     LogPrivateNetworkGuidanceIfApplicable();
                     throw;
                 }
-                catch (TaskCanceledException ex)
+                catch (TaskCanceledException ex) when (!CancellationToken.IsCancellationRequested)
                 {
                     _logger.LogError($"App Service HTTPS deployment to '{publishUri.GetLeftPart(UriPartial.Authority)}' timed out after 30 minutes. " +
                         $"Check installer proxy and SCM access settings. Details: {CloudInstallEngine.ExceptionMessages.Format(ex)}");
@@ -223,10 +240,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             while (true)
             {
+                CancellationToken.ThrowIfCancellationRequested();
                 KuduDeploymentStatus status = null;
                 try
                 {
-                    var statusResponse = await client.GetAsync(statusUri);
+                    var statusResponse = await client.GetAsync(statusUri, cancellationToken: CancellationToken);
                     using (statusResponse)
                     {
                         var body = await statusResponse.Content.ReadAsStringAsync();
@@ -240,7 +258,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                         }
                     }
                 }
-                catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException)
+                catch (Exception ex) when (!CancellationToken.IsCancellationRequested && (ex is HttpRequestException || ex is TaskCanceledException))
                 {
                     lastTransientError = CloudInstallEngine.ExceptionMessages.Format(ex);
                 }
@@ -280,7 +298,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                         $"The package uploaded successfully, so the deployment may still finish on its own - check {statusUri}.{trailing}");
                 }
 
-                await Task.Delay(DeploymentPollInterval);
+                await Task.Delay(DeploymentPollInterval, cancellationToken: CancellationToken);
             }
         }
 
@@ -365,16 +383,18 @@ namespace App.ControlPanel.Engine.InstallerTasks
             Directory.CreateDirectory(path);
         }
 
-        private static void CopyDirectory(string sourcePath, string destinationPath)
+        private static void CopyDirectory(string sourcePath, string destinationPath, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Directory.CreateDirectory(destinationPath);
             foreach (var filePath in Directory.GetFiles(sourcePath))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 File.Copy(filePath, Path.Combine(destinationPath, Path.GetFileName(filePath)), true);
             }
             foreach (var directoryPath in Directory.GetDirectories(sourcePath))
             {
-                CopyDirectory(directoryPath, Path.Combine(destinationPath, Path.GetFileName(directoryPath)));
+                CopyDirectory(directoryPath, Path.Combine(destinationPath, Path.GetFileName(directoryPath)), cancellationToken);
             }
         }
 

@@ -8,6 +8,10 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
+    poolOptions: {
+      // Let jsdom supply browser storage, not Node's file-backed Web Storage globals.
+      forks: { execArgv: ['--no-experimental-webstorage'] },
+    },
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     server: {

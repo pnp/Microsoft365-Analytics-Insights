@@ -97,13 +97,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             // Fetch latest release metadata from GitHub
             _logger.LogInformation($"Fetching latest stable release from GitHub repo {repoOwner}/{repoName}...");
-            var response = await _httpClient.GetAsync(apiUrl);
-            if (!response.IsSuccessStatusCode)
+            string json;
+            using (var response = await _httpClient.GetAsync(apiUrl, CancellationToken))
             {
-                throw new UnexpectedInstallException(DescribeFailedRelease(response, apiUrl));
+                if (!response.IsSuccessStatusCode)
+                    throw new UnexpectedInstallException(DescribeFailedRelease(response, apiUrl));
+                json = await response.Content.ReadAsStringAsync();
             }
-
-            var json = await response.Content.ReadAsStringAsync();
             var release = JObject.Parse(json);
             var tagName = release["tag_name"]?.ToString();
             var assets = release["assets"] as JArray;
@@ -157,7 +157,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             {
                 var url = assetUrls[kvp.Value];
                 var fileName = kvp.Value;
-                downloadTasks[kvp.Key] = Task.Run(() => DownloadFileToDir(url, fileName, tempDir));
+                downloadTasks[kvp.Key] = DownloadFileToDir(url, fileName, tempDir);
             }
 
             await Task.WhenAll(downloadTasks.Values);
@@ -178,18 +178,21 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 throw new ArgumentNullException(nameof(downloadUrl));
             }
 
-            var fileBytes = await _httpClient.GetByteArrayAsync(downloadUrl);
-
-            var filePath = Path.Combine(baseDir, fileName);
-
-            var fileDir = new FileInfo(filePath).Directory;
-            if (!fileDir.Exists)
+            using (var response = await _httpClient.GetAsync(downloadUrl, CancellationToken))
             {
-                fileDir.Create();
-            }
+                response.EnsureSuccessStatusCode();
+                var fileBytes = await response.Content.ReadAsByteArrayAsync();
+                CancellationToken.ThrowIfCancellationRequested();
 
-            File.WriteAllBytes(filePath, fileBytes);
-            return filePath;
+                var filePath = Path.Combine(baseDir, fileName);
+
+                var fileDir = new FileInfo(filePath).Directory;
+                if (!fileDir.Exists)
+                    fileDir.Create();
+
+                File.WriteAllBytes(filePath, fileBytes);
+                return filePath;
+            }
         }
     }
 

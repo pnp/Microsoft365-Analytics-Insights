@@ -610,8 +610,11 @@ namespace Tests.UnitTests.InstallTests
             });
         }
 
-        [TestMethod]
-        public void DeploymentReview_RequiresAcknowledgementAndValidInput_AndHasSafeDefault()
+        [DataTestMethod]
+        [DataRow(1.0f)]
+        [DataRow(1.5f)]
+        [DataRow(2.0f)]
+        public void DeploymentReview_RequiresAcknowledgementAndValidInput_AndHasSafeDefault(float scale)
         {
             RunSta(() =>
             {
@@ -621,11 +624,33 @@ namespace Tests.UnitTests.InstallTests
                 using (var review = new DeploymentReviewForm(config, new[] { "Copilot interactions" }))
                 {
                     review.Show();
+                    if (scale != 1.0f)
+                    {
+                        review.Scale(new SizeF(scale, scale));
+                        review.Font = new Font(review.Font.FontFamily, review.Font.Size * scale);
+                    }
+                    Application.DoEvents();
                     Assert.IsFalse(Find<Button>(review, "confirmDeployment").Enabled);
                     Assert.IsNull(review.AcceptButton);
                     Assert.AreEqual(DialogResult.Cancel, ((Button)review.CancelButton).DialogResult);
+                    var deploy = Find<Button>(review, "confirmDeployment");
+                    var back = Find<Button>(review, "cancelReview");
+                    Assert.IsNotNull(deploy.Image, "Deployment needs its action icon.");
+                    Assert.IsTrue(deploy.Left >= back.Right, "Deploy must be the right-hand next action.");
+                    Assert.IsTrue(back.TabIndex < deploy.TabIndex, "Keyboard order must follow the visual order.");
+                    Assert.IsTrue(deploy.Parent.ClientRectangle.Contains(deploy.Bounds));
+                    Assert.IsTrue(back.Parent.ClientRectangle.Contains(back.Bounds));
                     Find<CheckBox>(review, "acknowledgeDeployment").Checked = true;
                     Assert.IsTrue(Find<Button>(review, "confirmDeployment").Enabled);
+                    var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        using (var image = new Bitmap(review.Width, review.Height))
+                        {
+                            review.DrawToBitmap(image, new Rectangle(Point.Empty, review.Size));
+                            image.Save(Path.Combine(directory, $"deployment-review-{scale}.png"));
+                        }
+                    }
                     Find<CheckBox>(review, "acknowledgeDeployment").Checked = false;
                     Assert.IsFalse(Find<Button>(review, "confirmDeployment").Enabled);
                     Find<Button>(review, "cancelReview").PerformClick();
@@ -644,6 +669,126 @@ namespace Tests.UnitTests.InstallTests
                     Find<CheckBox>(review, "acknowledgeDeployment").Checked = true;
                     Find<Button>(review, "confirmDeployment").PerformClick();
                     Assert.AreEqual(DialogResult.OK, review.DialogResult);
+                }
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow(1.0f)]
+        [DataRow(1.5f)]
+        [DataRow(2.0f)]
+        public void ProxyAddress_ExplainsAcceptedFormatsWithoutClipping(float scale)
+        {
+            RunSta(() =>
+            {
+                using (var form = new ProxyConfigForm())
+                {
+                    form.ProxyConfig = new InstallerProxyConfig
+                    {
+                        UseProxy = true, Host = "proxy.contoso.com", Port = 8080, IntegratedAuth = true
+                    };
+                    form.Show();
+                    if (scale != 1.0f) form.Font = new Font(form.Font.FontFamily, form.Font.Size * scale);
+                    Application.DoEvents();
+                    var hint = Find<Label>(form, "proxyAddressHint");
+                    StringAssert.Contains(Find<Label>(form, "label2").Text, "URL");
+                    StringAssert.Contains(hint.Text, "proxy.contoso.com");
+                    StringAssert.Contains(hint.Text, "http://");
+                    StringAssert.Contains(hint.Text, "Port is required");
+                    Assert.IsTrue(hint.Parent.ClientRectangle.Contains(hint.Bounds));
+                    Assert.IsTrue(hint.Top >= Find<TextBox>(form, "txtProxyPort").Bottom);
+                    Assert.IsTrue(hint.Bottom <= Find<CheckBox>(form, "chkBasicAuthentication").Top);
+                    Assert.IsTrue(Find<Label>(form, "label2").Right <= Find<TextBox>(form, "txtProxyHost").Left);
+                    var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        using (var image = new Bitmap(form.Width, form.Height))
+                        {
+                            form.DrawToBitmap(image, new Rectangle(Point.Empty, form.Size));
+                            image.Save(Path.Combine(directory, $"proxy-address-{scale}.png"));
+                        }
+                    }
+                }
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow("http://proxy.contoso.com:3128", 3128)]
+        [DataRow("https://proxy.contoso.com:443", 443)]
+        [DataRow("proxy.contoso.com:8081", 8081)]
+        [DataRow("http://[2001:db8::1]:3128/", 3128)]
+        public void ProxyAddress_InlinePortDisablesSeparateFieldAndControlsSavedPort(string address, int expectedPort)
+        {
+            RunSta(() =>
+            {
+                using (var form = new ProxyConfigForm())
+                {
+                    form.ProxyConfig = new InstallerProxyConfig
+                    {
+                        UseProxy = true, Host = address, Port = 8080, IntegratedAuth = true
+                    };
+                    form.Show();
+                    var host = Find<TextBox>(form, "txtProxyHost");
+                    var port = Find<TextBox>(form, "txtProxyPort");
+                    var portLabel = Find<Label>(form, "label3");
+                    Assert.IsFalse(port.Enabled, "An inline port must be the only editable port.");
+                    Assert.IsFalse(portLabel.Enabled);
+                    Assert.AreEqual(expectedPort.ToString(), port.Text, "The disabled field must show the port actually used.");
+                    Assert.IsNull(form.ProxyConfig.ValidationError, "A stale separate port must not contradict the URL.");
+
+                    host.Text = "https://proxy.contoso.com";
+                    Assert.IsTrue(port.Enabled, "Removing the inline port must re-enable the field.");
+                    Assert.IsTrue(portLabel.Enabled);
+                    port.Text = "8181";
+                    Assert.IsTrue(form.ProxyConfig.TryGetProxyAddress(out var manualAddress, out _));
+                    Assert.AreEqual(8181, manualAddress.Port);
+
+                    host.Text = address;
+                    Assert.IsFalse(port.Enabled, "Editing an address must update the port state immediately.");
+                    Assert.AreEqual(expectedPort.ToString(), port.Text);
+                    Find<CheckBox>(form, "chkProxy").Checked = false;
+                    Find<CheckBox>(form, "chkProxy").Checked = true;
+                    Assert.IsFalse(port.Enabled, "Re-enabling the proxy must respect the inline port.");
+                    Assert.IsNull(form.ProxyConfig.ValidationError);
+
+                    var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+                    if (!string.IsNullOrEmpty(directory) && address == "http://proxy.contoso.com:3128")
+                        Capture(form, directory, "proxy-inline-port");
+
+                    InstallerProxyConfig savedConfig = null;
+                    form.FormClosing += (sender, args) => savedConfig = form.ProxyConfig;
+                    Find<Button>(form, "btnOk").PerformClick();
+                    Assert.AreEqual(DialogResult.OK, form.DialogResult);
+                    Assert.IsNotNull(savedConfig);
+                    Assert.IsTrue(savedConfig.TryGetProxyAddress(out var savedAddress, out _));
+                    Assert.AreEqual(expectedPort, savedAddress.Port);
+                }
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow("proxy.contoso.com")]
+        [DataRow("http://proxy.contoso.com")]
+        [DataRow("https://[2001:db8::1]")]
+        public void ProxyAddress_WithoutInlinePortKeepsSeparateFieldEditable(string address)
+        {
+            RunSta(() =>
+            {
+                using (var form = new ProxyConfigForm())
+                {
+                    form.ProxyConfig = new InstallerProxyConfig
+                    {
+                        UseProxy = true, Host = address, Port = 8080, IntegratedAuth = true
+                    };
+                    form.Show();
+                    var port = Find<TextBox>(form, "txtProxyPort");
+                    Assert.IsTrue(port.Enabled, "A scheme's implicit default port must not disable explicit port entry.");
+                    Assert.IsTrue(Find<Label>(form, "label3").Enabled);
+                    Assert.AreEqual("8080", port.Text);
+
+                    Find<TextBox>(form, "txtProxyHost").Text = "http://proxy.contoso.com:65536";
+                    Assert.IsTrue(port.Enabled, "An invalid inline port must not lock the field.");
+                    Assert.IsNotNull(form.ProxyConfig.ValidationError);
                 }
             });
         }

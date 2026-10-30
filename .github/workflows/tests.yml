@@ -1,20 +1,8 @@
 name: Tests
 
 on:
-  # Only main builds automatically. Merging to `dev` no longer re-runs this: the pull request that
-  # produced the merge has already built and tested exactly that code, so a push-triggered run on
-  # `dev` is a duplicate that competes for runners. Use `Run workflow` (workflow_dispatch) to build
-  # `dev` on demand.
-  push:
-    branches:
-      - main
-    paths:
-      - src/AnalyticsEngine/**
-      - src/SPO/AITracker/**
-      - reports/**
-      # Tested by CopilotAdoptionWorkbookComparisonScriptTests in Tests.UnitTests.
-      - scripts/CopilotAdoption/**
-      - .github/workflows/tests.yml
+  # ci.yml calls this with force_run for the exact release SHA; no duplicate main push run.
+  # Required checks must report even on unrelated PRs; gate work inside the workflow.
   pull_request:
     # The net10 branch has no XML configuration and builds on the .NET 10 SDK; its own
     # workflow (net10.yml) covers it. Running this .NET Framework pipeline against it would fail
@@ -31,7 +19,7 @@ on:
       - synchronize
       - reopened
       - ready_for_review
-    # Deliberately NO `paths:` filter here, unlike the `push` trigger above.
+    # Deliberately NO `paths:` filter here.
     #
     # `test_dotnet (Release)` and `test_aitracker` are REQUIRED status checks on dev and main. A
     # workflow that never starts reports nothing at all, so a PR touching only (say)
@@ -43,82 +31,88 @@ on:
     inputs:
       force_run:
         default: false
-        required: false
         type: boolean
         description: Bypass code changed check
+  workflow_call:
+    inputs:
+      force_run:
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  Solution_Directory: src\AnalyticsEngine\Tests.UnitTests
-  Build_Platform: anycpu
-  Build_ProcessorArchitecture: x86
-  ClientID: ${{ secrets.APP_CLIENTID }}
-  ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
-  TenantGUID: ${{ secrets.APP_TENANTGUID }}
-  TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
-  CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
-  CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
-  ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
-  # The tests' Storage account is the Azurite emulator started below, not a real storage account. Runtime state
-  # (Common.Entities.State: delta tokens, Teams tokens, import-schedule dates, the cognitive cache) lives in that
-  # account's tables, so every run starts from an empty store - as it did with the per-run Redis container this
-  # replaced - and no run can read, or leave behind, state from another run or from a concurrent pull request.
-  Storage: "UseDevelopmentStorage=true"
-  # Fail (rather than skip as Inconclusive) the Azure Table state-store integration tests if Azurite is not running.
-  REQUIRE_AZURITE: "true"
+  Storage: UseDevelopmentStorage=true
+  REQUIRE_AZURITE: 'true'
 
 jobs:
   setup_tests:
-    # Will check that the interesting folders have been updated.
-    #
-    # Also the single place the draft-PR guard lives: `test_aitracker` and `test_dotnet` both
-    # `needs:` this job, so skipping it here skips them too and a draft PR costs no CI minutes.
-    # A draft cannot be merged, so it does not matter that its required checks go unreported.
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     outputs:
-      run_dotnet: ${{ inputs.force_run || steps.changes.outputs.code == 'true' }}
+      run_dotnet: ${{ inputs.force_run || steps.changes.outputs.dotnet == 'true' }}
+      run_portal: ${{ inputs.force_run || steps.changes.outputs.portal == 'true' }}
       run_aitracker: ${{ inputs.force_run || steps.changes.outputs.aitracker == 'true' }}
       run_spfx: ${{ inputs.force_run || steps.changes.outputs.spfx == 'true' }}
+      shards: ${{ steps.shards.outputs.matrix }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
-      - name: Check if the code has been modified so tests must be run
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Select dependent workloads
         id: changes
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # 3.0.2
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         with:
-          filters: |
-            code:
-              - 'src/AnalyticsEngine/**'
-              # The workbook comparison script has no build of its own: its tests are in Tests.UnitTests.
-              - 'scripts/CopilotAdoption/**'
-            aitracker:
-              - 'src/SPO/AITracker/**'
-            spfx:
-              - 'src/SPO/ModernPagesAITrackerExtension/**'
-              - 'src/SPO/AITracker/spoinsights-modern-ui-aitracker.sppkg'
-              - '.github/scripts/Test-SpfxPackage.ps1'
+          filters: .github/ci-paths.json
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: Define exhaustive test shards
+        id: shards
+        run: echo "matrix=$(node .github/scripts/ci.mjs)" >> "$GITHUB_OUTPUT"
+
+  workflow_checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: setup_tests
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: Test CI helpers
+        run: node --test .github/scripts/*.test.mjs
+      - name: Validate workflow syntax
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o "$RUNNER_TEMP/actionlint.tar.gz"
+          cd "$RUNNER_TEMP"
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz' | sha256sum --check --strict
+          tar -xzf actionlint.tar.gz actionlint
+          cd "$GITHUB_WORKSPACE"
+          "$RUNNER_TEMP/actionlint" -shellcheck=''
 
   test_aitracker:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: setup_tests
-    # Gated per step rather than with a job-level `if:` - see the note on test_dotnet below.
-    # The gate is the AI tracker's own sources: this used to key off src/AnalyticsEngine/**,
-    # the wrong tree entirely, so the tracker's tests never ran when the tracker changed and
-    # always ran when it had not. See issue #270.
     steps:
       - name: Checkout source
         if: needs.setup_tests.outputs.run_aitracker == 'true' || needs.setup_tests.outputs.run_spfx == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
-      # CI never builds the SPFx extension: the release ships the package committed in src/SPO/AITracker as it is. So
-      # a change to the extension must come with its rebuilt package, which this checks by version. Its own path
-      # filter, as the mistake it catches is a change to the extension alone.
-      - name: Check the committed SPFx package matches its source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Check committed SPFx package
         if: needs.setup_tests.outputs.run_spfx == 'true'
         shell: pwsh
         run: ./.github/scripts/Test-SpfxPackage.ps1
-      # Same pinned Node as every other npm step in the repo, read from the repo-root .nvmrc.
-      # Left to the runner image this job would test the tracker on whatever Node ubuntu-latest
-      # currently ships, which is not necessarily the version the release build uses.
       - name: Setup Node
         if: needs.setup_tests.outputs.run_aitracker == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -128,150 +122,175 @@ jobs:
           cache-dependency-path: src/SPO/AITracker/TypeScript/package-lock.json
       - name: Run AI Tracker tests
         if: needs.setup_tests.outputs.run_aitracker == 'true'
-        run: |
-          cd src/SPO/AITracker/TypeScript
-          npm ci
-          npm run test
+        working-directory: src/SPO/AITracker/TypeScript
+        run: npm ci && npm run test
 
-  test_dotnet:
-    # Tests job
-    # Preparation:
-    #   - Transform configuration files
-    #   - Restore dependencies
-    # Build:
-    #   - Build .Net projects
-    # Test:
-    #   - Run test suite
-    # Pinned to windows-2022: the "Execute unit tests" step below uses a hardcoded
-    # vstest.console.exe path under VS2022 Enterprise. On windows-latest (now a newer image)
-    # that path no longer exists, so vstest can't be located and the job fails before any test
-    # runs. windows-2022 ships VS2022 Enterprise at that exact path. See PR #123 / issue #122.
+  build_tests:
     runs-on: windows-2022
+    timeout-minutes: 30
     needs: setup_tests
-    # NOTE: the per-path gate is applied to every step below rather than as a job-level `if:`,
-    # and that is deliberate. `test_dotnet (Release)` is a REQUIRED status check, and the
-    # "(Release)" suffix comes from the matrix. GitHub evaluates a job-level `if:` BEFORE it
-    # expands the matrix, so a job skipped that way reports a single check named plain
-    # "test_dotnet" - the required "test_dotnet (Release)" context never appears at all and the
-    # PR stays BLOCKED exactly as it did before. Measured on PR #280: with a job-level `if:` the
-    # check runs were `test_dotnet => completed/skipped`, with no `(Release)` variant.
-    # Gating each step instead keeps the matrix, so the correctly-named check always reports and
-    # simply does no work when nothing under src/AnalyticsEngine/** changed.
-    strategy:
-      matrix:
-        configuration: [Release] # [Debug, Release]
+    if: needs.setup_tests.outputs.run_dotnet == 'true'
     steps:
-      - name: Checkout source
-        if: needs.setup_tests.outputs.run_dotnet == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # 6.0.2
-      - name: Setup MSBuild
-        if: needs.setup_tests.outputs.run_dotnet == 'true'
-        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
-      # Tests.UnitTests references Web, and building Web runs `npm install` + `npm run build` for
-      # the portal SPA. That makes this job an npm consumer even though nothing here mentions npm,
-      # so it needs the pinned Node too - and Web.csproj's CheckNodeVersion guard now fails the
-      # build outright if it is absent or wrong. Read from the repo-root .nvmrc; never hardcode.
-      - name: Setup Node
-        if: needs.setup_tests.outputs.run_dotnet == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: src/AnalyticsEngine/Web/Scripts/portal/package-lock.json
-      - name: Cache NuGet Packages
-        id: nuget-packages
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # 5.0.5
-        if: false
-        env:
-          cache-name: nuget-package-cache
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~\.nuget\packages
-          key: ${{ runner.os }}-${{ env.cache-name }}
-      - name: Config substitution - Unit tests
-        if: needs.setup_tests.outputs.run_dotnet == 'true'
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/packages.config', '**/packages.lock.json', '**/NuGet.Config', '**/Directory.*.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+      # Only synthetic configuration enters the downloadable binary artifact.
+      - name: Configure credential-free test binaries
         uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
         with:
-          files: '${{ env.Solution_Directory }}\App.Release.config'
-      - name: Start Azurite (Table service)
-        # The runtime state store (Common.Entities.State.AzureTableKeyValueStore) is integration-tested against a
-        # real Table service. Azurite is the local emulator; StateStoreAzuriteTests talk to it through
-        # "UseDevelopmentStorage=true", and REQUIRE_AZURITE turns "emulator not reachable" into a failure here
-        # (locally, without Azurite, those tests report Inconclusive instead). It is also the Storage account every
-        # other test sees (see the Storage env var above).
-        #
-        # Use the azurite.exe that Visual Studio's Azure development workload ships on the runner image: it starts in
-        # seconds and installs nothing. An npm install of azurite took 7-14 minutes on this required check and
-        # resolved ~450 caret-range dependencies at run time in a job that holds the tenant secrets. The pinned npm
-        # install is only a fallback, for the day the image stops shipping it.
-        if: needs.setup_tests.outputs.run_dotnet == 'true'
+          files: src/AnalyticsEngine/Tests.UnitTests/App.Release.config
+        env:
+          ClientID: 00000000-0000-0000-0000-000000000000
+          TenantGUID: 00000000-0000-0000-0000-000000000000
+          TenantDomain: contoso.onmicrosoft.com
+          ClientSecret: ''
+          CognitiveEndpoint: ''
+          CognitiveKey: ''
+          ServiceBus: ''
+      - name: Restore and build test binaries
         shell: pwsh
         run: |
-          $data = Join-Path $env:RUNNER_TEMP 'azurite'
-          New-Item -ItemType Directory -Force -Path $data | Out-Null
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $vs = if (Test-Path $vswhere) { & $vswhere -latest -products * -property installationPath } else { $null }
-          $azurite = if ($vs) { Join-Path $vs 'Common7\IDE\Extensions\Microsoft\Azure Storage Emulator\azurite.exe' } else { $null }
-          if ($azurite -and (Test-Path $azurite)) {
-            "Using the Azurite bundled with Visual Studio: $azurite (version $(& $azurite --version))"
-          } else {
-            "Visual Studio's Azurite was not found on this image; installing azurite@3.37.0 from npm instead."
-            npm install --global azurite@3.37.0 --no-audit --no-fund
-            $azurite = (Get-Command azurite-table.cmd -ErrorAction Stop).Source
-          }
-          Start-Process -FilePath $azurite -ArgumentList @('--silent', '--location', $data, '--tableHost', '127.0.0.1', '--tablePort', '10002', '--skipApiVersionCheck') -WindowStyle Hidden
-          $deadline = (Get-Date).AddSeconds(60)
-          while ($true) {
-            try { $probe = [System.Net.Sockets.TcpClient]::new(); $probe.Connect('127.0.0.1', 10002); $probe.Dispose(); break }
-            catch { if ((Get-Date) -gt $deadline) { throw "Azurite did not start listening on 127.0.0.1:10002." }; Start-Sleep -Seconds 2 }
-          }
-          "Azurite Table service is listening on 127.0.0.1:10002."
-      - name: Restore the application
-        if: needs.setup_tests.outputs.run_dotnet == 'true'
-        run: msbuild ${{ env.Solution_Directory }} -t:Restore `
-          -p:Configuration=${{ env.Configuration }} `
-          -p:Platform=${{ env.Build_Platform }} `
-          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
-        env:
-          Configuration: ${{ matrix.configuration }}
-      - name: Build solution
-        if: needs.setup_tests.outputs.run_dotnet == 'true'
-        run: msbuild ${{ env.Solution_Directory }} `
-          -p:Configuration=${{ env.Configuration }} `
-          -p:Platform=${{ env.Build_Platform }} `
-          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
-        env:
-          Configuration: ${{ matrix.configuration }}
-      - name: Execute portal tests
-        if: needs.setup_tests.outputs.run_dotnet == 'true'
-        working-directory: src\AnalyticsEngine\Web\Scripts\portal
-        run: npm run test
-      - name: Execute unit tests
-        if: needs.setup_tests.outputs.run_dotnet == 'true'
-        uses: jesusfer/vstest-action@f5ec12ddb71f6e151b738fa4740f8fea61e9214b
+          msbuild src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj /restore /p:Configuration=Release /p:Platform=AnyCPU
+          if ($LASTEXITCODE -ne 0) { throw 'Test build failed.' }
+          msbuild src\AnalyticsEngine\Tests.FakeDataGen\Tests.FakeDataGen.csproj /restore /p:Configuration=Release /p:BuildProjectReferences=false
+          if ($LASTEXITCODE -ne 0) { throw 'Demo generator build failed.' }
+      - name: Upload reusable test binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          testAssembly: Tests.UnitTests.dll
-          searchFolder: ${{ env.Solution_Directory }}\bin\${{ env.Configuration }}\
-          runInParallel: true
-          vstestLocationMethod: location
-          vstestLocation: C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\IDE\\Extensions\\TestPlatform\\vstest.console.exe
+          name: test-binaries
+          retention-days: 3
+          compression-level: 1
+          if-no-files-found: error
+          path: |
+            src/AnalyticsEngine/Tests.UnitTests/bin/Release
+            src/AnalyticsEngine/Tests.FakeDataGen/bin/Release
+
+  test_shards:
+    name: .NET tests (${{ matrix.name }})
+    runs-on: windows-2022
+    timeout-minutes: 45
+    needs: [setup_tests, build_tests]
+    if: needs.setup_tests.outputs.run_dotnet == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup_tests.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: test-binaries
+          path: src/AnalyticsEngine
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - uses: ./.github/actions/test-runtime
+      - name: Configure this runner only
+        uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
+        with:
+          files: src/AnalyticsEngine/Tests.UnitTests/bin/Release/Tests.UnitTests.dll.config
         env:
-          Configuration: ${{ matrix.configuration }}
-          # DownloadLatestReleaseZipsHaveContent calls the GitHub REST API. Anonymous requests are limited
-          # to 60/hour per IP and Actions runners share outbound addresses, so the budget is often already
-          # spent and the API answers 403 - failing the required check for reasons unrelated to the change.
-          # The built-in token raises it to 5,000/hour. Read-only public metadata; no extra permission needed.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Deliberately a short smoke, not a scale run. Tests.UnitTests links the Tests.FakeDataGen *sources*
-      # (<Compile Include="..\Tests.FakeDataGen\..."/>) rather than referencing the project, so the
-      # solution build above never produces the EXE - this step is what proves the shipped executable
-      # actually starts, resolves its binding redirects and returns the right exit codes.
-      # BuildProjectReferences=false keeps it to that one project, and Verify-DemoCommand.ps1 uses the
-      # smallest generation the CLI accepts so the runner pays only the unavoidable schema-apply cost.
-      - name: Build and smoke-test the demo command
-        if: needs.setup_tests.outputs.run_dotnet == 'true'
+          ClientID: ${{ secrets.APP_CLIENTID }}
+          ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
+          TenantGUID: ${{ secrets.APP_TENANTGUID }}
+          TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
+          CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
+          CognitiveKey: ${{ secrets.APP_COGNITIVEKEY }}
+          ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
+      - name: Execute every test assigned to this shard
         shell: pwsh
+        env:
+          TEST_FILTER: ${{ matrix.filter }}
+          SHARD: ${{ matrix.name }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          msbuild src\AnalyticsEngine\Tests.FakeDataGen\Tests.FakeDataGen.csproj /restore `
-            -p:Configuration=${{ matrix.configuration }} -p:BuildProjectReferences=false
-          if ($LASTEXITCODE -ne 0) { throw "Demo generator build failed." }
-          & .\src\AnalyticsEngine\Tests.FakeDataGen\Verify-DemoCommand.ps1 -Configuration '${{ matrix.configuration }}'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -products * -property installationPath
+          $vstest = Join-Path $vs 'Common7\IDE\Extensions\TestPlatform\vstest.console.exe'
+          & $vstest src\AnalyticsEngine\Tests.UnitTests\bin\Release\Tests.UnitTests.dll `
+            "/TestCaseFilter:$env:TEST_FILTER" "/Logger:trx;LogFileName=$env:SHARD.trx" `
+            "/ResultsDirectory:$env:RUNNER_TEMP\test-results" /Platform:x64
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
+      - name: Report test outcomes and durations
+        if: always()
+        shell: pwsh
+        env:
+          SHARD: ${{ matrix.name }}
+        run: ./.github/scripts/Write-TestSummary.ps1 -ResultsDirectory "$env:RUNNER_TEMP\test-results" -Name $env:SHARD
+      - name: Upload TRX results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: vs-test-result-logs-${{ matrix.name }}
+          retention-days: 7
+          path: ${{ runner.temp }}/test-results/*.trx
+          if-no-files-found: error
+      - name: Smoke-test the shipped demo executable
+        if: matrix.name == 'demo'
+        shell: pwsh
+        run: ./src/AnalyticsEngine/Tests.FakeDataGen/Verify-DemoCommand.ps1 -Configuration Release
+
+  test_portal:
+    name: Portal type checks and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: setup_tests
+    if: needs.setup_tests.outputs.run_portal == 'true'
+    defaults:
+      run:
+        working-directory: src/AnalyticsEngine/Web/Scripts/portal
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: src/AnalyticsEngine/Web/Scripts/portal/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck:tests
+      # Includes the complete i18n suite; neither language is optional.
+      - run: npm run test -- --reporter=default --reporter=junit --outputFile.junit=portal-results.xml
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: portal-test-results
+          retention-days: 7
+          path: src/AnalyticsEngine/Web/Scripts/portal/portal-results.xml
+          if-no-files-found: error
+
+  # Keep the protected status context exactly as it was before splitting the work.
+  test_dotnet:
+    name: test_dotnet (Release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [setup_tests, workflow_checks, build_tests, test_shards, test_portal]
+    if: always() && needs.setup_tests.result != 'skipped'
+    steps:
+      - name: Require every applicable check
+        env:
+          SETUP: ${{ needs.setup_tests.result }}
+          HELPERS: ${{ needs.workflow_checks.result }}
+          RUN_DOTNET: ${{ needs.setup_tests.outputs.run_dotnet }}
+          BUILD: ${{ needs.build_tests.result }}
+          SHARDS: ${{ needs.test_shards.result }}
+          RUN_PORTAL: ${{ needs.setup_tests.outputs.run_portal }}
+          PORTAL: ${{ needs.test_portal.result }}
+        run: |
+          test "$SETUP" = success
+          test "$HELPERS" = success
+          if [ "$RUN_DOTNET" = true ]; then
+            test "$BUILD" = success
+            test "$SHARDS" = success
+          fi
+          if [ "$RUN_PORTAL" = true ]; then
+            test "$PORTAL" = success
+          fi

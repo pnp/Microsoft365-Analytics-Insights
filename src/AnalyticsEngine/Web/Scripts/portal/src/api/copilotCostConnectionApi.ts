@@ -77,7 +77,7 @@ const STATUS_KEYS: Record<string, TranslationKey> = {
   sourceFailure: 'admin.costConnection.sourceUnavailable',
   notFound: 'admin.costConnection.sourceNotFound',
   invalidResponse: 'admin.costConnection.invalidResponse',
-  invalidPage: 'admin.costConnection.invalidResponse',
+  invalidPage: 'admin.costConnection.invalidPage',
   pageLimit: 'admin.costConnection.pageLimit',
   cacheTooLarge: 'admin.costConnection.cacheTooLarge',
   sliceCompleted: 'admin.costConnection.sliceCompleted',

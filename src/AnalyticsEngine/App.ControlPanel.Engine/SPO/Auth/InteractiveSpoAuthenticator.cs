@@ -79,6 +79,7 @@ namespace App.ControlPanel.Engine.SPO.Auth
         /// Management Shell app. Used to give admins a targeted error if their tenant has blocked it.
         /// </summary>
         public bool UsingDefaultClientId { get; }
+        public CancellationToken CancellationToken { get; set; }
 
         /// <summary>
         /// Token resource for a site URL. SharePoint issues one token per tenant host, so
@@ -101,7 +102,7 @@ namespace App.ControlPanel.Engine.SPO.Auth
         {
             var resourceUri = GetResourceUri(siteUrl);
 
-            await _tokenLock.WaitAsync();
+            await _tokenLock.WaitAsync(CancellationToken);
             try
             {
                 if (_tokensByResource.TryGetValue(resourceUri, out var cached) && cached.ExpiresOn > DateTimeOffset.UtcNow.Add(TOKEN_REFRESH_WINDOW))
@@ -135,7 +136,7 @@ namespace App.ControlPanel.Engine.SPO.Auth
                 try
                 {
                     // Already signed in for another site/the app catalog - no second browser prompt.
-                    return await _app.AcquireTokenSilent(scopes, account).ExecuteAsync();
+                    return await _app.AcquireTokenSilent(scopes, account).ExecuteAsync(CancellationToken);
                 }
                 catch (MsalUiRequiredException)
                 {
@@ -158,10 +159,15 @@ namespace App.ControlPanel.Engine.SPO.Auth
 
             try
             {
-                using (var timeout = new CancellationTokenSource(InteractiveSignInTimeout))
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken))
                 {
+                    timeout.CancelAfter(InteractiveSignInTimeout);
                     return await request.ExecuteAsync(timeout.Token);
                 }
+            }
+            catch (OperationCanceledException) when (CancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (OperationCanceledException ex)
             {

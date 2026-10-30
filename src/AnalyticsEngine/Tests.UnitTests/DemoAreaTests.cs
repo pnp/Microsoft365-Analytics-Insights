@@ -72,6 +72,7 @@ namespace Tests.UnitTests
         [DataRow("powerbi", "event_meta_power_bi")]
         [DataRow("copilot-studio", "event_meta_copilot_studio")]
         [DataRow("dlp", "copilot_dlp_events")]
+        [DataRow("copilot-credits", "copilot_cost_observations")]
         public void EveryIndividualArea_ProducesReportFactsAndUsesSameRowsAsFullDemo(string key, string factTable)
         {
             var options = DemoGeneratorTests.Options("--areas", key);
@@ -103,6 +104,10 @@ namespace Tests.UnitTests
                 DemoPortalReadiness.ImportSettings(DemoArea.CopilotHistory));
             Assert.AreEqual("GraphUsersMetadata=True;Copilot=True;ImportDlp=True",
                 DemoPortalReadiness.ImportSettings(DemoArea.Dlp));
+            Assert.AreEqual("GraphUsersMetadata=True;CopilotCostManagement=True",
+                DemoPortalReadiness.ImportSettings(DemoArea.CopilotCredits));
+            Assert.AreNotEqual(DemoAreas.Parse("copilot-history"), DemoAreas.Parse("copilot-credits"),
+                "Prompt history and credit history are different sources and must be selected separately.");
         }
 
         [TestMethod]

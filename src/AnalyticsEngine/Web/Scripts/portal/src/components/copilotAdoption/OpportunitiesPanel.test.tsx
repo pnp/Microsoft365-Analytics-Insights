@@ -490,7 +490,7 @@ describe('OpportunitiesPanel sections and actions', () => {
 describe('OpportunitiesPanel without See PII', () => {
   it('opens on the licence estimate, never asks for the candidates, and offers no list to open', async () => {
     renderWithProvider(
-      <OpportunitiesPanel windowDays={28} summary={summary()} filterOptions={null} options={OPTIONS} canSeePii={false} />,
+      <OpportunitiesPanel windowDays={28} summary={summary()} options={OPTIONS} canSeePii={false} />,
     );
 
     expect(screen.getByRole('tab', { name: 'Time saved', selected: true })).toBeTruthy();
@@ -508,7 +508,6 @@ describe('OpportunitiesPanel without See PII', () => {
       <OpportunitiesPanel
         windowDays={28}
         summary={summary({ licenceOpportunityEstimate: { ...RECOMMENDED, cohortUsers: 0 }, licenceChatUsersEstimate: undefined })}
-        filterOptions={null}
         options={OPTIONS}
         canSeePii={false}
       />,

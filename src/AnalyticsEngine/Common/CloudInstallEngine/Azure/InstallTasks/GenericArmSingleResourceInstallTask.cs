@@ -77,7 +77,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     Parameters = BinaryData.FromObjectAsJson(newCreationParams)
                 });
 
-                await Container.GetArmDeployments().CreateOrUpdateAsync(WaitUntil.Completed, name + DateTime.Now.Ticks, armDeploymentInfo);
+                await Container.GetArmDeployments().CreateOrUpdateAsync(WaitUntil.Completed, name + DateTime.Now.Ticks, armDeploymentInfo, cancellationToken: CancellationToken);
 
                 _logger.LogInformation($"Created {name}");
 
@@ -104,14 +104,14 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             if (resource != null)
             {
-                await resource.DeleteAsync(WaitUntil.Completed);
+                await resource.DeleteAsync(WaitUntil.Completed, cancellationToken: CancellationToken);
                 _logger.LogInformation($"Deleted {name}");
             }
         }
 
         private GenericResource GetGenericAzResource(string name, string type)
         {
-            return Container.GetGenericResources($"resourceType eq '{type}'", "Properties")
+            return Container.GetGenericResources($"resourceType eq '{type}'", "Properties", cancellationToken: CancellationToken)
                 .Where(r => r.Data.Name == name).SingleOrDefault();
         }
     }

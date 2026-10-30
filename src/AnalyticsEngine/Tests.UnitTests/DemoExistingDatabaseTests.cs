@@ -103,6 +103,13 @@ WHERE url_id=1 AND field_id=1;");
                         Assert.IsTrue(messages.Any(m => m.Contains("Global weekly profiling is skipped")));
                         Assert.AreEqual(options.Users * (run + 1) + 1L, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.users;"));
                         Assert.AreEqual(originalCounts, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.copilot_user_count_log;"));
+                        foreach (string table in new[] { "copilot_cost_control", "copilot_cost_runs", "copilot_cost_work",
+                            "copilot_cost_observations", "copilot_cost_services", "copilot_cost_history", "copilot_cost_context" })
+                        {
+                            Assert.IsTrue(originalRows[table] > 0, "The full demo must exercise " + table);
+                            Assert.AreEqual(originalRows[table], after[table],
+                                "An append must never add a second population's credit sweeps to the tenant's own: " + table);
+                        }
                         Assert.AreEqual(originalDepartments, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.user_departments;"));
                         Assert.AreEqual(originalLicences, Scalar(connection, "SELECT COUNT_BIG(*) FROM dbo.license_types;"));
                         foreach (string table in namespacedObjects)
@@ -236,7 +243,7 @@ WHERE class=0 AND name LIKE N'M365AnalyticsSyntheticDemo%';"));
                                 sink.Write(DemoTables.Sessions, 1, session, 1);
                                 sink.Write(DemoTables.InteractionSessions, 1, thread, 1);
                                 sink.Write(DemoTables.Audit, id, 1, 1, options.AsOf);
-                                sink.Write(DemoTables.Chats, id, "Contoso", null, thread, "US", "1", 1, options.AsOf);
+                                sink.Write(DemoTables.Chats, id, "Contoso", null, thread, "US", "1", 1, options.AsOf, null, null);
                                 sink.Write(DemoTables.Interactions, graph, 1, 1, id.ToString("N"), 1, 1, 1,
                                     options.AsOf, 10, 2, 0, 0, 0, 0, null, null, null, 1);
                                 sink.Flush();

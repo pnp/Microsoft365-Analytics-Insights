@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 
 namespace CloudInstallEngine.Azure
 {
@@ -32,7 +33,8 @@ namespace CloudInstallEngine.Azure
             ResourceGroupName = resourceGroupName;
         }
 
-        public static SubscriptionResource FromTokenCredential(TokenCredential credential, string subscriptionId)
+        public static SubscriptionResource FromTokenCredential(TokenCredential credential, string subscriptionId,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
             if (subscriptionId is null)
             {
@@ -40,7 +42,8 @@ namespace CloudInstallEngine.Azure
             }
 
             var client = new ArmClient(credential);
-            var allSubs = client.GetSubscriptions().ToList();
+            cancellationToken.ThrowIfCancellationRequested();
+            var allSubs = client.GetSubscriptions().GetAll(cancellationToken).ToList();
             var subscription = allSubs.Where(sub => sub.Data.SubscriptionId == subscriptionId).SingleOrDefault();
             if (subscription == null)
             {

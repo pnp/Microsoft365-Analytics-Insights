@@ -15,6 +15,8 @@ import webActivity from './webActivity';
 import licenceActivity from './licenceActivity';
 import activityAnalysis from './activityAnalysis';
 import agentCosts from './agentCosts';
+import copilotInvestment from './copilotInvestment';
+import copilotSpend from './copilotSpend';
 import dlp from './dlp';
 import errors from './errors';
 import health from './health';
@@ -58,6 +60,8 @@ export const ES_MODULES = {
   licenceActivity,
   activityAnalysis,
   agentCosts,
+  copilotInvestment,
+  copilotSpend,
   dlp,
   errors,
   health,

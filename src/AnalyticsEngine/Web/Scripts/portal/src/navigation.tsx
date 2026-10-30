@@ -10,6 +10,7 @@ import {
   Globe20Regular,
   Home20Regular,
   Money20Regular,
+  MoneyCalculator20Regular,
   Options20Regular,
   Organization20Regular,
   PeopleCommunity20Regular,
@@ -21,6 +22,7 @@ import {
   Settings20Regular,
   ShieldProhibited20Regular,
   Sparkle20Regular,
+  Wallet20Regular,
 } from '@fluentui/react-icons';
 
 import { lazyWithReload } from './lazyWithReload';
@@ -33,6 +35,8 @@ import { REPORT_PAGES, type ReportPageDefinition, type WorkloadId } from './repo
 const InsightsOverviewPage = lazyWithReload(() => import('./pages/InsightsOverviewPage'));
 const ReportsPage = lazyWithReload(() => import('./pages/ReportsPage'));
 const CopilotAdoptionPage = lazyWithReload(() => import('./pages/CopilotAdoptionPage'));
+const CopilotInvestmentPage = lazyWithReload(() => import('./pages/CopilotInvestmentPage'));
+const CopilotSpendPage = lazyWithReload(() => import('./pages/CopilotSpendPage'));
 const TeamsExplorerPage = lazyWithReload(() => import('./pages/TeamsExplorerPage'));
 const WebActivityPage = lazyWithReload(() => import('./pages/WebActivityPage'));
 const AgentCostsPage = lazyWithReload(() => import('./pages/AgentCostsPage'));
@@ -50,6 +54,7 @@ const GlobalFilterPage = lazyWithReload(() => import('./pages/GlobalFilterPage')
 const CopilotAuditBackfillPage = lazyWithReload(() => import('./pages/CopilotAuditBackfillPage'));
 const LeadershipCohortPage = lazyWithReload(() => import('./pages/LeadershipCohortPage'));
 const CopilotAdoptionSettingsPage = lazyWithReload(() => import('./pages/CopilotAdoptionSettingsPage'));
+const CopilotInvestmentSettingsPage = lazyWithReload(() => import('./pages/CopilotInvestmentSettingsPage'));
 const ProfilingStatusPage = lazyWithReload(() => import('./pages/ProfilingStatusPage'));
 const InstallLogPage = lazyWithReload(() => import('./pages/InstallLogPage'));
 const HealthPage = lazyWithReload(() => import('./pages/HealthPage'));
@@ -165,6 +170,24 @@ export const ROUTES: PortalRoute[] = [
     labelKey: 'app.route.copilotAdoption',
     icon: <Sparkle20Regular />,
     element: <CopilotAdoptionPage />,
+    workload: 'copilot',
+  },
+  {
+    area: 'insights',
+    path: '/insights/copilot-investment',
+    labelKey: 'app.route.copilotInvestment',
+    // A calculator rather than the coin Agent costs uses: this page models value against cost, it is not a bill.
+    icon: <MoneyCalculator20Regular />,
+    element: <CopilotInvestmentPage />,
+    workload: 'copilot',
+  },
+  {
+    area: 'insights',
+    path: '/insights/copilot-spend',
+    labelKey: 'app.route.copilotSpend',
+    // A wallet: who consumed which credits, as the sources report them - no prices, value or modelling.
+    icon: <Wallet20Regular />,
+    element: <CopilotSpendPage />,
     workload: 'copilot',
   },
   {
@@ -305,6 +328,14 @@ export const ROUTES: PortalRoute[] = [
     groupKey: 'app.navGroup.reporting',
     icon: <Options20Regular />,
     element: <CopilotAdoptionSettingsPage />,
+  },
+  {
+    area: 'admin',
+    path: '/admin/copilot-investment-assumptions',
+    labelKey: 'app.route.copilotInvestmentAssumptions',
+    groupKey: 'app.navGroup.reporting',
+    icon: <MoneyCalculator20Regular />,
+    element: <CopilotInvestmentSettingsPage />,
   },
   {
     area: 'admin',

@@ -4,6 +4,8 @@ using AnalyticsWeb::Web.AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Security;
 using Common.Entities.Config;
+using Common.Entities;
+using Common.Entities.CopilotCosts;
 using Common.Entities.State;
 using Microsoft.Identity.Client;
 using Microsoft.AspNetCore.Authentication;
@@ -35,6 +37,35 @@ namespace Tests.UnitTests
         private const string ObjectId = "00000000-0000-0000-0000-000000000001";
         private const string Redirect = "https://contoso.example/signin-agent-costs";
         private const string Secret = "synthetic-runtime-credential-for-unit-tests";
+
+        [TestMethod]
+        public async Task ConsumptionFailureSurvivesRefreshAndOldGenerationCannotClearNewConnectionHealth()
+        {
+            var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
+            var config = new AppConfig { ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true } };
+            await store.ConnectAsync("synthetic-cache");
+            var first = await store.GetHeadAsync();
+            var now = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+            await store.RecordHealthAsync(first.Version, "permissionDenied", now);
+            await store.SaveCacheAsync(first.Version, "refreshed-synthetic-cache");
+            Assert.AreEqual("permissionDenied", (await CostApiHealthReader.ReadStudioAsync(config, () => store)).Status);
+            await store.ConnectAsync("new-synthetic-cache");
+            var second = await store.GetHeadAsync();
+            Assert.AreEqual("permissionDenied", (await CostApiHealthReader.ReadStudioAsync(config, () => store)).Status,
+                "Reconnect must not resolve an alert before the new connection reads consumption.");
+            await store.RecordHealthAsync(second.Version, "throttled", now);
+            await store.RecordHealthAsync(first.Version, null, now.AddMinutes(1));
+            var health = await CostApiHealthReader.ReadStudioAsync(config, () => store);
+            Assert.AreEqual("failing", health.Status);
+            Assert.IsNull(health.LastSuccessfulRead);
+            Assert.AreEqual(DataUtils.Health.HealthStatus.Degraded, health.ToRuntimeResult(now).Status);
+            Assert.AreEqual(DataUtils.Health.HealthStatus.Unhealthy, health.ToRuntimeResult(now.AddMinutes(15)).Status);
+            await store.RecordHealthAsync(second.Version, null, now.AddMinutes(20));
+            health = await CostApiHealthReader.ReadStudioAsync(config, () => store);
+            Assert.AreEqual("healthy", health.Status);
+            Assert.AreEqual(now.AddMinutes(20), health.LastSuccessfulRead);
+            Assert.IsNull(health.FailureSince);
+        }
 
         [TestMethod]
         public void CacheEncryption_IsRandomAuthenticatedAndSecretFree()

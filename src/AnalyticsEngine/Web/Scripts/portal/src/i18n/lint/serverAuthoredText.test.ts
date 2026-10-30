@@ -3,7 +3,7 @@ import { beforeAll, describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { loadCatalog, translateStatic, type TFunction } from '..';
+import { loadCatalog, translateStatic, type TFunction, type TranslationKey } from '..';
 import { EN_CATALOG } from '../catalog';
 import { DEFAULT_SCORE_VALUES, SCORE_FIELD_LABEL_KEYS } from '../../components/copilotAdoption/scoreSettings';
 import { COPILOT_ADOPTION_WARNING_KEYS, COWORK_TIER_LABEL_KEYS, TENURE_BASIS_LABEL_KEYS } from '../../components/copilotAdoption/serverText';
@@ -12,6 +12,7 @@ import {
   BLOB_CHECKPOINT_REASON_KEYS,
   DEFAULT_HEALTH_REASON_KEYS,
   AGENT_COST_CONNECTION_REASON_KEYS,
+  COST_API_REASON_KEYS,
   HEALTH_COMPONENT_LABEL_KEYS,
   translateHealthComponentDetailText,
   translateHealthReasonText,
@@ -42,6 +43,24 @@ import { PORTAL_PERMISSION_ERROR_CODE } from '../../access';
 import { GLOBAL_FILTER_ERROR_KEYS } from '../../api/globalFilterApi';
 import { REPORT_SCOPE_ERROR_KEYS } from '../../api/http';
 import { COPILOT_ADOPTION_SETTINGS_ERROR_KEYS } from '../../api/copilotAdoptionSettingsApi';
+import { COPILOT_INVESTMENT_SETTINGS_ERROR_KEYS } from '../../api/copilotInvestmentApi';
+import {
+  ACTION_CODES as INVESTMENT_ACTION_CODES,
+  ACTION_EFFECT_KEYS as INVESTMENT_ACTION_EFFECT_KEYS,
+  AVAILABILITY_NOTE_KEYS as INVESTMENT_AVAILABILITY_NOTE_KEYS,
+  EVIDENCE_LABEL_KEYS as INVESTMENT_EVIDENCE_KEYS,
+  FINDING_CODES as INVESTMENT_FINDING_CODES,
+  FLAG_LABEL_KEYS as INVESTMENT_FLAG_KEYS,
+  QUADRANT_LABEL_KEYS as INVESTMENT_QUADRANT_KEYS,
+  SIGNAL_LABEL_KEYS as INVESTMENT_SIGNAL_KEYS,
+  TRAJECTORY_UNAVAILABLE_KEYS as INVESTMENT_TRAJECTORY_UNAVAILABLE_KEYS,
+  TRUST_AREAS as INVESTMENT_TRUST_AREAS,
+  TRUST_AREA_LABEL_KEYS as INVESTMENT_TRUST_AREA_KEYS,
+  TRUST_CODES as INVESTMENT_TRUST_CODES,
+  VALUE_UNAVAILABLE_REASONS as INVESTMENT_VALUE_UNAVAILABLE_REASONS,
+} from '../../components/copilotInvestment/investmentShared';
+import { SPEND_AGENT_KIND_KEYS } from '../../components/copilotSpend/SpendPersonDialog';
+import { GROUPING_UNAVAILABLE_KEYS as SPEND_GROUPING_UNAVAILABLE_KEYS } from '../../pages/CopilotSpendPage';
 
 function sortedUnique(values: string[]): string[] {
   return [...new Set(values)].sort((a, b) => a.localeCompare(b));
@@ -68,6 +87,23 @@ describe('Default runtime health diagnostics', () => {
 });
 
 describe('Delegated billing import diagnostics', () => {
+  it('translates every cost API health reason and its component roll-up', async () => {
+    await loadCatalog('es');
+    const source = readFileSync(join(process.cwd(), '..', '..', '..', 'Common', 'Entities',
+      'CopilotCosts', 'CostApiHealthReader.cs'), 'utf8');
+    expect(translationKeysIn(source, 'costApi.')).toEqual(Object.keys(COST_API_REASON_KEYS).sort());
+    const es: TFunction = (key, values) => translateStatic('es', key, values);
+    for (const key of Object.values(COST_API_REASON_KEYS)) {
+      expect(source).toContain(`"${EN_CATALOG[key]}"`);
+      expect(translateHealthComponentDetailText(EN_CATALOG[key], es)).toBe(es(key));
+      expect(es(key)).not.toBe(EN_CATALOG[key]);
+    }
+    expect(translateHealthReasonText(`CopilotCostApi is degraded: ${EN_CATALOG['health.reason.costApiFailing']}`, es))
+      .toBe(es('health.reason.componentDegraded', {
+        component: es('health.component.CopilotCostApi'), detail: es('health.reason.costApiFailing'),
+      }));
+  });
+
   it('translates every billing connection health state and its overall roll-up', async () => {
     await loadCatalog('es');
     const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'Health', 'HealthService.cs'), 'utf8');
@@ -702,7 +738,7 @@ function healthComponentKeys(): string[] {
 describe('Health component display names', () => {
   it('translates every concrete component name the server can send today', () => {
     const serverKeys = healthComponentKeys();
-    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'Credential', 'MessageTracing', 'PowerPlatformConnection', 'ServiceBus', 'Sql']);
+    expect(serverKeys).toEqual(['BlobCheckpoint', 'CopilotAuditBackfill', 'CopilotCostApi', 'CopilotStudioConsumption', 'Credential', 'MessageTracing', 'PowerPlatformConnection', 'ServiceBus', 'Sql']);
 
     const missingMapEntries = serverKeys.filter((key) => !(key in HEALTH_COMPONENT_LABEL_KEYS));
     const missingCatalogEntries = serverKeys
@@ -2881,5 +2917,154 @@ describe('Leadership comparison server keys', () => {
       'admin.leadershipCohort.error.',
       'admin error codes',
     );
+  });
+});
+
+/**
+ * The Copilot investment report sends codes, never sentences: every action, finding, caveat, signal, flag,
+ * evidence code, quadrant and availability note is written by the portal from its catalog. A code added on the
+ * server without a sentence here would reach the page as an identifier, or vanish from it.
+ */
+const INVESTMENT_DIR = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotInvestment');
+const INVESTMENT_MODELS_CS = join(INVESTMENT_DIR, 'CopilotInvestmentModels.cs');
+
+describe('Copilot investment server codes', () => {
+  it('words every action, finding and caveat the calculator can send', () => {
+    expect(sortedUnique([...INVESTMENT_ACTION_CODES])).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentActionCodes'));
+    expect(sortedUnique([...INVESTMENT_FINDING_CODES])).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentFindingCodes'));
+    expect(sortedUnique([...INVESTMENT_TRUST_CODES])).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentTrustCodes'));
+    for (const code of INVESTMENT_ACTION_CODES) expect(`copilotInvestment.action.${code}.title` in EN_CATALOG, code).toBe(true);
+    for (const code of INVESTMENT_TRUST_CODES) expect(`copilotInvestment.trust.${code}` in EN_CATALOG, code).toBe(true);
+  });
+
+  it('labels every signal, flag, evidence code and quadrant', () => {
+    expectMapsExactly(INVESTMENT_SIGNAL_KEYS, csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentSignals'), 'copilotInvestment.signal.', 'signals');
+    expectMapsExactly(INVESTMENT_FLAG_KEYS, csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentFlags'), 'copilotInvestment.flag.', 'flags');
+    expectMapsExactly(
+      INVESTMENT_EVIDENCE_KEYS,
+      csharpClassConstants(join(INVESTMENT_DIR, 'CopilotInvestmentPersonDetailBuilder.cs'), 'EvidenceCodes'),
+      'copilotInvestment.person.evidence.',
+      'evidence codes',
+    );
+    expect(sortedUnique(Object.keys(INVESTMENT_QUADRANT_KEYS))).toEqual(
+      csharpClassConstants(join(INVESTMENT_DIR, 'CopilotInvestmentCalculator.Sections.cs'), 'QuadrantKeys'),
+    );
+    expect(Object.values(INVESTMENT_QUADRANT_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+  });
+
+  it('words what every action amount is, every confidence area and every reason a figure is withheld', () => {
+    // An amount without its kind - freed seat cost, a value shortfall, added cost - would read as one column of savings.
+    expect(sortedUnique(Object.keys(INVESTMENT_ACTION_EFFECT_KEYS))).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentActionEffects'));
+    expect(Object.values(INVESTMENT_ACTION_EFFECT_KEYS).filter((key) => key !== null && !(key in EN_CATALOG))).toEqual([]);
+    expect(sortedUnique([...INVESTMENT_TRUST_AREAS])).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentTrustAreas'));
+    expect(sortedUnique(Object.keys(INVESTMENT_TRUST_AREA_KEYS))).toEqual(sortedUnique([...INVESTMENT_TRUST_AREAS]));
+    expect(Object.values(INVESTMENT_TRUST_AREA_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
+    expect(sortedUnique(Object.keys(INVESTMENT_TRAJECTORY_UNAVAILABLE_KEYS))).toEqual(
+      csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentTrajectoryUnavailable'),
+    );
+    expect(sortedUnique([...INVESTMENT_VALUE_UNAVAILABLE_REASONS])).toEqual(csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentValueUnavailable'));
+  });
+
+  it('words every code the assumptions API and the report can be refused with, and every availability note', () => {
+    const codes = csharpClassConstants(join(INVESTMENT_DIR, 'CopilotInvestmentAssumptions.cs'), 'CopilotInvestmentErrorCodes');
+    expect(codes.length).toBeGreaterThanOrEqual(10);
+    expect(sortedUnique([...COPILOT_INVESTMENT_SETTINGS_ERROR_KEYS.keys()].filter((c) => c !== 'loadFailed' && c !== 'saveFailed'))).toEqual(codes);
+    expect([...COPILOT_INVESTMENT_SETTINGS_ERROR_KEYS.values()].filter((key) => !(key in EN_CATALOG))).toEqual([]);
+
+    const controller = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'CopilotInvestmentAPIController.cs'), 'utf8');
+    const notes = sortedUnique([...controller.matchAll(/notes\.Add\("([^"]+)"\)/g)].map((m) => m[1]));
+    expect(notes.length).toBeGreaterThanOrEqual(4);
+    expect(sortedUnique(Object.keys(INVESTMENT_AVAILABILITY_NOTE_KEYS))).toEqual(notes);
+  });
+});
+
+describe('Copilot spend server keys', () => {
+  const SPEND_MODELS_CS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotSpend', 'CopilotSpendModels.cs');
+
+  it('words every agent kind the person drill-down can send', () => {
+    expectMapsExactly(SPEND_AGENT_KIND_KEYS, csharpClassConstants(SPEND_MODELS_CS, 'CopilotSpendAgentKindKeys'), 'copilotSpend.person.usage.kind.', 'agent kinds');
+  });
+
+  it('explains every reason the people cannot be grouped', () => {
+    expectMapsExactly(
+      SPEND_GROUPING_UNAVAILABLE_KEYS,
+      csharpClassConstants(SPEND_MODELS_CS, 'CopilotSpendGroupingUnavailable'),
+      'copilotSpend.org.unavailable.',
+      'grouping failures',
+    );
+  });
+});
+
+describe('Copilot investment workbook wording', () => {
+  // The workbook is written on the server from this catalog (Common.Entities embeds it). A key the server reads that the
+  // catalog lacks fails in production, not here; a workbook key the server no longer reads is dead text nobody reviews.
+  const workbookSources = readdirSync(INVESTMENT_DIR)
+    .filter((name) => name.startsWith('CopilotInvestmentWorkbook') && name.endsWith('.cs'))
+    .map((name) => readFileSync(join(INVESTMENT_DIR, name), 'utf8'))
+    .join('\n');
+  const controller = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'CopilotInvestmentAPIController.cs'), 'utf8');
+  const filterWording = readFileSync(join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'Localisation', 'FilterWording.cs'), 'utf8');
+  const prefix = 'copilotInvestment.workbook.';
+  const sections = /"((?:fileName|noCurrency)|(?:unit|tone|col|sheet|exec|basis|studio|effect|action|finding|value|path|cohort|org|credits|method|people|seatBasis|signalSource|reclaim|error)\.[A-Za-z.]*[A-Za-z])"/g;
+  const workbookKeys = Object.keys(EN_CATALOG).filter((key) => key.startsWith(prefix));
+
+  it('finds every workbook key, every reused page key and every error the server can write', () => {
+    const read = sortedUnique([...workbookSources.matchAll(sections)].map((m) => prefix + m[1]));
+    expect(read.length).toBeGreaterThan(200);
+    expect(read.filter((key) => !(key in EN_CATALOG))).toEqual([]);
+
+    const reused = sortedUnique([...workbookSources.matchAll(/"(copilotInvestment\.[A-Za-z.]*[A-Za-z])"/g)].map((m) => m[1]));
+    expect(reused.filter((key) => !(key in EN_CATALOG))).toEqual([]);
+
+    const errors = sortedUnique([...controller.matchAll(/WorkbookError\([^,]+, "([^"]+)"/g)].map((m) => `${prefix}error.${m[1]}`));
+    expect(errors).toEqual([`${prefix}error.failed`, `${prefix}error.invalid`, `${prefix}error.notReady`, `${prefix}error.whatIf`]);
+    expect(errors.filter((key) => !(key in EN_CATALOG))).toEqual([]);
+
+    const filterKeys = sortedUnique([...filterWording.matchAll(/"((?:userFilter|globalFilter)\.[A-Za-z.]*[A-Za-z])"/g)].map((m) => m[1]));
+    expect(filterKeys.filter((key) => !(key in EN_CATALOG))).toEqual([]);
+    for (const kind of ['own', 'self', 'manager']) {
+      for (const family of ['globalFilter.reader.', 'globalFilter.reader.hidden.', 'globalFilter.reader.unresolved.']) {
+        expect(`${family}${kind}` in EN_CATALOG, `${family}${kind}`).toBe(true);
+      }
+    }
+  });
+
+  it('reads every key written for the workbook, so none is left behind untranslated or unreviewed', () => {
+    const read = new Set([...workbookSources.matchAll(sections)].map((m) => prefix + m[1]));
+    for (const m of controller.matchAll(/WorkbookError\([^,]+, "([^"]+)"/g)) read.add(`${prefix}error.${m[1]}`);
+    // Families read by code: Words.Tone, Effect, SeatBasis, SignalSource and Reclaim.
+    const families = sortedUnique([...workbookSources.matchAll(/Prefix \+ "([A-Za-z.]+\.)"/g)].map((m) => prefix + m[1]));
+    expect(families).toEqual([`${prefix}effect.`, `${prefix}reclaim.`, `${prefix}seatBasis.`, `${prefix}signalSource.`, `${prefix}tone.`]);
+    const unread = workbookKeys.filter((key) => !read.has(key) && !families.some((family) => key.startsWith(family)));
+    expect(unread).toEqual([]);
+  });
+
+  it('names every sheet within the Excel limits in both languages', async () => {
+    await loadCatalog('es');
+    const sheets = workbookKeys.filter((key) => key.startsWith(`${prefix}sheet.`)) as TranslationKey[];
+    expect(sheets.length).toBe(8);
+    for (const language of ['en', 'es'] as const) {
+      const names = sheets.map((key) => translateStatic(language, key));
+      for (const name of names) {
+        expect(name.length, `${language}: ${name}`).toBeLessThanOrEqual(31);
+        expect(name, `${language}: ${name}`).not.toMatch(/[[\]:*?/\\]/);
+      }
+      expect(new Set(names.map((n) => n.toLowerCase())).size, language).toBe(names.length);
+    }
+  });
+
+  it('labels every finding tone and action effect the calculator can send', () => {
+    for (const effect of csharpClassConstants(INVESTMENT_MODELS_CS, 'CopilotInvestmentActionEffects').filter((e) => e !== 'none')) {
+      expect(`${prefix}effect.${effect}` in EN_CATALOG, effect).toBe(true);
+    }
+    // A finding's tone is the literal (or ternary of literals) passed to Finding(code, tone, ...), or the local `tone`.
+    const sections = readFileSync(join(INVESTMENT_DIR, 'CopilotInvestmentCalculator.Sections.cs'), 'utf8');
+    const toneArguments = [
+      ...[...sections.matchAll(/Finding\(CopilotInvestmentFindingCodes\.\w+,\s*([^,)]*)/g)].map((m) => m[1]),
+      ...[...sections.matchAll(/var tone = ([^;]*);/g)].map((m) => m[1]),
+    ];
+    const tones = sortedUnique(toneArguments.flatMap((argument) => [...argument.matchAll(/"([A-Za-z]+)"/g)].map((m) => m[1])));
+    expect(tones).toEqual(['critical', 'good', 'neutral', 'opportunity', 'warning']);
+    for (const tone of tones) expect(`${prefix}tone.${tone}` in EN_CATALOG, tone).toBe(true);
   });
 });

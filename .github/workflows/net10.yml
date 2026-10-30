@@ -304,6 +304,14 @@ jobs:
             --filter "FullyQualifiedName~StableReleaseCorePortTests|FullyQualifiedName~SiteTokenRefreshCoreTests|FullyQualifiedName~CopilotCostConnectionTests|FullyQualifiedName~CopilotCostInstallerConfigTests|FullyQualifiedName~WebErrorDetailTests|FullyQualifiedName~AnalyticsLoggerSharedTelemetryTests|FullyQualifiedName~UserImportCheckpointApiTests|FullyQualifiedName~GraphPagingFailureTests|FullyQualifiedName~AppConfigDefaultsTests|FullyQualifiedName~Net10ReleaseDiagnosticTests|FullyQualifiedName~AppInsightsApiClientTests|FullyQualifiedName~GraphExceptionTelemetryTests|FullyQualifiedName~GraphUserDeltaTokenRecoveryTests|FullyQualifiedName~DlpGovernanceTests|FullyQualifiedName~PromptCategoryTests.AdminApi_|FullyQualifiedName~InstallEngineTests.WebJobProjectShipsSingletonSettingsJob"
           exit $LASTEXITCODE
 
+      - name: Check stable build 1857 investment and spend ports
+        shell: pwsh
+        run: |
+          dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
+            -c Release --no-build --nologo `
+            --filter "FullyQualifiedName~CopilotInvestment|FullyQualifiedName~CopilotSpend|FullyQualifiedName~DeploymentPrerequisitesTests|FullyQualifiedName~AzureResourceProviderPreflightTests|FullyQualifiedName~InstallerCancellationTests"
+          exit $LASTEXITCODE
+
       - name: Check stable credit collector SQL invariants
         shell: pwsh
         run: |

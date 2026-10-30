@@ -580,7 +580,8 @@ namespace Tests.UnitTests
             CollectionAssert.IsSubsetOf(
                 new[]
                 {
-                    "AgentCostsAPIController", "CopilotAdoptionAPIController", "DlpAPIController", "GlobalFilterAPIController",
+                    "AgentCostsAPIController", "CopilotAdoptionAPIController", "CopilotInvestmentAPIController",
+                    "CopilotSpendAPIController", "DlpAPIController", "GlobalFilterAPIController",
                     "LicenceActivityAPIController", "ReportsAPIController", "TeamsExplorerAPIController",
                     "UserFilterAPIController", "WebActivityAPIController",
                 },

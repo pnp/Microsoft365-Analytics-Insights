@@ -209,6 +209,13 @@ namespace Common.Entities.State
         public const string CopilotAdoptionSettings = "CopilotAdoptionSettings";
 
         /// <summary>
+        /// The tenant-wide prices, hourly cost and productivity assumptions set on the portal's Administration &gt;
+        /// Copilot investment assumptions page, with their version and change history (who, when, old and new values).
+        /// One row; deleting it clears every assumption, so the investment report shows evidence without money.
+        /// </summary>
+        public const string CopilotInvestmentAssumptions = "CopilotInvestmentAssumptions";
+
+        /// <summary>
         /// Per-person profile and licence refresh requests from the portal's User lookup diagnostics, the queue the
         /// importer drains them from, each person's last verified licence check, and the licence-data generation report
         /// caches key on. Bounded: at most <c>UserRefreshStore.MaxQueueLength</c> queued requests; finished requests

@@ -17,7 +17,14 @@ namespace Tests.FakeDataGen.Demo
         //                            costs: billed Copilot Studio credits (per agent and per user),
         //                            the Copilot Credits capacity snapshot and daily Azure agent spend.
         //          contoso-demo-v4 - default taxonomy and prompt-only classifications in interaction history.
-        public const string FormatVersion = "contoso-demo-v4";
+        //          contoso-demo-v5 - Copilot credit balance history (preview collector tables): daily sweeps,
+        //                            per-service balances that reset monthly, policies, tenant balance and
+        //                            the archived publications, under the new copilot-credits area.
+        //          contoso-demo-v6 - what each person uses Copilot for: prompt categories by department and
+        //                            app, 1-3 key phrases per analysed prompt, prompt/response shapes, department
+        //                            files and sites as accessed resources, and credit estimates on recognised
+        //                            Copilot Studio custom-engine agent ids (DemoCopilotPersonas).
+        public const string FormatVersion = "contoso-demo-v6";
 
         // Accepted ranges, shared with the interactive menu (DemoInteractive) so the two entry points
         // cannot drift apart and offer a value the other refuses.
@@ -206,8 +213,10 @@ asks for the same values, prints the equivalent command line, and runs this same
   --areas LIST             all (default), or comma-separated area keys:
                            directory,copilot,copilot-history,teams,outlook,sent-email,
                            sharepoint,web,onedrive,engage,office,powerapps,powerautomate,
-                           powerbi,copilot-studio,dlp. Shared users/licences are prerequisites.
-                           dlp includes the Copilot audit interactions its policy matches need.
+                           powerbi,copilot-studio,dlp,copilot-credits. Shared users/licences
+                           are prerequisites. dlp includes the Copilot audit interactions its
+                           policy matches need. copilot-history is prompt/response METADATA;
+                           copilot-credits is the preview credit BALANCE history.
   --users N                1..1000000 (default 1000).
   --skus N                 10..1000 (default 50); current assignments, not purchased capacity.
   --days N                 31..730 preceding calendar days (default 180).
@@ -229,9 +238,13 @@ Includes demographics, overlapping/rare SKUs, explicit zero daily workload rows,
 office-hour activity with time zones/leave, Copilot adoption personas/agents/Cowork,
 licensed-only D28 v2 snapshots, paired metadata-only interactions, SharePoint/web facts,
 Teams call/channel detail, sent email, Power Platform audit events, billed Copilot Studio
-credits per agent and per user with a capacity snapshot, daily Azure agent spend, and
-complete-week Power BI activity/device profiles. Power BI report views are separate from
-these profiles. No real message, prompt or response text. All text/sentiment is synthetic.
+credits per agent and per user with a capacity snapshot, daily Azure agent spend,
+complete-week Power BI activity/device profiles, and up to 92 days of preview Copilot credit
+balance sweeps (month-to-date balances per service, policies, tenant pool, partial, throttled
+and missing sweeps). Credit balances are point-in-time readings with an unverified accounting
+period, exactly as the live collector stores them; they are not a billed daily ledger.
+Power BI report views are separate from these profiles.
+No real message, prompt or response text. All text/sentiment is synthetic.
 No schema/config changes; existing schema is applied through DatabaseUpgrader on the NEW DB.
 Exact completed reruns are read-only no-ops. Unmarked, changed or incomplete targets fail;
 choose a new name after a failure, or rebuild a demo database with --recreate. There is no
@@ -240,7 +253,7 @@ database, and --recreate never touches one this generator did not create.
 The separate append command requires --confirm-existing and an existing, current-schema
 TEST database. It adds a fresh synthetic population without modifying existing users.
 It never creates/upgrades the target, compiles global profiles or invents tenant-wide
-Copilot totals, Copilot Studio credits, capacity or Azure agent spend.
+Copilot totals, Copilot Studio credits, capacity, Azure agent spend or credit balance history.
 Completed batches remain after failure; there is no automatic cleanup.
 Large populations/histories can exceed LocalDB's storage limit: preview the row counts first.
 Agent costs follow the generated agent traffic, so a population that never uses an agent gets

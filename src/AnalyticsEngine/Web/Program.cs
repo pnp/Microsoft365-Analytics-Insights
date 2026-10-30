@@ -15,7 +15,7 @@ using Web.AnalyticsWeb;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// The Copilot Adoption endpoints take the user filter on the query string (the CSV and Excel exports are
+// The Copilot Adoption, Investment and Spend endpoints take the user filter on the query string (the CSV and Excel exports are
 // plain links). The System.Web build lifted the host's query-string limit to 16 KB in Web.Template.config
 // so the portal, not the host, explains an over-long filter; Kestrel's request line defaults to 8 KB.
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestLineSize = 16 * 1024);

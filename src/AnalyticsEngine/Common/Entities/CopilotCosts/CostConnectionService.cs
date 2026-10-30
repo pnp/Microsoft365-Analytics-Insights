@@ -21,7 +21,7 @@ namespace Common.Entities.CopilotCosts
 
     public sealed class CostConnectionService
     {
-        private const string Key = "connection";
+        internal const string Key = "connection";
         private readonly ICostDocumentStore _store;
         private readonly ICostIdentity _identity;
         private readonly string _tenant;
@@ -152,12 +152,16 @@ namespace Common.Entities.CopilotCosts
             {
                 if (lease.State.AccountId == null || lease.State.Cache == null)
                     throw new CostConnectionException("disconnected");
+                var health = lease.State.CollectionHealth ?? (lease.State.CollectionHealth = new CostApiHealth());
+                health.LastAttempt = _clock();
+                var tokenAcquired = false;
                 try
                 {
                     byte[] cache;
                     try { cache = Convert.FromBase64String(lease.State.Cache); }
                     catch (FormatException) { throw new CostConnectionException("storageCorrupt"); }
                     var token = await _identity.RefreshAsync(lease.State.AccountId, cache, ct);
+                    tokenAcquired = true;
                     if (token.AccountId != lease.State.AccountId || token.TenantId != _tenant)
                         throw new CostConnectionException("accountMismatch");
                     lease.State.Cache = Convert.ToBase64String(token.Cache);
@@ -170,11 +174,22 @@ namespace Common.Entities.CopilotCosts
 
                 catch (CostConnectionException ex)
                 {
+                    if (ex.Status != "busy")
+                        health.RecordFailure(ex.Status, _clock());
                     if (ex.Status == "reconnectRequired" || ex.Status == "permissionDenied")
                     {
                         lease.State.Status = ex.Status;
-                        await lease.SaveAsync(ct);
                     }
+                    throw;
+                }
+                catch (OperationCanceledException) when (!tokenAcquired)
+                {
+                    health.RecordFailure("identityUnavailable", _clock());
+                    throw;
+                }
+                catch (Exception) when (!ct.IsCancellationRequested)
+                {
+                    health.RecordFailure("sourceFailure", _clock());
                     throw;
                 }
             }

@@ -199,8 +199,10 @@ only injection point early enough.
 ## Continuous delivery
 
 [`.github/workflows/telemetry-service.yml`](../../.github/workflows/telemetry-service.yml)
-builds, lints and tests both halves on every pull request, and deploys on pushes to `main` and
-`dev`. `dotnet publish` also builds the Vite client into `wwwroot`, so a single artifact is the
+builds, lints and tests both halves on relevant pull requests, and deploys on relevant pushes to
+`main`. Manual runs default to `deployment=none`: build and test without touching Azure.
+Choose `development` from `dev` or `production` from `main` to deploy explicitly.
+`dotnet publish` also builds the Vite client into `wwwroot`, so a single artifact is the
 whole deployable site. After deploying, the workflow polls `/health` so a build that deploys but
 fails to start is reported as a failed deployment rather than a successful one.
 
@@ -210,17 +212,27 @@ environment, and grant it Website Contributor (or Contributor) on the target App
 assignment scoped to the App Service is deleted with it; `deploy.ps1 -ReplaceLinuxWebApp` records
 and restores it.
 
+Development uses the separate `telemetry-service-dev` GitHub environment and needs its own
+federated credential and App Service role assignment. Set both `TELEMETRY_DEV_*` variables below
+before selecting it. An unset development target, or one naming the production App Service,
+fails before Azure sign-in; there is no production fallback. The workflow does not provision
+development resources or change environment protection rules. Configure reviewers and branch
+restrictions in GitHub settings; protect `telemetry-service` for production approvals.
+
 | Kind | Name | Purpose |
 | --- | --- | --- |
 | Secret | `AZURE_CLIENT_ID` | App registration used for the federated deployment credential. |
 | Secret | `AZURE_TENANT_ID` | Tenant of that app registration. |
 | Secret | `AZURE_SUBSCRIPTION_ID` | Subscription containing the App Service. |
-| Variable | `TELEMETRY_APP_NAME` | App Service name to deploy to. |
-| Variable | `TELEMETRY_RESOURCE_GROUP` | Resource group containing that App Service. |
+| Variable | `TELEMETRY_APP_NAME` | Production App Service name. |
+| Variable | `TELEMETRY_RESOURCE_GROUP` | Resource group containing the production App Service. |
+| Variable | `TELEMETRY_DEV_APP_NAME` | Separate development App Service; required only for a development deploy. |
+| Variable | `TELEMETRY_DEV_RESOURCE_GROUP` | Resource group containing the development App Service. |
 | Variable | `TELEMETRY_INFRA_PARAMETERS` | Non-secret Bicep parameters as a JSON object, used by the [drift check](../../infra/TelemetryService/drift/README.md#configuration). Only needed for `infra-drift.yml`. |
 
-The deploy job is guarded so it can only ever run from this repository on a push — never from a
-pull request and never from a fork.
+The deploy job is guarded so it can only run from this repository on the permitted branch and
+event, never from a pull request or a fork. Deployments are serialized by destination, not branch;
+an in-progress deployment is not cancelled.
 
 Configuration drift between these deployed resources and `infra/TelemetryService/resources.bicep` is
 detected weekly by [`.github/workflows/infra-drift.yml`](../../.github/workflows/infra-drift.yml),
@@ -297,7 +309,7 @@ your approved secure backup system.
 
 ### Prerequisites
 
-- PowerShell 7, Azure CLI, .NET 10 SDK and Node.js 24 (the repo-wide pin — see the
+- PowerShell 7, Azure CLI, .NET 10 SDK and Node.js 26.13.0 (the repo-wide pin — see the
   *Node.js version* section of [`CONTRIBUTING.md`](../../CONTRIBUTING.md)).
 - Azure CLI signed into the target tenant and subscription.
 - Permission to create resources and role assignments in the subscription.

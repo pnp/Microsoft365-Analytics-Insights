@@ -53,7 +53,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 // Resolve the service principal object ID from client credentials. Only log the
                 // resolution on the first lookup; subsequent role assignments for the same SP would
                 // otherwise print an identical "Resolved client ID..." line for every role.
-                var (objectIdStr, wasCached) = await ServicePrincipalResolver.GetObjectIdFromClientCredentialsWithCacheInfo(tenantId, clientId, clientSecret);
+                var (objectIdStr, wasCached) = await ServicePrincipalResolver.GetObjectIdFromClientCredentialsWithCacheInfo(tenantId, clientId, clientSecret, cancellationToken: CancellationToken);
                 if (!wasCached)
                 {
                     _logger.LogInformation($"Resolved client ID '{clientId}' to object ID '{objectIdStr}'");
@@ -68,7 +68,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // Find role definition by name on the resource group scope
             var scope = Container.Id;
             AuthorizationRoleDefinitionResource roleDefinition = null;
-            foreach (var rd in Container.GetAuthorizationRoleDefinitions())
+            foreach (var rd in Container.GetAuthorizationRoleDefinitions().GetAll(cancellationToken: CancellationToken))
             {
                 if (string.Equals(rd.Data.RoleName, roleName, StringComparison.OrdinalIgnoreCase))
                 {
@@ -82,7 +82,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
 
             // Check for existing assignment
-            foreach (var existing in Container.GetRoleAssignments())
+            foreach (var existing in Container.GetRoleAssignments().GetAll(cancellationToken: CancellationToken))
             {
                 if (existing.Data.PrincipalId == principalId &&
                     existing.Data.RoleDefinitionId == roleDefinition.Id)
@@ -103,7 +103,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
 
             var result = await Container.GetRoleAssignments().CreateOrUpdateAsync(
-                WaitUntil.Completed, roleAssignmentId, content);
+                WaitUntil.Completed, roleAssignmentId, content, cancellationToken: CancellationToken);
 
             _logger.LogInformation($"Role '{roleName}' assigned successfully.");
             return result.Value;

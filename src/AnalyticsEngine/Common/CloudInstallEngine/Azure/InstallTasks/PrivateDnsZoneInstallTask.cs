@@ -46,7 +46,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var sw = Stopwatch.StartNew();
             try
             {
-                var response = await Container.GetPrivateDnsZoneAsync(zoneName);
+                var response = await Container.GetPrivateDnsZoneAsync(zoneName, cancellationToken: CancellationToken);
                 dnsZone = response.Value;
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
@@ -67,7 +67,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     Networking.BeginCreate(zoneProvenance);
                     Networking.StampNew(dnsZoneData.Tags);
                 }
-                var operation = await Container.GetPrivateDnsZones().CreateOrUpdateAsync(WaitUntil.Completed, zoneName, dnsZoneData);
+                var operation = await Container.GetPrivateDnsZones().CreateOrUpdateAsync(WaitUntil.Completed, zoneName, dnsZoneData, cancellationToken: CancellationToken);
                 dnsZone = operation.Value;
                 Networking?.ConfirmCreate(zoneId);
                 _logger.LogInformation($"Created private DNS zone '{dnsZone.Data.Name}'.");
@@ -82,7 +82,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // 2. Get or create VNet link
             var linkName = $"{zoneName}-vnet-link";
             sw.Restart();
-            var existingLinks = dnsZone.GetVirtualNetworkLinks().GetAll()
+            var existingLinks = dnsZone.GetVirtualNetworkLinks().GetAll(cancellationToken: CancellationToken)
                 .Select(link => new VNetLinkInfo(
                     link.Data.Name,
                     link.Data.VirtualNetworkId?.ToString()))
@@ -92,7 +92,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             if (existingLink != null)
             {
-                var link = (await dnsZone.GetVirtualNetworkLinks().GetAsync(existingLink.Name)).Value;
+                var link = (await dnsZone.GetVirtualNetworkLinks().GetAsync(existingLink.Name, cancellationToken: CancellationToken)).Value;
                 Networking?.ObserveExisting(new PrivateNetworkArtifact
                 {
                     Id = link.Id.ToString(), Kind = PrivateNetworkProvenance.Link, TargetId = vnetId,
@@ -130,7 +130,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 }
                 try
                 {
-                    var operation = await dnsZone.GetVirtualNetworkLinks().CreateOrUpdateAsync(WaitUntil.Completed, linkName, linkData);
+                    var operation = await dnsZone.GetVirtualNetworkLinks().CreateOrUpdateAsync(WaitUntil.Completed, linkName, linkData, cancellationToken: CancellationToken);
                     Networking?.ConfirmCreate(linkId);
                     _logger.LogInformation($"Created VNet link '{operation.Value.Data.Name}'.");
                 }
@@ -143,11 +143,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
 
             // 3. Get or create DNS zone group on the private endpoint so A records are auto-registered
-            var peResource = Container.GetPrivateEndpoints().Get(peName).Value;
+            var peResource = (await Container.GetPrivateEndpoints().GetAsync(peName, cancellationToken: CancellationToken)).Value;
             var zoneGroupName = $"{peName}-zonegroup";
             PrivateDnsZoneGroupResource zoneGroup = null;
             sw.Restart();
-            var zoneGroups = peResource.GetPrivateDnsZoneGroups().GetAll().ToList();
+            var zoneGroups = peResource.GetPrivateDnsZoneGroups().GetAll(cancellationToken: CancellationToken).ToList();
             zoneGroup = zoneGroups.FirstOrDefault();
             var zoneGroupDecision = DecideZoneGroupAction(
                 zoneGroups.Select(group => new ZoneGroupInfo(
@@ -183,11 +183,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 });
                 try
                 {
-                    var operation = await peResource.GetPrivateDnsZoneGroups().CreateOrUpdateAsync(WaitUntil.Completed, zoneGroupName, zoneGroupData);
+                    var operation = await peResource.GetPrivateDnsZoneGroups().CreateOrUpdateAsync(WaitUntil.Completed, zoneGroupName, zoneGroupData, cancellationToken: CancellationToken);
                     zoneGroup = operation.Value;
                     if (Networking != null)
                     {
-                        zoneGroup = (await zoneGroup.GetAsync()).Value;
+                        zoneGroup = (await zoneGroup.GetAsync(cancellationToken: CancellationToken)).Value;
                         groupProvenance.Records = ReadRecords(zoneGroup.Data.PrivateDnsZoneConfigs);
                         foreach (var record in groupProvenance.Records)
                             record.CreatedExclusively = !existingRecords.Contains(record.Name, StringComparer.OrdinalIgnoreCase);
@@ -217,7 +217,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogWarning(
                     $"DNS zone group '{zoneGroupDecision.ExistingGroup.Name}' on private endpoint '{peName}' references the wrong zone(s) [{existingSummary}] — expected '{dnsZone.Id}'. " +
                     "Recreating so A records auto-register into the correct zone.");
-                await zoneGroup.DeleteAsync(WaitUntil.Completed);
+                await zoneGroup.DeleteAsync(WaitUntil.Completed, cancellationToken: CancellationToken);
 
                 var zoneGroupData = new PrivateDnsZoneGroupData()
                 {
@@ -230,7 +230,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 });
                 try
                 {
-                    var operation = await peResource.GetPrivateDnsZoneGroups().CreateOrUpdateAsync(WaitUntil.Completed, zoneGroupName, zoneGroupData);
+                    var operation = await peResource.GetPrivateDnsZoneGroups().CreateOrUpdateAsync(WaitUntil.Completed, zoneGroupName, zoneGroupData, cancellationToken: CancellationToken);
                     zoneGroup = operation.Value;
                     _logger.LogInformation($"Recreated DNS zone group '{zoneGroup.Data.Name}' pointing at '{dnsZone.Data.Name}'.");
                 }

@@ -90,6 +90,8 @@
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoAreas.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoCalendar.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoCommand.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCopilotCredits.cs" />
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCopilotPersonas.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoGenerator.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoInteractive.cs" />
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoOptions.cs" />
@@ -129,7 +131,7 @@
   <ItemGroup>
     <Compile Remove="Generated\**" />
     <!-- Native workspace tests cannot run or compile in the Linux demo graph. -->
-    <Compile Remove="InstallTests\InstallerLayoutTests.cs;InstallTests\InstallerWorkspaceTests.cs;InstallTests\AzureAIConfigControlTests.cs;InstallTests\OpenAIModelCatalogTests.cs" Condition="'$(AnalyticsTargetOS)' == 'linux'" />
+    <Compile Remove="InstallTests\InstallerLayoutTests.cs;InstallTests\InstallerWorkspaceTests.cs;InstallTests\DeploymentPrerequisitesTests.cs;InstallTests\AzureAIConfigControlTests.cs;InstallTests\OpenAIModelCatalogTests.cs" Condition="'$(AnalyticsTargetOS)' == 'linux'" />
     <Content Include="Generated\**" />
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

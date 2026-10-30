@@ -1534,6 +1534,45 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task Phase_ConsumptionHealthIsNotClearedBySuccessfulCapacityAndRecoversAfterRealRead()
+        {
+            var settings = new AppConfig
+            {
+                ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true },
+                CopilotStudioCreditsIntervalHours = 0
+            };
+            var clock = new FixedClock(new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc));
+            var source = new ScriptedCreditSource { ResourcesError = new AgentCostAuthorisationException("Synthetic refusal") };
+            source.AddUsers(clock.UtcNow.Date, null, null, new CopilotStudioUserCreditRow { UserId = "synthetic-user", Consumed = 1 });
+            var outcomes = new List<string>();
+            var phase = new AgentCostImportPhase(Logger, settings, new InMemoryImportLastRunStore(),
+                () => new CopilotStudioCreditImporter(Logger, source, new RecordingAgentCostStore(), 1, clock),
+                () => throw new AssertFailedException("Azure import is disabled."), clock,
+                creditConnectionVersion: () => Task.FromResult("synthetic-generation"),
+                creditHealth: (version, failure) => { outcomes.Add(failure); return Task.CompletedTask; });
+            await phase.RunAsync();
+            CollectionAssert.AreEqual(new[] { "permissionDenied" }, outcomes);
+            source.ResourcesError = null;
+            await phase.RunAsync();
+            Assert.AreEqual(2, outcomes.Count);
+            Assert.IsNull(outcomes[1]);
+            Assert.AreEqual(2, source.UserCalls.Count);
+        }
+
+        [TestMethod]
+        public async Task Phase_ConstructionFailureIsReportedWithoutExceptionText()
+        {
+            var settings = new AppConfig { ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true } };
+            string recorded = null;
+            await new AgentCostImportPhase(Logger, settings, new InMemoryImportLastRunStore(),
+                () => throw new InvalidOperationException("Synthetic confidential diagnostic"),
+                () => throw new AssertFailedException("Azure import is disabled."),
+                creditConnectionVersion: () => Task.FromResult("synthetic-generation"),
+                creditHealth: (version, failure) => { recorded = failure; return Task.CompletedTask; }).RunAsync();
+            Assert.AreEqual("sourceFailure", recorded);
+        }
+
+        [TestMethod]
         public async Task CreditImporter_WithNoConnection_ReadsNothingAndRecordsConnectionRequired()
         {
             var source = new ScriptedCreditSource { CanRead = false };
