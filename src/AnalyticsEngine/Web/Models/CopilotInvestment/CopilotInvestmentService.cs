@@ -170,9 +170,14 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
         /// The report for one request. <paramref name="analysis"/> is the shared adoption analysis for the period,
         /// or null when this deployment has no adoption evidence; it is narrowed here and never edited.
         /// </summary>
+        /// <param name="withPeople">
+        /// Whether the result must carry the per-person rows behind its figures. Only the See PII people views need them; the
+        /// summary, which every reader asks for, passes false so what readers share for two minutes holds no row per person
+        /// (the larger part of its size at 200,000 users). The two are cached apart.
+        /// </param>
         /// <exception cref="CopilotInvestmentAssumptionsRejectedException">The reader's what-if figures break a rule.</exception>
         public async Task<CopilotInvestmentSummary> BuildAsync(CopilotInvestmentRequest request, CopilotAdoptionAnalysis analysis,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, bool withPeople = true)
         {
             var range = request.Range;
             // Both sources are kept by day: read the window's own days, never the day after an explicit end date.
@@ -191,65 +196,87 @@ namespace Web.AnalyticsWeb.Models.CopilotInvestment
             var directory = await directoryTask.ConfigureAwait(false);
 
             var scope = request.Scope ?? ReportScope.Unrestricted;
-            var cacheKey = string.Join("|", "CopilotInvestment::Summary", AnalysisIdentity(analysis), RuntimeHelpers.GetHashCode(credits),
-                RuntimeHelpers.GetHashCode(studio), directory == null ? "-" : directory.LoadedUtc.Ticks.ToString(CultureInfo.InvariantCulture),
+            // The two kinds of result are cached apart (see withPeople): the one without rows is what nearly every request wants.
+            var cacheKey = string.Join("|", "CopilotInvestment::Summary", withPeople ? "withPeople" : "aggregates", AnalysisIdentity(analysis),
+                RuntimeHelpers.GetHashCode(credits), RuntimeHelpers.GetHashCode(studio),
+                directory == null ? "-" : directory.LoadedUtc.Ticks.ToString(CultureInfo.InvariantCulture),
                 scope.Key, assumptions.Document?.Version.ToString(CultureInfo.InvariantCulture) ?? "unavailable",
                 request.Scenario.Key, request.Dimension);
-            if (_results.Get(cacheKey) is CopilotInvestmentSummary cached) return ForThisReader(cached, scope);
 
-            var adoptionScope = scope.IsRestricted
-                ? CopilotAdoptionScope.Create(null, scope.UserFilter, scope.Restriction, scope.GlobalEcho, scope.Global?.DescribeInEnglish())
-                : CopilotAdoptionScope.WholeTenant;
-            var scoped = analysis == null ? null : CopilotAdoptionScopeFilter.FilterRows(analysis, adoptionScope);
-            Func<int, bool> inScope = scope.IsRestricted ? (Func<int, bool>)scope.Includes : _ => true;
+            // One build per summary at a time. Whoever finds nothing under the key builds it and publishes it on the entry; a
+            // request that arrives while that runs - or in the two minutes after - takes the same task, so a burst of page loads
+            // is one build, not one each. What the entry holds is the task, never a failure: see the catch below.
+            var building = new TaskCompletionSource<CopilotInvestmentSummary>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (_results.AddOrGetExisting(cacheKey, building.Task, DateTimeOffset.UtcNow.AddMinutes(2)) is Task<CopilotInvestmentSummary> shared)
+                return ForThisReader(await shared.ConfigureAwait(false), scope);
 
-            var notAnalysed = analysis?.LicensedUsersNotAnalysed?.Where(inScope).ToList();
-            var people = CopilotInvestmentPeopleBuilder.Build(scoped, credits.Users, studio.Users, inScope,
-                id => DirectoryEntry(directory, id), out var recommended, out var scopedCredits, notAnalysed);
-
-            var input = new CopilotInvestmentInput
+            try
             {
-                GeneratedUtc = DateTime.UtcNow,
-                FromUtc = range.FromUtc,
-                ToUtc = CopilotInvestmentWindow.End(range),
-                WindowDays = range.WindowDays,
-                WorkingDaysPerWeek = analysis?.Summary?.Options?.WorkingDaysPerWeek ?? 5,
-                MinGroupSize = analysis?.Summary?.Options?.MinSeatsPerSegment ?? 5,
-                Filtered = scope.IsRestricted,
-                People = people,
-                HoldersNotAnalysed = analysis?.LicensedUsersNotAnalysed?.Count(inScope) ?? 0,
-                RecommendedCandidates = recommended,
-                AdoptionAvailable = analysis != null,
-                AuditAvailable = analysis?.Summary?.DataSources?.AuditAvailable ?? false,
-                UsageReportAvailable = analysis?.Summary?.DataSources?.CopilotUsageReportAvailable ?? false,
-                UsageReportDate = analysis?.Summary?.DataSources?.CopilotUsageReportDate,
-                FiguresIncomplete = analysis?.Summary?.FiguresIncomplete ?? false,
-                LicensedUsersCapped = analysis?.LicensedUsersCapped ?? false,
-                AnalysisGeneratedUtc = analysis?.Summary?.GeneratedUtc,
-                Assumptions = effective,
-                AssumptionsStatusOverride = assumptions.Document == null ? CopilotInvestmentAssumptionStatus.Unavailable : null,
-                Provenance = provenance,
-                AssumptionsVersion = assumptions.Document?.Version ?? 0,
-                AssumptionsUpdatedUtc = assumptions.Document?.UpdatedUtc,
-                AssumptionsDurable = assumptions.Durable,
-                Credits = credits,
-                ScopedCredits = scopedCredits,
-                CreditCollectionEnabled = CreditCollectionEnabled,
-                Studio = studio,
-                StudioImportEnabled = StudioImportEnabled,
-                Dimension = request.Dimension,
-                DimensionName = directory?.DimensionName(request.Dimension),
-                GroupOf = GroupFunction(directory, request.Dimension, people),
-                // The weekly trend is tenant-wide, so it is only shown when the view is too.
-                WeeklyActiveHolders = scope.IsRestricted ? null : ActiveSeatHolderWeeks(analysis),
-                WeeklyActiveHoldersUnavailable = scope.IsRestricted ? CopilotInvestmentTrajectoryUnavailable.Filtered
-                    : analysis == null || !(analysis.Summary?.DataSources?.AuditAvailable ?? false) ? CopilotInvestmentTrajectoryUnavailable.NoAudit : null,
-            };
+                var adoptionScope = scope.IsRestricted
+                    ? CopilotAdoptionScope.Create(null, scope.UserFilter, scope.Restriction, scope.GlobalEcho, scope.Global?.DescribeInEnglish())
+                    : CopilotAdoptionScope.WholeTenant;
+                var scoped = analysis == null ? null : CopilotAdoptionScopeFilter.FilterRows(analysis, adoptionScope);
+                Func<int, bool> inScope = scope.IsRestricted ? (Func<int, bool>)scope.Includes : _ => true;
 
-            var summary = CopilotInvestmentCalculator.Calculate(input);
-            // Cached without the filter echoes: the scope key is shared by readers whose echoes differ (see ForThisReader).
-            _results.Set(cacheKey, summary, DateTimeOffset.UtcNow.AddMinutes(2));
-            return ForThisReader(summary, scope);
+                var notAnalysed = analysis?.LicensedUsersNotAnalysed?.Where(inScope).ToList();
+                var people = CopilotInvestmentPeopleBuilder.Build(scoped, credits.Users, studio.Users, inScope,
+                    id => DirectoryEntry(directory, id), out var recommended, out var scopedCredits, notAnalysed);
+
+                var input = new CopilotInvestmentInput
+                {
+                    GeneratedUtc = DateTime.UtcNow,
+                    FromUtc = range.FromUtc,
+                    ToUtc = CopilotInvestmentWindow.End(range),
+                    WindowDays = range.WindowDays,
+                    WorkingDaysPerWeek = analysis?.Summary?.Options?.WorkingDaysPerWeek ?? 5,
+                    MinGroupSize = analysis?.Summary?.Options?.MinSeatsPerSegment ?? 5,
+                    Filtered = scope.IsRestricted,
+                    People = people,
+                    HoldersNotAnalysed = analysis?.LicensedUsersNotAnalysed?.Count(inScope) ?? 0,
+                    RecommendedCandidates = recommended,
+                    AdoptionAvailable = analysis != null,
+                    AuditAvailable = analysis?.Summary?.DataSources?.AuditAvailable ?? false,
+                    UsageReportAvailable = analysis?.Summary?.DataSources?.CopilotUsageReportAvailable ?? false,
+                    UsageReportDate = analysis?.Summary?.DataSources?.CopilotUsageReportDate,
+                    FiguresIncomplete = analysis?.Summary?.FiguresIncomplete ?? false,
+                    LicensedUsersCapped = analysis?.LicensedUsersCapped ?? false,
+                    AnalysisGeneratedUtc = analysis?.Summary?.GeneratedUtc,
+                    Assumptions = effective,
+                    AssumptionsStatusOverride = assumptions.Document == null ? CopilotInvestmentAssumptionStatus.Unavailable : null,
+                    Provenance = provenance,
+                    AssumptionsVersion = assumptions.Document?.Version ?? 0,
+                    AssumptionsUpdatedUtc = assumptions.Document?.UpdatedUtc,
+                    AssumptionsDurable = assumptions.Durable,
+                    Credits = credits,
+                    ScopedCredits = scopedCredits,
+                    CreditCollectionEnabled = CreditCollectionEnabled,
+                    Studio = studio,
+                    StudioImportEnabled = StudioImportEnabled,
+                    Dimension = request.Dimension,
+                    DimensionName = directory?.DimensionName(request.Dimension),
+                    GroupOf = GroupFunction(directory, request.Dimension, people),
+                    // The weekly trend is tenant-wide, so it is only shown when the view is too.
+                    WeeklyActiveHolders = scope.IsRestricted ? null : ActiveSeatHolderWeeks(analysis),
+                    WeeklyActiveHoldersUnavailable = scope.IsRestricted ? CopilotInvestmentTrajectoryUnavailable.Filtered
+                        : analysis == null || !(analysis.Summary?.DataSources?.AuditAvailable ?? false) ? CopilotInvestmentTrajectoryUnavailable.NoAudit : null,
+                };
+
+                var summary = CopilotInvestmentCalculator.Calculate(input);
+                if (!withPeople) summary.People = new List<CopilotInvestmentPersonRow>();
+                building.SetResult(summary);
+                // Cached without the filter echoes: the scope key is shared by readers whose echoes differ (see ForThisReader).
+                return ForThisReader(summary, scope);
+            }
+            catch (Exception ex)
+            {
+                // A failed build is not kept for the two minutes: the entry goes, so the next request builds again, and the requests
+                // already waiting on it are given the failure rather than left waiting.
+                _results.Remove(cacheKey);
+                building.TrySetException(ex);
+                // Observed here, so a failure nobody was waiting for is never an unobserved task exception.
+                var ignored = building.Task.Exception;
+                throw;
+            }
         }
 
         /// <summary>

@@ -321,8 +321,8 @@ namespace Tests.UnitTests
 
             Assert.Fail(
                 $"Could not find {migrationId}.manual.sql anywhere above the test assembly. Every schema "
-                + "migration must ship a manual upgrade script for operators who upgrade by hand, and CI "
-                + "does not attach it - it has to be uploaded to the release by hand.");
+                + "migration must ship a manual upgrade script for operators who upgrade by hand: the release "
+                + "build attaches it to the release and refuses a new migration that has none.");
             return null;
         }
     }

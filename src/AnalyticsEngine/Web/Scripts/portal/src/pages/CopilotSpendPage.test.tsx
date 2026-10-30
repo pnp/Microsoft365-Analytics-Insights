@@ -399,6 +399,33 @@ describe('CopilotSpendPage', () => {
     expect(screen.getByRole('table', { name: 'By environment' })).toBeInTheDocument();
   });
 
+  it('shows the combined row of small environments with no figures and no count, and keeps every other environment\u2019s figures', async () => {
+    vi.mocked(fetchSpendSummary).mockResolvedValue(
+      summary({
+        studio: {
+          ...summary().studio,
+          environments: [
+            { environmentId: 'env-1', environmentName: 'Contoso \u2013 Main', emptyKey: null, folded: 0, withheld: false, credits: 1250, people: 40, days: 2 },
+            // Three small environments: the people in them can overlap, so the server states no count for the combination.
+            { environmentId: null, environmentName: null, emptyKey: 'otherEnvironments', folded: 3, withheld: true, credits: null, people: null, days: null },
+          ],
+        },
+      }),
+    );
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Copilot Studio billed usage' }));
+    const table = await screen.findByRole('table', { name: 'By environment' });
+    const cellsOf = (label: string) => within(within(table).getByText(label).closest('tr')!).getAllByRole('cell').map((cell) => cell.textContent);
+
+    const main = cellsOf('Contoso \u2013 Main');
+    expect([main[2], main[3]]).toEqual(['40', '2']);
+
+    const combined = cellsOf('Other environments (3)');
+    expect(combined[0]).toContain('Too few people to show figures');
+    expect(combined.slice(1)).toEqual(['\u2014', '\u2014', '\u2014']);
+  });
+
   it.each(['en', 'es'] as const)('keeps translated people notes on one line inside their badges (%s)', async (language) => {
     await loadCatalog(language);
     vi.mocked(fetchSpendPeople).mockResolvedValue({

@@ -536,8 +536,9 @@ page. It is shown as pills, the way Azure Monitor shows metric filters: `Departm
   reads - `[{"d":"department","v":["Sales"]},{"j":"or","d":"org:12","op":"isNot","v":["CC-1"],"n":true}]`
   - passed as the `userFilter` query parameter. GET, because a report's CSV and Excel exports are
   plain links. The portal refuses a filter over 6,000 encoded characters; `Web.Template.config` lifts
-  the host's 2,048-character query-string default for `api/CopilotAdoption`, `api/CopilotInvestment`
-  and `api/ActivityAnalysis`.
+  the host's 2,048-character query-string default for `api/CopilotAdoption`, `api/CopilotInvestment`,
+  `api/CopilotSpend` and `api/ActivityAnalysis` (a test fails if another API that takes a `userFilter`
+  is added without its own block).
 - **On the server** the filter is evaluated in memory against a shared directory snapshot
   (`IUserDirectorySource`, refreshed every few minutes and invalidated when an organisation type
   changes), so changing a filter never re-runs a report's SQL. The response echoes the filter it

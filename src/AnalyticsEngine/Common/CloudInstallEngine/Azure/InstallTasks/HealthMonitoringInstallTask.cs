@@ -28,10 +28,13 @@ namespace CloudInstallEngine.Azure.InstallTasks
         private readonly string _email;
         private readonly int _missingMinutes;
         private readonly HashSet<string> _expectedJobs;
+        private readonly bool _latestContentDeployed;
 
+        // latestContentDeployed: false when this run leaves the importers as they are (it does not update the release
+        // content), so they may be a build that predates the newer health checks. See ImporterHealthQuery.
         public HealthMonitoringInstallTask(TaskConfig config, ILogger logger, AzureLocation location,
             Dictionary<string, string> tags, bool enabled, string email, int missingMinutes,
-            bool activityExpected, bool webTrafficExpected) : base(config, logger, location, tags)
+            bool activityExpected, bool webTrafficExpected, bool latestContentDeployed = true) : base(config, logger, location, tags)
         {
             if (enabled && (missingMinutes < 15 || missingMinutes > 1440))
                 throw new ArgumentOutOfRangeException(nameof(missingMinutes));
@@ -40,6 +43,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             _enabled = enabled;
             _email = email?.Trim() ?? string.Empty;
             _missingMinutes = enabled ? missingMinutes : 15;
+            _latestContentDeployed = latestContentDeployed;
             _expectedJobs = new HashSet<string>(StringComparer.Ordinal);
             if (activityExpected) _expectedJobs.Add("Office365ActivityImporter");
             if (webTrafficExpected) _expectedJobs.Add("AppInsightsImporter");
@@ -190,7 +194,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                         {
                             ["allOf"] = new JArray(new JObject
                             {
-                                ["query"] = ImporterHealthQuery(jobs[i], _missingMinutes),
+                                ["query"] = ImporterHealthQuery(jobs[i], _missingMinutes, _latestContentDeployed),
                                 ["timeAggregation"] = "Count", ["operator"] = "GreaterThan",
                                 ["threshold"] = 0,
                                 ["failingPeriods"] = new JObject { ["numberOfEvaluationPeriods"] = 1, ["minFailingPeriodsToAlert"] = 1 }
@@ -307,11 +311,18 @@ namespace CloudInstallEngine.Azure.InstallTasks
             "| where message startswith \"ERROR: Can't access Teams user data\" " +
             "| project Signal='TeamsPermissionFailure')";
 
-        internal static string ImporterHealthQuery(string job, int minutes)
+        internal static string ImporterHealthQuery(string job, int minutes, bool latestContentDeployed = true)
         {
             // Reuse the allow-list and bounds checks rather than interpolating arbitrary identifiers.
             MissingHeartbeatQuery(job, minutes);
-            var expectedChecks = job == "Office365ActivityImporter"
+            // With the latest content deployed this must equal the HealthComponent names DefaultRuntimeHealth.BuildChecks
+            // registers for the job (this assembly cannot reference the enum). A rename or a removed check would otherwise
+            // leave a permanent Sev-2, and a new one would never be watched; HealthMonitoringTests pins the two lists together.
+            // The two Copilot cost checks came with the Copilot credit importers. When this run does not update the release
+            // content the deployed importer may predate them and never emit them, which would leave the alert firing for ever,
+            // so then only the pair every build has always emitted is required (an importer that is already current is
+            // watched for those again by the next run that updates the content).
+            var expectedChecks = job == "Office365ActivityImporter" && latestContentDeployed
                 ? "'Sql', 'Credential', 'CopilotCostApi', 'CopilotStudioConsumption'"
                 : "'Sql', 'Credential'";
             return "let Heartbeats = customEvents | where timestamp > ago(2d) " +

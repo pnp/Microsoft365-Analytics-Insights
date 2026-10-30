@@ -392,6 +392,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.org.col.studio': 'Créditos de Studio (periodo)',
   'copilotInvestment.org.col.unlicensedActive': 'Activos sin licencia',
   'copilotInvestment.org.folded': 'Se combinan {count} grupos más pequeños.',
+  'copilotInvestment.org.withheld': 'Menos de {count} personas contribuyen a alguna cifra: no se muestran las cifras',
   'copilotInvestment.org.empty': 'Ningún grupo tiene titulares suficientes para mostrarse.',
   'copilotInvestment.org.hidden': 'Este desglose nombra a responsables, para lo que hace falta el permiso Ver PII.',
 
@@ -1087,6 +1088,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.workbook.org.col.unlicensed': 'Usuarios de Copilot sin licencia',
   'copilotInvestment.workbook.org.notSet': '(sin valor)',
   'copilotInvestment.workbook.org.combined': '(grupos pequeños combinados)',
+  'copilotInvestment.workbook.org.combinedWithheld': '(menos de {count} personas contribuyen a alguna cifra: no se muestran las cifras)',
   'copilotInvestment.workbook.credits.title': 'Créditos de Copilot consumidos (lecturas preliminares) y registro de Copilot Studio',
   'copilotInvestment.workbook.credits.intro':
     'Los créditos consumidos son lecturas puntuales en el periodo propio de la fuente, que la fuente no identifica. Nunca se suman entre días ni se tratan como gasto diario o mensual.',

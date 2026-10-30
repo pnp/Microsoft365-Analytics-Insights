@@ -205,7 +205,7 @@ namespace Common.Entities.CopilotSpend
                         ? words.W("studio.otherEnvironments", ("count", words.Count(environment.Folded)))
                         : environment.EnvironmentName ?? words.W("studio.unnamedEnvironment"),
                     environment.Withheld ? words.W("studio.environmentsWithheld") : environment.EnvironmentId, environment.Credits,
-                    XlsxCell.Number(environment.People), Count(environment.Days));
+                    Count(environment.People), Count(environment.Days));
             sheet.AddBlankRow();
             sheet.AddRow(words.W("studio.agentsTitle"));
             if (studio.Agents == null)

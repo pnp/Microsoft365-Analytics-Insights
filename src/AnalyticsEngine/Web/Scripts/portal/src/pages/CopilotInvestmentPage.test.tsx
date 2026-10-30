@@ -154,7 +154,7 @@ function summary(overrides: Partial<CopilotInvestmentSummary> = {}): CopilotInve
     cohorts: [{ band: 'Champion', holders: 40, medianActiveDays: 18, activeDays: 720, shareOfHolders: 0.17, shareOfActiveDays: 0.4, cost: 1100, valueBase: 4500, roiBase: 4.1, credits: 6000, studioCredits: 3000 }],
     organisation: {
       dimension: 'department', dimensionName: null, foldedGroups: 1, minGroupSize: 5, hidden: false,
-      groups: [{ label: 'Ventas \u2013 \u0391\u03b8\u03ae\u03bd\u03b1', emptyKey: null, holders: 60, activeHolders: 55, idleHolders: 5, activeShare: 0.92, activeDaysPerHolderMonthly: 11, cost: 1650, valueBase: 4100, roiBase: 2.48, credits: 7000, creditConsumers: 40, studioCredits: 5000, unlicensedActiveUsers: 4 }],
+      groups: [{ label: 'Ventas \u2013 \u0391\u03b8\u03ae\u03bd\u03b1', emptyKey: null, withheld: false, holders: 60, activeHolders: 55, idleHolders: 5, activeShare: 0.92, activeDaysPerHolderMonthly: 11, cost: 1650, valueBase: 4100, roiBase: 2.48, credits: 7000, creditConsumers: 40, studioCredits: 5000, unlicensedActiveUsers: 4 }],
     },
     concentration: {
       activeDays: { population: 240, topShare: 0.42, topFraction: 0.2, gini: 0.48, lorenz: [0, 0.02, 0.06, 0.12, 0.2, 0.3, 0.4, 0.52, 0.65, 0.8, 1] },

@@ -66,7 +66,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.studio.noDays': 'Sin uso facturado en este periodo.',
   'copilotSpend.studio.environmentsTitle': 'Por entorno',
   'copilotSpend.studio.environmentsDescription':
-    'Créditos facturados por cada entorno de Power Platform en el periodo, para las personas de esta vista. Microsoft notifica el uso de cada persona por entorno, no por agente, así que suman el total anterior.',
+    'Créditos facturados por cada entorno de Power Platform en el periodo, para las personas de esta vista. Microsoft notifica el uso de cada persona por entorno, no por agente, así que suman el total anterior, salvo una fila combinada de entornos con muy pocas personas, que no muestra créditos y solo indica cuántas personas reúne cuando combina un único entorno.',
   'copilotSpend.studio.col.environment': 'Entorno',
   'copilotSpend.studio.unnamedEnvironment': 'Nombre del entorno no disponible',
   'copilotSpend.studio.otherEnvironments': 'Otros entornos ({count})',
@@ -134,7 +134,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.overview.allGroups': 'Ver todos los grupos',
   'copilotSpend.org.title': 'Organización',
   'copilotSpend.org.description':
-    'Créditos facturados de Copilot Studio y créditos consumidos en la última lectura por grupo, uno junto al otro y nunca sumados. Los grupos de menos de {count} personas se combinan, y una combinación que siga por debajo de {count} personas no muestra cifras, así que ninguna fila describe a menos de {count} personas.',
+    'Créditos facturados de Copilot Studio y créditos consumidos en la última lectura por grupo, uno junto al otro y nunca sumados. Los grupos de menos de {count} personas se combinan, y una combinación que siga por debajo de {count} personas muestra cuántas personas reúne, pero ninguna cifra.',
   'copilotSpend.org.descriptionEveryGroup':
     'Créditos facturados de Copilot Studio y créditos consumidos en la última lectura por grupo, uno junto al otro y nunca sumados. Se muestran todos los grupos: esta agrupación nombra a personas, así que solo la ven los lectores autorizados a ver datos individuales.',
   'copilotSpend.org.groupBy': 'Agrupar por',
@@ -430,7 +430,8 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.workbook.studio.day.notReported': 'Aún no está en el registro (no es cero)',
   'copilotSpend.workbook.studio.col.credits': 'Créditos facturados',
   'copilotSpend.workbook.studio.col.people': 'Personas',
-  'copilotSpend.workbook.studio.environmentsTitle': 'Por entorno de Power Platform (registro por persona: suma el total diario)',
+  'copilotSpend.workbook.studio.environmentsTitle':
+    'Por entorno de Power Platform (registro por persona: suma el total diario, salvo una fila combinada de entornos con muy pocas personas)',
   'copilotSpend.workbook.studio.col.environment': 'Entorno',
   'copilotSpend.workbook.studio.col.environmentId': 'Id. del entorno',
   'copilotSpend.workbook.studio.unnamedEnvironment': '(nombre del entorno no disponible)',
@@ -504,7 +505,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.workbook.balances.col.lastModified': 'Última modificación en la fuente (UTC)',
   'copilotSpend.workbook.org.groupedBy': 'Agrupado por',
   'copilotSpend.workbook.org.minGroup':
-    'Los grupos de menos de {count} personas se combinan; una combinación que siga por debajo de {count} no muestra cifras.',
+    'Los grupos de menos de {count} personas se combinan; una combinación que siga por debajo de {count} muestra cuántas personas reúne, pero ninguna cifra.',
   'copilotSpend.workbook.org.everyGroup': 'Se muestran todos los grupos.',
   'copilotSpend.workbook.org.unavailable.directoryUnavailable': 'No se pudo agrupar a las personas: no se pudo leer el directorio de usuarios.',
   'copilotSpend.workbook.org.unavailable.dimensionUnknown': 'No se pudo agrupar a las personas por este campo: el directorio ya no lo contiene.',

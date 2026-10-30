@@ -1,14 +1,18 @@
 using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
+using App.ControlPanel.Engine.Models;
 using App.ControlPanel.Engine.SPO.AppCatalog;
 using App.ControlPanel.Engine.SPO.Auth;
 using App.ControlPanel.Engine.SPO.Rest;
 using Azure.Core;
 using Azure.Core.Pipeline;
 using Azure.ResourceManager;
+using Azure.ResourceManager.Resources;
 using CloudInstallEngine;
 using CloudInstallEngine.Azure.InstallTasks;
+using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -16,6 +20,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
@@ -219,6 +224,147 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        // What a Cancel and a real failure each look like in the install log. The first step of a run is the Azure
+        // sign-in; these tests swap it for something that throws, so the real handling in InstallOrUpdate is what runs.
+
+        [TestMethod]
+        public async Task CancelWhileASqlCommandIsRunning_IsReportedAsCancelledNotFatal()
+        {
+            // The real driver and a real in-flight cancel. SqlClient reports it as a SqlException ("Operation
+            // cancelled by user") rather than an OperationCanceledException - which is all the installer used to
+            // recognise - so pressing Cancel during a database step was logged as an unexpected FATAL error.
+            using (var db = ScratchDatabase.Create("InstallCancel"))
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var logger = new CapturingLogger();
+                var installer = new InstallerWhoseSignInRuns(logger, ct =>
+                {
+                    cancellation.CancelAfter(TimeSpan.FromMilliseconds(500));
+                    RunSql(db.ConnectionString, "WAITFOR DELAY '00:00:30';", ct);
+                });
+
+                await installer.InstallOrUpdate(cancellation.Token);
+
+                AssertReportedAsCancelled(logger, $"The interrupted call threw {installer.Thrown?.GetType().Name}.");
+            }
+        }
+
+        [TestMethod]
+        public async Task AnyFailureAfterCancelWasRequested_IsReportedAsCancelled_AndKeepsWhatTheCallSaid()
+        {
+            // The same decision without a database: whatever type the interrupted call throws, the token says
+            // the user pressed Cancel.
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var logger = new CapturingLogger();
+                var installer = new InstallerWhoseSignInRuns(logger, ct =>
+                {
+                    cancellation.Cancel();
+                    throw new InvalidOperationException("A severe error occurred on the current command.");
+                });
+
+                await installer.InstallOrUpdate(cancellation.Token);
+
+                AssertReportedAsCancelled(logger, "");
+                Assert.IsTrue(logger.Lines.Any(l => l.Message.Contains("[InvalidOperationException] A severe error occurred on the current command.")),
+                    "The log must keep what the interrupted call reported, in case a real failure landed at the same moment.");
+            }
+        }
+
+        [TestMethod]
+        public async Task CancelBeforeTheRunStarts_IsStillReportedAsCancelled_AndNothingStarts()
+        {
+            using (var cancellation = new CancellationTokenSource())
+            {
+                cancellation.Cancel();
+                var logger = new CapturingLogger();
+                var installer = new InstallerWhoseSignInRuns(logger, ct => throw new InvalidOperationException("Must not be reached."));
+
+                await installer.InstallOrUpdate(cancellation.Token);
+
+                Assert.AreEqual(0, installer.SignIns, "Nothing may start once Cancel has been pressed.");
+                AssertReportedAsCancelled(logger, "");
+            }
+        }
+
+        [TestMethod]
+        public async Task AFailureThatIsNotACancel_IsStillFatal()
+        {
+            var logger = new CapturingLogger();
+            var installer = new InstallerWhoseSignInRuns(logger, ct => throw new InvalidOperationException("Synthetic failure."));
+
+            await installer.InstallOrUpdate(CancellationToken.None);
+
+            AssertReportedAsFatal(logger, nameof(InvalidOperationException));
+        }
+
+        [TestMethod]
+        public async Task ATimeoutWhileNobodyPressedCancel_IsFatal_NotReportedAsCancelledByTheUser()
+        {
+            // An HttpClient timeout surfaces as a TaskCanceledException, an OperationCanceledException, though the
+            // token the Cancel button owns is still live. It is a failure, and the log must show it as one.
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var logger = new CapturingLogger();
+                var installer = new InstallerWhoseSignInRuns(logger, ct =>
+                    throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 100 seconds elapsing."));
+
+                await installer.InstallOrUpdate(cancellation.Token);
+
+                Assert.IsFalse(cancellation.IsCancellationRequested);
+                AssertReportedAsFatal(logger, nameof(TaskCanceledException));
+            }
+        }
+
+        [TestMethod]
+        public async Task ASqlFailureThatIsNotACancel_IsStillFatal()
+        {
+            // A SqlException on its own is not a cancel: the exception type must never be what decides it.
+            using (var db = ScratchDatabase.Create("InstallFail"))
+            {
+                var logger = new CapturingLogger();
+                var installer = new InstallerWhoseSignInRuns(logger,
+                    ct => RunSql(db.ConnectionString, "RAISERROR('Synthetic failure.', 16, 1);", ct));
+
+                await installer.InstallOrUpdate(CancellationToken.None);
+
+                Assert.IsInstanceOfType(installer.Thrown, typeof(SqlException));
+                AssertReportedAsFatal(logger, nameof(SqlException));
+            }
+        }
+
+        static void RunSql(string connectionString, string sql, CancellationToken ct)
+        {
+            using (var connection = new SqlConnection(connectionString))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = sql;
+                    command.ExecuteNonQueryAsync(ct).GetAwaiter().GetResult();
+                }
+            }
+        }
+
+        static string Describe(CapturingLogger logger)
+            => string.Join(Environment.NewLine, logger.Lines.Select(l => $"{l.Level}: {l.Message}"));
+
+        static void AssertReportedAsCancelled(CapturingLogger logger, string context)
+        {
+            var log = context + Environment.NewLine + Describe(logger);
+            Assert.IsFalse(logger.Lines.Any(l => l.Message.Contains("FATAL")), "A Cancel is not a fatal error." + Environment.NewLine + log);
+            Assert.IsTrue(logger.Lines.Any(l => l.Level == LogLevel.Warning && l.Message.StartsWith("Install cancelled by user")), log);
+            Assert.IsTrue(logger.Lines.Any(l => l.Message.Contains("before cancellation")), "The closing status line must say it was cancelled." + Environment.NewLine + log);
+        }
+
+        static void AssertReportedAsFatal(CapturingLogger logger, string exceptionType)
+        {
+            var log = Describe(logger);
+            Assert.IsTrue(logger.Lines.Any(l => l.Level == LogLevel.Error && l.Message.StartsWith($"FATAL: Unexpected error of type '{exceptionType}'")), log);
+            Assert.IsFalse(logger.Lines.Any(l => l.Message.Contains("Install cancelled") || l.Message.Contains("before cancellation")),
+                "A genuine failure must not be reported as a cancel." + Environment.NewLine + log);
+        }
+
         static async Task CancelRunningTask(Func<Task> run, Task started, CancellationTokenSource cancellation,
             TaskCompletionSource<bool> release)
         {
@@ -235,6 +381,28 @@ namespace Tests.UnitTests.InstallTests
             {
                 release.TrySetResult(true);
                 try { await operation; } catch (OperationCanceledException) { }
+            }
+        }
+
+        /// <summary>An installer whose Azure sign-in - the first step of a run - runs the given action instead.</summary>
+        sealed class InstallerWhoseSignInRuns : SolutionInstaller
+        {
+            readonly Action<CancellationToken> _signIn;
+            public int SignIns;
+            public Exception Thrown;
+
+            public InstallerWhoseSignInRuns(ILogger logger, Action<CancellationToken> signIn)
+                : base(new SolutionInstallConfig(), logger, new SoftwareReleaseConfig(), new InstallerProxyConfig(), "contoso", "synthetic-password")
+            {
+                _signIn = signIn;
+            }
+
+            internal override SubscriptionResource ConnectToSubscription(CancellationToken ct)
+            {
+                SignIns++;
+                try { _signIn(ct); }
+                catch (Exception ex) { Thrown = ex; throw; }
+                throw new InvalidOperationException("The sign-in under test is meant to throw.");
             }
         }
 

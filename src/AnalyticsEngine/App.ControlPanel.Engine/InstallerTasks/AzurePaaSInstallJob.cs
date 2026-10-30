@@ -267,9 +267,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var activityExpected = Common.Entities.ImportTaskSettings.GetImportPropertyInfos()
                 .Any(p => p.Name != nameof(Common.Entities.ImportTaskSettings.WebTraffic) &&
                     (bool)p.GetValue(config.SolutionConfig.ImportTaskSettings));
+            // The alert is provisioned before the importers are deployed, and a run that does not update the release content
+            // leaves whichever importer build is already there, which may not emit the newer health checks.
             this.AddTask(new HealthMonitoringInstallTask(healthConfig, logger, Location, tagDic,
                 health.Enabled, health.NotificationEmail, health.MissingHeartbeatMinutes, activityExpected,
-                config.SolutionConfig.ImportTaskSettings.WebTraffic));
+                config.SolutionConfig.ImportTaskSettings.WebTraffic,
+                latestContentDeployed: config.TasksConfig?.InstallLatestSolutionContent ?? true));
 
             // Cognitive
             if (config.CognitiveServicesEnabled)

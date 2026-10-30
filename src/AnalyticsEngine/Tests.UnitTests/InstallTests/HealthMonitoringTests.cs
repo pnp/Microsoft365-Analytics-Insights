@@ -297,6 +297,7 @@ namespace Tests.UnitTests.InstallTests
             foreach (var query in new[]
             {
                 HealthMonitoringInstallTask.ImporterHealthQuery(ImporterHeartbeat.ActivityJob, 15),
+                HealthMonitoringInstallTask.ImporterHealthQuery(ImporterHeartbeat.ActivityJob, 15, latestContentDeployed: false),
                 HealthMonitoringInstallTask.ImporterHealthQuery(ImporterHeartbeat.WebTrafficJob, 1440),
                 HealthMonitoringInstallTask.MissingHeartbeatQuery(ImporterHeartbeat.ActivityJob, 30),
                 HealthMonitoringInstallTask.LoggedFailuresQuery
@@ -307,6 +308,102 @@ namespace Tests.UnitTests.InstallTests
             }
             Assert.ThrowsException<ArgumentException>(() => HealthMonitoringInstallTask.ImporterHealthQuery("'; union *", 30));
             Assert.ThrowsException<ArgumentOutOfRangeException>(() => HealthMonitoringInstallTask.ImporterHealthQuery(ImporterHeartbeat.ActivityJob, 14));
+        }
+
+        [DataTestMethod]
+        [DataRow(ImporterHeartbeat.ActivityJob)]
+        [DataRow(ImporterHeartbeat.WebTrafficJob)]
+        public void MissingHealthCheckAlert_RequiresExactlyTheChecksTheImporterRegisters(string job)
+        {
+            // The alert's list lives in the installer assembly, which cannot reference HealthComponent, so only this test
+            // ties it to what the importer emits (Component = HealthComponent.ToString()). A rename or a removed check
+            // would leave "<name>HealthCheckMissing" firing at Sev-2 for ever; a new check would never be watched.
+            var emitted = Common.Entities.Health.DefaultRuntimeHealth.BuildChecks(new Common.Entities.Config.AppConfig(), job)
+                .Keys.Select(component => component.ToString()).OrderBy(name => name, StringComparer.Ordinal).ToArray();
+            var required = RequiredChecks(HealthMonitoringInstallTask.ImporterHealthQuery(job, 30));
+
+            CollectionAssert.AreEqual(emitted, required,
+                $"The {job} alert requires [{string.Join(", ", required)}] but the importer registers [{string.Join(", ", emitted)}]. "
+                + "Update HealthMonitoringInstallTask.ImporterHealthQuery or DefaultRuntimeHealth.BuildChecks so they agree.");
+        }
+
+        [DataTestMethod]
+        [DataRow(ImporterHeartbeat.ActivityJob)]
+        [DataRow(ImporterHeartbeat.WebTrafficJob)]
+        public void MissingHealthCheckAlert_WhenTheRunDoesNotUpdateTheContent_RequiresOnlyTheChecksEveryImporterBuildEmits(string job)
+        {
+            // Re-running the installer without "Update solution with latest release" replaces the alert but leaves whichever
+            // importer is deployed, possibly one built before the Copilot cost checks existed. Requiring them would leave a
+            // Sev-2 firing for ever against it, so only the pair every build has emitted is required - and it must still be
+            // checks the current importer registers, or the alert would wait for something that never reports.
+            var registered = Common.Entities.Health.DefaultRuntimeHealth.BuildChecks(new Common.Entities.Config.AppConfig(), job)
+                .Keys.Select(component => component.ToString()).ToArray();
+            var required = RequiredChecks(HealthMonitoringInstallTask.ImporterHealthQuery(job, 30, latestContentDeployed: false));
+
+            CollectionAssert.AreEqual(new[] { "Credential", "Sql" }, required);
+            CollectionAssert.IsSubsetOf(required, registered);
+        }
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task Provisioning_RequiresTheCopilotCostChecksOnlyWhenTheRunUpdatesTheContent(bool latestContentDeployed)
+        {
+            var task = new FakeTask(true, true, true, latestContentDeployed: latestContentDeployed);
+            await task.ExecuteTaskReturnResult(null);
+
+            CollectionAssert.AreEqual(latestContentDeployed
+                    ? new[] { "CopilotCostApi", "CopilotStudioConsumption", "Credential", "Sql" }
+                    : new[] { "Credential", "Sql" },
+                RequiredByRule(task.Template, "Office365ActivityImporter"));
+            CollectionAssert.AreEqual(new[] { "Credential", "Sql" }, RequiredByRule(task.Template, "AppInsightsImporter"),
+                "The web traffic importer never emitted the Copilot cost checks.");
+        }
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public void TheInstallJob_TellsTheHealthAlertWhetherItUpdatesTheContent(bool installContent)
+        {
+            var account = new App.ControlPanel.Engine.Entities.AppRegistrationCredentials(
+                "00000000-0000-0000-0000-000000000000", "synthetic-secret", "00000000-0000-0000-0000-000000000000");
+            var config = SolutionInstallConfig.NewConfig();
+            config.InstallerAccount = account;
+            config.ActivityAccount = account;
+            config.HealthMonitoring.NotificationEmail = "operator@contoso.example";
+            config.AppServiceWebAppName = "contoso-web";
+            config.AppInsightsName = "contoso-insights";
+            config.SQLServerName = "contoso-sql";
+            config.SQLServerDatabaseName = "contoso-analytics";
+            config.TasksConfig.InstallLatestSolutionContent = installContent;
+            config.SolutionConfig.ImportTaskSettings.ActivityLog = true; // an activity import is expected, so its alert is built
+
+            var template = new InspectableJob(config).HealthTask.BuildTemplate(FakeTask.GroupId, "westeurope",
+                new HashSet<string>(), new ResourceIdentifier(FakeTask.GroupId + "/providers/Microsoft.Web/serverfarms/contoso-plan"));
+
+            CollectionAssert.AreEqual(installContent
+                    ? new[] { "CopilotCostApi", "CopilotStudioConsumption", "Credential", "Sql" }
+                    : new[] { "Credential", "Sql" },
+                RequiredByRule(template, "Office365ActivityImporter"));
+        }
+
+        private static string[] RequiredChecks(string query)
+        {
+            var list = System.Text.RegularExpressions.Regex.Match(query, @"datatable\(Component:string\) \[(?<names>[^\]]*)\]");
+            Assert.IsTrue(list.Success, "The alert no longer lists the checks it requires.");
+            return list.Groups["names"].Value.Split(',').Select(name => name.Trim().Trim('\''))
+                .OrderBy(name => name, StringComparer.Ordinal).ToArray();
+        }
+
+        private static string[] RequiredByRule(JObject template, string job) => RequiredChecks((string)((JArray)template["resources"])
+            .Single(resource => (string)resource["properties"]?["displayName"] == job + " health needs attention")
+            .SelectToken("properties.criteria.allOf[0].query"));
+
+        private sealed class InspectableJob : App.ControlPanel.Engine.InstallerTasks.AzurePaaSInstallJob
+        {
+            public InspectableJob(SolutionInstallConfig config) : base(NullLogger.Instance, config, null) { }
+            public HealthMonitoringInstallTask HealthTask =>
+                _installTaskListWithChildren.SelectMany(group => group).OfType<HealthMonitoringInstallTask>().Single();
         }
 
         [DataTestMethod]
@@ -521,10 +618,10 @@ namespace Tests.UnitTests.InstallTests
         private sealed class FakeTask : HealthMonitoringInstallTask
         {
             public const string GroupId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/contoso-demo";
-            public FakeTask(bool enabled, bool activity, bool web, Dictionary<string, string> tags = null) : base(
+            public FakeTask(bool enabled, bool activity, bool web, Dictionary<string, string> tags = null, bool latestContentDeployed = true) : base(
                 MonitoringTaskConfig(),
                 NullLogger.Instance, new AzureLocation("westeurope"), tags ?? new Dictionary<string, string>(),
-                enabled, enabled ? "operator@contoso.example" : "", 30, activity, web)
+                enabled, enabled ? "operator@contoso.example" : "", 30, activity, web, latestContentDeployed)
             {
             }
             public List<HealthResource> Existing { get; } = new List<HealthResource>();

@@ -11,6 +11,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using AdoptionScoring = Common.Entities.CopilotAdoption.CopilotAdoptionScoring;
+using AdoptionDateRange = Common.Entities.CopilotAdoption.CopilotAdoptionDateRange;
 using AdoptionTimePoint = Common.Entities.CopilotAdoption.AdoptionTimePoint;
 using CopilotInvestmentAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotInvestmentAPIController;
 
@@ -229,6 +230,97 @@ namespace Tests.UnitTests
             Assert.IsTrue(byDepartment.Organisation.Groups.Any(g => g.Label == "\u0391\u03b8\u03ae\u03bd\u03b1 Sales"), "Customer text keeps its non-Latin characters.");
             Assert.IsTrue(JsonConvert.SerializeObject(byDepartment.WithoutIndividualData()).Contains("\u0391\u03b8\u03ae\u03bd\u03b1"),
                 "An aggregate grouping by department is not individual data.");
+        }
+
+        /// <summary>
+        /// Five people in Sales, one in Legal (holding a distinctive balance) and two in Finance. Legal and Finance each fall
+        /// short of a minimum of three or more, and together they are exactly three people.
+        /// </summary>
+        internal static CopilotInvestmentInput SmallGroupsInput(int minGroupSize)
+        {
+            var people = Enumerable.Range(1, 5).Select(id => Holder(id, 10, department: "Sales")).ToList();
+            people.Add(Holder(6, 9, credit: Balance(6, 7777), department: "Legal"));
+            people.Add(Holder(7, 4, credit: Balance(7, 100), department: "Finance"));
+            people.Add(Holder(8, 2, credit: Balance(8, 200), department: "Finance"));
+            var input = Input(people, Assumptions());
+            input.MinGroupSize = minGroupSize;
+            return input;
+        }
+
+        [TestMethod]
+        public void TheCombinedRowOfSmallGroups_ShowsNoFigures_WhenItIsMadeOfFewerPeopleThanTheMinimum()
+        {
+            // A minimum of four: Legal and Finance are three people between them - fewer than a group needs to be shown.
+            var summary = CopilotInvestmentCalculator.Calculate(SmallGroupsInput(minGroupSize: 4));
+            var groups = summary.Organisation.Groups;
+
+            Assert.AreEqual(2, groups.Count);
+            Assert.AreEqual("Sales", groups[0].Label);
+            Assert.IsFalse(groups[0].Withheld, "A group that reaches the minimum is shown as it always was.");
+            Assert.AreEqual(5, groups[0].Holders);
+
+            var combined = groups[1];
+            Assert.AreEqual(CopilotInvestmentCalculator.GroupKeys.OtherSmallGroups, combined.EmptyKey);
+            Assert.IsTrue(combined.Withheld, "Three people in two groups are fewer than a minimum of four.");
+            Assert.AreEqual(2, summary.Organisation.FoldedGroups, "How many groups were combined is still said.");
+            Assert.IsNull(combined.Label);
+            Assert.AreEqual(0, combined.Holders + combined.ActiveHolders + combined.IdleHolders + combined.CreditConsumers + combined.UnlicensedActiveUsers);
+            Assert.AreEqual(0, combined.Credits, "The one balance among the three people is not shown.");
+            Assert.AreEqual(0, combined.StudioCredits);
+            Assert.IsNull(combined.ActiveShare);
+            Assert.IsNull(combined.ActiveDaysPerHolderMonthly);
+            Assert.IsNull(combined.Cost);
+            Assert.IsNull(combined.ValueBase);
+            Assert.IsNull(combined.RoiBase);
+
+            var json = JsonConvert.SerializeObject(combined);
+            StringAssert.Contains(json, "\"withheld\":true");
+            Assert.IsFalse(json.Contains("7777"), "Nothing of the three people leaves the server: " + json);
+        }
+
+        [TestMethod]
+        public void TheCombinedRowOfSmallGroups_ShowsItsFigures_OnceItReachesTheMinimum()
+        {
+            // A minimum of three: all three people in the combined group contribute to the credit total.
+            var summary = CopilotInvestmentCalculator.Calculate(SmallGroupsInput(minGroupSize: 3));
+            var combined = summary.Organisation.Groups.Single(g => g.EmptyKey == CopilotInvestmentCalculator.GroupKeys.OtherSmallGroups);
+
+            Assert.IsFalse(combined.Withheld);
+            Assert.AreEqual(3, combined.Holders);
+            Assert.AreEqual(8077, combined.Credits);
+            Assert.AreEqual(3, combined.CreditConsumers);
+            Assert.IsNotNull(combined.Cost);
+            Assert.AreEqual(2, summary.Organisation.FoldedGroups);
+            StringAssert.Contains(JsonConvert.SerializeObject(combined), "\"withheld\":false");
+        }
+
+        [TestMethod]
+        public void AGroupWithEnoughPeople_WithholdsFiguresWhenTheirContributorPopulationIsTooSmall()
+        {
+            var creditPeople = Enumerable.Range(1, 5).Select(id => Holder(id, 0)).ToList();
+            creditPeople[0].Credit = Balance(1, 10);
+            var creditGroup = Group(creditPeople);
+            Assert.IsTrue(creditGroup.Withheld, "A single credit consumer cannot be isolated by the group's total headcount.");
+            Assert.AreEqual(0, creditGroup.CreditConsumers);
+            Assert.AreEqual(0, creditGroup.Credits);
+
+            var studioPeople = Enumerable.Range(1, 5).Select(id => Holder(id, 0)).ToList();
+            studioPeople[0].Studio = new StudioUserFact { Credits = 10 };
+            Assert.IsTrue(Group(studioPeople).Withheld, "A single Studio consumer cannot be isolated by the group's total headcount.");
+
+            var activePeople = Enumerable.Range(1, 5).Select(id => Holder(id, 0)).ToList();
+            activePeople[0].ActiveDays = 1;
+            Assert.IsTrue(Group(activePeople).Withheld, "A single active holder cannot be isolated by the group's total headcount.");
+
+            var noContributors = Enumerable.Range(1, 5).Select(id => Holder(id, 0)).ToList();
+            Assert.IsFalse(Group(noContributors).Withheld, "An empty contributor population does not disclose an individual.");
+        }
+
+        private static CopilotInvestmentGroupRow Group(List<CopilotInvestmentPerson> people)
+        {
+            var input = Input(people, Assumptions());
+            input.MinGroupSize = 5;
+            return CopilotInvestmentCalculator.Calculate(input).Organisation.Groups.Single();
         }
 
         [TestMethod]
@@ -556,6 +648,56 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void APersonsTrend_IsShownForTheDefaultRollingWindow_WhichEndsPartwayThroughToday()
+        {
+            // The portal's default: 28 days ending now. Its exclusive bound is a time of day, not a midnight, and the
+            // controller hands it straight to the builder. Cut at today's midnight the window read as 27 days, so each
+            // half was 13 - under the minimum - and no trend was ever shown for it. A window that ends on a midnight,
+            // as the test above builds, never showed that. Explicit dates are checked alongside: they must not change.
+            var now = new DateTime(2026, 10, 28, 15, 30, 0, DateTimeKind.Utc);
+            var person = new CopilotInvestmentPersonRow { UserId = 1, Licensed = true, Flags = new List<string>() };
+
+            foreach (var range in new[] { AdoptionDateRange.Create(28, null, null, now), AdoptionDateRange.Create(28, "2026-10-01", "2026-10-28", now.AddDays(3)) })
+            {
+                var label = range.UsesExplicitDates ? "explicit dates" : "rolling window";
+                var lastDay = CopilotInvestmentWindow.LastDay(range);
+                var middle = range.FromUtc.AddDays(14);
+
+                List<string> Evidence(Func<DateTime, bool> active)
+                {
+                    var facts = new PersonDetailFacts { ActivityAssessed = true };
+                    for (var day = range.FromUtc; day <= lastDay; day = day.AddDays(1))
+                        if (day.DayOfWeek != DayOfWeek.Saturday && day.DayOfWeek != DayOfWeek.Sunday && active(day))
+                            facts.Activity.Add(new PersonActivityRow { ActivityDate = day, AppHost = "Word", Turns = 2 });
+                    return CopilotInvestmentPersonDetailBuilder.Build(person, facts, "EUR", range.FromUtc, range.ToExclusiveUtc).Evidence;
+                }
+
+                var steady = Evidence(_ => true);
+                CollectionAssert.DoesNotContain(steady, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Declining, label);
+                CollectionAssert.DoesNotContain(steady, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Growing, label);
+                CollectionAssert.Contains(Evidence(d => d < middle), CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Declining, label);
+                CollectionAssert.Contains(Evidence(d => d >= middle), CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Growing, label);
+            }
+        }
+
+        [TestMethod]
+        public void ARollingWindowsTrend_CountsTodayInItsSecondHalf()
+        {
+            // Active only on the last three days of a 90-day window, today among them: new use, however recent. Today is
+            // part of a rolling window, so the second half must reach it; ending at today's midnight counted two days.
+            var now = new DateTime(2026, 10, 28, 15, 30, 0, DateTimeKind.Utc);
+            var range = AdoptionDateRange.Create(90, null, null, now);
+            var person = new CopilotInvestmentPersonRow { UserId = 1, Licensed = true, Flags = new List<string>() };
+            var facts = new PersonDetailFacts { ActivityAssessed = true };
+            foreach (var daysAgo in new[] { 0, 1, 2 })
+                facts.Activity.Add(new PersonActivityRow { ActivityDate = now.Date.AddDays(-daysAgo), AppHost = "Word", Turns = 5 });
+
+            var detail = CopilotInvestmentPersonDetailBuilder.Build(person, facts, "EUR", range.FromUtc, range.ToExclusiveUtc);
+
+            CollectionAssert.Contains(detail.Evidence, CopilotInvestmentPersonDetailBuilder.EvidenceCodes.Growing);
+        }
+
+        [TestMethod]
         public void ThePeopleList_SortsEveryoneBeforePaging_MissingValuesLast_TiesByName()
         {
             var rows = Enumerable.Range(1, 120).Select(i => new CopilotInvestmentPersonRow
@@ -633,6 +775,45 @@ namespace Tests.UnitTests
             Assert.IsTrue(location.Success);
             StringAssert.Contains(location.Groups[1].Value, "maxQueryStringLength=\"16384\"");
             StringAssert.Contains(location.Groups[1].Value, "maxQueryString=\"16384\"");
+        }
+
+        [TestMethod]
+        public void EveryApiThatTakesAUserFilter_HasTheLargeQueryStringAllowanceInTheHostConfig()
+        {
+            // A <location> allowance covers one controller's route prefix and nothing else: api/CopilotSpend shipped with a
+            // free-form userFilter on four routes and no block of its own, so a long (but valid) filter got IIS's bare 404.15.
+            // The pins above name one controller each; this one finds every controller that takes a filter, so the next one
+            // cannot ship without its block.
+            var withFilter = PortalTestHost.WebControllers()
+                .Where(c => c.GetMethods(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public)
+                    .Any(m => m.GetParameters().Any(p => p.Name == "userFilter" && p.ParameterType == typeof(string))))
+                .ToList();
+            CollectionAssert.IsSubsetOf(
+                new[] { "CopilotAdoptionAPIController", "CopilotInvestmentAPIController", "CopilotSpendAPIController", "ActivityAnalysisAPIController" },
+                withFilter.Select(c => c.Name).ToList(),
+                "The scan no longer finds the controllers known to take a userFilter, so it would pass vacuously.");
+
+            var directory = new System.IO.DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+            string config = null;
+            while (directory != null && config == null)
+            {
+                var candidate = System.IO.Path.Combine(directory.FullName, "Web", "Web.Template.config");
+                config = System.IO.File.Exists(candidate) ? System.IO.File.ReadAllText(candidate) : null;
+                directory = directory.Parent;
+            }
+
+            Assert.IsNotNull(config, "Web.Template.config was not found.");
+            foreach (var controller in withFilter)
+            {
+                var prefix = controller.GetCustomAttributes(typeof(System.Web.Http.RoutePrefixAttribute), true)
+                    .Cast<System.Web.Http.RoutePrefixAttribute>().Single().Prefix;
+                var location = System.Text.RegularExpressions.Regex.Match(config,
+                    "<location path=\"" + System.Text.RegularExpressions.Regex.Escape(prefix) + "\">(.*?)</location>",
+                    System.Text.RegularExpressions.RegexOptions.Singleline);
+                Assert.IsTrue(location.Success, $"Web.Template.config has no <location path=\"{prefix}\"> block, but {controller.Name} takes a free-form userFilter on the query string.");
+                StringAssert.Contains(location.Groups[1].Value, "maxQueryStringLength=\"16384\"", prefix);
+                StringAssert.Contains(location.Groups[1].Value, "maxQueryString=\"16384\"", prefix);
+            }
         }
 
         [TestMethod]

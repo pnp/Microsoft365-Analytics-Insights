@@ -84,7 +84,10 @@ namespace Common.Entities.CopilotCosts
             try
             {
                 var store = open == null ? AgentCostConnectionStore.TryOpen(config) : open();
-                if (store == null) return Build("studio", "unavailable", null);
+                // No store only ever means no Storage connection string, which is a supported setup (the importer then
+                // runs capacity-only): nothing can be connected. It is not a failure to read health, which would be
+                // Unhealthy and raise the importer's Sev-2 alert. The Administration page already says "disconnected".
+                if (store == null) return Build("studio", "disconnected", null);
                 var head = await store.GetHeadAsync().ConfigureAwait(false);
                 if (head?.Connected != true) return Build("studio", "disconnected", null);
                 var reconnect = await store.NeedsReconnectAsync(head.Version).ConfigureAwait(false)

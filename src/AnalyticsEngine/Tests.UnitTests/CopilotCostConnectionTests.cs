@@ -26,6 +26,7 @@ using Common.Entities.CopilotCosts;
 using Common.Entities;
 using Common.Entities.Config;
 using DataUtils.Health;
+using CostHealthController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotCostHealthAPIController;
 
 namespace Tests.UnitTests
 {
@@ -96,6 +97,83 @@ namespace Tests.UnitTests
                 json.Properties().Select(p => p.Name).ToArray());
             Assert.IsFalse(json.ToString().Contains("reader"));
             Assert.IsFalse(json.ToString().Contains("access"));
+        }
+
+        [TestMethod]
+        public async Task StudioCreditsWithoutAStorageAccount_AreNotConnected_AndDoNotRaiseTheImporterAlarm()
+        {
+            // Storage is optional (StateStore.IsConfigured), and the importer then runs capacity-only. With no store
+            // nothing can be connected - not "health could not be read", which is Unhealthy and raises the importer's
+            // Sev-2 alert on every install that has Studio credits on but no Storage account.
+            var config = new AppConfig { ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true } };
+            config.ConnectionStrings.StorageConnectionString = null;
+
+            var health = await CostApiHealthReader.ReadStudioAsync(config);   // the real open path, no seam
+
+            Assert.AreEqual("disconnected", health.Status);
+            Assert.AreEqual(HealthStatus.Degraded, health.ToRuntimeResult(DateTimeOffset.UtcNow).Status);
+
+            var registered = Common.Entities.Health.DefaultRuntimeHealth.BuildChecks(config, DataUtils.Health.ImporterHeartbeat.ActivityJob);
+            var reported = await registered[HealthComponent.CopilotStudioConsumption](CancellationToken.None);
+            Assert.AreNotEqual(HealthStatus.Unhealthy, reported.Status, "The check the importer actually emits must stay quiet.");
+        }
+
+        [TestMethod]
+        public async Task StudioHealthThatCannotBeReadFromAConfiguredStore_StillRaisesTheAlarm()
+        {
+            // The other direction: only a missing store is "not connected". A store that is configured but fails is a fault.
+            var config = new AppConfig { ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true } };
+
+            var unreadable = await CostApiHealthReader.ReadStudioAsync(config,
+                () => throw new InvalidOperationException("Synthetic storage failure."));
+
+            Assert.AreEqual("unavailable", unreadable.Status);
+            Assert.AreEqual(HealthStatus.Unhealthy, unreadable.ToRuntimeResult(DateTimeOffset.UtcNow).Status);
+        }
+
+        [TestMethod]
+        public async Task ASourceThatAnswers_KeepsItsAnswer_WhenTheOtherReadMissesTheDeadline()
+        {
+            // A source that is switched off answers at once, and the portal keeps "disabled" quiet. A slow read of the
+            // other source must not turn it into "needs attention": the whole answer used to be replaced by
+            // "unavailable" for both. Only the read that did not finish is unavailable.
+            var never = new TaskCompletionSource<CostApiConnectionHealth>().Task;
+            var studioDisabled = Task.FromResult(CostApiHealthReader.Build("studio", "disabled", null));
+            var graphDisconnected = Task.FromResult(CostApiHealthReader.Build("graph", "disconnected", null));
+
+            var slowGraph = await CostHealthController.CombineAsync(never, studioDisabled, TimeSpan.FromMilliseconds(50));
+            Assert.AreEqual("unavailable", slowGraph.Single(r => r.Source == "graph").Status, "The read that did not finish is unavailable.");
+            Assert.AreEqual("disabled", slowGraph.Single(r => r.Source == "studio").Status, "The source that answered keeps its answer.");
+
+            var slowStudio = await CostHealthController.CombineAsync(graphDisconnected, never, TimeSpan.FromMilliseconds(50));
+            Assert.AreEqual("disconnected", slowStudio.Single(r => r.Source == "graph").Status, "The source that answered keeps its answer.");
+            Assert.AreEqual("unavailable", slowStudio.Single(r => r.Source == "studio").Status, "The read that did not finish is unavailable.");
+        }
+
+        [TestMethod]
+        public async Task AReadThatFails_MakesOnlyItsOwnSourceUnavailable()
+        {
+            var failed = Task.FromException<CostApiConnectionHealth>(new InvalidOperationException("Synthetic storage failure."));
+            var studioDisabled = Task.FromResult(CostApiHealthReader.Build("studio", "disabled", null));
+
+            var result = await CostHealthController.CombineAsync(failed, studioDisabled, TimeSpan.FromMinutes(1));
+
+            Assert.AreEqual("unavailable", result.Single(r => r.Source == "graph").Status);
+            Assert.AreEqual("disabled", result.Single(r => r.Source == "studio").Status);
+        }
+
+        [TestMethod]
+        public async Task WhenBothReadsFinish_EachAnswerIsReportedAsItIs_WithoutWaitingForTheDeadline()
+        {
+            var graph = Task.FromResult(CostApiHealthReader.Build("graph", "reconnectRequired", null));
+            var studio = Task.FromResult(CostApiHealthReader.Build("studio", "disabled", null));
+
+            var combined = CostHealthController.CombineAsync(graph, studio, TimeSpan.FromMinutes(1));
+
+            Assert.AreSame(combined, await Task.WhenAny(combined, Task.Delay(TimeSpan.FromSeconds(10))), "Reads that finished must not wait for the deadline.");
+            var result = await combined;
+            Assert.AreEqual("reconnectRequired", result.Single(r => r.Source == "graph").Status);
+            Assert.AreEqual("disabled", result.Single(r => r.Source == "studio").Status);
         }
 
         [TestMethod]

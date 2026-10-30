@@ -102,6 +102,9 @@ If it fails, rebuild the extension and commit the package, as
 * Uploads per-shard TRX and portal JUnit results, with slow .NET tests in each job summary.
 * Preserves required checks `test_dotnet (Release)` and `test_aitracker`. The former is a final
   gate that fails if any applicable build, shard, portal or CI-helper check fails or is cancelled.
+  `workflow-contract.test.mjs` pins those names (and `gitleaks`), that their workflows report on
+  every pull request, that the gate cannot be skipped into a pass and waits for every job, and
+  that the `ci` and `pr` path triggers cover everything `ci-paths.json` selects tests for.
 * Cancels superseded PR runs; jobs have explicit timeouts. CI helpers and actionlint run without
   tenant credentials. NuGet caches are keyed on dependency manifests, not build outputs.
 

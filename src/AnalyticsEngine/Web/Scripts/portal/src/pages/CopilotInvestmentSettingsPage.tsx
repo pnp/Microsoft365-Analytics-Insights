@@ -113,8 +113,8 @@ const TIME_FIELDS: { field: string; hint: TranslationKey }[] = [
   { field: 'realisation.upside', hint: 'copilotInvestment.settings.realisation.hint' },
 ];
 
-function errorText(t: ReturnType<typeof useT>, code: string): string {
-  return t(COPILOT_INVESTMENT_SETTINGS_ERROR_KEYS.get(code) ?? 'copilotInvestment.settings.error.saveFailed');
+function errorKey(code: string): TranslationKey {
+  return COPILOT_INVESTMENT_SETTINGS_ERROR_KEYS.get(code) ?? 'copilotInvestment.settings.error.saveFailed';
 }
 
 /**
@@ -126,12 +126,17 @@ export default function CopilotInvestmentSettingsPage() {
   const t = useT();
   const [model, setModel] = useState<InvestmentSettingsModel | null>(null);
   const [text, setText] = useState<FormText | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<{ code: string | null } | null>(null);
   const [saving, setSaving] = useState(false);
-  const [errors, setErrors] = useState<string[]>([]);
-  const [saved, setSaved] = useState<string | null>(null);
+  // What the last save said is kept as keys and figures and worded at render time, like the load failure: a message
+  // worded when it was raised would stay in the old language after the reader switches.
+  const [errors, setErrors] = useState<TranslationKey[]>([]);
+  const [saved, setSaved] = useState<{ version: number; unchanged: boolean } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
+  // Loads when the page opens and when the administrator asks for the latest - never because the language
+  // changed: a refetch would overwrite what they are typing. So `t` stays out of these dependencies, and a
+  // failure is kept as its code and worded at render time, in whatever language is showing then.
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
@@ -144,18 +149,18 @@ export default function CopilotInvestmentSettingsPage() {
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        setLoadError(e instanceof InvestmentSettingsError ? errorText(t, e.code) : t('copilotInvestment.settings.error.loadFailed'));
+        setLoadError({ code: e instanceof InvestmentSettingsError ? e.code : null });
       });
     return () => {
       cancelled = true;
     };
-  }, [reloadKey, t]);
+  }, [reloadKey]);
 
   const save = async () => {
     if (!model || !text) return;
     const { assumptions, invalid } = fromText(text);
     if (invalid.length > 0) {
-      setErrors([t('copilotInvestment.whatIf.invalidNumber')]);
+      setErrors(['copilotInvestment.whatIf.invalidNumber']);
       return;
     }
     setSaving(true);
@@ -163,15 +168,15 @@ export default function CopilotInvestmentSettingsPage() {
     setSaved(null);
     try {
       const result = await saveInvestmentSettings(model.version, assumptions);
-      setSaved(result.version === model.version ? t('copilotInvestment.settings.unchanged') : t('copilotInvestment.settings.saved', { version: formatNumber(result.version) }));
+      setSaved({ version: result.version, unchanged: result.version === model.version });
       setModel(result);
       setText(toText(result.assumptions));
     } catch (e: unknown) {
       if (e instanceof InvestmentSettingsError) {
         const codes = e.validationErrors.length > 0 ? e.validationErrors : [e.code];
-        setErrors(codes.map((code) => errorText(t, code)));
+        setErrors(codes.map(errorKey));
       } else {
-        setErrors([t('copilotInvestment.settings.error.saveFailed')]);
+        setErrors(['copilotInvestment.settings.error.saveFailed']);
       }
     } finally {
       setSaving(false);
@@ -197,7 +202,7 @@ export default function CopilotInvestmentSettingsPage() {
 
       {loadError && (
         <MessageBar intent="error">
-          <MessageBarBody>{loadError}</MessageBarBody>
+          <MessageBarBody>{loadError.code === null ? t('copilotInvestment.settings.error.loadFailed') : t(errorKey(loadError.code))}</MessageBarBody>
         </MessageBar>
       )}
       {!model && !loadError && <Spinner size={48} label={t('copilotInvestment.settings.loading')} />}
@@ -257,15 +262,19 @@ export default function CopilotInvestmentSettingsPage() {
           {errors.length > 0 && (
             <MessageBar intent="error">
               <MessageBarBody>
-                {errors.map((e) => (
-                  <div key={e}>{e}</div>
+                {errors.map((key) => (
+                  <div key={key}>{t(key)}</div>
                 ))}
               </MessageBarBody>
             </MessageBar>
           )}
           {saved && (
             <MessageBar intent="success">
-              <MessageBarBody>{saved}</MessageBarBody>
+              <MessageBarBody>
+                {saved.unchanged
+                  ? t('copilotInvestment.settings.unchanged')
+                  : t('copilotInvestment.settings.saved', { version: formatNumber(saved.version) })}
+              </MessageBarBody>
             </MessageBar>
           )}
 

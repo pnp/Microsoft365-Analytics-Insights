@@ -276,6 +276,8 @@ export interface InvestmentCohort {
 export interface InvestmentGroupRow {
   label: string | null;
   emptyKey: 'notSet' | 'otherSmallGroups' | null;
+  /** A combined row of fewer than `minGroupSize` people: it carries no figures, so every figure below reads as a dash. */
+  withheld: boolean;
   holders: number;
   activeHolders: number;
   idleHolders: number;

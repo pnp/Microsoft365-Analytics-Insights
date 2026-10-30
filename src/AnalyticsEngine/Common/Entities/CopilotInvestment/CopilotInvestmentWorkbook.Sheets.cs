@@ -160,10 +160,18 @@ namespace Common.Entities.CopilotInvestment
                 words.W("org.col.consumers"), words.W("col.studioPeriod"), words.W("org.col.unlicensed"));
             var first = sheet.CurrentRow;
             foreach (var g in organisation.Groups)
+            {
+                // A combination of too few people shows no figures at all, only why - never zeros that read as measurements.
+                if (g.Withheld)
+                {
+                    sheet.AddRow(words.W("org.combinedWithheld", ("count", words.Count(organisation.MinGroupSize))));
+                    continue;
+                }
                 sheet.AddRow(g.Label ?? (g.EmptyKey == CopilotInvestmentCalculator.GroupKeys.NotSet ? words.W("org.notSet") : words.W("org.combined")),
                     XlsxCell.Number(g.Holders), XlsxCell.Number(g.ActiveHolders), XlsxCell.Number(g.IdleHolders),
                     g.ActiveShare.HasValue ? (object)XlsxCell.Percent(g.ActiveShare.Value) : null, g.ActiveDaysPerHolderMonthly,
                     g.Cost, g.ValueBase, g.RoiBase, g.Credits, XlsxCell.Number(g.CreditConsumers), g.StudioCredits, XlsxCell.Number(g.UnlicensedActiveUsers));
+            }
             sheet.FreezeTopRows(first);
             if (sheet.CurrentRow > first) sheet.AddAutoFilter(first, sheet.CurrentRow, 1, 13);
         }

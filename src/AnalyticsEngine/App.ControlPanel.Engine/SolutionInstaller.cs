@@ -1,6 +1,7 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
 using App.ControlPanel.Engine.Models;
+using Azure.ResourceManager.Resources;
 using CloudInstallEngine.Models;
 using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
@@ -56,7 +57,7 @@ namespace App.ControlPanel.Engine
             try
             {
                 ct.ThrowIfCancellationRequested();
-                var azureSub = BaseAnalyticsSolutionInstallJob.FromConfig(this.Config, ct);
+                var azureSub = ConnectToSubscription(ct);
                 log.LogInformation("=== Phase: Azure backend resources ===");
                 // Get/create AppService + SQL and supporting Azure resources. Binaries installed post-create.
                 var azureBackeEndCreationJob = new AzurePaaSInstallJob(log, Config, azureSub,
@@ -143,9 +144,20 @@ namespace App.ControlPanel.Engine
                         $"See 'Configure Filtered URLs' in deployment guide for more info.");
                 }
             }
-            catch (OperationCanceledException)
+            catch (Exception ex) when (ct.IsCancellationRequested)
             {
+                // The token decides, not the exception type. SqlClient reports a command that is cancelled
+                // in flight as a SqlException ("Operation cancelled by user"); only a token that was already
+                // cancelled before the call gives an OperationCanceledException. Catching just that type
+                // reported a Cancel during a database step as a FATAL unexpected error. The other way round
+                // holds too: an OperationCanceledException while the token is still live is a timeout (an
+                // HttpClient's, say), a real failure, and is left to the FATAL handler below with its type shown.
                 log.LogWarning("Install cancelled by user. No further installation tasks will run. Azure operations already accepted may still finish; cancellation does not roll back changes.");
+                if (!(ex is OperationCanceledException))
+                {
+                    // Keep what the interrupted call said, in case a real failure landed at the same moment.
+                    log.LogInformation("The operation that was interrupted reported: " + CloudInstallEngine.ExceptionMessages.Format(ex));
+                }
                 PrintFinalStatus(summary, cancelled: true);
                 return;
             }
@@ -170,6 +182,13 @@ namespace App.ControlPanel.Engine
 
             PrintFinalStatus(summary);
         }
+
+        /// <summary>
+        /// Signs in to Azure and selects the subscription - the first step of a run. Virtual so a test can drive
+        /// the cancellation and failure handling in <see cref="InstallOrUpdate"/> without an Azure account.
+        /// </summary>
+        internal virtual SubscriptionResource ConnectToSubscription(CancellationToken ct)
+            => BaseAnalyticsSolutionInstallJob.FromConfig(this.Config, ct);
 
         /// <summary>
         /// Emit final completion line + structured summary block. Uses the underlying logger

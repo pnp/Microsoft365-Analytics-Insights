@@ -447,7 +447,47 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(new[] { true, false }, facts.PersonDetailEstimateRequests);
         }
 
-        private static CopilotInvestmentAPIController InvestmentController(ReportScopeResolver resolver, CopilotInvestmentReportService service)
+        /// <summary>
+        /// What readers share is the summary without a row per person (see the report service), so the readers that need the rows -
+        /// the people list and the workbook that holds the people sheet - must never be served from it, whichever is asked for first.
+        /// A reader without See PII still gets the shared summary, and no one's name.
+        /// </summary>
+        [TestMethod]
+        public async Task TheInvestmentPeopleList_AndThePeopleSheet_AreBuiltWithTheirRows_EvenWhenTheSharedSummaryWasBuiltFirst()
+        {
+            var directory = Directory();
+            var scopes = new ReportScopeResolver(GlobalFilterProviders.None, new FixedDirectory(directory));
+            var name = Guid.NewGuid().ToString("N");
+            var service = new CopilotInvestmentReportService(
+                new CopilotInvestmentFactsCache(new FakeFacts(Credits(1, 2, 3, 4, 5, 6), Studio(1, 2)), new MemoryCache("investment-facts-" + name)),
+                () => new CopilotInvestmentAssumptionsStore(new InMemoryKeyValueStore(), isDurable: true), new FixedDirectory(directory),
+                () => new ImportTaskSettings { CopilotStudioCredits = true, CopilotCostManagement = true }, () => true,
+                new MemoryCache("investment-results-" + name));
+            var reader = InvestmentController(scopes, service);
+
+            // The summary first: it is the request that leaves a summary without rows in the cache.
+            var summary = await (await reader.Summary(28, null, null, CancellationToken.None)).ExecuteAsync(CancellationToken.None);
+            Assert.AreEqual(HttpStatusCode.OK, summary.StatusCode, await summary.Content.ReadAsStringAsync());
+
+            var people = await (await reader.People(cancellationToken: CancellationToken.None)).ExecuteAsync(CancellationToken.None);
+            Assert.AreEqual(HttpStatusCode.OK, people.StatusCode, await people.Content.ReadAsStringAsync());
+            Assert.AreEqual(6, (int)JObject.Parse(await people.Content.ReadAsStringAsync())["total"], "Every person the report is about.");
+
+            var workbook = await reader.ExportWorkbook(28, null, null, "en", CancellationToken.None);
+            Assert.AreEqual(HttpStatusCode.OK, workbook.StatusCode);
+            CollectionAssert.Contains(WorkbookTexts(await workbook.Content.ReadAsByteArrayAsync()), "person3@contoso.example",
+                "A reader with See PII is given the people sheet.");
+
+            // The control: a reader without See PII is given the same report and no one's name, from the same shared summary.
+            var plain = await InvestmentController(scopes, service, seePii: false).ExportWorkbook(28, null, null, "en", CancellationToken.None);
+            Assert.AreEqual(HttpStatusCode.OK, plain.StatusCode);
+            var plainTexts = WorkbookTexts(await plain.Content.ReadAsByteArrayAsync());
+            Assert.IsTrue(plainTexts.Count > 10, "The control is a real workbook.");
+            Assert.IsFalse(plainTexts.Any(t => t != null && t.Contains("@contoso.example")), "No one's name leaves in a workbook for a reader without See PII.");
+        }
+
+        private static CopilotInvestmentAPIController InvestmentController(ReportScopeResolver resolver, CopilotInvestmentReportService service,
+            bool seePii = true)
         {
             var configuration = new HttpConfiguration();
             configuration.Properties[typeof(PortalAccessPolicy)] = PortalAccessPolicy.Enforcing;
@@ -455,7 +495,7 @@ namespace Tests.UnitTests
             request.SetConfiguration(configuration);
             var identity = new ClaimsIdentity("Test");
             identity.AddClaim(new Claim("upn", "reader@contoso.example"));
-            identity.AddClaim(new Claim("roles", PortalRoles.SeePii));
+            if (seePii) identity.AddClaim(new Claim("roles", PortalRoles.SeePii));
             // No adoption evidence on this deployment, so the analysis coordinator is never asked.
             var coordinator = new AdoptionCoordinator(new NoAdoption(), new NoAdoption(), (windowDays, hasOverride) => NullAnalysisTelemetry.Instance,
                 TimeSpan.FromMinutes(10));

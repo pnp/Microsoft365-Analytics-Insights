@@ -920,6 +920,13 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("emptyKey")]
         public string EmptyKey { get; set; }
 
+        /// <summary>
+        /// True when the group or any non-empty contributor population behind its figures is smaller than
+        /// <see cref="CopilotInvestmentOrganisation.MinGroupSize"/>; no figures are returned for that row.
+        /// </summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
+
         [JsonProperty("holders")]
         public int Holders { get; set; }
 
