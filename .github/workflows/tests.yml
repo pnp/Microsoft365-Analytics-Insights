@@ -42,14 +42,14 @@ jobs:
       shards: ${{ steps.shards.outputs.matrix }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Select dependent workloads
         id: changes
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: .github/ci-paths.json
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
       - name: Define exhaustive test shards
@@ -61,8 +61,8 @@ jobs:
     timeout-minutes: 10
     needs: setup_tests
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
       - name: Test CI helpers
@@ -86,14 +86,14 @@ jobs:
     steps:
       - name: Checkout source
         if: needs.setup_tests.outputs.run_aitracker == 'true' || needs.setup_tests.outputs.run_spfx == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check committed SPFx package
         if: needs.setup_tests.outputs.run_spfx == 'true'
         shell: pwsh
         run: ./.github/scripts/Test-SpfxPackage.ps1
       - name: Setup Node
         if: needs.setup_tests.outputs.run_aitracker == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -109,14 +109,14 @@ jobs:
     needs: setup_tests
     if: needs.setup_tests.outputs.run_dotnet == 'true'
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: src/AnalyticsEngine/Web/Scripts/portal/package-lock.json
-      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~\.nuget\packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/packages.config', '**/packages.lock.json', '**/NuGet.Config', '**/Directory.*.props') }}
@@ -162,12 +162,12 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.setup_tests.outputs.shards) }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: test-binaries
           path: src/AnalyticsEngine
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
       - uses: ./.github/actions/test-runtime
@@ -175,11 +175,13 @@ jobs:
         uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
         with:
           files: src/AnalyticsEngine/Tests.UnitTests/bin/Release/Tests.UnitTests.dll.config
+        # Dependabot and fork PRs cannot read Actions secrets. Keep their synthetic identity
+        # parseable instead of replacing it with empty values before offline tests run.
         env:
-          ClientID: ${{ secrets.APP_CLIENTID }}
+          ClientID: ${{ secrets.APP_CLIENTID || '00000000-0000-0000-0000-000000000000' }}
           ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
-          TenantGUID: ${{ secrets.APP_TENANTGUID }}
-          TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
+          TenantGUID: ${{ secrets.APP_TENANTGUID || '00000000-0000-0000-0000-000000000000' }}
+          TenantDomain: ${{ secrets.APP_TENANTDOMAIN || 'contoso.onmicrosoft.com' }}
           CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
           CognitiveKey: ${{ secrets.APP_COGNITIVEKEY }}
           ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
@@ -226,8 +228,8 @@ jobs:
       run:
         working-directory: src/AnalyticsEngine/Web/Scripts/portal
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
