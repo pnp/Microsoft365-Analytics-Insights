@@ -194,6 +194,6 @@ Agent costs follow the generated agent traffic, so a population that never uses 
 no Copilot Studio credits; Azure's fixed meters are still billed because the resources exist.
 Not generated: tenant capacity/licence history, installation/health success logs or
 live cognitive enrichment. Demo activity is representative, not an importer load test.
-Full guide: https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Synthetic-demo-data";
+Full guide: https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Copilot-Adoption-Demo-Data";
     }
 }

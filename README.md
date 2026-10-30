@@ -46,9 +46,14 @@ Enable only the areas you need — permissions scale accordingly. Fully enabled,
 
 ## Getting started
 
-All documentation lives in the **[wiki](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki)**.
+All documentation lives in the **[wiki](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki)**. New to the solution? Start with these two pages:
 
-1. **[Prerequisites](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Prerequisites)** — service principals, permissions (Graph/Microsoft 365 API + Azure RBAC), tenant/subscription setup.
+- **[Getting started](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Getting%20Started)** — a step-by-step path to your first Copilot report, including the short list of prerequisites a Copilot-focused deployment needs.
+- **[How it works](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/How%20It%20Works)** — the moving parts in plain English, with a diagram of the current architecture.
+
+The full detail, by step:
+
+1. **[Prerequisites](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Prerequisites)** — service principals, permissions (Graph/Microsoft 365 API + Azure RBAC), tenant/subscription setup, summarised by feature.
 2. **[Install with the installer](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Deployment%20Guidance)** — the standard deployment.
 3. **[Verify the deployment](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Verify)** — confirm the import jobs are running.
 
