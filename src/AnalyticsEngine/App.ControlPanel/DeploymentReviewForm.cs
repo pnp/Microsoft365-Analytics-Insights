@@ -121,14 +121,18 @@ namespace App.ControlPanel
             {
                 Name = "confirmDeployment",
                 Text = "&Deploy now",
+                Image = Properties.Resources.ASX_Run_blue_16x,
+                TextImageRelation = TextImageRelation.ImageBeforeText,
                 DialogResult = DialogResult.OK,
                 Enabled = false,
                 AutoSize = true,
                 Padding = new Padding(8, 5, 8, 5)
             };
             acknowledge.CheckedChanged += (sender, args) => deploy.Enabled = acknowledge.Checked && errors.Count == 0;
-            actions.Controls.Add(cancel);
             actions.Controls.Add(deploy);
+            actions.Controls.Add(cancel);
+            cancel.TabIndex = 0;
+            deploy.TabIndex = 1;
             layout.Controls.Add(actions, 0, 5);
             Controls.Add(layout);
             CancelButton = cancel;

@@ -28,10 +28,13 @@ namespace CloudInstallEngine.Azure.InstallTasks
         private readonly string _email;
         private readonly int _missingMinutes;
         private readonly HashSet<string> _expectedJobs;
+        private readonly bool _latestContentDeployed;
 
+        // latestContentDeployed: false when this run leaves the importers as they are (it does not update the release
+        // content), so they may be a build that predates the newer health checks. See ImporterHealthQuery.
         public HealthMonitoringInstallTask(TaskConfig config, ILogger logger, AzureLocation location,
             Dictionary<string, string> tags, bool enabled, string email, int missingMinutes,
-            bool activityExpected, bool webTrafficExpected) : base(config, logger, location, tags)
+            bool activityExpected, bool webTrafficExpected, bool latestContentDeployed = true) : base(config, logger, location, tags)
         {
             if (enabled && (missingMinutes < 15 || missingMinutes > 1440))
                 throw new ArgumentOutOfRangeException(nameof(missingMinutes));
@@ -40,6 +43,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             _enabled = enabled;
             _email = email?.Trim() ?? string.Empty;
             _missingMinutes = enabled ? missingMinutes : 15;
+            _latestContentDeployed = latestContentDeployed;
             _expectedJobs = new HashSet<string>(StringComparer.Ordinal);
             if (activityExpected) _expectedJobs.Add("Office365ActivityImporter");
             if (webTrafficExpected) _expectedJobs.Add("AppInsightsImporter");
@@ -84,7 +88,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         protected virtual async Task<ResourceIdentifier> ReadHostingPlanIdAsync()
         {
-            var site = (await Container.GetWebSiteAsync(_config.ResourceName)).Value;
+            var site = (await Container.GetWebSiteAsync(_config.ResourceName, cancellationToken: CancellationToken)).Value;
             var plan = site.Data.AppServicePlanId;
             if (plan == null || !string.Equals(plan.ResourceType.ToString(), "Microsoft.Web/serverfarms", StringComparison.OrdinalIgnoreCase))
                 throw new InstallException("The App Service did not report a valid hosting plan; no health-alert resources were changed.");
@@ -95,7 +99,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         {
             get
             {
-                var scope = Container.GetGenericResources("resourceType eq 'Microsoft.Insights/components'")
+                var scope = Container.GetGenericResources("resourceType eq 'Microsoft.Insights/components'", cancellationToken: CancellationToken)
                     .Single(r => string.Equals(r.Data.Name, _config.GetConfigValue(AppInsightsNameSetting), StringComparison.OrdinalIgnoreCase));
                 return scope.Data.Location.Name;
             }
@@ -105,7 +109,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         {
             var names = new HashSet<string>(ResourceNames, StringComparer.OrdinalIgnoreCase);
             return new[] { RuleType, GroupType, MetricType }
-                .SelectMany(type => Container.GetGenericResources("resourceType eq '" + type + "'")
+                .SelectMany(type => Container.GetGenericResources("resourceType eq '" + type + "'", cancellationToken: CancellationToken)
                     .Where(r => type == GroupType
                         ? string.Equals(r.Data.Name, ResourceNames[0], StringComparison.OrdinalIgnoreCase)
                         : names.Contains(r.Data.Name) && !string.Equals(r.Data.Name, ResourceNames[0], StringComparison.OrdinalIgnoreCase)))
@@ -181,7 +185,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     ["properties"] = new JObject
                     {
                         ["displayName"] = jobs[i] + " health needs attention",
-                        ["description"] = "Missing heartbeat/check telemetry, no cycle completion in 24h, SQL/schema failure, invalid credential or certificate expiry <14d. Not proof of data freshness or API permissions. Expected shutdowns require an alert processing rule or opt-out.",
+                        ["description"] = "Missing heartbeat/check telemetry, no cycle completion in 24h, SQL/schema failure, invalid credential, certificate expiry <14d, delegated cost API refusal or persistent collection failure. Cost recovery requires a successful API read, not token refresh. Expected shutdowns require an alert processing rule or opt-out.",
                         ["enabled"] = active, ["severity"] = 2,
                         ["evaluationFrequency"] = "PT5M", ["windowSize"] = "PT5M",
                         ["overrideQueryTimeRange"] = "P2D",
@@ -190,7 +194,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                         {
                             ["allOf"] = new JArray(new JObject
                             {
-                                ["query"] = ImporterHealthQuery(jobs[i], _missingMinutes),
+                                ["query"] = ImporterHealthQuery(jobs[i], _missingMinutes, _latestContentDeployed),
                                 ["timeAggregation"] = "Count", ["operator"] = "GreaterThan",
                                 ["threshold"] = 0,
                                 ["failingPeriods"] = new JObject { ["numberOfEvaluationPeriods"] = 1, ["minFailingPeriodsToAlert"] = 1 }
@@ -307,10 +311,20 @@ namespace CloudInstallEngine.Azure.InstallTasks
             "| where message startswith \"ERROR: Can't access Teams user data\" " +
             "| project Signal='TeamsPermissionFailure')";
 
-        internal static string ImporterHealthQuery(string job, int minutes)
+        internal static string ImporterHealthQuery(string job, int minutes, bool latestContentDeployed = true)
         {
             // Reuse the allow-list and bounds checks rather than interpolating arbitrary identifiers.
             MissingHeartbeatQuery(job, minutes);
+            // With the latest content deployed this must equal the HealthComponent names DefaultRuntimeHealth.BuildChecks
+            // registers for the job (this assembly cannot reference the enum). A rename or a removed check would otherwise
+            // leave a permanent Sev-2, and a new one would never be watched; HealthMonitoringTests pins the two lists together.
+            // The two Copilot cost checks came with the Copilot credit importers. When this run does not update the release
+            // content the deployed importer may predate them and never emit them, which would leave the alert firing for ever,
+            // so then only the pair every build has always emitted is required (an importer that is already current is
+            // watched for those again by the next run that updates the content).
+            var expectedChecks = job == "Office365ActivityImporter" && latestContentDeployed
+                ? "'Sql', 'Credential', 'CopilotCostApi', 'CopilotStudioConsumption'"
+                : "'Sql', 'Credential'";
             return "let Heartbeats = customEvents | where timestamp > ago(2d) " +
                 "| where name == 'ImporterHeartbeat' and tostring(customDimensions.JobName) == '" + job + "'; " +
                 "let Checks = customEvents | where timestamp > ago(30m) | where name == 'HealthCheck' " +
@@ -326,7 +340,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 "(Checks | where tostring(customDimensions.Status) == 'Unhealthy' " +
                 "or (Component == 'Credential' and toint(customDimensions.DaysToExpiry) < 14) " +
                 "| project Signal=strcat(Component, 'UnhealthyOrExpiring')), " +
-                "(datatable(Component:string) ['Sql', 'Credential'] | join kind=leftanti (Checks) on Component " +
+                "(datatable(Component:string) [" + expectedChecks + "] | join kind=leftanti (Checks) on Component " +
                 "| project Signal=strcat(Component, 'HealthCheckMissing'))";
         }
 

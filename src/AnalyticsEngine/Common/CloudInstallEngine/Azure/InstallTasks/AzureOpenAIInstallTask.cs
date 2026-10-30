@@ -81,7 +81,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var name = _config.GetNameConfigValue();
             var desiredAccess = _allowPublicAccess ? ServiceAccountPublicNetworkAccess.Enabled : ServiceAccountPublicNetworkAccess.Disabled;
             var account = Container.GetCognitiveServicesAccounts()
-                .AsEnumerable()
+                .GetAll(cancellationToken: CancellationToken)
                 .SingleOrDefault(item => string.Equals(item.Data.Name, name, StringComparison.OrdinalIgnoreCase));
 
             if (account != null && !string.Equals(account.Data.Kind, "OpenAI", StringComparison.OrdinalIgnoreCase))
@@ -93,8 +93,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var deploymentType = _config.GetConfigValue(CONFIG_KEY_DEPLOYMENT_TYPE);
             var capacity = int.Parse(_config.GetConfigValue(CONFIG_KEY_CAPACITY));
             // Validate before changing the account; an existing resource's actual location wins.
-            using (var timeout = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(90)))
+            using (var timeout = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(CancellationToken))
             {
+                timeout.CancelAfter(TimeSpan.FromSeconds(90));
                 var choices = await OpenAIModelCatalog.LoadAsync(_subscription, account?.Data.Location ?? AzureLocation, timeout.Token);
                 OpenAIModelCatalog.ValidateSelection(choices, modelName, modelVersion, deploymentType, capacity);
             }
@@ -104,7 +105,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var data = BuildAccountData(AzureLocation, name, _allowPublicAccess);
                 EnsureTagsOnNew(data.Tags);
                 account = (await Container.GetCognitiveServicesAccounts()
-                    .CreateOrUpdateAsync(WaitUntil.Completed, name, data)).Value;
+                    .CreateOrUpdateAsync(WaitUntil.Completed, name, data, cancellationToken: CancellationToken)).Value;
                 _logger.LogInformation($"Created Azure AI Foundry OpenAI resource '{name}'.");
             }
             else
@@ -137,7 +138,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                         }
                     }
                     account = (await Container.GetCognitiveServicesAccounts()
-                        .CreateOrUpdateAsync(WaitUntil.Completed, name, update)).Value;
+                        .CreateOrUpdateAsync(WaitUntil.Completed, name, update, cancellationToken: CancellationToken)).Value;
                 }
 
                 await EnsureTagsOnExisting(account.Data.Tags, account.GetTagResource());
@@ -147,7 +148,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             await account.GetCognitiveServicesAccountDeployments().CreateOrUpdateAsync(
                 WaitUntil.Completed,
                 deploymentName,
-                BuildDeploymentData(modelName, modelVersion, capacity, deploymentType));
+                BuildDeploymentData(modelName, modelVersion, capacity, deploymentType), cancellationToken: CancellationToken);
 
             var endpoint = account.Data.Properties?.Endpoint;
             if (string.IsNullOrWhiteSpace(endpoint))

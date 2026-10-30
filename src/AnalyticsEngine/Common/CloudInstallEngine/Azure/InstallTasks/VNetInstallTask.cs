@@ -38,7 +38,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             VirtualNetworkResource vnet = null;
             try
             {
-                var response = await Container.GetVirtualNetworkAsync(name);
+                var response = await Container.GetVirtualNetworkAsync(name, cancellationToken: CancellationToken);
                 vnet = response.Value;
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
@@ -79,7 +79,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 }
 
                 EnsureTagsOnNew(vnetData.Tags);
-                var operation = await Container.GetVirtualNetworks().CreateOrUpdateAsync(WaitUntil.Completed, name, vnetData);
+                var operation = await Container.GetVirtualNetworks().CreateOrUpdateAsync(WaitUntil.Completed, name, vnetData, cancellationToken: CancellationToken);
                 vnet = operation.Value;
 
                 _logger.LogInformation($"Created VNet '{vnet.Data.Name}' with subnet '{subnetName}'.");
@@ -95,7 +95,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     SubnetResource integrationSubnet = null;
                     try
                     {
-                        integrationSubnet = (await existingSubnets.GetAsync(appIntegrationSubnetName)).Value;
+                        integrationSubnet = (await existingSubnets.GetAsync(appIntegrationSubnetName, cancellationToken: CancellationToken)).Value;
                     }
                     catch (RequestFailedException ex) when (ex.Status == 404)
                     {
@@ -116,7 +116,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                         });
                         try
                         {
-                            await existingSubnets.CreateOrUpdateAsync(WaitUntil.Completed, appIntegrationSubnetName, subnetData);
+                            await existingSubnets.CreateOrUpdateAsync(WaitUntil.Completed, appIntegrationSubnetName, subnetData, cancellationToken: CancellationToken);
                             _logger.LogInformation($"Created integration subnet '{appIntegrationSubnetName}'.");
                         }
                         catch (RequestFailedException ex) when (ex.Status == 400 && ex.ErrorCode == "NetcfgSubnetRangesOverlap")

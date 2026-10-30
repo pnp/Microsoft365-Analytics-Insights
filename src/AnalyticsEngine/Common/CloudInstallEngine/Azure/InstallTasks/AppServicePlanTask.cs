@@ -26,7 +26,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public override async Task<AppServicePlanResource> ExecuteTaskReturnResult(object contextArg)
         {
             // Get/create plan
-            var plan = Container.GetAppServicePlans().AsEnumerable().Where(p => p.Data.Name == _config.ResourceName).SingleOrDefault();
+            var plan = Container.GetAppServicePlans().GetAll(cancellationToken: CancellationToken).Where(p => p.Data.Name == _config.ResourceName).SingleOrDefault();
 
             if (plan == null)
             {
@@ -42,7 +42,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 };
 
                 base.EnsureTagsOnNew(newPlanInfo.Tags);     // Add configured tags
-                var newPlanReq = await Container.GetAppServicePlans().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newPlanInfo);
+                var newPlanReq = await Container.GetAppServicePlans().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newPlanInfo, cancellationToken: CancellationToken);
                 plan = newPlanReq.Value;
 
                 _logger.LogInformation($"Created App Service plan '{plan.Data.Name}' at service level '{newPlanInfo.Sku.Name}'.");

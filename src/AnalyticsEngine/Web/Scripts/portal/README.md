@@ -26,6 +26,8 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | `#/insights/reports/spo-audit` and `#/insights/reports/web-traffic` | **File activity / Website traffic** | Existing SharePoint/OneDrive audit charts and page-tracker volume charts. Web activity remains a separate explorer. |
 | `#/insights/reports/calls` and `#/insights/reports/emails` | **Teams calls / Emails** | Existing call-volume/duration and sent-email charts. Teams Explorer remains separate. |
 | `#/insights/copilot-adoption` | **Copilot Adoption** | Which licensed users aren't getting value from their licence, and which unlicensed heavy users have the strongest case for one. |
+| `#/insights/copilot-investment` | **Copilot investment** | What the organisation invests in Copilot and what observed use supports it. The landing page leads with a verdict, the return and break-even, what would change the answer (the shortfall in active days, reclaim and reassignment), actions grouped by kind of decision, the weekly trend and how far to trust each part. The modelled cost is the analysed licensed users' Microsoft 365 Copilot licences plus their own billed Copilot Studio credits for the same window; preview credit balances are reported beside it and never added, because their accounting period is unverified. Every amount is modelled from the administrator's assumptions (or the reader's own browser-only what-if figures), with a conservative/base/upside value range, break-even minutes, sensitivity, cohorts, organisation and concentration. Tabs: Executive, Value & break-even, Organisation, Credits & sources, People (See PII only, sortable by every column, with a per-person evidence drill-down) and Method. With no organisation figures set, **What-if** explains which figures are needed and offers clearly labelled illustrative example figures that apply only in the reader's browser and are never saved. Excel export carries the same scope and is written in the reader's language (the page passes `language`); its People sheet needs See PII. No figure is a measured saving or an invoice. |
+| `#/insights/copilot-spend` | **Copilot spend** | Who consumed Copilot credits, when, from which source and where in the organisation - facts only, with no prices, value or recommendations, so it works before anyone sets the investment assumptions. Two sources kept apart and never added: **Copilot Studio billed usage** (the daily per-person ledger, which adds up over the period; by day and by Power Platform environment, and for an unfiltered view the tenant agent ledger by agent with its own total) and **Copilot credit balances** (each person's latest preview reading, with its reading date, freshness and an accounting period the source does not confirm; never summed across days). Department, company, country and custom-dimension aggregates are for every reader; the People tab (sortable by every column, with a per-person drill-down), manager grouping and the People sheet of the Excel export need See PII. The administrator's filter and the reader's own filter apply to every figure and the export; a filtered view withholds the tenant-only facts (unmatched charges and accounts, policies, pool balances and the agent ledger) and says so. |
 | `#/insights/teams` | **Teams Explorer** | How Microsoft Teams is actually being used: adoption and reach, engagement segments, meeting load and patterns, team/channel health and governance, conversation insight, and champions. Replaces the archived `reports\Misc\Archive\Teams.pbit`. |
 | `#/insights/web-activity` | **Web activity** | What people do on the SharePoint intranet: visits and visitors, page views, where visitors arrive and give up (entry/exit pages, bounce, page-to-page journeys), geography, search terms and the terms that lead nowhere, and browser/device/load-time technology. Replaces the Power BI web-traffic report. |
 | `#/insights/licence-activity` | **Licence activity** | Whether assigned licences are being used. One sortable table compares every licence - people assigned, a 0-100 adoption score (the share of measured holder-weeks that were active, over the services with a known band) and per-service activity - against the all-licences baseline, with empty and unassigned licences hidden by default. Choosing a licence, or **All licences**, shows each service's activity bands next to the baseline and its rank among the licences, the most and least active people (See PII only, and available for all licences as well as one), and a department and country breakdown. Explanatory notes can be hidden and stay hidden. |
@@ -44,6 +46,7 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | `#/admin/user-import` | **User import** | Whether the Graph user import has a stored checkpoint (its `/users/delta` token, kept in the `UserImport` partition of the `AnalyticsState` Azure Table), where it is kept, when the import last completed and how often it runs - and a confirmed **Clear checkpoint** action so the next run reads every user again, optionally on the next import cycle. The in-product version of deleting the stored token by hand (issue #664). The token itself never reaches the browser. |
 | `#/admin/leadership-cohort` | **Leadership group** | Saves an explicit Entra ID group for the Copilot Adoption comparison and requests membership reads by the activity importer. The response acknowledges durable settings/request storage, not Graph completion. **Check status** retrieves the worker outcome without requesting another read. |
 | `#/admin/copilot-adoption-settings` | **Copilot Adoption settings** | Configures the tenant-wide frequency, depth and breadth weights and adoption-level thresholds. Settings and change history are stored in the `CopilotAdoptionSettings` partition of `AnalyticsState`. |
+| `#/admin/copilot-investment-assumptions` | **Copilot investment assumptions** | The organisation's own figures for the Copilot investment report: currency, licence price, credit prices, fully loaded hourly cost, and conservative/base/upside minutes per active day and realisation. Empty until an administrator sets them - the report never models money from a figure nobody chose. Saved with optimistic concurrency and a change history in the `CopilotInvestmentAssumptions` partition of `AnalyticsState`. |
 | `#/admin/prompt-categories` | **Prompt categories** | Configures prompt goals and import opt-in. When an Azure OpenAI backend is configured, an explicit test-drive sends one synthetic sample against the saved taxonomy, even with import categorisation off. Shows the selected category, administrator-assigned human mode, taxonomy version and token usage without writing prompts/results or import counters. |
 | `#/admin/global-filter` | **Report filter** | The administrator's global report filter: conditions every Insights report applies for everyone, on top of their own filters, optionally compared with the viewer's own attributes. Previews the draft against the administrator's own account before saving. Needs See PII as well as Administration. See [The administrator's global filter](#the-administrators-global-filter). |
 | `#/admin/configuration` | **Service configuration** | What this deployment is pointed at: SQL, the storage account (which holds the runtime state table), Cognitive Services and Service Bus, plus the Teams calls import state and the Graph call webhook (with a live validation POST to test it). |
@@ -400,6 +403,8 @@ auth cookie, so a token in the request body would be ignored.
 | `o365AnalyticsProfilingStatusAPI` | `api/ProfilingStatus` | Profiling data freshness + paged `profiling.TraceLogs` for the Profiling page. |
 | `o365AnalyticsReportsAPI` | `api/Reports` | Lite in-app reports: enabled areas (`/areas`) + weekly usage charts per area (`/copilot`, `/usage`, `/office-apps`, `/spo-audit`, `/web-traffic`, `/calls`, `/emails`). |
 | `o365AnalyticsCopilotAdoptionAPI` | `api/CopilotAdoption` | Copilot licence adoption: availability, executive summary, licensed-user and licence-opportunity lists, and their CSV exports. Every endpoint takes the page-wide `userFilter` - see [The user filter](#the-user-filter). |
+| _(none - origin-relative)_ | `api/CopilotInvestment` | Copilot investment: `/availability`, `/summary` (aggregates for every reader; a `userFilter` or a grouping that names people, such as `manager`, needs See PII), `/trend` (credit-balance snapshots, never summed), `/people` and `/person/{userId}` (See PII only) and `/export/workbook` (its People sheet only with See PII; `language=en|es` writes it in that language, English when absent or unrecognised, from this catalog's `copilotInvestment.workbook.*` keys, which `Common.Entities` embeds - so a workbook key is translated, placeholder-checked and gated like any page text, and an error the link answers with is plain text in the same language). Every endpoint takes `windowDays`, the page-wide `userFilter` and optional what-if figures (`currency`, `seatPrice`, `creditPrice`, `studioCreditPrice`, `hourlyCost`, `minutesLow/Base/High`, `realisationLow/Base/High`, parsed culture-free). The administrator's global filter applies to every endpoint. Answers stable codes the portal translates. |
+| _(none - origin-relative)_ | `api/CopilotInvestmentSettings` | The investment assumptions: `GET` (Administration) and a same-origin `POST` (`{ expectedVersion, assumptions }`) that answers `versionConflict` when someone else saved first. |
 | _(none - origin-relative)_ | `api/UserFilter` | The user filter's picker: which attributes can be filtered on (`/dimensions`) and each one's values, largest first (`/values?dimension=&search=&take=`). For a reader the global filter applies to, both are counted within it. |
 | _(none - origin-relative)_ | `api/GlobalFilter` | The administrator's global filter: `GET /effective` (how it applies to the signed-in reader, for the bar on every Insights page); and, for administrators with See PII, `GET` the definition, `POST` a new one (`{ filter, revision }`) and `POST /preview` a draft. The two POSTs are state-changing calls, so they go through `apiFetch` (see below). |
 | _(none - origin-relative)_ | `api/TeamsExplorer` | Teams Explorer: source availability, and one endpoint per tab (`/overview`, `/adoption`, `/meetings`, `/collaboration`, `/conversations`, `/people`) plus `/export/{section}` CSVs. |
@@ -531,7 +536,9 @@ page. It is shown as pills, the way Azure Monitor shows metric filters: `Departm
   reads - `[{"d":"department","v":["Sales"]},{"j":"or","d":"org:12","op":"isNot","v":["CC-1"],"n":true}]`
   - passed as the `userFilter` query parameter. GET, because a report's CSV and Excel exports are
   plain links. The portal refuses a filter over 6,000 encoded characters; `Web.Template.config` lifts
-  the host's 2,048-character query-string default for `api/CopilotAdoption` and `api/ActivityAnalysis`.
+  the host's 2,048-character query-string default for `api/CopilotAdoption`, `api/CopilotInvestment`,
+  `api/CopilotSpend` and `api/ActivityAnalysis` (a test fails if another API that takes a `userFilter`
+  is added without its own block).
 - **On the server** the filter is evaluated in memory against a shared directory snapshot
   (`IUserDirectorySource`, refreshed every few minutes and invalidated when an organisation type
   changes), so changing a filter never re-runs a report's SQL. The response echoes the filter it
@@ -745,10 +752,12 @@ SharePoint, Power BI…), technical identifiers (SQL, CSV, GUID, UPN, DLP), unit
 ordinary English word added there defeats the whole mechanism, so additions are expected to be
 challenged in review — and the `release-manager` agent reads every change to it in a release diff.
 
-Both checks run in CI on every pull request. `tests.yml` builds the solution (which runs
-`npm run build`, and therefore `tsc`) and then runs `npm run test` in this directory, inside the
-`test_dotnet (Release)` job — a required status check on `dev` and `main`. A branch that leaves a
-string untranslated cannot be merged.
+Both checks run in CI on every applicable pull request. `tests.yml` runs `npm run lint`,
+`npm run typecheck:tests` and the complete `npm run test` suite in a parallel portal job.
+The required `test_dotnet (Release)` status on `dev` and `main` waits for that job as well as
+the .NET test shards. A branch that leaves a string untranslated cannot be merged.
+`typecheck:tests` uses `tsconfig.tests.json` to check test fixtures and helpers too; the production
+config excludes those files, and Vitest transpiles them without checking their types.
 
 ### Adding a language
 
@@ -771,6 +780,18 @@ Put it in the catalog module for its area, translate it in every language, and r
 `t()`. Existing component tests assert **English** wording and `renderWithProvider` pins the
 language to English, so a test failing after a translation change means the English text changed —
 restore the English rather than editing the test.
+
+### Text the server writes from the catalog
+
+The Copilot investment workbook is written on the server, in the reader's language, from this
+catalog rather than from C# strings. `Common.Entities` embeds the `copilotInvestment`,
+`userFilter`, `globalFilter` and `common` modules in both languages, and
+`Localisation/PortalCatalog.cs` reads them with a strict parser that throws on anything but
+`'key': 'value'` entries. Workbook wording is therefore translated, placeholder-checked and
+English-in-Spanish-checked like page text, and `serverAuthoredText.test.ts` fails when the C# reads
+a key the catalog lacks, or the catalog keeps a `copilotInvestment.workbook.*` key nothing reads.
+Adding a language also means adding it to `PortalLanguage` and embedding its modules in
+`Entities.csproj`; until then its readers get the English workbook.
 
 ## Local development
 

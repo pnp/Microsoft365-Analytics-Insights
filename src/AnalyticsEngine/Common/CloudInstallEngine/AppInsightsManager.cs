@@ -41,6 +41,7 @@ namespace CloudInstallEngine
         }
 
         public TokenCredential Creds { get; }
+        public CancellationToken CancellationToken { get; set; }
         public string SubscriptionID { get; set; }
         public string ResourceGroupName { get; set; }
         public string AppInsightsComponentName { get; set; }
@@ -125,10 +126,10 @@ namespace CloudInstallEngine
 
         async Task<HttpResponseMessage> ProcessReq(HttpRequestMessage addKeyRequest)
         {
-            var token = await Creds.GetTokenAsync(new TokenRequestContext(new string[] { "https://management.azure.com/.default" }), CancellationToken.None);
+            var token = await Creds.GetTokenAsync(new TokenRequestContext(new string[] { "https://management.azure.com/.default" }), CancellationToken);
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
 
-            var response = await _httpClient.SendAsync(addKeyRequest, HttpCompletionOption.ResponseHeadersRead, new CancellationToken());
+            var response = await _httpClient.SendAsync(addKeyRequest, CancellationToken);
             return response;
         }
 

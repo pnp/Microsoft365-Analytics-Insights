@@ -1,4 +1,5 @@
 using Common.Entities.Config;
+using Common.Entities.CopilotCosts;
 using DataUtils;
 using DataUtils.Health;
 using DataUtils.Sql;
@@ -23,15 +24,32 @@ namespace Common.Entities.Health
         public static IDisposable Start(AppConfig config, AnalyticsLogger logger, string jobName)
         {
             if (!config.EnableDefaultHealthChecks) return null;
-            return new RuntimeHealthMonitor(
-                new Dictionary<HealthComponent, Func<CancellationToken, Task<RuntimeHealthResult>>>
+            return new RuntimeHealthMonitor(BuildChecks(config, jobName),
+                (component, result) => logger.TrackHealthCheck(component, result.Status, result.Detail,
+                    result.DaysToExpiry, result.ReasonKey, jobName));
+        }
+
+        /// <summary>
+        /// The checks a job registers. The installer's "health check missing" alert requires exactly these component
+        /// names (HealthMonitoringInstallTask.ImporterHealthQuery keeps its own list, because the installer assembly
+        /// cannot reference <see cref="HealthComponent"/>); a test fails when the two drift apart.
+        /// </summary>
+        internal static Dictionary<HealthComponent, Func<CancellationToken, Task<RuntimeHealthResult>>> BuildChecks(AppConfig config, string jobName)
+        {
+            var checks = new Dictionary<HealthComponent, Func<CancellationToken, Task<RuntimeHealthResult>>>
                 {
                     [HealthComponent.Sql] = token => CheckSqlAsync(config.ConnectionStrings.DatabaseConnectionString, token),
                     [HealthComponent.Credential] = token => RuntimeCredentialHealth.CheckAsync(config.TenantGUID.ToString(),
                         config.ClientID, config.ClientSecret, config.UseClientCertificate, config.KeyVaultUrl, token)
-                },
-                (component, result) => logger.TrackHealthCheck(component, result.Status, result.Detail,
-                    result.DaysToExpiry, result.ReasonKey, jobName));
+                };
+            if (jobName == ImporterHeartbeat.ActivityJob)
+            {
+                checks[HealthComponent.CopilotCostApi] = async token =>
+                    (await CostApiHealthReader.ReadGraphAsync(config, token).ConfigureAwait(false)).ToRuntimeResult(DateTimeOffset.UtcNow);
+                checks[HealthComponent.CopilotStudioConsumption] = async token =>
+                    (await CostApiHealthReader.ReadStudioAsync(config).ConfigureAwait(false)).ToRuntimeResult(DateTimeOffset.UtcNow);
+            }
+            return checks;
         }
 
         public static async Task<RuntimeHealthResult> CheckSqlAsync(string connectionString, CancellationToken cancellationToken)

@@ -87,6 +87,9 @@ namespace Tests.FakeDataGen.Demo
                 Console.WriteLine($"User organisations: {summary.UserOrgTypes:N0} types, {summary.UserOrgValues:N0} values; assignments "
                     + string.Join(", ", summary.UserOrgAssignments.Select(p => p.Key + "=" + p.Value)));
                 Console.WriteLine("Copilot audit bands (latest 28 audit days, real scorer): " + string.Join(", ", summary.AdoptionBands.Select(p => p.Key + "=" + p.Value)));
+                if (summary.CreditHistoryDays > 0)
+                    Console.WriteLine($"Copilot credit balances (preview): {summary.CreditHistoryDays} days of daily sweeps ending {options.AsOf.AddDays(-1):yyyy-MM-dd}; "
+                        + "month-to-date balances with an unverified accounting period, not a billed ledger.");
                 Console.WriteLine("Fingerprint: " + summary.Fingerprint);
                 if (options.Preview) Console.WriteLine("Preview only: no database or weekly profiles were written.");
                 if (portalConnectionString != null)

@@ -58,7 +58,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var allowIps = new List<string>();
 
             // 1. Installer machine public IP - needed for the runtime secret upload (data-plane).
-            var installerIp = await PublicIpResolver.TryGetPublicIPv4Async(vault.Data.Name, _logger);
+            var installerIp = await PublicIpResolver.TryGetPublicIPv4Async(vault.Data.Name, _logger, cancellationToken: CancellationToken);
             if (!string.IsNullOrEmpty(installerIp))
             {
                 allowIps.Add(installerIp);
@@ -114,7 +114,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             try
             {
-                var updated = await vault.UpdateAsync(patch);
+                var updated = await vault.UpdateAsync(patch, cancellationToken: CancellationToken);
                 if (creatingRule)
                 {
                     if (updated.Value.Data.Properties.NetworkRuleSet.VirtualNetworkRules
@@ -136,7 +136,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         List<string> GetAppServiceOutboundIps(string appServiceName)
         {
-            var site = Container.GetWebSites().AsEnumerable().Where(s => s.Data.Name == appServiceName).SingleOrDefault();
+            var site = Container.GetWebSites().GetAll(cancellationToken: CancellationToken).Where(s => s.Data.Name == appServiceName).SingleOrDefault();
             if (site == null)
             {
                 _logger.LogWarning($"App Service '{appServiceName}' not found in the resource group; cannot allow its outbound IPs on the Key Vault firewall.");

@@ -532,11 +532,18 @@ INSERT dbo.__MigrationHistory VALUES('202610221500003_UniqueOnlineMeetingIds','S
                 Assert.IsFalse(incomplete.InventoryComplete);
                 Assert.AreEqual("sliceTimedOut", incomplete.LastOutcome);
                 Assert.AreEqual(0, userReads);
+                Assert.IsNull((await connection.ReadAsync(Ct)).CollectionHealth.LastSuccessfulRead,
+                    "Directory inventory and a token refresh are not cost API access.");
                 Sql("UPDATE dbo.copilot_cost_runs SET not_before=NULL;");
                 await collector.RunSliceAsync(Ct);
                 Assert.AreEqual(0, userReads);
                 Assert.IsTrue((await _store.ReadStatusAsync(Ct)).InventoryComplete);
+                Assert.IsNull((await connection.ReadAsync(Ct)).CollectionHealth.LastSuccessfulRead);
+                await Assert.ThrowsExceptionAsync<CostConnectionException>(() => connection.RunWithTokenAsync(
+                    (_, __, ___) => throw new CostConnectionException("permissionDenied"), Ct));
                 await collector.RunSliceAsync(Ct);
+                Assert.AreEqual("permissionDenied", (await connection.ReadAsync(Ct)).CollectionHealth.FailureCode,
+                    "Policy/context access must not mask a refused user-balance read.");
                 await collector.RunSliceAsync(Ct);
                 Assert.AreEqual(0, userReads);
                 await collector.RunSliceAsync(Ct);
@@ -549,6 +556,8 @@ INSERT dbo.__MigrationHistory VALUES('202610221500003_UniqueOnlineMeetingIds','S
                 Assert.AreEqual("complete", status.Phase);
                 Assert.IsNotNull(status.LastCompleted);
                 Assert.AreEqual(2, Sql("SELECT COUNT(*) FROM dbo.copilot_cost_context;"));
+                Assert.IsNull((await connection.ReadAsync(Ct)).CollectionHealth.FailureCode);
+                Assert.IsNotNull((await connection.ReadAsync(Ct)).CollectionHealth.LastSuccessfulRead);
             }
         }
 

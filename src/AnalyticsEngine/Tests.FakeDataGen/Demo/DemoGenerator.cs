@@ -39,6 +39,9 @@ namespace Tests.FakeDataGen.Demo
         public int UserOrgTypes { get; set; }
         public int UserOrgValues { get; set; }
         public int CompletedProfileWeeks { get; set; }
+
+        /// <summary>Days of preview Copilot credit balance sweeps generated; 0 when that area was not selected.</summary>
+        public int CreditHistoryDays { get; set; }
     }
 
     internal sealed class CountingDemoSink : IDemoSink
@@ -73,7 +76,10 @@ namespace Tests.FakeDataGen.Demo
         private DemoWebActivityGenerator _web;
         private DemoPowerPlatformGenerator _powerPlatform;
         private DemoAgentCosts _agentCosts;
+        private DemoCopilotCredits _credits;
         private readonly PromptCategoryConfiguration _taxonomy = PromptCategoryConfiguration.Defaults();
+        private readonly DemoCopilotPersonas _personas;
+        private readonly int[] _keywordBuffer = new int[DemoCopilotPersonas.MaxKeywordsPerPrompt];
         private int _interactionId;
 
         public DemoGenerator(DemoOptions options, CancellationToken cancellation = default(CancellationToken))
@@ -83,6 +89,7 @@ namespace Tests.FakeDataGen.Demo
             _calendar = new DemoCalendar(options);
             _cancellation = cancellation;
             _taxonomy.ValidateAndVersion();
+            _personas = new DemoCopilotPersonas(options.Seed, _taxonomy);
             _dailyActive = new int[options.Days, DemoTimeline.ReportApps.Length];
             _rollingActive = new int[options.Days, DemoTimeline.ReportApps.Length];
             _dailyPrompts = new long[options.Days];
@@ -128,6 +135,11 @@ namespace Tests.FakeDataGen.Demo
             _collaboration.WriteDimensions();
             _powerPlatform = new DemoPowerPlatformGenerator(_options, _calendar, _sink);
             _powerPlatform.WriteDimensions();
+            if (_options.Includes(DemoArea.CopilotCredits))
+            {
+                _credits = new DemoCopilotCredits(_options, _sink);
+                _credits.WriteRuns();
+            }
             _sink.Flush();
 
             int progressEvery = Math.Max(1, _options.Users / 20);
@@ -137,6 +149,7 @@ namespace Tests.FakeDataGen.Demo
                 var user = _population.User(id);
                 var timeline = new DemoTimeline(_options, user);
                 WriteTimeline(user, timeline);
+                _credits?.WriteUser(user, timeline);
                 if (id % progressEvery == 0 || id == _options.Users)
                     progress?.Invoke($"Activity: {id:N0}/{_options.Users:N0} users; {summary.TotalRows:N0} source rows.");
             }
@@ -146,6 +159,13 @@ namespace Tests.FakeDataGen.Demo
             {
                 progress?.Invoke("Writing billed Copilot Studio credits, capacity and Azure agent spend...");
                 _agentCosts.Write();
+            }
+            if (_credits != null)
+            {
+                progress?.Invoke($"Writing {_credits.HistoryDays} days of preview Copilot credit balances: unlinked accounts and policy context...");
+                _credits.WriteUnresolved();
+                _credits.WriteContext();
+                summary.CreditHistoryDays = _credits.HistoryDays;
             }
             _sink.Flush();
             return summary;
@@ -178,11 +198,11 @@ namespace Tests.FakeDataGen.Demo
             _sink.Write(DemoTables.Operations, 1, "CopilotInteraction");
             _sink.Write(DemoTables.Operations, 2, "FileAccessed");
             _sink.Write(DemoTables.Operations, 3, "FileModified");
-            _sink.Write(DemoTables.Agents, 1, "Contoso Knowledge Assistant", "Copilot.Studio.ContosoDemo.Knowledge", true);
-            _sink.Write(DemoTables.Agents, 2, "Contoso Sales Coach", "Copilot.Studio.ContosoDemo.Sales", true);
-            _sink.Write(DemoTables.Agents, 3, "Contoso Expenses Bot", "Copilot.Studio.ContosoDemo.Expenses", true);
-            _sink.Write(DemoTables.Agents, 4, "Contoso Onboarding Guide", "Copilot.Studio.ContosoDemo.Onboarding", true);
-            _sink.Write(DemoTables.Agents, 5, "Microsoft 365 Copilot Cowork", "Copilot.M365Copilot.CoworkAgent", false);
+            _sink.Write(DemoTables.Agents, 1, "Contoso Knowledge Assistant", DemoCopilotPersonas.AgentIds[1], true);
+            _sink.Write(DemoTables.Agents, 2, "Contoso Sales Coach", DemoCopilotPersonas.AgentIds[2], true);
+            _sink.Write(DemoTables.Agents, 3, "Contoso Expenses Bot", DemoCopilotPersonas.AgentIds[3], true);
+            _sink.Write(DemoTables.Agents, 4, "Contoso Onboarding Guide", DemoCopilotPersonas.AgentIds[4], true);
+            _sink.Write(DemoTables.Agents, 5, "Microsoft 365 Copilot Cowork", DemoCopilotPersonas.AgentIds[DemoCopilotPersonas.CoworkAgent], false);
             // Page URLs and their titles are written together by the web generator: each page has
             // exactly one title, so a separate title dimension would immediately drift from the pages
             // it is supposed to name.
@@ -193,21 +213,9 @@ namespace Tests.FakeDataGen.Demo
             _sink.Write(DemoTables.ItemTypes, 1, "File");
             _web.WriteClientDimensions();
             if (_options.Includes(DemoArea.Web)) _web.WriteSearchAndClickDimensions();
-            _sink.Write(DemoTables.ResourceNames, 1, "Contoso knowledge – Καλημέρα κόσμε");
-            _sink.Write(DemoTables.ResourceNames, 2, "Contoso planning workbook");
-            _sink.Write(DemoTables.ResourceNames, 3, "Contoso customer message");
-            _sink.Write(DemoTables.ResourceNames, 4, "Contoso project page");
-            _sink.Write(DemoTables.ResourceNames, 5, "Contoso delivery list");
-            _sink.Write(DemoTables.ResourceSites, 1, "https://contoso.sharepoint.com/sites/demo-01");
-            _sink.Write(DemoTables.ResourceSites, 2, "https://contoso.sharepoint.com/sites/demo-02");
-            _sink.Write(DemoTables.ResourceSites, 3, "https://outlook.office365.com/owa");
-            _sink.Write(DemoTables.ResourceSites, 4, "https://contoso.example/knowledge");
-            _sink.Write(DemoTables.ResourceSites, 5, "https://contoso.sharepoint.com/sites/demo-03");
-            _sink.Write(DemoTables.ResourceTypes, 1, "File");
-            _sink.Write(DemoTables.ResourceTypes, 2, "Email");
-            _sink.Write(DemoTables.ResourceTypes, 3, "Message");
-            _sink.Write(DemoTables.ResourceTypes, 4, "WebPage");
-            _sink.Write(DemoTables.ResourceTypes, 5, "ListItem");
+            // Accessed resources: ids 1-5 keep their earlier meaning (DLP events point at them), then each
+            // department's own files, mail and channel posts, a few Greek file names and public web pages.
+            DemoCopilotPersonas.WriteResourceDimensions(_sink);
             _sink.Write(DemoTables.InteractionTypes, 1, "userPrompt");
             _sink.Write(DemoTables.InteractionTypes, 2, "aiResponse");
             for (int i = 0; i < DemoTimeline.Hosts.Length; i++)
@@ -446,14 +454,13 @@ namespace Tests.FakeDataGen.Demo
                 var time = _calendar.Timestamp(user.Zone, dayIndex, DemoRandom.Value(_options.Seed, user.Id, dayIndex, 50), slot);
                 if (_options.Includes(DemoArea.Copilot | DemoArea.Dlp))
                 {
+                    var chat = _personas.Chat(user, dayIndex, slot, host, agent);
                     _sink.Write(DemoTables.Audit, id, user.Id, 1, time);
                     _sink.Write(DemoTables.Chats, id, DemoTimeline.Hosts[host], agent == 0 ? (object)null : agent,
-                        thread, user.Profile.UsageLocation, DemoOptions.FormatVersion, user.Id, time);
-                    if (agent > 0 && agent != 5 && slot == 0)
-                    {
-                        int resource = 1 + (int)(DemoRandom.Value(_options.Seed, user.Id, dayIndex, 60) % 5);
-                        _sink.Write(DemoTables.Resources, id, resource, resource, resource);
-                    }
+                        thread, user.Profile.UsageLocation, DemoOptions.FormatVersion, user.Id, time,
+                        chat.Estimate, chat.EstimateJson);
+                    if (chat.FirstResource > 0) DemoCopilotPersonas.WriteResource(_sink, id, chat.FirstResource);
+                    if (chat.SecondResource > 0) DemoCopilotPersonas.WriteResource(_sink, id, chat.SecondResource);
                     if (slot == 0 && user.Id % 3 != 0)
                         _sink.Write(DemoTables.CopilotEventModels, id, 1 + user.Id % 2);
                     if (slot == 0 && agent > 0 && user.Id % 2 == 0)
@@ -469,19 +476,29 @@ namespace Tests.FakeDataGen.Demo
                 // Graph interaction history requires a Copilot licence. Free Chat demand is
                 // visible in the audit source, but must not be invented in that Graph feed.
                 if (!user.CopilotLicensed || !_options.Includes(DemoArea.CopilotHistory)) continue;
-                int words = 8 + (int)(DemoRandom.Value(_options.Seed, user.Id, dayIndex, 51 + slot) % 50);
                 int latency = 800 + (int)(DemoRandom.Value(_options.Seed, user.Id, dayIndex, 71 + slot) % 15000);
                 string request = id.ToString("N");
                 object language = user.Id % 3 == 0 ? null : (object)1;
                 object sentiment = language == null ? null : (object)((1 + (user.Id + slot) % 9) / 10.0);
+                int categoryIndex = _personas.CategoryIndex(user, dayIndex, slot, host, agent);
+                var category = _personas.Category(categoryIndex);
+                var prompt = _personas.Prompt(user, dayIndex, slot, host, agent, categoryIndex);
+                var response = _personas.Response(user, dayIndex, slot, agent, categoryIndex);
                 int promptId = checked(++_interactionId);
                 _sink.Write(DemoTables.Interactions, request + "-prompt", sessionId, user.Id, request, 1,
-                    host + 1, host == 0 ? 1 : 2, time, words * 6, words, 0, 0, 0, agent > 0 ? 1 : 0, null,
-                    language, sentiment, promptId);
-                var category = _taxonomy.Categories[(user.Id + dayIndex + slot) % _taxonomy.Categories.Count];
+                    host + 1, host == 0 ? 1 : 2, time, prompt.Chars, prompt.Words, prompt.Attachments, prompt.Links,
+                    prompt.Mentions, prompt.Contexts, null, language, sentiment, promptId);
                 _sink.Write(DemoTables.PromptClassifications, promptId, category.Id, _taxonomy.Version, category.HumanMode);
+                // Key phrases come from Azure AI Language, which only analyses user prompts, and only those it
+                // analysed at all (a language was detected).
+                if (language != null)
+                {
+                    int phrases = _personas.Keywords(user, dayIndex, slot, categoryIndex, _keywordBuffer);
+                    for (int i = 0; i < phrases; i++) _sink.Write(DemoTables.InteractionKeywords, promptId, _keywordBuffer[i]);
+                }
                 _sink.Write(DemoTables.Interactions, request + "-response", sessionId, user.Id, request, 2,
-                    host + 1, host == 0 ? 1 : 2, time.AddMilliseconds(latency), words * 24, words * 4, 0, agent > 0 ? 1 : 0, 0, 0, latency,
+                    host + 1, host == 0 ? 1 : 2, time.AddMilliseconds(latency), response.Chars, response.Words,
+                    response.Attachments, response.Links, response.Mentions, response.Contexts, latency,
                     language, sentiment, checked(++_interactionId));
             }
         }

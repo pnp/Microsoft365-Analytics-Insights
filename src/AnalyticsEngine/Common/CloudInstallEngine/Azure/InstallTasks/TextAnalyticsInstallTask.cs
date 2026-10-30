@@ -26,7 +26,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var name = _config.GetNameConfigValue();
             var desiredAccess = _allowPublicAccess ? ServiceAccountPublicNetworkAccess.Enabled : ServiceAccountPublicNetworkAccess.Disabled;
 
-            var analytics = Container.GetCognitiveServicesAccounts().AsEnumerable().Where(s => s.Data.Name == name).SingleOrDefault();
+            var analytics = Container.GetCognitiveServicesAccounts().GetAll(cancellationToken: CancellationToken).Where(s => s.Data.Name == name).SingleOrDefault();
 
             var logMsg = string.Empty;
             if (analytics == null)
@@ -45,7 +45,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
                 try
                 {
-                    var result = await Container.GetCognitiveServicesAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, creationParams);
+                    var result = await Container.GetCognitiveServicesAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, creationParams, cancellationToken: CancellationToken);
                     analytics = result.Value;
                 }
                 catch (RequestFailedException ex) when (ex.ErrorCode == "ResourceKindRequireAcceptTerms")
@@ -86,7 +86,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                         Kind = analytics.Data.Kind,
                         Properties = updateProps
                     };
-                    var result = await Container.GetCognitiveServicesAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, updateParams);
+                    var result = await Container.GetCognitiveServicesAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, updateParams, cancellationToken: CancellationToken);
                     analytics = result.Value;
                 }
 
@@ -97,7 +97,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             string accountKey = null;
             try
             {
-                var keysResponse = await analytics.GetKeysAsync();
+                var keysResponse = await analytics.GetKeysAsync(cancellationToken: CancellationToken);
                 accountKey = keysResponse.Value.Key1;
             }
             catch (RequestFailedException ex) when (ex.Status == 400 && ex.Message != null && ex.Message.IndexOf("disableLocalAuth", System.StringComparison.OrdinalIgnoreCase) >= 0)

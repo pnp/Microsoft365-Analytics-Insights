@@ -71,7 +71,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // Always resolve the public IP, whether or not our named rule exists. The old code only looked it
             // up inside the "rule missing" branch, so when a stale rule existed the installer never even asked
             // what its own address was - and so could not report the mismatch it was about to die from.
-            var clientIp = await PublicIpResolver.TryGetPublicIPv4Async(_keyVaultName, _logger);
+            var clientIp = await PublicIpResolver.TryGetPublicIPv4Async(_keyVaultName, _logger, cancellationToken: CancellationToken);
 
             var existingRules = ReadRules(server);
             var ourRule = existingRules.FirstOrDefault(r => r.Name == ruleName);
@@ -130,21 +130,21 @@ namespace CloudInstallEngine.Azure.InstallTasks
         }
 
         /// <summary>Snapshot of the server's firewall rules in the shape the pure coverage logic works on.</summary>
-        private static List<SqlFirewallRuleRange> ReadRules(SqlServerResource server)
+        private List<SqlFirewallRuleRange> ReadRules(SqlServerResource server)
         {
-            return server.GetSqlFirewallRules().AsEnumerable()
+            return server.GetSqlFirewallRules().GetAll(cancellationToken: CancellationToken)
                 .Select(r => new SqlFirewallRuleRange(r.Data.Name, r.Data.StartIPAddress, r.Data.EndIPAddress))
                 .ToList();
         }
 
         SqlFirewallRuleResource GetRuleByName(SqlServerResource server, string name)
         {
-            return server.GetSqlFirewallRules().AsEnumerable().Where(r => r.Data.Name == name).SingleOrDefault();
+            return server.GetSqlFirewallRules().GetAll(cancellationToken: CancellationToken).Where(r => r.Data.Name == name).SingleOrDefault();
         }
 
         private async Task AddRule(SqlFirewallRuleCollection serverRules, string ruleName, string ip)
         {
-            await serverRules.CreateOrUpdateAsync(WaitUntil.Completed, ruleName, new SqlFirewallRuleData { StartIPAddress = ip, EndIPAddress = ip, Name = ruleName });
+            await serverRules.CreateOrUpdateAsync(WaitUntil.Completed, ruleName, new SqlFirewallRuleData { StartIPAddress = ip, EndIPAddress = ip, Name = ruleName }, cancellationToken: CancellationToken);
         }
     }
 }

@@ -23,6 +23,10 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.Owin;
 using System.Web.Helpers;
 using Common.Entities.CopilotCosts;
+using Common.Entities;
+using Common.Entities.Config;
+using DataUtils.Health;
+using CostHealthController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotCostHealthAPIController;
 
 namespace Tests.UnitTests
 {
@@ -33,6 +37,167 @@ namespace Tests.UnitTests
         private const string Client = "00000000-0000-0000-0000-000000000002";
         private const string UserId = "00000000-0000-0000-0000-000000000003";
         private static readonly CancellationToken Ct = CancellationToken.None;
+
+        [DataTestMethod]
+        [DataRow("reconnectRequired")]
+        [DataRow("permissionDenied")]
+        [DataRow("identityUnavailable")]
+        public async Task TokenFailuresBeforeSqlRemainVisibleAfterTokenRefreshAlone(string failure)
+        {
+            var store = new MemoryStore();
+            var identity = new Identity();
+            var now = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+            var service = Service(store, identity, () => now);
+            await Connect(service);
+            identity.RefreshFailure = failure;
+            var called = false;
+            await Fails(failure, () => service.RunWithTokenAsync((_, __, ___) =>
+            { called = true; return Task.CompletedTask; }, Ct));
+            Assert.IsFalse(called, "No SQL or source work starts when token acquisition fails.");
+            var failed = (await service.ReadAsync(Ct)).CollectionHealth;
+            Assert.AreEqual(failure, failed.FailureCode);
+            Assert.AreEqual(now, failed.FailureSince);
+            Assert.IsNull(failed.LastSuccessfulRead);
+
+            now = now.AddMinutes(20);
+            identity.RefreshFailure = null;
+            await service.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct);
+            var refreshed = await service.ReadAsync(Ct);
+            Assert.AreEqual(failure, refreshed.CollectionHealth.FailureCode);
+            Assert.AreEqual(failed.FailureSince, refreshed.CollectionHealth.FailureSince);
+            Assert.AreEqual(HealthStatus.Unhealthy,
+                CostApiHealthReader.Build("graph", refreshed.Status, refreshed.CollectionHealth).ToRuntimeResult(now).Status);
+            await Connect(service);
+            var reconnected = await service.ReadAsync(Ct);
+            Assert.AreNotEqual(refreshed.Generation, reconnected.Generation);
+            Assert.AreEqual(failure, reconnected.CollectionHealth.FailureCode,
+                "Interactive reconnect is not proof of API recovery either.");
+        }
+
+        [TestMethod]
+        public async Task HealthReaderOmitsCredentialsAndDisabledConnectionsDoNotOpenStorage()
+        {
+            var config = new AppConfig
+            {
+                CopilotCostConnectionEnabled = false,
+                ImportJobSettings = new ImportTaskSettings { CopilotCostManagement = true }
+            };
+            Assert.AreEqual("disabled", (await CostApiHealthReader.ReadGraphAsync(config, Ct,
+                () => throw new AssertFailedException("Disabled collection must not open storage."))).Status);
+            config.CopilotCostConnectionEnabled = true;
+            var store = new MemoryStore();
+            var identity = new Identity { RefreshFailure = "identityUnavailable" };
+            var service = Service(store, identity);
+            await Connect(service);
+            await Fails("identityUnavailable", () => service.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct));
+            var health = await CostApiHealthReader.ReadGraphAsync(config, Ct, () => store);
+            Assert.AreEqual("failing", health.Status);
+            var json = JObject.FromObject(health);
+            CollectionAssert.AreEquivalent(new[] { "source", "status", "lastAttempt", "lastSuccessfulRead", "failureSince", "failureCode" },
+                json.Properties().Select(p => p.Name).ToArray());
+            Assert.IsFalse(json.ToString().Contains("reader"));
+            Assert.IsFalse(json.ToString().Contains("access"));
+        }
+
+        [TestMethod]
+        public async Task StudioCreditsWithoutAStorageAccount_AreNotConnected_AndDoNotRaiseTheImporterAlarm()
+        {
+            // Storage is optional (StateStore.IsConfigured), and the importer then runs capacity-only. With no store
+            // nothing can be connected - not "health could not be read", which is Unhealthy and raises the importer's
+            // Sev-2 alert on every install that has Studio credits on but no Storage account.
+            var config = new AppConfig { ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true } };
+            config.ConnectionStrings.StorageConnectionString = null;
+
+            var health = await CostApiHealthReader.ReadStudioAsync(config);   // the real open path, no seam
+
+            Assert.AreEqual("disconnected", health.Status);
+            Assert.AreEqual(HealthStatus.Degraded, health.ToRuntimeResult(DateTimeOffset.UtcNow).Status);
+
+            var registered = Common.Entities.Health.DefaultRuntimeHealth.BuildChecks(config, DataUtils.Health.ImporterHeartbeat.ActivityJob);
+            var reported = await registered[HealthComponent.CopilotStudioConsumption](CancellationToken.None);
+            Assert.AreNotEqual(HealthStatus.Unhealthy, reported.Status, "The check the importer actually emits must stay quiet.");
+        }
+
+        [TestMethod]
+        public async Task StudioHealthThatCannotBeReadFromAConfiguredStore_StillRaisesTheAlarm()
+        {
+            // The other direction: only a missing store is "not connected". A store that is configured but fails is a fault.
+            var config = new AppConfig { ImportJobSettings = new ImportTaskSettings { CopilotStudioCredits = true } };
+
+            var unreadable = await CostApiHealthReader.ReadStudioAsync(config,
+                () => throw new InvalidOperationException("Synthetic storage failure."));
+
+            Assert.AreEqual("unavailable", unreadable.Status);
+            Assert.AreEqual(HealthStatus.Unhealthy, unreadable.ToRuntimeResult(DateTimeOffset.UtcNow).Status);
+        }
+
+        [TestMethod]
+        public async Task ASourceThatAnswers_KeepsItsAnswer_WhenTheOtherReadMissesTheDeadline()
+        {
+            // A source that is switched off answers at once, and the portal keeps "disabled" quiet. A slow read of the
+            // other source must not turn it into "needs attention": the whole answer used to be replaced by
+            // "unavailable" for both. Only the read that did not finish is unavailable.
+            var never = new TaskCompletionSource<CostApiConnectionHealth>().Task;
+            var studioDisabled = Task.FromResult(CostApiHealthReader.Build("studio", "disabled", null));
+            var graphDisconnected = Task.FromResult(CostApiHealthReader.Build("graph", "disconnected", null));
+
+            var slowGraph = await CostHealthController.CombineAsync(never, studioDisabled, TimeSpan.FromMilliseconds(50));
+            Assert.AreEqual("unavailable", slowGraph.Single(r => r.Source == "graph").Status, "The read that did not finish is unavailable.");
+            Assert.AreEqual("disabled", slowGraph.Single(r => r.Source == "studio").Status, "The source that answered keeps its answer.");
+
+            var slowStudio = await CostHealthController.CombineAsync(graphDisconnected, never, TimeSpan.FromMilliseconds(50));
+            Assert.AreEqual("disconnected", slowStudio.Single(r => r.Source == "graph").Status, "The source that answered keeps its answer.");
+            Assert.AreEqual("unavailable", slowStudio.Single(r => r.Source == "studio").Status, "The read that did not finish is unavailable.");
+        }
+
+        [TestMethod]
+        public async Task AReadThatFails_MakesOnlyItsOwnSourceUnavailable()
+        {
+            var failed = Task.FromException<CostApiConnectionHealth>(new InvalidOperationException("Synthetic storage failure."));
+            var studioDisabled = Task.FromResult(CostApiHealthReader.Build("studio", "disabled", null));
+
+            var result = await CostHealthController.CombineAsync(failed, studioDisabled, TimeSpan.FromMinutes(1));
+
+            Assert.AreEqual("unavailable", result.Single(r => r.Source == "graph").Status);
+            Assert.AreEqual("disabled", result.Single(r => r.Source == "studio").Status);
+        }
+
+        [TestMethod]
+        public async Task WhenBothReadsFinish_EachAnswerIsReportedAsItIs_WithoutWaitingForTheDeadline()
+        {
+            var graph = Task.FromResult(CostApiHealthReader.Build("graph", "reconnectRequired", null));
+            var studio = Task.FromResult(CostApiHealthReader.Build("studio", "disabled", null));
+
+            var combined = CostHealthController.CombineAsync(graph, studio, TimeSpan.FromMinutes(1));
+
+            Assert.AreSame(combined, await Task.WhenAny(combined, Task.Delay(TimeSpan.FromSeconds(10))), "Reads that finished must not wait for the deadline.");
+            var result = await combined;
+            Assert.AreEqual("reconnectRequired", result.Single(r => r.Source == "graph").Status);
+            Assert.AreEqual("disabled", result.Single(r => r.Source == "studio").Status);
+        }
+
+        [TestMethod]
+        public async Task SliceBudgetExpiringDuringTokenAcquisitionDoesNotLeaveConnectionLookingHealthy()
+        {
+            var store = new MemoryStore();
+            var identity = new Identity();
+            var service = Service(store, identity);
+            await Connect(service);
+            using (var budget = new CancellationTokenSource())
+            {
+                identity.OnRefresh = () =>
+                {
+                    budget.Cancel();
+                    budget.Token.ThrowIfCancellationRequested();
+                    return Task.CompletedTask;
+                };
+                await Assert.ThrowsExceptionAsync<OperationCanceledException>(() =>
+                    service.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, budget.Token));
+            }
+            var health = (await service.ReadAsync(Ct)).CollectionHealth;
+            Assert.AreEqual("identityUnavailable", health.FailureCode);
+            Assert.IsNull(health.LastSuccessfulRead);
+        }
 
         [DataTestMethod]
         [DataRow("GET")]

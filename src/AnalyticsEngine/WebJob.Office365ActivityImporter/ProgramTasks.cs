@@ -202,7 +202,10 @@ namespace WebJob.Office365ActivityImporter
             if (status != "sliceCompleted" && status != "observed" && status != "partial")
                 _copilotCostRetryAt = DateTimeOffset.UtcNow.AddMinutes(status == "idle" ? 1 : 5);
             // Only stable, application-authored classifications; never exception text/SQL/request URLs.
-            _logger.LogInformation("Copilot cost preview collection: {Outcome}", status);
+            if (CostApiHealth.SafeCode(status) == status || status == "configurationRequired" || status == "storageRequired")
+                _logger.LogWarning("Copilot cost preview collection: {Outcome}. Previous observations are retained; check Administration > Copilot credit history.", status);
+            else
+                _logger.LogInformation("Copilot cost preview collection: {Outcome}", status);
         }
 
         internal bool CopilotCostsEnabled => _settings.ImportJobSettings.CopilotCostManagement
@@ -312,6 +315,7 @@ namespace WebJob.Office365ActivityImporter
                         connectionHead = connectionStore == null ? null : await connectionStore.GetHeadAsync();
                         return connectionHead?.Version;
                     },
+                    creditHealth: (version, failure) => connectionStore.RecordHealthAsync(version, failure, DateTimeOffset.UtcNow),
                     azureCostImporterFactory: () =>
                     {
                         var auth = new AzureManagementAppIndentityOAuthContext(_logger, _settings.ClientID,

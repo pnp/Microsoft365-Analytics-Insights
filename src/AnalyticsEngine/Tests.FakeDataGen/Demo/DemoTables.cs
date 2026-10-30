@@ -86,6 +86,8 @@ namespace Tests.FakeDataGen.Demo
         private static DemoColumn A(string name, int size) => new DemoColumn(name, SqlDbType.VarChar, size);
         private static DemoColumn G(string name) => new DemoColumn(name, SqlDbType.UniqueIdentifier);
         private static DemoColumn F(string name) => new DemoColumn(name, SqlDbType.Float);
+        private static DemoColumn O(string name) => new DemoColumn(name, SqlDbType.DateTimeOffset);
+        private static DemoColumn H(string name, int size) => new DemoColumn(name, SqlDbType.Binary, size);
 
         /// <summary>A money / credit column. Every agent-cost decimal in the schema is decimal(18,6).</summary>
         private static DemoColumn M(string name) => new DemoColumn(name, SqlDbType.Decimal, 0, 18, 6);
@@ -144,8 +146,11 @@ namespace Tests.FakeDataGen.Demo
         public static readonly DemoTable InteractionSessions = T("copilot_interaction_sessions", true,
             I("id"), N("session_ref", 450), I("user_id"));
         public static readonly DemoTable Audit = T("audit_events", false, G("id"), I("user_id"), I("operation_id"), D("time_stamp"));
+        // The credit estimate is what the importer's CopilotCreditEstimation works out for the turn: a total on
+        // every row, and its JSON breakdown on agent turns (see DemoCopilotPersonas.Chat).
         public static readonly DemoTable Chats = T("copilot_chats", false, G("event_id"), N("app_host"), I("agent_id"),
-            N("thread_id", 450), N("client_region", 50), N("copilot_log_version", 50), I("user_id"), D("time_stamp"));
+            N("thread_id", 450), N("client_region", 50), N("copilot_log_version", 50), I("user_id"), D("time_stamp"),
+            I("copilot_credit_estimate_total"), N("copilot_credit_estimate_json", -1));
         public static readonly DemoTable Resources = T("copilot_event_accessed_resources", false,
             G("copilot_chat_id"), I("resource_name_id"), I("resource_site_url_id"), I("resource_type_id"));
         // DLP. Declared after Chats/ResourceNames/ResourceTypes because dependency order is also the
@@ -175,6 +180,9 @@ namespace Tests.FakeDataGen.Demo
             N("version", 64), N("categories_json", -1));
         public static readonly DemoTable PromptClassifications = T("copilot_prompt_classifications", false,
             I("interaction_id"), N("category_id", 40), N("taxonomy_version", 64), N("human_mode", 20));
+        // Key phrases Azure AI Language extracted from a user prompt. The table's own identity id is left to SQL.
+        public static readonly DemoTable InteractionKeywords = T("copilot_interaction_keywords", false,
+            I("interaction_id"), I("keyword_id"));
         public static readonly DemoTable Teams = Daily("teams_user_activity_log", L("private_chat_count"), L("team_chat_count"),
             L("post_messages"), L("reply_messages"), L("urgent_messages"), L("calls_count"), L("meetings_count"),
             L("adhoc_meetings_attended_count"), L("adhoc_meetings_organized_count"), L("meetings_attended_count"),
@@ -249,5 +257,30 @@ namespace Tests.FakeDataGen.Demo
         public static readonly DemoTable AgentCostImports = T("agent_cost_import_log", false,
             N("import_name", 100), D("imported_utc"), D("window_from"), D("window_to"),
             I("rows_read"), I("rows_saved"), N("error", 1000));
+
+        // Copilot credit history (preview). The collector's own tables, in foreign-key order: a sweep (run)
+        // before its work rows, an observation before its service and unevaluated rows. No identity is
+        // supplied; history and context ids are SQL Server's own, as the live collector leaves them.
+        public static readonly DemoTable CostControl = T("copilot_cost_control", false,
+            I("singleton"), A("generation", 32), B("blocked"));
+        public static readonly DemoTable CostRuns = T("copilot_cost_runs", false,
+            G("run_id"), A("generation", 32), D("inventory_date"), B("inventory_complete"), I("inventory_pages"),
+            L("fence"), O("last_served"), O("last_attempt"), O("last_completed"), A("outcome", 40), I("context_phase"));
+        public static readonly DemoTable CostWork = T("copilot_cost_work", false,
+            G("run_id"), G("object_id"), I("user_id"), I("attempts"), O("next_attempt"), B("completed"), B("observed"),
+            B("measured"), B("empty"), B("partial"), I("unevaluated"), A("outcome", 40));
+        public static readonly DemoTable CostObservations = T("copilot_cost_observations", false,
+            D("observation_date"), G("object_id"), I("user_id"), O("observed_at"), Y("quality"), A("period_status", 40),
+            N("selection_status", -1));
+        public static readonly DemoTable CostServices = T("copilot_cost_services", false,
+            D("observation_date"), G("object_id"), H("category_hash", 32), N("category", -1), N("policy_id", -1),
+            F("consumed_quantity"), N("unit", -1), B("allowed"), N("decision_reason", -1), O("source_modified"),
+            N("period_limit", -1), N("per_user_limit", -1), N("capacity", -1), N("remaining", -1), N("data_status", -1));
+        public static readonly DemoTable CostUnevaluated = T("copilot_cost_unevaluated", false,
+            D("observation_date"), G("object_id"), I("ordinal"), N("category", -1), N("reason", -1));
+        public static readonly DemoTable CostHistory = T("copilot_cost_history", false,
+            G("run_id"), G("publication_id"), D("observation_date"), G("object_id"), O("observed_at"), Y("quality"), N("bundle", -1));
+        public static readonly DemoTable CostContext = T("copilot_cost_context", false,
+            G("run_id"), O("observed_at"), A("kind", 20), N("source_url", 4000), N("document", -1));
     }
 }

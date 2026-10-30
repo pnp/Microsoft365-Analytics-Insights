@@ -1,346 +1,118 @@
 name: Release build
 
 on:
-  # Only main builds automatically. Merging to `dev` no longer re-runs this: the pull request that
-  # produced the merge has already built and tested exactly that code, so a push-triggered run on
-  # `dev` is a duplicate that competes for runners. Use `Run workflow` (workflow_dispatch) to build
-  # `dev` on demand.
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - src/AnalyticsEngine/**
+      - src/SPO/**
       - reports/**
-      - .github/workflows/ci.yml
-      - .github/scripts/Build-ReleasePackage.ps1
+      - build/**
+      - .nvmrc
+      - .github/ci-paths.json
+      - .github/actions/**
+      - .github/scripts/**
+      - .github/workflows/**
   workflow_dispatch:
 
-env:
-  Solution_Directory: src\AnalyticsEngine\
-  Build_Platform: Any CPU
-  Build_ProcessorArchitecture: x86
-  ClientID: ${{ secrets.APP_CLIENTID }}
-  ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
-  TenantGUID: ${{ secrets.APP_TENANTGUID }}
-  TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
-  CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
-  CognitiveKey: ${{ secrets.APP_COGNITIVEKEY}}
-  ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
-  Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
-  SoftwareDownloadURL: ${{ secrets.SOFTWAREDOWNLOADURL }}
-  StatsApiSecret: ${{ secrets.STATSAPISECRET }}
-  StatsApiUrl: ${{ secrets.STATSAPIURL }}
+permissions:
+  contents: read
+  pull-requests: read
+
+# Never cancel a release after signing, tagging or uploading has started.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   setup_build:
-    # This step will calculate the build number with an offset
-    # so that build numbers will follow the ones from Azure DevOps.
-    # It will also check that the important folders have been updated.
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
-      build_number: ${{ steps.build_number.outputs.number }}
+      build_number: ${{ steps.number.outputs.number }}
     steps:
       - name: Calculate build number
-        id: build_number
-        run: echo "number=$((${{ vars.BUILD_NUMBER_OFFSET }} + ${{ github.run_number }}))" >> "$GITHUB_OUTPUT"
-
-  build_dotnet:
-    # Preparation:
-    #   - Get signing certificate
-    #   - Transform configuration files
-    #   - Restore dependencies
-    # Build:
-    #   - Build .Net projects
-    # Output:
-    #   - Clean .Net builds
-    #   - Copy PS scripts
-    #   - Zip files
-    #   - Publish artifacts
-    runs-on: windows-latest
-    needs: setup_build
-    strategy:
-      matrix:
-        configuration: [Release] # [Debug, Release]
-        project:
-          - name: WebJob.AppInsightsImporter
-            file: WebJob.AppInsightsImporter.csproj
-            outDir: AppInsightsImporter
-            compressFolder: AppInsightsImporter
-          - name: WebJob.Office365ActivityImporter
-            file: WebJob.Office365ActivityImporter.csproj
-            outDir: Office365ActivityImporter
-            compressFolder: Office365ActivityImporter
-          - name: Web
-            file: Web.csproj
-            outDir: Website
-            compressFolder: Website\_PublishedWebsites\Web
-          - name: App.ControlPanel
-            file: App.ControlPanel.WinForms.csproj
-            outDir: ControlPanelApp
-            compressFolder: ControlPanelApp
-    env:
-      BuildId: ${{ needs.setup_build.outputs.build_number }}
-      BuildLabel: Build ${{ needs.setup_build.outputs.build_number }}
-    steps:
-      - name: This is ${{ env.BuildLabel }}
-        run: echo ${{ env.BuildId }}
-      - name: Prepare build
-        id: prep
-        shell: bash
-        run: |
-          mkdir -p "${{ env.Zips_Folder }}"
-          echo "ZIPS_FOLDER=${{ env.Zips_Folder }}" >> "$GITHUB_OUTPUT"
-          echo "PFX_PATH=${{ env.Pfx_Path }}" >> "$GITHUB_OUTPUT"
+        id: number
         env:
-          Zips_Folder: ${{ runner.temp }}/zips/
-          Pfx_Path: ${{ runner.temp }}/SPOInsightsBinaries.pfx
-      
-      - name: Checkout source
-        uses: actions/checkout@v6
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v3
-      # Building Web.csproj runs `npm install` + `npm run build` for the portal SPA via MSBuild, so
-      # this job needs the same pinned Node as every other npm step. Without it the build silently
-      # uses whatever Node the windows runner image happens to ship, which is the drift this pin
-      # exists to stop. The version comes from the repo-root .nvmrc - never hardcode it here.
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: src/AnalyticsEngine/Web/Scripts/portal/package-lock.json
-      - name: Cache NuGet Packages
-        id: nuget-packages
-        uses: actions/cache@v5
-        if: false
-        env:
-          cache-name: nuget-package-cache
-        with:
-          path: ~\.nuget\packages
-          key: ${{ runner.os }}-${{ env.cache-name }}
+          OFFSET: ${{ vars.BUILD_NUMBER_OFFSET }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: echo "number=$((OFFSET + RUN_NUMBER))" >> "$GITHUB_OUTPUT"
 
-      # Configuration files
-      - name: Year substitution
-        shell: bash
-        run: |
-          year=$(date +%Y)
-          find ./src -name AssemblyInfo.cs | xargs sed -i "s/© __year__/© $year/"
-      - name: Build label substitution
-        shell: bash
-        run: |
-          sed -i "s|\"DEV_BUILD\"|\"${{ env.BuildLabel }}\"|" "src/AnalyticsEngine/Common/Entities/BuildConstants.cs"
-      - name: Config substitutions
-        uses: devops-actions/variable-substitution@v2.0.0
-        with:
-          files: '${{ env.Solution_Directory }}\*\App.Release.config, ${{ env.Solution_Directory }}\Web\Web.Release.config'
+  tests:
+    uses: ./.github/workflows/tests.yml
+    with:
+      force_run: true
+    secrets: inherit
 
-      # Build the project
-      - name: Restore the application
-        run: msbuild ${{ env.Solution_Directory }}\${{ matrix.project.name }}\${{ matrix.project.file }} -t:Restore `
-          -p:Configuration=${{ matrix.configuration }} `
-          -p:Platform="${{ env.Build_Platform }}" `
-          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }}
-
-      - name: Build ${{ matrix.project.name }}
-        run: msbuild ${{ env.Solution_Directory }}\${{ matrix.project.name }}\${{ matrix.project.file }} `
-          -p:Configuration=${{ matrix.configuration }} `
-          -p:Platform="${{ env.Build_Platform }}" `
-          -p:ProcessorArchitecture=${{ env.Build_ProcessorArchitecture }} `
-          -p:OutDir=${{ runner.temp }}\${{ matrix.project.outDir }} `
-          -p:OutputPath=${{ matrix.configuration }} `
-          -p:AllowedReferenceRelatedFileExtensions=none `
-          -p:EmitCompilerGeneratedFiles=false
-
-      - name: Copy Automation scripts (WebJob.Office365ActivityImporter only)
-        if: matrix.project.name == 'WebJob.Office365ActivityImporter'
-        run: |
-          Copy-Item -Verbose -Force -Recurse `
-          -Path "src/AnalyticsEngine/WebJob.Office365ActivityImporter/AutomationPS" `
-          -Destination "${{ runner.temp }}\Office365ActivityImporter\"
-
-      - name: Setup SignTool
-        uses: KamaranL/add-signtool-action@v1
-        id: signtool
-
-      - name: Decode the PFX
-        if: matrix.project.name == 'App.ControlPanel'
-        run: |
-          $pfx_cert_byte = [System.Convert]::FromBase64String("${{ secrets.PFX_BASE64 }}")
-          [IO.File]::WriteAllBytes("${{ steps.prep.outputs.PFX_PATH }}", $pfx_cert_byte)
-      - name: Debug SignTool Outputs
-        if: matrix.project.name == 'App.ControlPanel'
-        run: |
-          Write-Host "Available SignTool outputs:"
-          Write-Host "signtool-x64: '${{ steps.signtool.outputs.signtool-x64 }}'"
-          Write-Host "signtool-x86: '${{ steps.signtool.outputs.signtool-x86 }}'"
-          Write-Host "Runner Arch: ${{ runner.arch }}"
-          Write-Host "ENV RUNNER_ARCH: $env:RUNNER_ARCH"
-          
-      - name: Sign installer
-        if: matrix.project.name == 'App.ControlPanel'
-        run: |
-            $signtoolPath = "${{ steps.signtool.outputs.signtool-x64 }}"
-            if ([string]::IsNullOrEmpty($signtoolPath)) {
-              # Fallback to PATH
-              Write-Host "SignTool output is empty, using PATH"
-              $signtoolPath = "signtool.exe"
-            } else {
-              Write-Host "Using SignTool from output: $signtoolPath"
-            }
-            & $signtoolPath sign /fd SHA256 /a /t http://timestamp.digicert.com /v `
-            /f "${{ steps.prep.outputs.PFX_PATH }}" /p "${{ secrets.PFX_KEY}}" `
-            "${{ runner.temp }}\ControlPanelApp\AnalyticsInstaller.exe"
-      - name: Remove the PFX
-        if: matrix.project.name == 'App.ControlPanel'
-        run: |
-          Remove-Item -Path "${{ steps.prep.outputs.PFX_PATH }}"
-    
-      - name: Archive ${{ matrix.project.name }}
-        run: |
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\AppInsightsImporter\_PublishedWebsites"
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Office365ActivityImporter\_PublishedWebsites"
-          Remove-Item -Force -Recurse -ErrorAction SilentlyContinue "${{ runner.temp }}\Website\_PublishedWebsites\Web\bin\Scripts"
-          # Prunes files the package doesn't need, fails if it carries a dependency it must never
-          # ship, then zips it. See the script's help and .github/workflows/README.md.
-          ./.github/scripts/Build-ReleasePackage.ps1 `
-            -Path "${{ runner.temp }}\${{ matrix.project.compressFolder }}" `
-            -Package "${{ matrix.project.outDir }}" `
-            -DestinationPath "${{ steps.prep.outputs.ZIPS_FOLDER }}\${{ matrix.project.outDir }}.zip"
-
-      # Wrap up
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          path: ${{ steps.prep.outputs.ZIPS_FOLDER }}
-          name: drop_${{ matrix.project.name }}
-          if-no-files-found: error
-  
-  build_aitracker:
-    # NPM ai tracker
-    # Build:
-    #   - Build AI Tracker
-    # Output:
-    #   - Clean AI Tracker
-    #   - Zip files
-    #   - Publish artifacts
-    runs-on: ubuntu-latest
+  packages:
     needs: setup_build
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v6
-      # CI never builds the SPFx extension, so the release ships the package committed in src/SPO/AITracker as it is.
-      # Don't release one that isn't the build of the extension's current source version.
-      - name: Check the committed SPFx package matches its source
-        shell: pwsh
-        run: ./.github/scripts/Test-SpfxPackage.ps1
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: src/SPO/AITracker/TypeScript/package-lock.json
-      - name: Build AITracker
-        run: |
-          cd src/SPO/AITracker/TypeScript
-          npm ci
-          npm run build:prod
-          cd ../..
-          rm -rf AITracker/TypeScript
-          zip -r AITrackerInstaller.zip AITracker
-      # Wrap up
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          path: src/SPO/AITrackerInstaller.zip
-          name: drop_aitracker
-          if-no-files-found: error
-
+    uses: ./.github/workflows/build-packages.yml
+    with:
+      build_label: Build ${{ needs.setup_build.outputs.build_number }}
+      sign_installer: true
+    secrets: inherit
 
   release:
     runs-on: ubuntu-latest
-    needs:
-      - setup_build
-      - build_dotnet
-      - build_aitracker
-    permissions: 
-      # Required to create tags in the repo
+    timeout-minutes: 20
+    needs: [setup_build, tests, packages]
+    permissions:
       contents: write
     env:
-      BuildId: ${{ needs.setup_build.outputs.build_number }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.setup_build.outputs.build_number }}
+      RELEASE_COMMIT: ${{ github.sha }}
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v6
-        if: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-      - name: Install Changelog Generator
-        if: false
-        run: sudo gem install github_changelog_generator
-      - name: Generate Changelog
-        if: false
-        run: |
-          git branch
-          last_tag=""
-          extra=""
-          if ( git describe --tags --abbrev=0 ); then
-            last_tag=$(git describe --tags --abbrev=0)
-            extra="--since-tag $last_tag"
-          fi
-          echo $extra | xargs github_changelog_generator -u pnp -p Microsoft365-Analytics-Insights \
-            --token ${{ github.token }} \
-            --release-branch ${{ github.ref_name }}
-          sed -i '/\[Unreleased\]/,+1d' CHANGELOG.md
-      - name: Download artifacts
-        uses: actions/download-artifact@v8
-        id: artifacts
-      - name: Generate release label
-        run: |
-          if [ "${{ github.ref_name }}" != "main" ]; then
-            echo "LABEL=Testing build ${{ env.BuildId }}" >> $GITHUB_ENV
-          else
-            echo "LABEL=Stable build ${{ env.BuildId }}" >> $GITHUB_ENV
-          fi
-      # GitHub's automatic release notes anchor on the most recent tag *reachable from the commit
-      # being released*. Stable tags sit on `main`'s release merge commits, which are not ancestors
-      # of `dev`, so a `dev` testing build cannot see any of them and walks back to the last
-      # *testing* tag instead. That is how "Testing build 1836" came out anchored on tag 1826,
-      # re-listing four stable releases' worth of changes that had already shipped, when its real
-      # delta over stable was a single pull request.
-      #
-      # Anchoring explicitly on the last published stable release makes every build's changelog
-      # answer the question a reader actually has: what is in this build that is not in the stable
-      # release I am running? An empty value restores the automatic behaviour, which is what should
-      # happen before the first stable release exists, or if its tag has been deleted.
-      - name: Resolve changelog baseline
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          prev=$(gh api "repos/${{ github.repository }}/releases?per_page=100" \
-            --jq 'map(select(.draft == false and .prerelease == false)) | first | .tag_name // empty') || prev=""
-          if [ -n "$prev" ] && ! gh api "repos/${{ github.repository }}/git/ref/tags/$prev" > /dev/null 2>&1; then
-            echo "::warning::Last published stable release '$prev' has no tag; falling back to automatic anchoring."
-            prev=""
-          fi
-          if [ -z "$prev" ]; then
-            echo "::warning::Could not resolve a published stable release to anchor the changelog on; falling back to automatic anchoring."
-          fi
-          echo "Changelog baseline: ${prev:-<automatic>}"
-          echo "PREVIOUS_STABLE_TAG=$prev" >> "$GITHUB_ENV"
-      - name: Create release
-        uses: ncipollo/release-action@v1.21.0
-        id: create_release
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          BASE: ${{ steps.artifacts.outputs.download-path }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          draft: ${{ vars.PUBLISH_RELEASES != 'true' }}
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: drop_*
+          merge-multiple: true
+          path: ${{ runner.temp }}/packages
+      - name: Resolve published stable baseline
+        id: baseline
+        run: |
+          set -euo pipefail
+          previous=$(gh api "repos/$GH_REPO/releases?per_page=100" \
+            --jq 'map(select(.draft == false and .prerelease == false)) | first | .tag_name // empty')
+          if [ -z "$previous" ]; then
+            echo "::error::No published stable baseline was found; cannot prove the SQL asset delta."
+            exit 1
+          fi
+          git rev-parse --verify "refs/tags/$previous^{commit}"
+          echo "tag=$previous" >> "$GITHUB_OUTPUT"
+      - name: Verify package contents
+        shell: pwsh
+        run: ./.github/scripts/Test-ReleasePackages.ps1 -Path "$env:RUNNER_TEMP/packages"
+      - name: Export SQL assets and record checksums
+        env:
+          BASELINE: ${{ steps.baseline.outputs.tag }}
+        run: node .github/scripts/prepare-release.mjs prepare "$BASELINE" "$RELEASE_COMMIT" "$RUNNER_TEMP/packages" "$RUNNER_TEMP/release-assets"
+      - name: Create verified release candidate
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
+        with:
+          draft: true
           prerelease: ${{ github.ref_name != 'main' }}
-          makeLatest: ${{ github.ref_name == 'main' }}
-          name: ${{ env.LABEL }}
-          tag: ${{ env.BuildId }}
+          makeLatest: false
+          name: ${{ github.ref_name == 'main' && 'Stable' || 'Testing' }} build ${{ env.RELEASE_TAG }}
+          tag: ${{ env.RELEASE_TAG }}
           commit: ${{ github.sha }}
-          # bodyFile:  CHANGELOG.md
           generateReleaseNotes: true
-          generateReleaseNotesPreviousTag: ${{ env.PREVIOUS_STABLE_TAG }}
-          artifacts: "${{ env.BASE }}/**/*.zip"
-          artifactContentType: application/zip
+          generateReleaseNotesPreviousTag: ${{ steps.baseline.outputs.tag }}
+          artifacts: ${{ runner.temp }}/release-assets/*
+          artifactErrorsFailBuild: true
+      - name: Download candidate and verify every asset
+        run: |
+          gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/downloaded-assets"
+          node .github/scripts/prepare-release.mjs verify "$RUNNER_TEMP/release-assets" "$RUNNER_TEMP/downloaded-assets"
+      - name: Publish only after verification
+        if: vars.PUBLISH_RELEASES == 'true'
+        env:
+          IS_STABLE: ${{ github.ref_name == 'main' }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest="$IS_STABLE"

@@ -4,6 +4,7 @@ using Azure.Messaging.ServiceBus;
 using Azure.Messaging.ServiceBus.Administration;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.CopilotCosts;
 using Common.Entities.State;
 using DataUtils;
 using DataUtils.AppInsights;
@@ -115,6 +116,7 @@ namespace Web.AnalyticsWeb.Models.Health
         private readonly IHealthDataSource _dataSource;
         private readonly IHealthCache _cache;
         private readonly Func<AppConfig, Task<string>> _agentCostConnectionStatus;
+        private readonly Func<AppConfig, CancellationToken, Task<CostApiConnectionHealth[]>> _costApiHealth;
         private readonly TimeSpan _sectionDeadline;
 
         /// <summary>
@@ -140,17 +142,22 @@ namespace Web.AnalyticsWeb.Models.Health
         public static readonly HealthService Default = new HealthService(new SqlHealthDataSource(), MemoryCacheHealthCache.Instance);
 
         public HealthService(IHealthDataSource dataSource, IHealthCache cache,
-            Func<AppConfig, Task<string>> agentCostConnectionStatus = null)
-            : this(dataSource, cache, agentCostConnectionStatus, null)
+            Func<AppConfig, Task<string>> agentCostConnectionStatus = null,
+            Func<AppConfig, CancellationToken, Task<CostApiConnectionHealth[]>> costApiHealth = null)
+            : this(dataSource, cache, agentCostConnectionStatus, null, costApiHealth)
         {
         }
 
         internal HealthService(IHealthDataSource dataSource, IHealthCache cache,
-            Func<AppConfig, Task<string>> agentCostConnectionStatus, TimeSpan? sectionDeadline)
+            Func<AppConfig, Task<string>> agentCostConnectionStatus, TimeSpan? sectionDeadline,
+            Func<AppConfig, CancellationToken, Task<CostApiConnectionHealth[]>> costApiHealth = null)
         {
             _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
             _cache = cache ?? throw new ArgumentNullException(nameof(cache));
             _agentCostConnectionStatus = agentCostConnectionStatus ?? ReadAgentCostConnectionStatusAsync;
+            _costApiHealth = costApiHealth ?? ((config, token) => Task.WhenAll(
+                CostApiHealthReader.ReadGraphAsync(config, token),
+                CostApiHealthReader.ReadStudioAsync(config)));
             _sectionDeadline = sectionDeadline ?? DefaultSectionDeadline;
         }
 
@@ -487,6 +494,22 @@ namespace Web.AnalyticsWeb.Models.Health
 
             cancellationToken.ThrowIfCancellationRequested();
             await LoadAgentCostConnectionHealthAsync(config, section);
+            foreach (var health in await _costApiHealth(config, cancellationToken))
+            {
+                var component = health.Source == "graph" ? "CopilotCostApi" : "CopilotStudioConsumption";
+                if (health.Status == "disabled" || health.Status == "disconnected")
+                {
+                    section.ComponentHealth.RemoveAll(row => row.Component == component);
+                    continue;
+                }
+                var result = health.ToRuntimeResult(DateTimeOffset.UtcNow);
+                UpsertComponent(section, new ComponentHealthRow
+                {
+                    Component = component,
+                    Status = result.Status.ToString(), Detail = result.Detail, ReasonKey = result.ReasonKey,
+                    LastSeenUtc = DateTime.UtcNow
+                });
+            }
 
             return FinishComponents(section);
         }

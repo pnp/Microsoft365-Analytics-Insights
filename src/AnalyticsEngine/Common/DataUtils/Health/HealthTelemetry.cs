@@ -38,7 +38,10 @@
         CopilotAuditBackfill,
 
         /// <summary>Opt-in diagnostic capture of matching API JSON responses to Azure Blob storage.</summary>
-        MessageTracing
+        MessageTracing,
+
+        CopilotCostApi,
+        CopilotStudioConsumption
     }
 
     /// <summary>

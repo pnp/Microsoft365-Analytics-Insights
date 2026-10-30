@@ -126,9 +126,8 @@ describe('Administration connections navigation', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Copilot credit history (preview)' })).toBeVisible();
     expect(log.at(-1)).toBe('/admin/copilot-cost-connection');
-    expect(fetchCostConnection).not.toHaveBeenCalled();
-    await user.click(screen.getByRole('button', { name: 'Check connection' }));
     expect(await screen.findByRole('button', { name: 'Connect reader' })).toBeVisible();
+    expect(fetchCostConnection).toHaveBeenCalledTimes(1);
   });
 
   it('handles sign-in callback outcomes on the dedicated credit-history route', async () => {
@@ -141,7 +140,7 @@ describe('Administration connections navigation', () => {
   it('refuses a credit-history deep link without Administration', async () => {
     renderAt('/admin/copilot-cost-connection', { administration: false, seePii: true });
     expect(await screen.findByText('You do not have access to this page')).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Check connection' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Refresh status' })).not.toBeInTheDocument();
     expect(fetchCostConnection).not.toHaveBeenCalled();
   });
 });

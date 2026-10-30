@@ -33,7 +33,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             ServiceBusQueueResource queue = null;
             try
             {
-                var existingQueue = await sbNS.GetServiceBusQueueAsync(name);
+                var existingQueue = await sbNS.GetServiceBusQueueAsync(name, cancellationToken: CancellationToken);
                 queue = existingQueue.Value;
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
@@ -47,7 +47,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
                 var queueData = new ServiceBusQueueData();
                 ServiceBusQueueSettings.Apply(queueData, sbNS.Data?.Sku?.Name);
-                var operation = await allQueues.CreateOrUpdateAsync(WaitUntil.Completed, name, queueData);
+                var operation = await allQueues.CreateOrUpdateAsync(WaitUntil.Completed, name, queueData, cancellationToken: CancellationToken);
                 queue = operation.Value;
 
                 _logger.LogInformation($"Created service-bus queue '{name}' ({ServiceBusQueueSettings.Describe(queue.Data)}).");
@@ -61,7 +61,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var changes = ServiceBusQueueSettings.Apply(queueData, sbNS.Data?.Sku?.Name);
                 if (changes.Count > 0)
                 {
-                    var operation = await sbNS.GetServiceBusQueues().CreateOrUpdateAsync(WaitUntil.Completed, name, queueData);
+                    var operation = await sbNS.GetServiceBusQueues().CreateOrUpdateAsync(WaitUntil.Completed, name, queueData, cancellationToken: CancellationToken);
                     queue = operation.Value;
                     _logger.LogInformation($"Updated service-bus queue '{name}': {string.Join("; ", changes)}.");
                 }
@@ -71,7 +71,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             ServiceBusNamespaceAuthorizationRuleResource rule = null;
             try
             {
-                rule = await sbNS.GetServiceBusNamespaceAuthorizationRuleAsync(policyName);
+                rule = await sbNS.GetServiceBusNamespaceAuthorizationRuleAsync(policyName, cancellationToken: CancellationToken);
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
             {
@@ -86,13 +86,13 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var ruleInfo = new ServiceBusAuthorizationRuleData();
                 ruleInfo.Rights.Add(ServiceBusAccessRight.Send);
                 ruleInfo.Rights.Add(ServiceBusAccessRight.Listen);
-                var operation = await allRules.CreateOrUpdateAsync(WaitUntil.Completed, policyName, ruleInfo);
+                var operation = await allRules.CreateOrUpdateAsync(WaitUntil.Completed, policyName, ruleInfo, cancellationToken: CancellationToken);
                 rule = operation.Value;
 
                 _logger.LogInformation($"Created service-bus access policy '{policyName}'.");
             }
 
-            var key = await rule.GetKeysAsync();
+            var key = await rule.GetKeysAsync(cancellationToken: CancellationToken);
             var connectionString = $"{key.Value.PrimaryConnectionString};EntityPath={name}";
 
             return new ServiceBusQueueResourceWithConnectionString { ConnectionString = connectionString, Queue = queue };

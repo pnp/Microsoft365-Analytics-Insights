@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using Microsoft.Data.SqlClient;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine
@@ -54,9 +55,11 @@ namespace App.ControlPanel.Engine
 
 
         public SolutionInstallConfig Config { get; set; }
+        public CancellationToken CancellationToken { get; set; }
 
         public async Task<bool> VerifySQL(string connectionString)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrEmpty(connectionString))
             {
                 throw new ArgumentException($"'{nameof(connectionString)}' cannot be null or empty.", nameof(connectionString));
@@ -126,6 +129,7 @@ namespace App.ControlPanel.Engine
 
             while (true)
             {
+                CancellationToken.ThrowIfCancellationRequested();
                 var (ok, error) = await TrySqlConnection(connectionString);
                 if (ok)
                 {
@@ -157,7 +161,7 @@ namespace App.ControlPanel.Engine
                         {
                             repaired = await repairEntraAccess();
                         }
-                        catch (Exception ex)
+                        catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
                         {
                             _logger.LogError($"Could not repair the installer's database access: {ex.Message}");
                         }
@@ -233,7 +237,7 @@ namespace App.ControlPanel.Engine
                     {
                         repaired = await repairFirewallForIp(blockedIp);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
                     {
                         _logger.LogError($"Could not update the SQL Server firewall rule for {blockedIp}: {ex.Message}");
                         ReportSqlConnectionFailure(connectionString, error);
@@ -251,7 +255,7 @@ namespace App.ControlPanel.Engine
 
                 var wait = _firewallRepairRetryBackoff[attempt];
                 _logger.LogInformation($"Waiting {wait.TotalSeconds:0}s for the SQL Server firewall change to propagate, then retrying...");
-                await Task.Delay(wait);
+                await Task.Delay(wait, CancellationToken);
                 attempt++;
             }
         }
@@ -259,15 +263,16 @@ namespace App.ControlPanel.Engine
         /// <summary>Opens a connection and runs a trivial query. Returns the SqlException rather than logging it.</summary>
         async Task<(bool ok, SqlException error)> TrySqlConnection(string connectionString)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             // AzureSqlTokenAuth attaches a Microsoft Entra ID access token when the connection string has
             // no user id/password - i.e. when the server has SQL authentication disabled. For every
             // existing SQL-authentication deployment this behaves exactly like new SqlConnection(). See #117.
             SqlConnection conn;
             try
             {
-                conn = AzureSqlTokenAuth.CreateConnection(connectionString);
+                conn = AzureSqlTokenAuth.CreateConnection(connectionString, CancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 // Token acquisition failed, so there is no SqlException to report. Say what actually went
                 // wrong rather than letting an unrelated-looking exception escape to the generic handler.
@@ -282,10 +287,12 @@ namespace App.ControlPanel.Engine
                     var sqlConnectionInfo = new SqlConnectionStringBuilder(connectionString);
                     _logger.LogInformation($"Testing connection to SQL Server '{sqlConnectionInfo.DataSource}'");
 
-                    conn.Open(); // throws if invalid
-                    var cmd = conn.CreateCommand();
-                    cmd.CommandText = "Select @@version";
-                    await cmd.ExecuteNonQueryAsync();
+                    await conn.OpenAsync(CancellationToken);
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "Select @@version";
+                        await cmd.ExecuteNonQueryAsync(CancellationToken);
+                    }
                 }
                 catch (SqlException ex)
                 {
@@ -334,10 +341,12 @@ namespace App.ControlPanel.Engine
 
             try
             {
+                CancellationToken.ThrowIfCancellationRequested();
                 await taskFunctionDelegate();
+                CancellationToken.ThrowIfCancellationRequested();
                 return true;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 bool addDefaultLogging = true;
                 if (addDefaultLogging) ReportError(taskName, ex);
@@ -355,9 +364,12 @@ namespace App.ControlPanel.Engine
 
             try
             {
-                return await taskFunctionDelegate();
+                CancellationToken.ThrowIfCancellationRequested();
+                var result = await taskFunctionDelegate();
+                CancellationToken.ThrowIfCancellationRequested();
+                return result;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 bool addDefaultLogging = true;
                 if (onError != null) addDefaultLogging = onError(ex);
@@ -373,9 +385,11 @@ namespace App.ControlPanel.Engine
 
             try
             {
+                CancellationToken.ThrowIfCancellationRequested();
                 await taskActionDelegate();
+                CancellationToken.ThrowIfCancellationRequested();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 ReportError(taskName, ex);
 

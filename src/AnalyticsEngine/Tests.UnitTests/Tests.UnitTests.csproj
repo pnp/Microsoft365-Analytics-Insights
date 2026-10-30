@@ -105,6 +105,9 @@
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoAgentCosts.cs">
       <Link>DemoGenerator\DemoAgentCosts.cs</Link>
     </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCopilotCredits.cs">
+      <Link>DemoGenerator\DemoCopilotCredits.cs</Link>
+    </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoAreas.cs">
       <Link>DemoGenerator\DemoAreas.cs</Link>
     </Compile>
@@ -155,6 +158,9 @@
     </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\DemoTimeline.cs">
       <Link>DemoGenerator\DemoTimeline.cs</Link>
+    </Compile>
+    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCopilotPersonas.cs">
+      <Link>DemoGenerator\DemoCopilotPersonas.cs</Link>
     </Compile>
     <Compile Include="..\Tests.FakeDataGen\Demo\SqlDemoDatabase.cs">
       <Link>DemoGenerator\SqlDemoDatabase.cs</Link>

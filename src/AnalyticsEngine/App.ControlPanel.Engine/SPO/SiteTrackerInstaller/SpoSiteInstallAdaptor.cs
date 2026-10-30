@@ -36,6 +36,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
         SpoRestClient _rest;
         SpoWeb _rootWeb;
         List<SpoWeb> _subWebs = new List<SpoWeb>();
+        public CancellationToken CancellationToken { get; set; }
 
         public SpoSiteInstallAdaptor(string siteUrl, ISpoAuthenticator authenticator, ILogger logger)
         {
@@ -53,7 +54,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
         {
             // A sign-in failure is fatal for the whole SharePoint stage, not a per-site problem, so let
             // SpoAuthenticationException propagate rather than reporting this site as merely inaccessible.
-            _rest = new SpoRestClient(_authenticator, _logger);
+            _rest = new SpoRestClient(_authenticator, _logger) { CancellationToken = CancellationToken };
 
             try
             {
@@ -155,7 +156,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
                         deletedAction = true;
 
                         // Give SPO a chance to remove the custom action
-                        Thread.Sleep(1000);
+                        await Task.Delay(1000, CancellationToken);
                         break;
                     }
                 }

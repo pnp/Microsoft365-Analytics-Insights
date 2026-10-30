@@ -50,7 +50,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var sw = Stopwatch.StartNew();
             try
             {
-                var response = await Container.GetPrivateEndpointAsync(name);
+                var response = await Container.GetPrivateEndpointAsync(name, cancellationToken: CancellationToken);
                 pe = response.Value;
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
@@ -82,7 +82,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                         throw PrivateNetworkProvenance.Blocked(id,
                             "the endpoint is disconnected; review its DNS dependencies before removing/recreating it");
                     _logger.LogInformation($"Existing private endpoint '{name}' has connection status '{connectionState}'. Deleting and recreating for '{targetShortName}'...");
-                    await pe.DeleteAsync(WaitUntil.Completed);
+                    await pe.DeleteAsync(WaitUntil.Completed, cancellationToken: CancellationToken);
                     pe = null;
                 }
             }
@@ -110,7 +110,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     Networking.BeginCreate(provenance);
                     Networking.StampNew(peData.Tags);
                 }
-                var operation = await Container.GetPrivateEndpoints().CreateOrUpdateAsync(WaitUntil.Completed, name, peData);
+                var operation = await Container.GetPrivateEndpoints().CreateOrUpdateAsync(WaitUntil.Completed, name, peData, cancellationToken: CancellationToken);
                 pe = operation.Value;
                 Networking?.ConfirmCreate(id);
 

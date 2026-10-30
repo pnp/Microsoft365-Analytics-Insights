@@ -22,11 +22,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
     {
         public static async Task<SqlAuthDecision> DetectAsync(SqlServerResource sqlServer, string sqlPassword,
             SqlServerAuthMode configuredMode, ILogger logger, Guid installerObjectId = default(Guid),
-            bool hasConfiguredDatabaseUsers = false)
+            bool hasConfiguredDatabaseUsers = false, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (sqlServer == null) throw new ArgumentNullException(nameof(sqlServer));
 
-            var state = await ReadAsync(sqlServer, logger);
+            var state = await ReadAsync(sqlServer, logger, cancellationToken);
             var decision = SqlServerAuthDetection.Decide(state,
                 state.HasSqlAdminLogin && !string.IsNullOrWhiteSpace(sqlPassword), configuredMode);
             decision.ServerState = state;
@@ -47,12 +47,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// <summary>
         /// Inspects the server. Returns null when there is no server to inspect.
         /// </summary>
-        public static async Task<SqlServerAuthState> ReadAsync(SqlServerResource sqlServer, ILogger logger)
+        public static async Task<SqlServerAuthState> ReadAsync(SqlServerResource sqlServer, ILogger logger,
+            CancellationToken cancellationToken = default(CancellationToken))
         {
             if (sqlServer == null) return null;
 
             // The cached ARM payload may predate this run's create/update, so re-read it.
-            var server = await sqlServer.GetAsync();
+            var server = await sqlServer.GetAsync(cancellationToken: cancellationToken);
             var data = server.Value.Data;
 
             var state = new SqlServerAuthState
@@ -72,7 +73,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // that value can disagree after authentication is changed through the portal/CLI.
             try
             {
-                var onlyAuth = await sqlServer.GetSqlServerAzureADOnlyAuthentications().GetAsync("Default");
+                var onlyAuth = await sqlServer.GetSqlServerAzureADOnlyAuthentications().GetAsync("Default", cancellationToken);
                 state.EntraOnlyAuthEnabled = onlyAuth.Value.Data.IsAzureADOnlyAuthenticationEnabled
                     ?? throw new InvalidOperationException("Azure did not return the SQL Server's Microsoft Entra-only authentication setting.");
             }
@@ -90,7 +91,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // A separately removed/replaced administrator must not be inferred from the embedded payload.
             try
             {
-                var admin = await sqlServer.GetSqlServerAzureADAdministrators().GetAsync("ActiveDirectory");
+                var admin = await sqlServer.GetSqlServerAzureADAdministrators().GetAsync("ActiveDirectory", cancellationToken);
                 var childSid = admin.Value.Data.Sid;
                 state.HasEntraAdmin = childSid.HasValue;
                 state.EntraAdminLogin = admin.Value.Data.Login;
@@ -128,6 +129,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     /// </summary>
     public class SqlIdentityAccessTask
     {
+        public CancellationToken CancellationToken { get; set; }
         private readonly ILogger _logger;
         private readonly IEntraPrincipalResolver _resolver;
         private readonly IManagedIdentityApplicationIdSource _identitySource;
@@ -178,6 +180,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public async Task<bool> GrantDatabaseAccessAsync(string connectionString, ManagedIdentityOwner owner, string principalName,
             Guid principalObjectId, string resourceId, IEnumerable<string> roles, string databaseUserName = null)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(connectionString))
             {
                 throw new ArgumentException($"'{nameof(connectionString)}' cannot be null or empty.", nameof(connectionString));
@@ -249,7 +252,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     $"{createUser} then add it to {string.Join(", ", roleList)}.");
                 return false;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
                 _logger.LogError($"Could not grant the {ownerName} managed identity '{principalName}' access to the database: {ex.Message}");
                 return false;
@@ -259,16 +262,16 @@ namespace App.ControlPanel.Engine.InstallerTasks
             return true;
         }
 
-        static async Task RunGrantScriptAsync(string connectionString, string sql)
+        async Task RunGrantScriptAsync(string connectionString, string sql)
         {
-            using (var connection = AzureSqlTokenAuth.CreateConnection(connectionString))
+            using (var connection = AzureSqlTokenAuth.CreateConnection(connectionString, CancellationToken))
             {
-                await connection.OpenAsync();
+                await connection.OpenAsync(CancellationToken);
                 using (var cmd = connection.CreateCommand())
                 {
                     cmd.CommandText = sql;
                     cmd.CommandTimeout = 120;
-                    await cmd.ExecuteNonQueryAsync();
+                    await cmd.ExecuteNonQueryAsync(CancellationToken);
                 }
             }
         }
@@ -288,11 +291,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </remarks>
         public async Task<Guid?> ResolveApplicationIdAsync(string principalName, Guid principalObjectId, string resourceId)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             if (_identitySource != null && !string.IsNullOrWhiteSpace(resourceId))
             {
                 try
                 {
-                    var identity = await _identitySource.GetSystemAssignedIdentityAsync(resourceId, CancellationToken.None);
+                    var identity = await _identitySource.GetSystemAssignedIdentityAsync(resourceId, CancellationToken);
                     if (identity == null)
                     {
                         _logger.LogInformation($"Azure Resource Manager reports no system-assigned managed identity for '{principalName}'.");
@@ -310,7 +314,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                         return identity.ClientId;
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
                 {
                     _logger.LogInformation(
                         $"Could not read the application ID of managed identity '{principalName}' from Azure Resource Manager: {ex.Message}");
@@ -321,10 +325,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
             {
                 try
                 {
-                    var fromGraph = await _resolver.ResolveApplicationIdAsync(principalObjectId, CancellationToken.None);
+                    var fromGraph = await _resolver.ResolveApplicationIdAsync(principalObjectId, CancellationToken);
                     if (fromGraph.HasValue && fromGraph.Value != Guid.Empty) return fromGraph;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
                 {
                     _logger.LogInformation($"Could not resolve the application ID for '{principalName}': {ex.Message}");
                 }

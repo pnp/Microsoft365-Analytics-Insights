@@ -94,22 +94,23 @@ namespace CloudInstallEngine.Azure
         }
 
         /// <summary>
-        /// Best-effort public IPv4 of this host, or null if it could not be determined. Never throws.
+        /// Best-effort public IPv4 of this host, or null if it could not be determined. Cancellation propagates.
         /// </summary>
         /// <param name="keyVaultName">
         /// Configured Key Vault name, enabling the first-party source. Null/empty (or a vault that does not
         /// exist yet) simply falls through to the echo service.
         /// </param>
-        public static async Task<string> TryGetPublicIPv4Async(string keyVaultName, ILogger logger)
+        public static async Task<string> TryGetPublicIPv4Async(string keyVaultName, ILogger logger, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var fromVault = await TryGetFromKeyVaultAsync(keyVaultName, logger);
+            cancellationToken.ThrowIfCancellationRequested();
+            var fromVault = await TryGetFromKeyVaultAsync(keyVaultName, logger, cancellationToken);
             if (fromVault != null)
             {
                 logger?.LogInformation($"Detected this host's public IP address as '{fromVault}' (reported by Azure Key Vault).");
                 return fromVault;
             }
 
-            var fromEcho = await TryGetFromEchoServiceAsync(logger);
+            var fromEcho = await TryGetFromEchoServiceAsync(logger, cancellationToken);
             if (fromEcho != null)
             {
                 logger?.LogInformation(
@@ -126,7 +127,7 @@ namespace CloudInstallEngine.Azure
             return null;
         }
 
-        private static async Task<string> TryGetFromKeyVaultAsync(string keyVaultName, ILogger logger)
+        private static async Task<string> TryGetFromKeyVaultAsync(string keyVaultName, ILogger logger, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(keyVaultName)) return null;
 
@@ -137,7 +138,7 @@ namespace CloudInstallEngine.Azure
             try
             {
                 using (var http = new HttpClient { Timeout = RequestTimeout })
-                using (var response = await http.GetAsync(url))
+                using (var response = await http.GetAsync(url, cancellationToken))
                 {
                     if (response.Headers.TryGetValues(KeyVaultNetworkInfoHeader, out var values))
                     {
@@ -149,7 +150,7 @@ namespace CloudInstallEngine.Azure
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 // Expected on a first install (the vault does not exist yet) - not worth alarming about.
                 logger?.LogDebug($"Could not read the caller IP from Key Vault '{keyVaultName}': {ex.Message}");
@@ -158,12 +159,12 @@ namespace CloudInstallEngine.Azure
             return null;
         }
 
-        private static async Task<string> TryGetFromEchoServiceAsync(ILogger logger)
+        private static async Task<string> TryGetFromEchoServiceAsync(ILogger logger, CancellationToken cancellationToken)
         {
             try
             {
                 using (var http = new HttpClient { Timeout = RequestTimeout })
-                using (var response = await http.GetAsync(EchoServiceUrl))
+                using (var response = await http.GetAsync(EchoServiceUrl, cancellationToken))
                 {
                     if (!response.IsSuccessStatusCode)
                     {
@@ -174,11 +175,11 @@ namespace CloudInstallEngine.Azure
                     return ParseEchoServiceBody(await response.Content.ReadAsStringAsync());
                 }
             }
-            catch (TaskCanceledException)
+            catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 logger?.LogWarning($"Public IP lookup at {EchoServiceUrl} timed out after {RequestTimeout.TotalSeconds:0}s.");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 logger?.LogWarning($"Public IP lookup at {EchoServiceUrl} failed: {ex.Message}");
             }

@@ -184,12 +184,13 @@ namespace DataUtils.Sql
         /// access token when the connection string has no credentials of its own. Drop-in replacement
         /// for <c>new SqlConnection(connectionString)</c>.
         /// </summary>
-        public static SqlConnection CreateConnection(string connectionString)
+        public static SqlConnection CreateConnection(string connectionString, CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var connection = new SqlConnection(connectionString);
             try
             {
-                ApplyAccessTokenIfNeeded(connection);
+                ApplyAccessTokenIfNeeded(connection, cancellationToken);
             }
             catch
             {
@@ -210,12 +211,12 @@ namespace DataUtils.Sql
         /// Re-acquiring is cheap: Azure.Identity credentials cache the token in memory and only call the
         /// identity provider again when it is close to expiry.
         /// </remarks>
-        public static void ApplyAccessTokenIfNeeded(SqlConnection connection)
+        public static void ApplyAccessTokenIfNeeded(SqlConnection connection, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (connection == null) throw new ArgumentNullException(nameof(connection));
             if (!NeedsAccessToken(connection.ConnectionString)) return;
 
-            connection.AccessToken = GetAccessToken();
+            connection.AccessToken = GetAccessToken(cancellationToken);
         }
 
         /// <summary>
@@ -250,8 +251,9 @@ namespace DataUtils.Sql
         /// token) is cached, so long-running work such as an EF migration keeps getting fresh tokens
         /// rather than expiring mid-upgrade.
         /// </summary>
-        public static string GetAccessToken()
+        public static string GetAccessToken(CancellationToken cancellationToken = default(CancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var credential = Credential;
             if (credential == null)
             {
@@ -264,7 +266,7 @@ namespace DataUtils.Sql
 
             try
             {
-                return credential.GetToken(new TokenRequestContext(new[] { SqlTokenScope }), CancellationToken.None).Token;
+                return credential.GetToken(new TokenRequestContext(new[] { SqlTokenScope }), cancellationToken).Token;
             }
             catch (AuthenticationFailedException ex)
             {
