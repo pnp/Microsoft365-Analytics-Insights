@@ -414,6 +414,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.quadrants.lowSpendHighEvidence': 'Menos créditos consumidos, uso regular',
   'copilotInvestment.quadrants.lowSpendLowEvidence': 'Menos créditos consumidos, uso ligero',
   'copilotInvestment.quadrants.people': '{count} personas \u00b7 {credits} créditos',
+  'copilotInvestment.quadrants.peopleWithheld': '{count} personas \u00b7 créditos no mostrados, podrían identificar a menos de {minimum} personas',
 
   // Créditos y fuentes
   'copilotInvestment.sources.title': 'Fuentes',

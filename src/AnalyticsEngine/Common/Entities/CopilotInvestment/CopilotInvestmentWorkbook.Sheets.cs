@@ -101,7 +101,11 @@ namespace Common.Entities.CopilotInvestment
                 sheet.AddRow(XlsxCell.Wrapped(words.T("copilotInvestment.quadrants.description",
                     ("median", words.Num(concentration.QuadrantMedianCredits)), ("days", words.Num(concentration.QuadrantDaysPerMonth)))));
                 sheet.AddHeaderRow(words.W("col.group"), words.W("col.people"), words.W("col.credits"));
-                foreach (var q in concentration.Quadrants) sheet.AddRow(QuadrantLabel(q.Key, words), XlsxCell.Number(q.People), q.Credits);
+                // Credits withheld from a reader without See PII are an empty cell that says why, never a zero.
+                var withheld = words.T("copilotInvestment.trend.withheld",
+                    ("count", words.Count(System.Math.Max(summary.Organisation?.MinGroupSize ?? 0, SmallPopulations.MinPeopleWithoutSeePii))));
+                foreach (var q in concentration.Quadrants)
+                    sheet.AddRow(QuadrantLabel(q.Key, words), XlsxCell.Number(q.People), q.Withheld ? null : (object)q.Credits, q.Withheld ? withheld : null);
                 sheet.AddBlankRow();
             }
 

@@ -313,7 +313,7 @@ export interface InvestmentConcentration {
   activeDays: InvestmentDistribution | null;
   credits: InvestmentDistribution | null;
   /** Split at the median balance and at `quadrantDaysPerMonth` active days a month - not the high-spend flag's thresholds. */
-  quadrants: { key: string; people: number; credits: number }[];
+  quadrants: { key: string; people: number; credits: number; withheld?: boolean }[];
   quadrantMedianCredits: number | null;
   quadrantDaysPerMonth: number;
 }

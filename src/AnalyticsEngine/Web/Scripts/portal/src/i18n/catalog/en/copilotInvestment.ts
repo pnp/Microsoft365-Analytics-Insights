@@ -405,6 +405,7 @@ export const copilotInvestment = {
   'copilotInvestment.quadrants.lowSpendHighEvidence': 'Fewer credits consumed, regular use',
   'copilotInvestment.quadrants.lowSpendLowEvidence': 'Fewer credits consumed, light use',
   'copilotInvestment.quadrants.people': '{count} people \u00b7 {credits} credits',
+  'copilotInvestment.quadrants.peopleWithheld': '{count} people \u00b7 credits not shown, they could single out fewer than {minimum} people',
 
   // Credits & sources
   'copilotInvestment.sources.title': 'Sources',

@@ -243,6 +243,30 @@ async function reopenedDialog(): Promise<HTMLElement> {
 }
 
 describe('CopilotInvestmentPage', () => {
+  it('shows a quadrant withheld from a reader without See PII by its count alone, never a zero', async () => {
+    const base = summary();
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(
+      summary({
+        concentration: {
+          ...base.concentration,
+          quadrants: [
+            { key: 'highSpendStrongEvidence', people: 6, credits: 0, withheld: true },
+            { key: 'highSpendThinEvidence', people: 2, credits: 0, withheld: true },
+            { key: 'lowSpendStrongEvidence', people: 45, credits: 1500 },
+            { key: 'lowSpendThinEvidence', people: 30, credits: 1000 },
+          ],
+        },
+      }),
+    );
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Organisation' }));
+    expect(await screen.findByText('2 people \u00b7 credits not shown, they could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.getByText('6 people \u00b7 credits not shown, they could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.getByText('45 people \u00b7 1,500 credits')).toBeInTheDocument();
+    expect(screen.queryByText(/\u00b7 0 credits/)).not.toBeInTheDocument();
+  });
+
   it('shows a reading withheld from a reader without See PII as withheld, never as zero', async () => {
     vi.mocked(fetchInvestmentTrend).mockResolvedValue({
       points: [

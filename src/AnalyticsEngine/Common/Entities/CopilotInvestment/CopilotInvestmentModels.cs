@@ -141,6 +141,16 @@ namespace Common.Entities.CopilotInvestment
             {
                 copy.Organisation = Organisation.WithComplementsWithheld(Math.Max(Organisation.MinGroupSize, SmallPopulations.MinPeopleWithoutSeePii));
             }
+            if (Concentration != null)
+            {
+                copy.Concentration = Concentration.WithoutSmallPopulations(Math.Max(Organisation?.MinGroupSize ?? 0, SmallPopulations.MinPeopleWithoutSeePii));
+                // A concentration finding quotes its curve's top share: it goes with the curve.
+                var evidenceGone = Concentration.ActiveDays != null && copy.Concentration.ActiveDays == null;
+                var creditsGone = Concentration.Credits != null && copy.Concentration.Credits == null;
+                if ((evidenceGone || creditsGone) && Findings != null)
+                    copy.Findings = Findings.Where(f => !(evidenceGone && f.Code == CopilotInvestmentFindingCodes.EvidenceConcentration)
+                        && !(creditsGone && f.Code == CopilotInvestmentFindingCodes.CreditConcentration)).ToList();
+            }
             return copy;
         }
 
@@ -1018,6 +1028,26 @@ namespace Common.Entities.CopilotInvestment
 
         [JsonProperty("quadrantDaysPerMonth")]
         public double QuadrantDaysPerMonth { get; set; }
+
+        /// <summary>
+        /// A copy for a reader without See PII. A curve whose shares single out one to <paramref name="minPeople"/> - 1 people
+        /// (<see cref="CopilotInvestmentDistribution.SafeWithoutSeePii"/>) is left out, which the page reads as too few people
+        /// to measure: at ten consumers each decile is one person's balance. A quadrant of that few people keeps its count but
+        /// not its credits, and the quadrants split the same people, so enough others are withheld with it that no difference
+        /// gives them back (<see cref="SmallPopulations.WithholdComplements"/>); the median they are split at is one person's
+        /// reading, so it goes when fewer people than that are split at all. Never edits this object.
+        /// </summary>
+        internal CopilotInvestmentConcentration WithoutSmallPopulations(int minPeople)
+        {
+            var copy = (CopilotInvestmentConcentration)MemberwiseClone();
+            if (ActiveDays != null && !ActiveDays.SafeWithoutSeePii) copy.ActiveDays = null;
+            if (Credits != null && !Credits.SafeWithoutSeePii) copy.Credits = null;
+            var withheld = Quadrants.Select(q => SmallPopulations.IsSmall(q.People, minPeople)).ToArray();
+            SmallPopulations.WithholdComplements(Quadrants.Select(q => new[] { q.People }).ToList(), withheld, minPeople);
+            copy.Quadrants = Quadrants.Select((q, i) => withheld[i] ? new CopilotInvestmentQuadrant { Key = q.Key, People = q.People, Withheld = true } : q).ToList();
+            if (SmallPopulations.IsSmall(Quadrants.Sum(q => q.People), minPeople)) copy.QuadrantMedianCredits = null;
+            return copy;
+        }
     }
 
     public sealed class CopilotInvestmentDistribution
@@ -1038,6 +1068,13 @@ namespace Common.Entities.CopilotInvestment
         /// <summary>Cumulative share of the total held by the bottom 0%, 10%, ... 100% of the population.</summary>
         [JsonProperty("lorenz")]
         public List<double> Lorenz { get; set; } = new List<double>();
+
+        /// <summary>
+        /// False when a share in it, or the difference of two, would be the sum of one to four people's values
+        /// (<see cref="CopilotInvestmentStatistics.EveryCutHoldsEnough"/>): a reader without See PII is then not given it.
+        /// </summary>
+        [JsonIgnore]
+        internal bool SafeWithoutSeePii { get; set; }
     }
 
     public sealed class CopilotInvestmentQuadrant
@@ -1048,8 +1085,13 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("people")]
         public int People { get; set; }
 
+        /// <summary>The quadrant's credits; 0 when <see cref="Withheld"/>, which the page and the workbook never show as a zero.</summary>
         [JsonProperty("credits")]
         public double Credits { get; set; }
+
+        /// <summary>True when, for a reader without See PII, the credits could single out too few people and are not given.</summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
     }
 
     /// <summary>People without a seat: metered consumption and the evidence they already show.</summary>

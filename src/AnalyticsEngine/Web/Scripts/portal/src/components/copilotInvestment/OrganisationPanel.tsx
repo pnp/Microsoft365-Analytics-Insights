@@ -191,7 +191,12 @@ export default function OrganisationPanel({ summary, dimension, onDimensionChang
                   {QUADRANT_LABEL_KEYS[q.key] ? t(QUADRANT_LABEL_KEYS[q.key]) : q.key}
                 </Text>
                 <Text size={200}>
-                  {t('copilotInvestment.quadrants.people', { count: formatNumber(q.people), credits: formatCredits(q.credits) })}
+                  {q.withheld
+                    ? t('copilotInvestment.quadrants.peopleWithheld', {
+                        count: formatNumber(q.people),
+                        minimum: formatNumber(Math.max(summary.organisation.minGroupSize, 5)),
+                      })
+                    : t('copilotInvestment.quadrants.people', { count: formatNumber(q.people), credits: formatCredits(q.credits) })}
                 </Text>
               </div>
             ))}
