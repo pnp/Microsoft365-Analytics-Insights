@@ -187,6 +187,13 @@ namespace DataUtils
         /// <summary>True once the wrapper has switched to RBAC after a key-auth failure.</summary>
         public bool UsingRbac => _usingRbac;
 
+        /// <summary>Wraps an existing client, with no RBAC fallback, so tests can substitute a fake one.</summary>
+        internal CognitiveServicesClient(TextAnalyticsClient inner, ILogger logger = null)
+        {
+            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            _logger = logger;
+        }
+
         private bool CanFallbackToRbac =>
             !string.IsNullOrEmpty(_tenantId) &&
             !string.IsNullOrEmpty(_clientId) &&
@@ -403,7 +410,9 @@ namespace DataUtils
                             }
                             else
                             {
-                                logger.LogError($"Error in sentiment analysis for message: {originalInput.Text}");
+                                // Never the text itself: it is a Teams message or a page comment. The id, the
+                                // length and the service's error code are enough to see why it was rejected.
+                                logger.LogError($"Error in sentiment analysis for document {sentimentResult.Id} ({originalInput.Text?.Length ?? 0} characters): {DescribeAnalysisFailure(sentimentResult, langResult)}");
                             }
                         }
                         else
@@ -415,6 +424,13 @@ namespace DataUtils
             }
 
             return analysisResults;
+        }
+
+        private static string DescribeAnalysisFailure(AnalyzeSentimentResult sentiment, DetectLanguageResult language)
+        {
+            if (sentiment.HasError) return $"sentiment analysis returned error {sentiment.Error.ErrorCode}";
+            if (language == null) return "no language was detected";
+            return $"language detection returned error {language.Error.ErrorCode}";
         }
     }
 }

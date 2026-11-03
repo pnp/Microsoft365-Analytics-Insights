@@ -55,6 +55,30 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        [DoNotParallelize]
+        public void PageComments_MalformedJson_PrintsTheFieldButNotTheComments()
+        {
+            const string commentText = "Contoso private comment";
+            var original = System.Console.Out;
+            var captured = new System.IO.StringWriter();
+            System.Console.SetOut(captured);
+            try
+            {
+                // Cut off mid-way, as a truncated payload would be: valid entries before an invalid ending.
+                var props = new PageUpdateEventCustomProps { Url = "u", CommentsString = "[{\"comment\":\"" + commentText + "\"}, {\"comment\":" };
+                Assert.AreEqual(0, props.PageComments.Count);
+            }
+            finally
+            {
+                System.Console.SetOut(original);
+            }
+
+            var output = captured.ToString();
+            StringAssert.Contains(output, nameof(PageUpdateEventCustomProps.CommentsString));
+            Assert.IsFalse(output.Contains(commentText), "The comments were printed: " + output);
+        }
+
+        [TestMethod]
         public void Likes_EmptyOrNullString_ReturnsEmptyList()
         {
             Assert.AreEqual(0, new PageUpdateEventCustomProps { Url = "u", LikesString = null }.Likes.Count);

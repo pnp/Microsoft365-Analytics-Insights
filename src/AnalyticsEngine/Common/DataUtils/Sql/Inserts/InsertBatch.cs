@@ -198,7 +198,7 @@ namespace DataUtils.Sql.Inserts
                         // every retry as a "poison batch". For SharePoint URLs longer than the
                         // urls.full_url-width nvarchar(850) columns see issue #122 / #127.
                         Interlocked.Increment(ref _rowsSkippedTooWide);
-                        _logger.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj, true)}. Continuing with the rest of the batch.");
+                        _logger.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj)}. Continuing with the rest of the batch.");
                         continue;
                     }
 
@@ -212,12 +212,12 @@ namespace DataUtils.Sql.Inserts
                         // didn't predict it (e.g. a column whose declared width we couldn't parse).
                         // Skip just this row so one bad value can't poison the whole batch.
                         Interlocked.Increment(ref _rowsSkippedTooWide);
-                        _logger.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj, true)}. SQL error {ex.Number}: {ex.Message}. Continuing with the rest of the batch.");
+                        _logger.LogError($"Skipping over-width record for staging table {tempTableName}: {BuildRowDiagnostic(insertObj)}. SQL error {ex.Number}: {SqlErrorMessages.WithoutValues(ex.Message)}. Continuing with the rest of the batch.");
                         continue;
                     }
                     catch (SqlException ex)
                     {
-                        _logger.LogCritical($"Failed to insert record into {tempTableName} - {sqlInsert} | row: {BuildRowDiagnostic(insertObj, false)} | SQL error {ex.Number}: {ex.Message}");
+                        _logger.LogCritical($"Failed to insert record into {tempTableName} - {sqlInsert} | row: {BuildRowDiagnostic(insertObj)} | SQL error {ex.Number}: {SqlErrorMessages.WithoutValues(ex.Message)}");
                         throw;
                     }
                 }
@@ -233,14 +233,12 @@ namespace DataUtils.Sql.Inserts
         private static bool IsColumnTruncationError(SqlException ex) => ex.Number == 8152 || ex.Number == 2628;
 
         // Builds a privacy-conscious, single-line description of a row to help operators locate the
-        // source record and the offending column when an insert fails. String VALUES are never logged
-        // (they may hold customer data such as URLs, file/user names) - only the over-width column's
-        // name, declared width and actual length, plus a short prefix sample when requested so the
-        // value can be recognised. Guid/DateTime/number/bool fields (e.g. log_id, time_stamp) are
-        // logged in full as they are non-sensitive keys for finding the record.
-        private string BuildRowDiagnostic(T insertObj, bool includeOverWidthSample)
+        // source record and the offending column when an insert fails. String VALUES are never logged,
+        // not even a prefix (they hold customer data such as URLs, file and user names) - only the
+        // over-width column's name, declared width and actual length. Guid/DateTime/number/bool fields
+        // (e.g. log_id, time_stamp) are logged in full as they are non-sensitive keys for finding the record.
+        private string BuildRowDiagnostic(T insertObj)
         {
-            const int SAMPLE_CHARS = 64;
             var parts = new List<string>();
             foreach (var fieldMapping in _batchTypeFieldCache.PropertyMappingInfo)
             {
@@ -251,12 +249,7 @@ namespace DataUtils.Sql.Inserts
                     var declaredLen = fieldMapping.SqlInfo.MaxLength;
                     if (declaredLen.HasValue && s.Length > declaredLen.Value)
                     {
-                        var part = $"column '{fieldName}' ({fieldMapping.SqlInfo.SqlColDefinition}) holds {s.Length} chars but the limit is {declaredLen.Value}";
-                        if (includeOverWidthSample)
-                        {
-                            part += $" (starts with \"{s.Substring(0, Math.Min(SAMPLE_CHARS, s.Length))}…\")";
-                        }
-                        parts.Add(part);
+                        parts.Add($"column '{fieldName}' ({fieldMapping.SqlInfo.SqlColDefinition}) holds {s.Length} chars but the limit is {declaredLen.Value}");
                     }
                 }
                 else if (val != null)
