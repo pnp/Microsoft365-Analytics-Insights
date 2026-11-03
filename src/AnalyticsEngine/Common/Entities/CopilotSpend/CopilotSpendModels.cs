@@ -220,14 +220,21 @@ namespace Common.Entities.CopilotSpend
         /// person's charges under a name that identifies them.
         /// <para>The row is always withheld because nothing here can show the combination is large enough. Each
         /// environment's count is its own distinct people, so someone who used two of them is in both counts: adding them
-        /// overstates the combination, and the ledger query keeps no distinct count of it. Every environment folded here
-        /// is below <paramref name="minPeople"/> on its own, so the largest of them proves nothing either. The count is
+        /// overstates the combination, and the ledger query keeps no distinct count of it. Every environment folded for being
+        /// small is below <paramref name="minPeople"/> on its own, so the largest of them proves nothing either. The count is
         /// stated only when one environment is folded, where it is exact.</para>
+        /// <para>The environments add up to the period's total, so that total less the ones shown would be the combined
+        /// row's credits: the smallest environment used by at least <paramref name="minPeople"/> people is combined with
+        /// small ones that hold anyone, so whatever that difference gives holds at least that many people
+        /// (<see cref="SmallPopulations.WithholdOverlappingComplement"/>).</para>
         /// </summary>
         public CopilotSpendStudio WithSmallEnvironmentsCombined(int minPeople)
         {
             var copy = (CopilotSpendStudio)MemberwiseClone();
-            var small = Environments.Where(e => e.EmptyKey == null && e.People < minPeople).ToList();
+            var named = Environments.Where(e => e.EmptyKey == null).ToList();
+            var fold = named.Select(e => e.People < minPeople).ToArray();
+            SmallPopulations.WithholdOverlappingComplement(named.Select(e => e.People ?? 0).ToList(), fold, minPeople);
+            var small = named.Where((e, i) => fold[i]).ToList();
             if (small.Count == 0) return copy;
             copy.Environments = Environments.Except(small).ToList();
             copy.Environments.Add(new CopilotSpendEnvironment

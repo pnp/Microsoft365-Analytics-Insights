@@ -61,7 +61,7 @@ export const copilotSpend = {
   'copilotSpend.studio.noDays': 'No billed usage in this period.',
   'copilotSpend.studio.environmentsTitle': 'By environment',
   'copilotSpend.studio.environmentsDescription':
-    'Billed credits per Power Platform environment in the period, for the people in this view. Microsoft reports each person\u2019s usage by environment, not by agent, so these add up to the total above, apart from a combined row of environments with too few people, which shows no credits, and shows how many people it holds only when it combines a single environment.',
+    'Billed credits per Power Platform environment in the period, for the people in this view. Microsoft reports each person\u2019s usage by environment, not by agent, so these add up to the total above, apart from a combined row, which shows no credits: it holds the environments with too few people and, with them, the smallest of the others, so that they cannot be worked out from the total. It shows how many people it holds only when it combines a single environment.',
   'copilotSpend.studio.col.environment': 'Environment',
   'copilotSpend.studio.unnamedEnvironment': 'Environment name not available',
   'copilotSpend.studio.otherEnvironments': 'Other environments ({count})',
