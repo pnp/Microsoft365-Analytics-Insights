@@ -1320,8 +1320,9 @@ namespace Common.Entities.CopilotAdoption
                 + "an enabled licensed user whose manager is someone else with an enabled account; a people manager is "
                 + "anyone who manages at least one, with or without a Copilot seat. A manager whose own use cannot be "
                 + "determined is counted as unknown and left out of both sides of the comparison. Each department "
-                + $"is the report's own. Figures for fewer than {summary.Options.MinSeatsPerSegment} people managers, "
-                + "or a rate over fewer reports than that, are left blank. This is an association, not a cause: teams "
+                + $"is the report's own. Figures for fewer than {summary.Options.MinSeatsPerSegment} people managers - "
+                + "in all, or on either side of a comparison - or a rate over fewer reports than that, are left blank. "
+                + "This is an association, not a cause: teams "
                 + "whose manager uses Copilot may differ in function, seniority or seat coverage."));
             sheet.AddHeaderRow(
                 "Department", "Seats", "Direct reports", "Managers, use known", "Managers, use unknown",
@@ -2752,7 +2753,9 @@ namespace Common.Entities.CopilotAdoption
                 + "team that was given seats, which on its own would widen the gap.\n"
                 + $"Aggregates only. Every figure that depends on managers' own use needs at least {o.MinSeatsPerSegment} "
                 + $"people managers whose use is known, and every rate needs at least {o.MinSeatsPerSegment} reports "
-                + "behind it; anything smaller is left blank. Nothing about a manager's own use is attached to a person's "
+                + "behind it; anything smaller is left blank. The comparison by the manager's use, and its split by seat, "
+                + $"is shown only when each of its groups holds at least {o.MinSeatsPerSegment} managers or none, so that "
+                + "no group gives away one manager's own use. Nothing about a manager's own use is attached to a person's "
                 + "row or to the roll-up by direct manager. On the department table each report counts in their own "
                 + "department, and the departments are those of the adoption-by-department table.");
 

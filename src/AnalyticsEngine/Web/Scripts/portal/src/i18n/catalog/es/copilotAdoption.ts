@@ -318,7 +318,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.managerModelling.title': '¿Usan Copilot los propios responsables?',
   'copilotAdoption.page.managerModelling.managers': 'El {pct} de los {known} responsables de equipo cuyo uso propio se conoce usó Copilot en este periodo.',
   'copilotAdoption.page.managerModelling.teams': 'Las personas a su cargo directo estuvieron activas en un {activeWith} (hábito: {habitWith}), frente a un {activeWithout} (hábito: {habitWithout}) cuando el responsable no lo usó.',
-  'copilotAdoption.page.managerModelling.teamsTooFew': 'Hay muy pocas personas a cargo en uno de los dos lados para comparar los equipos: cada lado necesita al menos {min}.',
+  'copilotAdoption.page.managerModelling.teamsTooFew': 'Hay muy pocos responsables de equipo o personas a cargo en uno de los dos lados para comparar los equipos: cada lado necesita al menos {min} de cada uno.',
   'copilotAdoption.page.managerModelling.seatLicensed': 'Responsables con licencia de Copilot: las personas a su cargo estuvieron activas en un {activeWith} cuando el responsable usó Copilot, frente a un {activeWithout} cuando no.',
   'copilotAdoption.page.managerModelling.seatUnlicensed': 'Responsables sin licencia: las personas a su cargo estuvieron activas en un {activeWith} cuando el responsable usó Copilot Chat, frente a un {activeWithout} cuando no.',
   'copilotAdoption.page.managerModelling.unknown.one': 'No se ha podido determinar el uso propio de {count} responsable más, que queda fuera en lugar de contarse como alguien que no usa Copilot.',

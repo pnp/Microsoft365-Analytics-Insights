@@ -135,10 +135,10 @@ describe('ManagerModellingLine', () => {
     expect(screen.getByText(/Se muestra cuando se conoce el uso propio de al menos 5 responsables de equipo/)).toBeInTheDocument();
   });
 
-  it('says why there is no comparison when one side has too few reports', () => {
+  it('says why there is no comparison when one side has too few managers or reports', () => {
     renderWithProvider(<ManagerModellingLine summary={summary({ reportsActiveRatePctManagerInactive: null, reportsHabitRatePctManagerInactive: null })} />);
 
-    expect(screen.getByText(/There are too few direct reports on one side to compare the teams: each side needs at least 5\./)).toBeInTheDocument();
+    expect(screen.getByText(/There are too few people managers or direct reports on one side to compare the teams: each side needs at least 5 of each\./)).toBeInTheDocument();
   });
 
   it('says when no licensed user has a recorded manager', () => {

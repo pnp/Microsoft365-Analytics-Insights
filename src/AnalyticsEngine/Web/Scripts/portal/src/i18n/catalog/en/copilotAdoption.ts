@@ -317,7 +317,7 @@ export const copilotAdoption = {
   'copilotAdoption.page.managerModelling.title': 'Do managers use Copilot themselves?',
   'copilotAdoption.page.managerModelling.managers': '{pct} of the {known} people managers whose own use is known used Copilot themselves in this period.',
   'copilotAdoption.page.managerModelling.teams': 'Their direct reports were active at {activeWith} (habit {habitWith}), against {activeWithout} (habit {habitWithout}) where the manager did not use it.',
-  'copilotAdoption.page.managerModelling.teamsTooFew': 'There are too few direct reports on one side to compare the teams: each side needs at least {min}.',
+  'copilotAdoption.page.managerModelling.teamsTooFew': 'There are too few people managers or direct reports on one side to compare the teams: each side needs at least {min} of each.',
   'copilotAdoption.page.managerModelling.seatLicensed': 'Managers with a Copilot seat: their direct reports were active at {activeWith} where the manager used it, against {activeWithout} where they did not.',
   'copilotAdoption.page.managerModelling.seatUnlicensed': 'Managers without a seat: their direct reports were active at {activeWith} where the manager used Copilot Chat, against {activeWithout} where they did not.',
   'copilotAdoption.page.managerModelling.unknown.one': '{count} more people manager\'s own use could not be determined, and is left out rather than counted as not using Copilot.',
