@@ -1912,7 +1912,8 @@ namespace Tests.UnitTests
                     db,
                     CopilotAdoptionSql.AgentUsageByDepartmentSql(),
                     new SqlParameter("@from", from),
-                    new SqlParameter("@top", 10));
+                    new SqlParameter("@top", 10),
+                    new SqlParameter("@minUsers", 1));
 
                 Assert.AreEqual(2, byDepartment.Count,
                     "Only agent-attributed interactions count, and only two departments produced any.");
@@ -1920,6 +1921,15 @@ namespace Tests.UnitTests
                     "Finance ran two agent interactions; its third interaction carried no agent.");
                 Assert.AreEqual(1d, byDepartment.Single(r => r.Label == "Καλημέρα κόσμε").Value,
                     "A non-Latin department name must survive the join and the grouping.");
+
+                // The floor counts people, not interactions: Finance's two interactions are one person's.
+                Assert.AreEqual(0, Query<CopilotAdoptionService.CategoryQueryRow>(
+                        db,
+                        CopilotAdoptionSql.AgentUsageByDepartmentSql(),
+                        new SqlParameter("@from", from),
+                        new SqlParameter("@top", 10),
+                        new SqlParameter("@minUsers", 2)).Count,
+                    "A department whose agent use is one person's must not be listed.");
 
                 var unlicensed = Query<UnlicensedUsageQueryRow>(
                     db,

@@ -2247,17 +2247,46 @@ namespace Tests.UnitTests
         [TestMethod]
         public void OpportunityByDepartment_TrimsDepartmentNamesToMatchSegmentKeys()
         {
+            // Five candidates - the breakdown's minimum - only one group once the names are trimmed.
             var analysis = new CopilotAdoptionAnalysis();
-            analysis.Opportunities.Add(new LicenceOpportunityRow
+            analysis.Opportunities.AddRange(Enumerable.Range(0, 5).Select(i => new LicenceOpportunityRow
             {
-                Department = "Finance ",
+                Department = i < 3 ? "Finance " : "Finance",
                 Recommended = true,
-            });
+            }));
 
             new CopilotAdoptionService().FinaliseSummary(analysis);
 
             Assert.AreEqual("Finance", analysis.Summary.OpportunityByDepartment.Single().Label,
                 "Candidate counts must use the same trimmed department key as the adoption segments.");
+            Assert.AreEqual(5d, analysis.Summary.OpportunityByDepartment.Single().Value);
+        }
+
+        [TestMethod]
+        public void DepartmentBreakdowns_LeaveOutDepartmentsWithFewerPeopleThanTheMinimum()
+        {
+            // One unlicensed Chat user's volume, or one or two candidates, would describe identifiable people in a
+            // small team - and these breakdowns are served to readers without See PII. Five or more are kept.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.UnlicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Unlicensed($"chat{i}@contoso.com", "Legal", activeDays: 5, interactions: 10)));
+            analysis.UnlicensedUsers.Add(Unlicensed("lone@contoso.com", "Facilities", activeDays: 20, interactions: 500));
+            analysis.Opportunities.AddRange(Enumerable.Range(0, 5)
+                .Select(i => new LicenceOpportunityRow { UserId = 100 + i, Department = "Legal", Recommended = true }));
+            analysis.Opportunities.AddRange(Enumerable.Range(0, 2)
+                .Select(i => new LicenceOpportunityRow { UserId = 200 + i, Department = "Facilities", Recommended = true }));
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var usage = analysis.Summary.Unlicensed.UsageByDepartment;
+            Assert.AreEqual("Legal", usage.Single().Label, "One person's interactions are not a department figure.");
+            Assert.AreEqual(50d, usage.Single().Value);
+            Assert.AreEqual(550, analysis.Summary.Unlicensed.Interactions, "The tenant total still counts everyone.");
+
+            var candidates = analysis.Summary.OpportunityByDepartment;
+            Assert.AreEqual("Legal", candidates.Single().Label);
+            Assert.AreEqual(5d, candidates.Single().Value);
+            Assert.AreEqual(7, analysis.Summary.RecommendedForLicence, "The tenant total still counts everyone.");
         }
 
         [TestMethod]
@@ -3665,6 +3694,48 @@ namespace Tests.UnitTests
             CollectionAssert.Contains(segments, "Engineering");
             CollectionAssert.DoesNotContain(segments, "Facilities",
                 "One unlicensed user is not a department-level finding.");
+        }
+
+        [TestMethod]
+        public void CombinedView_LeavesASideWithTooFewPeopleBlank_AndTheAgentFiguresWithIt()
+        {
+            // Engineering is listed for its six seats, but its one unlicensed Chat user's volume and agent use must
+            // not be - nor the agent figures, which count both sides and would give that person back by subtraction.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Departmentalise(ActiveUser($"eng{i}@contoso.com", 10, 50), "Engineering")));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                .Select(i => Departmentalise(ActiveUser($"legal{i}@contoso.com", 10, 50), "Legal")));
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+            analysis.UnlicensedUsers.Add(Unlicensed("lone@contoso.com", "Engineering", activeDays: 20, interactions: 500));
+            analysis.UnlicensedUsers.AddRange(Enumerable.Range(0, 5)
+                .Select(i => Unlicensed($"chat{i}@contoso.com", "Legal", activeDays: 5, interactions: 10)));
+            analysis.AgentReachRows = new List<AgentReachRow>();
+            analysis.AgentOrigins = new Dictionary<int, string>();
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            var engineering = analysis.Summary.CombinedByDepartment.Single(r => r.Segment == "Engineering");
+            Assert.AreEqual(6, engineering.LicensedUsers);
+            Assert.AreEqual(6, engineering.LicensedActiveUsers);
+            Assert.IsNotNull(engineering.InteractionsPerLicensedUser);
+            Assert.IsNull(engineering.UnlicensedActiveUsers, "Withheld, never published as a count of one.");
+            Assert.IsNull(engineering.InteractionsPerUnlicensedUser);
+            Assert.IsNull(engineering.UnlicensedAgentUserPct);
+            Assert.IsTrue(engineering.AgentFiguresWithheld);
+            Assert.IsNull(engineering.AgentActiveUsers);
+            Assert.IsNull(engineering.AgentUsers);
+            Assert.IsNull(engineering.AgentUserPct);
+            Assert.IsNull(engineering.AgentInteractions);
+
+            // Enough people on both sides: every figure is published, as before.
+            var legal = analysis.Summary.CombinedByDepartment.Single(r => r.Segment == "Legal");
+            Assert.AreEqual(6, legal.LicensedUsers);
+            Assert.AreEqual(5, legal.UnlicensedActiveUsers);
+            Assert.IsNotNull(legal.InteractionsPerUnlicensedUser);
+            Assert.IsFalse(legal.AgentFiguresWithheld);
+            Assert.AreEqual(11, legal.AgentActiveUsers);
+            Assert.AreEqual(0, legal.AgentUsers);
         }
 
         #endregion

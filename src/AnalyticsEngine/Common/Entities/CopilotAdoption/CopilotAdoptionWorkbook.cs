@@ -184,6 +184,11 @@ namespace Common.Entities.CopilotAdoption
                         ? " The following sections could not be narrowed and remain TENANT-WIDE, because they "
                           + "come from totals that carry no per-person detail: "
                           + DescribeUnscopedSections(summary.UnscopedSections) + "."
+                        : string.Empty)
+                    + ((summary.WithheldSections?.Count ?? 0) > 0
+                        ? " The following sections describe the whole organisation and are LEFT OUT, because the "
+                          + "report filter set by a portal administrator applies: "
+                          + DescribeUnscopedSections(summary.WithheldSections) + "."
                         : string.Empty)));
 
                 // A condition on an organisation type deleted or disabled since the filter was built
@@ -458,9 +463,12 @@ namespace Common.Entities.CopilotAdoption
                     ? $" In this filtered view it counts only the licence holders the analysis reached: {notAnalysedInView:N0} "
                       + "more that the filter selects are beyond the analysis limit and are not counted here."
                     : string.Empty));
-            AddMeta(sheet, "Purchased Copilot seats", summary.PurchasedCopilotSeats.HasValue ? (object)summary.PurchasedCopilotSeats.Value : "Unknown",
-                "Purchased seats from Graph subscribedSkus prepaidUnits for the SKUs classified as Copilot seats. Unknown means subscribedSkus was unavailable or the permission is missing - deliberately not zero.");
-            AddMeta(sheet, "Unassigned Copilot seats", summary.UnassignedCopilotSeats.HasValue ? (object)summary.UnassignedCopilotSeats.Value : "Unknown",
+            var purchasesWithheld = (summary.WithheldSections ?? new List<string>()).Contains(CopilotAdoptionUnscopedSections.PurchasedSeats);
+            AddMeta(sheet, "Purchased Copilot seats", summary.PurchasedCopilotSeats.HasValue ? (object)summary.PurchasedCopilotSeats.Value : purchasesWithheld ? "Not shown" : "Unknown",
+                purchasesWithheld
+                    ? "Not shown under the report filter set by a portal administrator: seats are bought for the whole organisation."
+                    : "Purchased seats from Graph subscribedSkus prepaidUnits for the SKUs classified as Copilot seats. Unknown means subscribedSkus was unavailable or the permission is missing - deliberately not zero.");
+            AddMeta(sheet, "Unassigned Copilot seats", summary.UnassignedCopilotSeats.HasValue ? (object)summary.UnassignedCopilotSeats.Value : purchasesWithheld ? "Not shown" : "Unknown",
                 "Purchased minus assigned, per Copilot SKU. A seat nobody holds, as distinct from a seat somebody holds but does not use - the two need different decisions, so they are never merged.");
             AddMeta(sheet, "Users analysed", summary.ScoredUsers,
                 notAnalysedInView > 0
@@ -1144,13 +1152,15 @@ namespace Common.Entities.CopilotAdoption
                     "Licensed and unlicensed side by side. A department with idle licences AND heavy unlicensed use "
                     + "is a licence-allocation problem, not an adoption problem, and can usually be fixed at no cost. "
                     + "Interactions per licence divides by all licences including idle ones - that is the point of the "
-                    + "comparison. Both per-user columns are normalised to a month."));
+                    + "comparison. Both per-user columns are normalised to a month. A department is listed when either "
+                    + $"population reaches {summary.Options.MinSeatsPerSegment} people; the figures of a smaller one are left "
+                    + "blank, with the agent figures, so that no one can be singled out."));
                 sheet.AddRow(XlsxCell.Wrapped(
                     "Agent breadth and depth (" + AgentFiguresScopeLabel(summary.AgentFiguresScope) + "): breadth is the "
                     + "share of the department's active Copilot users seen in the audit log who used at least one agent; "
                     + "depth is how many distinct agents they used per 100 of them, and how many interactions each of "
                     + "those agents had. Builders are people who created, published or shared a Copilot Studio agent. "
-                    + "Blank means not measured. Definitions are on 'How this is calculated'."));
+                    + "Blank means not measured, or too few people to report on. Definitions are on 'How this is calculated'."));
                 sheet.AddHeaderRow("Department", "Seats", "Active licences", "Interactions per licence",
                     "Licences using agents %", "Unlicensed users", "Interactions per unlicensed user",
                     "Unlicensed using agents %", "Active users (audit)", "Using customer-built agents %",
@@ -1318,8 +1328,9 @@ namespace Common.Entities.CopilotAdoption
                 + "an enabled licensed user whose manager is someone else with an enabled account; a people manager is "
                 + "anyone who manages at least one, with or without a Copilot seat. A manager whose own use cannot be "
                 + "determined is counted as unknown and left out of both sides of the comparison. Each department "
-                + $"is the report's own. Figures for fewer than {summary.Options.MinSeatsPerSegment} people managers, "
-                + "or a rate over fewer reports than that, are left blank. This is an association, not a cause: teams "
+                + $"is the report's own. Figures for fewer than {summary.Options.MinSeatsPerSegment} people managers - "
+                + "in all, or on either side of a comparison - or a rate over fewer reports than that, are left blank. "
+                + "This is an association, not a cause: teams "
                 + "whose manager uses Copilot may differ in function, seniority or seat coverage."));
             sheet.AddHeaderRow(
                 "Department", "Seats", "Direct reports", "Managers, use known", "Managers, use unknown",
@@ -2750,7 +2761,9 @@ namespace Common.Entities.CopilotAdoption
                 + "team that was given seats, which on its own would widen the gap.\n"
                 + $"Aggregates only. Every figure that depends on managers' own use needs at least {o.MinSeatsPerSegment} "
                 + $"people managers whose use is known, and every rate needs at least {o.MinSeatsPerSegment} reports "
-                + "behind it; anything smaller is left blank. Nothing about a manager's own use is attached to a person's "
+                + "behind it; anything smaller is left blank. The comparison by the manager's use, and its split by seat, "
+                + $"is shown only when each of its groups holds at least {o.MinSeatsPerSegment} managers or none, so that "
+                + "no group gives away one manager's own use. Nothing about a manager's own use is attached to a person's "
                 + "row or to the roll-up by direct manager. On the department table each report counts in their own "
                 + "department, and the departments are those of the adoption-by-department table.");
 

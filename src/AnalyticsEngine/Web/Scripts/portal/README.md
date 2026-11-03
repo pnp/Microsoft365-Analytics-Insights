@@ -402,7 +402,7 @@ auth cookie, so a token in the request body would be ignored.
 | `o365AnalyticsInstallLogAPI` | `api/InstallLog` | Install log (config history from `sys_configs`) for the Install Log page. |
 | `o365AnalyticsProfilingStatusAPI` | `api/ProfilingStatus` | Profiling data freshness + paged `profiling.TraceLogs` for the Profiling page. |
 | `o365AnalyticsReportsAPI` | `api/Reports` | Lite in-app reports: enabled areas (`/areas`) + weekly usage charts per area (`/copilot`, `/usage`, `/office-apps`, `/spo-audit`, `/web-traffic`, `/calls`, `/emails`). |
-| `o365AnalyticsCopilotAdoptionAPI` | `api/CopilotAdoption` | Copilot licence adoption: availability, executive summary, licensed-user and licence-opportunity lists, and their CSV exports. Every endpoint takes the page-wide `userFilter` - see [The user filter](#the-user-filter). |
+| `o365AnalyticsCopilotAdoptionAPI` | `api/CopilotAdoption` | Copilot licence adoption: availability, executive summary, licensed-user and licence-opportunity lists, and their CSV exports. Every endpoint takes the page-wide `userFilter` - see [The user filter](#the-user-filter). The summary, licence types, filters, queries and workbook are aggregates for every reader; the per-person lists and their exports need See PII, and so does anything that narrows the population: an `emailDomain`, a `userFilter` or a `seatLicenceTypeIds` override of the automatic Copilot seat classification. |
 | _(none - origin-relative)_ | `api/CopilotInvestment` | Copilot investment: `/availability`, `/summary` (aggregates for every reader; a `userFilter` or a grouping that names people, such as `manager`, needs See PII), `/trend` (credit-balance snapshots, never summed), `/people` and `/person/{userId}` (See PII only) and `/export/workbook` (its People sheet only with See PII; `language=en|es` writes it in that language, English when absent or unrecognised, from this catalog's `copilotInvestment.workbook.*` keys, which `Common.Entities` embeds - so a workbook key is translated, placeholder-checked and gated like any page text, and an error the link answers with is plain text in the same language). Every endpoint takes `windowDays`, the page-wide `userFilter` and optional what-if figures (`currency`, `seatPrice`, `creditPrice`, `studioCreditPrice`, `hourlyCost`, `minutesLow/Base/High`, `realisationLow/Base/High`, parsed culture-free). The administrator's global filter applies to every endpoint. Answers stable codes the portal translates. |
 | _(none - origin-relative)_ | `api/CopilotInvestmentSettings` | The investment assumptions: `GET` (Administration) and a same-origin `POST` (`{ expectedVersion, assumptions }`) that answers `versionConflict` when someone else saved first. |
 | _(none - origin-relative)_ | `api/UserFilter` | The user filter's picker: which attributes can be filtered on (`/dimensions`) and each one's values, largest first (`/values?dimension=&search=&take=`). For a reader the global filter applies to, both are counted within it. |
@@ -602,8 +602,11 @@ with or without See PII.
   people a given report has rows for nor the groups a report breaks them into: a department, country or
   adoption breakdown can still show a group smaller than five, exactly as it can with no filter.
 - **What stays tenant-wide**, and says so beside the figures: the Overview page's data counts, Teams
-  team-level figures (collaboration and conversations), agent and Azure cost figures, and the Copilot
-  Adoption sections already marked as tenant-wide.
+  team-level figures (collaboration and conversations), and agent and Azure cost figures. The Copilot
+  Adoption sections it marks as tenant-wide under a reader's own filter (use by app, resource types, the
+  weekly trend, the agent inventory, purchased seats, the Copilot Studio capacity snapshot and Microsoft's
+  report figures) are instead left out under this filter and listed in the summary's `withheldSections`,
+  together with the tenant's seat count; the page says they are not shown rather than showing them empty.
 - **Administrators** see the filter applied too, so they see what everyone sees. Only those with **both
   Administration and See PII** can switch it off for their own view from the bar, which sets the session
   cookie `GlobalFilterBypass=1`; the server requires both permissions, and exports follow it because it

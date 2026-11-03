@@ -299,9 +299,11 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void ARateNeedsTheMinimumNumberOfReportsBehindIt()
+        public void ASideWithTooFewManagersOrReports_WithholdsTheWholeComparison()
         {
-            // Six managers with a seat: five use Copilot with three reports each, one does not, with two.
+            // Six managers with a seat: five use Copilot with three reports each, one does not, with two. The
+            // inactive side is one manager and two reports - and since the sides add up to the reports with a
+            // known manager, which is published, the active side cannot be shown without giving it away either.
             var seats = new List<LicensedUserAdoptionRow>();
             for (var m = 1; m <= 6; m++)
             {
@@ -312,12 +314,64 @@ namespace Tests.UnitTests
 
             var summary = Finalise(Analysis(seats), minSeats: 5);
 
-            Assert.AreEqual(83.3, summary.ManagersActivePct);
-            Assert.AreEqual(15, summary.ReportsManagerActive);
-            Assert.AreEqual(100d, summary.ReportsActiveRatePctManagerActive);
-            Assert.AreEqual(2, summary.ReportsManagerInactive, "The count is published...");
-            Assert.IsNull(summary.ReportsActiveRatePctManagerInactive, "...but a rate over two reports is not.");
+            Assert.AreEqual(83.3, summary.ManagersActivePct, "A share of six known managers is still published.");
+            Assert.AreEqual(17, summary.ReportsWithManager);
+            Assert.IsNull(summary.ReportsManagerInactive, "One inactive manager's team size would point to them...");
+            Assert.IsNull(summary.ReportsActiveRatePctManagerInactive, "...and a rate over two reports is not shown either...");
+            Assert.IsNull(summary.ReportsManagerActive, "...nor the other side, which is the published total minus this one.");
+            Assert.IsNull(summary.ReportsActiveRatePctManagerActive);
             Assert.IsNull(summary.ReportsHabitRatePctManagerInactive);
+            Assert.IsNull(summary.ReportsManagerActiveLicensed);
+        }
+
+        [TestMethod]
+        public void AManagerAloneOnOneSideOfASplit_IsNotGivenAwayByTheirTeamsFigures()
+        {
+            // Five managers whose use is known, each with five licensed reports. Four hold a seat and use Copilot;
+            // the fifth holds no seat. Anyone who knows that much about the department could read the fifth
+            // manager's own Copilot use off whichever side their team landed on - so neither split is published.
+            foreach (var fifthUsesChat in new[] { true, false })
+            {
+                var seats = new List<LicensedUserAdoptionRow>();
+                for (var m = 1; m <= 4; m++) seats.Add(Seat(m, AdoptionBand.Champion));
+                for (var m = 1; m <= 5; m++)
+                {
+                    for (var r = 0; r < 5; r++) seats.Add(Seat(m * 100 + r, AdoptionBand.Established, manager: m));
+                }
+
+                var summary = Finalise(
+                    Analysis(seats, chat: fifthUsesChat ? new[] { ChatUser(5) } : null),
+                    minSeats: 5);
+                var label = fifthUsesChat ? "fifth manager uses Copilot Chat" : "fifth manager does not use Copilot";
+
+                Assert.AreEqual(5, summary.ManagersStatusKnown, label);
+                Assert.AreEqual(fifthUsesChat ? 100d : 80d, summary.ManagersActivePct,
+                    label + ": a share of five known managers is published, as before.");
+                Assert.IsNull(summary.ReportsManagerActiveUnlicensed, label);
+                Assert.IsNull(summary.ReportsManagerInactiveUnlicensed, label);
+                Assert.IsNull(summary.ReportsManagerActiveLicensed, label + ": the sibling cell would give it back by subtraction.");
+                Assert.IsNull(summary.ReportsActiveRatePctManagerActiveUnlicensed, label);
+                Assert.IsNull(summary.ReportsActiveRatePctManagerInactiveUnlicensed, label);
+                Assert.IsNull(summary.ReportsActiveRatePctManagerActiveLicensed, label);
+
+                if (fifthUsesChat)
+                {
+                    // Everyone on one side, nobody on the other: the use split says nothing about any one manager.
+                    Assert.AreEqual(25, summary.ReportsManagerActive, label);
+                    Assert.AreEqual(0, summary.ReportsManagerInactive, label);
+                    Assert.AreEqual(100d, summary.ReportsActiveRatePctManagerActive, label);
+                }
+                else
+                {
+                    Assert.IsNull(summary.ReportsManagerActive, label + ": one inactive manager is one identifiable person.");
+                    Assert.IsNull(summary.ReportsManagerInactive, label);
+                    Assert.IsNull(summary.ReportsActiveRatePctManagerActive, label);
+                    Assert.IsNull(summary.ReportsActiveRatePctManagerInactive, label);
+                }
+
+                Assert.IsNull(summary.WithoutIndividualData().ReportsManagerActiveUnlicensed,
+                    label + ": the copy served without See PII, and the workbook built from it, carry the same blanks.");
+            }
         }
 
         [TestMethod]
@@ -325,26 +379,26 @@ namespace Tests.UnitTests
         {
             var seats = new List<LicensedUserAdoptionRow>();
 
-            // A Greek-named department with six managers, each with a seat and five reports in the same
-            // department: big enough for every figure.
-            for (var m = 1; m <= 6; m++)
+            // A Greek-named department with ten managers, each with a seat and five reports in the same
+            // department, five of them using Copilot and five not: big enough for every figure.
+            for (var m = 1; m <= 10; m++)
             {
-                seats.Add(Seat(m, m <= 3 ? AdoptionBand.Established : AdoptionBand.NeverUsed, department: GreekDepartment));
+                seats.Add(Seat(m, m <= 5 ? AdoptionBand.Established : AdoptionBand.NeverUsed, department: GreekDepartment));
                 for (var r = 0; r < 5; r++)
                 {
-                    seats.Add(Seat(m * 100 + r, r < (m <= 3 ? 4 : 1) ? AdoptionBand.Trialling : AdoptionBand.NeverUsed, manager: m, department: GreekDepartment));
+                    seats.Add(Seat(m * 100 + r, r < (m <= 5 ? 4 : 1) ? AdoptionBand.Trialling : AdoptionBand.NeverUsed, manager: m, department: GreekDepartment));
                 }
             }
 
             // Six seats but only two managers: listed, with its manager figures withheld.
-            seats.Add(Seat(7, AdoptionBand.Champion, department: "Contoso Legal"));
-            seats.Add(Seat(8, AdoptionBand.NeverUsed, department: "Contoso Legal"));
-            for (var r = 0; r < 2; r++) seats.Add(Seat(700 + r, AdoptionBand.Trialling, manager: 7, department: "Contoso Legal"));
-            for (var r = 0; r < 2; r++) seats.Add(Seat(800 + r, AdoptionBand.Trialling, manager: 8, department: "Contoso Legal"));
+            seats.Add(Seat(11, AdoptionBand.Champion, department: "Contoso Legal"));
+            seats.Add(Seat(12, AdoptionBand.NeverUsed, department: "Contoso Legal"));
+            for (var r = 0; r < 2; r++) seats.Add(Seat(1100 + r, AdoptionBand.Trialling, manager: 11, department: "Contoso Legal"));
+            for (var r = 0; r < 2; r++) seats.Add(Seat(1200 + r, AdoptionBand.Trialling, manager: 12, department: "Contoso Legal"));
 
             // Four seats: below the minimum, so the department is not listed at all.
-            seats.Add(Seat(9, AdoptionBand.Champion, department: "Contoso Tiny"));
-            for (var r = 0; r < 3; r++) seats.Add(Seat(900 + r, AdoptionBand.Trialling, manager: 9, department: "Contoso Tiny"));
+            seats.Add(Seat(13, AdoptionBand.Champion, department: "Contoso Tiny"));
+            for (var r = 0; r < 3; r++) seats.Add(Seat(1300 + r, AdoptionBand.Trialling, manager: 13, department: "Contoso Tiny"));
 
             var summary = Finalise(Analysis(seats), minSeats: 5);
 
@@ -355,10 +409,10 @@ namespace Tests.UnitTests
             Assert.IsFalse(summary.ManagerModellingByDepartment.Any(d => d.Segment == "Contoso Tiny"));
 
             var greek = summary.ManagerModellingByDepartment.Single(d => d.Segment == GreekDepartment);
-            Assert.AreEqual(36, greek.LicensedUsers);
-            Assert.AreEqual(6, greek.ManagersStatusKnown);
+            Assert.AreEqual(60, greek.LicensedUsers);
+            Assert.AreEqual(10, greek.ManagersStatusKnown);
             Assert.AreEqual(50d, greek.ManagersActivePct);
-            Assert.AreEqual(15, greek.ReportsManagerActive);
+            Assert.AreEqual(25, greek.ReportsManagerActive);
             Assert.AreEqual(80d, greek.ReportsActiveRatePctManagerActive);
             Assert.AreEqual(20d, greek.ReportsActiveRatePctManagerInactive);
             Assert.AreEqual(80d, greek.ReportsActiveRatePctManagerActiveLicensed);
@@ -371,8 +425,8 @@ namespace Tests.UnitTests
             Assert.IsNull(legal.ReportsActiveRatePctManagerInactive);
 
             // The tenant-wide figure still covers every department, including the one not listed.
-            Assert.AreEqual(9, summary.ManagersStatusKnown);
-            Assert.AreEqual(37, summary.ReportsWithManager);
+            Assert.AreEqual(13, summary.ManagersStatusKnown);
+            Assert.AreEqual(57, summary.ReportsWithManager);
         }
 
         #endregion
