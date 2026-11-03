@@ -1144,13 +1144,15 @@ namespace Common.Entities.CopilotAdoption
                     "Licensed and unlicensed side by side. A department with idle licences AND heavy unlicensed use "
                     + "is a licence-allocation problem, not an adoption problem, and can usually be fixed at no cost. "
                     + "Interactions per licence divides by all licences including idle ones - that is the point of the "
-                    + "comparison. Both per-user columns are normalised to a month."));
+                    + "comparison. Both per-user columns are normalised to a month. A department is listed when either "
+                    + $"population reaches {summary.Options.MinSeatsPerSegment} people; the figures of a smaller one are left "
+                    + "blank, with the agent figures, so that no one can be singled out."));
                 sheet.AddRow(XlsxCell.Wrapped(
                     "Agent breadth and depth (" + AgentFiguresScopeLabel(summary.AgentFiguresScope) + "): breadth is the "
                     + "share of the department's active Copilot users seen in the audit log who used at least one agent; "
                     + "depth is how many distinct agents they used per 100 of them, and how many interactions each of "
                     + "those agents had. Builders are people who created, published or shared a Copilot Studio agent. "
-                    + "Blank means not measured. Definitions are on 'How this is calculated'."));
+                    + "Blank means not measured, or too few people to report on. Definitions are on 'How this is calculated'."));
                 sheet.AddHeaderRow("Department", "Seats", "Active licences", "Interactions per licence",
                     "Licences using agents %", "Unlicensed users", "Interactions per unlicensed user",
                     "Unlicensed using agents %", "Active users (audit)", "Using customer-built agents %",

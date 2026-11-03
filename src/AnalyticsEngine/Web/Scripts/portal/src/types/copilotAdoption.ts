@@ -422,13 +422,19 @@ export interface AdoptionConcentrationBand {
 /** Licensed and unlicensed Copilot use for one department, side by side. */
 export interface AdoptionCombinedSegmentRow {
   segment: string;
-  licensedUsers: number;
-  licensedActiveUsers: number;
-  interactionsPerLicensedUser: number;
-  licensedAgentUserPct: number;
-  unlicensedActiveUsers: number;
-  interactionsPerUnlicensedUser: number;
-  unlicensedAgentUserPct: number;
+  /**
+   * Each side's figures are null when fewer than `minSeatsPerSegment` people are on that side: withheld so
+   * that no one can be singled out, never a measured zero.
+   */
+  licensedUsers: number | null;
+  licensedActiveUsers: number | null;
+  interactionsPerLicensedUser: number | null;
+  licensedAgentUserPct: number | null;
+  unlicensedActiveUsers: number | null;
+  interactionsPerUnlicensedUser: number | null;
+  unlicensedAgentUserPct: number | null;
+  /** True when the agent figures below are null because too few people are behind them, not because they were not measured. */
+  agentFiguresWithheld?: boolean;
   /**
    * Agent breadth and depth (#646) over the department's active Copilot users seen in the audit log, and its
    * Copilot Studio builders (#647). Each is null when it could not be measured, and absent from a server

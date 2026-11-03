@@ -479,6 +479,18 @@ describe('CopilotAdoptionPage view split', () => {
     expect(screen.queryByRole('button', { name: 'SQL' })).not.toBeInTheDocument();
   });
 
+  it('shows a dash, not zero candidates, for a league-table department the candidate breakdown does not list', async () => {
+    await renderPage();
+
+    const table = await screen.findByRole('table', { name: 'Department league table' });
+    // Support has no published candidate count - too few candidates to show, or past the breakdown's cap.
+    const support = within(within(table).getByText('Support').closest('tr') as HTMLElement);
+    expect(support.getAllByText('\u2014')).toHaveLength(2);
+    const finance = within(within(table).getByText('Finance').closest('tr') as HTMLElement);
+    expect(finance.getByText('6')).toBeVisible();
+    expect(finance.queryByText('\u2014')).toBeNull();
+  });
+
   it('shows Microsoft’s tenant prompt figures on the executive view, named and dated, beside the audit figures', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
       microsoftReportDate: '2026-10-05T00:00:00Z',

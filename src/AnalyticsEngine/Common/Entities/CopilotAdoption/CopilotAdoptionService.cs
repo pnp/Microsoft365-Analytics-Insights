@@ -764,6 +764,7 @@ namespace Common.Entities.CopilotAdoption
                 { "@from", agentWindowStart },
                 { "@toExclusive", agentToExclusive },
                 { "@top", _options.TopSegments },
+                { "@minUsers", Math.Max(1, _options.MinSeatsPerSegment) },
             };
             output.Sql["agentsByDepartment"] = CopilotAdoptionSql.ForDisplay(byDeptSql, byDeptParameters);
 
@@ -2138,8 +2139,11 @@ namespace Common.Entities.CopilotAdoption
             var opportunities = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
             var recommended = opportunities.Where(o => o.Recommended).ToList();
             summary.RecommendedForLicence = recommended.Count;
+            // Like every other department breakdown, a department needs MinSeatsPerSegment people behind its
+            // figure: one or two candidates would say which of a small team's few unlicensed people work hardest.
             summary.OpportunityByDepartment = recommended
                 .GroupBy(o => string.IsNullOrWhiteSpace(o.Department) ? "(no department)" : o.Department.Trim())
+                .Where(g => g.Count() >= _options.MinSeatsPerSegment)
                 .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Count() })
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
@@ -3299,8 +3303,11 @@ namespace Common.Entities.CopilotAdoption
 
             unlicensed.HabitBuckets = BuildHabitBuckets(rows.Select(r => (double)r.ActiveDays));
 
+            // A department's bar is the sum of its people's interactions, so it needs MinSeatsPerSegment of
+            // them: a department with one unlicensed Chat user would publish that person's volume.
             unlicensed.UsageByDepartment = rows
                 .GroupBy(r => string.IsNullOrWhiteSpace(r.Department) ? "(no department)" : r.Department.Trim())
+                .Where(g => g.Count() >= _options.MinSeatsPerSegment)
                 .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Sum(r => (double)r.Interactions) })
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
@@ -3366,39 +3373,56 @@ namespace Common.Entities.CopilotAdoption
                 agents = agents ?? new DepartmentAgentFigures();
                 var measured = agentFigures.Measured;
 
+                // Each side is published only when enough people are behind it; a side with nobody on it is a
+                // measured zero. The agent figures count both sides together, so with either side withheld they
+                // would hand it back by subtraction from the side that is shown - they go too, as they do when
+                // the department's active population is itself too small.
+                var licensedShown = seats.Count == 0 || seats.Count >= _options.MinSeatsPerSegment;
+                var unlicensedShown = chat.Count == 0 || chat.Count >= _options.MinSeatsPerSegment;
+                var agentsWithheld = measured
+                    && (!licensedShown || !unlicensedShown || (agents.ActiveUsers > 0 && agents.ActiveUsers < _options.MinSeatsPerSegment));
+                var agentsShown = measured && !agentsWithheld;
+
                 rows.Add(new AdoptionCombinedSegmentRow
                 {
                     Segment = segment,
-                    LicensedUsers = seats.Count,
-                    LicensedActiveUsers = seats.Count(CopilotAdoptionScoring.IsActive),
+                    LicensedUsers = licensedShown ? seats.Count : (int?)null,
+                    LicensedActiveUsers = licensedShown ? seats.Count(CopilotAdoptionScoring.IsActive) : (int?)null,
                     // Per seat held, not per active seat: this column exists to be compared with the
                     // unlicensed one, and an idle seat is the whole point of the comparison.
                     // Report-sourced licensed rows hold Microsoft prompt counts in Interactions, not
                     // audit interaction counts, so they stay in the seat denominator but never in this
                     // numerator. Otherwise this row adds two different units and labels them as one.
-                    InteractionsPerLicensedUser = PerUserPerMonth(
-                        seats.Where(u => !IsUsageReportSourced(u)).Sum(u => (double)u.Interactions),
-                        seats.Count),
-                    LicensedAgentUserPct = CopilotAdoptionScoring.Percentage(
-                        seats.Count(u => u.AgentsUsed > 0), seats.Count),
-                    UnlicensedActiveUsers = chat.Count,
-                    InteractionsPerUnlicensedUser = PerUserPerMonth(chat.Sum(u => (double)u.Interactions), chat.Count),
-                    UnlicensedAgentUserPct = CopilotAdoptionScoring.Percentage(
-                        chat.Count(u => u.AgentsUsed > 0), chat.Count),
-                    AgentActiveUsers = measured ? agents.ActiveUsers : (int?)null,
-                    AgentUsers = measured ? agents.AgentUsers : (int?)null,
-                    AgentUserPct = measured ? PercentageOrNull(agents.AgentUsers, agents.ActiveUsers) : null,
-                    DistinctAgents = measured ? agents.Agents.Count : (int?)null,
-                    AgentsPer100ActiveUsers = measured ? PerHundredOrNull(agents.Agents.Count, agents.ActiveUsers) : null,
-                    AgentInteractions = measured ? agents.Interactions : (long?)null,
-                    InteractionsPerActiveAgent = measured ? PerAgentOrNull(agents.Interactions, agents.Agents.Count) : null,
+                    InteractionsPerLicensedUser = licensedShown
+                        ? PerUserPerMonth(
+                            seats.Where(u => !IsUsageReportSourced(u)).Sum(u => (double)u.Interactions),
+                            seats.Count)
+                        : (double?)null,
+                    LicensedAgentUserPct = licensedShown
+                        ? CopilotAdoptionScoring.Percentage(seats.Count(u => u.AgentsUsed > 0), seats.Count)
+                        : (double?)null,
+                    UnlicensedActiveUsers = unlicensedShown ? chat.Count : (int?)null,
+                    InteractionsPerUnlicensedUser = unlicensedShown
+                        ? PerUserPerMonth(chat.Sum(u => (double)u.Interactions), chat.Count)
+                        : (double?)null,
+                    UnlicensedAgentUserPct = unlicensedShown
+                        ? CopilotAdoptionScoring.Percentage(chat.Count(u => u.AgentsUsed > 0), chat.Count)
+                        : (double?)null,
+                    AgentFiguresWithheld = agentsWithheld,
+                    AgentActiveUsers = agentsShown ? agents.ActiveUsers : (int?)null,
+                    AgentUsers = agentsShown ? agents.AgentUsers : (int?)null,
+                    AgentUserPct = agentsShown ? PercentageOrNull(agents.AgentUsers, agents.ActiveUsers) : null,
+                    DistinctAgents = agentsShown ? agents.Agents.Count : (int?)null,
+                    AgentsPer100ActiveUsers = agentsShown ? PerHundredOrNull(agents.Agents.Count, agents.ActiveUsers) : null,
+                    AgentInteractions = agentsShown ? agents.Interactions : (long?)null,
+                    InteractionsPerActiveAgent = agentsShown ? PerAgentOrNull(agents.Interactions, agents.Agents.Count) : null,
                     AgentBuilders = agentFigures.BuildersMeasured ? agents.Builders : (int?)null,
                 });
             }
 
             return rows
-                .OrderByDescending(r => r.LicensedUsers)
-                .ThenByDescending(r => r.UnlicensedActiveUsers)
+                .OrderByDescending(r => r.LicensedUsers ?? 0)
+                .ThenByDescending(r => r.UnlicensedActiveUsers ?? 0)
                 .Take(_options.TopSegments)
                 .ToList();
         }

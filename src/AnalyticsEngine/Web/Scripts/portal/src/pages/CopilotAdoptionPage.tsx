@@ -1288,13 +1288,22 @@ function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary
   // Both collections are absent when the analysis returned early (a failed licence-types query
   // marks the summary incomplete without populating the segment breakdowns), so neither can be
   // spread or mapped unguarded.
+  // A department missing from the candidate breakdown has no published count - it fell below the
+  // breakdown's minimum group or its cap - which is not the same as no candidates, so it shows a dash
+  // and no reassignment signal rather than a zero.
   const candidatesByDepartment = new Map((summary.opportunityByDepartment ?? []).map((r) => [r.label, r.value]));
   const rows = [...(summary.habitByDepartment ?? [])]
     .map((row) => {
       const habitRatePct = row.licensedUsers > 0 ? (row.habitualUsers / row.licensedUsers) * 100 : 0;
       const idleSeats = row.neverUsedUsers;
-      const candidates = candidatesByDepartment.get(row.segment) ?? 0;
-      return { ...row, habitRatePct, idleSeats, candidates, netOpportunity: candidates - idleSeats };
+      const candidates = candidatesByDepartment.get(row.segment);
+      return {
+        ...row,
+        habitRatePct,
+        idleSeats,
+        candidates,
+        netOpportunity: candidates === undefined ? undefined : candidates - idleSeats,
+      };
     })
     .sort((a, b) => a.habitRatePct - b.habitRatePct || b.licensedUsers - a.licensedUsers)
     .slice(0, 8);
@@ -1324,13 +1333,15 @@ function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary
             <td className={styles.skuCell}>{formatPct(row.habitRatePct)}</td>
             <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
             <td className={styles.skuCell}>{formatCount(row.idleSeats)}</td>
-            <td className={styles.skuCell}>{formatCount(row.candidates)}</td>
+            <td className={styles.skuCell}>{row.candidates === undefined ? '\u2014' : formatCount(row.candidates)}</td>
             <td className={styles.skuCell}>
-              {row.netOpportunity > 0
-                ? t('copilotAdoption.page.moreCandidatesNeverUsedSeats', { v0: formatCount(row.netOpportunity) })
-                : row.netOpportunity < 0
-                  ? t('copilotAdoption.page.moreNeverUsedSeatsCandidates', { v0: formatCount(Math.abs(row.netOpportunity)) })
-                  : t('copilotAdoption.page.balanced')}
+              {row.netOpportunity === undefined
+                ? '\u2014'
+                : row.netOpportunity > 0
+                  ? t('copilotAdoption.page.moreCandidatesNeverUsedSeats', { v0: formatCount(row.netOpportunity) })
+                  : row.netOpportunity < 0
+                    ? t('copilotAdoption.page.moreNeverUsedSeatsCandidates', { v0: formatCount(Math.abs(row.netOpportunity)) })
+                    : t('copilotAdoption.page.balanced')}
             </td>
           </tr>
         ))}
