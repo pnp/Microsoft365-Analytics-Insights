@@ -7,6 +7,15 @@ using System.Threading.Tasks;
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     /// <summary>
+    /// Optional, fresh verification for a reused sign-in name. A delta omission or a disabled flag is never
+    /// deletion evidence. Implementations must fail closed on partial responses, permission failures and ambiguity.
+    /// </summary>
+    internal interface IReusedUpnVerifier
+    {
+        Task<bool> VerifyReusedUpnAsync(GraphUser currentOwner, string previousObjectId);
+    }
+
+    /// <summary>
     /// Interface for loading user metadata from external sources
     /// </summary>
     public interface IUserMetadataLoader

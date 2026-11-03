@@ -580,6 +580,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     : await db.users.AsNoTracking().ToListAsync();
                 _logger.LogInformation($"User import - loaded {allDbUsers.Count.ToString("N0")} users from database");
 
+                var rowsToDeactivate = UserIdentityRules.SelectRowsToDeactivate(allDbUsers, deactivations);
+                int? usersInDirectory = null;
+                if (rowsToDeactivate.NoLongerInDirectory.Count > 0)
+                    usersInDirectory = await CountDirectoryUsersAsync();
+                var verifier = deltaReadCompleted && !userScope.IsFiltered ? _userLoader as IReusedUpnVerifier : null;
+
                 // Renamed users keep their row. Users whose identity cannot be matched safely are quarantined: left out of
                 // everything below that depends on who they are, and carried to the next cycle. Nobody else waits for them.
                 var profilesByObjectId = new Dictionary<string, GraphUser>(StringComparer.OrdinalIgnoreCase);
@@ -592,7 +598,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
                 var reconciliation = await UserRenameProcessor.ReconcileAsync(db.Database.Connection.ConnectionString,
                     allActiveGraphUsers.Concat(disabledGraphUsers), allDbUsers, _logger,
-                    () => EnsureWriterLockHeldAsync("user rename"));
+                    () => EnsureWriterLockHeldAsync("user rename"),
+                    verifier == null ? null : (Func<GraphUser, Common.Entities.User, Task<bool>>)((owner, previous) =>
+                        verifier.VerifyReusedUpnAsync(owner, previous.AzureAdId)));
                 var quarantinedRowIds = new HashSet<int>();
                 if (reconciliation.Conflicts.Count > 0)
                 {
@@ -662,16 +670,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // SelectRowsToDeactivate). Resolved now, against the rows just loaded: a deleted account's entry carries
                 // nothing but its object id, and azure_ad_id cannot be queried efficiently.
                 var disabledGraphUsersWithRows = disabledGraphUsers.Where(u => dbUsersByUpn.ContainsKey(u.UserPrincipalName)).ToList();
-                var rowsToDeactivate = UserIdentityRules.SelectRowsToDeactivate(allDbUsers, deactivations);
-
-                // Absence only means deletion if the read really listed the whole directory. Graph's own count of the
-                // directory's users is read now, as close to the read as possible, and only when absence would disable
-                // someone: see DirectoryReadCompleteness.
-                int? usersInDirectory = null;
-                if (rowsToDeactivate.NoLongerInDirectory.Count > 0)
-                {
-                    usersInDirectory = await CountDirectoryUsersAsync();
-                }
 
                 var graphMentionedExistingDbUsers = _dataMapper.GetDbUsersFromGraphUsers(allActiveGraphUsers, allDbUsers);
                 var fallbackLicenceUserIds = skus == null ? new HashSet<int>() : null;
@@ -1063,6 +1061,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var message = $"User import - identity reconciliation: {reconciliation.RenamesApplied:N0} renamed in place " +
                 $"({reconciliation.RenamedFromSeveralRows:N0} from several rows, {reconciliation.ChainedRenames:N0} after another rename freed the name), " +
                 $"{reconciliation.PlaceholdersAdopted:N0} placeholder row(s) adopted (path: object id stamped on the row another import created under the new sign-in name; earlier rows kept as history), " +
+                $"{reconciliation.ObsoleteNamesReleased:N0} obsolete sign-in name(s) released atomically (previous row, object id and history kept; current identity separate), " +
                 $"{reconciliation.Conflicts.Count:N0} quarantined, {merge.Retried:N0} retried from earlier cycles, {resolved:N0} resolved, " +
                 $"{merge.Dropped:N0} dropped (deleted or outside UserGroupsFilter), in {reconciliation.ElapsedMs:N0} ms.";
             if (reconciliation.Conflicts.Count > 0 || !load.Available)
@@ -1750,6 +1749,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Fallback for edge cases where mapper isn't initialized. Uses the same extracted
                 // mapping rule as UserDataMapper so the two copies cannot drift apart (#371).
                 var plan = UserMetadataMappingRules.BuildPlan(graphUser);
+                UserIdentityRules.EnsureSameObject(dbUser, plan.AzureAdId);
                 dbUser.AccountEnabled = plan.AccountEnabled;
                 dbUser.PostalCode = plan.PostalCode;
                 dbUser.AzureAdId = plan.AzureAdId;

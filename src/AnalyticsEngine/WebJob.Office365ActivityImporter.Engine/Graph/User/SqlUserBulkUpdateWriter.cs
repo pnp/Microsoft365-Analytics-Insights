@@ -12,10 +12,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// drops the temp table again.
     /// </summary>
     /// <remarks>
-    /// This is <c>UserBatchProcessor.ExecuteBulkUpdate</c> moved here unchanged (#371): same
-    /// connection handling, same temp-table DDL, same column mappings, same batch size and
-    /// timeouts. Nothing about the bulk-copy strategy is being altered - it is only being taken out
-    /// of the batching logic so that logic becomes testable.
+    /// The bulk-copy strategy is unchanged. The users update is transactional: every staged row must match a
+    /// compatible identity, otherwise the whole batch rolls back and the import throws before licence/organisation
+    /// attribution or checkpoint commit can use stale mappings.
     ///
     /// The temp table is <c>#user_updates</c>, i.e. session-scoped, so every step must run on the
     /// same open <see cref="SqlConnection"/>.
@@ -62,15 +61,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     await bulkCopy.WriteToServerAsync(userUpdates);
                 }
 
-                using (var cmd = new SqlCommand(UPDATE_FROM_TEMP_SQL, connection))
+                using (var transaction = connection.BeginTransaction())
                 {
-                    cmd.CommandTimeout = 600;
-                    await cmd.ExecuteNonQueryAsync();
-                }
+                    using (var cmd = new SqlCommand(UPDATE_FROM_TEMP_SQL + "; SELECT @@ROWCOUNT;", connection, transaction))
+                    {
+                        cmd.CommandTimeout = 600;
+                        var updated = (int)await cmd.ExecuteScalarAsync();
+                        if (updated != userUpdates.Rows.Count)
+                            throw new InvalidOperationException(
+                                $"User import - metadata batch identity changed or a row disappeared: expected {userUpdates.Rows.Count} updates, matched {updated}. " +
+                                "The whole batch was rolled back; licences and organisations must not use the stale mappings, and the user checkpoint must not advance.");
+                    }
 
-                using (var cmd = new SqlCommand("DROP TABLE #user_updates", connection))
-                {
-                    await cmd.ExecuteNonQueryAsync();
+                    using (var cmd = new SqlCommand("DROP TABLE #user_updates", connection, transaction))
+                    {
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                    transaction.Commit();
                 }
             }
         }
@@ -129,6 +136,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 u.manager_id             = CASE WHEN t.manager_reported = 1 THEN t.manager_id ELSE u.manager_id END,
                 u.last_updated           = t.last_updated
             FROM dbo.users u
-            INNER JOIN #user_updates t ON u.id = t.id";
+            INNER JOIN #user_updates t ON u.id = t.id
+            WHERE u.azure_ad_id IS NULL OR DATALENGTH(u.azure_ad_id) = 0 OR u.azure_ad_id = t.azure_ad_id";
     }
 }

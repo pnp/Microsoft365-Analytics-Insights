@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -108,6 +109,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         public int RenamesApplied { get; set; }
 
+        public int ObsoleteNamesReleased { get; set; }
+
         /// <summary>Renames applied to the newest of several rows carrying the object id.</summary>
         public int RenamedFromSeveralRows { get; set; }
 
@@ -140,7 +143,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// per-day unique keys, which is deferred.
     /// </para>
     /// <para>
-    /// Anything else is genuinely ambiguous - the name is held by a row with another object id (a reused sign-in name,
+    /// A reused name can be released only after fresh, bounded directory verification establishes the current owner
+    /// and the previous object's deletion/absence. The previous row is disabled and renamed to a reserved historical
+    /// name, keeping its object id, primary key and all references. Assigning the current owner's existing row, or
+    /// creating their separate row, is in the same guarded transaction. No distinct object ids are ever merged.
+    /// </para>
+    /// <para>
+    /// Anything else stays ambiguous - the name is held by a row with another object id (an unverified reused name,
     /// or two users swapping names), Graph named the user twice, or the row changed while it was being written - and
     /// only those users are quarantined: nothing that depends on their identity is written, everyone else is imported,
     /// and the caller keeps their latest Graph profile so they are re-checked on every cycle. A chain of renames in one
@@ -154,6 +163,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>The first conflicts written to the log, by id.</summary>
         internal const int ConflictsLogged = 20;
+
+        internal const int MaxReusedNamesVerifiedPerCycle = 50;
+        private static int _verificationRound;
 
         /// <summary>Decides what to rename and what to quarantine, from rows already loaded. No SQL, no Graph.</summary>
         public static UserRenamePlan Plan(IEnumerable<GraphUser> graphUsers, IEnumerable<User> dbUsers)
@@ -198,8 +210,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
                 ownerOfName.Add(user.UserPrincipalName, user.Id);
 
-                if (byObjectId.TryGetValue(user.Id, out var rowsWithObjectId))
-                    candidates.Add(new KeyValuePair<GraphUser, List<User>>(user, rowsWithObjectId));
+                byObjectId.TryGetValue(user.Id, out var rowsWithObjectId);
+                candidates.Add(new KeyValuePair<GraphUser, List<User>>(user, rowsWithObjectId ?? new List<User>()));
             }
 
             var renamingRow = new Dictionary<int, PlannedUserRename>();
@@ -229,7 +241,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     continue;
                 }
 
-                AddRename(plan, renamingRow, user, candidate.Value, round: 0);
+                if (candidate.Value.Count > 0)
+                    AddRename(plan, renamingRow, user, candidate.Value, round: 0);
             }
 
             // A chain: the new name is held by a row this run renames away first. Later rounds only ever depend on
@@ -239,7 +252,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var stillBlocked = new List<Tuple<GraphUser, List<User>, User>>();
                 foreach (var waiting in blocked)
                 {
-                    if (renamingRow.TryGetValue(waiting.Item3.ID, out var freeing) && freeing.Round < round)
+                    if (waiting.Item2.Count > 0 && renamingRow.TryGetValue(waiting.Item3.ID, out var freeing) && freeing.Round < round)
                         AddRename(plan, renamingRow, waiting.Item1, waiting.Item2, round);
                     else
                         stillBlocked.Add(waiting);
@@ -286,10 +299,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// identity it cannot match; a SQL failure or a lost writer lock still throws.
         /// </summary>
         public static async Task<UserIdentityReconciliation> ReconcileAsync(string connectionString, IEnumerable<GraphUser> graphUsers,
-            List<User> dbUsers, ILogger logger, Func<Task> beforeWrite)
+            List<User> dbUsers, ILogger logger, Func<Task> beforeWrite,
+            Func<GraphUser, User, Task<bool>> verifyObsoleteOwner = null)
         {
             var timer = Stopwatch.StartNew();
-            var plan = Plan(graphUsers, dbUsers);
+            var profiles = graphUsers.ToList();
+            var plan = Plan(profiles, dbUsers);
             var result = new UserIdentityReconciliation { PlaceholdersAdopted = plan.PlaceholdersAdopted };
             foreach (var conflict in plan.Conflicts.Values)
                 result.Conflicts[conflict.ObjectId] = conflict;
@@ -297,9 +312,133 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (plan.Renames.Count > 0)
                 await ApplyAsync(connectionString, plan, result, logger, beforeWrite);
 
+            // A newcomer can take a name freed by an ordinary rename, but only if that rename actually succeeded.
+            // There is no source row to rename for this account; the normal insert phase will create it.
+            var rows = plan.Conflicts.Values.Any(c => c.Kind == UserIdentityConflictKind.DestinationOtherObjectId)
+                ? dbUsers.ToDictionary(u => u.ID) : null;
+            foreach (var conflict in plan.Conflicts.Values.Where(c => c.Kind == UserIdentityConflictKind.DestinationOtherObjectId && c.SourceRowIds.Count == 0))
+            {
+                var owner = profiles.First(u => string.Equals(u.Id, conflict.ObjectId, StringComparison.OrdinalIgnoreCase));
+                if (!string.Equals(rows[conflict.DestinationRowId.Value].UserPrincipalName, owner.UserPrincipalName, StringComparison.OrdinalIgnoreCase))
+                    result.Conflicts.Remove(conflict.ObjectId);
+            }
+
+            if (verifyObsoleteOwner != null && result.Conflicts.Values.Any(c => c.Kind == UserIdentityConflictKind.DestinationOtherObjectId))
+            {
+                var namedObjectIds = new HashSet<string>(profiles.Select(u => u.Id), StringComparer.OrdinalIgnoreCase);
+                var blocked = result.Conflicts.Values.Where(c => c.Kind == UserIdentityConflictKind.DestinationOtherObjectId)
+                    .OrderBy(c => c.ObjectId, StringComparer.OrdinalIgnoreCase).ToList();
+                // Rotate a bounded window so persistent ambiguous conflicts cannot starve the rest.
+                var offset = blocked.Count == 0 ? 0
+                    : (int)((long)(Interlocked.Increment(ref _verificationRound) & int.MaxValue) * MaxReusedNamesVerifiedPerCycle % blocked.Count);
+                for (var index = 0; index < Math.Min(blocked.Count, MaxReusedNamesVerifiedPerCycle); index++)
+                {
+                    var conflict = blocked[(offset + index) % blocked.Count];
+                    var destination = rows[conflict.DestinationRowId.Value];
+                    // A chain or swap, including a disabled live owner, is never a retirement.
+                    if (namedObjectIds.Contains(destination.AzureAdId))
+                        continue;
+                    var owner = profiles.First(u => string.Equals(u.Id, conflict.ObjectId, StringComparison.OrdinalIgnoreCase));
+                    if (owner.AccountEnabled != true || !Guid.TryParse(destination.AzureAdId, out var oldId)
+                        || !await verifyObsoleteOwner(owner, destination))
+                        continue;
+                    var source = conflict.SourceRowIds.Select(id => rows[id])
+                        .OrderByDescending(u => u.ID).FirstOrDefault();
+                    await beforeWrite();
+                    var assignedId = await ReleaseAndAssignAsync(connectionString, source, destination, owner, HistoricalName(destination.ID, oldId));
+                    if (!assignedId.HasValue)
+                    {
+                        result.Conflicts[owner.Id] = new UserIdentityConflict(owner.Id, UserIdentityConflictKind.ChangedDuringRename,
+                            conflict.SourceRowIds, destination.ID);
+                        continue;
+                    }
+                    destination.UserPrincipalName = HistoricalName(destination.ID, oldId);
+                    destination.AccountEnabled = false;
+                    if (source == null)
+                    {
+                        source = new User { ID = assignedId.Value, AzureAdId = owner.Id };
+                        dbUsers.Add(source);
+                    }
+                    source.UserPrincipalName = owner.UserPrincipalName;
+                    result.Conflicts.Remove(owner.Id);
+                    result.ObsoleteNamesReleased++;
+                }
+                if (blocked.Count > MaxReusedNamesVerifiedPerCycle)
+                    logger.LogWarning("User import - reused UPN verification budget: at most {Limit} conflicts verified per cycle; deferred identities stay quarantined and the verification window rotates.",
+                        MaxReusedNamesVerifiedPerCycle);
+            }
+
             LogConflicts(result, logger);
             result.ElapsedMs = timer.ElapsedMilliseconds;
             return result;
+        }
+
+        // ':' is forbidden in Entra UPNs; '@...invalid' keeps generic domain/identity readers out of hash paths.
+        internal static string HistoricalName(int rowId, Guid objectId)
+            => $"retired:entra:{objectId:N}:row:{rowId.ToString(System.Globalization.CultureInfo.InvariantCulture)}@history.invalid";
+
+        /// <summary>
+        /// The name is never free outside this transaction. Both rows are guarded against the snapshot read before
+        /// Graph verification; a concurrent refresh, rename or placeholder writer leaves the pair unchanged.
+        /// </summary>
+        internal static async Task<int?> ReleaseAndAssignAsync(string connectionString, User source, User destination,
+            GraphUser owner, string historicalName)
+        {
+            using (var connection = AzureSqlTokenAuth.CreateConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                using (var transaction = connection.BeginTransaction(IsolationLevel.Serializable))
+                using (var command = connection.CreateCommand())
+                {
+                    command.Transaction = transaction;
+                    command.CommandTimeout = 90;
+                    command.Parameters.Add("@destination", SqlDbType.Int).Value = destination.ID;
+                    command.Parameters.Add("@previousObject", SqlDbType.NVarChar, -1).Value = destination.AzureAdId;
+                    command.Parameters.Add("@desired", SqlDbType.VarChar, MaxUpnLength).Value = owner.UserPrincipalName;
+                    command.Parameters.Add("@historical", SqlDbType.VarChar, MaxUpnLength).Value = historicalName;
+                    command.Parameters.Add("@destinationUpdated", SqlDbType.DateTime).Value = (object)destination.LastUpdated ?? DBNull.Value;
+                    command.Parameters.Add("@destinationEnabled", SqlDbType.Bit).Value = (object)destination.AccountEnabled ?? DBNull.Value;
+                    command.Parameters.Add("@source", SqlDbType.Int).Value = (object)source?.ID ?? DBNull.Value;
+                    command.Parameters.Add("@old", SqlDbType.VarChar, MaxUpnLength).Value = (object)source?.UserPrincipalName ?? DBNull.Value;
+                    command.Parameters.Add("@object", SqlDbType.NVarChar, -1).Value = owner.Id;
+                    command.Parameters.Add("@created", SqlDbType.DateTime2).Value = (object)owner.CreatedDateTime ?? DBNull.Value;
+                    command.Parameters.Add("@sourceUpdated", SqlDbType.DateTime).Value = (object)source?.LastUpdated ?? DBNull.Value;
+                    command.Parameters.Add("@sourceEnabled", SqlDbType.Bit).Value = (object)source?.AccountEnabled ?? DBNull.Value;
+                    command.CommandText = @"
+IF NOT EXISTS (SELECT 1 FROM dbo.users WITH (UPDLOCK, HOLDLOCK)
+    WHERE id = @destination AND user_name = @desired AND azure_ad_id = @previousObject
+      AND (last_updated = @destinationUpdated OR (last_updated IS NULL AND @destinationUpdated IS NULL))
+      AND (account_enabled = @destinationEnabled OR (account_enabled IS NULL AND @destinationEnabled IS NULL)))
+    RETURN;
+IF EXISTS (SELECT 1 FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE user_name = @historical)
+    RETURN;
+IF @source IS NOT NULL AND NOT EXISTS (SELECT 1 FROM dbo.users WITH (UPDLOCK, HOLDLOCK)
+    WHERE id = @source AND user_name = @old AND azure_ad_id = @object
+      AND (last_updated = @sourceUpdated OR (last_updated IS NULL AND @sourceUpdated IS NULL))
+      AND (account_enabled = @sourceEnabled OR (account_enabled IS NULL AND @sourceEnabled IS NULL)))
+    RETURN;
+UPDATE dbo.users SET user_name = @historical, account_enabled = 0, last_updated = GETUTCDATE()
+WHERE id = @destination;
+IF @source IS NULL
+BEGIN
+    INSERT dbo.users (user_name, azure_ad_id, account_enabled, created_utc) VALUES (@desired, @object, 1, @created);
+    SELECT CAST(SCOPE_IDENTITY() AS int);
+END
+ELSE
+BEGIN
+    UPDATE dbo.users SET user_name = @desired WHERE id = @source;
+    SELECT @source;
+END";
+                    var assigned = await command.ExecuteScalarAsync();
+                    if (assigned == null || assigned == DBNull.Value)
+                    {
+                        transaction.Rollback();
+                        return null;
+                    }
+                    transaction.Commit();
+                    return (int)assigned;
+                }
+            }
         }
 
         private static async Task ApplyAsync(string connectionString, UserRenamePlan plan, UserIdentityReconciliation result, ILogger logger, Func<Task> beforeWrite)
