@@ -243,6 +243,52 @@ async function reopenedDialog(): Promise<HTMLElement> {
 }
 
 describe('CopilotInvestmentPage', () => {
+  it('shows a quadrant withheld from a reader without See PII by its count alone, never a zero', async () => {
+    const base = summary();
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(
+      summary({
+        concentration: {
+          ...base.concentration,
+          quadrants: [
+            { key: 'highSpendStrongEvidence', people: 6, credits: 0, withheld: true },
+            { key: 'highSpendThinEvidence', people: 2, credits: 0, withheld: true },
+            { key: 'lowSpendStrongEvidence', people: 45, credits: 1500 },
+            { key: 'lowSpendThinEvidence', people: 30, credits: 1000 },
+          ],
+        },
+      }),
+    );
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Organisation' }));
+    expect(await screen.findByText('2 people \u00b7 credits not shown, they could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.getByText('6 people \u00b7 credits not shown, they could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.getByText('45 people \u00b7 1,500 credits')).toBeInTheDocument();
+    expect(screen.queryByText(/\u00b7 0 credits/)).not.toBeInTheDocument();
+  });
+
+  it('shows a reading withheld from a reader without See PII as withheld, never as zero', async () => {
+    vi.mocked(fetchInvestmentTrend).mockResolvedValue({
+      points: [
+        { date: '2026-10-19', observedUsers: 300, consumingUsers: 90, credits: 9800, limitExhaustedUsers: 0 },
+        { date: '2026-10-26', observedUsers: 3, consumingUsers: 2, credits: null, limitExhaustedUsers: 0, withheld: true },
+      ],
+      snapshotDate: '2026-10-26',
+      failureCode: null,
+      minPeople: 5,
+    });
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Credits & sources' }));
+    expect(await screen.findByRole('listitem', { name: '19 Oct 2026: 9,800 credits, 90 people' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('listitem', { name: '26 Oct 2026: credits not shown, they could single out fewer than 5 people; 2 people' }),
+    ).toBeInTheDocument();
+    const table = screen.getByRole('table', { name: 'Consumed-credit readings over time' });
+    expect(within(table).getByRole('img', { name: 'Not shown: it could single out fewer than 5 people' })).toBeInTheDocument();
+    expect(within(table).queryByText('0')).not.toBeInTheDocument();
+  });
+
   it('leads with the answer and the modelled figures it rests on, each labelled as modelled', async () => {
     renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
 

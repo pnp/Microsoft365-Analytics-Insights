@@ -324,6 +324,109 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AGroupWithheldFromAReaderWithoutSeePii_CannotBeWorkedOutFromTheTotalLessTheGroupsShown()
+        {
+            // Legal's six holders include one with a reading (7777.25), so Legal is withheld. Alone, the report's credit total
+            // less Sales and Finance would be that one reading, under Legal's name.
+            var people = Enumerable.Range(1, 5).Select(id => Holder(id, 10, credit: Balance(id, 20), department: "Sales")).ToList();
+            people.AddRange(Enumerable.Range(6, 6).Select(id => Holder(id, 8, credit: Balance(id, 30), department: "Finance")));
+            people.AddRange(Enumerable.Range(12, 6).Select(id => Holder(id, 9, credit: id == 12 ? Balance(id, 7777.25) : null, department: "Legal")));
+            var input = Input(people, Assumptions());
+            input.MinGroupSize = 5;
+            var summary = CopilotInvestmentCalculator.Calculate(input);
+            CopilotInvestmentGroupRow Cached(string label) => summary.Organisation.Groups.Single(g => g.Label == label);
+            Assert.IsTrue(Cached("Legal").Withheld);
+            Assert.IsFalse(Cached("Sales").Withheld, "The control: a reader with See PII sees every group large enough on its own.");
+            Assert.AreEqual(8057.25, summary.Investment.Credits.Credits, 1e-9, "The total every reader is given.");
+
+            var trimmed = summary.WithoutIndividualData().Organisation;
+            CopilotInvestmentGroupRow Trimmed(string label) => trimmed.Groups.Single(g => g.Label == label);
+            Assert.IsTrue(Trimmed("Legal").Withheld);
+            Assert.IsTrue(Trimmed("Sales").Withheld, "Five readings: the fewest of the groups still shown, withheld with Legal's one.");
+            Assert.AreEqual(0, Trimmed("Sales").Credits + Trimmed("Sales").Holders + Trimmed("Sales").ActiveHolders);
+            Assert.IsNull(Trimmed("Sales").Cost);
+            Assert.IsFalse(Trimmed("Finance").Withheld);
+            var residual = summary.Investment.Credits.Credits - trimmed.Groups.Where(g => !g.Withheld).Sum(g => g.Credits);
+            Assert.AreNotEqual(7777.25, residual, 1e-6, "The total less the groups shown is two groups' readings together, six people.");
+            Assert.IsFalse(JsonConvert.SerializeObject(summary.WithoutIndividualData()).Contains("7777.25"));
+
+            Assert.IsFalse(Cached("Sales").Withheld, "The cached summary, a reader with See PII's, is never edited.");
+            Assert.AreEqual(100, Cached("Sales").Credits, 1e-9);
+            Assert.AreSame(summary.Organisation.Groups.Single(g => g.Label == "Finance"), Trimmed("Finance"));
+        }
+
+        [TestMethod]
+        public void AConcentrationCurveOfTooFewPeople_IsNotGivenToAReaderWithoutSeePii_NorTheFindingThatQuotesIt()
+        {
+            // Twelve readings: each tenth of the curve is one or two people, and the top tenth is the largest reading alone.
+            var people = Enumerable.Range(1, 12).Select(id => Holder(id, 10, credit: Balance(id, id == 12 ? 4321.25 : 10 * id))).ToList();
+            var summary = CopilotInvestmentCalculator.Calculate(Input(people, Assumptions()));
+            Assert.IsNotNull(summary.Concentration.Credits, "The control: a reader with See PII is given the curve.");
+            Assert.IsTrue(summary.Findings.Any(f => f.Code == CopilotInvestmentFindingCodes.CreditConcentration));
+            Assert.IsTrue(summary.Findings.Any(f => f.Code == CopilotInvestmentFindingCodes.EvidenceConcentration));
+
+            var trimmed = summary.WithoutIndividualData();
+            Assert.IsNull(trimmed.Concentration.Credits, "Its top share is one person's reading, and each tenth one or two people's.");
+            Assert.IsNull(trimmed.Concentration.ActiveDays, "Twelve holders' active days: the same.");
+            Assert.IsFalse(trimmed.Findings.Any(f => f.Code == CopilotInvestmentFindingCodes.CreditConcentration || f.Code == CopilotInvestmentFindingCodes.EvidenceConcentration),
+                "A finding quoting the withheld curve's top share goes with it.");
+            Assert.AreEqual(summary.Findings.Count - 2, trimmed.Findings.Count, "Only those two.");
+            Assert.IsFalse(JsonConvert.SerializeObject(trimmed).Contains("4321.25"));
+            Assert.IsNotNull(summary.Concentration.Credits, "The cached summary is never edited.");
+
+            // Sixty readings: every tenth of the curve is six people, so it singles no one out.
+            var many = Enumerable.Range(1, 60).Select(id => Holder(id, 10, credit: Balance(id, 10 + id))).ToList();
+            var large = CopilotInvestmentCalculator.Calculate(Input(many, Assumptions())).WithoutIndividualData();
+            Assert.IsNotNull(large.Concentration.Credits);
+            Assert.IsNotNull(large.Concentration.ActiveDays);
+            Assert.IsTrue(large.Findings.Any(f => f.Code == CopilotInvestmentFindingCodes.CreditConcentration));
+        }
+
+        [TestMethod]
+        public void ACurve_SinglesNoOneOut_OnlyWhenEveryCutHoldsNobodyOrFivePeopleWithAValue()
+        {
+            Assert.IsFalse(CopilotInvestmentStatistics.EveryCutHoldsEnough(Enumerable.Range(1, 10).Select(v => (double)v).ToList(), 0.1, 5), "Ten values: a tenth is one person.");
+            Assert.IsTrue(CopilotInvestmentStatistics.EveryCutHoldsEnough(Enumerable.Range(1, 50).Select(v => (double)v).ToList(), 0.1, 5));
+            var twoActive = Enumerable.Repeat(0d, 98).Concat(new[] { 3d, 9d }).ToList();
+            Assert.IsFalse(CopilotInvestmentStatistics.EveryCutHoldsEnough(twoActive, 0.2, 5), "A hundred holders, two of them active: the top tenth is those two.");
+            Assert.IsTrue(CopilotInvestmentStatistics.EveryCutHoldsEnough(Enumerable.Repeat(0d, 30).ToList(), 0.2, 5), "Nobody with a value singles nobody out.");
+        }
+
+        [TestMethod]
+        public void AQuadrantOfTooFewPeople_KeepsItsCountButNotItsCredits_WithEnoughOthersWithheld()
+        {
+            var concentration = new CopilotInvestmentConcentration
+            {
+                QuadrantMedianCredits = 40,
+                Quadrants =
+                {
+                    new CopilotInvestmentQuadrant { Key = CopilotInvestmentCalculator.QuadrantKeys.HighSpendStrongEvidence, People = 6, Credits = 600.5 },
+                    new CopilotInvestmentQuadrant { Key = CopilotInvestmentCalculator.QuadrantKeys.HighSpendThinEvidence, People = 1, Credits = 777.75 },
+                    new CopilotInvestmentQuadrant { Key = CopilotInvestmentCalculator.QuadrantKeys.LowSpendStrongEvidence, People = 7, Credits = 70.25 },
+                    new CopilotInvestmentQuadrant { Key = CopilotInvestmentCalculator.QuadrantKeys.LowSpendThinEvidence, People = 0, Credits = 0 },
+                },
+            };
+            var trimmed = concentration.WithoutSmallPopulations(5).Quadrants.ToDictionary(q => q.Key);
+
+            var one = trimmed[CopilotInvestmentCalculator.QuadrantKeys.HighSpendThinEvidence];
+            Assert.IsTrue(one.Withheld, "One person.");
+            Assert.AreEqual(1, one.People, "How many is a count, not anyone's credits.");
+            Assert.AreEqual(0, one.Credits);
+            Assert.IsTrue(trimmed[CopilotInvestmentCalculator.QuadrantKeys.HighSpendStrongEvidence].Withheld, "Six people, the fewest of the rest: seven together.");
+            Assert.IsFalse(trimmed[CopilotInvestmentCalculator.QuadrantKeys.LowSpendStrongEvidence].Withheld);
+            Assert.AreEqual(70.25, trimmed[CopilotInvestmentCalculator.QuadrantKeys.LowSpendStrongEvidence].Credits, 1e-9);
+            Assert.IsFalse(trimmed[CopilotInvestmentCalculator.QuadrantKeys.LowSpendThinEvidence].Withheld, "Nobody in it.");
+            var json = JsonConvert.SerializeObject(concentration.WithoutSmallPopulations(5));
+            Assert.IsFalse(json.Contains("777.75") || json.Contains("600.5"), json);
+            Assert.AreEqual(40d, concentration.WithoutSmallPopulations(5).QuadrantMedianCredits, "Fourteen people are split at it.");
+            Assert.AreEqual(777.75, concentration.Quadrants[1].Credits, 1e-9, "The cached object is never edited.");
+
+            var few = new CopilotInvestmentConcentration { QuadrantMedianCredits = 40 };
+            few.Quadrants.Add(new CopilotInvestmentQuadrant { Key = CopilotInvestmentCalculator.QuadrantKeys.HighSpendStrongEvidence, People = 3, Credits = 90 });
+            Assert.IsNull(few.WithoutSmallPopulations(5).QuadrantMedianCredits, "Three people's median is one of their readings.");
+        }
+
+        [TestMethod]
         public void AFilteredView_WithholdsTenantOnlyFacts()
         {
             var input = Input(new List<CopilotInvestmentPerson> { Holder(1, 10, credit: Balance(1, 10)) }, Assumptions());

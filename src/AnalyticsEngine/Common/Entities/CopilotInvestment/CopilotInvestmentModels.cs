@@ -137,6 +137,21 @@ namespace Common.Entities.CopilotInvestment
                 organisation.Hidden = true;
                 copy.Organisation = organisation;
             }
+            else if (Organisation != null)
+            {
+                copy.Organisation = Organisation.WithComplementsWithheld(Math.Max(Organisation.MinGroupSize, SmallPopulations.MinPeopleWithoutSeePii));
+            }
+            if (Concentration != null)
+            {
+                copy.Concentration = Concentration.WithoutSmallPopulations(Math.Max(Organisation?.MinGroupSize ?? 0, SmallPopulations.MinPeopleWithoutSeePii));
+                // A concentration finding quotes its curve's top share: it goes with the curve.
+                var evidenceGone = Concentration.ActiveDays != null && copy.Concentration.ActiveDays == null;
+                var creditsGone = Concentration.Credits != null && copy.Concentration.Credits == null;
+                if ((evidenceGone || creditsGone) && Findings != null)
+                    copy.Findings = Findings.Where(f => !(evidenceGone && f.Code == CopilotInvestmentFindingCodes.EvidenceConcentration)
+                        && !(creditsGone && f.Code == CopilotInvestmentFindingCodes.CreditConcentration)).ToList();
+            }
+            copy.Services = CopilotInvestmentServiceRow.WithoutSmallPopulations(Services, Math.Max(Organisation?.MinGroupSize ?? 0, SmallPopulations.MinPeopleWithoutSeePii));
             return copy;
         }
 
@@ -908,6 +923,27 @@ namespace Common.Entities.CopilotInvestment
         public bool Hidden { get; set; }
 
         internal object MemberwiseCopy() => MemberwiseClone();
+
+        /// <summary>
+        /// A copy for a reader without See PII in which no withheld group can be worked out from the others. Every person is
+        /// in exactly one row and the rows add up to the report's totals, so with one group withheld, a total less the groups
+        /// shown would be that group's figures, under its own name. Further groups are withheld, the fewest people of the
+        /// population that falls short first, until the withheld groups together hold no one or at least
+        /// <paramref name="minPeople"/> of each population behind the figures (<see cref="SmallPopulations.WithholdComplements"/>).
+        /// A withheld group keeps its name, which on its own says nothing about anyone's figures. Rows are copied, never
+        /// edited: the cached organisation is the one a reader with See PII is given.
+        /// </summary>
+        internal CopilotInvestmentOrganisation WithComplementsWithheld(int minPeople)
+        {
+            var withheld = Groups.Select(g => g.Withheld).ToArray();
+            if (!withheld.Any(w => w)) return this;
+            SmallPopulations.WithholdComplements(Groups.Select(g => g.Populations).ToList(), withheld, minPeople);
+            var copy = (CopilotInvestmentOrganisation)MemberwiseClone();
+            copy.Groups = Groups.Select((g, i) => withheld[i] && !g.Withheld
+                ? new CopilotInvestmentGroupRow { Label = g.Label, EmptyKey = g.EmptyKey, Withheld = true, Populations = g.Populations }
+                : g).ToList();
+            return copy;
+        }
     }
 
     public sealed class CopilotInvestmentGroupRow
@@ -962,6 +998,14 @@ namespace Common.Entities.CopilotInvestment
 
         [JsonProperty("unlicensedActiveUsers")]
         public int UnlicensedActiveUsers { get; set; }
+
+        /// <summary>
+        /// The people behind the row's figures, withheld or not: holders, active holders, people with a credit amount, people
+        /// with a Studio amount and active people without a seat, in that order. What the copy for a reader without See PII
+        /// needs to withhold enough groups together (<see cref="CopilotInvestmentOrganisation.WithComplementsWithheld"/>).
+        /// </summary>
+        [JsonIgnore]
+        internal int[] Populations { get; set; }
     }
 
     public sealed class CopilotInvestmentConcentration
@@ -985,6 +1029,26 @@ namespace Common.Entities.CopilotInvestment
 
         [JsonProperty("quadrantDaysPerMonth")]
         public double QuadrantDaysPerMonth { get; set; }
+
+        /// <summary>
+        /// A copy for a reader without See PII. A curve whose shares single out one to <paramref name="minPeople"/> - 1 people
+        /// (<see cref="CopilotInvestmentDistribution.SafeWithoutSeePii"/>) is left out, which the page reads as too few people
+        /// to measure: at ten consumers each decile is one person's balance. A quadrant of that few people keeps its count but
+        /// not its credits, and the quadrants split the same people, so enough others are withheld with it that no difference
+        /// gives them back (<see cref="SmallPopulations.WithholdComplements"/>); the median they are split at is one person's
+        /// reading, so it goes when fewer people than that are split at all. Never edits this object.
+        /// </summary>
+        internal CopilotInvestmentConcentration WithoutSmallPopulations(int minPeople)
+        {
+            var copy = (CopilotInvestmentConcentration)MemberwiseClone();
+            if (ActiveDays != null && !ActiveDays.SafeWithoutSeePii) copy.ActiveDays = null;
+            if (Credits != null && !Credits.SafeWithoutSeePii) copy.Credits = null;
+            var withheld = Quadrants.Select(q => SmallPopulations.IsSmall(q.People, minPeople)).ToArray();
+            SmallPopulations.WithholdComplements(Quadrants.Select(q => new[] { q.People }).ToList(), withheld, minPeople);
+            copy.Quadrants = Quadrants.Select((q, i) => withheld[i] ? new CopilotInvestmentQuadrant { Key = q.Key, People = q.People, Withheld = true } : q).ToList();
+            if (SmallPopulations.IsSmall(Quadrants.Sum(q => q.People), minPeople)) copy.QuadrantMedianCredits = null;
+            return copy;
+        }
     }
 
     public sealed class CopilotInvestmentDistribution
@@ -1005,6 +1069,13 @@ namespace Common.Entities.CopilotInvestment
         /// <summary>Cumulative share of the total held by the bottom 0%, 10%, ... 100% of the population.</summary>
         [JsonProperty("lorenz")]
         public List<double> Lorenz { get; set; } = new List<double>();
+
+        /// <summary>
+        /// False when a share in it, or the difference of two, would be the sum of one to four people's values
+        /// (<see cref="CopilotInvestmentStatistics.EveryCutHoldsEnough"/>): a reader without See PII is then not given it.
+        /// </summary>
+        [JsonIgnore]
+        internal bool SafeWithoutSeePii { get; set; }
     }
 
     public sealed class CopilotInvestmentQuadrant
@@ -1015,8 +1086,13 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("people")]
         public int People { get; set; }
 
+        /// <summary>The quadrant's credits; 0 when <see cref="Withheld"/>, which the page and the workbook never show as a zero.</summary>
         [JsonProperty("credits")]
         public double Credits { get; set; }
+
+        /// <summary>True when, for a reader without See PII, the credits could single out too few people and are not given.</summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
     }
 
     /// <summary>People without a seat: metered consumption and the evidence they already show.</summary>
@@ -1076,8 +1152,45 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("consumers")]
         public int Consumers { get; set; }
 
+        /// <summary>The category's consumption; 0 when <see cref="Withheld"/>, which the page and the workbook never show as a zero.</summary>
         [JsonProperty("quantity")]
         public double Quantity { get; set; }
+
+        /// <summary>True when, for a reader without See PII, <see cref="Quantity"/> could single out too few people and is not given.</summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
+
+        /// <summary>Accounts with an amount other than zero in the category: who <see cref="Quantity"/> describes.</summary>
+        [JsonIgnore]
+        internal int Contributors { get; set; }
+
+        /// <summary>
+        /// Copies of the categories for a reader without See PII. A category's quantity is withheld when one to
+        /// <paramref name="minPeople"/> - 1 accounts are behind it - the same people's balance as a withheld total, often. The
+        /// categories of one unit add up to that unit's total and one person can consume several, so the smallest category
+        /// of at least that many accounts is withheld with them (<see cref="SmallPopulations.WithholdOverlappingComplement"/>).
+        /// The counts stay. Rows are copied, never edited.
+        /// </summary>
+        internal static List<CopilotInvestmentServiceRow> WithoutSmallPopulations(List<CopilotInvestmentServiceRow> rows, int minPeople)
+        {
+            if (rows == null) return null;
+            var withheld = rows.Select(r => SmallPopulations.IsSmall(r.Contributors, minPeople)).ToArray();
+            foreach (var unit in rows.Select((r, i) => i).GroupBy(i => rows[i].Unit ?? string.Empty, StringComparer.Ordinal))
+            {
+                var indexes = unit.ToList();
+                var inUnit = indexes.Select(i => withheld[i]).ToArray();
+                SmallPopulations.WithholdOverlappingComplement(indexes.Select(i => rows[i].Contributors).ToList(), inUnit, minPeople);
+                for (var k = 0; k < indexes.Count; k++) withheld[indexes[k]] = inUnit[k];
+            }
+            return rows.Select((r, i) =>
+            {
+                if (!withheld[i]) return r;
+                var copy = (CopilotInvestmentServiceRow)r.MemberwiseClone();
+                copy.Quantity = 0;
+                copy.Withheld = true;
+                return copy;
+            }).ToList();
+        }
 
         [JsonProperty("unknownAmountUsers")]
         public int UnknownAmountUsers { get; set; }

@@ -115,17 +115,19 @@ namespace Common.Entities.CopilotInvestment
             var creditContributors = people.Count(p => (p.Credit?.Credits ?? 0) != 0);
             var studioContributors = people.Count(p => (p.Studio?.Credits ?? 0) != 0);
             var unlicensedActiveUsers = people.Count(p => !p.Licensed && p.ActiveDays > 0);
+            var populations = new[] { holders.Count, active, creditContributors, studioContributors, unlicensedActiveUsers };
             if (people.Count < minGroupSize
                 || HasSmallContributorPopulation(holders.Count, minGroupSize)
                 || HasSmallContributorPopulation(active, minGroupSize)
                 || HasSmallContributorPopulation(creditContributors, minGroupSize)
                 || HasSmallContributorPopulation(studioContributors, minGroupSize)
                 || HasSmallContributorPopulation(unlicensedActiveUsers, minGroupSize))
-                return new CopilotInvestmentGroupRow { Withheld = true };
+                return new CopilotInvestmentGroupRow { Withheld = true, Populations = populations };
 
             // The matched holders only, so a group's return compares the same people's value and cost.
             var row = new CopilotInvestmentGroupRow
             {
+                Populations = populations,
                 Holders = holders.Count,
                 ActiveHolders = active,
                 IdleHolders = holders.Count - active,
@@ -222,6 +224,7 @@ namespace Common.Entities.CopilotInvestment
                     Category = g.Key.Category,
                     Unit = g.Key.Unit.Length == 0 ? null : g.Key.Unit,
                     Consumers = g.Where(s => (s.Consumed ?? 0) > 0).Select(s => s.ObjectId).Distinct().Count(),
+                    Contributors = g.Where(s => (s.Consumed ?? 0) != 0).Select(s => s.ObjectId).Distinct().Count(),
                     Quantity = Math.Round(g.Sum(s => s.Consumed ?? 0), 6),
                     UnknownAmountUsers = g.Where(s => !s.Consumed.HasValue).Select(s => s.ObjectId).Distinct().Count(),
                     LimitExhaustedUsers = g.Where(s => string.Equals(s.DecisionReason, "limitExhausted", StringComparison.Ordinal)).Select(s => s.ObjectId).Distinct().Count(),

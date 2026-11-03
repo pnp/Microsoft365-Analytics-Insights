@@ -5,6 +5,7 @@ using Common.Entities.CopilotInvestment;
 using Common.Entities.CopilotSpend;
 using Common.Entities.Localisation;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -188,6 +189,163 @@ namespace Tests.UnitTests
             Assert.IsNull(folded.UnknownAmountPeople);
         }
 
+        /// <summary>
+        /// Contoso departments of five people or more, each person in one. Finance's readings are 10 to 60 and only one of its
+        /// people was billed for Copilot Studio (1234.5); one of Marketing's nine Studio makers holds the only reading there
+        /// (777.25); Sales has six of each; Legal has readings and no Studio use at all.
+        /// </summary>
+        private static CopilotSpendInput DepartmentsInput()
+        {
+            var people = new List<(int Id, string Department, double? Studio, double? Balance)>();
+            people.AddRange(Enumerable.Range(1, 6).Select(id => (id, "Finance", id == 1 ? 1234.5 : (double?)null, (double?)(10 * id))));
+            people.AddRange(Enumerable.Range(11, 9).Select(id => (id, "Marketing", (double?)2, id == 11 ? 777.25 : (double?)null)));
+            people.AddRange(Enumerable.Range(21, 5).Select(id => (id, "Legal", (double?)null, (double?)5)));
+            people.AddRange(Enumerable.Range(31, 6).Select(id => (id, GreekDepartment, (double?)3, (double?)4)));
+            var input = Input();
+            input.MinGroupSize = CopilotSpendCalculator.DefaultMinGroupSize;
+            input.Credits.Users.Clear();
+            input.Studio.Users.Clear();
+            foreach (var p in people)
+            {
+                if (p.Balance.HasValue) input.Credits.Users.Add(Balance(p.Id, p.Balance));
+                if (p.Studio.HasValue) input.Studio.Users.Add(new StudioUserFact { UserId = p.Id, Credits = p.Studio.Value, ActiveDays = 1 });
+            }
+            var departments = people.ToDictionary(p => p.Id, p => p.Department);
+            input.GroupOf = id => departments[id];
+            input.Directory = id => new CopilotInvestmentDirectoryEntry { UserPrincipalName = $"person{id}@contoso.example", Department = departments[id] };
+            return input;
+        }
+
+        [TestMethod]
+        public void AGroupWithEnoughPeople_WithholdsASourcesFiguresFromAReaderWithoutSeePii_WhenTooFewOfItsPeopleAreBehindThem()
+        {
+            var summary = CopilotSpendCalculator.Calculate(DepartmentsInput());
+            CopilotSpendGroupRow Group(CopilotSpendSummary s, string label) => s.Organisation.Groups.Single(g => g.Label == label);
+
+            // A reader with See PII is given the cached summary: every group as it always was.
+            var finance = Group(summary, "Finance");
+            Assert.AreEqual(6, finance.People);
+            Assert.AreEqual(1, finance.StudioPeople);
+            Assert.AreEqual(1234.5, finance.StudioCredits.Value, 1e-9);
+            Assert.IsFalse(finance.Withheld || finance.StudioWithheld || finance.BalancesWithheld);
+            Assert.AreEqual(777.25, Group(summary, "Marketing").BalanceCredits.Value, 1e-9);
+
+            var trimmed = summary.WithoutIndividualData();
+
+            // One Studio maker in a department of six: the department's Studio figures would be theirs.
+            var studioOfOne = Group(trimmed, "Finance");
+            Assert.IsTrue(studioOfOne.StudioWithheld, "A single Studio consumer cannot be isolated by the group's total headcount.");
+            Assert.IsNull(studioOfOne.StudioPeople);
+            Assert.IsNull(studioOfOne.StudioCredits);
+            Assert.IsNull(studioOfOne.ShareOfStudio);
+            Assert.IsFalse(studioOfOne.Withheld, "The row stays: its people and its other source are not about one person.");
+            Assert.AreEqual(6, studioOfOne.People);
+            Assert.IsFalse(studioOfOne.BalancesWithheld);
+            Assert.AreEqual(210, studioOfOne.BalanceCredits.Value, 1e-9, "Six readings, 10 to 60.");
+            Assert.AreEqual(6, studioOfOne.BalancePeople);
+
+            // One reading among nine Studio makers: the readings are withheld, the Studio figures are not.
+            var readingOfOne = Group(trimmed, "Marketing");
+            Assert.IsTrue(readingOfOne.BalancesWithheld, "A single reading cannot be isolated by the group's total headcount.");
+            Assert.IsNull(readingOfOne.BalanceCredits);
+            Assert.IsNull(readingOfOne.BalancePeople);
+            Assert.IsNull(readingOfOne.ShareOfBalances);
+            Assert.IsNull(readingOfOne.UnknownAmountPeople);
+            Assert.IsFalse(readingOfOne.StudioWithheld);
+            Assert.AreEqual(18, readingOfOne.StudioCredits.Value, 1e-9);
+
+            // Nobody billed for Studio in Legal: an empty population singles no one out, so its zero stays.
+            var nobody = Group(trimmed, "Legal");
+            Assert.IsFalse(nobody.StudioWithheld, "An empty contributor population does not disclose an individual.");
+            Assert.AreEqual(0, nobody.StudioPeople);
+            Assert.AreEqual(0, nobody.StudioCredits.Value, 1e-9);
+
+            // Nothing withheld reaches the page or the workbook, and the cached rows are never edited.
+            var json = JsonConvert.SerializeObject(trimmed);
+            Assert.IsFalse(json.Contains("1234.5") || json.Contains("777.25"), json);
+            StringAssert.Contains(json, "\"studioWithheld\":true");
+            var workbook = CopilotInvestmentWorkbookLanguageTests.Sheets(CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.English));
+            Assert.IsFalse(workbook.SelectMany(s => s.Cells).Any(c => c.Value == "1234.5" || c.Value == "777.25"), "The export is never less redacted than the page.");
+            var en = PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, PortalLanguage.English);
+            var texts = CopilotInvestmentWorkbookLanguageTests.Texts(workbook);
+            Assert.IsTrue(texts.Any(t => t.Contains(en.Text("copilotSpend.workbook.org.studioWithheld", ("count", "5")))), "The export says why the cells are empty.");
+            Assert.IsFalse(texts.Any(t => t.Contains(en.Text("copilotSpend.workbook.org.studioNotAvailable"))), "Withheld is not 'not available'.");
+            Assert.AreEqual(1234.5, Group(summary, "Finance").StudioCredits.Value, 1e-9);
+            Assert.IsFalse(Group(summary, "Finance").StudioWithheld);
+            StringAssert.Contains(JsonConvert.SerializeObject(summary.Organisation), "1234.5");
+        }
+
+        [TestMethod]
+        public void AGroupWithheldFromAReaderWithoutSeePii_CannotBeWorkedOutFromTheTotalLessTheGroupsShown()
+        {
+            var summary = CopilotSpendCalculator.Calculate(DepartmentsInput());
+            var trimmed = summary.WithoutIndividualData().Organisation;
+            CopilotSpendGroupRow Cached(string label) => summary.Organisation.AllGroups.Single(g => g.Label == label);
+            CopilotSpendGroupRow Trimmed(string label) => trimmed.AllGroups.Single(g => g.Label == label);
+
+            // Finance's one Studio maker is withheld, so the department with the fewest other makers is withheld with it.
+            Assert.IsTrue(Trimmed("Finance").StudioWithheld);
+            Assert.IsTrue(Trimmed(GreekDepartment).StudioWithheld, "Six makers: the fewest of the departments still shown.");
+            Assert.IsFalse(Trimmed("Marketing").StudioWithheld, "Nine makers, and the two withheld already hold seven.");
+            Assert.IsFalse(Trimmed(GreekDepartment).BalancesWithheld, "Each source is protected on its own.");
+            // Marketing's one reading is withheld, so the department with the fewest other readings is withheld with it.
+            Assert.IsTrue(Trimmed("Marketing").BalancesWithheld);
+            Assert.IsTrue(Trimmed("Legal").BalancesWithheld);
+            Assert.IsFalse(Trimmed("Legal").StudioWithheld, "Nobody in Legal was billed for Studio.");
+
+            // The arithmetic a reader could do: each source's total (every row's credits, which the shares also give away)
+            // less the rows shown is the withheld rows together, never one row on its own, and always five people or more.
+            foreach (var source in new (string Name, Func<CopilotSpendGroupRow, double?> Credits, Func<CopilotSpendGroupRow, int?> People, Func<CopilotSpendGroupRow, bool> Withheld)[]
+            {
+                ("studio", g => g.StudioCredits, g => g.StudioPeople, g => g.StudioWithheld),
+                ("balances", g => g.BalanceCredits, g => g.BalancePeople, g => g.BalancesWithheld),
+            })
+            {
+                var total = summary.Organisation.AllGroups.Sum(g => source.Credits(g) ?? 0);
+                var hidden = trimmed.AllGroups.Where(source.Withheld).ToList();
+                var residual = total - trimmed.AllGroups.Where(g => !source.Withheld(g)).Sum(g => source.Credits(g) ?? 0);
+                Assert.IsTrue(hidden.Count >= 2, source.Name + ": one withheld group alone would be the total less the rest.");
+                Assert.IsTrue(hidden.Sum(g => source.People(Cached(g.Label)) ?? 0) >= CopilotSpendCalculator.DefaultMinGroupSize, source.Name);
+                foreach (var g in hidden)
+                    Assert.AreNotEqual(source.Credits(Cached(g.Label)).Value, residual, 1e-6, source.Name + ": " + g.Label + " cannot be worked out.");
+            }
+
+            // The page and the workbook withhold the same groups, and the cached summary is never edited.
+            foreach (var row in trimmed.Groups.Where(g => g.Label != null))
+                Assert.AreSame(trimmed.AllGroups.Single(g => g.Label == row.Label), row);
+            Assert.IsFalse(summary.Organisation.AllGroups.Any(g => g.StudioWithheld || g.BalancesWithheld));
+            Assert.AreEqual(18, Cached(GreekDepartment).StudioCredits.Value, 1e-9, "A reader with See PII still sees every group's figures.");
+        }
+
+        [TestMethod]
+        public void ThePagesCombinedRowOfMoreGroups_WithholdsASourceWithheldInAnyGroupItCombines()
+        {
+            // Five departments of five Studio makers; the one with the least Studio use also holds the only reading in its
+            // department. The page lists three and combines the other two, which the export lists one by one.
+            var people = Enumerable.Range(0, 25).Select(i => (Id: i + 1, Department: "Contoso " + (char)('A' + i / 5))).ToList();
+            var input = DepartmentsInput();
+            input.MaxGroups = 3;
+            input.Credits.Users.Clear();
+            input.Studio.Users.Clear();
+            foreach (var p in people) input.Studio.Users.Add(new StudioUserFact { UserId = p.Id, Credits = p.Department == "Contoso E" ? 1 : 10 + p.Id, ActiveDays = 1 });
+            input.Credits.Users.Add(Balance(21, 4321.75));
+            foreach (var p in people.Where(p => p.Department == "Contoso A")) input.Credits.Users.Add(Balance(p.Id, 3));
+            var departments = people.ToDictionary(p => p.Id, p => p.Department);
+            input.GroupOf = id => departments[id];
+            input.Directory = id => new CopilotInvestmentDirectoryEntry { UserPrincipalName = $"person{id}@contoso.example", Department = departments[id] };
+            var summary = CopilotSpendCalculator.Calculate(input);
+            Assert.AreEqual(CopilotSpendGroupKeys.MoreGroups, summary.Organisation.Groups[3].EmptyKey, "The control: two groups are beyond the page's three.");
+            Assert.IsNotNull(summary.Organisation.Groups[3].BalanceCredits);
+
+            var trimmed = summary.WithoutIndividualData().Organisation;
+            Assert.IsTrue(trimmed.AllGroups.Single(g => g.Label == "Contoso E").BalancesWithheld, "One reading in a department of five.");
+            var more = trimmed.Groups.Single(g => g.EmptyKey == CopilotSpendGroupKeys.MoreGroups);
+            Assert.IsTrue(more.BalancesWithheld, "Otherwise the combined row less the groups the export shows would give the reading back.");
+            Assert.IsNull(more.BalanceCredits);
+            Assert.IsFalse(more.StudioWithheld, "Its Studio makers are all in groups large enough to show.");
+            Assert.IsFalse(JsonConvert.SerializeObject(summary.WithoutIndividualData()).Contains("4321.75"));
+        }
+
         [TestMethod]
         public void EveryCalendarDayKeepsItsPlace_AndOnlyTheLedgersOwnDaysCanHaveNoCharges()
         {
@@ -297,8 +455,12 @@ namespace Tests.UnitTests
             Assert.IsFalse(trimmed.Studio.Environments.Any(e => e.EnvironmentId == "env-2" || (e.EnvironmentName ?? string.Empty).Contains("dev")),
                 "A one-person environment's name does not reach a reader without See PII.");
             var combined = trimmed.Studio.Environments.Single(e => e.EmptyKey == CopilotSpendGroupKeys.OtherEnvironments);
-            Assert.AreEqual(1, combined.People);
-            Assert.IsTrue(combined.Withheld && combined.Credits == null && combined.Days == null, "Still one person: no amount either.");
+            Assert.AreEqual(2, combined.Folded,
+                "The one-person environment, and the default one with it: alone, the total less the environment shown would be its charges.");
+            Assert.IsNull(combined.People, "Two environments' counts can overlap, so none is stated.");
+            Assert.IsTrue(combined.Withheld && combined.Credits == null && combined.Days == null, "No amount either.");
+            Assert.AreEqual(1, trimmed.Studio.Environments.Count);
+            Assert.IsFalse(JsonConvert.SerializeObject(trimmed.Studio.Environments).Contains("17"));
             Assert.IsFalse(CopilotInvestmentWorkbookLanguageTests.Texts(CopilotInvestmentWorkbookLanguageTests.Sheets(
                 CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.English))).Any(t => t.Contains(" dev")));
         }
@@ -308,9 +470,11 @@ namespace Tests.UnitTests
         {
             // Three environments of two people each add up to six, but the same two people can be in all three. The ledger
             // keeps each environment's own distinct count and none for the combination, so nothing shows it reaches the
-            // smallest group the report shows: it must not pass on a sum.
+            // smallest group the report shows: it must not pass on a sum. The smallest environment of enough people goes
+            // with them, so the period's total less the environments shown is not theirs alone.
             var input = Input();
             input.StudioBreakdown.Environments.Clear();
+            input.StudioBreakdown.Environments.Add(new CopilotSpendEnvironment { EnvironmentId = "env-0", EnvironmentName = "Contoso production", Credits = 120, People = 40, Days = 20 });
             input.StudioBreakdown.Environments.Add(new CopilotSpendEnvironment { EnvironmentId = "env-1", EnvironmentName = "Contoso (default)", Credits = 50, People = 12, Days = 9 });
             foreach (var n in new[] { 2, 3, 4 })
                 input.StudioBreakdown.Environments.Add(new CopilotSpendEnvironment { EnvironmentId = "env-" + n, EnvironmentName = "Contoso sandbox " + n, Credits = 7.5, People = 2, Days = 4 });
@@ -319,18 +483,19 @@ namespace Tests.UnitTests
             var trimmed = summary.WithoutIndividualData();
 
             var combined = trimmed.Studio.Environments.Single(e => e.EmptyKey == CopilotSpendGroupKeys.OtherEnvironments);
-            Assert.AreEqual(3, combined.Folded);
+            Assert.AreEqual(4, combined.Folded, "Three sandboxes, and the default environment, the smallest of the others.");
             Assert.IsTrue(combined.Withheld, "Six is a sum of three counts that can overlap, not a count of people.");
             Assert.IsNull(combined.Credits);
             Assert.IsNull(combined.Days);
             Assert.IsNull(combined.People, "No distinct count of the combination exists, so none is stated.");
             Assert.IsFalse(trimmed.Studio.Environments.Any(e => (e.EnvironmentName ?? string.Empty).Contains("sandbox")), "No small environment keeps its name.");
+            Assert.IsFalse(trimmed.Studio.Environments.Any(e => e.EnvironmentId == "env-1"));
 
-            var shown = trimmed.Studio.Environments.Single(e => e.EnvironmentId == "env-1");
-            Assert.AreEqual(50d, shown.Credits, "An environment of enough people on its own keeps its name and figures.");
-            Assert.AreEqual(12, shown.People);
+            var shown = trimmed.Studio.Environments.Single(e => e.EnvironmentId == "env-0");
+            Assert.AreEqual(120d, shown.Credits, "An environment of enough people on its own keeps its name and figures.");
+            Assert.AreEqual(40, shown.People);
             Assert.IsFalse(shown.Withheld);
-            Assert.AreEqual(4, summary.Studio.Environments.Count, "The cached summary, which a reader with See PII is given, is never edited.");
+            Assert.AreEqual(5, summary.Studio.Environments.Count, "The cached summary, which a reader with See PII is given, is never edited.");
 
             var texts = CopilotInvestmentWorkbookLanguageTests.Texts(CopilotInvestmentWorkbookLanguageTests.Sheets(
                 CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.English)));
@@ -350,7 +515,140 @@ namespace Tests.UnitTests
             Assert.IsTrue(trimmed.Organisation.Hidden && trimmed.Organisation.Groups.Count == 0, "A manager grouping names a person in every row.");
             Assert.AreEqual(4, summary.People.Count, "The cached summary is never edited.");
             Assert.IsTrue(summary.Organisation.Groups.Count > 0);
-            Assert.AreEqual(summary.Studio.Credits, trimmed.Studio.Credits);
+
+            // Three people billed for Studio and two readings in view: either total would be theirs, so it is withheld on the
+            // copy. The counts stay, and so do the charges and readings no one in view was matched to, which are not theirs.
+            Assert.IsNull(trimmed.Studio.Credits);
+            Assert.IsTrue(trimmed.Studio.CreditsWithheld);
+            Assert.AreEqual(3, trimmed.Studio.People);
+            Assert.AreEqual(7, trimmed.Studio.UnmatchedCredits.Value, 1e-9);
+            Assert.IsNull(trimmed.Balances.Credits);
+            Assert.IsTrue(trimmed.Balances.CreditsWithheld);
+            Assert.AreEqual(50, trimmed.Balances.UnresolvedCredits.Value, 1e-9);
+            Assert.IsTrue(trimmed.Studio.Days.Single(d => d.Status == CopilotSpendDayStatus.Recorded).Withheld, "Three people billed that day.");
+            Assert.AreEqual(67, summary.Studio.Credits.Value, 1e-9, "A reader with See PII is given the cached totals.");
+            Assert.AreEqual(220, summary.Balances.Credits.Value, 1e-9);
+            Assert.IsFalse(summary.Studio.CreditsWithheld || summary.Balances.CreditsWithheld || summary.Studio.Days.Any(d => d.Withheld));
+        }
+
+        [TestMethod]
+        public void ADayOfTooFewPeople_IsWithheldFromAReaderWithoutSeePii_WithADayThatKeepsItFromBeingWorkedOut()
+        {
+            // Eight people billed in the period, 116 credits: six on Tuesday, seven on Wednesday and one on Saturday.
+            var input = Input();
+            input.Studio.Users.Clear();
+            foreach (var id in Enumerable.Range(1, 8)) input.Studio.Users.Add(new StudioUserFact { UserId = id, Credits = 10 + id, ActiveDays = 2 });
+            input.StudioBreakdown.Days.Clear();
+            input.StudioBreakdown.Days.Add(new CopilotSpendDay { Date = From, Credits = 64.75, People = 6 });
+            input.StudioBreakdown.Days.Add(new CopilotSpendDay { Date = From.AddDays(1), Credits = 37.5, People = 7 });
+            input.StudioBreakdown.Days.Add(new CopilotSpendDay { Date = From.AddDays(4), Credits = 13.75, People = 1 });
+            var summary = CopilotSpendCalculator.Calculate(input);
+            Assert.AreEqual(116, summary.Studio.Credits.Value, 1e-9, "The control: the days add up to the period's total.");
+
+            var trimmed = summary.WithoutIndividualData();
+            Assert.AreEqual(116, trimmed.Studio.Credits.Value, 1e-9, "Eight people billed: the total is theirs together, and shown.");
+            Assert.IsFalse(trimmed.Studio.CreditsWithheld);
+            var days = trimmed.Studio.Days.Where(d => d.Status == CopilotSpendDayStatus.Recorded).ToList();
+            var saturday = days.Single(d => d.Date == From.AddDays(4));
+            Assert.IsTrue(saturday.Withheld, "One person billed that day.");
+            Assert.IsNull(saturday.Credits);
+            Assert.AreEqual(1, saturday.People, "How many is a count, not anyone's charges.");
+            Assert.IsTrue(days.Single(d => d.Date == From).Withheld, "The smallest day of five or more people is withheld with it.");
+            Assert.AreEqual(37.5, days.Single(d => d.Date == From.AddDays(1)).Credits.Value, 1e-9);
+            var residual = trimmed.Studio.Credits.Value - days.Where(d => !d.Withheld).Sum(d => d.Credits ?? 0);
+            Assert.AreNotEqual(13.75, residual, 1e-6, "The total less the days shown holds at least the six people of Tuesday.");
+
+            Assert.IsFalse(JsonConvert.SerializeObject(trimmed).Contains("13.75"));
+            var sheets = CopilotInvestmentWorkbookLanguageTests.Sheets(CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.English));
+            Assert.IsFalse(sheets.SelectMany(s => s.Cells).Any(c => c.Value == "13.75" || c.Value == "64.75"), "The export is never less redacted than the page.");
+            CollectionAssert.Contains(CopilotInvestmentWorkbookLanguageTests.Texts(sheets),
+                PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, PortalLanguage.English).Text("copilotSpend.workbook.dist.figureWithheld", ("count", "5")));
+
+            Assert.AreEqual(13.75, summary.Studio.Days.Single(d => d.Date == From.AddDays(4)).Credits.Value, 1e-9, "A reader with See PII sees every day.");
+            Assert.IsFalse(summary.Studio.Days.Any(d => d.Withheld));
+        }
+
+        [TestMethod]
+        public void ACategoryOfTooFewAccounts_IsWithheldFromAReaderWithoutSeePii_NotJustTheTotalItAddsUpTo()
+        {
+            // The two people in view with a reading and the unmatched account all consumed in one category: its quantity is
+            // their readings together, the very total the copy withholds.
+            var input = Input();
+            input.Credits.Services.Add(new CreditServiceFact { ObjectId = new Guid(1, 0, 0, new byte[8]), Category = "contosoAgents", Unit = CopilotInvestmentSql.CreditUnit, Consumed = 61.125 });
+            input.Credits.Services.Add(new CreditServiceFact { ObjectId = new Guid(4, 0, 0, new byte[8]), Category = "contosoAgents", Unit = CopilotInvestmentSql.CreditUnit, Consumed = 12.5 });
+            input.Credits.Services.Add(new CreditServiceFact { ObjectId = new Guid(999, 0, 0, new byte[8]), Category = "contosoAgents", Unit = CopilotInvestmentSql.CreditUnit, Consumed = 50 });
+            var summary = CopilotSpendCalculator.Calculate(input);
+            var cached = summary.Balances.Services.Single();
+            Assert.AreEqual(123.625, cached.Quantity, 1e-9, "The control: a reader with See PII sees the category's consumption.");
+
+            var trimmed = summary.WithoutIndividualData();
+            var category = trimmed.Balances.Services.Single();
+            Assert.IsTrue(category.Withheld, "Three accounts.");
+            Assert.AreEqual(0, category.Quantity);
+            Assert.AreEqual(3, category.Consumers, "How many is a count, not anyone's consumption.");
+            Assert.IsFalse(JsonConvert.SerializeObject(trimmed).Contains("123.625"));
+            var cells = CopilotInvestmentWorkbookLanguageTests.Sheets(CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.English)).SelectMany(s => s.Cells);
+            Assert.IsFalse(cells.Any(c => c.Value == "123.625"), "The export is never less redacted than the page.");
+            Assert.IsFalse(cached.Withheld, "The cached row is never edited.");
+            Assert.AreEqual(123.625, cached.Quantity, 1e-9);
+        }
+
+        [TestMethod]
+        public void CategoriesOfOneUnit_WithholdTheSmallestOfEnoughAccountsWithASmallOne_BecauseTheyAddUpToItsTotal()
+        {
+            var rows = new List<CopilotInvestmentServiceRow>
+            {
+                new CopilotInvestmentServiceRow { Category = "a", Unit = CopilotInvestmentSql.CreditUnit, Consumers = 3, Contributors = 3, Quantity = 123.625 },
+                new CopilotInvestmentServiceRow { Category = "b", Unit = CopilotInvestmentSql.CreditUnit, Consumers = 6, Contributors = 6, Quantity = 400.5 },
+                new CopilotInvestmentServiceRow { Category = "c", Unit = CopilotInvestmentSql.CreditUnit, Consumers = 9, Contributors = 9, Quantity = 900.75 },
+                new CopilotInvestmentServiceRow { Category = "d", Unit = "message", Consumers = 2, Contributors = 2, Quantity = 7 },
+                new CopilotInvestmentServiceRow { Category = "e", Unit = "message", Consumers = 0, Contributors = 0, Quantity = 0 },
+            };
+            var shown = CopilotInvestmentServiceRow.WithoutSmallPopulations(rows, 5).ToDictionary(r => r.Category);
+
+            Assert.IsTrue(shown["a"].Withheld, "Three accounts.");
+            Assert.IsTrue(shown["b"].Withheld, "The smallest category of five or more in the same unit: one person can be in several, so counts cannot be added.");
+            Assert.AreSame(rows[2], shown["c"]);
+            Assert.IsTrue(shown["d"].Withheld, "Two accounts.");
+            Assert.AreSame(rows[4], shown["e"], "Nobody consumed it.");
+            Assert.AreEqual(6, shown["b"].Consumers);
+            Assert.AreEqual(400.5, rows[1].Quantity, 1e-9, "The cached rows are never edited.");
+            Assert.IsFalse(rows.Any(r => r.Withheld));
+        }
+
+        [TestMethod]
+        public void ABalanceReadingOfTooFewPeople_IsWithheldFromAReaderWithoutSeePii_WithTheReadingsTheTotalIsBuiltFrom()
+        {
+            var points = new List<CreditTrendPoint>
+            {
+                new CreditTrendPoint { Date = Snapshot.AddDays(-20), ObservedUsers = 40, ConsumingUsers = 30, Credits = 900.5 },
+                new CreditTrendPoint { Date = Snapshot.AddDays(-15), ObservedUsers = 35, ConsumingUsers = 3, Credits = 41.25 },
+                new CreditTrendPoint { Date = Snapshot.AddDays(-10), ObservedUsers = 30, ConsumingUsers = 0, Credits = -12.5 },
+                new CreditTrendPoint { Date = Snapshot.AddDays(-5), ObservedUsers = 30, ConsumingUsers = 0, Credits = 0 },
+                new CreditTrendPoint { Date = Snapshot.AddDays(-1), ObservedUsers = 50, ConsumingUsers = 40, Credits = 1500.25 },
+                new CreditTrendPoint { Date = Snapshot, ObservedUsers = 2, ConsumingUsers = 2, Credits = 77.75, LimitExhaustedUsers = 1 },
+            };
+            var shown = CreditTrendPoint.WithoutSmallSamples(points, Snapshot.AddDays(-2), Snapshot, CopilotSpendCalculator.DefaultMinGroupSize);
+
+            Assert.AreSame(points[0], shown[0], "Thirty people with consumed credits: shown as it is.");
+            Assert.IsTrue(shown[1].Withheld && shown[1].Credits == null, "Three people.");
+            Assert.AreEqual(3, shown[1].ConsumingUsers, "How many is a count, not anyone's credits.");
+            Assert.AreEqual(35, shown[1].ObservedUsers);
+            Assert.IsTrue(shown[2].Withheld, "An amount with nobody consuming is adjustments by people the count does not show.");
+            Assert.AreSame(points[3], shown[3], "Nothing consumed is nobody's figure.");
+            Assert.IsTrue(shown[5].Withheld && shown[5].Credits == null, "The tail of a sweep that crossed midnight: two people.");
+            Assert.AreEqual(1, shown[5].LimitExhaustedUsers);
+            Assert.IsTrue(shown[4].Withheld, "In the days the report's total is read from: that total less this reading would give the tail back.");
+
+            var json = JsonConvert.SerializeObject(shown);
+            foreach (var value in new[] { "41.25", "-12.5", "1500.25", "77.75" }) Assert.IsFalse(json.Contains(value), value + " in " + json);
+            StringAssert.Contains(json, "900.5");
+            Assert.AreEqual(77.75, points[5].Credits.Value, 1e-9, "The cached points, which a reader with See PII is given, are never edited.");
+            Assert.IsFalse(points.Any(p => p.Withheld));
+
+            // With no reading of too few people in those days, they stay.
+            var settled = CreditTrendPoint.WithoutSmallSamples(points.Take(5).ToList(), Snapshot.AddDays(-2), Snapshot.AddDays(-1), CopilotSpendCalculator.DefaultMinGroupSize);
+            Assert.AreSame(points[4], settled[4]);
         }
 
         [TestMethod]

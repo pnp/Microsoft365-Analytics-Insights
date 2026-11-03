@@ -486,6 +486,45 @@ namespace Tests.UnitTests
             Assert.IsFalse(plainTexts.Any(t => t != null && t.Contains("@contoso.example")), "No one's name leaves in a workbook for a reader without See PII.");
         }
 
+        [TestMethod]
+        public async Task TheBalanceTrend_WithholdsAReadingOfTooFewPeople_FromAReaderWithoutSeePii_OnBothReports()
+        {
+            // The newest sweep is today's, so the trend's sample dates fall in the period that ends now; its tail read two people.
+            var directory = Directory();
+            var scopes = new ReportScopeResolver(GlobalFilterProviders.None, new FixedDirectory(directory));
+            var credits = Credits(1, 2, 3, 4, 5, 6);
+            credits.SnapshotDate = DateTime.UtcNow.Date;
+            credits.SnapshotBandFrom = credits.SnapshotDate.Value.AddDays(-2);
+            var facts = new FakeFacts(credits, Studio(1, 2));
+            facts.Trend.Add(new CreditTrendPoint { Date = credits.SnapshotDate.Value.AddDays(-6), ObservedUsers = 40, ConsumingUsers = 30, Credits = 900.5 });
+            facts.Trend.Add(new CreditTrendPoint { Date = credits.SnapshotDate.Value, ObservedUsers = 2, ConsumingUsers = 2, Credits = 77.75 });
+            var name = Guid.NewGuid().ToString("N");
+            var investment = new CopilotInvestmentReportService(
+                new CopilotInvestmentFactsCache(facts, new MemoryCache("investment-facts-" + name)),
+                () => new CopilotInvestmentAssumptionsStore(new InMemoryKeyValueStore(), isDurable: true), new FixedDirectory(directory),
+                () => new ImportTaskSettings { CopilotStudioCredits = true, CopilotCostManagement = true }, () => true,
+                new MemoryCache("investment-results-" + name));
+            var spend = SpendService(directory, facts);
+
+            foreach (var seePii in new[] { false, true })
+            {
+                var responses = new[]
+                {
+                    await (await Controller(scopes, spend, seePii).Trend(7, null, CancellationToken.None)).ExecuteAsync(CancellationToken.None),
+                    await (await InvestmentController(scopes, investment, seePii).Trend(7, null, CancellationToken.None)).ExecuteAsync(CancellationToken.None),
+                };
+                foreach (var response in responses)
+                {
+                    var json = await response.Content.ReadAsStringAsync();
+                    Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, json);
+                    StringAssert.Contains(json, "900.5", "A reading of thirty people is shown to every reader.");
+                    Assert.AreEqual(seePii, json.Contains("77.75"), (seePii ? "A reader with See PII sees every reading: " : "Two people's reading is withheld: ") + json);
+                    Assert.AreEqual(seePii ? 0 : 1, JObject.Parse(json)["points"].Count(p => (bool)p["withheld"]), json);
+                }
+            }
+            Assert.IsFalse(facts.Trend.Any(p => p.Withheld), "The cached readings are never edited.");
+        }
+
         private static CopilotInvestmentAPIController InvestmentController(ReportScopeResolver resolver, CopilotInvestmentReportService service,
             bool seePii = true)
         {
@@ -553,7 +592,10 @@ namespace Tests.UnitTests
             public Task<StudioFacts> GetStudioFactsAsync(DateTime from, DateTime toExclusive, CancellationToken cancellationToken) => Task.FromResult(_studio);
 
             public Task<List<CreditTrendPoint>> GetCreditTrendAsync(IReadOnlyList<DateTime> dates, ReportUserScope scope, CancellationToken cancellationToken) =>
-                Task.FromResult(new List<CreditTrendPoint>());
+                Task.FromResult(Trend);
+
+            /// <summary>The balance readings the trend reads; none unless a test sets them.</summary>
+            internal List<CreditTrendPoint> Trend { get; } = new List<CreditTrendPoint>();
 
             /// <summary>What a person's drill-down reads; empty unless a test sets it.</summary>
             internal PersonDetailFacts PersonDetail { get; set; } = new PersonDetailFacts();

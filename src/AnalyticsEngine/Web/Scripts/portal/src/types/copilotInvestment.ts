@@ -313,7 +313,7 @@ export interface InvestmentConcentration {
   activeDays: InvestmentDistribution | null;
   credits: InvestmentDistribution | null;
   /** Split at the median balance and at `quadrantDaysPerMonth` active days a month - not the high-spend flag's thresholds. */
-  quadrants: { key: string; people: number; credits: number }[];
+  quadrants: { key: string; people: number; credits: number; withheld?: boolean }[];
   quadrantMedianCredits: number | null;
   quadrantDaysPerMonth: number;
 }
@@ -338,7 +338,10 @@ export interface InvestmentServiceRow {
   category: string;
   unit: string | null;
   consumers: number;
+  /** 0 when `withheld`, which is never shown as a zero. */
   quantity: number;
+  /** For a reader without See PII: the quantity could single out fewer than the minimum number of people and is not given. */
+  withheld?: boolean;
   unknownAmountUsers: number;
   limitExhaustedUsers: number;
   notEntitledUsers: number;
@@ -544,12 +547,16 @@ export interface InvestmentTrendPoint {
   consumingUsers: number;
   credits: number | null;
   limitExhaustedUsers: number;
+  /** For a reader without See PII: `credits` is null because they could single out fewer than the minimum number of people. */
+  withheld?: boolean;
 }
 
 export interface InvestmentTrend {
   points: InvestmentTrendPoint[];
   snapshotDate: string | null;
   failureCode: string | null;
+  /** The fewest people a point's credits may describe to a reader without See PII. */
+  minPeople?: number;
 }
 
 export interface CopilotInvestmentAvailability {

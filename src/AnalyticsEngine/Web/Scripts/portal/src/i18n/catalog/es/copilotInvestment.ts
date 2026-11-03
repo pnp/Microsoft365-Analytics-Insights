@@ -414,6 +414,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.quadrants.lowSpendHighEvidence': 'Menos créditos consumidos, uso regular',
   'copilotInvestment.quadrants.lowSpendLowEvidence': 'Menos créditos consumidos, uso ligero',
   'copilotInvestment.quadrants.people': '{count} personas \u00b7 {credits} créditos',
+  'copilotInvestment.quadrants.peopleWithheld': '{count} personas \u00b7 créditos no mostrados, podrían identificar a menos de {minimum} personas',
 
   // Créditos y fuentes
   'copilotInvestment.sources.title': 'Fuentes',
@@ -440,6 +441,8 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.trend.credits': 'Créditos consumidos',
   'copilotInvestment.trend.consumers': 'Personas con créditos consumidos',
   'copilotInvestment.trend.point': '{date}: {credits} créditos, {consumers} personas',
+  'copilotInvestment.trend.pointWithheld': '{date}: créditos no mostrados, podrían identificar a menos de {count} personas; {consumers} personas',
+  'copilotInvestment.trend.withheld': 'No se muestra: podría identificar a menos de {count} personas',
   'copilotInvestment.trend.empty': 'No hay lecturas de consumo en este periodo.',
   'copilotInvestment.trend.loading': 'Cargando las lecturas de consumo\u2026',
 

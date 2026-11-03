@@ -211,7 +211,11 @@ namespace Tests.UnitTests
         public void ACombinedRowOfTooFewPeople_IsWrittenAsItsReasonAlone_InEitherLanguage()
         {
             // Three people in two small groups, against a minimum of four: the row says why it has no figures, and has none.
-            var summary = CopilotInvestmentCalculator.Calculate(CopilotInvestmentCalculatorTests.SmallGroupsInput(minGroupSize: 4));
+            // Support's five holders are withheld with it for a reader without See PII, so the combined row is not the report's
+            // totals less the groups shown.
+            var input = CopilotInvestmentCalculatorTests.SmallGroupsInput(minGroupSize: 4);
+            input.People.AddRange(Enumerable.Range(21, 5).Select(id => CopilotInvestmentCalculatorTests.Holder(id, 10, department: "Support")));
+            var summary = CopilotInvestmentCalculator.Calculate(input);
             var english = CopilotInvestmentWorkbook.Build(summary.WithoutIndividualData(), false, "test", PortalLanguage.English);
             var spanish = CopilotInvestmentWorkbook.Build(summary.WithoutIndividualData(), false, "test", PortalLanguage.Spanish);
             AssertSpanishCounterpart(english, spanish);
@@ -220,13 +224,18 @@ namespace Tests.UnitTests
             {
                 var text = PortalCatalog.For(Module, language);
                 var organisation = Sheets(book)[Array.IndexOf(SheetKeys, "organisation")].Cells;
-                var reason = organisation.Single(c => c.Text == text.Text("copilotInvestment.workbook.org.combinedWithheld", ("count", "4")));
+                var reasons = organisation.Where(c => c.Text == text.Text("copilotInvestment.workbook.org.combinedWithheld", ("count", "4"))).ToList();
+                Assert.AreEqual(2, reasons.Count, language + ": the combined row and the group withheld with it.");
 
-                var row = Regex.Match(reason.Ref, "\\d+").Value;
-                Assert.AreEqual(1, organisation.Count(c => Regex.Match(c.Ref, "\\d+").Value == row), language + ": the reason is alone on its row.");
+                foreach (var reason in reasons)
+                {
+                    var row = Regex.Match(reason.Ref, "\\d+").Value;
+                    Assert.AreEqual(1, organisation.Count(c => Regex.Match(c.Ref, "\\d+").Value == row), language + ": the reason is alone on its row.");
+                }
                 CollectionAssert.DoesNotContain(Texts(new[] { ("Organisation", organisation) }), text.Text("copilotInvestment.workbook.org.combined"), language.ToString());
                 Assert.IsFalse(organisation.Any(c => c.Value == "7777"), language + ": the balance of the one person in Legal is not written.");
                 Assert.IsTrue(organisation.Any(c => c.Text == "Sales"), language + ": a group that reaches the minimum is written as ever.");
+                Assert.IsFalse(organisation.Any(c => c.Text == "Support"), language + ": withheld with the combined row.");
             }
 
             // Once the same three people reach the minimum the row is an ordinary one: its label and its figures, no reason.

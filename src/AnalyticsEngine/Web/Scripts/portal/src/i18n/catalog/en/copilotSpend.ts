@@ -61,7 +61,7 @@ export const copilotSpend = {
   'copilotSpend.studio.noDays': 'No billed usage in this period.',
   'copilotSpend.studio.environmentsTitle': 'By environment',
   'copilotSpend.studio.environmentsDescription':
-    'Billed credits per Power Platform environment in the period, for the people in this view. Microsoft reports each person\u2019s usage by environment, not by agent, so these add up to the total above, apart from a combined row of environments with too few people, which shows no credits, and shows how many people it holds only when it combines a single environment.',
+    'Billed credits per Power Platform environment in the period, for the people in this view. Microsoft reports each person\u2019s usage by environment, not by agent, so these add up to the total above, apart from a combined row, which shows no credits: it holds the environments with too few people and, with them, the smallest of the others, so that they cannot be worked out from the total. It shows how many people it holds only when it combines a single environment.',
   'copilotSpend.studio.col.environment': 'Environment',
   'copilotSpend.studio.unnamedEnvironment': 'Environment name not available',
   'copilotSpend.studio.otherEnvironments': 'Other environments ({count})',
@@ -220,6 +220,9 @@ export const copilotSpend = {
   'copilotSpend.balances.trendPeople.other': '{people} people with consumed credits, of {observed} read',
   'copilotSpend.balances.trendAtLimit': '{people} at a credit limit',
   'copilotSpend.balances.trendPointUnknown': '{date}: amount not stated',
+  'copilotSpend.balances.trendPointWithheld': '{date}: credits not shown, they could single out fewer than {count} people',
+  'copilotSpend.studio.dayWithheld': '{date}: credits not shown, they could single out fewer than {count} people',
+  'copilotSpend.figureWithheld': 'Not shown: it could single out fewer than {count} people',
   'copilotSpend.distribution.title': 'How consumption is spread across people',
   'copilotSpend.distribution.description':
     'Whether a few people account for most of the credits, or many people for a little each. One source is shown at a time, because the two sources are never added together.',
@@ -515,6 +518,8 @@ export const copilotSpend = {
   'copilotSpend.workbook.org.withheld': 'Fewer than {count} people: figures not shown.',
   'copilotSpend.workbook.org.studioNotAvailable': 'Copilot Studio figures not available (not zero).',
   'copilotSpend.workbook.org.balancesNotAvailable': 'Consumed-credit figures not available (not zero).',
+  'copilotSpend.workbook.org.studioWithheld': 'Copilot Studio figures not shown: they could single out fewer than {count} people.',
+  'copilotSpend.workbook.org.balancesWithheld': 'Consumed-credit figures not shown: they could single out fewer than {count} people.',
   'copilotSpend.workbook.people.col.upn': 'User principal name',
   'copilotSpend.workbook.people.col.department': 'Department',
   'copilotSpend.workbook.people.col.jobTitle': 'Job title',
