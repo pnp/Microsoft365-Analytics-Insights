@@ -403,12 +403,14 @@ Not App Insights: this is `AnalyticsInstaller.exe --initdb` output, which the in
 - Per migration: `[{utc}] MigrationStarting: migration={id} stage=apply.`, then `MigrationOutcome: migration={id} stage=apply outcome=Succeeded elapsedMs={n}.` or `outcome=Failed elapsedMs={n} exceptionType={t} sqlError={n}.` SQL progress: `MigrationSqlProgress: severity={n} sqlError={n}; {text}`. The installer relays `severity=Error` and `outcome=Failed` lines at Error.
 - Final: `Database initialised successfully. Everything worked.` Failures: `Initialise database failed with EF. Exception: ...`, `Run custom SQL scripts failed`, `Org URL population check failed`.
 - Installer wrapper: `Database initialisation failed: downloaded control-panel app exited with code {n}. Last output: ...`; `Database initialisation completed (exit 0)`. `=== Phase: <name> ===` headers delimit installer phases.
+- Blocked process launch: Warning `Downloaded installer launch failed: operation=... exceptionType=... nativeError=...`; Error `Database initialisation did not run because Windows could not launch the downloaded installer.` The remaining tasks continue, but `UpgradeDeployment: stage=complete outcome=Deferred` leaves WebJobs paused. Configuration registration and opening the browser are separate best-effort operations and report their own warnings.
 
 | Last evidence | What it proves |
 |---|---|
 | `MigrationStarting` with no `MigrationOutcome` | Still running (large index builds take a long time) or the process was killed. Migrations are idempotent and resumable, so a re-run converges |
 | `outcome=Failed ... sqlError=N` | That migration did not apply and later ones did not run; N names the cause (1205 deadlock, -2 timeout, 207/208 schema) |
 | `Database initialised successfully` | Schema current; per-migration `elapsedMs` gives the maintenance-window estimate |
+| `outcome=Deferred` after a downloaded-installer launch failure | Schema upgrade did not run, even if content deployment completed. Keep `WEBJOBS_STOPPED=1`; apply the matching release's manual SQL scripts in migration-id order or upgrade from an approved machine, then re-run with content deployment enabled to restore the previous WebJobs state. This is not a successful migration |
 | Portal or importer errors naming a missing column right after a deploy | The upgrade was not applied for that build; the portal Health page shows the pending migration |
 
 ### 3.10 Web portal errors (`errorId`)
