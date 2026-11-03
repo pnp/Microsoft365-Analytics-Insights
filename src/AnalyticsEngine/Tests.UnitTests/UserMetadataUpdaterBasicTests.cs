@@ -229,6 +229,7 @@ namespace Tests.UnitTests
             var config = new AppConfig();
             var fakeLoader = new FakeUserMetadataLoader();
             var updater = new UserMetadataUpdater(logger, config, fakeLoader);
+            var objectId = Guid.NewGuid().ToString();
 
             var dbUser = new Common.Entities.User
             {
@@ -236,12 +237,12 @@ namespace Tests.UnitTests
                 AccountEnabled = true,
                 PostalCode = "OLD_CODE",
                 Mail = "old@test.com",
-                AzureAdId = "old-aad-id"
+                AzureAdId = objectId
             };
 
             var graphUser = new GraphUser
             {
-                Id = "new-aad-id",
+                Id = objectId,
                 UserPrincipalName = "test@test.com",
                 AccountEnabled = false,
                 PostalCode = "NEW_CODE",
@@ -251,10 +252,41 @@ namespace Tests.UnitTests
             var result = updater.UpdateDbUserFromGraphUser(dbUser, graphUser);
 
             Assert.AreSame(dbUser, result);
-            Assert.AreEqual("new-aad-id", dbUser.AzureAdId);
+            Assert.AreEqual(objectId, dbUser.AzureAdId);
             Assert.AreEqual(false, dbUser.AccountEnabled);
             Assert.AreEqual("NEW_CODE", dbUser.PostalCode);
             Assert.AreEqual("new@test.com", dbUser.Mail);
+        }
+
+        [TestMethod]
+        public void UserMetadataUpdater_UpdateDbUserFromGraphUser_DifferentObjectDoesNotChangeExistingValues()
+        {
+            var updater = new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), new FakeUserMetadataLoader());
+            var objectId = Guid.NewGuid().ToString();
+            var dbUser = new Common.Entities.User
+            {
+                UserPrincipalName = "reused@contoso.com",
+                AzureAdId = objectId,
+                AccountEnabled = true,
+                PostalCode = "12345",
+                Mail = "prior@contoso.com"
+            };
+            var graphUser = new GraphUser
+            {
+                Id = Guid.NewGuid().ToString(),
+                UserPrincipalName = dbUser.UserPrincipalName,
+                AccountEnabled = false,
+                PostalCode = "54321",
+                Mail = "current@contoso.com"
+            };
+
+            Assert.ThrowsException<InvalidOperationException>(() => updater.UpdateDbUserFromGraphUser(dbUser, graphUser));
+
+            Assert.AreEqual(objectId, dbUser.AzureAdId);
+            Assert.AreEqual("reused@contoso.com", dbUser.UserPrincipalName);
+            Assert.AreEqual(true, dbUser.AccountEnabled);
+            Assert.AreEqual("12345", dbUser.PostalCode);
+            Assert.AreEqual("prior@contoso.com", dbUser.Mail);
         }
 
         #endregion

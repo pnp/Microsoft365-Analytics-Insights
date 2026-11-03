@@ -382,7 +382,7 @@ namespace Tests.UnitTests
 
             var loader = new FakeUserMetadataLoader(new List<GraphUser>
             {
-                new GraphUser { UserPrincipalName = "a@contoso.com", AccountEnabled = true, Id = Guid.NewGuid().ToString() },
+                NewGraphUser(),
             })
             {
                 OrgSelectionWasRejected = true,
@@ -491,7 +491,7 @@ namespace Tests.UnitTests
             const string listAttribute = "extension_0123456789abcdef0123456789abcdef_costCentres";
             var orgTypes = new FakeUserOrgTypeStore(listAttribute, "extensionAttribute1");
             var assignments = new FakeUserOrgAssignmentStore();
-            var withoutAValue = new GraphUser { UserPrincipalName = "b@contoso.com", AccountEnabled = true, Id = Guid.NewGuid().ToString() };
+            var withoutAValue = NewGraphUser();
             var user = NewGraphUser();
             user.AdditionalProperties = Newtonsoft.Json.JsonConvert.DeserializeObject<Dictionary<string, Newtonsoft.Json.Linq.JToken>>(
                 @"{ """ + listAttribute + @""": [ ""CC-1"", ""CC-2"" ], ""onPremisesExtensionAttributes"": { ""extensionAttribute1"": ""Retail"" } }");
@@ -524,7 +524,7 @@ namespace Tests.UnitTests
             const string listAttribute = "extension_0123456789abcdef0123456789abcdef_costCentres";
             var orgTypes = new FakeUserOrgTypeStore(listAttribute, "extensionAttribute1").MarkHoldingLists(1);
             var assignments = new FakeUserOrgAssignmentStore();
-            var withoutAList = new GraphUser { UserPrincipalName = "b@contoso.com", AccountEnabled = true, Id = Guid.NewGuid().ToString() };
+            var withoutAList = NewGraphUser();
             var loader = new FakeUserMetadataLoader(new List<GraphUser> { withoutAList, NewGraphUser() });
 
             await RunImport(loader, orgTypes, assignments);
@@ -649,7 +649,7 @@ namespace Tests.UnitTests
 
             var loader = new FakeUserMetadataLoader(new List<GraphUser>
             {
-                new GraphUser { UserPrincipalName = "a@contoso.com", AccountEnabled = true, Id = Guid.NewGuid().ToString() },
+                NewGraphUser(),
             });
 
             // Must not throw.
@@ -660,7 +660,8 @@ namespace Tests.UnitTests
 
         private static GraphUser NewGraphUser()
         {
-            return new GraphUser { UserPrincipalName = "a@contoso.com", AccountEnabled = true, Id = Guid.NewGuid().ToString() };
+            var objectId = Guid.NewGuid().ToString();
+            return new GraphUser { UserPrincipalName = "org-import-" + objectId + "@contoso.com", AccountEnabled = true, Id = objectId };
         }
 
         private static async Task RunImport(
