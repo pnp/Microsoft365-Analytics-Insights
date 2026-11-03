@@ -1184,7 +1184,8 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>
         /// The tenant-wide Copilot seat count, set only when this summary is narrowed, so a page can say
-        /// how much of the tenant the narrowed figures cover.
+        /// how much of the tenant the narrowed figures cover. Never set under the administrator's global
+        /// filter, whose reader may not learn the size of the population outside it.
         /// </summary>
         [JsonProperty("unscopedLicensedUsers")]
         public int? UnscopedLicensedUsers { get; set; }
@@ -1202,6 +1203,15 @@ namespace Common.Entities.CopilotAdoption
         /// </remarks>
         [JsonProperty("unscopedSections")]
         public List<string> UnscopedSections { get; set; } = new List<string>();
+
+        /// <summary>
+        /// The same sections when the administrator's global filter applies: left out, because that filter
+        /// decides whose figures this reader may see and these describe everyone, rather than carried across
+        /// tenant-wide. Empty otherwise. Values are the <see cref="CopilotAdoptionUnscopedSections"/> constants,
+        /// so the page can say which are missing and why instead of showing them as empty.
+        /// </summary>
+        [JsonProperty("withheldSections")]
+        public List<string> WithheldSections { get; set; } = new List<string>();
 
         /// <summary>The configured accountability dimension used for <see cref="AccountabilityRollup"/>.</summary>
         [JsonProperty("accountabilityDimension")]

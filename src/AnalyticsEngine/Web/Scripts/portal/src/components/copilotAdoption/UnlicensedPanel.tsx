@@ -58,11 +58,14 @@ export default function UnlicensedPanel({
   options,
   windowDays,
   sql,
+  usageByAppWithheld = false,
 }: {
   unlicensed: UnlicensedPopulationSummary;
   options: CopilotAdoptionOptions;
   windowDays: number;
   sql: Record<string, string> | null;
+  /** True when the server left the by-app breakdown out because the administrator's report filter applies. */
+  usageByAppWithheld?: boolean;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -150,6 +153,8 @@ export default function UnlicensedPanel({
           <div className={styles.cardBody}>
             {unlicensed.usageByApp.length > 0 ? (
               <TreemapChart categories={unlicensed.usageByApp} valueLabel={t('copilotAdoptionUsers.unlicensed.interactionsValueLabel')} />
+            ) : usageByAppWithheld ? (
+              <div className={styles.empty}>{t('copilotAdoption.page.withheldByReportFilter')}</div>
             ) : (
               <div className={styles.empty}>{t('copilotAdoptionUsers.unlicensed.noPerApp')}</div>
             )}

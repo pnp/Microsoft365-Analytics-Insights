@@ -34,6 +34,7 @@ import type {
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
 } from '../types/copilotAdoption';
+import { UNSCOPED_SECTIONS } from '../types/copilotAdoption';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
@@ -222,6 +223,14 @@ function describeUnscopedSections(t: TFunction, sections: string[]): string {
     return key ? t(key) : s;
   });
   return new Intl.ListFormat(activeLocale(), { style: 'long', type: 'conjunction' }).format(labels);
+}
+
+/**
+ * Whether the server left a section out because the administrator's report filter applies, so the page
+ * says so rather than showing it empty, as if nothing had been measured.
+ */
+function isWithheld(summary: CopilotAdoptionSummary, section: string): boolean {
+  return (summary.withheldSections ?? []).includes(section);
 }
 
 function hasTrendGaps(series: { points: { value: number | null }[] }[]): boolean {
@@ -856,10 +865,15 @@ function CopilotAdoptionView({
                   options={summary.options}
                   windowDays={windowDays}
                   sql={sql}
+                  usageByAppWithheld={isWithheld(summary, UNSCOPED_SECTIONS.usageByApp)}
                 />
               )}
 
-              {tab === 'agents' && (
+              {tab === 'agents' && (isWithheld(summary, UNSCOPED_SECTIONS.agents) ? (
+                <Card>
+                  <Text className={styles.muted}>{t('copilotAdoption.page.withheldByReportFilter')}</Text>
+                </Card>
+              ) : (
                 <AgentsPanel
                   estate={summary.agents}
                   agents={summary.agents.agents}
@@ -870,7 +884,7 @@ function CopilotAdoptionView({
                   topUsersCapped={summary.topAgentUsersCapped}
                   canSeePii={canSeePii}
                 />
-              )}
+              ))}
 
               {tab === 'cowork' && (
                 <CoworkPanel
@@ -981,11 +995,16 @@ function FilterBanner({
           description: joinConditions(t, parts, 'and'),
           coverage,
           unscoped:
-            (summary.unscopedSections?.length ?? 0) > 0
+            ((summary.unscopedSections?.length ?? 0) > 0
               ? ` ${t('copilotAdoption.page.scopeBanner.unscopedSections', {
                   v0: describeUnscopedSections(t, summary.unscopedSections ?? []),
                 })}`
-              : '',
+              : '') +
+            ((summary.withheldSections?.length ?? 0) > 0
+              ? ` ${t('copilotAdoption.page.scopeBanner.withheldSections', {
+                  v0: describeUnscopedSections(t, summary.withheldSections ?? []),
+                })}`
+              : ''),
           unknown:
             (echo?.unknownDimensions?.length ?? 0) > 0 || (global?.unknownDimensions?.length ?? 0) > 0
               ? ` ${t('userFilter.print.unknown')}`
@@ -1761,6 +1780,8 @@ function AnalystTab({
           <div className={styles.cardBody}>
             {summary.usageByApp.length > 0 ? (
               <TreemapChart categories={summary.usageByApp} valueLabel={t('copilotAdoption.page.interactions')} />
+            ) : isWithheld(summary, UNSCOPED_SECTIONS.usageByApp) ? (
+              <Text className={styles.muted}>{t('copilotAdoption.page.withheldByReportFilter')}</Text>
             ) : (
               <Text className={styles.muted}>{t('copilotAdoption.page.noPerAppBreakdownAvailableNeedsCopilotAuditImport')}</Text>
             )}
@@ -2817,6 +2838,7 @@ function buildKpis(
   const o = summary.options;
   const seatSkus = (summary.seatLicenceTypes ?? []).filter((l) => l.isCopilotSeat);
   const scoreWeights = [o.frequencyWeight, o.depthWeight, o.breadthWeight];
+  const purchasesWithheld = isWithheld(summary, UNSCOPED_SECTIONS.purchasedSeats);
 
   // Identical unless the detail query hit its row cap. When they differ, every rate below describes
   // the scored subset, and saying so is the difference between a caveat and a wrong number.
@@ -2846,17 +2868,23 @@ function buildKpis(
     {
       key: 'purchased',
       label: t('copilotAdoption.page.purchasedSeats'),
-      value: summary.purchasedCopilotSeats == null ? t('copilotAdoption.page.unknown') : formatCount(summary.purchasedCopilotSeats),
-      hint: summary.unassignedCopilotSeats == null
-        ? t('copilotAdoption.page.kpi.grantOrganizationReadAll')
-        : t('copilotAdoption.page.kpi.unassignedSeats', { count: formatCount(summary.unassignedCopilotSeats) }),
+      value: summary.purchasedCopilotSeats != null
+        ? formatCount(summary.purchasedCopilotSeats)
+        : purchasesWithheld ? '\u2014' : t('copilotAdoption.page.unknown'),
+      hint: purchasesWithheld
+        ? t('copilotAdoption.page.withheldByReportFilter')
+        : summary.unassignedCopilotSeats == null
+          ? t('copilotAdoption.page.kpi.grantOrganizationReadAll')
+          : t('copilotAdoption.page.kpi.unassignedSeats', { count: formatCount(summary.unassignedCopilotSeats) }),
       tone: summary.unassignedCopilotSeats != null && summary.unassignedCopilotSeats > 0 ? 'critical' : undefined,
       info: {
         what: t('copilotAdoption.page.microsoftCopilotSeatsPurchasedTenantGraphSubscribedskusPrepaidunitsSeparate'),
         how: t('copilotAdoption.page.purchasedEnabledWarningSuspendedPrepaidUnitsSkusClassifiedMicrosoft'),
-        source: summary.subscribedSkusAvailable
-          ? t('copilotAdoption.page.kpi.purchasedSeatsSourceImported')
-          : t('copilotAdoption.page.kpi.purchasedSeatsSourceUnknown'),
+        source: purchasesWithheld
+          ? t('copilotAdoption.page.withheldByReportFilter')
+          : summary.subscribedSkusAvailable
+            ? t('copilotAdoption.page.kpi.purchasedSeatsSourceImported')
+            : t('copilotAdoption.page.kpi.purchasedSeatsSourceUnknown'),
       },
     },
     {

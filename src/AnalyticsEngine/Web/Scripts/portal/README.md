@@ -602,8 +602,11 @@ with or without See PII.
   people a given report has rows for nor the groups a report breaks them into: a department, country or
   adoption breakdown can still show a group smaller than five, exactly as it can with no filter.
 - **What stays tenant-wide**, and says so beside the figures: the Overview page's data counts, Teams
-  team-level figures (collaboration and conversations), agent and Azure cost figures, and the Copilot
-  Adoption sections already marked as tenant-wide.
+  team-level figures (collaboration and conversations), and agent and Azure cost figures. The Copilot
+  Adoption sections it marks as tenant-wide under a reader's own filter (use by app, resource types, the
+  weekly trend, the agent inventory, purchased seats, the Copilot Studio capacity snapshot and Microsoft's
+  report figures) are instead left out under this filter and listed in the summary's `withheldSections`,
+  together with the tenant's seat count; the page says they are not shown rather than showing them empty.
 - **Administrators** see the filter applied too, so they see what everyone sees. Only those with **both
   Administration and See PII** can switch it off for their own view from the bar, which sets the session
   cookie `GlobalFilterBypass=1`; the server requires both permissions, and exports follow it because it

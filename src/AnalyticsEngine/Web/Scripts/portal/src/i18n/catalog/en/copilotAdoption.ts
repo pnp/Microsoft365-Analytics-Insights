@@ -61,6 +61,8 @@ export const copilotAdoption = {
   'copilotAdoption.page.filterBanner.heading': 'Filtered:',
   'copilotAdoption.page.filterBanner.coverage': 'The figures below cover {licensed} of the tenant’s {total} Copilot licence holders, not the whole tenant.',
   'copilotAdoption.page.filterBanner.coverageNoTotal': 'The figures below describe only the people this filter matches, not the whole tenant.',
+  'copilotAdoption.page.scopeBanner.withheldSections': 'Because a portal administrator\'s report filter applies, {v0} are not shown: they describe the whole organisation.',
+  'copilotAdoption.page.withheldByReportFilter': 'Not shown, because it describes the whole organisation and a portal administrator\'s report filter applies.',
   'copilotAdoption.page.filterBanner.clear': 'Clear filter',
   'copilotAdoption.page.scopeBanner.unscopedSections': '{v0} stay tenant-wide, because they come from totals that carry no per-person detail to narrow.',
   'copilotAdoption.page.errors.checkAvailability': 'Failed to check Copilot adoption availability.',

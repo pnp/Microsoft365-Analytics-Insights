@@ -253,7 +253,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// The heavy SQL stays cached tenant-wide and shared - narrowing re-scores the loaded rows in
         /// memory instead of re-querying per domain or per filter, which would multiply the load on a
         /// database the importer is already sharing. Sections that cannot be narrowed are carried across
-        /// and named in <see cref="CopilotAdoptionSummary.UnscopedSections"/> so the page can label them.
+        /// and named in <see cref="CopilotAdoptionSummary.UnscopedSections"/> so the page can label them -
+        /// or, under the administrator's global filter, left out and named in
+        /// <see cref="CopilotAdoptionSummary.WithheldSections"/>.
         /// </remarks>
         private async Task<CopilotAdoptionAnalysis> TryGetScopedSummaryAsync(
             int windowDays, string from, string to, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,

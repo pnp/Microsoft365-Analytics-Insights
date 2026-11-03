@@ -685,6 +685,38 @@ describe('CopilotAdoptionPage email-domain filter', () => {
     );
   });
 
+  it('says which sections the administrator\'s report filter leaves out, instead of showing them as empty', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      summary({
+        globalFilter: { clauses: [], matchedPeople: 40, directoryPeople: 200, viewerFound: true, unknownDimensions: [], dimensionNames: {} },
+        unscopedLicensedUsers: null,
+        unscopedSections: [],
+        withheldSections: ['usageByApp', 'agents', 'purchasedSeats'],
+        usageByApp: [],
+        purchasedCopilotSeats: null,
+        unassignedCopilotSeats: null,
+      }),
+    );
+    const withheld = 'Not shown, because it describes the whole organisation and a portal administrator\'s report filter applies.';
+
+    await renderPage();
+
+    const banner = (await screen.findByText('Filtered:')).parentElement as HTMLElement;
+    expect(banner.textContent).toContain('describe only the people this filter matches, not the whole tenant');
+    expect(banner.textContent).toMatch(
+      /Because a portal administrator's report filter applies, Copilot use by app \(licensed and unlicensed\), the agent inventory and purchased and unassigned seats are not shown/,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+    await screen.findByRole('tab', { name: 'Analyst view', selected: true });
+    // The purchased-seats tile and the by-app card say why they are empty, rather than "unknown" or "not imported".
+    expect((await screen.findAllByText(withheld, undefined, { timeout: 5000 })).length).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByText('No per-app breakdown is available', { exact: false })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Agents' }));
+    expect(await screen.findByText(withheld, undefined, { timeout: 5000 })).toBeVisible();
+  });
+
   it('lets the reader get back to the whole tenant from the banner', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ userFilter: echo([FABRIKAM_ONLY]) }));
 

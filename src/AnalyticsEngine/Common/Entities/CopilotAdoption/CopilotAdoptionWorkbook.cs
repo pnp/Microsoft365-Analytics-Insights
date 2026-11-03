@@ -184,6 +184,11 @@ namespace Common.Entities.CopilotAdoption
                         ? " The following sections could not be narrowed and remain TENANT-WIDE, because they "
                           + "come from totals that carry no per-person detail: "
                           + DescribeUnscopedSections(summary.UnscopedSections) + "."
+                        : string.Empty)
+                    + ((summary.WithheldSections?.Count ?? 0) > 0
+                        ? " The following sections describe the whole organisation and are LEFT OUT, because the "
+                          + "report filter set by a portal administrator applies: "
+                          + DescribeUnscopedSections(summary.WithheldSections) + "."
                         : string.Empty)));
 
                 // A condition on an organisation type deleted or disabled since the filter was built
@@ -458,9 +463,12 @@ namespace Common.Entities.CopilotAdoption
                     ? $" In this filtered view it counts only the licence holders the analysis reached: {notAnalysedInView:N0} "
                       + "more that the filter selects are beyond the analysis limit and are not counted here."
                     : string.Empty));
-            AddMeta(sheet, "Purchased Copilot seats", summary.PurchasedCopilotSeats.HasValue ? (object)summary.PurchasedCopilotSeats.Value : "Unknown",
-                "Purchased seats from Graph subscribedSkus prepaidUnits for the SKUs classified as Copilot seats. Unknown means subscribedSkus was unavailable or the permission is missing - deliberately not zero.");
-            AddMeta(sheet, "Unassigned Copilot seats", summary.UnassignedCopilotSeats.HasValue ? (object)summary.UnassignedCopilotSeats.Value : "Unknown",
+            var purchasesWithheld = (summary.WithheldSections ?? new List<string>()).Contains(CopilotAdoptionUnscopedSections.PurchasedSeats);
+            AddMeta(sheet, "Purchased Copilot seats", summary.PurchasedCopilotSeats.HasValue ? (object)summary.PurchasedCopilotSeats.Value : purchasesWithheld ? "Not shown" : "Unknown",
+                purchasesWithheld
+                    ? "Not shown under the report filter set by a portal administrator: seats are bought for the whole organisation."
+                    : "Purchased seats from Graph subscribedSkus prepaidUnits for the SKUs classified as Copilot seats. Unknown means subscribedSkus was unavailable or the permission is missing - deliberately not zero.");
+            AddMeta(sheet, "Unassigned Copilot seats", summary.UnassignedCopilotSeats.HasValue ? (object)summary.UnassignedCopilotSeats.Value : purchasesWithheld ? "Not shown" : "Unknown",
                 "Purchased minus assigned, per Copilot SKU. A seat nobody holds, as distinct from a seat somebody holds but does not use - the two need different decisions, so they are never merged.");
             AddMeta(sheet, "Users analysed", summary.ScoredUsers,
                 notAnalysedInView > 0

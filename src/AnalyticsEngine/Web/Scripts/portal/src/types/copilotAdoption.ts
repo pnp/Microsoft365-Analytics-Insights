@@ -678,6 +678,12 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
   globalFilter?: GlobalFilterEcho | null;
   /** The tenant-wide Copilot seat count, sent only when the summary is narrowed. */
   unscopedLicensedUsers?: number | null;
+  /**
+   * The sections left out because the administrator's report filter applies - the same names as
+   * `unscopedSections`, which they describe the whole organisation for. Show each as not available under
+   * the filter, never as empty. Absent from a server that predates it.
+   */
+  withheldSections?: string[];
   accountabilityDimension: string | null;
   accountabilityDimensionLabel: string | null;
   accountabilityRollup: AccountabilityRollupRow[];

@@ -199,7 +199,10 @@ namespace Common.Entities.CopilotAdoption
     /// carried across unchanged and <i>named</i> in
     /// <see cref="CopilotAdoptionSummary.UnscopedSections"/>. Dropping them would lose real information;
     /// silently leaving them next to narrowed figures would invite the reader to compare two different
-    /// populations. Naming them is the only honest option.</para>
+    /// populations. Naming them is the only honest option - for a reader who narrowed the view
+    /// themselves. Under the administrator's global filter, which decides whose figures a reader may see
+    /// at all, they are left out instead and named in <see cref="CopilotAdoptionSummary.WithheldSections"/>,
+    /// together with the tenant's seat count and purchases.</para>
     /// </summary>
     public static class CopilotAdoptionScopeFilter
     {
@@ -233,7 +236,11 @@ namespace Common.Entities.CopilotAdoption
                 // No scoring runs here, so the licence types can be shared rather than cloned.
                 Summary = SeedScopedSummary(tenant, scope, cloneSeatLicenceTypes: false),
                 Sql = analysis.Sql,
-                Agents = analysis.Agents,
+                // The inventory is the tenant's: every agent, its users and interactions across every
+                // department, and the department most of its users are in. Shared with a view the reader
+                // narrowed themselves, where it is labelled tenant-wide; never with one the administrator's
+                // filter restricts, whose reader may not see figures about the people outside it.
+                Agents = scope.Restriction == null ? analysis.Agents : new List<AgentUsageRow>(),
                 // Unlike the inventory, a person: narrowed like every other per-person list, so a filtered
                 // view lists its own heaviest agent users. The cap was tenant-wide, so a slice inherits it.
                 AgentUsers = Narrow(analysis.AgentUsers, u => u.UserId, u => u.EmailDomain, scope),
@@ -303,6 +310,13 @@ namespace Common.Entities.CopilotAdoption
         private static CopilotAdoptionSummary SeedScopedSummary(
             CopilotAdoptionSummary tenant, CopilotAdoptionScope scope, bool cloneSeatLicenceTypes)
         {
+            // Only the data-source warnings. Any population warning is re-raised by the scoring pass, with
+            // this domain's own numbers in it. Under the administrator's filter, not the ones that quote the
+            // tenant's seat purchases either.
+            var warnings = new List<string>(tenant.SourceWarnings ?? new List<string>());
+            var warningDetails = new List<CopilotAdoptionWarningDetail>(tenant.SourceWarningDetails ?? new List<CopilotAdoptionWarningDetail>());
+            if (scope.Restriction != null) WithoutSeatPurchaseWarnings(warnings, warningDetails);
+
             return new CopilotAdoptionSummary
             {
                 ScopedEmailDomain = scope.EmailDomain,
@@ -318,8 +332,9 @@ namespace Common.Entities.CopilotAdoption
                 GlobalFilterDescription = scope.GlobalFilterDescription,
 
                 // The tenant-wide seat count, so a narrowed page can say "312 of 4,210 licence holders"
-                // - the proportion is what tells a reader whether the slice is representative.
-                UnscopedLicensedUsers = tenant.LicensedUsers,
+                // - the proportion is what tells a reader whether the slice is representative. Not under
+                // the administrator's filter: that reader may not learn how many people are outside it.
+                UnscopedLicensedUsers = scope.Restriction == null ? tenant.LicensedUsers : (int?)null,
 
                 // When the analysis ran, over what period, and with which licence types counted as a
                 // seat. Identical for every slice of it.
@@ -341,17 +356,40 @@ namespace Common.Entities.CopilotAdoption
                 FiguresIncomplete = tenant.FiguresIncomplete,
                 IncompleteReasons = new List<string>(tenant.IncompleteReasons ?? new List<string>()),
 
-                // Only the data-source warnings. Any population warning is re-raised by the scoring
-                // pass, with this domain's own numbers in it.
-                Warnings = new List<string>(tenant.SourceWarnings ?? new List<string>()),
-                SourceWarnings = new List<string>(tenant.SourceWarnings ?? new List<string>()),
-                WarningDetails = (tenant.SourceWarningDetails ?? new List<CopilotAdoptionWarningDetail>())
-                    .Select(d => d.Clone())
-                    .ToList(),
-                SourceWarningDetails = (tenant.SourceWarningDetails ?? new List<CopilotAdoptionWarningDetail>())
-                    .Select(d => d.Clone())
-                    .ToList(),
+                Warnings = new List<string>(warnings),
+                SourceWarnings = new List<string>(warnings),
+                WarningDetails = warningDetails.Select(d => d.Clone()).ToList(),
+                SourceWarningDetails = warningDetails.Select(d => d.Clone()).ToList(),
             };
+        }
+
+        /// <summary>
+        /// Warnings that quote the tenant's Copilot seat purchases - Graph's purchased and assigned counts, or
+        /// that the purchases could not be read at all - which are statements about the whole tenant.
+        /// </summary>
+        private static readonly HashSet<string> SeatPurchaseWarnings = new HashSet<string>(StringComparer.Ordinal)
+        {
+            CopilotAdoptionWarningKeys.SkuSeatMismatch,
+            CopilotAdoptionWarningKeys.PurchasedSeatsUnknown,
+        };
+
+        /// <summary>
+        /// Removes <see cref="SeatPurchaseWarnings"/> from a warning list and its index-aligned details, for a
+        /// view under the administrator's filter: the purchases are withheld there, so the scoring pass would
+        /// otherwise also report them as unreadable.
+        /// </summary>
+        private static void WithoutSeatPurchaseWarnings(List<string> warnings, List<CopilotAdoptionWarningDetail> details)
+        {
+            if (warnings == null || details == null) return;
+
+            for (var i = Math.Min(warnings.Count, details.Count) - 1; i >= 0; i--)
+            {
+                if (details[i] != null && SeatPurchaseWarnings.Contains(details[i].Key))
+                {
+                    warnings.RemoveAt(i);
+                    details.RemoveAt(i);
+                }
+            }
         }
 
         /// <summary>
@@ -384,7 +422,15 @@ namespace Common.Entities.CopilotAdoption
             finaliseSummary(scoped);
 
             ScopeSeatLicenceTypes(scoped);
-            CarryUnscopedSections(tenant, scoped.Summary);
+            if (scope.Restriction == null)
+            {
+                CarryUnscopedSections(tenant, scoped.Summary);
+            }
+            else
+            {
+                WithholdTenantSections(tenant, scoped.Summary);
+            }
+
             WarnOfSeatHoldersNotAnalysed(analysis, scope, scoped.Summary);
 
             return scoped;
@@ -431,10 +477,12 @@ namespace Common.Entities.CopilotAdoption
         /// The licence types a narrowed summary lists.
         /// </summary>
         /// <remarks>
-        /// Under the administrator's global filter, only the Copilot seat types. No other type's assignment
-        /// count can be narrowed - a user row carries its Copilot seats only (see
-        /// <see cref="ScopeSeatLicenceTypes"/>) - and its assigned, purchased and unassigned counts all describe
-        /// the whole tenant, which is what that filter keeps a restricted reader from reading. Narrowed by an
+        /// Under the administrator's global filter, only the Copilot seat types, and without their purchased
+        /// and unassigned seats. No other type's assignment count can be narrowed - a user row carries its
+        /// Copilot seats only (see <see cref="ScopeSeatLicenceTypes"/>) - and its assigned, purchased and
+        /// unassigned counts all describe the whole tenant, which is what that filter keeps a restricted reader
+        /// from reading. So do a Copilot type's purchased and unassigned seats: purchased minus unassigned is the
+        /// tenant's assigned count. Always copies, so the cached tenant types are never edited. Narrowed by an
         /// email domain or by the reader's own filter, every type is listed, the others tenant-wide, as before.
         /// </remarks>
         private static List<LicenceTypeClassification> SeatLicenceTypesFor(
@@ -443,9 +491,19 @@ namespace Common.Entities.CopilotAdoption
             if (scope.Restriction == null && !clone) return tenant.SeatLicenceTypes;
 
             IEnumerable<LicenceTypeClassification> listed = tenant.SeatLicenceTypes ?? new List<LicenceTypeClassification>();
-            if (scope.Restriction != null) listed = listed.Where(l => l.IsCopilotSeat);
+            if (scope.Restriction == null) return listed.Select(l => l.Clone()).ToList();
 
-            return clone ? listed.Select(l => l.Clone()).ToList() : listed.ToList();
+            return listed
+                .Where(l => l.IsCopilotSeat)
+                .Select(l =>
+                {
+                    var copy = l.Clone();
+                    copy.PurchasedUnits = null;
+                    copy.UnassignedUnits = null;
+                    copy.PurchasedUnitsRefreshedUtc = null;
+                    return copy;
+                })
+                .ToList();
         }
 
         /// <summary>
@@ -552,6 +610,73 @@ namespace Common.Entities.CopilotAdoption
         private static bool CoworkCapped(CopilotAdoptionAnalysis analysis, CopilotAdoptionSummary tenant)
         {
             return (analysis.CoworkSignals?.Count ?? 0) >= (tenant.Options?.MaxCoworkUsersScored ?? int.MaxValue);
+        }
+
+        /// <summary>
+        /// Under the administrator's global filter, leaves out the sections <see cref="CarryUnscopedSections"/>
+        /// carries across tenant-wide, and names them in <see cref="CopilotAdoptionSummary.WithheldSections"/>.
+        /// </summary>
+        /// <remarks>
+        /// <para>That filter decides which people a reader may see figures about, so a tenant-wide section
+        /// beside the narrowed figures is data about everyone else: the agent inventory with every department's
+        /// agent use by name, the weekly totals, Copilot use by app and resource type, the seats bought for the
+        /// whole tenant, Microsoft's tenant prompt totals and the Copilot Studio capacity. Labelled "tenant-wide",
+        /// that is fine for a reader who narrowed the view themselves and can clear the filter; it is not for one
+        /// who cannot. Their narrowed counterparts - the agent breadth and depth of this view's own people, its
+        /// own seat counts - are already in the scoring pass's figures and stay.</para>
+        /// <para>The scoring pass has left these sections empty, except the agent estate, which it built from
+        /// the empty inventory <see cref="FilterRows"/> gives a restricted view, and the purchase warnings it
+        /// raised for the purchases <see cref="SeatLicenceTypesFor"/> withheld. Both are reset here.</para>
+        /// </remarks>
+        private static void WithholdTenantSections(CopilotAdoptionSummary tenant, CopilotAdoptionSummary scoped)
+        {
+            scoped.UsageByApp = new List<AdoptionCategory>();
+            scoped.TopResourceTypes = new List<AdoptionResourceTypeRow>();
+            scoped.WeeklyTrend = new List<AdoptionSeries>();
+            scoped.WeeklyVolumeTrend = new List<AdoptionSeries>();
+
+            // Whether per-person credit rows exist is a fact about the import, and the Cowork list's credit
+            // column - narrowed like every other per-person figure - depends on it.
+            scoped.CoworkCreditPosition = new CoworkCreditPosition
+            {
+                PerUserCreditsAvailable = tenant.CoworkCreditPosition?.PerUserCreditsAvailable ?? false,
+            };
+
+            // The inventory's look-back is a setting, which the page's method text quotes.
+            scoped.Agents = new AgentEstateSummary { HistoryDays = tenant.Agents?.HistoryDays ?? 0 };
+            scoped.AgentsInThreeOrMoreDepartments = null;
+            scoped.AgentsInThreeOrMoreDepartmentsUnknownOrigin = null;
+
+            scoped.MicrosoftReportDate = null;
+            scoped.MicrosoftReportPeriodDays = null;
+            scoped.MicrosoftReportVersion = null;
+            scoped.MicrosoftReportPromptsSubmitted = null;
+            scoped.MicrosoftReportAveragePromptsPerActiveUser = null;
+
+            scoped.PurchasedCopilotSeats = null;
+            scoped.UnassignedCopilotSeats = null;
+            scoped.SubscribedSkusAvailable = false;
+            WithoutSeatPurchaseWarnings(scoped.Warnings, scoped.WarningDetails);
+            WithoutSeatPurchaseWarnings(scoped.SourceWarnings, scoped.SourceWarningDetails);
+
+            // Whether the unlicensed list stopped at its cap is true of any subset of it.
+            if (scoped.Unlicensed != null && tenant.Unlicensed != null)
+            {
+                scoped.Unlicensed.UsageByApp = new List<AdoptionCategory>();
+                scoped.Unlicensed.Truncated = tenant.Unlicensed.Truncated;
+            }
+
+            scoped.UnscopedSections = new List<string>();
+            scoped.WithheldSections = new List<string>
+            {
+                CopilotAdoptionUnscopedSections.UsageByApp,
+                CopilotAdoptionUnscopedSections.TopResourceTypes,
+                CopilotAdoptionUnscopedSections.WeeklyTrend,
+                CopilotAdoptionUnscopedSections.Agents,
+                CopilotAdoptionUnscopedSections.PurchasedSeats,
+                CopilotAdoptionUnscopedSections.CoworkCredits,
+                CopilotAdoptionUnscopedSections.MicrosoftReport,
+            };
         }
 
         private static List<T> Narrow<T>(List<T> rows, Func<T, int> userIdOf, Func<T, string> domainOf, CopilotAdoptionScope scope)

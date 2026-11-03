@@ -63,6 +63,8 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.filterBanner.heading': 'Filtrado:',
   'copilotAdoption.page.filterBanner.coverage': 'Las cifras siguientes abarcan a {licensed} de los {total} titulares de licencias de Copilot del inquilino, no a todo el inquilino.',
   'copilotAdoption.page.filterBanner.coverageNoTotal': 'Las cifras siguientes describen solo a las personas que cumplen este filtro, no a todo el inquilino.',
+  'copilotAdoption.page.scopeBanner.withheldSections': 'Como se aplica el filtro de informes de un administrador del portal, no se muestran {v0}: describen a toda la organización.',
+  'copilotAdoption.page.withheldByReportFilter': 'No se muestra, porque describe a toda la organización y se aplica el filtro de informes de un administrador del portal.',
   'copilotAdoption.page.filterBanner.clear': 'Quitar filtro',
   'copilotAdoption.page.scopeBanner.unscopedSections': '{v0} permanecen a nivel de inquilino, porque proceden de totales sin detalle por persona que permita acotarlos.',
   'copilotAdoption.page.errors.checkAvailability': 'No se pudo comprobar la disponibilidad de la adopción de Copilot.',
