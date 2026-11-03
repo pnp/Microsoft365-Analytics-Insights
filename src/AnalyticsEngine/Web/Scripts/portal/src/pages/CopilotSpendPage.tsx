@@ -1049,6 +1049,7 @@ function GroupTable({ summary, groups, customDimensions }: { summary: CopilotSpe
   const t = useT();
   const source = { dimensions: customDimensions, names: { [summary.organisation.dimension]: summary.organisation.dimensionName ?? '' } };
   const withheld = t('copilotSpend.org.withheld', { count: formatNumber(summary.organisation.minGroupSize) });
+  const figureWithheld = t('copilotSpend.org.figureWithheld', { count: formatNumber(summary.organisation.minGroupSize) });
   const notAvailable = t('copilotSpend.studio.notAvailable');
   // A figure the source did not provide, or a combined row too small to show, reads as a dash with its reason - never 0.
   const cell = (text: string, missing: boolean, reason: string) =>
@@ -1074,7 +1075,9 @@ function GroupTable({ summary, groups, customDimensions }: { summary: CopilotSpe
       </TableHeader>
       <TableBody>
         {groups.map((g) => {
-          const reason = g.withheld ? withheld : notAvailable;
+          // A whole row too small to show, one source's figures withheld from a reader without See PII, or a source not available.
+          const studioReason = g.withheld ? withheld : g.studioWithheld ? figureWithheld : notAvailable;
+          const balanceReason = g.withheld ? withheld : g.balancesWithheld ? figureWithheld : notAvailable;
           return (
             <TableRow key={g.label ?? g.emptyKey ?? '-'}>
               <TableCell>
@@ -1091,16 +1094,16 @@ function GroupTable({ summary, groups, customDimensions }: { summary: CopilotSpe
                 )}
               </TableCell>
               <TableCell className={styles.num}>{formatNumber(g.people)}</TableCell>
-              <TableCell className={styles.num}>{cell(formatCredits(g.studioCredits), g.studioCredits === null, reason)}</TableCell>
+              <TableCell className={styles.num}>{cell(formatCredits(g.studioCredits), g.studioCredits === null, studioReason)}</TableCell>
               <TableCell className={styles.num}>
-                {g.studioCredits === null ? cell('', true, reason) : <ShareCell share={g.shareOfStudio} text={formatShareAboveZero(g.shareOfStudio)} />}
+                {g.studioCredits === null ? cell('', true, studioReason) : <ShareCell share={g.shareOfStudio} text={formatShareAboveZero(g.shareOfStudio)} />}
               </TableCell>
-              <TableCell className={styles.num}>{cell(formatCredits(g.balanceCredits), g.balanceCredits === null, reason)}</TableCell>
+              <TableCell className={styles.num}>{cell(formatCredits(g.balanceCredits), g.balanceCredits === null, balanceReason)}</TableCell>
               <TableCell className={styles.num}>
-                {g.balanceCredits === null ? cell('', true, reason) : <ShareCell share={g.shareOfBalances} text={formatShareAboveZero(g.shareOfBalances)} />}
+                {g.balanceCredits === null ? cell('', true, balanceReason) : <ShareCell share={g.shareOfBalances} text={formatShareAboveZero(g.shareOfBalances)} />}
               </TableCell>
               <TableCell className={styles.num}>
-                {cell(g.unknownAmountPeople === null ? '' : formatNumber(g.unknownAmountPeople), g.unknownAmountPeople === null, reason)}
+                {cell(g.unknownAmountPeople === null ? '' : formatNumber(g.unknownAmountPeople), g.unknownAmountPeople === null, balanceReason)}
               </TableCell>
             </TableRow>
           );

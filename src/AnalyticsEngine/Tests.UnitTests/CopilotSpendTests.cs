@@ -5,6 +5,7 @@ using Common.Entities.CopilotInvestment;
 using Common.Entities.CopilotSpend;
 using Common.Entities.Localisation;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -186,6 +187,92 @@ namespace Tests.UnitTests
             Assert.IsNull(folded.BalanceCredits);
             Assert.IsNull(folded.ShareOfStudio);
             Assert.IsNull(folded.UnknownAmountPeople);
+        }
+
+        /// <summary>
+        /// Contoso departments of five people or more, each person in one. Finance's readings are 10 to 60 and only one of its
+        /// people was billed for Copilot Studio (1234.5); one of Marketing's nine Studio makers holds the only reading there
+        /// (777.25); Sales has six of each; Legal has readings and no Studio use at all.
+        /// </summary>
+        private static CopilotSpendInput DepartmentsInput()
+        {
+            var people = new List<(int Id, string Department, double? Studio, double? Balance)>();
+            people.AddRange(Enumerable.Range(1, 6).Select(id => (id, "Finance", id == 1 ? 1234.5 : (double?)null, (double?)(10 * id))));
+            people.AddRange(Enumerable.Range(11, 9).Select(id => (id, "Marketing", (double?)2, id == 11 ? 777.25 : (double?)null)));
+            people.AddRange(Enumerable.Range(21, 5).Select(id => (id, "Legal", (double?)null, (double?)5)));
+            people.AddRange(Enumerable.Range(31, 6).Select(id => (id, GreekDepartment, (double?)3, (double?)4)));
+            var input = Input();
+            input.MinGroupSize = CopilotSpendCalculator.DefaultMinGroupSize;
+            input.Credits.Users.Clear();
+            input.Studio.Users.Clear();
+            foreach (var p in people)
+            {
+                if (p.Balance.HasValue) input.Credits.Users.Add(Balance(p.Id, p.Balance));
+                if (p.Studio.HasValue) input.Studio.Users.Add(new StudioUserFact { UserId = p.Id, Credits = p.Studio.Value, ActiveDays = 1 });
+            }
+            var departments = people.ToDictionary(p => p.Id, p => p.Department);
+            input.GroupOf = id => departments[id];
+            input.Directory = id => new CopilotInvestmentDirectoryEntry { UserPrincipalName = $"person{id}@contoso.example", Department = departments[id] };
+            return input;
+        }
+
+        [TestMethod]
+        public void AGroupWithEnoughPeople_WithholdsASourcesFiguresFromAReaderWithoutSeePii_WhenTooFewOfItsPeopleAreBehindThem()
+        {
+            var summary = CopilotSpendCalculator.Calculate(DepartmentsInput());
+            CopilotSpendGroupRow Group(CopilotSpendSummary s, string label) => s.Organisation.Groups.Single(g => g.Label == label);
+
+            // A reader with See PII is given the cached summary: every group as it always was.
+            var finance = Group(summary, "Finance");
+            Assert.AreEqual(6, finance.People);
+            Assert.AreEqual(1, finance.StudioPeople);
+            Assert.AreEqual(1234.5, finance.StudioCredits.Value, 1e-9);
+            Assert.IsFalse(finance.Withheld || finance.StudioWithheld || finance.BalancesWithheld);
+            Assert.AreEqual(777.25, Group(summary, "Marketing").BalanceCredits.Value, 1e-9);
+
+            var trimmed = summary.WithoutIndividualData();
+
+            // One Studio maker in a department of six: the department's Studio figures would be theirs.
+            var studioOfOne = Group(trimmed, "Finance");
+            Assert.IsTrue(studioOfOne.StudioWithheld, "A single Studio consumer cannot be isolated by the group's total headcount.");
+            Assert.IsNull(studioOfOne.StudioPeople);
+            Assert.IsNull(studioOfOne.StudioCredits);
+            Assert.IsNull(studioOfOne.ShareOfStudio);
+            Assert.IsFalse(studioOfOne.Withheld, "The row stays: its people and its other source are not about one person.");
+            Assert.AreEqual(6, studioOfOne.People);
+            Assert.IsFalse(studioOfOne.BalancesWithheld);
+            Assert.AreEqual(210, studioOfOne.BalanceCredits.Value, 1e-9, "Six readings, 10 to 60.");
+            Assert.AreEqual(6, studioOfOne.BalancePeople);
+
+            // One reading among nine Studio makers: the readings are withheld, the Studio figures are not.
+            var readingOfOne = Group(trimmed, "Marketing");
+            Assert.IsTrue(readingOfOne.BalancesWithheld, "A single reading cannot be isolated by the group's total headcount.");
+            Assert.IsNull(readingOfOne.BalanceCredits);
+            Assert.IsNull(readingOfOne.BalancePeople);
+            Assert.IsNull(readingOfOne.ShareOfBalances);
+            Assert.IsNull(readingOfOne.UnknownAmountPeople);
+            Assert.IsFalse(readingOfOne.StudioWithheld);
+            Assert.AreEqual(18, readingOfOne.StudioCredits.Value, 1e-9);
+
+            // Nobody billed for Studio in Legal: an empty population singles no one out, so its zero stays.
+            var nobody = Group(trimmed, "Legal");
+            Assert.IsFalse(nobody.StudioWithheld, "An empty contributor population does not disclose an individual.");
+            Assert.AreEqual(0, nobody.StudioPeople);
+            Assert.AreEqual(0, nobody.StudioCredits.Value, 1e-9);
+
+            // Nothing withheld reaches the page or the workbook, and the cached rows are never edited.
+            var json = JsonConvert.SerializeObject(trimmed);
+            Assert.IsFalse(json.Contains("1234.5") || json.Contains("777.25"), json);
+            StringAssert.Contains(json, "\"studioWithheld\":true");
+            var workbook = CopilotInvestmentWorkbookLanguageTests.Sheets(CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.English));
+            Assert.IsFalse(workbook.SelectMany(s => s.Cells).Any(c => c.Value == "1234.5" || c.Value == "777.25"), "The export is never less redacted than the page.");
+            var en = PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, PortalLanguage.English);
+            var texts = CopilotInvestmentWorkbookLanguageTests.Texts(workbook);
+            Assert.IsTrue(texts.Any(t => t.Contains(en.Text("copilotSpend.workbook.org.studioWithheld", ("count", "5")))), "The export says why the cells are empty.");
+            Assert.IsFalse(texts.Any(t => t.Contains(en.Text("copilotSpend.workbook.org.studioNotAvailable"))), "Withheld is not 'not available'.");
+            Assert.AreEqual(1234.5, Group(summary, "Finance").StudioCredits.Value, 1e-9);
+            Assert.IsFalse(Group(summary, "Finance").StudioWithheld);
+            StringAssert.Contains(JsonConvert.SerializeObject(summary.Organisation), "1234.5");
         }
 
         [TestMethod]

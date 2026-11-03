@@ -140,6 +140,7 @@ export const copilotSpend = {
   'copilotSpend.org.notSet': 'Not set',
   'copilotSpend.org.combined': 'Other small groups ({count})',
   'copilotSpend.org.withheld': 'Fewer than {count} people: figures not shown',
+  'copilotSpend.org.figureWithheld': 'Not shown: it could single out fewer than {count} people',
   'copilotSpend.org.moreGroups': '{count} more groups (each listed in the Excel report)',
   'copilotSpend.org.regrouping': 'Grouping by {dimension}\u2026',
   'copilotSpend.org.unavailable.directoryUnavailable':
@@ -515,6 +516,8 @@ export const copilotSpend = {
   'copilotSpend.workbook.org.withheld': 'Fewer than {count} people: figures not shown.',
   'copilotSpend.workbook.org.studioNotAvailable': 'Copilot Studio figures not available (not zero).',
   'copilotSpend.workbook.org.balancesNotAvailable': 'Consumed-credit figures not available (not zero).',
+  'copilotSpend.workbook.org.studioWithheld': 'Copilot Studio figures not shown: they could single out fewer than {count} people.',
+  'copilotSpend.workbook.org.balancesWithheld': 'Consumed-credit figures not shown: they could single out fewer than {count} people.',
   'copilotSpend.workbook.people.col.upn': 'User principal name',
   'copilotSpend.workbook.people.col.department': 'Department',
   'copilotSpend.workbook.people.col.jobTitle': 'Job title',

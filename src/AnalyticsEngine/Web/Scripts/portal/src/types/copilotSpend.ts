@@ -203,8 +203,14 @@ export interface SpendGroupRow {
   folded: number;
   /** A combined row with fewer people than the smallest group shown: its figures are null. */
   withheld: boolean;
+  /**
+   * For a reader without See PII: the Copilot Studio figures are null because they could single out fewer than the minimum
+   * number of people, though the row itself is shown. `balancesWithheld` is the same for the consumed-credit figures.
+   */
+  studioWithheld: boolean;
+  balancesWithheld: boolean;
   people: number;
-  /** Null when the source is not available, or the row is withheld: not zero. */
+  /** Null when the source is not available, or the row or its source is withheld: not zero. */
   studioPeople: number | null;
   studioCredits: number | null;
   shareOfStudio: number | null;

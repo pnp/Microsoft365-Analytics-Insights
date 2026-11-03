@@ -147,6 +147,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.org.notSet': 'Sin definir',
   'copilotSpend.org.combined': 'Otros grupos pequeños ({count})',
   'copilotSpend.org.withheld': 'Menos de {count} personas: cifras no mostradas',
+  'copilotSpend.org.figureWithheld': 'No se muestra: podría identificar a menos de {count} personas',
   'copilotSpend.org.moreGroups': '{count} grupos más (cada uno figura en el informe de Excel)',
   'copilotSpend.org.regrouping': 'Agrupando por {dimension}…',
   'copilotSpend.org.unavailable.directoryUnavailable':
@@ -528,6 +529,8 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.workbook.org.withheld': 'Menos de {count} personas: cifras no mostradas.',
   'copilotSpend.workbook.org.studioNotAvailable': 'Cifras de Copilot Studio no disponibles (no es cero).',
   'copilotSpend.workbook.org.balancesNotAvailable': 'Cifras de créditos consumidos no disponibles (no es cero).',
+  'copilotSpend.workbook.org.studioWithheld': 'Cifras de Copilot Studio no mostradas: podrían identificar a menos de {count} personas.',
+  'copilotSpend.workbook.org.balancesWithheld': 'Cifras de créditos consumidos no mostradas: podrían identificar a menos de {count} personas.',
   'copilotSpend.workbook.people.col.upn': 'Nombre principal de usuario',
   'copilotSpend.workbook.people.col.department': 'Departamento',
   'copilotSpend.workbook.people.col.jobTitle': 'Puesto',

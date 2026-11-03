@@ -167,8 +167,12 @@ namespace Common.Entities.CopilotSpend
             if (g.EmptyKey == CopilotInvestmentCalculator.GroupKeys.OtherSmallGroups)
                 notes.Add(words.W("org.combinedNote", ("groups", words.Count(g.Folded)), ("count", words.Count(organisation.MinGroupSize))));
             if (g.Withheld) notes.Add(words.W("org.withheld", ("count", words.Count(organisation.MinGroupSize))));
-            if (g.StudioCredits == null && !g.Withheld) notes.Add(words.W("org.studioNotAvailable"));
-            if (g.BalanceCredits == null && !g.Withheld) notes.Add(words.W("org.balancesNotAvailable"));
+            // A copy for a reader without See PII withholds one source's figures that describe too few people; say so, never "not available".
+            var floor = ("count", words.Count(organisation.MinGroupSize));
+            if (g.StudioWithheld) notes.Add(words.W("org.studioWithheld", floor));
+            else if (g.StudioCredits == null && !g.Withheld) notes.Add(words.W("org.studioNotAvailable"));
+            if (g.BalancesWithheld) notes.Add(words.W("org.balancesWithheld", floor));
+            else if (g.BalanceCredits == null && !g.Withheld) notes.Add(words.W("org.balancesNotAvailable"));
             return notes.Count == 0 ? null : string.Join(" ", notes);
         }
 
