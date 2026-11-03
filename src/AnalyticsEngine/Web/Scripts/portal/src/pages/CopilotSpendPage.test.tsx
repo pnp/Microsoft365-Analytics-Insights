@@ -580,6 +580,19 @@ describe('CopilotSpendPage', () => {
     expect(within(table).getByText('6,000')).toBeInTheDocument();
   });
 
+  it('says a category withheld from a reader without See PII is withheld, never zero', async () => {
+    const balances = summary().balances;
+    vi.mocked(fetchSpendSummary).mockResolvedValue(
+      summary({ balances: { ...balances, services: [{ ...balances.services[0], consumers: 3, quantity: 0, withheld: true }] } }),
+    );
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Copilot credits consumed (readings)' }));
+    const table = await screen.findByRole('table', { name: 'By category' });
+    expect(within(table).getByRole('img', { name: 'Not shown: it could single out fewer than 5 people' })).toBeInTheDocument();
+    expect(within(table).queryByText('0')).not.toBeInTheDocument();
+  });
+
   it('says a day or a reading withheld from a reader without See PII is withheld, never zero or an unstated amount', async () => {
     const studio = summary().studio;
     vi.mocked(fetchSpendSummary).mockResolvedValue(

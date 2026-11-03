@@ -338,7 +338,10 @@ export interface InvestmentServiceRow {
   category: string;
   unit: string | null;
   consumers: number;
+  /** 0 when `withheld`, which is never shown as a zero. */
   quantity: number;
+  /** For a reader without See PII: the quantity could single out fewer than the minimum number of people and is not given. */
+  withheld?: boolean;
   unknownAmountUsers: number;
   limitExhaustedUsers: number;
   notEntitledUsers: number;

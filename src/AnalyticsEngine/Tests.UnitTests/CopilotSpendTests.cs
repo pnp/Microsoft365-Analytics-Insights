@@ -562,6 +562,54 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void ACategoryOfTooFewAccounts_IsWithheldFromAReaderWithoutSeePii_NotJustTheTotalItAddsUpTo()
+        {
+            // The two people in view with a reading and the unmatched account all consumed in one category: its quantity is
+            // their readings together, the very total the copy withholds.
+            var input = Input();
+            input.Credits.Services.Add(new CreditServiceFact { ObjectId = new Guid(1, 0, 0, new byte[8]), Category = "contosoAgents", Unit = CopilotInvestmentSql.CreditUnit, Consumed = 61.125 });
+            input.Credits.Services.Add(new CreditServiceFact { ObjectId = new Guid(4, 0, 0, new byte[8]), Category = "contosoAgents", Unit = CopilotInvestmentSql.CreditUnit, Consumed = 12.5 });
+            input.Credits.Services.Add(new CreditServiceFact { ObjectId = new Guid(999, 0, 0, new byte[8]), Category = "contosoAgents", Unit = CopilotInvestmentSql.CreditUnit, Consumed = 50 });
+            var summary = CopilotSpendCalculator.Calculate(input);
+            var cached = summary.Balances.Services.Single();
+            Assert.AreEqual(123.625, cached.Quantity, 1e-9, "The control: a reader with See PII sees the category's consumption.");
+
+            var trimmed = summary.WithoutIndividualData();
+            var category = trimmed.Balances.Services.Single();
+            Assert.IsTrue(category.Withheld, "Three accounts.");
+            Assert.AreEqual(0, category.Quantity);
+            Assert.AreEqual(3, category.Consumers, "How many is a count, not anyone's consumption.");
+            Assert.IsFalse(JsonConvert.SerializeObject(trimmed).Contains("123.625"));
+            var cells = CopilotInvestmentWorkbookLanguageTests.Sheets(CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.English)).SelectMany(s => s.Cells);
+            Assert.IsFalse(cells.Any(c => c.Value == "123.625"), "The export is never less redacted than the page.");
+            Assert.IsFalse(cached.Withheld, "The cached row is never edited.");
+            Assert.AreEqual(123.625, cached.Quantity, 1e-9);
+        }
+
+        [TestMethod]
+        public void CategoriesOfOneUnit_WithholdTheSmallestOfEnoughAccountsWithASmallOne_BecauseTheyAddUpToItsTotal()
+        {
+            var rows = new List<CopilotInvestmentServiceRow>
+            {
+                new CopilotInvestmentServiceRow { Category = "a", Unit = CopilotInvestmentSql.CreditUnit, Consumers = 3, Contributors = 3, Quantity = 123.625 },
+                new CopilotInvestmentServiceRow { Category = "b", Unit = CopilotInvestmentSql.CreditUnit, Consumers = 6, Contributors = 6, Quantity = 400.5 },
+                new CopilotInvestmentServiceRow { Category = "c", Unit = CopilotInvestmentSql.CreditUnit, Consumers = 9, Contributors = 9, Quantity = 900.75 },
+                new CopilotInvestmentServiceRow { Category = "d", Unit = "message", Consumers = 2, Contributors = 2, Quantity = 7 },
+                new CopilotInvestmentServiceRow { Category = "e", Unit = "message", Consumers = 0, Contributors = 0, Quantity = 0 },
+            };
+            var shown = CopilotInvestmentServiceRow.WithoutSmallPopulations(rows, 5).ToDictionary(r => r.Category);
+
+            Assert.IsTrue(shown["a"].Withheld, "Three accounts.");
+            Assert.IsTrue(shown["b"].Withheld, "The smallest category of five or more in the same unit: one person can be in several, so counts cannot be added.");
+            Assert.AreSame(rows[2], shown["c"]);
+            Assert.IsTrue(shown["d"].Withheld, "Two accounts.");
+            Assert.AreSame(rows[4], shown["e"], "Nobody consumed it.");
+            Assert.AreEqual(6, shown["b"].Consumers);
+            Assert.AreEqual(400.5, rows[1].Quantity, 1e-9, "The cached rows are never edited.");
+            Assert.IsFalse(rows.Any(r => r.Withheld));
+        }
+
+        [TestMethod]
         public void ABalanceReadingOfTooFewPeople_IsWithheldFromAReaderWithoutSeePii_WithTheReadingsTheTotalIsBuiltFrom()
         {
             var points = new List<CreditTrendPoint>

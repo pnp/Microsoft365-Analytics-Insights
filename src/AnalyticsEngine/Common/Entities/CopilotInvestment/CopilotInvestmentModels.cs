@@ -151,6 +151,7 @@ namespace Common.Entities.CopilotInvestment
                     copy.Findings = Findings.Where(f => !(evidenceGone && f.Code == CopilotInvestmentFindingCodes.EvidenceConcentration)
                         && !(creditsGone && f.Code == CopilotInvestmentFindingCodes.CreditConcentration)).ToList();
             }
+            copy.Services = CopilotInvestmentServiceRow.WithoutSmallPopulations(Services, Math.Max(Organisation?.MinGroupSize ?? 0, SmallPopulations.MinPeopleWithoutSeePii));
             return copy;
         }
 
@@ -1151,8 +1152,45 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("consumers")]
         public int Consumers { get; set; }
 
+        /// <summary>The category's consumption; 0 when <see cref="Withheld"/>, which the page and the workbook never show as a zero.</summary>
         [JsonProperty("quantity")]
         public double Quantity { get; set; }
+
+        /// <summary>True when, for a reader without See PII, <see cref="Quantity"/> could single out too few people and is not given.</summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
+
+        /// <summary>Accounts with an amount other than zero in the category: who <see cref="Quantity"/> describes.</summary>
+        [JsonIgnore]
+        internal int Contributors { get; set; }
+
+        /// <summary>
+        /// Copies of the categories for a reader without See PII. A category's quantity is withheld when one to
+        /// <paramref name="minPeople"/> - 1 accounts are behind it - the same people's balance as a withheld total, often. The
+        /// categories of one unit add up to that unit's total and one person can consume several, so the smallest category
+        /// of at least that many accounts is withheld with them (<see cref="SmallPopulations.WithholdOverlappingComplement"/>).
+        /// The counts stay. Rows are copied, never edited.
+        /// </summary>
+        internal static List<CopilotInvestmentServiceRow> WithoutSmallPopulations(List<CopilotInvestmentServiceRow> rows, int minPeople)
+        {
+            if (rows == null) return null;
+            var withheld = rows.Select(r => SmallPopulations.IsSmall(r.Contributors, minPeople)).ToArray();
+            foreach (var unit in rows.Select((r, i) => i).GroupBy(i => rows[i].Unit ?? string.Empty, StringComparer.Ordinal))
+            {
+                var indexes = unit.ToList();
+                var inUnit = indexes.Select(i => withheld[i]).ToArray();
+                SmallPopulations.WithholdOverlappingComplement(indexes.Select(i => rows[i].Contributors).ToList(), inUnit, minPeople);
+                for (var k = 0; k < indexes.Count; k++) withheld[indexes[k]] = inUnit[k];
+            }
+            return rows.Select((r, i) =>
+            {
+                if (!withheld[i]) return r;
+                var copy = (CopilotInvestmentServiceRow)r.MemberwiseClone();
+                copy.Quantity = 0;
+                copy.Withheld = true;
+                return copy;
+            }).ToList();
+        }
 
         [JsonProperty("unknownAmountUsers")]
         public int UnknownAmountUsers { get; set; }

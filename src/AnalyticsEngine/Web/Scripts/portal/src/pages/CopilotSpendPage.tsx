@@ -1005,7 +1005,15 @@ function BalancesPanel({ summary, trend, trendError }: { summary: CopilotSpendSu
                         : t('copilotInvestment.services.unitMissing')}
                   </TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.consumers)}</TableCell>
-                  <TableCell className={styles.num}>{formatCredits(s.quantity)}</TableCell>
+                  <TableCell className={styles.num}>
+                    {s.withheld ? (
+                      <span title={missingCredits(t, null, true, balances.distribution?.minPeople)} aria-label={missingCredits(t, null, true, balances.distribution?.minPeople)} role="img">
+                        {'\u2014'}
+                      </span>
+                    ) : (
+                      formatCredits(s.quantity)
+                    )}
+                  </TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.limitExhaustedUsers + s.notEntitledUsers)}</TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.unevaluatedUsers)}</TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.unknownAmountUsers)}</TableCell>

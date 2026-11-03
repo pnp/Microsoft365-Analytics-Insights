@@ -204,9 +204,13 @@ namespace Common.Entities.CopilotInvestment
             sheet.AddHeaderRow(words.W("credits.col.service"), words.W("col.unit"), words.W("credits.col.consuming"), words.W("credits.col.quantity"),
                 words.W("credits.col.unknownAmounts"), words.W("credits.col.limitExhausted"), words.W("credits.col.notEntitled"),
                 words.T("copilotInvestment.services.col.unevaluated"), words.W("credits.col.policies"));
+            // A quantity withheld from a reader without See PII says why in its own cell, never a zero.
+            var serviceWithheld = words.T("copilotInvestment.trend.withheld",
+                ("count", words.Count(System.Math.Max(summary.Organisation?.MinGroupSize ?? 0, SmallPopulations.MinPeopleWithoutSeePii))));
             foreach (var s in summary.Services)
-                sheet.AddRow(s.Category, s.Unit ?? words.W("credits.unknownUnit"), XlsxCell.Number(s.Consumers), s.Quantity, XlsxCell.Number(s.UnknownAmountUsers),
-                    XlsxCell.Number(s.LimitExhaustedUsers), XlsxCell.Number(s.NotEntitledUsers), XlsxCell.Number(s.UnevaluatedUsers), string.Join(", ", s.Policies));
+                sheet.AddRow(s.Category, s.Unit ?? words.W("credits.unknownUnit"), XlsxCell.Number(s.Consumers), s.Withheld ? (object)serviceWithheld : s.Quantity,
+                    XlsxCell.Number(s.UnknownAmountUsers), XlsxCell.Number(s.LimitExhaustedUsers), XlsxCell.Number(s.NotEntitledUsers), XlsxCell.Number(s.UnevaluatedUsers),
+                    string.Join(", ", s.Policies));
             sheet.AddBlankRow();
             sheet.AddHeaderRow(words.W("credits.col.policy"), words.W("credits.col.type"), words.W("credits.col.status"), words.W("credits.col.billing"),
                 words.W("credits.col.periodLimit"), words.W("credits.col.perUserLimit"), words.W("credits.col.groups"), words.T("copilotInvestment.policies.col.services"));

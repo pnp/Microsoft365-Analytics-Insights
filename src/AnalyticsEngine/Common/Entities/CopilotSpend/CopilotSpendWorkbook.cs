@@ -240,9 +240,12 @@ namespace Common.Entities.CopilotSpend
             sheet.AddHeaderRow(words.W("balances.col.service"), words.W("col.unit"), words.W("balances.col.consuming"), words.W("balances.col.quantity"),
                 words.W("balances.col.unknown"), words.W("balances.col.limit"), words.W("balances.col.notEntitled"), words.W("balances.col.unevaluated"),
                 words.W("balances.col.policies"));
+            // A quantity withheld from a reader without See PII says why in its own cell, never a zero.
+            var serviceWithheld = words.W("dist.figureWithheld", ("count", words.Count(CopilotSpendCalculator.DefaultMinGroupSize)));
             foreach (var s in balances.Services)
-                sheet.AddRow(s.Category, s.Unit ?? words.W("balances.unknownUnit"), XlsxCell.Number(s.Consumers), s.Quantity, XlsxCell.Number(s.UnknownAmountUsers),
-                    XlsxCell.Number(s.LimitExhaustedUsers), XlsxCell.Number(s.NotEntitledUsers), XlsxCell.Number(s.UnevaluatedUsers), string.Join(", ", s.Policies));
+                sheet.AddRow(s.Category, s.Unit ?? words.W("balances.unknownUnit"), XlsxCell.Number(s.Consumers), s.Withheld ? (object)serviceWithheld : s.Quantity,
+                    XlsxCell.Number(s.UnknownAmountUsers), XlsxCell.Number(s.LimitExhaustedUsers), XlsxCell.Number(s.NotEntitledUsers), XlsxCell.Number(s.UnevaluatedUsers),
+                    string.Join(", ", s.Policies));
             sheet.AddBlankRow();
             if (summary.Filtered)
             {

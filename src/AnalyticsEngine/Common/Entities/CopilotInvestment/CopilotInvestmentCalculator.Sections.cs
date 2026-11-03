@@ -224,6 +224,7 @@ namespace Common.Entities.CopilotInvestment
                     Category = g.Key.Category,
                     Unit = g.Key.Unit.Length == 0 ? null : g.Key.Unit,
                     Consumers = g.Where(s => (s.Consumed ?? 0) > 0).Select(s => s.ObjectId).Distinct().Count(),
+                    Contributors = g.Where(s => (s.Consumed ?? 0) != 0).Select(s => s.ObjectId).Distinct().Count(),
                     Quantity = Math.Round(g.Sum(s => s.Consumed ?? 0), 6),
                     UnknownAmountUsers = g.Where(s => !s.Consumed.HasValue).Select(s => s.ObjectId).Distinct().Count(),
                     LimitExhaustedUsers = g.Where(s => string.Equals(s.DecisionReason, "limitExhausted", StringComparison.Ordinal)).Select(s => s.ObjectId).Distinct().Count(),

@@ -97,6 +97,7 @@ namespace Common.Entities.CopilotSpend
             {
                 copy.Balances = Balances.Copy();
                 copy.Balances.Distribution = Balances.Distribution?.Anonymised(CopilotSpendCalculator.DefaultMinGroupSize);
+                copy.Balances.Services = CopilotInvestmentServiceRow.WithoutSmallPopulations(Balances.Services, CopilotSpendCalculator.DefaultMinGroupSize);
                 // In a filtered view the total is the people's own; unfiltered, it less the unmatched accounts' credits is.
                 if (SmallPopulations.IsSmall(Balances.Contributors, CopilotSpendCalculator.DefaultMinGroupSize))
                 {

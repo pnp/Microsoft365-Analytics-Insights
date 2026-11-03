@@ -69,6 +69,7 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
   const maxCredits = Math.max(1, ...points.map((p) => p.credits ?? 0));
   // A reading withheld from a reader without See PII is a dash with its reason, never a zero.
   const withheld = t('copilotInvestment.trend.withheld', { count: formatNumber(trend?.minPeople ?? 5) });
+  const serviceWithheld = t('copilotInvestment.trend.withheld', { count: formatNumber(Math.max(summary.organisation.minGroupSize, 5)) });
 
   return (
     <div className={styles.stack}>
@@ -234,7 +235,15 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
                         : t('copilotInvestment.services.unitMissing')}
                   </TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.consumers)}</TableCell>
-                  <TableCell className={styles.num}>{formatCredits(s.quantity)}</TableCell>
+                  <TableCell className={styles.num}>
+                    {s.withheld ? (
+                      <span title={serviceWithheld} aria-label={serviceWithheld} role="img">
+                        {'\u2014'}
+                      </span>
+                    ) : (
+                      formatCredits(s.quantity)
+                    )}
+                  </TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.limitExhaustedUsers + s.notEntitledUsers)}</TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.unevaluatedUsers)}</TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.unknownAmountUsers)}</TableCell>
