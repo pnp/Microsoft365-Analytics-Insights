@@ -208,6 +208,13 @@ namespace Common.Entities.LicenceActivity
 
         public string Id { get; }
 
+        /// <summary>
+        /// The overview of one selection. With a <see cref="LicenceActivityQuery.MinimumGroupSize"/> - a reader
+        /// without See PII - no figure describes fewer people than that minimum: a licence held by fewer has its
+        /// activity withheld (<see cref="LicenceActivitySku.Withheld"/>), smaller departments and countries are
+        /// folded into one row, and a selection of fewer people has every figure withheld
+        /// (<see cref="LicenceActivityOverview.Suppressed"/>). Without one, every group is shown.
+        /// </summary>
         public LicenceActivityOverview BuildOverview(
             LicenceActivityQuery query, CancellationToken cancellationToken)
         {
@@ -226,11 +233,13 @@ namespace Common.Entities.LicenceActivity
                 }
             }
 
+            var minimum = query.MinimumGroupSize;
             var overview = new LicenceActivityOverview
             {
                 ReadModelId = Id,
                 Query = query,
                 DistinctAssignedUsers = includedCount,
+                Suppressed = IsSmall(includedCount, minimum),
                 Coverage = _coverage.Select(CloneCoverage).ToList()
             };
 
@@ -247,8 +256,10 @@ namespace Common.Entities.LicenceActivity
             overview.AllLicences = new LicenceActivityAllLicences
             {
                 AssignedUsers = includedCount,
-                AdoptionScore = everyoneScore.Score,
-                Workloads = ToDistributions(everyone, includedCount)
+                AdoptionScore = overview.Suppressed ? null : everyoneScore.Score,
+                Workloads = overview.Suppressed
+                    ? new List<LicenceActivityDistribution>()
+                    : ToDistributions(everyone, includedCount)
             };
 
             foreach (var licence in _licences)
@@ -273,16 +284,42 @@ namespace Common.Entities.LicenceActivity
                         AddScore(ref score, user);
                     }
                 }
-                result.AdoptionScore = score.Score;
-                result.Workloads = ToDistributions(distributions, result.AssignedUsers);
+                // How many hold a licence is not anybody's activity, so the count stays; what those few did goes.
+                if (IsSmall(result.AssignedUsers, minimum))
+                {
+                    result.Withheld = true;
+                }
+                else
+                {
+                    result.AdoptionScore = score.Score;
+                    result.Workloads = ToDistributions(distributions, result.AssignedUsers);
+                }
                 overview.Licences.Add(result);
             }
 
-            var departments = BuildDemographics(included, true, cancellationToken);
-            var countries = BuildDemographics(included, false, cancellationToken);
-            overview.DemographicsTruncated = departments.Count > 50 || countries.Count > 50;
-            overview.Departments = ProjectDemographics(departments, cancellationToken);
-            overview.Countries = ProjectDemographics(countries, cancellationToken);
+            if (!overview.Suppressed)
+            {
+                var departments = BuildDemographics(included, true, cancellationToken);
+                var countries = BuildDemographics(included, false, cancellationToken);
+                if (minimum.HasValue)
+                {
+                    bool departmentsCapped, countriesCapped;
+                    int otherDepartments, otherCountries;
+                    overview.Departments = ProjectWithoutSmallGroups(
+                        departments, minimum.Value, out otherDepartments, out departmentsCapped, cancellationToken);
+                    overview.Countries = ProjectWithoutSmallGroups(
+                        countries, minimum.Value, out otherCountries, out countriesCapped, cancellationToken);
+                    overview.OtherDepartments = otherDepartments;
+                    overview.OtherCountries = otherCountries;
+                    overview.DemographicsTruncated = departmentsCapped || countriesCapped;
+                }
+                else
+                {
+                    overview.DemographicsTruncated = departments.Count > MaximumDemographicRows || countries.Count > MaximumDemographicRows;
+                    overview.Departments = ProjectDemographics(departments, cancellationToken);
+                    overview.Countries = ProjectDemographics(countries, cancellationToken);
+                }
+            }
 
             if (overview.Licences.Count == 0)
                 overview.Messages.Add(LicenceActivityRules.Notes.NoLicences);
@@ -417,22 +454,98 @@ namespace Common.Entities.LicenceActivity
         private static List<LicenceActivityDemographic> ProjectDemographics(
             List<DemographicAccumulator> values, CancellationToken cancellationToken)
         {
-            var count = Math.Min(50, values.Count);
+            var count = Math.Min(MaximumDemographicRows, values.Count);
             var result = new List<LicenceActivityDemographic>(count);
             for (var index = 0; index < count; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var value = values[index];
+                result.Add(Project(values[index]));
+            }
+            return result;
+        }
+
+        private static LicenceActivityDemographic Project(DemographicAccumulator value) =>
+            new LicenceActivityDemographic
+            {
+                Id = value.Id,
+                Name = value.Name,
+                AssignedUsers = value.AssignedUsers,
+                Workloads = ToDistributions(value.Distributions, value.AssignedUsers)
+            };
+
+        /// <summary>
+        /// The departments or countries for a reader without See PII: every group of fewer than
+        /// <paramref name="minimum"/> people is folded into one unnamed row, so no row is a handful of
+        /// individuals' activity. At most <see cref="MaximumDemographicRows"/> rows, the folded one included;
+        /// larger groups past that are left out, as they are for every reader.
+        /// </summary>
+        /// <param name="values">Every group, largest first.</param>
+        private static List<LicenceActivityDemographic> ProjectWithoutSmallGroups(
+            List<DemographicAccumulator> values, int minimum, out int otherGroups, out bool capped,
+            CancellationToken cancellationToken)
+        {
+            var named = new List<DemographicAccumulator>(values.Count);
+            var folded = new List<DemographicAccumulator>();
+            var foldedPeople = 0;
+            foreach (var value in values)
+            {
+                if (value.AssignedUsers < minimum)
+                {
+                    folded.Add(value);
+                    foldedPeople += value.AssignedUsers;
+                }
+                else named.Add(value);
+            }
+
+            // The total is on the page as well, so the folded row is always the total less the named rows. When the
+            // small groups come to 1-4 people that row is those few people, so fold the smallest named group into it
+            // too - as Activity analysis does (ActivityAnalysisEvaluation.AlsoFold). One is always enough: it adds at
+            // least the minimum. Values are largest first, so the smallest named group is the last.
+            if (foldedPeople > 0 && foldedPeople < minimum && named.Count > 0)
+            {
+                var smallest = named[named.Count - 1];
+                named.RemoveAt(named.Count - 1);
+                folded.Add(smallest);
+                foldedPeople += smallest.AssignedUsers;
+            }
+
+            var limit = folded.Count > 0 ? MaximumDemographicRows - 1 : MaximumDemographicRows;
+            capped = named.Count > limit;
+            var result = new List<LicenceActivityDemographic>(Math.Min(limit, named.Count) + 1);
+            for (var index = 0; index < named.Count && index < limit; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                result.Add(Project(named[index]));
+            }
+
+            otherGroups = folded.Count;
+            if (folded.Count > 0)
+            {
+                var distributions = NewDistributions();
+                foreach (var value in folded)
+                    for (var workload = 0; workload < distributions.Length; workload++)
+                        distributions[workload].Add(value.Distributions[workload]);
                 result.Add(new LicenceActivityDemographic
                 {
-                    Id = value.Id,
-                    Name = value.Name,
-                    AssignedUsers = value.AssignedUsers,
-                    Workloads = ToDistributions(value.Distributions, value.AssignedUsers)
+                    Id = LicenceActivityDemographic.OtherId,
+                    Name = null,
+                    Other = true,
+                    AssignedUsers = foldedPeople,
+                    Workloads = ToDistributions(distributions, foldedPeople)
                 });
             }
             return result;
         }
+
+        /// <summary>
+        /// A group a reader without See PII may not see the activity of: some people, but fewer than the minimum.
+        /// Nobody at all is not small - there is nobody's activity to see. Always false without a minimum.
+        /// </summary>
+        private static bool IsSmall(int people, int? minimum) =>
+            minimum.HasValue && people > 0 && people < minimum.Value;
+
+        /// <summary>The most department or country rows an overview lists.</summary>
+        private const int MaximumDemographicRows = 50;
 
         private RankingIndex GetRanking(
             int workload, RankingKind kind, string sort, string direction,
@@ -821,6 +934,14 @@ namespace Common.Entities.LicenceActivity
                     case 1: Low++; break;
                     case 0: Zero++; break;
                 }
+            }
+
+            internal void Add(DistributionAccumulator other)
+            {
+                High += other.High;
+                Moderate += other.Moderate;
+                Low += other.Low;
+                Zero += other.Zero;
             }
         }
 

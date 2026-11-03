@@ -169,6 +169,11 @@ interface LicenceComparisonTableProps {
   allLicences: LicenceActivityAllLicences | null;
   selected: LicenceScope;
   onSelect: (scope: LicenceScope) => void;
+  /**
+   * For a reader without See PII, the fewest people a figure describes: a licence held by fewer comes back
+   * `withheld`, and its row says so instead of showing those few people's activity. Null for every other reader.
+   */
+  minimumGroupSize?: number | null;
 }
 
 /**
@@ -186,7 +191,7 @@ interface LicenceComparisonTableProps {
  * Built to stay responsive at ~50 licences of very uneven size: rendering is O(licences); the per-person
  * work stays on the server.
  */
-function LicenceComparisonTable({ licences, allLicences, selected, onSelect }: LicenceComparisonTableProps) {
+function LicenceComparisonTable({ licences, allLicences, selected, onSelect, minimumGroupSize = null }: LicenceComparisonTableProps) {
   const styles = useStyles();
   const table = useLaTableStyles();
   const t = useT();
@@ -388,10 +393,20 @@ function LicenceComparisonTable({ licences, allLicences, selected, onSelect }: L
                   sku.skuId && sku.skuId !== licenceName(sku) ? sku.skuId : null,
                 )}
                 <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(sku.assignedUsers)}</td>
-                <td className={table.td}>
-                  <AdoptionScoreBar score={sku.adoptionScore ?? null} />
-                </td>
-                {workloadCells(sku.workloads)}
+                {sku.withheld ? (
+                  <td className={table.td} colSpan={1 + WORKLOADS.length}>
+                    <Text size={200} className={styles.muted}>
+                      {t('licenceActivity.withheld.cell', { count: formatCount(minimumGroupSize ?? 0) })}
+                    </Text>
+                  </td>
+                ) : (
+                  <>
+                    <td className={table.td}>
+                      <AdoptionScoreBar score={sku.adoptionScore ?? null} />
+                    </td>
+                    {workloadCells(sku.workloads)}
+                  </>
+                )}
               </tr>
             ))}
           </tbody>

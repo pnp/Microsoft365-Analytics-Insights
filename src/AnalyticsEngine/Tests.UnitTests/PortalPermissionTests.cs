@@ -146,9 +146,9 @@ namespace Tests.UnitTests
             ["InstallLogAPIController.Get"] = Admin,
 
             ["LicenceActivityAPIController.Availability"] = Any,
-            ["LicenceActivityAPIController.Overview"] = Any,
+            ["LicenceActivityAPIController.Overview"] = Any,           // department/country narrowing needs See PII; groups of fewer than 5 withheld without it
             ["LicenceActivityAPIController.Users"] = Pii,
-            ["LicenceActivityAPIController.Export"] = Any,             // refuses usersId without See PII
+            ["LicenceActivityAPIController.Export"] = Any,             // refuses usersId without See PII; the same withheld overview as the screen
 
             ["PortalAccessAPIController.Get"] = Any,
             ["PromptCategoriesAPIController.Get"] = Admin,
@@ -180,12 +180,12 @@ namespace Tests.UnitTests
 
             ["TeamsExplorerAPIController.Availability"] = Any,
             ["TeamsExplorerAPIController.Overview"] = Any,
-            ["TeamsExplorerAPIController.Adoption"] = Any,
+            ["TeamsExplorerAPIController.Adoption"] = Any,             // folds breakdown groups of fewer than 5 people without See PII
             ["TeamsExplorerAPIController.Meetings"] = Any,             // trims the named leaderboards
             ["TeamsExplorerAPIController.Collaboration"] = Any,
             ["TeamsExplorerAPIController.Conversations"] = Any,
-            ["TeamsExplorerAPIController.People"] = Any,               // trims the champion and dormant lists
-            ["TeamsExplorerAPIController.Export"] = Any,               // refuses the people sections without See PII
+            ["TeamsExplorerAPIController.People"] = Any,               // trims the champion and dormant lists; folds departments of fewer than 5 power users
+            ["TeamsExplorerAPIController.Export"] = Any,               // refuses the people sections without See PII; folds the adoption breakdown as on screen
 
             ["UpdateCheckAPIController.Get"] = Admin,
 
@@ -698,6 +698,8 @@ namespace Tests.UnitTests
             (HttpMethod.Get, "api/CopilotAdoption/cowork/export", "seePii"),
             (HttpMethod.Get, "api/LicenceActivity/users?overviewId=synthetic&licenceTypeId=1", "seePii"),
             (HttpMethod.Get, "api/LicenceActivity/export?overviewId=synthetic&usersId=synthetic", "seePii"),
+            (HttpMethod.Get, "api/LicenceActivity/overview?departmentId=1", "seePii"),
+            (HttpMethod.Get, "api/LicenceActivity/overview?countryId=0", "seePii"),
             (HttpMethod.Get, "api/AgentCosts/users", "seePii"),
             (HttpMethod.Get, "api/ActivityAnalysis/people", "seePii"),
             (HttpMethod.Get, "api/ActivityAnalysis/report?metrics=teams.calls&userFilter=%5B%7B%22d%22%3A%22userName%22%2C%22v%22%3A%5B%22person1%40contoso.com%22%5D%7D%5D", "seePii"),
@@ -957,17 +959,91 @@ namespace Tests.UnitTests
                     Assert.AreEqual(9, (int)trimmed["championsByDepartment"][0]["count"]);
                     Assert.IsFalse(trimmed.ToString().Contains("@contoso.com"));
 
+                    // A department with one to four power users is folded: in a small department the count says who.
+                    CollectionAssert.AreEqual(
+                        new[] { "Πωλήσεις", "Contoso Seven", null },
+                        trimmed["championsByDepartment"].Select(row => (string)row["name"]).ToArray());
+                    var other = trimmed["championsByDepartment"].Last;
+                    Assert.IsTrue((bool)other["other"]);
+                    Assert.AreEqual(5, (int)other["count"], "4 + 1 power users.");
+                    Assert.AreEqual(2, (int)trimmed["otherChampionDepartments"]);
+                    Assert.AreEqual(5, (int)trimmed["minimumGroupSize"]);
+                    Assert.IsFalse(trimmed.ToString().Contains("Contoso Four") || trimmed.ToString().Contains("Contoso One"));
+
                     // The next reader holds the permission and is served from the same cache entry.
                     host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
                     var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/people?days=28&top=37"));
                     Assert.AreEqual("champion@contoso.com", (string)full["champions"][0]["userPrincipalName"]);
                     Assert.AreEqual("dormant@contoso.com", (string)full["dormant"][0]["userPrincipalName"]);
+                    CollectionAssert.AreEqual(
+                        new[] { "Πωλήσεις", "Contoso Seven", "Contoso Four", "Contoso One" },
+                        full["championsByDepartment"].Select(row => (string)row["name"]).ToArray(),
+                        "A See PII reader sees every department, as before.");
+                    Assert.IsNull(full["championsByDepartment"][0]["other"], "The flag is only sent on the folded row.");
                     Assert.AreEqual(1, store.PeopleCalls, "The second reader must have been served from the cache.");
                 }
             }
             finally
             {
                 MemoryCache.Default.Remove(query.CacheKey("people"));
+            }
+        }
+
+        [TestMethod]
+        public async Task TeamsAdoption_WithoutSeePii_FoldsGroupsOfFewerThanFive_OnScreenAndInTheExport_AndTheCachedSectionKeepsThem()
+        {
+            // A job title held by one person is that person: their messages per active user are their own message count.
+            var store = new FakeTeamsStore();
+            var query = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 37);
+            var small = new[] { "Contoso Chief Explorer", "Contoso Four Title", "Contoso Night Office" };
+            MemoryCache.Default.Remove(query.CacheKey("adoption"));
+            try
+            {
+                using (var host = new PortalTestHost(
+                    new[] { typeof(TeamsExplorerAPIController) },
+                    PortalTestHost.SignedIn(),
+                    PortalAccessPolicy.Enforcing,
+                    _ => new TeamsExplorerAPIController(store, () => new TeamsExplorerSources())))
+                {
+                    var trimmed = await host.Client.GetStringAsync("api/TeamsExplorer/adoption?days=28&groupBy=jobTitle&top=37");
+                    var json = JObject.Parse(trimmed);
+                    CollectionAssert.AreEqual(
+                        new[] { "Contoso Analysts", "Contoso Five Title", null },
+                        json["breakdown"].Select(row => (string)row["name"]).ToArray(),
+                        "Five people keep their name; one and four, and two active people among thirty, do not.");
+                    var other = json["breakdown"].Last;
+                    Assert.IsTrue((bool)other["other"]);
+                    Assert.AreEqual(35, (int)other["knownUsers"]);
+                    Assert.AreEqual(7, (int)other["activeUsers"]);
+                    Assert.AreEqual(3, (int)json["otherGroups"]);
+                    Assert.AreEqual(5, (int)json["minimumGroupSize"]);
+                    var csv = await host.Client.GetStringAsync("api/TeamsExplorer/export/adoption?days=28&groupBy=jobTitle&top=37");
+                    StringAssert.Contains(csv, TeamsExplorerExports.OtherGroupsLabel);
+                    StringAssert.Contains(csv, "Contoso Five Title");
+                    foreach (var name in small)
+                    {
+                        Assert.IsFalse(trimmed.Contains(name), name + " on screen");
+                        Assert.IsFalse(csv.Contains(name), name + " in the export");
+                    }
+                    Assert.IsFalse(trimmed.Contains("777") || csv.Contains("777"), "The one person's message count.");
+
+                    // The next reader holds the permission and is served from the same cache entry, untouched.
+                    var storeCalls = store.AdoptionCalls;
+                    host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                    var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/adoption?days=28&groupBy=jobTitle&top=37"));
+                    Assert.AreEqual(5, ((JArray)full["breakdown"]).Count);
+                    Assert.AreEqual(777d, (double)full["breakdown"].Single(row => (string)row["name"] == "Contoso Chief Explorer")["messagesPerActiveUser"]);
+                    Assert.AreEqual(0, (int)full["otherGroups"]);
+                    Assert.AreEqual(JTokenType.Null, full["minimumGroupSize"].Type);
+                    Assert.AreEqual(storeCalls, store.AdoptionCalls, "The second reader must have been served from the cache.");
+                    var fullCsv = await host.Client.GetStringAsync("api/TeamsExplorer/export/adoption?days=28&groupBy=jobTitle&top=37");
+                    foreach (var name in small) StringAssert.Contains(fullCsv, name);
+                    Assert.IsFalse(fullCsv.Contains(TeamsExplorerExports.OtherGroupsLabel));
+                }
+            }
+            finally
+            {
+                MemoryCache.Default.Remove(query.CacheKey("adoption"));
             }
         }
 
@@ -1304,13 +1380,38 @@ namespace Tests.UnitTests
         {
             internal int MeetingsCalls;
             internal int PeopleCalls;
+            internal int AdoptionCalls;
 
             public Task<Tuple<int, int>> GetTeamCountsAsync() => Task.FromResult(Tuple.Create(1, 1));
 
             public Task<TeamsOverview> GetOverviewAsync(TeamsExplorerQuery query, TeamsExplorerSources sources)
                 => Task.FromResult(new TeamsOverview());
 
-            public Task<TeamsAdoption> GetAdoptionAsync(TeamsExplorerQuery query) => Task.FromResult(new TeamsAdoption());
+            /// <summary>
+            /// Job titles held by 1, 4, 5 and 12 people, and an office of 30 with only two people active: the one-person
+            /// title's messages per active user are that person's own.
+            /// </summary>
+            public Task<TeamsAdoption> GetAdoptionAsync(TeamsExplorerQuery query)
+            {
+                Interlocked.Increment(ref AdoptionCalls);
+                var adoption = new TeamsAdoption { GroupBy = query.GroupBy };
+                adoption.Breakdown.Add(Row("Contoso Analysts", 12, 10, 40));
+                adoption.Breakdown.Add(Row("Contoso Night Office", 30, 2, 90));
+                adoption.Breakdown.Add(Row("Contoso Five Title", 5, 5, 20));
+                adoption.Breakdown.Add(Row("Contoso Four Title", 4, 4, 30));
+                adoption.Breakdown.Add(Row("Contoso Chief Explorer", 1, 1, 777));
+                return Task.FromResult(adoption);
+            }
+
+            private static TeamsDemographicRow Row(string name, int known, int active, double messagesPerActiveUser) =>
+                new TeamsDemographicRow
+                {
+                    Name = name,
+                    KnownUsers = known,
+                    ActiveUsers = active,
+                    ReachPct = TeamsExplorerScoring.Percentage(active, known),
+                    MessagesPerActiveUser = messagesPerActiveUser,
+                };
 
             public Task<TeamsMeetings> GetMeetingsAsync(TeamsExplorerQuery query)
             {
@@ -1334,6 +1435,9 @@ namespace Tests.UnitTests
                 people.Champions.Add(new TeamsPersonRow { UserPrincipalName = "champion@contoso.com", Department = "Ventes" });
                 people.Dormant.Add(new TeamsPersonRow { UserPrincipalName = "dormant@contoso.com", Department = "Ventes" });
                 people.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Πωλήσεις", Count = 9 });
+                people.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Contoso Seven", Count = 7 });
+                people.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Contoso Four", Count = 4 });
+                people.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Contoso One", Count = 1 });
                 return Task.FromResult(people);
             }
         }

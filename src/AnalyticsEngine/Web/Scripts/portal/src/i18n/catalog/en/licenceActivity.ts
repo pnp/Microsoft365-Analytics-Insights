@@ -178,6 +178,18 @@ export const licenceActivity = {
   'licenceActivity.demographics.capped':
     'Showing only the {count} largest by number of people assigned \u2014 this is not the full list.',
   'licenceActivity.demographics.unknownBucket': 'Unknown',
+  'licenceActivity.demographics.otherRow.one': '1 smaller group, combined',
+  'licenceActivity.demographics.otherRow.other': '{count} smaller groups, combined',
+  'licenceActivity.demographics.otherNote':
+    'Groups of fewer than {count} people are combined into one row, so that nobody can be singled out.',
+
+  // What a reader without See PII sees in place of a handful of people's activity
+  'licenceActivity.withheld.cell': 'Hidden: fewer than {count} people hold this licence',
+  'licenceActivity.withheld.detail':
+    'Fewer than {count} people hold this licence, so how much they use their services is hidden to protect their privacy.',
+  'licenceActivity.suppressed.title': 'Figures hidden',
+  'licenceActivity.suppressed.body':
+    'So few people hold a licence in this selection that every figure would describe individuals, so the figures are hidden to protect their privacy.',
 
   // Workload distributions
   'licenceActivity.distribution.activeOfMeasured': '{active} of {measured} active ({rate})',
@@ -256,6 +268,8 @@ export const licenceActivity = {
   'licenceActivity.page.recentOptionsHidden': 'Showing up to {count} recent options; some may be hidden.',
   'licenceActivity.page.filterByCountry': 'Filter by country',
   'licenceActivity.page.allCountries': 'All countries',
+  'licenceActivity.page.demographicFilterNeedsSeePii':
+    'Filtering by department or country needs the {role} app role, because a filter can narrow the figures down to a single person.',
   'licenceActivity.page.exportSummaryAndPeopleTooltip':
     'An Excel copy of the summary plus the exact people currently listed in the People tab. Built from the figures already on screen, so it matches what you can see.',
   'licenceActivity.page.exportSummaryTooltip':

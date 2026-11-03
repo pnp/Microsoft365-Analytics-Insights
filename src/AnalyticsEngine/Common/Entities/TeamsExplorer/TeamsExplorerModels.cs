@@ -2,6 +2,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Common.Entities.TeamsExplorer
 {
@@ -84,11 +85,19 @@ namespace Common.Entities.TeamsExplorer
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class TeamsNamedCountRow
     {
+        /// <summary>The value's name; <c>null</c> for the folded <see cref="Other"/> row.</summary>
         public string Name { get; set; }
         public long Count { get; set; }
 
         /// <summary>Share of the section's total, 0-100. Null where a share is meaningless.</summary>
         public double? SharePct { get; set; }
+
+        /// <summary>
+        /// True for the single row a reader without See PII gets in place of every count too small to show by name
+        /// (see <see cref="TeamsPeople.WithoutIndividualData"/>). Sent only when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Other { get; set; }
     }
 
     /// <summary>One bucket of a distribution (meeting size, duration, period of day, rating...).</summary>
@@ -221,7 +230,15 @@ namespace Common.Entities.TeamsExplorer
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class TeamsDemographicRow
     {
+        /// <summary>Tenant data, never translated. <c>null</c> for the folded <see cref="Other"/> row.</summary>
         public string Name { get; set; }
+
+        /// <summary>
+        /// True for the single row a reader without See PII gets in place of every group too small to show by name
+        /// (see <see cref="TeamsAdoption.WithoutSmallGroups"/>).
+        /// </summary>
+        public bool Other { get; set; }
+
         public int KnownUsers { get; set; }
         public int ActiveUsers { get; set; }
         public double ReachPct { get; set; }
@@ -266,6 +283,87 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsDemographicRow> Breakdown { get; set; } = new List<TeamsDemographicRow>();
         public List<TeamsDeviceRow> Devices { get; set; } = new List<TeamsDeviceRow>();
         public TeamsLifecycle Lifecycle { get; set; } = new TeamsLifecycle();
+
+        /// <summary>
+        /// The fewest people a breakdown row describes, for a reader without See PII; <c>null</c> when every group is
+        /// shown. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>
+        /// How many groups were folded into the <see cref="TeamsDemographicRow.Other"/> row - or, when even all of
+        /// them together are too few people, left out of <see cref="Breakdown"/> altogether. 0 when nothing was.
+        /// </summary>
+        public int OtherGroups { get; set; }
+
+        /// <summary>
+        /// This section for a reader who does not hold the portal's See PII permission (#661, #680): no breakdown row
+        /// describes fewer than <paramref name="minimumPeople"/> people. A group is too small when it has fewer people,
+        /// or when fewer than that - but some - of them were active, since its messages and meetings per active user
+        /// are then those few people's own. Small groups are folded into one unnamed row; when that row is itself too
+        /// small, the smallest shown group goes into it too, so that it cannot be worked out as the difference
+        /// either. A shallow copy: the section is cached and shared between readers.
+        /// </summary>
+        public TeamsAdoption WithoutSmallGroups(int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var shown = new List<TeamsDemographicRow>();
+            var folded = new List<TeamsDemographicRow>();
+            foreach (var row in Breakdown ?? new List<TeamsDemographicRow>())
+            {
+                if (IsSmall(row, minimumPeople)) folded.Add(row);
+                else shown.Add(row);
+            }
+
+            var other = Combine(folded);
+            while (folded.Count > 0 && IsSmall(other, minimumPeople))
+            {
+                // A shown group has the minimum or more people, and none or the minimum or more of them active. So
+                // when the folded row is short of active people, only a group with active people can make it up.
+                var candidates = other.ActiveUsers > 0 ? shown.Where(r => r.ActiveUsers > 0) : shown;
+                var smallest = candidates
+                    .OrderBy(r => r.KnownUsers)
+                    .ThenBy(r => r.ActiveUsers)
+                    .ThenBy(r => r.Name, StringComparer.Ordinal)
+                    .FirstOrDefault();
+                if (smallest == null) break;
+                shown.Remove(smallest);
+                folded.Add(smallest);
+                other = Combine(folded);
+            }
+
+            // Still too few people when everything that could be folded has been: the row is left out.
+            if (folded.Count > 0 && !IsSmall(other, minimumPeople)) shown.Add(other);
+
+            var copy = (TeamsAdoption)MemberwiseClone();
+            copy.Breakdown = shown;
+            copy.MinimumGroupSize = minimumPeople;
+            copy.OtherGroups = folded.Count;
+            return copy;
+        }
+
+        private static bool IsSmall(TeamsDemographicRow row, int minimumPeople) =>
+            row.KnownUsers < minimumPeople || (row.ActiveUsers > 0 && row.ActiveUsers < minimumPeople);
+
+        private static TeamsDemographicRow Combine(List<TeamsDemographicRow> rows)
+        {
+            var known = rows.Sum(r => r.KnownUsers);
+            var active = rows.Sum(r => r.ActiveUsers);
+            // Each row's averages are over its own active users, so its totals are the average times those users.
+            var messages = rows.Sum(r => r.MessagesPerActiveUser * r.ActiveUsers);
+            var meetings = rows.Sum(r => r.MeetingsPerActiveUser * r.ActiveUsers);
+            return new TeamsDemographicRow
+            {
+                Name = null,
+                Other = true,
+                KnownUsers = known,
+                ActiveUsers = active,
+                ReachPct = TeamsExplorerScoring.Percentage(active, known),
+                MessagesPerActiveUser = active > 0 ? messages / active : 0,
+                MeetingsPerActiveUser = active > 0 ? meetings / active : 0,
+            };
+        }
     }
 
     #endregion
@@ -549,15 +647,60 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsNamedCountRow> ChampionsByDepartment { get; set; } = new List<TeamsNamedCountRow>();
 
         /// <summary>
-        /// This section without the two lists that name people, for a reader who does not hold the portal's
-        /// See PII permission (#661). The power users per department stay: they are a count, and every
-        /// reader sees aggregates. A shallow copy, because the section is cached and shared between readers.
+        /// The fewest power users a <see cref="ChampionsByDepartment"/> row counts, for a reader without See PII;
+        /// <c>null</c> when every department is shown. See <see cref="WithoutIndividualData"/>.
         /// </summary>
-        public TeamsPeople WithoutIndividualData()
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>
+        /// How many departments were folded into the <see cref="TeamsNamedCountRow.Other"/> row of
+        /// <see cref="ChampionsByDepartment"/> - or, when even all of them together are too few people, left out. 0 when
+        /// none were.
+        /// </summary>
+        public int OtherChampionDepartments { get; set; }
+
+        /// <summary>
+        /// This section without the two lists that name people, for a reader who does not hold the portal's
+        /// See PII permission (#661). The power users per department stay - they are a count, and every reader sees
+        /// aggregates - except that a department with fewer than <paramref name="minimumPeople"/> of them is folded
+        /// into one unnamed row (#680): in a small department, a count of power users says who they are. When that row
+        /// is itself too few people, the smallest named department goes into it too, so that it cannot be worked
+        /// out as the difference either. A shallow copy, because the section is cached and shared between readers.
+        /// </summary>
+        public TeamsPeople WithoutIndividualData(int minimumPeople)
         {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var rows = ChampionsByDepartment ?? new List<TeamsNamedCountRow>();
+            var total = rows.Sum(r => r.Count);
+            var shown = rows.Where(r => r.Count >= minimumPeople).ToList();
+            var folded = rows.Where(r => r.Count < minimumPeople).ToList();
+            // A named row counts the minimum or more, so one is always enough.
+            if (folded.Count > 0 && folded.Sum(r => r.Count) < minimumPeople && shown.Count > 0)
+            {
+                var smallest = shown.OrderBy(r => r.Count).ThenBy(r => r.Name, StringComparer.Ordinal).First();
+                shown.Remove(smallest);
+                folded.Add(smallest);
+            }
+
+            var otherCount = folded.Sum(r => r.Count);
+            if (folded.Count > 0 && otherCount >= minimumPeople)
+            {
+                shown.Add(new TeamsNamedCountRow
+                {
+                    Name = null,
+                    Other = true,
+                    Count = otherCount,
+                    SharePct = total > 0 ? TeamsExplorerScoring.Percentage(otherCount, total) : (double?)null,
+                });
+            }
+
             var copy = (TeamsPeople)MemberwiseClone();
             copy.Champions = new List<TeamsPersonRow>();
             copy.Dormant = new List<TeamsPersonRow>();
+            copy.ChampionsByDepartment = shown;
+            copy.MinimumGroupSize = minimumPeople;
+            copy.OtherChampionDepartments = folded.Count;
             return copy;
         }
     }

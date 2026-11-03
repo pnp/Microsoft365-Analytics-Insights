@@ -44,8 +44,11 @@ namespace Web.AnalyticsWeb.Controllers
     /// <para>
     /// People are behind the portal's See PII permission (#661): without it the People tab keeps its
     /// power users per department but loses the champion and dormant lists, their exports are refused,
-    /// and the meetings section is served without its named leaderboards. The cached section is the
-    /// complete one; a reader without the permission gets a trimmed copy of it.
+    /// and the meetings section is served without its named leaderboards. The adoption breakdown - and its
+    /// export - and the power users per department fold every group of fewer than
+    /// <see cref="ReportScopeResolver.MinimumPeopleWithoutSeePii"/> people into one row for such a reader (#680), so a
+    /// one-person job title, office or department is not that person's activity. The cached section is the complete
+    /// one; a reader without the permission gets a trimmed copy of it.
     /// </para>
     /// </remarks>
     [Authorize]
@@ -122,7 +125,10 @@ namespace Web.AnalyticsWeb.Controllers
             int top = TeamsExplorerQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
-            return await CachedAsync("adoption", query, () => _store.GetAdoptionAsync(query)).ConfigureAwait(false);
+            Func<TeamsAdoption, TeamsAdoption> forReader = null;
+            if (!PortalAccess.Evaluate(Request, User).SeePii)
+                forReader = a => a.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
+            return await CachedAsync("adoption", query, () => _store.GetAdoptionAsync(query), forReader).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/meetings?days=28
@@ -170,7 +176,8 @@ namespace Web.AnalyticsWeb.Controllers
         {
             var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
             Func<TeamsPeople, TeamsPeople> forReader = null;
-            if (!PortalAccess.Evaluate(Request, User).SeePii) forReader = p => p.WithoutIndividualData();
+            if (!PortalAccess.Evaluate(Request, User).SeePii)
+                forReader = p => p.WithoutIndividualData(ReportScopeResolver.MinimumPeopleWithoutSeePii);
             return await CachedAsync("people", query, () => _store.GetPeopleAsync(query), forReader).ConfigureAwait(false);
         }
 
@@ -250,6 +257,9 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     var adoption = await _store.GetAdoptionAsync(query).ConfigureAwait(false);
                     failedQuery = FailedQuery(adoption, "adoption-breakdown", out failedInfo);
+                    // Never less redacted than the page: the same groups are folded for a reader without See PII.
+                    if (!PortalAccess.Evaluate(Request, User).SeePii)
+                        adoption = adoption.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
                     csv = CsvSerialiser.ToBytes(
                         adoption.Breakdown,
                         TeamsExplorerExports.DemographicColumns(query.GroupBy));

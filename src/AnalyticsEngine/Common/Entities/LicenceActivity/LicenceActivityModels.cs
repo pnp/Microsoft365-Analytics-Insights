@@ -49,6 +49,23 @@ namespace Common.Entities.LicenceActivity
         public List<LicenceActivityDemographic> Departments { get; set; } = new List<LicenceActivityDemographic>();
         public List<LicenceActivityDemographic> Countries { get; set; } = new List<LicenceActivityDemographic>();
         public bool DemographicsTruncated { get; set; }
+
+        /// <summary>
+        /// True when a reader without See PII asked about so few people - 1 to <see cref="LicenceActivityQuery.MinimumGroupSize"/>
+        /// less one - that every figure would be a handful of individuals' records. The counts of people stay; every
+        /// activity distribution, adoption score and department or country row is withheld.
+        /// </summary>
+        public bool Suppressed { get; set; }
+
+        /// <summary>
+        /// How many departments were folded into the single <see cref="LicenceActivityDemographic.Other"/> row, for a
+        /// reader without See PII. 0 when nothing was folded.
+        /// </summary>
+        public int OtherDepartments { get; set; }
+
+        /// <summary>As <see cref="OtherDepartments"/>, for countries.</summary>
+        public int OtherCountries { get; set; }
+
         public List<string> Messages { get; set; } = new List<string>();
     }
 
@@ -66,6 +83,13 @@ namespace Common.Entities.LicenceActivity
         /// Built by the read model only; the direct SQL path leaves it null.
         /// </summary>
         public double? AdoptionScore { get; set; }
+
+        /// <summary>
+        /// True when fewer people hold this licence than a reader without See PII may see
+        /// (<see cref="LicenceActivityQuery.MinimumGroupSize"/>): <see cref="AssignedUsers"/> stays, but the
+        /// activity distributions and the adoption score - those few people's own activity - are withheld.
+        /// </summary>
+        public bool Withheld { get; set; }
 
         public List<LicenceActivityDistribution> Workloads { get; set; } = new List<LicenceActivityDistribution>();
     }
@@ -96,10 +120,23 @@ namespace Common.Entities.LicenceActivity
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class LicenceActivityDemographic
     {
+        /// <summary>The directory value's ID; 0 for "Unknown", and <see cref="OtherId"/> for the folded row.</summary>
         public int Id { get; set; }
+
+        /// <summary>Tenant data, never translated. <c>null</c> for the folded row.</summary>
         public string Name { get; set; }
+
+        /// <summary>
+        /// True for the single row a reader without See PII gets in place of every group too small to show by name
+        /// (see <see cref="LicenceActivityOverview.OtherDepartments"/>). Never a filter option.
+        /// </summary>
+        public bool Other { get; set; }
+
         public int AssignedUsers { get; set; }
         public List<LicenceActivityDistribution> Workloads { get; set; } = new List<LicenceActivityDistribution>();
+
+        /// <summary>The <see cref="Id"/> of the folded row: never a directory ID, which is 0 or positive.</summary>
+        public const int OtherId = -1;
     }
 
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
