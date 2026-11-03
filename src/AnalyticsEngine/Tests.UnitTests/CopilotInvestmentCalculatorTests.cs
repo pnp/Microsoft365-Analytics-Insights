@@ -324,6 +324,38 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AGroupWithheldFromAReaderWithoutSeePii_CannotBeWorkedOutFromTheTotalLessTheGroupsShown()
+        {
+            // Legal's six holders include one with a reading (7777.25), so Legal is withheld. Alone, the report's credit total
+            // less Sales and Finance would be that one reading, under Legal's name.
+            var people = Enumerable.Range(1, 5).Select(id => Holder(id, 10, credit: Balance(id, 20), department: "Sales")).ToList();
+            people.AddRange(Enumerable.Range(6, 6).Select(id => Holder(id, 8, credit: Balance(id, 30), department: "Finance")));
+            people.AddRange(Enumerable.Range(12, 6).Select(id => Holder(id, 9, credit: id == 12 ? Balance(id, 7777.25) : null, department: "Legal")));
+            var input = Input(people, Assumptions());
+            input.MinGroupSize = 5;
+            var summary = CopilotInvestmentCalculator.Calculate(input);
+            CopilotInvestmentGroupRow Cached(string label) => summary.Organisation.Groups.Single(g => g.Label == label);
+            Assert.IsTrue(Cached("Legal").Withheld);
+            Assert.IsFalse(Cached("Sales").Withheld, "The control: a reader with See PII sees every group large enough on its own.");
+            Assert.AreEqual(8057.25, summary.Investment.Credits.Credits, 1e-9, "The total every reader is given.");
+
+            var trimmed = summary.WithoutIndividualData().Organisation;
+            CopilotInvestmentGroupRow Trimmed(string label) => trimmed.Groups.Single(g => g.Label == label);
+            Assert.IsTrue(Trimmed("Legal").Withheld);
+            Assert.IsTrue(Trimmed("Sales").Withheld, "Five readings: the fewest of the groups still shown, withheld with Legal's one.");
+            Assert.AreEqual(0, Trimmed("Sales").Credits + Trimmed("Sales").Holders + Trimmed("Sales").ActiveHolders);
+            Assert.IsNull(Trimmed("Sales").Cost);
+            Assert.IsFalse(Trimmed("Finance").Withheld);
+            var residual = summary.Investment.Credits.Credits - trimmed.Groups.Where(g => !g.Withheld).Sum(g => g.Credits);
+            Assert.AreNotEqual(7777.25, residual, 1e-6, "The total less the groups shown is two groups' readings together, six people.");
+            Assert.IsFalse(JsonConvert.SerializeObject(summary.WithoutIndividualData()).Contains("7777.25"));
+
+            Assert.IsFalse(Cached("Sales").Withheld, "The cached summary, a reader with See PII's, is never edited.");
+            Assert.AreEqual(100, Cached("Sales").Credits, 1e-9);
+            Assert.AreSame(summary.Organisation.Groups.Single(g => g.Label == "Finance"), Trimmed("Finance"));
+        }
+
+        [TestMethod]
         public void AFilteredView_WithholdsTenantOnlyFacts()
         {
             var input = Input(new List<CopilotInvestmentPerson> { Holder(1, 10, credit: Balance(1, 10)) }, Assumptions());

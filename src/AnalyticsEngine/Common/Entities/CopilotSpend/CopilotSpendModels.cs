@@ -473,9 +473,13 @@ namespace Common.Entities.CopilotSpend
         /// </summary>
         /// <remarks>
         /// Decisions are made once per group, on the export's list (<see cref="AllGroups"/>), so the page and the workbook
-        /// withhold the same groups. The page's combined row of the groups beyond its top ones (<c>moreGroups</c>) is the sum
-        /// of rows the export lists one by one, so a source withheld in any of them is withheld in it too: otherwise the
-        /// combined row less the ones shown would give the withheld one back.
+        /// withhold the same groups. Every person is in exactly one group and the groups add up to totals the reader is given
+        /// (through each row's share, if nothing else), so withholding one group alone would not hide it: the total less the
+        /// groups shown is that group. Each source's figures are therefore withheld in further groups, the fewest such people
+        /// first, until the withheld groups together hold no one or at least <paramref name="minPeople"/> of the people
+        /// behind that source's figures (<see cref="SmallPopulations.WithholdComplements"/>). The page's combined row of the
+        /// groups beyond its top ones (<c>moreGroups</c>) is the sum of rows the export lists one by one, so a source withheld
+        /// in any of them is withheld in it too: otherwise the combined row less the ones shown would give the withheld one back.
         /// </remarks>
         internal CopilotSpendOrganisation WithoutSmallContributorPopulations(int minPeople)
         {
@@ -483,6 +487,8 @@ namespace Common.Entities.CopilotSpend
             var studio = AllGroups.Select(g => g.Withheld || SmallPopulations.IsSmall(g.StudioContributors, minPeople)).ToArray();
             var balances = AllGroups.Select(g => g.Withheld || SmallPopulations.IsSmall(g.BalanceContributors, minPeople)
                 || SmallPopulations.IsSmall(g.UnknownAmountContributors, minPeople)).ToArray();
+            SmallPopulations.WithholdComplements(AllGroups.Select(g => new[] { g.StudioContributors }).ToList(), studio, minPeople);
+            SmallPopulations.WithholdComplements(AllGroups.Select(g => new[] { g.BalanceContributors, g.UnknownAmountContributors }).ToList(), balances, minPeople);
 
             var trimmed = new Dictionary<CopilotSpendGroupRow, CopilotSpendGroupRow>();
             for (var i = 0; i < AllGroups.Count; i++) trimmed[AllGroups[i]] = Withhold(AllGroups[i], studio[i], balances[i]);

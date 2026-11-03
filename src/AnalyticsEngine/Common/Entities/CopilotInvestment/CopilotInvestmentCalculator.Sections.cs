@@ -115,17 +115,19 @@ namespace Common.Entities.CopilotInvestment
             var creditContributors = people.Count(p => (p.Credit?.Credits ?? 0) != 0);
             var studioContributors = people.Count(p => (p.Studio?.Credits ?? 0) != 0);
             var unlicensedActiveUsers = people.Count(p => !p.Licensed && p.ActiveDays > 0);
+            var populations = new[] { holders.Count, active, creditContributors, studioContributors, unlicensedActiveUsers };
             if (people.Count < minGroupSize
                 || HasSmallContributorPopulation(holders.Count, minGroupSize)
                 || HasSmallContributorPopulation(active, minGroupSize)
                 || HasSmallContributorPopulation(creditContributors, minGroupSize)
                 || HasSmallContributorPopulation(studioContributors, minGroupSize)
                 || HasSmallContributorPopulation(unlicensedActiveUsers, minGroupSize))
-                return new CopilotInvestmentGroupRow { Withheld = true };
+                return new CopilotInvestmentGroupRow { Withheld = true, Populations = populations };
 
             // The matched holders only, so a group's return compares the same people's value and cost.
             var row = new CopilotInvestmentGroupRow
             {
+                Populations = populations,
                 Holders = holders.Count,
                 ActiveHolders = active,
                 IdleHolders = holders.Count - active,

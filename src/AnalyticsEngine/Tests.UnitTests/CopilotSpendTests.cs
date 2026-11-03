@@ -276,6 +276,77 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AGroupWithheldFromAReaderWithoutSeePii_CannotBeWorkedOutFromTheTotalLessTheGroupsShown()
+        {
+            var summary = CopilotSpendCalculator.Calculate(DepartmentsInput());
+            var trimmed = summary.WithoutIndividualData().Organisation;
+            CopilotSpendGroupRow Cached(string label) => summary.Organisation.AllGroups.Single(g => g.Label == label);
+            CopilotSpendGroupRow Trimmed(string label) => trimmed.AllGroups.Single(g => g.Label == label);
+
+            // Finance's one Studio maker is withheld, so the department with the fewest other makers is withheld with it.
+            Assert.IsTrue(Trimmed("Finance").StudioWithheld);
+            Assert.IsTrue(Trimmed(GreekDepartment).StudioWithheld, "Six makers: the fewest of the departments still shown.");
+            Assert.IsFalse(Trimmed("Marketing").StudioWithheld, "Nine makers, and the two withheld already hold seven.");
+            Assert.IsFalse(Trimmed(GreekDepartment).BalancesWithheld, "Each source is protected on its own.");
+            // Marketing's one reading is withheld, so the department with the fewest other readings is withheld with it.
+            Assert.IsTrue(Trimmed("Marketing").BalancesWithheld);
+            Assert.IsTrue(Trimmed("Legal").BalancesWithheld);
+            Assert.IsFalse(Trimmed("Legal").StudioWithheld, "Nobody in Legal was billed for Studio.");
+
+            // The arithmetic a reader could do: each source's total (every row's credits, which the shares also give away)
+            // less the rows shown is the withheld rows together, never one row on its own, and always five people or more.
+            foreach (var source in new (string Name, Func<CopilotSpendGroupRow, double?> Credits, Func<CopilotSpendGroupRow, int?> People, Func<CopilotSpendGroupRow, bool> Withheld)[]
+            {
+                ("studio", g => g.StudioCredits, g => g.StudioPeople, g => g.StudioWithheld),
+                ("balances", g => g.BalanceCredits, g => g.BalancePeople, g => g.BalancesWithheld),
+            })
+            {
+                var total = summary.Organisation.AllGroups.Sum(g => source.Credits(g) ?? 0);
+                var hidden = trimmed.AllGroups.Where(source.Withheld).ToList();
+                var residual = total - trimmed.AllGroups.Where(g => !source.Withheld(g)).Sum(g => source.Credits(g) ?? 0);
+                Assert.IsTrue(hidden.Count >= 2, source.Name + ": one withheld group alone would be the total less the rest.");
+                Assert.IsTrue(hidden.Sum(g => source.People(Cached(g.Label)) ?? 0) >= CopilotSpendCalculator.DefaultMinGroupSize, source.Name);
+                foreach (var g in hidden)
+                    Assert.AreNotEqual(source.Credits(Cached(g.Label)).Value, residual, 1e-6, source.Name + ": " + g.Label + " cannot be worked out.");
+            }
+
+            // The page and the workbook withhold the same groups, and the cached summary is never edited.
+            foreach (var row in trimmed.Groups.Where(g => g.Label != null))
+                Assert.AreSame(trimmed.AllGroups.Single(g => g.Label == row.Label), row);
+            Assert.IsFalse(summary.Organisation.AllGroups.Any(g => g.StudioWithheld || g.BalancesWithheld));
+            Assert.AreEqual(18, Cached(GreekDepartment).StudioCredits.Value, 1e-9, "A reader with See PII still sees every group's figures.");
+        }
+
+        [TestMethod]
+        public void ThePagesCombinedRowOfMoreGroups_WithholdsASourceWithheldInAnyGroupItCombines()
+        {
+            // Five departments of five Studio makers; the one with the least Studio use also holds the only reading in its
+            // department. The page lists three and combines the other two, which the export lists one by one.
+            var people = Enumerable.Range(0, 25).Select(i => (Id: i + 1, Department: "Contoso " + (char)('A' + i / 5))).ToList();
+            var input = DepartmentsInput();
+            input.MaxGroups = 3;
+            input.Credits.Users.Clear();
+            input.Studio.Users.Clear();
+            foreach (var p in people) input.Studio.Users.Add(new StudioUserFact { UserId = p.Id, Credits = p.Department == "Contoso E" ? 1 : 10 + p.Id, ActiveDays = 1 });
+            input.Credits.Users.Add(Balance(21, 4321.75));
+            foreach (var p in people.Where(p => p.Department == "Contoso A")) input.Credits.Users.Add(Balance(p.Id, 3));
+            var departments = people.ToDictionary(p => p.Id, p => p.Department);
+            input.GroupOf = id => departments[id];
+            input.Directory = id => new CopilotInvestmentDirectoryEntry { UserPrincipalName = $"person{id}@contoso.example", Department = departments[id] };
+            var summary = CopilotSpendCalculator.Calculate(input);
+            Assert.AreEqual(CopilotSpendGroupKeys.MoreGroups, summary.Organisation.Groups[3].EmptyKey, "The control: two groups are beyond the page's three.");
+            Assert.IsNotNull(summary.Organisation.Groups[3].BalanceCredits);
+
+            var trimmed = summary.WithoutIndividualData().Organisation;
+            Assert.IsTrue(trimmed.AllGroups.Single(g => g.Label == "Contoso E").BalancesWithheld, "One reading in a department of five.");
+            var more = trimmed.Groups.Single(g => g.EmptyKey == CopilotSpendGroupKeys.MoreGroups);
+            Assert.IsTrue(more.BalancesWithheld, "Otherwise the combined row less the groups the export shows would give the reading back.");
+            Assert.IsNull(more.BalanceCredits);
+            Assert.IsFalse(more.StudioWithheld, "Its Studio makers are all in groups large enough to show.");
+            Assert.IsFalse(JsonConvert.SerializeObject(summary.WithoutIndividualData()).Contains("4321.75"));
+        }
+
+        [TestMethod]
         public void EveryCalendarDayKeepsItsPlace_AndOnlyTheLedgersOwnDaysCanHaveNoCharges()
         {
             // Two weeks from Monday 12 Oct: charges on weekdays to Thursday 22 Oct, the ledger's latest stored day.

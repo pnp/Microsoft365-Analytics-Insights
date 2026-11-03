@@ -137,6 +137,10 @@ namespace Common.Entities.CopilotInvestment
                 organisation.Hidden = true;
                 copy.Organisation = organisation;
             }
+            else if (Organisation != null)
+            {
+                copy.Organisation = Organisation.WithComplementsWithheld(Math.Max(Organisation.MinGroupSize, SmallPopulations.MinPeopleWithoutSeePii));
+            }
             return copy;
         }
 
@@ -908,6 +912,27 @@ namespace Common.Entities.CopilotInvestment
         public bool Hidden { get; set; }
 
         internal object MemberwiseCopy() => MemberwiseClone();
+
+        /// <summary>
+        /// A copy for a reader without See PII in which no withheld group can be worked out from the others. Every person is
+        /// in exactly one row and the rows add up to the report's totals, so with one group withheld, a total less the groups
+        /// shown would be that group's figures, under its own name. Further groups are withheld, the fewest people of the
+        /// population that falls short first, until the withheld groups together hold no one or at least
+        /// <paramref name="minPeople"/> of each population behind the figures (<see cref="SmallPopulations.WithholdComplements"/>).
+        /// A withheld group keeps its name, which on its own says nothing about anyone's figures. Rows are copied, never
+        /// edited: the cached organisation is the one a reader with See PII is given.
+        /// </summary>
+        internal CopilotInvestmentOrganisation WithComplementsWithheld(int minPeople)
+        {
+            var withheld = Groups.Select(g => g.Withheld).ToArray();
+            if (!withheld.Any(w => w)) return this;
+            SmallPopulations.WithholdComplements(Groups.Select(g => g.Populations).ToList(), withheld, minPeople);
+            var copy = (CopilotInvestmentOrganisation)MemberwiseClone();
+            copy.Groups = Groups.Select((g, i) => withheld[i] && !g.Withheld
+                ? new CopilotInvestmentGroupRow { Label = g.Label, EmptyKey = g.EmptyKey, Withheld = true, Populations = g.Populations }
+                : g).ToList();
+            return copy;
+        }
     }
 
     public sealed class CopilotInvestmentGroupRow
@@ -962,6 +987,14 @@ namespace Common.Entities.CopilotInvestment
 
         [JsonProperty("unlicensedActiveUsers")]
         public int UnlicensedActiveUsers { get; set; }
+
+        /// <summary>
+        /// The people behind the row's figures, withheld or not: holders, active holders, people with a credit amount, people
+        /// with a Studio amount and active people without a seat, in that order. What the copy for a reader without See PII
+        /// needs to withhold enough groups together (<see cref="CopilotInvestmentOrganisation.WithComplementsWithheld"/>).
+        /// </summary>
+        [JsonIgnore]
+        internal int[] Populations { get; set; }
     }
 
     public sealed class CopilotInvestmentConcentration
