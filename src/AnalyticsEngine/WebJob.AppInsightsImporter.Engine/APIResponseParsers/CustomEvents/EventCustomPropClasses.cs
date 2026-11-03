@@ -155,7 +155,8 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
             {
                 // Parse-error visibility: no logger is injected into the DTO so we still fall back
                 // to stderr until callers thread one through. See audit follow-up TEST-09 in PR notes.
-                Console.WriteLine($"\nERROR:Unexpected {fieldName} value for URL {Url}: '{json}'");
+                // Never the JSON itself: it holds comment text and author addresses.
+                Console.WriteLine($"\nERROR:Unexpected {fieldName} value for URL {Url}: {json.Length} characters that aren't a valid JSON list");
                 return new List<T>();
             }
         }
