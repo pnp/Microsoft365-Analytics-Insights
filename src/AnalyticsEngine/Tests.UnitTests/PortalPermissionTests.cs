@@ -86,17 +86,17 @@ namespace Tests.UnitTests
             ["CallRecordWebhookController.Post"] = Public,
 
             ["CopilotAdoptionAPIController.Availability"] = Any,
-            ["CopilotAdoptionAPIController.Summary"] = Any,            // trims the manager roll-up
-            ["CopilotAdoptionAPIController.LicenceTypes"] = Any,
-            ["CopilotAdoptionAPIController.Sql"] = Any,
-            ["CopilotAdoptionAPIController.Filters"] = Any,
+            ["CopilotAdoptionAPIController.Summary"] = Any,            // trims the manager roll-up; an email domain, user filter or seat-licence override needs See PII
+            ["CopilotAdoptionAPIController.LicenceTypes"] = Any,       // a seat-licence override needs See PII
+            ["CopilotAdoptionAPIController.Sql"] = Any,                // a seat-licence override needs See PII
+            ["CopilotAdoptionAPIController.Filters"] = Any,            // a seat-licence override needs See PII
             ["CopilotAdoptionAPIController.LicensedUsers"] = Pii,
             ["CopilotAdoptionAPIController.ExportLicensedUsers"] = Pii,
             ["CopilotAdoptionAPIController.Opportunities"] = Pii,
             ["CopilotAdoptionAPIController.ExportOpportunities"] = Pii,
             ["CopilotAdoptionAPIController.Cowork"] = Pii,
             ["CopilotAdoptionAPIController.ExportCowork"] = Pii,
-            ["CopilotAdoptionAPIController.ExportWorkbook"] = Any,     // trims the per-person sheets
+            ["CopilotAdoptionAPIController.ExportWorkbook"] = Any,     // trims the per-person sheets; narrowing as for Summary needs See PII
 
             ["CopilotCostConnectionAPIController.Status"] = Admin,
             ["CopilotCostConnectionAPIController.Collection"] = Admin,
@@ -1023,6 +1023,67 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CopilotAdoption_SeatLicenceOverride_NarrowsThePopulation_SoNeedsSeePii()
+        {
+            // The override chooses whose activity every licensed-user figure describes, from every licence type in
+            // the tenant: one held by a single known person would make the licensed side that person's record.
+            var runner = new FixedRunner(SmallAnalysis());
+            var overridden = new[]
+            {
+                "api/CopilotAdoption/summary?seatLicenceTypeIds=1",
+                "api/CopilotAdoption/licence-types?seatLicenceTypeIds=1",
+                "api/CopilotAdoption/filters?seatLicenceTypeIds=1",
+                "api/CopilotAdoption/sql?seatLicenceTypeIds=1",
+                "api/CopilotAdoption/export/workbook?seatLicenceTypeIds=1",
+            };
+
+            using (var host = CopilotAdoptionHost(runner, PortalTestHost.SignedIn()))
+            {
+                // Administration does not imply See PII.
+                foreach (var principal in new[] { PortalTestHost.SignedIn(), PortalTestHost.SignedIn(PortalRoles.Administration) })
+                {
+                    host.Principal = principal;
+                    foreach (var url in overridden)
+                    {
+                        var response = await host.Client.GetAsync(url);
+                        Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode, url);
+                        var body = JObject.Parse(await response.Content.ReadAsStringAsync());
+                        Assert.AreEqual(PortalPermissionDeniedModel.ErrorCode, (string)body["code"], url);
+                        Assert.AreEqual("seePii", (string)body["permission"], url);
+                    }
+                }
+
+                Assert.AreEqual(0, runner.Overrides.Count, "A refused override must not start an analysis either.");
+
+                // Without an override - an empty one overrides nothing - the aggregates are everyone's, as before.
+                host.Principal = PortalTestHost.SignedIn();
+                foreach (var url in new[]
+                {
+                    "api/CopilotAdoption/summary",
+                    "api/CopilotAdoption/summary?seatLicenceTypeIds=",
+                    "api/CopilotAdoption/licence-types",
+                    "api/CopilotAdoption/filters",
+                    "api/CopilotAdoption/sql",
+                    "api/CopilotAdoption/export/workbook",
+                })
+                {
+                    Assert.AreEqual(HttpStatusCode.OK, (await host.Client.GetAsync(url)).StatusCode, url);
+                }
+
+                Assert.IsTrue(runner.Overrides.All(ids => ids.Count == 0), "Only the automatic classification was analysed.");
+
+                // A See PII holder keeps the override, and it still reaches the analysis.
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                foreach (var url in overridden)
+                {
+                    Assert.AreEqual(HttpStatusCode.OK, (await host.Client.GetAsync(url)).StatusCode, url);
+                }
+
+                CollectionAssert.AreEqual(new List<int> { 1 }, runner.Overrides.Single(ids => ids.Count > 0));
+            }
+        }
+
+        [TestMethod]
         public async Task UserFilterCatalogue_RequiresSeePii()
         {
             using (var host = new PortalTestHost(
@@ -1109,10 +1170,15 @@ namespace Tests.UnitTests
 
         private static PortalTestHost CopilotAdoptionHost(CopilotAdoptionAnalysis analysis, IPrincipal principal, LeadershipComparisonProvider leadership = null)
         {
+            return CopilotAdoptionHost(new FixedRunner(analysis), principal, leadership);
+        }
+
+        private static PortalTestHost CopilotAdoptionHost(FixedRunner runner, IPrincipal principal, LeadershipComparisonProvider leadership = null)
+        {
             // Never the process-wide provider: that would read the test run's Storage account.
             leadership = leadership ?? new LeadershipComparisonProvider(() => new LeadershipCohortStore(new InMemoryKeyValueStore(), isDurable: true));
             var coordinator = new AdoptionCoordinator(
-                new FixedRunner(analysis),
+                runner,
                 new DictionaryCache(),
                 (windowDays, hasOverride) => NullAnalysisTelemetry.Instance,
                 TimeSpan.FromMinutes(10));
@@ -1281,8 +1347,14 @@ namespace Tests.UnitTests
             private readonly CopilotAdoptionAnalysis _analysis;
             internal FixedRunner(CopilotAdoptionAnalysis analysis) { _analysis = analysis; }
 
+            /// <summary>The seat-licence override of every analysis started, empty for the automatic classification.</summary>
+            internal List<List<int>> Overrides { get; } = new List<List<int>>();
+
             public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, Common.Entities.CopilotAdoption.CopilotAdoptionEffectiveScoreSettings scoreSettings, ICopilotAdoptionRunTelemetry telemetry)
-                => Task.FromResult(_analysis);
+            {
+                lock (Overrides) Overrides.Add(new List<int>(seatLicenceTypeIds ?? new List<int>()));
+                return Task.FromResult(_analysis);
+            }
         }
 
         private sealed class DictionaryCache : AdoptionCache
