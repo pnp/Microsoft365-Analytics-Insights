@@ -141,7 +141,10 @@ export type TeamsSegmentTrendPoint = {
 };
 
 export type TeamsDemographicRow = {
-  name: string;
+  /** Tenant data, never translated. Null for the combined `other` row. */
+  name: string | null;
+  /** True for the single row a reader without See PII gets in place of every group too small to name. */
+  other?: boolean;
   knownUsers: number;
   activeUsers: number;
   reachPct: number;
@@ -172,6 +175,16 @@ export type TeamsAdoption = TeamsSection & {
   breakdown: TeamsDemographicRow[];
   devices: TeamsDeviceRow[];
   lifecycle: TeamsLifecycle;
+  /**
+   * For a reader without See PII, the fewest people - and active people - a breakdown row describes. Null or
+   * absent when every group is shown.
+   */
+  minimumGroupSize?: number | null;
+  /**
+   * How many groups were combined into the `other` row - or, when even all of them together are too few people,
+   * left out of the breakdown. 0 or absent when none were.
+   */
+  otherGroups?: number;
 };
 
 export type TeamsCallKpis = {
@@ -320,7 +333,22 @@ export type TeamsPeople = TeamsSection & {
   namesObfuscated: boolean;
   champions: TeamsPersonRow[];
   dormant: TeamsPersonRow[];
-  championsByDepartment: TeamsNamedCount[];
+  championsByDepartment: TeamsDepartmentCount[];
+  /**
+   * For a reader without See PII, the fewest power users a department row counts. Null or absent when every
+   * department is shown.
+   */
+  minimumGroupSize?: number | null;
+  /** How many departments were combined into the `other` row - or left out when too few even together. */
+  otherChampionDepartments?: number;
+};
+
+/** Power users in one department. `other` marks the combined row a reader without See PII gets; its name is null. */
+export type TeamsDepartmentCount = {
+  name: string | null;
+  count: number;
+  sharePct: number | null;
+  other?: boolean;
 };
 
 /** Exportable sections, matching `TeamsExplorerExports.Sections`. */

@@ -17,6 +17,115 @@ namespace Tests.UnitTests
     [TestClass]
     public class TeamsExplorerScoringTests
     {
+        #region Small groups for a reader without See PII
+
+        [TestMethod]
+        public void WithoutSmallGroups_AFoldedRowShortOfPeople_TakesTheSmallestShownGroup()
+        {
+            var adoption = Adoption(Group("Contoso Trio", 3, 0), Group("Contoso Six", 6, 0), Group("Contoso Twenty", 20, 10));
+
+            var trimmed = adoption.WithoutSmallGroups(5);
+
+            CollectionAssert.AreEqual(new[] { "Contoso Twenty", null }, trimmed.Breakdown.Select(r => r.Name).ToArray());
+            Assert.AreEqual(9, trimmed.Breakdown[1].KnownUsers);
+            Assert.AreEqual(2, trimmed.OtherGroups);
+            Assert.AreEqual(5, trimmed.MinimumGroupSize);
+        }
+
+        [TestMethod]
+        public void WithoutSmallGroups_AFoldedRowShortOfActivePeople_TakesTheSmallestGroupWithActivePeople()
+        {
+            // Two active people among ten: their messages per active user are those two people's own.
+            var adoption = Adoption(
+                Group("Contoso Quiet", 10, 2, messagesPerActiveUser: 50),
+                Group("Contoso Idle", 6, 0),
+                Group("Contoso Busy", 8, 6, messagesPerActiveUser: 10),
+                Group("Contoso Big", 40, 30));
+
+            var trimmed = adoption.WithoutSmallGroups(5);
+
+            CollectionAssert.AreEqual(new[] { "Contoso Idle", "Contoso Big", null }, trimmed.Breakdown.Select(r => r.Name).ToArray(),
+                "An idle group cannot make up active people, so it keeps its name.");
+            var other = trimmed.Breakdown[2];
+            Assert.IsTrue(other.Other);
+            Assert.AreEqual(18, other.KnownUsers);
+            Assert.AreEqual(8, other.ActiveUsers);
+            Assert.AreEqual((2 * 50 + 6 * 10) / 8d, other.MessagesPerActiveUser, 1e-9);
+            Assert.AreEqual(100d * 8 / 18, other.ReachPct, 1e-9);
+            Assert.AreEqual(2, trimmed.OtherGroups);
+        }
+
+        [TestMethod]
+        public void WithoutSmallGroups_TooFewPeopleEvenTogether_LeavesTheRowOut()
+        {
+            var adoption = Adoption(Group("Contoso Quiet", 10, 2), Group("Contoso Idle", 6, 0));
+
+            var trimmed = adoption.WithoutSmallGroups(5);
+
+            CollectionAssert.AreEqual(new[] { "Contoso Idle" }, trimmed.Breakdown.Select(r => r.Name).ToArray());
+            Assert.AreEqual(1, trimmed.OtherGroups, "Left out, and said so.");
+        }
+
+        [TestMethod]
+        public void WithoutSmallGroups_IsACopy_AndGroupsOfFiveAreShownAsTheyAre()
+        {
+            var adoption = Adoption(
+                Group("Contoso Five", 5, 5), Group("Contoso Four", 4, 4), Group("Contoso Three", 3, 3, messagesPerActiveUser: 99));
+
+            var trimmed = adoption.WithoutSmallGroups(5);
+
+            CollectionAssert.AreEqual(new[] { "Contoso Five", null }, trimmed.Breakdown.Select(r => r.Name).ToArray());
+            Assert.AreSame(adoption.Breakdown[0], trimmed.Breakdown[0], "A group of five is shown unchanged.");
+            Assert.AreEqual(7, trimmed.Breakdown[1].KnownUsers);
+            Assert.AreEqual(3, adoption.Breakdown.Count, "The cached section is never edited.");
+            Assert.IsNull(adoption.MinimumGroupSize);
+            Assert.AreEqual(0, adoption.OtherGroups);
+        }
+
+        private static TeamsAdoption Adoption(params TeamsDemographicRow[] rows)
+        {
+            var adoption = new TeamsAdoption();
+            adoption.Breakdown.AddRange(rows);
+            return adoption;
+        }
+
+        [TestMethod]
+        public void PeopleWithoutIndividualData_FoldsDepartmentsWithFewerThanFivePowerUsers_AndNeverLeavesAHandfulInTheFoldedRow()
+        {
+            var people = new TeamsPeople();
+            people.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Contoso Nine", Count = 9, SharePct = 9 * 100d / 11 });
+            people.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Contoso Two", Count = 2, SharePct = 2 * 100d / 11 });
+
+            var trimmed = people.WithoutIndividualData(5);
+
+            // Two power users on their own would be the folded row, and also everyone less the named rows.
+            Assert.AreEqual(1, trimmed.ChampionsByDepartment.Count);
+            Assert.IsTrue(trimmed.ChampionsByDepartment[0].Other);
+            Assert.IsNull(trimmed.ChampionsByDepartment[0].Name);
+            Assert.AreEqual(11, trimmed.ChampionsByDepartment[0].Count);
+            Assert.AreEqual(100d, trimmed.ChampionsByDepartment[0].SharePct.Value, 1e-9);
+            Assert.AreEqual(2, trimmed.OtherChampionDepartments);
+            Assert.AreEqual(2, people.ChampionsByDepartment.Count, "The cached section is never edited.");
+
+            var alone = new TeamsPeople();
+            alone.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Contoso Two", Count = 2 });
+            var hidden = alone.WithoutIndividualData(5);
+            Assert.AreEqual(0, hidden.ChampionsByDepartment.Count, "Too few even together: left out.");
+            Assert.AreEqual(1, hidden.OtherChampionDepartments);
+        }
+
+        private static TeamsDemographicRow Group(string name, int known, int active, double messagesPerActiveUser = 0) =>
+            new TeamsDemographicRow
+            {
+                Name = name,
+                KnownUsers = known,
+                ActiveUsers = active,
+                ReachPct = TeamsExplorerScoring.Percentage(active, known),
+                MessagesPerActiveUser = messagesPerActiveUser,
+            };
+
+        #endregion
+
         #region Window
 
         [TestMethod]

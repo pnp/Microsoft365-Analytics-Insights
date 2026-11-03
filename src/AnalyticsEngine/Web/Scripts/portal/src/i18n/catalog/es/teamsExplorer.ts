@@ -247,6 +247,12 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.adoption.reachBy.emptyNoGroups': 'No se pudo agrupar ningún usuario para este periodo.',
   'teamsExplorer.adoption.reachBy.emptyMetadataUnavailable': 'Los metadatos de usuario no se están importando, por lo que no hay nada por lo que agrupar. Active la importación de metadatos de usuario de Graph.',
   'teamsExplorer.adoption.reachBy.metadataUnavailableNote': 'Los metadatos de usuario no se están importando, por lo que cada grupo mostrará "(sin establecer)".',
+  'teamsExplorer.adoption.reachBy.otherNote':
+    'Los grupos de menos de {count} personas, o con menos de {count} personas activas, se combinan en una sola fila para que no se pueda identificar a nadie.',
+  'teamsExplorer.adoption.reachBy.allGroupsSmall':
+    'Todos los grupos tienen menos de {count} personas, o menos de {count} personas activas, así que este desglose se oculta para proteger su privacidad.',
+  'teamsExplorer.adoption.otherGroups.one': '1 grupo más pequeño, combinado',
+  'teamsExplorer.adoption.otherGroups.other': '{count} grupos más pequeños, combinados',
   'teamsExplorer.adoption.groupBy': 'Agrupar por',
   'teamsExplorer.adoption.groupByAria': 'Agrupar el desglose de adopción por',
   'teamsExplorer.adoption.valueLabel.reachPct': '% de alcance',
@@ -417,6 +423,12 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.people.championDepartments.title': 'Dónde están los promotores',
   'teamsExplorer.people.championDepartments.description': 'Departamentos con más usuarios avanzados.',
   'teamsExplorer.people.championDepartments.note': 'Un usuario avanzado está activo en más del 60% de los días laborables del periodo. Los departamentos con muchos son donde un programa de promotores ya tiene base.',
+  'teamsExplorer.people.championDepartments.otherNote':
+    'Los departamentos con menos de {count} usuarios avanzados se combinan en una sola fila para que no se pueda identificar a nadie.',
+  'teamsExplorer.people.championDepartments.allSmall':
+    'Todos los departamentos tienen menos de {count} usuarios avanzados, así que este gráfico se oculta para proteger su privacidad.',
+  'teamsExplorer.people.championDepartments.other.one': '1 departamento más pequeño, combinado',
+  'teamsExplorer.people.championDepartments.other.other': '{count} departamentos más pequeños, combinados',
   'teamsExplorer.people.valueLabel.powerUsers': 'usuarios avanzados',
   'teamsExplorer.people.table.aria': 'Usuarios de Teams',
 };

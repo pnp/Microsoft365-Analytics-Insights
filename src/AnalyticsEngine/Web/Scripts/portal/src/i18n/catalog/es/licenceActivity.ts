@@ -178,6 +178,18 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.demographics.capped':
     'Se muestran solo los {count} grupos más grandes por número de personas asignadas; esta no es la lista completa.',
   'licenceActivity.demographics.unknownBucket': 'Desconocido',
+  'licenceActivity.demographics.otherRow.one': '1 grupo más pequeño, combinado',
+  'licenceActivity.demographics.otherRow.other': '{count} grupos más pequeños, combinados',
+  'licenceActivity.demographics.otherNote':
+    'Los grupos de menos de {count} personas se combinan en una sola fila para que no se pueda identificar a nadie.',
+
+  // Lo que ve un lector sin See PII en lugar de la actividad de unas pocas personas
+  'licenceActivity.withheld.cell': 'Oculto: menos de {count} personas tienen esta licencia',
+  'licenceActivity.withheld.detail':
+    'Menos de {count} personas tienen esta licencia, así que su uso de los servicios se oculta para proteger su privacidad.',
+  'licenceActivity.suppressed.title': 'Cifras ocultas',
+  'licenceActivity.suppressed.body':
+    'Tan pocas personas tienen una licencia en esta selección que cada cifra describiría a individuos, así que las cifras se ocultan para proteger su privacidad.',
 
   // Workload distributions
   'licenceActivity.distribution.activeOfMeasured': '{active} de {measured} activos ({rate})',
@@ -256,6 +268,8 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.page.recentOptionsHidden': 'Mostrando hasta {count} opciones recientes; algunas pueden estar ocultas.',
   'licenceActivity.page.filterByCountry': 'Filtrar por país',
   'licenceActivity.page.allCountries': 'Todos los países',
+  'licenceActivity.page.demographicFilterNeedsSeePii':
+    'Para filtrar por departamento o país se necesita el rol de aplicación {role}, porque un filtro puede reducir las cifras a una sola persona.',
   'licenceActivity.page.exportSummaryAndPeopleTooltip':
     'Una copia de Excel del resumen más las personas exactas que aparecen actualmente en la pestaña Personas. Se genera a partir de las cifras ya visibles en pantalla, por lo que coincide con lo que puede ver.',
   'licenceActivity.page.exportSummaryTooltip':

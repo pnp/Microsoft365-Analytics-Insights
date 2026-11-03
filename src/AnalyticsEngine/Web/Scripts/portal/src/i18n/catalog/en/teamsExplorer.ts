@@ -245,6 +245,12 @@ export const teamsExplorer = {
   'teamsExplorer.adoption.reachBy.emptyNoGroups': 'No users could be grouped for this period.',
   'teamsExplorer.adoption.reachBy.emptyMetadataUnavailable': 'User metadata is not being imported, so there is nothing to group by. Switch on the Graph user metadata import.',
   'teamsExplorer.adoption.reachBy.metadataUnavailableNote': 'User metadata is not being imported, so every group will read "(not set)".',
+  'teamsExplorer.adoption.reachBy.otherNote':
+    'Groups of fewer than {count} people, or with fewer than {count} active people, are combined into one row so that nobody can be singled out.',
+  'teamsExplorer.adoption.reachBy.allGroupsSmall':
+    'Every group has fewer than {count} people, or fewer than {count} active people, so this breakdown is hidden to protect their privacy.',
+  'teamsExplorer.adoption.otherGroups.one': '1 smaller group, combined',
+  'teamsExplorer.adoption.otherGroups.other': '{count} smaller groups, combined',
   'teamsExplorer.adoption.groupBy': 'Group by',
   'teamsExplorer.adoption.groupByAria': 'Group the adoption breakdown by',
   'teamsExplorer.adoption.valueLabel.reachPct': '% reach',
@@ -415,6 +421,12 @@ export const teamsExplorer = {
   'teamsExplorer.people.championDepartments.title': 'Where the champions are',
   'teamsExplorer.people.championDepartments.description': 'Departments with the most power users.',
   'teamsExplorer.people.championDepartments.note': 'A power user is active on more than 60% of the period\u2019s working days. Departments with many are where a champions programme already has a foothold.',
+  'teamsExplorer.people.championDepartments.otherNote':
+    'Departments with fewer than {count} power users are combined into one row so that nobody can be singled out.',
+  'teamsExplorer.people.championDepartments.allSmall':
+    'Every department has fewer than {count} power users, so this chart is hidden to protect their privacy.',
+  'teamsExplorer.people.championDepartments.other.one': '1 smaller department, combined',
+  'teamsExplorer.people.championDepartments.other.other': '{count} smaller departments, combined',
   'teamsExplorer.people.valueLabel.powerUsers': 'power users',
   'teamsExplorer.people.table.aria': 'Teams users',
 } as const;
