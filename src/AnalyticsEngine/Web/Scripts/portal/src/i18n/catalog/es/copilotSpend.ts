@@ -147,7 +147,6 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.org.notSet': 'Sin definir',
   'copilotSpend.org.combined': 'Otros grupos pequeños ({count})',
   'copilotSpend.org.withheld': 'Menos de {count} personas: cifras no mostradas',
-  'copilotSpend.org.figureWithheld': 'No se muestra: podría identificar a menos de {count} personas',
   'copilotSpend.org.moreGroups': '{count} grupos más (cada uno figura en el informe de Excel)',
   'copilotSpend.org.regrouping': 'Agrupando por {dimension}…',
   'copilotSpend.org.unavailable.directoryUnavailable':
@@ -229,6 +228,9 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.balances.trendPeople.other': '{people} personas con créditos consumidos de {observed} leídas',
   'copilotSpend.balances.trendAtLimit': '{people} en el límite de créditos',
   'copilotSpend.balances.trendPointUnknown': '{date}: importe no indicado',
+  'copilotSpend.balances.trendPointWithheld': '{date}: créditos no mostrados, podrían identificar a menos de {count} personas',
+  'copilotSpend.studio.dayWithheld': '{date}: créditos no mostrados, podrían identificar a menos de {count} personas',
+  'copilotSpend.figureWithheld': 'No se muestra: podría identificar a menos de {count} personas',
   'copilotSpend.distribution.title': 'Cómo se reparte el consumo entre las personas',
   'copilotSpend.distribution.description':
     'Si unas pocas personas concentran la mayor parte de los créditos o muchas consumen un poco cada una. Se muestra una fuente cada vez, porque las dos fuentes nunca se suman.',

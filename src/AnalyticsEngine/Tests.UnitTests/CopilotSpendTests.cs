@@ -508,7 +508,92 @@ namespace Tests.UnitTests
             Assert.IsTrue(trimmed.Organisation.Hidden && trimmed.Organisation.Groups.Count == 0, "A manager grouping names a person in every row.");
             Assert.AreEqual(4, summary.People.Count, "The cached summary is never edited.");
             Assert.IsTrue(summary.Organisation.Groups.Count > 0);
-            Assert.AreEqual(summary.Studio.Credits, trimmed.Studio.Credits);
+
+            // Three people billed for Studio and two readings in view: either total would be theirs, so it is withheld on the
+            // copy. The counts stay, and so do the charges and readings no one in view was matched to, which are not theirs.
+            Assert.IsNull(trimmed.Studio.Credits);
+            Assert.IsTrue(trimmed.Studio.CreditsWithheld);
+            Assert.AreEqual(3, trimmed.Studio.People);
+            Assert.AreEqual(7, trimmed.Studio.UnmatchedCredits.Value, 1e-9);
+            Assert.IsNull(trimmed.Balances.Credits);
+            Assert.IsTrue(trimmed.Balances.CreditsWithheld);
+            Assert.AreEqual(50, trimmed.Balances.UnresolvedCredits.Value, 1e-9);
+            Assert.IsTrue(trimmed.Studio.Days.Single(d => d.Status == CopilotSpendDayStatus.Recorded).Withheld, "Three people billed that day.");
+            Assert.AreEqual(67, summary.Studio.Credits.Value, 1e-9, "A reader with See PII is given the cached totals.");
+            Assert.AreEqual(220, summary.Balances.Credits.Value, 1e-9);
+            Assert.IsFalse(summary.Studio.CreditsWithheld || summary.Balances.CreditsWithheld || summary.Studio.Days.Any(d => d.Withheld));
+        }
+
+        [TestMethod]
+        public void ADayOfTooFewPeople_IsWithheldFromAReaderWithoutSeePii_WithADayThatKeepsItFromBeingWorkedOut()
+        {
+            // Eight people billed in the period, 116 credits: six on Tuesday, seven on Wednesday and one on Saturday.
+            var input = Input();
+            input.Studio.Users.Clear();
+            foreach (var id in Enumerable.Range(1, 8)) input.Studio.Users.Add(new StudioUserFact { UserId = id, Credits = 10 + id, ActiveDays = 2 });
+            input.StudioBreakdown.Days.Clear();
+            input.StudioBreakdown.Days.Add(new CopilotSpendDay { Date = From, Credits = 64.75, People = 6 });
+            input.StudioBreakdown.Days.Add(new CopilotSpendDay { Date = From.AddDays(1), Credits = 37.5, People = 7 });
+            input.StudioBreakdown.Days.Add(new CopilotSpendDay { Date = From.AddDays(4), Credits = 13.75, People = 1 });
+            var summary = CopilotSpendCalculator.Calculate(input);
+            Assert.AreEqual(116, summary.Studio.Credits.Value, 1e-9, "The control: the days add up to the period's total.");
+
+            var trimmed = summary.WithoutIndividualData();
+            Assert.AreEqual(116, trimmed.Studio.Credits.Value, 1e-9, "Eight people billed: the total is theirs together, and shown.");
+            Assert.IsFalse(trimmed.Studio.CreditsWithheld);
+            var days = trimmed.Studio.Days.Where(d => d.Status == CopilotSpendDayStatus.Recorded).ToList();
+            var saturday = days.Single(d => d.Date == From.AddDays(4));
+            Assert.IsTrue(saturday.Withheld, "One person billed that day.");
+            Assert.IsNull(saturday.Credits);
+            Assert.AreEqual(1, saturday.People, "How many is a count, not anyone's charges.");
+            Assert.IsTrue(days.Single(d => d.Date == From).Withheld, "The smallest day of five or more people is withheld with it.");
+            Assert.AreEqual(37.5, days.Single(d => d.Date == From.AddDays(1)).Credits.Value, 1e-9);
+            var residual = trimmed.Studio.Credits.Value - days.Where(d => !d.Withheld).Sum(d => d.Credits ?? 0);
+            Assert.AreNotEqual(13.75, residual, 1e-6, "The total less the days shown holds at least the six people of Tuesday.");
+
+            Assert.IsFalse(JsonConvert.SerializeObject(trimmed).Contains("13.75"));
+            var sheets = CopilotInvestmentWorkbookLanguageTests.Sheets(CopilotSpendWorkbook.Build(trimmed, false, "test", PortalLanguage.English));
+            Assert.IsFalse(sheets.SelectMany(s => s.Cells).Any(c => c.Value == "13.75" || c.Value == "64.75"), "The export is never less redacted than the page.");
+            CollectionAssert.Contains(CopilotInvestmentWorkbookLanguageTests.Texts(sheets),
+                PortalCatalog.For(CopilotSpendWorkbook.CatalogModule, PortalLanguage.English).Text("copilotSpend.workbook.dist.figureWithheld", ("count", "5")));
+
+            Assert.AreEqual(13.75, summary.Studio.Days.Single(d => d.Date == From.AddDays(4)).Credits.Value, 1e-9, "A reader with See PII sees every day.");
+            Assert.IsFalse(summary.Studio.Days.Any(d => d.Withheld));
+        }
+
+        [TestMethod]
+        public void ABalanceReadingOfTooFewPeople_IsWithheldFromAReaderWithoutSeePii_WithTheReadingsTheTotalIsBuiltFrom()
+        {
+            var points = new List<CreditTrendPoint>
+            {
+                new CreditTrendPoint { Date = Snapshot.AddDays(-20), ObservedUsers = 40, ConsumingUsers = 30, Credits = 900.5 },
+                new CreditTrendPoint { Date = Snapshot.AddDays(-15), ObservedUsers = 35, ConsumingUsers = 3, Credits = 41.25 },
+                new CreditTrendPoint { Date = Snapshot.AddDays(-10), ObservedUsers = 30, ConsumingUsers = 0, Credits = -12.5 },
+                new CreditTrendPoint { Date = Snapshot.AddDays(-5), ObservedUsers = 30, ConsumingUsers = 0, Credits = 0 },
+                new CreditTrendPoint { Date = Snapshot.AddDays(-1), ObservedUsers = 50, ConsumingUsers = 40, Credits = 1500.25 },
+                new CreditTrendPoint { Date = Snapshot, ObservedUsers = 2, ConsumingUsers = 2, Credits = 77.75, LimitExhaustedUsers = 1 },
+            };
+            var shown = CreditTrendPoint.WithoutSmallSamples(points, Snapshot.AddDays(-2), Snapshot, CopilotSpendCalculator.DefaultMinGroupSize);
+
+            Assert.AreSame(points[0], shown[0], "Thirty people with consumed credits: shown as it is.");
+            Assert.IsTrue(shown[1].Withheld && shown[1].Credits == null, "Three people.");
+            Assert.AreEqual(3, shown[1].ConsumingUsers, "How many is a count, not anyone's credits.");
+            Assert.AreEqual(35, shown[1].ObservedUsers);
+            Assert.IsTrue(shown[2].Withheld, "An amount with nobody consuming is adjustments by people the count does not show.");
+            Assert.AreSame(points[3], shown[3], "Nothing consumed is nobody's figure.");
+            Assert.IsTrue(shown[5].Withheld && shown[5].Credits == null, "The tail of a sweep that crossed midnight: two people.");
+            Assert.AreEqual(1, shown[5].LimitExhaustedUsers);
+            Assert.IsTrue(shown[4].Withheld, "In the days the report's total is read from: that total less this reading would give the tail back.");
+
+            var json = JsonConvert.SerializeObject(shown);
+            foreach (var value in new[] { "41.25", "-12.5", "1500.25", "77.75" }) Assert.IsFalse(json.Contains(value), value + " in " + json);
+            StringAssert.Contains(json, "900.5");
+            Assert.AreEqual(77.75, points[5].Credits.Value, 1e-9, "The cached points, which a reader with See PII is given, are never edited.");
+            Assert.IsFalse(points.Any(p => p.Withheld));
+
+            // With no reading of too few people in those days, they stay.
+            var settled = CreditTrendPoint.WithoutSmallSamples(points.Take(5).ToList(), Snapshot.AddDays(-2), Snapshot.AddDays(-1), CopilotSpendCalculator.DefaultMinGroupSize);
+            Assert.AreSame(points[4], settled[4]);
         }
 
         [TestMethod]

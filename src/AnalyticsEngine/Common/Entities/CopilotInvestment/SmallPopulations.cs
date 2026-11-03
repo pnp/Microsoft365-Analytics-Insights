@@ -51,5 +51,32 @@ namespace Common.Entities.CopilotInvestment
                 }
             } while (added);
         }
+
+        /// <summary>
+        /// Complementary withholding over rows whose people can overlap - days, say, where one person can be behind several -
+        /// so adding the withheld rows' counts up proves nothing about how many different people they hold together. Once a
+        /// row with someone behind it is withheld for having too few people, the shown row with the fewest people that on its
+        /// own has at least <paramref name="minPeople"/> is withheld too (the last of them on a tie): whatever a total less the
+        /// rows shown gives, it then holds at least that many different people. When no such row exists, every row with anyone
+        /// behind it is small and withheld, and that difference is the population's whole total, which is withheld or not on its own.
+        /// </summary>
+        /// <param name="people">For each row, the different people behind its figures.</param>
+        /// <param name="withheld">For each row, whether it is withheld; a row withheld to protect another is set here.</param>
+        public static void WithholdOverlappingComplement(IReadOnlyList<int> people, bool[] withheld, int minPeople)
+        {
+            var exposed = false;
+            for (var i = 0; i < people.Count; i++)
+            {
+                if (!withheld[i] || people[i] <= 0) continue;
+                if (people[i] >= minPeople) return;
+                exposed = true;
+            }
+            if (!exposed) return;
+
+            var next = -1;
+            for (var i = 0; i < people.Count; i++)
+                if (!withheld[i] && people[i] >= minPeople && (next < 0 || people[i] <= people[next])) next = i;
+            if (next >= 0) withheld[next] = true;
+        }
     }
 }

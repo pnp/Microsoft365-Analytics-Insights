@@ -140,7 +140,6 @@ export const copilotSpend = {
   'copilotSpend.org.notSet': 'Not set',
   'copilotSpend.org.combined': 'Other small groups ({count})',
   'copilotSpend.org.withheld': 'Fewer than {count} people: figures not shown',
-  'copilotSpend.org.figureWithheld': 'Not shown: it could single out fewer than {count} people',
   'copilotSpend.org.moreGroups': '{count} more groups (each listed in the Excel report)',
   'copilotSpend.org.regrouping': 'Grouping by {dimension}\u2026',
   'copilotSpend.org.unavailable.directoryUnavailable':
@@ -221,6 +220,9 @@ export const copilotSpend = {
   'copilotSpend.balances.trendPeople.other': '{people} people with consumed credits, of {observed} read',
   'copilotSpend.balances.trendAtLimit': '{people} at a credit limit',
   'copilotSpend.balances.trendPointUnknown': '{date}: amount not stated',
+  'copilotSpend.balances.trendPointWithheld': '{date}: credits not shown, they could single out fewer than {count} people',
+  'copilotSpend.studio.dayWithheld': '{date}: credits not shown, they could single out fewer than {count} people',
+  'copilotSpend.figureWithheld': 'Not shown: it could single out fewer than {count} people',
   'copilotSpend.distribution.title': 'How consumption is spread across people',
   'copilotSpend.distribution.description':
     'Whether a few people account for most of the credits, or many people for a little each. One source is shown at a time, because the two sources are never added together.',

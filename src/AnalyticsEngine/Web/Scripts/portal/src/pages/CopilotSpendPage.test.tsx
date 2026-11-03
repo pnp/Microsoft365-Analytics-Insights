@@ -580,6 +580,33 @@ describe('CopilotSpendPage', () => {
     expect(within(table).getByText('6,000')).toBeInTheDocument();
   });
 
+  it('says a day or a reading withheld from a reader without See PII is withheld, never zero or an unstated amount', async () => {
+    const studio = summary().studio;
+    vi.mocked(fetchSpendSummary).mockResolvedValue(
+      summary({
+        studio: {
+          ...studio,
+          credits: null,
+          creditsWithheld: true,
+          days: studio.days.map((d) => (d.status === 'recorded' ? { ...d, credits: null, withheld: true } : d)),
+        },
+      }),
+    );
+    vi.mocked(fetchSpendTrend).mockResolvedValue({
+      points: [{ date: '2026-10-26', observedUsers: 3, consumingUsers: 2, credits: null, limitExhaustedUsers: 0, withheld: true }],
+      snapshotDate: '2026-10-26',
+      failureCode: null,
+      minPeople: 5,
+    });
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    expect(await screen.findByRole('listitem', { name: '25 Oct 2026: credits not shown, they could single out fewer than 5 people' })).toBeInTheDocument();
+    expect(await screen.findByRole('listitem', { name: '26 Oct 2026: credits not shown, they could single out fewer than 5 people' })).toBeInTheDocument();
+    expect(screen.queryByRole('listitem', { name: /amount not stated/ })).not.toBeInTheDocument();
+    expect(screen.getByTitle('Not shown: it could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.queryByText('1,250')).not.toBeInTheDocument();
+  });
+
   it('gives the right reason for a missing agent ledger and a grouping that cannot be made', async () => {
     vi.mocked(fetchSpendSummary).mockResolvedValue(
       summary({

@@ -65,9 +65,10 @@ namespace Common.Entities.CopilotSpend
         /// <summary>
         /// A copy for a reader without See PII: no people, no grouping that names a person, no source's figures in a group
         /// that describe fewer people than the smallest group shown, no environment small enough to stand for one (its name and
-        /// amount are combined with the other small ones), and distributions without the named lists or any figure that
-        /// describes fewer people than the smallest group shown. Summaries are cached and shared between readers, so the
-        /// cached object is never edited.
+        /// amount are combined with the other small ones), no section total or day of the ledger that describes fewer people
+        /// than that, and distributions without the named lists or any figure that describes fewer people than the smallest
+        /// group shown. A figure withheld for its own sake also takes with it enough others that a total less what is shown
+        /// cannot give it back. Summaries are cached and shared between readers, so the cached object is never edited.
         /// </summary>
         public CopilotSpendSummary WithoutIndividualData()
         {
@@ -89,13 +90,19 @@ namespace Common.Entities.CopilotSpend
             }
             if (Studio != null)
             {
-                copy.Studio = Studio.WithSmallEnvironmentsCombined(CopilotSpendCalculator.DefaultMinGroupSize);
+                copy.Studio = Studio.WithoutSmallPopulations(CopilotSpendCalculator.DefaultMinGroupSize);
                 copy.Studio.Distribution = Studio.Distribution?.Anonymised(CopilotSpendCalculator.DefaultMinGroupSize);
             }
             if (Balances != null)
             {
                 copy.Balances = Balances.Copy();
                 copy.Balances.Distribution = Balances.Distribution?.Anonymised(CopilotSpendCalculator.DefaultMinGroupSize);
+                // In a filtered view the total is the people's own; unfiltered, it less the unmatched accounts' credits is.
+                if (SmallPopulations.IsSmall(Balances.Contributors, CopilotSpendCalculator.DefaultMinGroupSize))
+                {
+                    copy.Balances.Credits = null;
+                    copy.Balances.CreditsWithheld = true;
+                }
             }
             return copy;
         }
@@ -156,6 +163,13 @@ namespace Common.Entities.CopilotSpend
         /// <summary>Billed credits in the window for the people in view; unfiltered, also the charges no user matched. Null when not available.</summary>
         [JsonProperty("credits")]
         public double? Credits { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Credits"/> is null because fewer than the minimum number of
+        /// people in view were billed: it would be their own charges (with the unmatched ones, which are stated beside it).
+        /// </summary>
+        [JsonProperty("creditsWithheld")]
+        public bool CreditsWithheld { get; set; }
 
         /// <summary>People in view with billed credits in the window. Null when not available.</summary>
         [JsonProperty("people")]
@@ -224,6 +238,25 @@ namespace Common.Entities.CopilotSpend
             });
             return copy;
         }
+
+        /// <summary>
+        /// A copy for a reader without See PII: small environments combined (<see cref="WithSmallEnvironmentsCombined"/>);
+        /// each day's credits withheld when fewer than <paramref name="minPeople"/> people were billed on it, with the
+        /// smallest day of at least that many withheld too, so that the period's total less the days shown holds at least
+        /// that many people (<see cref="CopilotSpendDay.WithoutSmallPopulations"/>); and the period's total withheld when
+        /// fewer than that many people in view were billed in it at all. Never edits this object.
+        /// </summary>
+        internal CopilotSpendStudio WithoutSmallPopulations(int minPeople)
+        {
+            var copy = WithSmallEnvironmentsCombined(minPeople);
+            if (SmallPopulations.IsSmall(People ?? 0, minPeople))
+            {
+                copy.Credits = null;
+                copy.CreditsWithheld = true;
+            }
+            copy.Days = CopilotSpendDay.WithoutSmallPopulations(Days, minPeople);
+            return copy;
+        }
     }
 
     /// <summary>The ledger's recording state for one calendar day.</summary>
@@ -248,12 +281,36 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("status")]
         public string Status { get; set; } = CopilotSpendDayStatus.Recorded;
 
-        /// <summary>Billed credits; null unless <see cref="Status"/> is <c>recorded</c>.</summary>
+        /// <summary>Billed credits; null unless <see cref="Status"/> is <c>recorded</c>, or when <see cref="Withheld"/>.</summary>
         [JsonProperty("credits")]
         public double? Credits { get; set; }
 
         [JsonProperty("people")]
         public int? People { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, a recorded day's <see cref="Credits"/> are null: fewer than the minimum
+        /// number of people were billed on it, or it is the day withheld with such days so that they cannot be given back.
+        /// </summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
+
+        /// <summary>
+        /// Copies of the days for a reader without See PII. A day's credits are withheld when one to
+        /// <paramref name="minPeople"/> - 1 people were billed on it. The days add up to the period's total, which the reader is
+        /// given, and one person can be billed on several days, so no sum of the withheld days' counts shows how many different
+        /// people they hold: the smallest day billed to at least <paramref name="minPeople"/> people is withheld with them,
+        /// so whatever the total less the days shown gives holds at least that many (<see cref="SmallPopulations.WithholdOverlappingComplement"/>).
+        /// The people count of a withheld day stays: it is a count, not anyone's charges. Days are copied, never edited.
+        /// </summary>
+        internal static List<CopilotSpendDay> WithoutSmallPopulations(List<CopilotSpendDay> days, int minPeople)
+        {
+            if (days == null) return null;
+            var people = days.Select(d => d.Credits.HasValue ? d.People ?? 0 : 0).ToList();
+            var withheld = people.Select(p => SmallPopulations.IsSmall(p, minPeople)).ToArray();
+            SmallPopulations.WithholdOverlappingComplement(people, withheld, minPeople);
+            return days.Select((d, i) => withheld[i] ? new CopilotSpendDay { Date = d.Date, Status = d.Status, People = d.People, Withheld = true } : d).ToList();
+        }
     }
 
     public sealed class CopilotSpendEnvironment
@@ -355,6 +412,17 @@ namespace Common.Entities.CopilotSpend
         /// <summary>Latest balances, in credits, of the people in view; unfiltered, also the accounts no user matched. Null when not available.</summary>
         [JsonProperty("credits")]
         public double? Credits { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Credits"/> is null because fewer than the minimum number of
+        /// people in view have a reading other than zero: it would be their own (with the unmatched accounts', stated beside it).
+        /// </summary>
+        [JsonProperty("creditsWithheld")]
+        public bool CreditsWithheld { get; set; }
+
+        /// <summary>People in view whose latest reading is other than zero, adjustments below zero included: who <see cref="Credits"/> describes.</summary>
+        [JsonIgnore]
+        internal int Contributors { get; set; }
 
         /// <summary>People in view with a latest reading at all, zero or not.</summary>
         [JsonProperty("observedPeople")]

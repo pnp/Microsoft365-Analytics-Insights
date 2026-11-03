@@ -544,12 +544,16 @@ export interface InvestmentTrendPoint {
   consumingUsers: number;
   credits: number | null;
   limitExhaustedUsers: number;
+  /** For a reader without See PII: `credits` is null because they could single out fewer than the minimum number of people. */
+  withheld?: boolean;
 }
 
 export interface InvestmentTrend {
   points: InvestmentTrendPoint[];
   snapshotDate: string | null;
   failureCode: string | null;
+  /** The fewest people a point's credits may describe to a reader without See PII. */
+  minPeople?: number;
 }
 
 export interface CopilotInvestmentAvailability {

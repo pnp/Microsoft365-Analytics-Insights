@@ -430,6 +430,8 @@ export const copilotInvestment = {
   'copilotInvestment.trend.credits': 'Credits consumed',
   'copilotInvestment.trend.consumers': 'People with consumed credits',
   'copilotInvestment.trend.point': '{date}: {credits} credits, {consumers} people',
+  'copilotInvestment.trend.pointWithheld': '{date}: credits not shown, they could single out fewer than {count} people; {consumers} people',
+  'copilotInvestment.trend.withheld': 'Not shown: it could single out fewer than {count} people',
   'copilotInvestment.trend.empty': 'No consumption readings in this period.',
   'copilotInvestment.trend.loading': 'Loading the consumption readings\u2026',
 

@@ -365,6 +365,7 @@ namespace Common.Entities.CopilotSpend
                 LimitExhaustedPeople = observed.Count(o => o.LimitExhaustedRows > 0),
                 NotEntitledPeople = observed.Count(o => o.NotEntitledRows > 0),
                 Credits = available ? Math.Round(observed.Concat(unresolved).Sum(o => o.Credits ?? 0), 6) : (double?)null,
+                Contributors = available ? observed.Count(o => (o.Credits ?? 0) != 0) : 0,
                 SweepsInWindow = credits.Sweeps.Count,
                 CompletedSweepsInWindow = credits.Sweeps.Count(s => s.LastCompleted.HasValue),
                 Services = CopilotInvestmentCalculator.ServiceRows(credits, observed, input.Filtered),

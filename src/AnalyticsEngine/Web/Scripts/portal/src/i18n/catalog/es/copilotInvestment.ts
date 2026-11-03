@@ -440,6 +440,8 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.trend.credits': 'Créditos consumidos',
   'copilotInvestment.trend.consumers': 'Personas con créditos consumidos',
   'copilotInvestment.trend.point': '{date}: {credits} créditos, {consumers} personas',
+  'copilotInvestment.trend.pointWithheld': '{date}: créditos no mostrados, podrían identificar a menos de {count} personas; {consumers} personas',
+  'copilotInvestment.trend.withheld': 'No se muestra: podría identificar a menos de {count} personas',
   'copilotInvestment.trend.empty': 'No hay lecturas de consumo en este periodo.',
   'copilotInvestment.trend.loading': 'Cargando las lecturas de consumo\u2026',
 

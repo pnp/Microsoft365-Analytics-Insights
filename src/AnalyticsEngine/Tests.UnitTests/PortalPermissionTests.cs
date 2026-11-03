@@ -108,7 +108,7 @@ namespace Tests.UnitTests
 
             ["CopilotInvestmentAPIController.Availability"] = Any,
             ["CopilotInvestmentAPIController.Summary"] = Any,          // trims the people; a user filter or manager grouping needs See PII
-            ["CopilotInvestmentAPIController.Trend"] = Any,            // balance totals only; a user filter needs See PII
+            ["CopilotInvestmentAPIController.Trend"] = Any,            // balance totals only, a reading of fewer than 5 people withheld; a user filter needs See PII
             ["CopilotInvestmentAPIController.People"] = Pii,
             ["CopilotInvestmentAPIController.Person"] = Pii,
             ["CopilotInvestmentAPIController.ExportWorkbook"] = Any,   // trims the people sheet
@@ -116,7 +116,7 @@ namespace Tests.UnitTests
             ["CopilotInvestmentSettingsAPIController.Save"] = Admin,
 
             ["CopilotSpendAPIController.Summary"] = Any,               // trims the people; a user filter or manager grouping needs See PII
-            ["CopilotSpendAPIController.Trend"] = Any,                 // balance totals only; a user filter needs See PII
+            ["CopilotSpendAPIController.Trend"] = Any,                 // balance totals only, a reading of fewer than 5 people withheld; a user filter needs See PII
             ["CopilotSpendAPIController.People"] = Pii,
             ["CopilotSpendAPIController.Person"] = Pii,
             ["CopilotSpendAPIController.ExportWorkbook"] = Any,        // trims the people sheet

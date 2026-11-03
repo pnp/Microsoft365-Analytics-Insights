@@ -70,10 +70,13 @@ namespace Common.Entities.CopilotSpend
             var credits = words.W("unit.credits");
             var people = words.W("unit.people");
             var studio = summary.Studio;
+            // A figure withheld from a reader without See PII is an empty cell that says why, as on the distribution sheet.
+            var withheld = words.W("dist.figureWithheld", ("count", words.Count(CopilotSpendCalculator.DefaultMinGroupSize)));
             sheet.AddHeaderRow(words.W("summary.col.studio"), words.W("col.value"), words.W("col.unit"), words.W("col.note"));
             // A source that is not available leaves its cells empty: never a zero the source did not report.
             sheet.AddRow(words.W("studio.credits"), studio.Credits, credits,
                 !studio.Available ? words.W("studio.notAvailable")
+                : studio.CreditsWithheld ? withheld
                 : studio.UnmatchedCredits > 0 ? words.W("studio.creditsUnmatched", ("credits", words.Num(studio.UnmatchedCredits))) : words.W("studio.creditsNote"));
             sheet.AddRow(words.W("studio.people"), Count(studio.People), people);
             sheet.AddRow(words.W("studio.latest"), studio.LatestDate, null, words.W("studio.latestNote"));
@@ -87,7 +90,7 @@ namespace Common.Entities.CopilotSpend
             var balances = summary.Balances;
             sheet.AddHeaderRow(words.W("summary.col.balances"), words.W("col.value"), words.W("col.unit"), words.W("col.note"));
             sheet.AddRow(words.W("balances.credits"), balances.Credits, credits,
-                balances.Available ? words.W("balances.creditsNote") : words.W("balances.notAvailable"));
+                !balances.Available ? words.W("balances.notAvailable") : balances.CreditsWithheld ? withheld : words.W("balances.creditsNote"));
             sheet.AddRow(words.W("balances.snapshot"), balances.SnapshotDate, null,
                 words.W("balances.snapshotNote", ("days", words.Count(CopilotInvestmentSql.SnapshotBandDays))));
             if (balances.SnapshotBeforeWindow)
@@ -197,9 +200,10 @@ namespace Common.Entities.CopilotSpend
             sheet.AddRow(words.W("studio.latest"), studio.LatestDate, null, words.W("studio.latestNote"));
             sheet.AddHeaderRow(words.W("studio.col.date"), words.W("studio.col.credits"), words.W("studio.col.people"), words.W("col.note"));
             // Every calendar day: a day the ledger has no charges for is said to be so, and one after its latest day is not reported.
+            var dayWithheld = words.W("dist.figureWithheld", ("count", words.Count(CopilotSpendCalculator.DefaultMinGroupSize)));
             foreach (var day in studio.Days)
                 sheet.AddRow(XlsxCell.Date(day.Date), day.Credits, Count(day.People),
-                    day.Status == CopilotSpendDayStatus.Recorded ? null : words.W("studio.day." + day.Status));
+                    day.Withheld ? dayWithheld : day.Status == CopilotSpendDayStatus.Recorded ? null : words.W("studio.day." + day.Status));
             sheet.AddBlankRow();
             sheet.AddRow(words.W("studio.environmentsTitle"));
             sheet.AddHeaderRow(words.W("studio.col.environment"), words.W("studio.col.environmentId"), words.W("studio.col.credits"), words.W("studio.col.people"),
