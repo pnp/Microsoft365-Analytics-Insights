@@ -46,6 +46,47 @@ namespace Tests.UnitTests
             Assert.AreEqual(timestamp.AddMinutes(1), result.LatestRead);
         }
 
+        [TestMethod]
+        public void PageLoad_AppInsightsDurationInMilliseconds_IsStagedInSeconds()
+        {
+            // App Insights reports a page view's duration in milliseconds (pageViews.duration, AppPageViews.DurationMs),
+            // and hits.page_load_time is in seconds. Older builds divided by 10,000 and staged 0.25 for this view.
+            var view = PageView(Guid.NewGuid(), InScopeSite + "/pages/home.aspx");
+            view.DurationMS = 2500;
+            view.CustomProperties.PageLoad = "2500";
+
+            Assert.AreEqual(2.5d, view.PageLoadInSeconds);
+
+            var plan = PageViewStagingRules.Plan(CollectionOf(view), FilterFor("https://contoso.sharepoint.com"));
+            Assert.AreEqual(1, plan.RowsToStage.Count);
+            Assert.AreEqual("2.5", plan.RowsToStage[0].PageLoadTime, "The staged value is what lands in hits.page_load_time.");
+
+            view.DurationMS = 2537.6;
+            Assert.AreEqual(2.54d, view.PageLoadInSeconds, "Rounded to the hundredth of a second.");
+        }
+
+        [DataTestMethod]
+        [DataRow(null, DisplayName = "No pageLoad property")]
+        [DataRow("", DisplayName = "Empty pageLoad")]
+        [DataRow("0", DisplayName = "pageLoad 0, as for a navigation that doesn't reload the page")]
+        public void PageLoad_ViewTheTrackerDidNotMeasure_IsStoredAsZero(string pageLoad)
+        {
+            var view = PageView(Guid.NewGuid(), InScopeSite + "/pages/home.aspx");
+            view.DurationMS = 2500;
+            view.CustomProperties.PageLoad = pageLoad;
+
+            Assert.AreEqual(0d, view.PageLoadInSeconds, "0 means not measured, whatever duration App Insights reports.");
+        }
+
+        [TestMethod]
+        public void PageLoad_MeasuredViewWithNoDuration_IsStoredAsZero()
+        {
+            var view = PageView(Guid.NewGuid(), InScopeSite + "/pages/home.aspx");
+            view.CustomProperties.PageLoad = "1234";
+
+            Assert.AreEqual(0d, view.PageLoadInSeconds, "No duration column, or a duration of 0, stays 0.");
+        }
+
         private static PageViewAppInsightsQueryResult PageView(Guid? pageRequestId, string url, string siteUrl = InScopeSite)
         {
             return new PageViewAppInsightsQueryResult

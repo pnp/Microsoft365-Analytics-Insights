@@ -57,14 +57,6 @@ namespace Common.Entities.SpoWebActivity
     /// fast" verdict from views that were never timed.
     /// </para>
     /// <para>
-    /// Note a separate, PRE-EXISTING caveat this report inherits and does not fix: that same importer
-    /// property derives the value as <c>DurationMS / (1000 * 10)</c>, which is a tenth of the
-    /// milliseconds-to-seconds conversion, and it carries a standing TODO asking for a domain owner's
-    /// decision before it changes. Load times here are therefore internally consistent and good for
-    /// RANKING pages against each other, but their absolute scale is only as trustworthy as that
-    /// import. Do not quote them as service-level figures until it is resolved.
-    /// </para>
-    /// <para>
     /// <b>OPTION (RECOMPILE) everywhere.</b> The window is the main cost lever, and a plan cached for
     /// 7 days is a bad plan for 365. Recompiling costs a millisecond or two on statements that are
     /// already reading tens of thousands of rows.
