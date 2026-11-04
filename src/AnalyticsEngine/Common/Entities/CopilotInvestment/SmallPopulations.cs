@@ -78,5 +78,104 @@ namespace Common.Entities.CopilotInvestment
                 if (!withheld[i] && people[i] >= minPeople && (next < 0 || people[i] <= people[next])) next = i;
             if (next >= 0) withheld[next] = true;
         }
+
+        /// <summary>
+        /// For rows that add up to a total the reader is not given: when every row with someone behind it is shown, they add
+        /// up to that total all the same. So unless a row with someone behind it is withheld already, the shown row with the
+        /// fewest people (more than none) is withheld too (the last of them on a tie).
+        /// </summary>
+        /// <param name="people">For each row, the people behind its figures that the withheld total adds up.</param>
+        /// <param name="withheld">For each row, whether it is withheld; a row withheld to protect the total is set here.</param>
+        public static void WithholdOneOf(IReadOnlyList<int> people, bool[] withheld)
+        {
+            var next = -1;
+            for (var i = 0; i < people.Count; i++)
+            {
+                if (people[i] <= 0) continue;
+                if (withheld[i]) return;
+                if (next < 0 || people[i] <= people[next]) next = i;
+            }
+            if (next >= 0) withheld[next] = true;
+        }
+
+        /// <summary>
+        /// Withholding over the parts of one total: populations that split the people behind it between them, each person in
+        /// exactly one, where the reader is given several figures that each add up a different selection of the parts - the
+        /// total, a part on its own, two parts together. Every part with too few people behind it is withheld, then more parts,
+        /// the fewest people first, until the withheld parts together hold nobody or at least the minimum (as
+        /// <see cref="WithholdComplements"/>). A figure is then shown only when it adds up none of the withheld parts, or every
+        /// one of them while they hold enough people together: whatever difference of the figures shown a reader works out,
+        /// the withheld parts come back only all together, never fewer of them.
+        /// </summary>
+        internal sealed class Parts
+        {
+            private readonly int[] _people;
+            private readonly bool[] _withheld;
+            private readonly int _minPeople;
+
+            /// <param name="people">The people behind each part's figures: who its amount describes.</param>
+            /// <param name="minPeople">The fewest people a figure may describe.</param>
+            /// <param name="keep">
+            /// A part never withheld only to protect another, or -1 for none. When it is the only part left that could be, no
+            /// more are: the withheld parts then hold too few people together, and every figure adding up any of them - the
+            /// total included - is withheld instead.
+            /// </param>
+            public Parts(IReadOnlyList<int> people, int minPeople, int keep = -1)
+            {
+                _people = new int[people.Count];
+                for (var i = 0; i < people.Count; i++) _people[i] = System.Math.Max(0, people[i]);
+                _minPeople = minPeople;
+                _withheld = new bool[_people.Length];
+                for (var i = 0; i < _people.Length; i++) _withheld[i] = IsSmall(_people[i], minPeople);
+                while (IsSmall(Behind, minPeople))
+                {
+                    var next = -1;
+                    for (var i = 0; i < _people.Length; i++)
+                        if (!_withheld[i] && i != keep && _people[i] > 0 && (next < 0 || _people[i] <= _people[next])) next = i;
+                    if (next < 0) break;
+                    _withheld[next] = true;
+                }
+            }
+
+            private int Behind
+            {
+                get
+                {
+                    var behind = 0;
+                    for (var i = 0; i < _people.Length; i++)
+                        if (_withheld[i]) behind += _people[i];
+                    return behind;
+                }
+            }
+
+            /// <summary>Whether a figure adding up exactly these parts may be given to the reader.</summary>
+            public bool Shows(params int[] parts)
+            {
+                var people = 0;
+                var withheldIn = 0;
+                foreach (var part in parts)
+                {
+                    people += _people[part];
+                    if (_withheld[part]) withheldIn++;
+                }
+                if (IsSmall(people, _minPeople)) return false;
+                if (withheldIn == 0) return true;
+                var withheld = 0;
+                foreach (var w in _withheld)
+                    if (w) withheld++;
+                return withheldIn == withheld && !IsSmall(Behind, _minPeople);
+            }
+
+            /// <summary>Whether the total of every part may be given to the reader.</summary>
+            public bool ShowsTotal
+            {
+                get
+                {
+                    var all = new int[_people.Length];
+                    for (var i = 0; i < all.Length; i++) all[i] = i;
+                    return Shows(all);
+                }
+            }
+        }
     }
 }

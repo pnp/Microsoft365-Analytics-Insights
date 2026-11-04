@@ -17,6 +17,7 @@ import {
   FIELD_LABEL_KEYS,
   SCENARIO_LABEL_KEYS,
   SectionHeading,
+  WithheldMark,
   formatCredits,
   formatDecimal,
   formatMinutes,
@@ -24,6 +25,7 @@ import {
   formatMultiple,
   formatMultipleDelta,
   formatShare,
+  withheldMinimum,
 } from './investmentShared';
 
 const useStyles = makeStyles({
@@ -88,6 +90,10 @@ export default function ValuePanel({ summary }: { summary: CopilotInvestmentSumm
   const breakEven = summary.breakEven;
   const sensitivity = summary.sensitivity;
   const baseRoi = value.scenarios.find((s) => s.scenario === 'base')?.roiMultiple ?? null;
+  // Without See PII, a cost carrying one to four people's Copilot Studio charges is withheld, and with it every figure
+  // worked out from it: each says so, never "not available".
+  const costWithheld = summary.investment.studioCostWithheld === true;
+  const fromCost = t('copilotInvestment.withheld.fromCost', { count: formatNumber(withheldMinimum(summary)) });
   // Each lever with how far it moves the base case, so a small move is still visible as a move.
   const lever = (roi: number | null): string => {
     const delta = formatMultipleDelta(t, roi, baseRoi);
@@ -101,6 +107,7 @@ export default function ValuePanel({ summary }: { summary: CopilotInvestmentSumm
           title={t('copilotInvestment.value.scenarios.title')}
           description={t('copilotInvestment.value.scenarios.description')}
         />
+        {costWithheld && <Text size={200}>{t('copilotInvestment.value.costWithheld', { count: formatNumber(withheldMinimum(summary)) })}</Text>}
         <Table size="small" aria-label={t('copilotInvestment.value.scenarios.title')}>
           <TableHeader>
             <TableRow>
@@ -128,8 +135,8 @@ export default function ValuePanel({ summary }: { summary: CopilotInvestmentSumm
                 <TableCell className={styles.num}>{formatNumber(s.realisedHours, { maximumFractionDigits: 0 })}</TableCell>
                 <TableCell className={styles.num}>{formatMoney(s.value, currency)}</TableCell>
                 <TableCell className={styles.num}>{formatMoney(s.monthlyValue, currency)}</TableCell>
-                <TableCell className={styles.num}>{formatMultiple(t, s.roiMultiple)}</TableCell>
-                <TableCell className={styles.num}>{formatMoney(s.net, currency)}</TableCell>
+                <TableCell className={styles.num}>{costWithheld ? <WithheldMark reason={fromCost} /> : formatMultiple(t, s.roiMultiple)}</TableCell>
+                <TableCell className={styles.num}>{costWithheld ? <WithheldMark reason={fromCost} /> : formatMoney(s.net, currency)}</TableCell>
                 <TableCell className={styles.num}>{formatNumber(s.holdersAtOrAboveBreakEven)}</TableCell>
               </TableRow>
             ))}
@@ -167,7 +174,11 @@ export default function ValuePanel({ summary }: { summary: CopilotInvestmentSumm
                   const c = cell(m, r);
                   const roi = c?.roiMultiple ?? null;
                   const pays = roi !== null && roi >= 1;
-                  return (
+                  return costWithheld ? (
+                    <span key={r} role="cell" className={`${styles.gridCell} ${m === 'base' && r === 'base' ? styles.baseCell : ''}`}>
+                      <WithheldMark reason={fromCost} />
+                    </span>
+                  ) : (
                     <span
                       key={r}
                       role="cell"
@@ -195,9 +206,9 @@ export default function ValuePanel({ summary }: { summary: CopilotInvestmentSumm
           <SectionHeading title={t('copilotInvestment.value.levers.title')} />
           <div className={styles.facts}>
             <Text size={200}>{t('copilotInvestment.value.levers.hourlyMinus')}</Text>
-            <Text weight="semibold">{lever(sensitivity.roiBaseHourlyMinus20)}</Text>
+            <Text weight="semibold">{costWithheld ? <WithheldMark reason={fromCost} /> : lever(sensitivity.roiBaseHourlyMinus20)}</Text>
             <Text size={200}>{t('copilotInvestment.value.levers.hourlyPlus')}</Text>
-            <Text weight="semibold">{lever(sensitivity.roiBaseHourlyPlus20)}</Text>
+            <Text weight="semibold">{costWithheld ? <WithheldMark reason={fromCost} /> : lever(sensitivity.roiBaseHourlyPlus20)}</Text>
             {sensitivity.roiBaseAfterReclaim !== null && (
               <>
                 <Text size={200}>{t('copilotInvestment.value.levers.afterReclaim')}</Text>
@@ -220,9 +231,9 @@ export default function ValuePanel({ summary }: { summary: CopilotInvestmentSumm
           <SectionHeading title={t('copilotInvestment.value.breakEven.title')} />
           <div className={styles.facts}>
             <Text size={200}>{t('copilotInvestment.value.breakEven.minutes')}</Text>
-            <Text weight="semibold">{formatMinutes(t, breakEven.minutesPerActiveDay)}</Text>
+            <Text weight="semibold">{costWithheld ? <WithheldMark reason={fromCost} /> : formatMinutes(t, breakEven.minutesPerActiveDay)}</Text>
             <Text size={200}>{t('copilotInvestment.value.breakEven.margin')}</Text>
-            <Text weight="semibold">{formatShare(breakEven.marginOfSafety)}</Text>
+            <Text weight="semibold">{costWithheld ? <WithheldMark reason={fromCost} /> : formatShare(breakEven.marginOfSafety)}</Text>
             <Text size={200}>{t('copilotInvestment.value.breakEven.daysPerSeat')}</Text>
             <Text weight="semibold">{formatDecimal(breakEven.activeDaysPerMonthPerSeat)}</Text>
             <Text size={200}>{t('copilotInvestment.value.breakEven.minutesPerWeekday')}</Text>
@@ -250,6 +261,8 @@ function Cohorts({ summary }: { summary: CopilotInvestmentSummary }) {
   // A month at a time, like the headline figures, so a 7- or 90-day period reads on the same scale.
   const months = summary.monthsInWindow > 0 ? summary.monthsInWindow : 1;
   const monthly = (value: number | null): number | null => (value === null ? null : value / months);
+  // A band's figure withheld from a reader without See PII says why; its holders are a count and always show.
+  const withheld = <WithheldMark reason={t('copilotInvestment.trend.withheld', { count: formatNumber(withheldMinimum(summary)) })} />;
   return (
     <Card className={styles.card}>
       <SectionHeading title={t('copilotInvestment.value.cohorts.title')} description={t('copilotInvestment.value.cohorts.description')} />
@@ -274,13 +287,13 @@ function Cohorts({ summary }: { summary: CopilotInvestmentSummary }) {
               <TableCell>{BAND_LABEL_KEYS[c.band] ? t(BAND_LABEL_KEYS[c.band]) : c.band}</TableCell>
               <TableCell className={styles.num}>{formatNumber(c.holders)}</TableCell>
               <TableCell className={styles.num}>{formatShare(c.shareOfHolders)}</TableCell>
-              <TableCell className={styles.num}>{formatDecimal(c.medianActiveDays)}</TableCell>
-              <TableCell className={styles.num}>{formatShare(c.shareOfActiveDays)}</TableCell>
-              <TableCell className={styles.num}>{formatMoney(monthly(c.cost), currency)}</TableCell>
-              <TableCell className={styles.num}>{formatMoney(monthly(c.valueBase), currency)}</TableCell>
-              <TableCell className={styles.num}>{formatMultiple(t, c.roiBase)}</TableCell>
-              <TableCell className={styles.num}>{formatCredits(c.credits)}</TableCell>
-              <TableCell className={styles.num}>{formatCredits(c.studioCredits)}</TableCell>
+              <TableCell className={styles.num}>{c.withheld ? withheld : formatDecimal(c.medianActiveDays)}</TableCell>
+              <TableCell className={styles.num}>{c.withheld ? withheld : formatShare(c.shareOfActiveDays)}</TableCell>
+              <TableCell className={styles.num}>{c.costWithheld ? withheld : formatMoney(monthly(c.cost), currency)}</TableCell>
+              <TableCell className={styles.num}>{c.withheld ? withheld : formatMoney(monthly(c.valueBase), currency)}</TableCell>
+              <TableCell className={styles.num}>{c.costWithheld ? withheld : formatMultiple(t, c.roiBase)}</TableCell>
+              <TableCell className={styles.num}>{c.creditsWithheld ? withheld : formatCredits(c.credits)}</TableCell>
+              <TableCell className={styles.num}>{c.studioWithheld ? withheld : formatCredits(c.studioCredits)}</TableCell>
             </TableRow>
           ))}
         </TableBody>

@@ -133,7 +133,7 @@ namespace Tests.UnitTests
 
                 // No double count: every credit-unit service quantity is either an imported person's or an unlinked account's.
                 var serviceCredits = report.Services.Where(s => s.Unit == CopilotInvestmentSql.CreditUnit).Sum(s => s.Quantity);
-                Assert.AreEqual(Math.Round(spend.Credits.Credits + credits.UnresolvedCredits.Value, 3), Math.Round(serviceCredits, 3));
+                Assert.AreEqual(Math.Round(spend.Credits.Credits.Value + credits.UnresolvedCredits.Value, 3), Math.Round(serviceCredits, 3));
                 Assert.IsTrue(report.Services.Any(s => s.Category == DemoCopilotCredits.PreviewService && s.Unit == DemoCopilotCredits.FutureUnit));
 
                 // Value, break-even and sensitivity exist only as scenarios over observed active days.

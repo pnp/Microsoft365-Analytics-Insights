@@ -245,6 +245,10 @@ export const copilotInvestment = {
   'copilotInvestment.finding.highSpendThinEvidence':
     '{people} people have consumed the most credits while showing little Copilot use of their own ({credits} credits). More spend is not more evidence: review what is running in their name.',
   'copilotInvestment.finding.highSpendThinEvidenceOne': 'One person is among those who consumed the most credits while showing little Copilot use of their own ({credits} credits). More spend is not more evidence: review what is running in their name.',
+  'copilotInvestment.finding.highSpendThinEvidenceWithheld':
+    '{people} people have consumed the most credits while showing little Copilot use of their own (their credits are not shown: they could single out fewer than {count} people). More spend is not more evidence: review what is running in their name.',
+  'copilotInvestment.finding.highSpendThinEvidenceOneWithheld':
+    'One person is among those who consumed the most credits while showing little Copilot use of their own (their credits are not shown: they could single out fewer than {count} people). More spend is not more evidence: review what is running in their name.',
   'copilotInvestment.finding.expandEvidenced':
     '{people} people without a licence already use Copilot on more active days than a licence needs to break even. Licensing them would cost {monthly} a month.',
   'copilotInvestment.finding.expandEvidencedOne': 'One person without a licence already uses Copilot on more active days than a licence needs to break even. Licensing them would cost {monthly} a month.',
@@ -274,6 +278,10 @@ export const copilotInvestment = {
   'copilotInvestment.action.enableBelowBreakEven.title': 'Support people below break-even',
   'copilotInvestment.action.enableBelowBreakEven.body': '{people} licensed users use Copilot, but not yet often enough to cover their own cost on the base case. The typical one needs {days} more active days a month.',
   'copilotInvestment.action.enableBelowBreakEven.bodyOne': 'One licensed user uses Copilot, but not yet often enough to cover their own cost on the base case. They need {days} more active days a month.',
+  'copilotInvestment.action.enableBelowBreakEven.bodyWithheld':
+    '{people} licensed users use Copilot, but not yet often enough to cover their own cost on the base case. How many more active days they need is not shown: it could single out fewer than {count} people.',
+  'copilotInvestment.action.enableBelowBreakEven.bodyOneWithheld':
+    'One licensed user uses Copilot, but not yet often enough to cover their own cost on the base case. How many more active days they need is not shown: it could single out fewer than {count} people.',
   'copilotInvestment.action.enableLightEvidence.title': 'Help light users build a habit',
   'copilotInvestment.action.enableLightEvidence.body': '{people} licensed users have tried Copilot but not built a regular habit yet.',
   'copilotInvestment.action.enableLightEvidence.bodyOne': 'One licensed user has tried Copilot but not built a regular habit yet.',
@@ -287,10 +295,18 @@ export const copilotInvestment = {
   'copilotInvestment.action.reviewHighSpendThinEvidence.body':
     '{people} people have consumed the most credits ({credits} credits) with little use of their own. Check for scheduled agents or automations before raising any limit.',
   'copilotInvestment.action.reviewHighSpendThinEvidence.bodyOne': 'One person is among those who consumed the most credits ({credits} credits) with little use of their own. Check for scheduled agents or automations before raising any limit.',
+  'copilotInvestment.action.reviewHighSpendThinEvidence.bodyWithheld':
+    '{people} people have consumed the most credits with little use of their own (their credits are not shown: they could single out fewer than {count} people). Check for scheduled agents or automations before raising any limit.',
+  'copilotInvestment.action.reviewHighSpendThinEvidence.bodyOneWithheld':
+    'One person is among those who consumed the most credits with little use of their own (their credits are not shown: they could single out fewer than {count} people). Check for scheduled agents or automations before raising any limit.',
   'copilotInvestment.action.raiseLimitEvidenced.title': 'Review limits for evidenced heavy users',
   'copilotInvestment.action.raiseLimitEvidenced.body':
     '{people} people with strong, regular Copilot use are at or near their credit limit ({credits} credits).',
   'copilotInvestment.action.raiseLimitEvidenced.bodyOne': 'One person with strong, regular Copilot use is at or near their credit limit ({credits} credits).',
+  'copilotInvestment.action.raiseLimitEvidenced.bodyWithheld':
+    '{people} people with strong, regular Copilot use are at or near their credit limit (their credits are not shown: they could single out fewer than {count} people).',
+  'copilotInvestment.action.raiseLimitEvidenced.bodyOneWithheld':
+    'One person with strong, regular Copilot use is at or near their credit limit (their credits are not shown: they could single out fewer than {count} people).',
   'copilotInvestment.action.licenceMeteredHeavy.title': 'Compare metered spend with a licence',
   'copilotInvestment.action.licenceMeteredHeavy.body': '{people} people without a licence were billed more in Copilot Studio credits than a licence would cost.',
   'copilotInvestment.action.licenceMeteredHeavy.bodyOne': 'One person without a licence was billed more in Copilot Studio credits than a licence would cost.',
@@ -433,6 +449,19 @@ export const copilotInvestment = {
   'copilotInvestment.trend.point': '{date}: {credits} credits, {consumers} people',
   'copilotInvestment.trend.pointWithheld': '{date}: credits not shown, they could single out fewer than {count} people; {consumers} people',
   'copilotInvestment.trend.withheld': 'Not shown: it could single out fewer than {count} people',
+  'copilotInvestment.withheld.cost': 'Not shown: its Copilot Studio part could single out fewer than {count} people',
+  'copilotInvestment.withheld.fromCost':
+    'Not shown: it is worked out from a modelled cost whose Copilot Studio part could single out fewer than {count} people',
+  'copilotInvestment.exec.verdict.withheld':
+    'The return is not shown: the modelled cost it is measured against includes Copilot Studio charges that could single out fewer than {count} people. The value and the evidence of use below are shown as usual.',
+  'copilotInvestment.value.costWithheld':
+    'Returns, net figures and the break-even are not shown: the modelled cost they are worked out from includes Copilot Studio charges that could single out fewer than {count} people.',
+  'copilotInvestment.kpi.studio.hintPriorWithheld': 'Previous {days} days not shown: they could single out fewer than {count} people',
+  'copilotInvestment.exec.path.reclaimNoReturn':
+    'Reclaiming the {count} idle licences that are safe to reclaim frees {monthly} a month of licence cost. A cash saving only where licences can be reduced.',
+  'copilotInvestment.exec.path.reclaimOneNoReturn':
+    'Reclaiming the one idle licence that is safe to reclaim frees {monthly} a month of licence cost. A cash saving only where licences can be reduced.',
+  'copilotInvestment.action.amountWithheld': 'Amount not shown: it could single out fewer than {count} people',
   'copilotInvestment.trend.empty': 'No consumption readings in this period.',
   'copilotInvestment.trend.loading': 'Loading the consumption readings\u2026',
 
@@ -939,12 +968,16 @@ export const copilotInvestment = {
     'Review licences with no Copilot activity that the adoption rules do not mark safe to reclaim: ask before reassigning.',
   'copilotInvestment.workbook.action.enableBelowBreakEven':
     'Support licensed users who use Copilot but below their own break-even; the median holder needs about {days} more active days a month. The amount is the modelled value still missing, not a cost.',
+  'copilotInvestment.workbook.action.enableBelowBreakEvenWithheld':
+    'Support licensed users who use Copilot but below their own break-even; how many more active days they need is not shown, as it could single out fewer than {count} people. The amount is the modelled value still missing, not a cost.',
   'copilotInvestment.workbook.action.enableLightEvidence': 'Coach licensed users with only light Copilot activity.',
   'copilotInvestment.workbook.action.expandEvidenced':
     'Offer licences to people without one whose Copilot use already exceeds the {days} active days a month a licence needs. The amount is the licence cost it would add; their use shows demand, not the gain a licence would bring.',
   'copilotInvestment.workbook.action.expandRecommended': 'Offer licences to the people the adoption report recommends.',
   'copilotInvestment.workbook.action.reviewHighSpendThinEvidence':
     'Review the largest credit consumers who show thin Copilot activity ({credits} credits).',
+  'copilotInvestment.workbook.action.reviewHighSpendThinEvidenceWithheld':
+    'Review the largest credit consumers who show thin Copilot activity (credits not shown: they could single out fewer than {count} people).',
   'copilotInvestment.workbook.action.reviewHighSpendThinEvidence.monthly':
     'The amount assumes each reading is one month of use, which the source does not confirm.',
   'copilotInvestment.workbook.action.raiseLimitEvidenced':
@@ -967,6 +1000,8 @@ export const copilotInvestment = {
     'Credit consumers: {consumers}. The top {topFraction} of them account for {topShare} of the consumed credits in the latest readings.',
   'copilotInvestment.workbook.finding.highSpendThinEvidence':
     'People among the largest credit consumers who show thin Copilot activity: {people} ({credits} credits). Review what drives that consumption.',
+  'copilotInvestment.workbook.finding.highSpendThinEvidenceWithheld':
+    'People among the largest credit consumers who show thin Copilot activity: {people} (credits not shown: they could single out fewer than {count} people). Review what drives that consumption.',
   'copilotInvestment.workbook.finding.expandCandidates':
     'People without a licence whose Copilot use already justifies one: {people}. Licensing them would cost {monthly} {currency} a month (modelled).',
   'copilotInvestment.workbook.finding.limitBlocked':

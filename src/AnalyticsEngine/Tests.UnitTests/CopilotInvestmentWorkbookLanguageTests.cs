@@ -240,11 +240,17 @@ namespace Tests.UnitTests
 
             // Once the same three people reach the minimum the row is an ordinary one: its label and its figures, no reason.
             var enough = CopilotInvestmentCalculator.Calculate(CopilotInvestmentCalculatorTests.SmallGroupsInput(minGroupSize: 3));
-            var plain = Sheets(CopilotInvestmentWorkbook.Build(enough.WithoutIndividualData(), false, "test", PortalLanguage.English))[Array.IndexOf(SheetKeys, "organisation")].Cells;
+            var plain = Sheets(CopilotInvestmentWorkbook.Build(enough, true, "test", PortalLanguage.English))[Array.IndexOf(SheetKeys, "organisation")].Cells;
             var en = PortalCatalog.For(Module, PortalLanguage.English);
             var label = plain.Single(c => c.Text == en.Text("copilotInvestment.workbook.org.combined"));
             Assert.IsTrue(plain.Any(c => c.Ref != label.Ref && c.Value == "8077"), "The combined row's credits are written.");
             Assert.IsFalse(plain.Any(c => c.Text != null && c.Text.Contains("figures not shown")));
+
+            // Without See PII, though, those three people's balances are the report's whole balance total, which is withheld for
+            // being fewer than five people's: the only group with any balances would add up to it, so it is withheld with it.
+            var trimmed = Sheets(CopilotInvestmentWorkbook.Build(enough.WithoutIndividualData(), false, "test", PortalLanguage.English))[Array.IndexOf(SheetKeys, "organisation")].Cells;
+            Assert.IsFalse(trimmed.Any(c => c.Text == en.Text("copilotInvestment.workbook.org.combined")));
+            Assert.IsFalse(trimmed.Any(c => c.Value == "8077"));
         }
 
         [TestMethod]
