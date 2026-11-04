@@ -1,0 +1,7 @@
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/pnp/Microsoft365-Analytics-Insights/security/advisories/new
+    about: Report vulnerabilities privately, as SECURITY.md describes. Don't open a public issue for them.
+  - name: Troubleshooting guide
+    url: https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Troubleshooting
+    about: Common problems, their causes, and where to find the logs that explain them.
