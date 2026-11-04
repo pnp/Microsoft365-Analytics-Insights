@@ -388,6 +388,60 @@ VALUES (@p0, N'Word', @userId, @p1);",
             }
         }
 
+        /// <summary>
+        /// R1-3: what makes a backfilled interaction complete is the payload's own child rows, not just its chat row. Each kind
+        /// the merges write for it is expected; a kind they would not write (a model with no name) is not.
+        /// </summary>
+        [TestMethod]
+        public void Completeness_ExpectsEveryKindOfChildRowThePayloadMakesTheMergesWrite()
+        {
+            var full = new CopilotAuditLogContent
+            {
+                CopilotEventData = new CopilotEventData
+                {
+                    AccessedResources = new List<AccessedResource>
+                    {
+                        new AccessedResource
+                        {
+                            Name = "Καλημέρα κόσμε.docx",
+                            Type = "File",
+                            PolicyDetails = new List<AccessedResourcePolicyDetail> { new AccessedResourcePolicyDetail { PolicyId = "policy-1", PolicyName = "Contoso Finance" } },
+                        },
+                    },
+                    Contexts = new List<Context> { new Context { Id = "https://contoso.sharepoint.com/sites/example/Shared Documents/Καλημέρα κόσμε.docx", Type = "docx" } },
+                    AISystemPlugin = new List<AISystemPlugin> { new AISystemPlugin { Id = "BingWebSearch" } },
+                },
+                ParsedAuditEvent = new WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate.CopilotAuditEvent
+                {
+                    Messages = new List<WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate.Message>
+                    {
+                        new WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate.Message { Id = "prompt-1", IsPrompt = true },
+                    },
+                    ModelTransparencyDetails = new List<WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate.ModelTransparencyDetail>
+                    {
+                        new WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate.ModelTransparencyDetail { ModelName = "DEEP_LEO" },
+                    },
+                },
+            };
+            Assert.AreEqual(CopilotChildRows.AccessedResources | CopilotChildRows.Messages | CopilotChildRows.AiModels
+                | CopilotChildRows.Contexts | CopilotChildRows.AiSystemPlugins | CopilotChildRows.DlpMatches,
+                CopilotBackfillCompleteness.Expected(full));
+
+            var bare = new CopilotAuditLogContent
+            {
+                CopilotEventData = new CopilotEventData(),
+                ParsedAuditEvent = new WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate.CopilotAuditEvent
+                {
+                    ModelTransparencyDetails = new List<WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate.ModelTransparencyDetail>
+                    {
+                        new WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate.ModelTransparencyDetail { ModelName = null },
+                    },
+                },
+            };
+            Assert.AreEqual(CopilotChildRows.None, CopilotBackfillCompleteness.Expected(bare),
+                "A model with no name writes no row, so nothing is expected: the chat row alone is complete.");
+        }
+
         [TestMethod]
         public async Task Importer_DropsRecordsAlreadyPresentBeforeCommitAndCountsThem()
         {
@@ -928,8 +982,8 @@ VALUES (@p0, N'Word', @userId, @p1);",
         private sealed class FakeExistingEventFilter : ICopilotAuditBackfillExistingEventFilter
         {
             public HashSet<Guid> Existing = new HashSet<Guid>();
-            public Task<HashSet<Guid>> GetExistingIdsAsync(IEnumerable<Guid> ids)
-                => Task.FromResult(new HashSet<Guid>((ids ?? Enumerable.Empty<Guid>()).Where(id => Existing.Contains(id))));
+            public Task<HashSet<Guid>> GetCompletelySavedIdsAsync(IEnumerable<AbstractAuditLogContent> interactions)
+                => Task.FromResult(new HashSet<Guid>((interactions ?? Enumerable.Empty<AbstractAuditLogContent>()).Select(a => a.Id).Where(id => Existing.Contains(id))));
         }
 
         private sealed class ThrowingLedgerStore : IKeyValueStore

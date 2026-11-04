@@ -123,6 +123,14 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         private readonly ConcurrentDictionary<string, byte> _unresolvableMeetingIds =
             new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 
+        // UPNs Graph has already failed to give an object id for this run (a deleted account's 404, or a refusal), so a
+        // Teams meeting interaction by the same user costs no further Graph call inside the save lock.
+        private readonly ConcurrentDictionary<string, byte> _unresolvableUserUpns =
+            new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+
+        // 1 once we've logged the user lookup explanation for this run.
+        private int _userLookupWarningLogged;
+
         // 1 once we've logged the "no application access policy" explanation for this run.
         private int _meetingAccessPolicyWarningLogged;
 
@@ -722,6 +730,109 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         {
             var user = await _userGraphCache.GetResource(userPrincipalName);
             return user.Id ?? throw new Exception($"No user ID found on user in Graph by upn {userPrincipalName}");
+        }
+
+        /// <summary>
+        /// The user lookup for a caller holding the save lock, which a Teams meeting interaction needs before its meeting
+        /// lookup (the meeting id is built from the user's object id). Bounded like <see cref="GetMeetingInfoSingleAttempt"/>:
+        /// a cache hit, or one Graph call with the SDK's retries off within <see cref="InLockLookupDeadline"/>, and no call
+        /// while a recent transient failure for the same user is remembered. A user Graph doesn't know (404), or one it
+        /// refuses to read, is remembered for the run, so the user's later meeting interactions cost no Graph call.
+        /// Returns null for such a user; a transient failure throws <see cref="CopilotEnrichmentTransientException"/>.
+        /// </summary>
+        public async Task<string> GetUserIdFromUpnSingleAttempt(string userPrincipalName)
+        {
+            Interlocked.Increment(ref _inLockLookups);
+            if (string.IsNullOrEmpty(userPrincipalName))
+            {
+                Interlocked.Increment(ref _inLockUnresolvable);
+                return null;
+            }
+
+            if (_userGraphCache.TryGetCached(userPrincipalName, out var cachedUser) && cachedUser.Id != null)
+            {
+                Interlocked.Increment(ref _inLockCacheHits);
+                return cachedUser.Id;
+            }
+
+            if (_unresolvableUserUpns.ContainsKey(userPrincipalName))
+            {
+                Interlocked.Increment(ref _inLockUnresolvable);
+                return null;
+            }
+
+            var memoKey = "user|" + userPrincipalName;
+            if (IsTransientOutcomeRemembered(memoKey))
+            {
+                Interlocked.Increment(ref _inLockMemoSkips);
+                Interlocked.Increment(ref _inLockTransient);
+                throw new CopilotEnrichmentTransientException("Microsoft Graph failed transiently reading this Copilot user moments ago; not asking again inside the save lock.");
+            }
+
+            var sw = Stopwatch.StartNew();
+            var scope = OpenScope(LookupMode.InLock);
+            try
+            {
+                var user = await scope.Next().GetUserAsync(userPrincipalName);
+                ForgetTransientOutcome(memoKey);
+                if (user?.Id == null)
+                {
+                    RememberUnresolvableUser(userPrincipalName, "returned no object id");
+                    return null;
+                }
+
+                Interlocked.Increment(ref _inLockResolved);
+                return _userGraphCache.AddOrGetCached(userPrincipalName, user).Id;
+            }
+            catch (Exception ex) when (IsDeadlineReached(scope, ex))
+            {
+                RememberTransientOutcome(memoKey);
+                Interlocked.Increment(ref _inLockTransient);
+                Interlocked.Increment(ref _inLockDeadlineHits);
+                throw new CopilotEnrichmentTransientException("Reading a Copilot user reached its end-to-end deadline.", ex);
+            }
+            catch (ApiException ex) when (IsTransientFileResolutionFailure(ex))
+            {
+                RememberTransientOutcome(memoKey);
+                Interlocked.Increment(ref _inLockTransient);
+                throw new CopilotEnrichmentTransientException($"Microsoft Graph failed transiently reading a Copilot user (HTTP {ex.ResponseStatusCode}).", ex);
+            }
+            catch (Exception ex) when (IsRetryableGraphFailure(ex))
+            {
+                RememberTransientOutcome(memoKey);
+                Interlocked.Increment(ref _inLockTransient);
+                throw;
+            }
+            catch (ApiException ex)
+            {
+                ForgetTransientOutcome(memoKey);
+                RememberUnresolvableUser(userPrincipalName, $"returned HTTP {ex.ResponseStatusCode}");
+                return null;
+            }
+            finally
+            {
+                Interlocked.Add(ref _inLockGraphCalls, scope.GraphCalls);
+                Interlocked.Add(ref _inLockElapsedMs, sw.ElapsedMilliseconds);
+                scope.Dispose();
+            }
+        }
+
+        private void RememberUnresolvableUser(string userPrincipalName, string outcome)
+        {
+            _unresolvableUserUpns.TryAdd(userPrincipalName, 0);
+            Interlocked.Increment(ref _inLockUnresolvable);
+
+            // Never the UPN itself: a log line says what happened and how often, not to whom.
+            if (Interlocked.Exchange(ref _userLookupWarningLogged, 1) == 0)
+            {
+                _logger.LogWarning($"Copilot meeting enrichment could not read a user from Microsoft Graph (Graph {outcome}), so that user's "
+                    + "Teams meeting interactions are saved without their meeting details. This is expected for an account that has since been "
+                    + "deleted. The user is not looked up again this import run, and further such users are logged at debug level only.");
+            }
+            else
+            {
+                _logger.LogDebug($"Copilot meeting enrichment: another user could not be read from Microsoft Graph (Graph {outcome}).");
+            }
         }
 
         /// <summary>

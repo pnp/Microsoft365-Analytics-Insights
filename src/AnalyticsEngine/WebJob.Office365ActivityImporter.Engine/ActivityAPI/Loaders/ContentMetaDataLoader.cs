@@ -30,18 +30,37 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         protected abstract Task<List<SUMMARYTYPE>> LoadAllActivityReports(string auditContentType, TimePeriod chunk, int batchId);
 
         /// <summary>
+        /// The Management Activity API refuses to list content whose start time is more than 7 days in the past (AF20055).
+        /// </summary>
+        internal static readonly TimeSpan MaxListingLookback = TimeSpan.FromDays(7);
+
+        /// <summary>Kept back from <see cref="MaxListingLookback"/>, so a listing requested a little after the window was worked out is still inside it.</summary>
+        internal static readonly TimeSpan ListingLookbackMargin = TimeSpan.FromMinutes(10);
+
+        private int _lookbackClampLogged;
+
+        /// <summary>
         /// Enumerates the period of time were retrieving metadata for bearing in mind the configuration
         /// and the maximum chunk size and earliest date supported by the API
         /// </summary>
-        public List<TimePeriod> GetScanningTimeChunksFromNow()
+        public List<TimePeriod> GetScanningTimeChunksFromNow() => GetScanningTimeChunksFrom(DateTime.UtcNow);
+
+        internal List<TimePeriod> GetScanningTimeChunksFrom(DateTime nowUtc)
         {
-            var daysToAdd = -1;
-            if (_settings.DaysBeforeNowToDownload > 1)
+            var lookback = TimeSpan.FromDays(_settings.DaysBeforeNowToDownload > 1 ? _settings.DaysBeforeNowToDownload : 1);
+            var maxLookback = MaxListingLookback - ListingLookbackMargin;
+            if (lookback > maxLookback)
             {
-                daysToAdd = _settings.DaysBeforeNowToDownload * -1;
+                // A longer window used to make the oldest chunk's listing fail on every cycle for every content type, which
+                // counted as download errors.
+                if (Interlocked.Exchange(ref _lookbackClampLogged, 1) == 0)
+                {
+                    _logger.LogWarning($"Audit events import: DaysBeforeNowToDownload is {_settings.DaysBeforeNowToDownload}, but the Office 365 " +
+                        "Management Activity API only lists content from the last 7 days. Downloading the last 7 days instead.");
+                }
+                lookback = maxLookback;
             }
-            var extractStart = DateTime.UtcNow.AddDays(daysToAdd);
-            return TimePeriod.GetScanningTimeChunksFrom(extractStart, DateTime.UtcNow, _settings.TimeChunkOverlapMinutes);
+            return TimePeriod.GetScanningTimeChunksFrom(nowUtc - lookback, nowUtc, _settings.TimeChunkOverlapMinutes);
         }
 
         /// <summary>

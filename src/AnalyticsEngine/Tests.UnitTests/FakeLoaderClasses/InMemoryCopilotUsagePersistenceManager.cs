@@ -77,6 +77,9 @@ namespace Tests.UnitTests.FakeLoaderClasses
             if (FailUserDetailUpsertWith != null) throw FailUserDetailUpsertWith;
 
             var result = new CopilotUsageUpsertResult();
+            // As the SQL adapter: a further row for a key already written by this call replaces its values (the last row
+            // wins) and is counted as a duplicate, not as a second insert or an update.
+            var written = new HashSet<string>(StringComparer.Ordinal);
             foreach (var row in rows)
             {
                 if (!userIdsByUpn.TryGetValue(row.UserPrincipalName, out var userId)) continue;
@@ -93,12 +96,23 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
                 var changed = CopilotUsageUserDetailLoader.Populate(log, row, hasVersion2Data);
 
+                if (written.Contains(key))
+                {
+                    result.DuplicateRows++;
+                    continue;
+                }
+
                 if (isNew)
                 {
                     UserDetail[key] = log;
                     result.Inserted++;
+                    written.Add(key);
                 }
-                else if (changed) result.Updated++;
+                else if (changed)
+                {
+                    result.Updated++;
+                    written.Add(key);
+                }
                 else result.Unchanged++;
             }
 
@@ -109,11 +123,27 @@ namespace Tests.UnitTests.FakeLoaderClasses
         {
             if (FailUserCountUpsertWith != null) throw FailUserCountUpsertWith;
 
-            var result = new CopilotUsageUpsertResult();            foreach (var row in rows)
+            var result = new CopilotUsageUpsertResult();
+            var written = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var row in rows)
             {
                 var key = $"{row.ReportType}|{(row.ReportPeriodDays.HasValue ? row.ReportPeriodDays.Value.ToString() : string.Empty)}|{row.ReportDate:yyyy-MM-dd}|{row.AppName}";
                 if (UserCounts.TryGetValue(key, out var stored))
                 {
+                    if (written.Contains(key))
+                    {
+                        if (!ReferenceEquals(stored, row))
+                        {
+                            stored.ReportRefreshDate = row.ReportRefreshDate;
+                            stored.EnabledUsers = row.EnabledUsers;
+                            stored.ActiveUsers = row.ActiveUsers;
+                            stored.PromptsSubmitted = row.PromptsSubmitted;
+                            stored.AveragePromptsSubmitted = row.AveragePromptsSubmitted;
+                        }
+                        result.DuplicateRows++;
+                        continue;
+                    }
+
                     // The production rule, not a copy of it - so a change here (e.g. letting the refresh
                     // date count as a change again) fails these tests rather than only the DB-backed ones.
                     if (!CopilotUsageReportPolicy.UserCountValueChanged(stored, row))
@@ -128,11 +158,13 @@ namespace Tests.UnitTests.FakeLoaderClasses
                     stored.PromptsSubmitted = row.PromptsSubmitted;
                     stored.AveragePromptsSubmitted = row.AveragePromptsSubmitted;
                     result.Updated++;
+                    written.Add(key);
                 }
                 else
                 {
                     UserCounts[key] = row;
                     result.Inserted++;
+                    written.Add(key);
                 }
             }
 

@@ -263,6 +263,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 DetachActivityLogs(_db);
             }
 
+            if (result.DuplicateRows > 0)
+            {
+                // Counts only, never the identity: the rows are people.
+                _logger.LogWarning($"Copilot per-user report: Graph returned {result.DuplicateRows:N0} extra row(s) for a user, date and period " +
+                    "it had already reported. Kept the last row for each; the report is otherwise unaffected.");
+            }
+
             return result;
         }
 
@@ -285,6 +292,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             }
 
             var written = 0;
+            // Keys whose row is queued for an INSERT or UPDATE in this not-yet-saved batch. Graph is meant to send one row
+            // per user, date and period, but nothing guarantees it (a deleted and re-created account can share a UPN).
+            var queuedKeys = new HashSet<string>(StringComparer.Ordinal);
             foreach (var row in batch)
             {
                 if (!userIdsByUpn.TryGetValue(row.UserPrincipalName, out var userId)) continue;
@@ -301,6 +311,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 }
 
                 var changed = Populate(log, row, hasVersion2Data);
+
+                if (queuedKeys.Contains(key))
+                {
+                    // A further row for a key already queued in this batch. Populate has just overwritten the queued
+                    // entity, so the pending INSERT or UPDATE carries this row's values - the last row wins. Its state must
+                    // not change: EF6 turns Added -> Modified into an UPDATE of a row that was never inserted, and that
+                    // DbUpdateConcurrencyException used to fail the whole report on every cycle.
+                    result.DuplicateRows++;
+                    continue;
+                }
 
                 if (isNew)
                 {
@@ -321,6 +341,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                     continue;
                 }
 
+                queuedKeys.Add(key);
                 written++;
             }
 
@@ -377,6 +398,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             }
 
             var pending = 0;
+            // Keys whose row is queued for an INSERT or UPDATE since the last SaveChanges. See SaveBatchAsync: a further row
+            // for one of them must only update the queued entity's values, never change its EF state.
+            var queuedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var autoDetectWasEnabled = _db.Configuration.AutoDetectChangesEnabled;
             _db.Configuration.AutoDetectChangesEnabled = false;
             try
@@ -386,6 +410,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                     var key = KeyOf(row);
                     if (existingByKey.TryGetValue(key, out var stored))
                     {
+                        if (queuedKeys.Contains(key))
+                        {
+                            // Already queued in this batch, possibly as an INSERT: the last row wins.
+                            if (!ReferenceEquals(stored, row))
+                            {
+                                CopyUserCountValues(stored, row);
+                            }
+                            result.DuplicateRows++;
+                            continue;
+                        }
+
                         // Only write when a value actually moved; the rule (including why the refresh date
                         // is deliberately excluded) lives in CopilotUsageReportPolicy so the in-memory test
                         // double asserts the same rule rather than a copy of it.
@@ -395,11 +430,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                             continue;
                         }
 
-                        stored.ReportRefreshDate = row.ReportRefreshDate;
-                        stored.EnabledUsers = row.EnabledUsers;
-                        stored.ActiveUsers = row.ActiveUsers;
-                        stored.PromptsSubmitted = row.PromptsSubmitted;
-                        stored.AveragePromptsSubmitted = row.AveragePromptsSubmitted;
+                        CopyUserCountValues(stored, row);
                         _db.Entry(stored).State = EntityState.Modified;
                         result.Updated++;
                     }
@@ -410,11 +441,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                         result.Inserted++;
                     }
 
+                    queuedKeys.Add(key);
                     pending++;
                     if (pending >= UserCountSaveBatchSize)
                     {
                         await _db.SaveChangesAsync();
                         pending = 0;
+                        // Saved rows are tracked as unchanged from here on, so a later duplicate is compared with what was written.
+                        queuedKeys.Clear();
                     }
                 }
 
@@ -425,7 +459,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
                 _db.Configuration.AutoDetectChangesEnabled = autoDetectWasEnabled;
             }
 
+            if (result.DuplicateRows > 0)
+            {
+                _logger.LogWarning($"Copilot user-count report '{reportType}': Graph returned {result.DuplicateRows:N0} extra row(s) for an app and date " +
+                    "it had already reported. Kept the last row for each; the report is otherwise unaffected.");
+            }
+
             return result;
+        }
+
+        private static void CopyUserCountValues(CopilotUserCountLog stored, CopilotUserCountLog row)
+        {
+            stored.ReportRefreshDate = row.ReportRefreshDate;
+            stored.EnabledUsers = row.EnabledUsers;
+            stored.ActiveUsers = row.ActiveUsers;
+            stored.PromptsSubmitted = row.PromptsSubmitted;
+            stored.AveragePromptsSubmitted = row.AveragePromptsSubmitted;
         }
 
         /// <summary>

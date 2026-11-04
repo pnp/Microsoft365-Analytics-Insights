@@ -18,6 +18,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         public int Updated { get; set; }
         public int Unchanged { get; set; }
 
+        /// <summary>
+        /// Further rows for a key whose row was already queued for writing in the same save batch. Their values
+        /// replaced the queued row's - the last row wins - so they are not counted again in <see cref="Inserted"/>
+        /// or <see cref="Updated"/>.
+        /// </summary>
+        public int DuplicateRows { get; set; }
+
         /// <summary>Rows actually written to SQL. This is what the loaders return and log.</summary>
         public int Written => Inserted + Updated;
     }

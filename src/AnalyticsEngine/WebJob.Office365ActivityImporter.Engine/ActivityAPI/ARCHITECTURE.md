@@ -87,7 +87,8 @@ The live import above still owns normal steady-state Copilot audit ingestion. It
 Management Activity API on every importer cycle (`ActivityImporter<T>` via
 `ProgramTasks.DownloadActivityData`) and scans the configured `DaysBeforeNowToDownload` window
 (`ContentMetaDataLoader.GetScanningTimeChunksFromNow`, default six days in `AppConfig`, and
-`WebJob.Office365ActivityImporter/App.Release.config` also sets `DaysBeforeNowToDownload` to 6). That API only
+`WebJob.Office365ActivityImporter/App.Release.config` also sets `DaysBeforeNowToDownload` to 6; a larger value is
+capped 10 minutes inside 7 days, because the API refuses a listing that starts further back with `AF20055`). That API only
 lists content blobs created after the tenant's subscription for that content type was started, and only
 while those blobs remain available (the Management Activity API can list content created up to about
 seven days back). A new install, a newly enabled Copilot
@@ -146,9 +147,16 @@ documented Graph object form (a defensive JSON-string form is also accepted), is
 type 261 through the same `ActivityReportSqlPersistenceManager.CommitAll` path as live Management
 Activity API records. The merge SQL already has `NOT EXISTS` guards for base `audit_events` and Copilot
 child rows, so duplicates do not create primary-key failures. Before each commit the backfill asks
-`SqlCopilotAuditBackfillExistingEventFilter` for ids that already have a `dbo.copilot_chats` row (PK seeks
-in chunks of at most 1,000 ids) and drops only those complete Copilot interactions, counting them as
-`RecordsAlreadyPresent`. An id with a base `audit_events` row but no Copilot metadata is deliberately
+`SqlCopilotAuditBackfillExistingEventFilter` which of the batch's interactions are already saved completely
+(one query per chunk of at most 1,000 ids: a `dbo.copilot_chats` seek plus an index seek on each child table's
+`copilot_chat_id`), and drops only those, counting them as `RecordsAlreadyPresent`. Complete means the chat row
+and at least one row of every kind the interaction's payload makes the merges write beneath it: accessed
+resources, messages, AI models, contexts, plugins and DLP matches (a DLP match also counts when another record
+of the same turn holds it, as the DLP merge stores a match once per turn). File and meeting rows are not part of
+the check, because whether one is written depends on what Graph resolves. An interaction with its chat row but a
+missing kind - what a merge or DLP commit that failed partway leaves - is committed again, and the idempotent
+merges write just the missing rows; so does an interaction imported by a build that predates one of those child
+tables. An id with a base `audit_events` row but no Copilot metadata is deliberately
 re-staged so the normal metadata-recovery path can write the missing child rows. The shared persistence
 path applies the same
 `UserGroupsFilter`/`UserImportScope` staging gate (so
