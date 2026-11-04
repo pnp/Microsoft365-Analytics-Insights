@@ -11,6 +11,7 @@ import type {
 } from '../../types/copilotAdoption';
 import { AdoptionBand, AgentHealth } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
+import { reportQueryFailureText } from '../shared/reportQueryFailure';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { activeLocale, EN_CATALOG, formatDateParts, formatNumber, parseApiDate, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
 
@@ -126,6 +127,15 @@ export function copilotAdoptionWarningText(
       t,
       String(detail.values?.query ?? ''),
       String(detail.values?.description ?? ''),
+    );
+    // The server sends a stable reason and an error reference, never the exception's text.
+    const failure = detail.values?.failure;
+    const reference = detail.values?.reference;
+    values.message = reportQueryFailureText(
+      t,
+      failure == null ? null : String(failure),
+      reference == null ? null : String(reference),
+      String(detail.values?.message ?? ''),
     );
   }
   const key = detail.key === COPILOT_ADOPTION_WARNING_KEYS.UsageReportSourcedUsers

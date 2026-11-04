@@ -9,8 +9,15 @@
 export type TeamsQueryInfo = {
   key: string;
   sql: string;
-  /** Present when the section failed. The section renders this instead of a chart. */
+  /**
+   * Present when the section failed. The section renders it instead of a chart: the reason and an error reference in
+   * English, never the exception's text.
+   */
   error: string | null;
+  /** The failure's stable reason (`ReportQueryFailure.Reason`), worded by `reportQueryFailureText`. */
+  errorReason?: string | null;
+  /** The error reference the server log carries for this failure. */
+  errorReference?: string | null;
   elapsedMs: number;
 };
 

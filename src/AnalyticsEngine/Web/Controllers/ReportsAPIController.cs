@@ -831,7 +831,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (Exception ex)
             {
-                chart.Error = InnermostMessage(ex);
+                MarkQueryFailed(chart, ex);
             }
 
             return chart;
@@ -886,13 +886,17 @@ namespace Web.AnalyticsWeb.Controllers
                 }
                 catch (Exception ex)
                 {
-                    var message = InnermostMessage(ex);
-                    warnings.Add($"{sq.Name}: {message}");
+                    // Every reader sees this: the reason and an error reference, never SqlClient's text.
+                    var failure = ReportQueryFailure.From(ex);
+                    LogQueryFailure(failure, key + "/" + sq.Name);
+                    warnings.Add($"{sq.Name}: {failure.EnglishText}");
                     warningFacts.Add(new ReportSeriesWarning
                     {
                         Series = sq.Name,
                         Reason = "loadFailed",
-                        Error = message,
+                        Error = failure.EnglishText,
+                        ErrorReason = failure.Reason,
+                        ErrorReference = failure.Reference,
                     });
 
                     // Give up on the rest only once we already have something to draw. Bailing out on
@@ -1098,7 +1102,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (Exception ex)
             {
-                chart.Error = InnermostMessage(ex);
+                MarkQueryFailed(chart, ex);
             }
 
             return chart;
@@ -1133,7 +1137,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (Exception ex)
             {
-                chart.Error = InnermostMessage(ex);
+                MarkQueryFailed(chart, ex);
             }
 
             return chart;
@@ -1195,7 +1199,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (Exception ex)
             {
-                chart.Error = InnermostMessage(ex);
+                MarkQueryFailed(chart, ex);
             }
 
             return chart;
@@ -1377,15 +1381,38 @@ namespace Web.AnalyticsWeb.Controllers
             return lines.Count == 0 ? string.Empty : string.Join("\r\n", lines) + "\r\n";
         }
 
-        /// <summary>EF wraps SQL errors; the innermost message (the SqlException) is the useful one.</summary>
-        private static string InnermostMessage(Exception ex)
+        /// <summary>The <see cref="ReportChart.ErrorKey"/> of a chart whose query failed.</summary>
+        internal const string QueryFailedErrorKey = "queryFailed";
+
+        /// <summary>Where a failed chart query's classification and error reference go.</summary>
+        private static readonly Lazy<DataUtils.AnalyticsLogger> FailureLogger = new Lazy<DataUtils.AnalyticsLogger>(
+            () => new DataUtils.AnalyticsLogger(new AppConfig().AppInsightsConnectionString, "Reports"));
+
+        /// <summary>
+        /// A chart whose query failed. Every signed-in reader sees the chart, so it carries the failure's reason and an
+        /// error reference (<see cref="ReportQueryFailure"/>), never the exception's text, which names servers,
+        /// databases, logins and objects. The reference is logged with the classification.
+        /// </summary>
+        internal static void MarkQueryFailed(ReportChart chart, Exception ex)
         {
-            var e = ex;
-            while (e.InnerException != null)
+            var failure = ReportQueryFailure.From(ex);
+            chart.Error = failure.EnglishText;
+            chart.ErrorKey = QueryFailedErrorKey;
+            chart.ErrorReason = failure.Reason;
+            chart.ErrorReference = failure.Reference;
+            LogQueryFailure(failure, chart.Key);
+        }
+
+        private static void LogQueryFailure(ReportQueryFailure failure, string key)
+        {
+            try
             {
-                e = e.InnerException;
+                failure.Log(FailureLogger.Value, "Reports", key);
             }
-            return e.Message;
+            catch (Exception)
+            {
+                // A logger that can't be built must not turn a degraded chart into a failed page.
+            }
         }
 
         internal static bool IsQueryTimeout(Exception ex)

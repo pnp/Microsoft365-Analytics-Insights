@@ -25,8 +25,17 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>The SQL that produced the section, with its parameters declared, ready to paste into SSMS.</summary>
         public string Sql { get; set; }
 
-        /// <summary>The innermost error message when the section failed; null when it succeeded.</summary>
+        /// <summary>
+        /// When the section failed, what its reader is told: the reason in English and an error reference, never the
+        /// exception's text (<see cref="ReportQueryFailure"/>). Null when it succeeded.
+        /// </summary>
         public string Error { get; set; }
+
+        /// <summary>The failure's stable reason (<see cref="ReportQueryFailure.Reason"/>), which the portal words.</summary>
+        public string ErrorReason { get; set; }
+
+        /// <summary>The error reference the server log carries for this failure.</summary>
+        public string ErrorReference { get; set; }
 
         /// <summary>How long the query took, for spotting the section that needs an index.</summary>
         public long ElapsedMs { get; set; }

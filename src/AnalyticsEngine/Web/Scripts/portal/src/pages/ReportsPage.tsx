@@ -19,6 +19,7 @@ import { fetchReportArea } from '../api/reportsApi';
 import type { ReportAreaData, ReportAreaKey, ReportChart, ReportMatrix, ReportSeries, ReportSeriesWarning } from '../types/reports';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
+import { reportQueryFailureText } from '../components/shared/reportQueryFailure';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
 import MatrixChart from '../components/charts/MatrixChart';
@@ -376,7 +377,7 @@ export function reportChartWarningText(t: TFunction, chart: ReportChart): string
 function seriesWarningText(t: TFunction, warning: ReportSeriesWarning): string {
   const values = {
     series: warning.series,
-    error: warning.error ?? '',
+    error: reportQueryFailureText(t, warning.errorReason, warning.errorReference, warning.error ?? ''),
     week: warning.week ? formatDateParts(parseApiDate(warning.week), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '',
     count: formatNumber(warning.count ?? 0),
   };
@@ -409,6 +410,12 @@ function chartErrorText(t: TFunction, chart: ReportChart): string {
 
   if (chart.errorKey === 'noCompletedUsageWeeksWithData') {
     return t('reports.chart.error.noCompletedUsageWeeksWithData');
+  }
+
+  if (chart.errorKey === 'queryFailed') {
+    return t('reports.chart.error.queryFailed', {
+      error: reportQueryFailureText(t, chart.errorReason, chart.errorReference, chart.error ?? ''),
+    });
   }
 
   return chart.error ?? '';

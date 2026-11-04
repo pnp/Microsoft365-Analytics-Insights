@@ -283,6 +283,25 @@ describe('Copilot Adoption server-authored text reproduction', () => {
     )).toBe('Error al cargar detalle de usuarios con licencia: Timeout from Contoso SQL');
   });
 
+  it('words a could-not-load failure from its reason and error reference, not from server text', () => {
+    setActiveLanguage('es');
+    const reference = '00000000-0000-0000-0000-000000000001';
+    expect(copilotAdoptionWarningText(
+      tEs,
+      {
+        key: COPILOT_ADOPTION_WARNING_KEYS.CouldNotLoad,
+        values: {
+          query: 'LicensedUserDetail',
+          description: 'licensed user detail',
+          message: `the query timed out (error reference ${reference})`,
+          failure: 'Timeout',
+          reference,
+        },
+      },
+      `Could not load licensed user detail: the query timed out (error reference ${reference})`,
+    )).toBe(`Error al cargar detalle de usuarios con licencia: se ha agotado el tiempo de espera de la consulta (referencia de error ${reference})`);
+  });
+
   it('uses Spanish singular grammar for the usage-report source warning', () => {
     setActiveLanguage('es');
     expect(copilotAdoptionWarningText(

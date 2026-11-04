@@ -2,6 +2,7 @@ import { makeStyles, tokens, Text, Card, MessageBar, MessageBarBody } from '@flu
 import type { ReactNode } from 'react';
 import SqlPopover from '../SqlPopover';
 import type { KpiTone } from '../shared/KpiGrid';
+import { reportQueryFailureText } from '../shared/reportQueryFailure';
 import { formatDateParts, formatNumber, parseApiDate, useT, type TFunction, type TranslationKey } from '../../i18n';
 import type {
   TeamsBucket,
@@ -339,7 +340,7 @@ export function SectionCard({
       <div className={styles.body}>
         {query?.error ? (
           <MessageBar intent="error">
-            <MessageBarBody>{t('teamsExplorer.shared.sectionLoadError', { error: query.error })}</MessageBarBody>
+            <MessageBarBody>{t('teamsExplorer.shared.sectionLoadError', { error: reportQueryFailureText(t, query.errorReason, query.errorReference, query.error ?? '') })}</MessageBarBody>
           </MessageBar>
         ) : isEmpty ? (
           <Text size={200} className={styles.muted}>

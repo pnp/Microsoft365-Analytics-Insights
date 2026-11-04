@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { formatDateParts, formatNumber, parseApiDate, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
 import SqlPopover from '../SqlPopover';
 import type { KpiTone } from '../shared/KpiGrid';
+import { reportQueryFailureText } from '../shared/reportQueryFailure';
 import type { ReportCategory, ReportSeries } from '../../types/reports';
 import type {
   WebActivityBucket,
@@ -393,7 +394,7 @@ export function SectionCard({
       <div className={styles.body}>
         {query?.error ? (
           <MessageBar intent="error">
-            <MessageBarBody>{t('webActivity.shared.sectionLoadFailed', { error: query.error })}</MessageBarBody>
+            <MessageBarBody>{t('webActivity.shared.sectionLoadFailed', { error: reportQueryFailureText(t, query.errorReason, query.errorReference, query.error ?? '') })}</MessageBarBody>
           </MessageBar>
         ) : isEmpty ? (
           <Text size={200} className={styles.muted}>

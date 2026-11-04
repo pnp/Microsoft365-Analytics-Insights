@@ -38,6 +38,12 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         /// <summary>Win32 native error code, e.g. "258" (wait operation timed out).</summary>
         public string Win32ErrorCode { get; set; }
 
+        /// <summary>
+        /// The error reference a reader was shown for this failure (<see cref="CopilotAdoptionFailure.ErrorId"/>), so an
+        /// administrator given it finds this event.
+        /// </summary>
+        public string ErrorId { get; set; }
+
         public string ActiveOperations { get; set; }
         public string SynchronizationContext { get; set; }
         public string ShutdownReason { get; set; }
@@ -78,6 +84,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             AddIfPresent(result, "ExceptionChain", ExceptionChain);
             AddIfPresent(result, "SqlErrorNumber", SqlErrorNumber);
             AddIfPresent(result, "Win32ErrorCode", Win32ErrorCode);
+            AddIfPresent(result, "ErrorId", ErrorId);
             AddIfPresent(result, "ActiveOperations", ActiveOperations);
             AddIfPresent(result, "ShutdownReason", ShutdownReason);
             return result;
@@ -1222,6 +1229,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                     ExceptionChain = failure?.ExceptionChain,
                     SqlErrorNumber = failure?.SqlErrorNumber?.ToString(CultureInfo.InvariantCulture),
                     Win32ErrorCode = failure?.Win32ErrorCode?.ToString(CultureInfo.InvariantCulture),
+                    ErrorId = failure?.ErrorId,
                     ActiveOperations = activeOperations,
                     SynchronizationContext =
                         SynchronizationContext.Current?.GetType().Name ?? "None",

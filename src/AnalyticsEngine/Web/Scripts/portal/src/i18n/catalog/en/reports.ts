@@ -81,6 +81,7 @@ export const reports = {
   'reports.chart.error.noCompletedUsageWeeks': 'No completed usage-report weeks are available.',
   'reports.chart.error.noWorkloadSeriesLoaded': 'No workload series could be loaded. {details}',
   'reports.chart.error.noCompletedUsageWeeksWithData': 'No completed usage-report weeks are available for workloads with data.',
+  'reports.chart.error.queryFailed': 'This chart could not be loaded: {error}.',
   'reports.chart.warning.series.loadFailed': '{series}: {error}',
   'reports.chart.warning.series.notAttempted': '{series}: not attempted after the database timeout',
   'reports.chart.warning.series.noSettledData': '{series}: no settled usage data',

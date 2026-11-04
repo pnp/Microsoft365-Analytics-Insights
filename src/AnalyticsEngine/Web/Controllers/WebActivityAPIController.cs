@@ -60,9 +60,13 @@ namespace Web.AnalyticsWeb.Controllers
         private readonly Func<WebActivitySources> _sourcesFactory;
         private readonly ReportScopeResolver _scopes;
 
+        /// <summary>Where a failed section's classification and error reference go (<see cref="ReportQueryFailure.Log"/>).</summary>
+        private static readonly Lazy<DataUtils.AnalyticsLogger> ProductionLogger = new Lazy<DataUtils.AnalyticsLogger>(
+            () => new DataUtils.AnalyticsLogger(new AppConfig().AppInsightsConnectionString, "WebActivity"));
+
         public WebActivityAPIController()
             : this(
-                new SqlWebActivityStore(DefaultAnalyticsDbContextFactory.Instance),
+                new SqlWebActivityStore(DefaultAnalyticsDbContextFactory.Instance, WebActivitySql.CommandTimeoutSeconds, ProductionLogger.Value),
                 () => WebActivitySources.FromConfig(new AppConfig()),
                 ReportScopeResolver.Default)
         {

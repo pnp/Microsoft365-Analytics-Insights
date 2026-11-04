@@ -18,7 +18,11 @@ namespace Tests.UnitTests
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter) =>
-            _lines.Add((logLevel, formatter(state, exception)));
+        // Locked: stores run a page's queries concurrently, and each failed one logs.
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+        {
+            var line = (logLevel, formatter(state, exception));
+            lock (_lines) _lines.Add(line);
+        }
     }
 }
