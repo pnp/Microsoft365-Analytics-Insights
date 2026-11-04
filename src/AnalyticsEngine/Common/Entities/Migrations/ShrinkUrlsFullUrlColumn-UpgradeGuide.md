@@ -43,20 +43,20 @@ table (the largest dimension table). The staging join columns are declared `nvar
 
 ## Supported upgrade‑from states (both end at `nvarchar(850)` losslessly)
 
-There are two published releases customers may be upgrading **from**. Both reach `nvarchar(850)`
-without losing data:
+A database can be upgraded from either of two schema states. Both reach `nvarchar(850)` without
+losing data:
 
-### State B — previous stable release (last migration `RemoveDataverseTables`)
+### State B — upgrading from before `ShrinkUrlsFullUrlColumn` (last migration `RemoveDataverseTables`)
 
 - `full_url` is still `(n)varchar(max)`; `ShrinkUrlsFullUrlColumn` has **not** been applied.
 - On upgrade EF applies the **corrected** `ShrinkUrlsFullUrlColumn` (→ `nvarchar(850)`), then the
   empty `UrlFullUrlVarcharMapping`, then `UrlFullUrlNvarchar` (a no‑op, already `nvarchar(850)`).
 - `nvarchar(max)` → `nvarchar(850)` is a pure Unicode‑preserving widen, so **Greek URLs are kept
   intact**.
-- These are the customers (e.g. the Greek bank that reported this) who were previously **blocked**
-  from the `varchar` release by its lossy pre‑flight check. They can now upgrade.
+- This state includes the databases that the `varchar` form's lossy pre‑flight check previously
+  **blocked** from upgrading. They can now upgrade.
 
-### State C — current stable release (last migration `UrlFullUrlVarcharMapping`)
+### State C — upgrading from `UrlFullUrlVarcharMapping` (`full_url` is `varchar(1700)`)
 
 - `full_url` is already `varchar(1700)` (the bad form).
 - On upgrade EF applies only the new `UrlFullUrlNvarchar`, which converts
