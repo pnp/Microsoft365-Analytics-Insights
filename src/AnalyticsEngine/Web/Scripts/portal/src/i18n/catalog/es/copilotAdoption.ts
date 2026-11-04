@@ -437,6 +437,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
 
   'copilotAdoption.page.theSameMeasuresDepartmentTableOrganisationsRunEnablementRegionally': 'Las mismas medidas que la tabla del departamento, para las organizaciones que gestionan la habilitación a nivel regional.',
   'copilotAdoption.page.notEnoughLicensedUsersAnyAccountableGroupBreakDown': 'No hay suficientes usuarios con licencia en ningún grupo responsable para desglosar de manera confiable.',
+  'copilotAdoption.page.pastRangeManagerRollupHidden': 'Este periodo no termina hoy, por lo que no se muestra el resumen por responsable: cada una de sus filas nombra a un responsable, y las listas que nombran a personas solo se muestran para periodos que terminan hoy. Elija un periodo que termine hoy para verlo.',
   'copilotAdoption.page.seats2': 'Puestos',
   'copilotAdoption.page.adoption': 'Adopción',
   'copilotAdoption.page.habit': 'Hábito',

@@ -22,6 +22,10 @@ const userFilter = {
   'userFilter.bar.dimensionsError': 'The attributes to filter on could not be loaded. Conditions already applied still apply.',
   'userFilter.bar.retry': 'Try again',
   'userFilter.bar.loadingDimensions': 'Loading attributes…',
+  // A shared link whose filter was not applied, because the reader does not hold See PII.
+  'userFilter.linkNotApplied.title': 'The filter in this link was not applied',
+  'userFilter.linkNotApplied.body': 'Filtering by people needs the See PII permission (the {role} app role), which you do not have. The figures below are for everyone this report covers, not only the people the link was filtered to.',
+  'userFilter.linkNotApplied.bodyWithinGlobal': 'Filtering by people needs the See PII permission (the {role} app role), which you do not have. The figures below are for everyone within the administrator’s report filter, not only the people the link was filtered to.',
 
   'userFilter.join.and': 'AND',
   'userFilter.join.or': 'OR',

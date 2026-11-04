@@ -96,6 +96,7 @@ import {
   type TimeSavedCohorts,
 } from '../components/copilotAdoption/timeSavedCohort';
 import UserFilterBar from '../components/userFilter/UserFilterBar';
+import LinkFilterNotApplied from '../components/userFilter/LinkFilterNotApplied';
 import UserFilterPrintSummary from '../components/userFilter/UserFilterPrintSummary';
 import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 import { describeGlobalFilter } from '../components/globalFilter/describeGlobalFilter';
@@ -703,6 +704,9 @@ function CopilotAdoptionView({
           it narrows their figures whether or not they may add a filter of their own. */}
       <GlobalFilterBar />
 
+      {/* A shared link's filter dropped for a reader without See PII is said, not silently replaced. */}
+      <LinkFilterNotApplied requested={requestedUserFilter} />
+
       {availability?.available && canSeePii && (
         <>
           <UserFilterBar filter={userFilter} onChange={setUserFilter} echoNames={summary?.userFilter?.dimensionNames} />
@@ -863,7 +867,6 @@ function CopilotAdoptionView({
                 <UnlicensedPanel
                   unlicensed={summary.unlicensed}
                   options={summary.options}
-                  windowDays={windowDays}
                   sql={sql}
                   usageByAppWithheld={isWithheld(summary, UNSCOPED_SECTIONS.usageByApp)}
                 />
@@ -878,7 +881,6 @@ function CopilotAdoptionView({
                   estate={summary.agents}
                   agents={summary.agents.agents}
                   options={summary.options}
-                  windowDays={windowDays}
                   sql={sql}
                   topUsers={summary.topAgentUsers}
                   topUsersCapped={summary.topAgentUsersCapped}
@@ -1598,16 +1600,22 @@ function AnalystTab({
           />
         </div>
         <div className={styles.cardBody}>
-          {canSeePii || summary.accountabilityDimension !== 'directManager' ? (
+          {summary.accountabilityDimension !== 'directManager' || (canSeePii && !o.usesExplicitDates) ? (
             <AccountabilityRollupTable
               rows={summary.accountabilityRollup}
               segmentLabel={accountabilityCopy.label}
             />
-          ) : (
+          ) : !canSeePii ? (
             // Grouped by direct manager, every row is labelled with a manager's sign-in name. The server
             // sends none of them to a reader without the See PII permission; say so rather than showing
             // an empty table that reads as "no groups".
             <PiiHiddenNote />
+          ) : (
+            // Nor to anyone for a period that does not end today. That is not a shortage of licensed users,
+            // which is what the empty table would say.
+            <MessageBar intent="info">
+              <MessageBarBody>{t('copilotAdoption.page.pastRangeManagerRollupHidden')}</MessageBarBody>
+            </MessageBar>
           )}
         </div>
       </Card>

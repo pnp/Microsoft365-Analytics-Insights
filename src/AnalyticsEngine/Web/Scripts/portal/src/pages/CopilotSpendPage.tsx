@@ -37,6 +37,7 @@ import PrintButton from '../components/shared/PrintButton';
 import CostApiWarnings from '../components/shared/CostApiWarnings';
 import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 import UserFilterBar from '../components/userFilter/UserFilterBar';
+import LinkFilterNotApplied from '../components/userFilter/LinkFilterNotApplied';
 import UserFilterPrintSummary from '../components/userFilter/UserFilterPrintSummary';
 import { useUserFilterDimensions } from '../components/userFilter/useUserFilterDimensions';
 import { parseUserFilter, serializeUserFilter } from '../components/userFilter/userFilterModel';
@@ -286,6 +287,7 @@ function SpendView({ userFilter: controlledFilter, onUserFilterChange }: {
 
       <GlobalFilterBar />
       <CostApiWarnings />
+      <LinkFilterNotApplied requested={requestedFilter} />
 
       {canSeePii && (
         <>
@@ -622,6 +624,14 @@ function ReadingsTrendChart({ trend, error, height = 200 }: { trend: SpendTrend 
     );
   }
   if (!trend) return <FluentSpinner size="tiny" label={t('copilotSpend.balances.trendLoading')} />;
+  // The read itself failed: the readings are missing, which is not the same as there being none.
+  if (trend.failureCode) {
+    return (
+      <MessageBar intent="error">
+        <MessageBarBody>{t('copilotSpend.balances.unavailable')}</MessageBarBody>
+      </MessageBar>
+    );
+  }
   if (trend.points.length === 0) return <Text size={200}>{t('copilotSpend.balances.noData')}</Text>;
   // ISO dates sort correctly as plain strings, whatever the reader's language.
   const points: SpendLinePoint[] = [...trend.points]

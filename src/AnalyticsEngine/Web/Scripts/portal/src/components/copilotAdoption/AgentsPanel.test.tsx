@@ -138,7 +138,7 @@ const ESTATE: AgentEstateSummary = {
 
 function renderPanel() {
   return renderWithProvider(
-    <AgentsPanel estate={ESTATE} agents={AGENTS} options={OPTIONS} windowDays={30} sql={null} />,
+    <AgentsPanel estate={ESTATE} agents={AGENTS} options={OPTIONS} sql={null} />,
   );
 }
 
@@ -202,7 +202,7 @@ describe('AgentsPanel agent origin', () => {
 
   function renderMixed() {
     return renderWithProvider(
-      <AgentsPanel estate={MIXED_ESTATE} agents={MIXED} options={OPTIONS} windowDays={30} sql={null} />,
+      <AgentsPanel estate={MIXED_ESTATE} agents={MIXED} options={OPTIONS} sql={null} />,
     );
   }
 
@@ -276,7 +276,6 @@ describe('AgentsPanel heaviest agent users', () => {
         estate={ESTATE}
         agents={AGENTS}
         options={{ ...OPTIONS, maxAgentUsersScored: 20000 }}
-        windowDays={30}
         sql={null}
         {...props}
       />,
@@ -328,7 +327,6 @@ describe('AgentsPanel headline figures', () => {
         estate={{ ...ESTATE, activeAgents: null, agentInteractions: null, interactionsPerAgentUser: null }}
         agents={AGENTS}
         options={OPTIONS}
-        windowDays={30}
         sql={null}
       />,
     );
@@ -342,12 +340,64 @@ describe('AgentsPanel headline figures', () => {
 
   it('shows measured figures as numbers', () => {
     renderWithProvider(
-      <AgentsPanel estate={{ ...ESTATE, interactionsPerAgentUser: 12.5 }} agents={AGENTS} options={OPTIONS} windowDays={30} sql={null} />,
+      <AgentsPanel estate={{ ...ESTATE, interactionsPerAgentUser: 12.5 }} agents={AGENTS} options={OPTIONS} sql={null} />,
     );
 
     expect(within(tile('Active agents')).getByText('3')).toBeInTheDocument();
     const intensity = tile('Interactions per agent user');
     expect(within(intensity).getByText('12.5')).toBeInTheDocument();
     expect(within(intensity).getByText('300 agent interactions in total')).toBeInTheDocument();
+  });
+});
+
+/**
+ * A period with dates of its own - here the last calendar quarter, 92 days. The page's selector still holds the rolling
+ * window it last had, so nothing on this tab may describe the figures as "the last 28 days".
+ */
+describe('AgentsPanel for a period with its own dates', () => {
+  const PAST_QUARTER: CopilotAdoptionOptions = {
+    ...OPTIONS,
+    windowDays: 92,
+    usesExplicitDates: true,
+    fromUtc: '2026-07-01T00:00:00Z',
+    toUtc: '2026-09-30T00:00:00Z',
+    toExclusiveUtc: '2026-10-01T00:00:00Z',
+  };
+
+  it('dates the headline figures by the period, and the department chart by its own window up to today', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(
+      <AgentsPanel
+        estate={{ ...ESTATE, usageByDepartment: [{ label: 'Finance', value: 40 }] }}
+        agents={AGENTS}
+        options={PAST_QUARTER}
+        sql={null}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'How "Agent users" is calculated' }));
+    expect(await screen.findByText(/^Distinct people who used at least one agent from 1 Jul 2026 to 30 Sept? 2026, licensed or not\.$/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'How "Agent usage by department" is calculated' }));
+    expect(await screen.findByText(/^Agent interactions in the last 92 days up to today, grouped by/)).toBeInTheDocument();
+    expect(screen.queryByText(/at least one agent in the last \d+ days/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Agent interactions in the last (28|30) days/)).not.toBeInTheDocument();
+  });
+
+  it('keeps "the last N days" for a rolling window, with N the window analysed', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(<AgentsPanel estate={ESTATE} agents={AGENTS} options={OPTIONS} sql={null} />);
+
+    await user.click(screen.getByRole('button', { name: 'How "Agent users" is calculated' }));
+    expect(await screen.findByText('Distinct people who used at least one agent in the last 30 days, licensed or not.')).toBeInTheDocument();
+  });
+
+  it('tells a See PII reader why a past period lists nobody, rather than leaving the list out', () => {
+    renderWithProvider(
+      <AgentsPanel estate={ESTATE} agents={AGENTS} options={PAST_QUARTER} sql={null} topUsers={[]} canSeePii />,
+    );
+
+    expect(screen.getByText(/^This period does not end today, so the heaviest agent users are not listed/)).toBeInTheDocument();
+    expect(screen.queryByText('Heaviest agent users')).not.toBeInTheDocument();
   });
 });
