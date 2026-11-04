@@ -36,9 +36,9 @@ namespace Common.Entities.UserScope
     /// <para>
     /// <b>A group that does not exist is an answer, a failed read is not.</b> A filter naming no real group
     /// resolves to nobody (and says so), because that is what the filter says. A read that fails - missing
-    /// permission, an outage, an exhausted budget - makes the whole resolution
-    /// <see cref="UserImportScopeStatus.Unavailable"/>, because treating an unreadable group as an empty one would
-    /// silently remove its members from every import.
+    /// permission, an outage, an exhausted budget, or a success response without the page it should carry - makes
+    /// the whole resolution <see cref="UserImportScopeStatus.Unavailable"/>, because treating an unreadable group as
+    /// an empty (or shorter) one would silently remove its members from every import.
     /// </para>
     /// </remarks>
     public class GroupMembershipResolver : IGroupMembershipResolver
@@ -308,7 +308,14 @@ namespace Common.Entities.UserScope
                     break;
                 }
 
-                foreach (var group in page?.Items ?? new List<DirectoryGroup>())
+                // A page that isn't there is a failed read, not the end of the directory: groups beyond it are unknown.
+                if (page?.Items == null)
+                {
+                    budget.Stop("group discovery failed (the directory returned no page)", UserImportScopeFailureKind.DirectoryRead);
+                    break;
+                }
+
+                foreach (var group in page.Items)
                 {
                     if (string.IsNullOrEmpty(group?.Id) || string.IsNullOrEmpty(group.DisplayName))
                     {
@@ -323,7 +330,7 @@ namespace Common.Entities.UserScope
                     }
                 }
 
-                nextLink = page?.NextLink;
+                nextLink = page.NextLink;
             }
             while (!string.IsNullOrEmpty(nextLink));
 
@@ -369,7 +376,16 @@ namespace Common.Entities.UserScope
                     return read;
                 }
 
-                foreach (var member in page?.Items ?? new List<DirectoryUser>())
+                // A page that isn't there is a failed read, not the last page. Taking it for one would resolve the group to
+                // the members read so far - a complete-looking prefix that a purge would treat as the whole scope.
+                if (page?.Items == null)
+                {
+                    budget.Stop($"the members of group '{group.DisplayName}' could not be read (the directory returned no page)",
+                        UserImportScopeFailureKind.DirectoryRead);
+                    return read;
+                }
+
+                foreach (var member in page.Items)
                 {
                     if (member != null)
                     {
@@ -378,7 +394,7 @@ namespace Common.Entities.UserScope
                     }
                 }
 
-                nextLink = page?.NextLink;
+                nextLink = page.NextLink;
             }
             while (!string.IsNullOrEmpty(nextLink));
 

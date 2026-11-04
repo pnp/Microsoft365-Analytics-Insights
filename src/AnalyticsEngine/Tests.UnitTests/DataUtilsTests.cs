@@ -283,6 +283,26 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void IUrlObjectResolver_MatchesWholePathSegments_IgnoringCaseAndTrailingSlashes()
+        {
+            var urls = new List<Url>()
+            {
+                new Url { FullUrl = "https://contoso.sharepoint.com" },
+                new Url { FullUrl = "https://contoso.sharepoint.com/sites/hr" },
+                new Url { FullUrl = "https://contoso.sharepoint.com/sites/finance/" },
+            };
+
+            Assert.AreEqual("https://contoso.sharepoint.com", urls.GetClosest("https://contoso.sharepoint.com/sites/hrdocs/a.docx").FullUrl,
+                "/sites/hr is not a parent of /sites/hrdocs.");
+            Assert.AreEqual("https://contoso.sharepoint.com/sites/finance/", urls.GetClosest("https://contoso.sharepoint.com/sites/finance").FullUrl,
+                "A trailing slash on either side makes no difference.");
+            Assert.AreEqual("https://contoso.sharepoint.com/sites/hr", urls.GetClosest("https://CONTOSO.sharepoint.com/Sites/HR/Shared Documents/Καλημέρα κόσμε.docx").FullUrl,
+                "Case makes no difference, as in the SQL collation of the stored URLs.");
+            Assert.AreEqual("https://contoso.sharepoint.com/sites/hr", urls.GetClosest("https://contoso.sharepoint.com/sites/hr?web=1").FullUrl);
+            Assert.IsNull(urls.GetClosest("https://contoso.sharepoint.com.example/sites/hr"), "A host is not a parent of a longer host name.");
+        }
+
+        [TestMethod]
         public async Task CacheEncodingTest()
         {
             using (var db = new AnalyticsEntitiesContext())

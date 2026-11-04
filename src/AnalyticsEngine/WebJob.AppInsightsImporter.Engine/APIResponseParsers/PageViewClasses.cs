@@ -55,28 +55,34 @@ namespace WebJob.AppInsightsImporter.Engine.ApiImporter
 
         public PageViewCustomProps CustomProperties { get; set; } = new PageViewCustomProps();
 
+        /// <summary>
+        /// App Insights' own page-view duration, in milliseconds: the classic <c>pageViews.duration</c> column,
+        /// <c>AppPageViews.DurationMs</c> in a Log Analytics workspace.
+        /// </summary>
         [AppInsightsQueryResultProperty("duration")]
         public double DurationMS { get; set; }
 
+        /// <summary>
+        /// The value stored in <c>hits.page_load_time</c>: <see cref="DurationMS"/> in seconds, or 0 when the view
+        /// was not measured.
+        /// </summary>
+        /// <remarks>
+        /// The tracker's own <c>pageLoad</c> property only decides whether the view was measured. It is absent or
+        /// "0" when the browser had no load timing to report, as for a SharePoint navigation that doesn't reload
+        /// the page. Older builds divided by 10,000, so the rows they wrote hold a tenth of the real time until
+        /// <c>src/Repair Page Load Times.sql</c> has been run on the database.
+        /// </remarks>
         public double PageLoadInSeconds
         {
             get
             {
-                double pageLoadTimeInSeconds = 0;
-                if (!string.IsNullOrEmpty(this.CustomProperties.PageLoad) && this.CustomProperties.PageLoad != "0")
+                var pageLoad = this.CustomProperties?.PageLoad;
+                if (string.IsNullOrEmpty(pageLoad) || pageLoad == "0")
                 {
-                    double.TryParse(this.CustomProperties.PageLoad, out pageLoadTimeInSeconds);
-
-                    // Convert hit values 
-                    const int ONE_THOUSAND = 1000;
-
-                    // TODO: the parsed CustomProperties.PageLoad value above is overwritten here and never used.
-                    // Behaviour preserved intentionally because downstream reports may already depend on this
-                    // DurationMS-based calculation. Confirm with domain owner before changing.
-                    pageLoadTimeInSeconds = Math.Round(this.DurationMS / (double)(ONE_THOUSAND * 10), 2);
+                    return 0;
                 }
 
-                return pageLoadTimeInSeconds;
+                return Math.Round(this.DurationMS / 1000d, 2);
             }
         }
 

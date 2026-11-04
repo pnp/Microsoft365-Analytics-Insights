@@ -51,3 +51,11 @@ test('shards are exhaustive and disjoint, including overlapping names and future
     assert.deepEqual(testShards().filter(shard => matches(shard.filter, name)).map(shard => shard.name), [expected]);
   }
 });
+
+test('a step that runs in one shard names a shard that exists, or it would silently never run', () => {
+  const workflow = readFileSync(new URL('../workflows/tests.yml', import.meta.url), 'utf8');
+  const gated = [...workflow.matchAll(/matrix\.name == '([^']+)'/g)].map(match => match[1]);
+  assert.ok(gated.length > 0, 'The parser no longer finds the shard-gated steps in tests.yml.');
+  const shards = testShards().map(shard => shard.name);
+  for (const name of gated) assert.ok(shards.includes(name), `tests.yml gates a step on "${name}", which is not a shard.`);
+});

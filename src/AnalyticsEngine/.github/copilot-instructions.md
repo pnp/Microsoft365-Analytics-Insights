@@ -12,6 +12,7 @@
 ## Project Guidelines
 - User prefers to keep the existing InsertBatch row-by-row implementation rather than replacing it with SqlBulkCopy.
 - **Prove an external API exists before coding against it.** Cite the Graph `$metadata` or Microsoft Learn evidence in the PR body, and never treat Graph's `Resource not found for the segment` 400 as "not available on this tenant". The full rule is *External APIs: prove they exist before coding against them* in the repo-wide [`.github/copilot-instructions.md`](../../../.github/copilot-instructions.md); the incident was #588, #632 and #692.
+- **Tag a test that can only fail outside UTC with `[TestCategory("TimeZone")]`**: one that converts between local time and UTC, where a host at UTC sees the same ticks either way. GitHub's runners are at UTC, so `tests.yml` runs that category again in Romance Standard Time and counts Inconclusive as failed there. Untagged, such a test never proves anything in CI. See *tests* in [`.github/workflows/README.md`](../../../.github/workflows/README.md).
 
 ## Web portal UI — no UI change without its translations
 The portal at [`Web/Scripts/portal`](../Web/Scripts/portal/README.md) ships in **English (en-GB) and Spanish (es-ES)**. It picks a language from the browser and lets the user change it from the header, so both languages are live for every customer. Adding a panel in English only is not "translate it later" — it puts English labels in the middle of a Spanish page for every Spanish-speaking admin.

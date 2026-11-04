@@ -113,7 +113,7 @@
     <None Include="App.config" />
     <None Include="Graph\Copilot\InteractionHistory\readme.md" />
     <None Include="Graph\Email\readme.md" />
-    <None Include="Graph\User\REFACTORING_SUMMARY.md" />
+    <None Include="Graph\User\README.md" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Azure.AI.TextAnalytics">

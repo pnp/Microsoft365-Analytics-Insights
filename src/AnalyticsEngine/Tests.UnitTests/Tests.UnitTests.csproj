@@ -102,83 +102,6 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoAgentCosts.cs">
-      <Link>DemoGenerator\DemoAgentCosts.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCopilotCredits.cs">
-      <Link>DemoGenerator\DemoCopilotCredits.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoAreas.cs">
-      <Link>DemoGenerator\DemoAreas.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCalendar.cs">
-      <Link>DemoGenerator\DemoCalendar.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCommand.cs">
-      <Link>DemoGenerator\DemoCommand.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoGenerator.cs">
-      <Link>DemoGenerator\DemoGenerator.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoInteractive.cs">
-      <Link>DemoGenerator\DemoInteractive.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoOptions.cs">
-      <Link>DemoGenerator\DemoOptions.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoPopulation.cs">
-      <Link>DemoGenerator\DemoPopulation.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoPortalReadiness.cs">
-      <Link>DemoGenerator\DemoPortalReadiness.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoTables.cs">
-      <Link>DemoGenerator\DemoTables.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoUserOrganisations.cs">
-      <Link>DemoGenerator\DemoUserOrganisations.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoWebCatalogue.cs">
-      <Link>DemoGenerator\DemoWebCatalogue.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoWebActivityGenerator.cs">
-      <Link>DemoGenerator\DemoWebActivityGenerator.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCollaborationTables.cs">
-      <Link>DemoGenerator\DemoCollaborationTables.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCollaborationGenerator.cs">
-      <Link>DemoGenerator\DemoCollaborationGenerator.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoPowerPlatformTables.cs">
-      <Link>DemoGenerator\DemoPowerPlatformTables.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoPowerPlatformGenerator.cs">
-      <Link>DemoGenerator\DemoPowerPlatformGenerator.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoTimeline.cs">
-      <Link>DemoGenerator\DemoTimeline.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCopilotPersonas.cs">
-      <Link>DemoGenerator\DemoCopilotPersonas.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\SqlDemoDatabase.cs">
-      <Link>DemoGenerator\SqlDemoDatabase.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Demo\SqlExistingDemoDatabase.cs">
-      <Link>DemoGenerator\SqlExistingDemoDatabase.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotAdoptionPersonas.cs">
-      <Link>DemoGenerator\CopilotAdoptionPersonas.cs</Link>
-    </Compile>
-    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotInteractionHistoryGenerator.cs" Link="DemoGenerator\CopilotInteractionHistoryGenerator.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotUserManager.cs" Link="DemoGenerator\CopilotUserManager.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotLicenseManager.cs" Link="DemoGenerator\CopilotLicenseManager.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotActivityGeneratorConfig.cs" Link="DemoGenerator\CopilotActivityGeneratorConfig.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Generation\ActivityTimestampGenerator.cs" Link="DemoGenerator\ActivityTimestampGenerator.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Seeding\SeedDataCatalogue.cs">
-      <Link>DemoGenerator\SeedDataCatalogue.cs</Link>
-    </Compile>
     <Compile Update="Properties\Resources.Designer.cs">
       <AutoGen>True</AutoGen>
       <DesignTime>True</DesignTime>
@@ -194,11 +117,6 @@
     <None Include="App.Release.config">
       <DependentUpon>App.Template.config</DependentUpon>
     </None>
-    <None Include="Complete_TestSuite_Summary.md" />
-    <None Include="DBLookupCacheDuplicateKeyErrorTests.md" />
-    <None Include="DBLookupCacheTests.md" />
-    <None Include="DBLookupCache_TestSummary.md" />
-    <None Include="EntityFramework_LINQ_Query_Fix.md" />
     <None Include="Example Data\Azure AD 2.json" />
     <None Include="Example Data\Azure AD Login.json" />
     <None Include="Example Data\Project.json" />
@@ -243,6 +161,7 @@
       <Project>{a4448200-5dfa-486d-891b-2476b80233f6}</Project>
       <Name>UsageReporting</Name>
     </ProjectReference>
+    <ProjectReference Include="..\Tests.FakeDataGen.Shared\Tests.FakeDataGen.Shared.csproj" />
     <ProjectReference Include="..\WebJob.AppInsightsImporter.Engine\WebJob.AppInsightsImporter.Engine.csproj">
       <Project>{974b3b6c-b89a-45e6-a5a3-a0292beb1ba4}</Project>
       <Name>WebJob.AppInsightsImporter.Engine</Name>

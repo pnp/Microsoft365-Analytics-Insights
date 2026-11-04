@@ -32,24 +32,31 @@ each other's tooling. The area switcher sits in the header; each area has its ow
 | `#/insights/web-activity` | **Web activity** | What people do on the SharePoint intranet: visits and visitors, page views, where visitors arrive and give up (entry/exit pages, bounce, page-to-page journeys), geography, search terms and the terms that lead nowhere, and browser/device/load-time technology. Replaces the Power BI web-traffic report. |
 | `#/insights/licence-activity` | **Licence activity** | Whether assigned licences are being used. One sortable table compares every licence - people assigned, a 0-100 adoption score (the share of measured holder-weeks that were active, over the services with a known band) and per-service activity - against the all-licences baseline, with empty and unassigned licences hidden by default. Choosing a licence, or **All licences**, shows each service's activity bands next to the baseline and its rank among the licences, the most and least active people (See PII only, and available for all licences as well as one), and a department and country breakdown. Explanatory notes can be hidden and stay hidden. |
 | `#/insights/activity-analysis` | **Activity analysis** | Microsoft 365 activity week by week from the profiling runbooks' weekly roll-up (`profiling.ActivitiesWeeklyColumns`): a metric slicer over the 58 Teams, Outlook, OneDrive, SharePoint, Copilot and Viva Engage metrics, active people by company and department, metrics by week, and a department results matrix (Sum and Unique per metric) with a pinned total. Filters narrow the people by directory attributes, licences held and min/max ranges on each person's totals - all See PII only, because any condition can be differenced against the unfiltered report to single one person out; durations are entered and shown in hours. A department expands to its people, and a Top people list ranks the champions - both See PII only. Replaces the Power BI "Activity Analysis" and "Filter Settings" views. |
+| `#/insights/agent-costs` | **Agent costs** | What Microsoft charged for Copilot Studio agents, broken down as far as the billing data allows - by agent, environment, harness and billing feature - plus Azure spend for the subscriptions the deployment imports. A breakdown appears only once Microsoft reports the dimension behind it. Per-person credit consumers need See PII; Azure spend has no per-person view. |
+| `#/insights/dlp` | **DLP impact** | Where Microsoft Purview Data Loss Prevention policies stopped Microsoft 365 Copilot from using content: which agents and people are most affected, and which policies are responsible. The most-affected people need See PII. |
 
 **Administration** — running the service, for an IT operator.
 
-| Route (hash) | Page | What it does |
-| --- | --- | --- |
-| `#/admin/health` | **Service health** | System health: overview, import liveness, exceptions, component health, data overview and configuration, each lazily loaded from its own cached endpoint. |
-| `#/admin/install-log` | **Install log** | History of configurations applied to the solution (the `sys_configs` table): when, by whom, install messages, and the config JSON per entry. The API removes every secret from that JSON before returning it, including the encrypted SQL administrator password and app registration secrets that earlier installers recorded, and withholds an entry that is not valid JSON. The most recent is the current configuration. |
-| `#/admin/profiling` | **Profiling** | Current state of the profiling data: earliest/latest dates for each compiled profiling table and the source activity tables that feed it (each with the **SQL** behind it), plus a paged view of the profiling runbooks' trace log (`profiling.TraceLogs`). Lets admins quickly check the runbooks have run, data is fresh, and spot errors. |
-| `#/admin/teams-permissions` | **Teams permissions** | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token per Team in the `TeamsAuth` partition of the `AnalyticsState` Azure Table in the solution's storage account). Ported from the original app. |
-| `#/admin/agent-cost-connection` | **Copilot Studio billing connection** | Connect/reconnect, disconnect and inspect the deployment-wide delegated billing administrator used for Copilot Studio consumption. Administration only; no tokens or named-user analytics are returned to the SPA. |
-| `#/admin/user-lookup` | **User data lookup** | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
-| `#/admin/user-import` | **User import** | Whether the Graph user import has a stored checkpoint (its `/users/delta` token, kept in the `UserImport` partition of the `AnalyticsState` Azure Table), where it is kept, when the import last completed and how often it runs - and a confirmed **Clear checkpoint** action so the next run reads every user again, optionally on the next import cycle. The in-product version of deleting the stored token by hand (issue #664). The token itself never reaches the browser. |
-| `#/admin/leadership-cohort` | **Leadership group** | Saves an explicit Entra ID group for the Copilot Adoption comparison and requests membership reads by the activity importer. The response acknowledges durable settings/request storage, not Graph completion. **Check status** retrieves the worker outcome without requesting another read. |
-| `#/admin/copilot-adoption-settings` | **Copilot Adoption settings** | Configures the tenant-wide frequency, depth and breadth weights and adoption-level thresholds. Settings and change history are stored in the `CopilotAdoptionSettings` partition of `AnalyticsState`. |
-| `#/admin/copilot-investment-assumptions` | **Copilot investment assumptions** | The organisation's own figures for the Copilot investment report: currency, licence price, credit prices, fully loaded hourly cost, and conservative/base/upside minutes per active day and realisation. Empty until an administrator sets them - the report never models money from a figure nobody chose. Saved with optimistic concurrency and a change history in the `CopilotInvestmentAssumptions` partition of `AnalyticsState`. |
-| `#/admin/prompt-categories` | **Prompt categories** | Configures prompt goals and import opt-in. When an Azure OpenAI backend is configured, an explicit test-drive sends one synthetic sample against the saved taxonomy, even with import categorisation off. Shows the selected category, administrator-assigned human mode, taxonomy version and token usage without writing prompts/results or import counters. |
-| `#/admin/global-filter` | **Report filter** | The administrator's global report filter: conditions every Insights report applies for everyone, on top of their own filters, optionally compared with the viewer's own attributes. Previews the draft against the administrator's own account before saving. Needs See PII as well as Administration. See [The administrator's global filter](#the-administrators-global-filter). |
-| `#/admin/configuration` | **Service configuration** | What this deployment is pointed at: SQL, the storage account (which holds the runtime state table), Cognitive Services and Service Bus, plus the Teams calls import state and the Graph call webhook (with a live validation POST to test it). |
+| Route (hash) | Page | Nav group | What it does |
+| --- | --- | --- | --- |
+| `#/admin/health` | **Service health** | Service | System health: overview, import liveness, exceptions, component health, data overview and configuration, each lazily loaded from its own cached endpoint. |
+| `#/admin/configuration` | **Service configuration** | Service | What this deployment is pointed at: SQL, the storage account (which holds the runtime state table), Cognitive Services and Service Bus, plus the Teams calls import state and the Graph call webhook (with a live validation POST to test it). |
+| `#/admin/install-log` | **Install log** | Service | History of configurations applied to the solution (the `sys_configs` table): when, by whom, install messages, and the config JSON per entry. The API removes every secret from that JSON before returning it, including the encrypted SQL administrator password and app registration secrets that earlier installers recorded, and withholds an entry that is not valid JSON. The most recent is the current configuration. |
+| `#/admin/profiling` | **Profiling** | Service | Current state of the profiling data: earliest/latest dates for each compiled profiling table and the source activity tables that feed it (each with the **SQL** behind it), plus a paged view of the profiling runbooks' trace log (`profiling.TraceLogs`). Lets admins quickly check the runbooks have run, data is fresh, and spot errors. |
+| `#/admin/teams-permissions` | **Teams permissions** | Connections | Authorise / de-authorise Teams for deep analytics (stores a delegated refresh token per Team in the `TeamsAuth` partition of the `AnalyticsState` Azure Table in the solution's storage account). Ported from the original app. |
+| `#/admin/agent-cost-connection` | **Copilot Studio billing connection** | Connections | Connect/reconnect, disconnect and inspect the deployment-wide delegated billing administrator used for Copilot Studio consumption. Administration only; no tokens or named-user analytics are returned to the SPA. |
+| `#/admin/copilot-cost-connection` | **Copilot credit history (preview)** | Connections | Connects the deployment-wide work or school account (Microsoft requires the Global Reader role) that the importer reads Copilot credit balances with, checks access to the credit data, and shows the scheduled collection. A saved connection doesn't prove that Microsoft returns usable credit data, and credits are not a bill. |
+| `#/admin/user-import` | **User import** | Users & scope | Whether the Graph user import has a stored checkpoint (its `/users/delta` token, kept in the `UserImport` partition of the `AnalyticsState` Azure Table), where it is kept, when the import last completed and how often it runs - and a confirmed **Clear checkpoint** action so the next run reads every user again, optionally on the next import cycle. The in-product version of deleting the stored token by hand (issue #664). The token itself never reaches the browser. |
+| `#/admin/user-scope` | **User scope** | Users & scope | The scope `UserGroupsFilter` resolves to (direct members of named Entra ID groups): refresh it, and remove the stored analytics data of people outside it with a purge you can follow and cancel. |
+| `#/admin/user-orgs` | **User organisations** | Users & scope | Organisation types that group users by something the directory doesn't track reliably, such as a cost centre or an HR team. A type takes its values from a custom Entra ID attribute, read on every user import, or from an uploaded CSV; a user has at most one value per type. |
+| `#/admin/user-lookup` | **User data lookup** | Users & scope | Enter a user's UPN to see all of their data held in SQL: profile, per-category record counts (broken down by workload, including Copilot and Power Platform; each row has a **SQL** button to view & copy the query behind its count), drill-down to recent rows, and which **import workloads** are enabled (so a legitimate 0 count is explained). |
+| `#/admin/global-filter` | **Report filter** | Copilot & reporting | The administrator's global report filter: conditions every Insights report applies for everyone, on top of their own filters, optionally compared with the viewer's own attributes. Previews the draft against the administrator's own account before saving. Needs See PII as well as Administration. See [The administrator's global filter](#the-administrators-global-filter). |
+| `#/admin/copilot-adoption-settings` | **Copilot Adoption settings** | Copilot & reporting | Configures the tenant-wide frequency, depth and breadth weights and adoption-level thresholds. Settings and change history are stored in the `CopilotAdoptionSettings` partition of `AnalyticsState`. |
+| `#/admin/copilot-investment-assumptions` | **Copilot investment assumptions** | Copilot & reporting | The organisation's own figures for the Copilot investment report: currency, licence price, credit prices, fully loaded hourly cost, and conservative/base/upside minutes per active day and realisation. Empty until an administrator sets them - the report never models money from a figure nobody chose. Saved with optimistic concurrency and a change history in the `CopilotInvestmentAssumptions` partition of `AnalyticsState`. |
+| `#/admin/leadership-cohort` | **Leadership group** | Copilot & reporting | Saves an explicit Entra ID group for the Copilot Adoption comparison and requests membership reads by the activity importer. The response acknowledges durable settings/request storage, not Graph completion. **Check status** retrieves the worker outcome without requesting another read. |
+| `#/admin/prompt-categories` | **Prompt categories** | Copilot & reporting | Configures prompt goals and import opt-in. When an Azure OpenAI backend is configured, an explicit test-drive sends one synthetic sample against the saved taxonomy, even with import categorisation off. Shows the selected category, administrator-assigned human mode, taxonomy version and token usage without writing prompts/results or import counters. |
+| `#/admin/copilot-audit-backfill` | **Copilot audit backfill** | Copilot & reporting | Starts, follows and cancels an on-demand Audit Search backfill of retained Copilot interaction history, for when the normal audit import can't reach older interactions (a new install, a stopped importer, Copilot import enabled later). Overlap with the live import is de-duplicated. |
+| `#/admin/agent365-catalog` | **Agent 365 catalogue** | Copilot & reporting | The latest package catalogue imported from Microsoft Agent 365. It has no owner column, because the catalogue API provides no verified owner field. |
 
 Routing uses `HashRouter`, so the whole SPA is served by a single MVC action and no IIS /
 MVC route changes are needed to add pages.
@@ -107,7 +114,9 @@ Availability-read failures are shown with a retry, never presented as disabled i
 
 `src/navigation.tsx` is the single source of truth for both the router and the left nav, so
 the two cannot drift. Built-in chart routes and catalog entries share `src/reportNavigation.ts`;
-specialist routes remain in `ROUTES`, with an optional workload association.
+specialist routes remain in `ROUTES`, with an optional workload association. The tables above are a
+copy for readers, and can drift: when you add a route to `ROUTES`, add it to them too, and add its
+controller to [Backend APIs used](#backend-apis-used).
 
 > The pre-split routes (`#/home`, `#/reports`, `#/teams`, `#/health`, ...) are **not**
 > redirected. Anything unrecognised falls back to the Insights overview.
@@ -398,7 +407,7 @@ auth cookie, so a token in the request body would be ignored.
 | `o365AnalyticsAuthAPI` | `api/TeamsAuthAPI` | Get / set Teams deep-analytics authorisation. |
 | _(none - origin-relative)_ | `api/AgentCostConnection` | Administration-only delegated billing status, same-origin `/begin` and `/disconnect` POSTs. |
 | `o365AnalyticsUserLookupAPI` | `api/UserDataLookup` | User data lookup (summary + per-category detail). |
-| `o365AnalyticsSystemStatusAPI` | `api/SystemStatus` | System status / configuration for the Home page, plus the record counts for the imports this deployment runs. |
+| `o365AnalyticsSystemStatusAPI` | `api/SystemStatus` | System status / configuration for the Overview and Service configuration pages, plus the record counts for the imports this deployment runs. |
 | `o365AnalyticsInstallLogAPI` | `api/InstallLog` | Install log (config history from `sys_configs`) for the Install Log page. |
 | `o365AnalyticsProfilingStatusAPI` | `api/ProfilingStatus` | Profiling data freshness + paged `profiling.TraceLogs` for the Profiling page. |
 | `o365AnalyticsReportsAPI` | `api/Reports` | Lite in-app reports: enabled areas (`/areas`) + weekly usage charts per area (`/copilot`, `/usage`, `/office-apps`, `/spo-audit`, `/web-traffic`, `/calls`, `/emails`). |
@@ -410,7 +419,30 @@ auth cookie, so a token in the request body would be ignored.
 | _(none - origin-relative)_ | `api/TeamsExplorer` | Teams Explorer: source availability, and one endpoint per tab (`/overview`, `/adoption`, `/meetings`, `/collaboration`, `/conversations`, `/people`) plus `/export/{section}` CSVs. |
 | _(none - origin-relative)_ | `api/WebActivity` | SharePoint web activity: source availability, and one endpoint per tab (`/overview`, `/visits`, `/pages`, `/journeys`, `/geography`, `/search`, `/technology`) plus `/export/{section}` CSVs. |
 | _(none - origin-relative)_ | `api/ActivityAnalysis` | Activity analysis: `/availability` (whether the profiling tables exist and hold weeks, the period bounds and the metric catalogue), `/report` (aggregates for a period and the selected `metrics`, open to every reader with small groups folded and 1-4 people suppressed for a reader without See PII; any `userFilter`, `licences` or `ranges` condition - and the `rangeMaxima` bounds, each one person's total - need See PII) and `/people` (a department's people or the top people; See PII only). The metric labels, categories, reasons and error codes are stable keys the portal translates. |
-| _(none - origin-relative)_ | `api/UserImportCheckpoint` | User import checkpoint: `GET` its state; `POST /clear` (body `{ "runOnNextCycle": bool }`) deletes it. The only state-changing call the portal makes to its own API, so the server requires the `X-Requested-With` header `apiFetch` sends (see below). |
+| _(none - origin-relative)_ | `api/UserImportCheckpoint` | User import checkpoint: `GET` its state; `POST /clear` (body `{ "runOnNextCycle": bool }`) deletes it. A state-changing call, so it goes through `apiFetch` (see below). |
+| _(none - origin-relative)_ | `api/PortalAccess` | What the signed-in user holds (Administration, See PII), so the SPA leaves out what the server would refuse. Advisory only, and open to every signed-in user. See [Permissions](#permissions). |
+| _(none - origin-relative)_ | `api/Health` | Service health, one independently cached endpoint per section: `/summary` (also plain `GET api/Health`), `/data`, `/liveness`, `/exceptions`, `/components` and `/config`. |
+| _(none - origin-relative)_ | `api/UpdateCheck` | Whether a newer release than the running build exists, for the Service configuration page. Asked on demand, never polled in the background. |
+| _(none - origin-relative)_ | `api/AgentCosts` | Agent costs: `/availability`, `/summary`, `/trend`, `/breakdown`, `/detail`, `/azure` and `/filters` for every reader; `/users` (per-person credits) needs See PII. |
+| _(none - origin-relative)_ | `api/CopilotSpend` | Copilot spend: `/summary`, `/trend` and `/export/workbook`; `/people` and `/person/{userId}` need See PII. |
+| _(none - origin-relative)_ | `api/CopilotCostHealth` | The state of both Copilot cost sources, behind the warnings on the Copilot investment and Copilot spend pages. |
+| _(none - origin-relative)_ | `api/LicenceActivity` | Licence activity: `/availability`, `/overview` and `/export`; `/users` needs See PII. |
+| _(none - origin-relative)_ | `api/Dlp` | DLP impact: `/availability`, `/summary` and `/governance`. |
+| _(none - origin-relative)_ | `api/PromptCategories` | Prompt categories: the configuration (`GET`, a `POST` to save, `POST /reset`), the test-drive (`POST /test`) and the run history (`GET /runs`), all Administration only; and `GET /report`, the category report on the Prompt insights page. |
+| _(none - origin-relative)_ | `api/CopilotAdoptionSettings` | Copilot Adoption score settings: `GET`, a `POST` to save and `POST /reset`. |
+| _(none - origin-relative)_ | `api/LeadershipCohort` | The leadership group: `GET`, a `PUT` to save and `POST /refresh`, which asks the activity importer to read the group's members. |
+| _(none - origin-relative)_ | `api/CopilotAuditBackfill` | Copilot audit backfill: `GET` its status, `POST /start` and `POST /{id}/cancel`. |
+| _(none - origin-relative)_ | `api/CopilotCostConnection` | Copilot credit history (preview): `GET` the connection status (with the anti-forgery token the POSTs need) and `GET /collection`; `POST /connect`, `/disconnect`, `/probe` and `/resetProbe`. |
+| _(none - origin-relative)_ | `api/UserScope` | User scope: `GET` the resolved scope and `POST /refresh`; `POST /purge`, `GET /purge/{id}` and `POST /purge/{id}/cancel` for the purge. |
+| _(none - origin-relative)_ | `api/UserOrg` | User organisations: organisation types (`GET`/`POST /types`, `PUT`/`DELETE /types/{id}`), `GET /attributes` and `POST /test-entra` for an Entra attribute, `POST /preview-csv` and `POST /import-csv` for a CSV, and read-only views of jobs, imports, values and members. |
+| _(none - origin-relative)_ | `api/Agent365Catalog` | `GET` the latest completed Agent 365 package-catalogue snapshot. |
+
+Every controller in `Web/Controllers` is listed above except the ones the SPA doesn't call:
+`HomeController` serves `index.html`; `AccountController` handles sign-in and sign-out and starts
+the Teams and Copilot Studio billing consent flows; and the anonymous `CallRecordWebhookController`
+(Microsoft Graph call-record notifications) and `ImportConfigController` (the SharePoint tracker's
+configuration) serve callers outside the portal. `BaseAPIController` is a base class. Who may call
+each action is pinned in `PortalPermissionTests`; see [Permissions](#permissions).
 
 ### Calls that change something
 
@@ -420,7 +452,20 @@ came from. Such actions carry `RequireSameOriginXhrAttribute` (in the `Web` proj
 `X-Requested-With: XMLHttpRequest` - which `apiFetch` always sends, an HTML form cannot set, and another origin
 can only add after a CORS preflight that this site never grants with credentials - and, when the browser sends
 `Sec-Fetch-Site`, it must be `same-origin`. A refused request gets a bare `403`. Call such an action through
-`apiFetch`, never raw `fetch`, or it will be refused.
+`apiFetch`, never raw `fetch`, or it will be refused. A new action that changes state carries the attribute too.
+
+These are the state-changing calls the portal makes to its own API, and the check each one gets:
+
+| Calls | How the server checks the request came from the portal |
+| --- | --- |
+| `POST api/UserImportCheckpoint/clear`; `POST api/GlobalFilter` and `/preview`; `POST api/CopilotInvestmentSettings`; `POST api/CopilotAdoptionSettings` and `/reset`; `PUT api/LeadershipCohort` and `POST /refresh`; `POST api/PromptCategories`, `/reset` and `/test`; `POST api/CopilotAuditBackfill/start` and `/{id}/cancel`; `POST api/UserScope/refresh`, `/purge` and `/purge/{id}/cancel`; `POST api/UserDataLookup/refresh`; `POST api/AgentCostConnection/begin` and `/disconnect` | `RequireSameOriginXhrAttribute`, as above. `/preview` and `/test` change nothing stored, but are guarded the same way. |
+| `api/UserOrg`: `POST /types`, `PUT` and `DELETE /types/{id}`, `POST /test-entra`, `POST /preview-csv` and `POST /import-csv` | The controller's own `X-Requested-With: XMLHttpRequest` check, which answers `400` with the `notFromPortal` code. |
+| `POST api/CopilotCostConnection/connect`, `/disconnect`, `/probe` and `/resetProbe` | The `Origin` header must be this site, and the `X-Copilot-Cost-CSRF` header must carry the anti-forgery token from `GET api/CopilotCostConnection`, matched to its `__Host-CopilotCostCsrf` cookie. |
+| `PUT api/TeamsAuthAPI` (authorise or de-authorise Teams) | None of these; it relies on the browser. A `PUT` is never a simple request, so another origin can't send one without a CORS preflight, which this API never answers. |
+
+`POST api/SiteTokenAPI` (mints an access token), `POST api/TeamsAuthAPI` (reads each Team's authorisation
+status) and the Service configuration page's validation `POST` to the call-records webhook (with a
+`validationToken`, which the webhook only echoes) change nothing, despite the verb.
 
 `window.o365AnalyticsBuildLabel` is not an endpoint: it is the running build's label
 (`Common.Entities.BuildConstants.BuildLabel`, stamped as `Build <number>` by ci.yml), substituted
@@ -799,13 +844,25 @@ Adding a language also means adding it to `PortalLanguage` and embedding its mod
 ## Local development
 
 ```bash
-npm install
+npm ci           # the locked dependencies, as the build and CI install them
 npm run dev      # Vite dev server (http://localhost:5173)
 ```
 
 When running the Vite dev server in isolation the backend APIs are not available, so the
-Home and User Lookup pages will report an API error and the Teams page reports that no Graph
-token could be obtained - that is expected outside the ASP.NET host.
+Overview and User data lookup pages will report an API error and the Teams page reports that no
+Graph token could be obtained - that is expected outside the ASP.NET host.
+
+## Tests and checks
+
+The `test_portal` job in `.github/workflows/tests.yml` runs these, and `test_dotnet (Release)`, the
+required check, waits for it:
+
+```bash
+npm run lint              # tsc over the app; fails on a missing Spanish key
+npm run typecheck:tests   # tsc over the tests
+npm test                  # every vitest test, including the translation checks
+npx vitest run src/i18n   # just the translation checks
+```
 
 ## Production build
 
@@ -814,5 +871,6 @@ npm run build    # type-checks then emits ./build (served by the ASP.NET site)
 ```
 
 The Vite config sets `base = /Scripts/portal/build/` and `build.outDir = build`. The
-ASP.NET `Web.csproj` runs `npm install` + `npm run build` automatically and the
+ASP.NET `Web.csproj` runs `npm ci` + `npm run build` automatically (and fails first if the Node.js
+on `PATH` isn't the major in the repository's `.nvmrc`), and the
 `HomeController.Index` action serves the generated `build/index.html` at the site root.

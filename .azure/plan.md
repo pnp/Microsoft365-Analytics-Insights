@@ -93,8 +93,8 @@ The service already:
 
 | Component | Azure Service | SKU / Configuration |
 |-----------|---------------|---------------------|
-| API + dashboard | Linux App Service | Basic B1, one instance, .NET 10, Always On |
-| Hosting plan | App Service plan | Linux Basic B1 |
+| API + dashboard | Windows App Service | Basic B1, one instance, .NET 10, Always On |
+| Hosting plan | App Service plan | Windows Basic B1 |
 | Telemetry store | Azure Cosmos DB for NoSQL | Serverless |
 | Secret storage | Azure Key Vault | Standard, RBAC, purge protection, private-only access |
 | Network | Virtual Network | Dedicated App Service integration and private-endpoint subnets |
@@ -152,7 +152,7 @@ The service already:
 ### Research Findings
 
 - Official App Service guidance confirms Basic B1 supports regional VNet integration.
-- Linux App Service must set `vnetRouteAllEnabled` for private Key Vault references.
+- The template sets `vnetRouteAllEnabled`, so all outbound traffic goes through the VNet integration.
 - Cosmos DB free tier is unavailable for serverless accounts.
 - Cosmos DB NoSQL private endpoints use group ID `Sql` and private DNS zone `privatelink.documents.azure.com`.
 - Key Vault references use the App Service managed identity and the built-in Key Vault Secrets User role.
@@ -238,7 +238,7 @@ Expected post-deployment behavior (design intent, not a recorded run):
 - the dashboard API returns HTTP 401 without an access token;
 - an anonymous invalid telemetry upload reaches the application and returns HTTP 400;
 - Cosmos DB and Key Vault public network access are disabled and private endpoints are approved;
-- Linux App Service protects the `/.auth/` platform route, so that route returning HTTP 401 is expected and is not a failure.
+- the App Service Authentication `/.auth/version` route answers HTTP 401 (as it did on Linux) or HTTP 200 with its runtime version; `deploy.ps1` accepts a 401, or a 200 reporting version 1.13.0 or later.
 
 Note: automatic tenant admin consent may be unavailable, in which case an
 assigned dashboard user can receive a delegated-consent prompt on first sign-in.
