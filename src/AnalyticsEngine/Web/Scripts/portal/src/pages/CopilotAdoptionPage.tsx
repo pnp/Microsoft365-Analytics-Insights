@@ -1304,18 +1304,17 @@ function ExecutiveTab({
 function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary }) {
   const styles = useStyles();
   const t = useT();
-  // Both collections are absent when the analysis returned early (a failed licence-types query
-  // marks the summary incomplete without populating the segment breakdowns), so neither can be
-  // spread or mapped unguarded.
-  // A department missing from the candidate breakdown has no published count - it fell below the
-  // breakdown's minimum group or its cap - which is not the same as no candidates, so it shows a dash
-  // and no reassignment signal rather than a zero.
-  const candidatesByDepartment = new Map((summary.opportunityByDepartment ?? []).map((r) => [r.label, r.value]));
+  // Absent when the analysis returned early (a failed licence-types query marks the summary incomplete
+  // without populating the segment breakdowns), so it cannot be spread unguarded.
+  // Each row carries its own department's candidate count, counted by the server over every candidate. It
+  // used to be looked up in opportunityByDepartment, which keeps the departments with the MOST candidates
+  // while these rows are the ones with the LOWEST habit rate, so most rows found nothing. A null count is
+  // withheld (too few to show) or unknown: a dash and no reassignment signal, never a zero.
   const rows = [...(summary.habitByDepartment ?? [])]
     .map((row) => {
       const habitRatePct = row.licensedUsers > 0 ? (row.habitualUsers / row.licensedUsers) * 100 : 0;
       const idleSeats = row.neverUsedUsers;
-      const candidates = candidatesByDepartment.get(row.segment);
+      const candidates = row.recommendedCandidates ?? undefined;
       return {
         ...row,
         habitRatePct,
