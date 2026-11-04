@@ -996,6 +996,38 @@ DELETE FROM dbo.users WHERE id IN ({users});");
         }
 
         /// <summary>
+        /// The Copilot credit history preview reads every directory user, so it holds readings about people who never got a
+        /// user row. The snapshot finds the ones outside the scope by object id - and only those: someone in scope who has no
+        /// user row yet keeps their readings, as does anyone with a user row (the candidates' own are added from their row).
+        /// </summary>
+        [TestMethod]
+        public async Task Snapshot_FindsCreditHistoryOfPeopleOutsideTheScopeWithNoUserRow()
+        {
+            var token = "usp" + Guid.NewGuid().ToString("N").Substring(0, 12);
+            Guid outsider = Guid.NewGuid(), member = Guid.NewGuid(), run = Guid.NewGuid();
+            try
+            {
+                await ExecuteAsync($@"
+INSERT INTO dbo.copilot_cost_runs (run_id, generation, inventory_date, last_served) VALUES ('{run}', '{token}', '2026-09-01', SYSDATETIMEOFFSET());
+INSERT INTO dbo.copilot_cost_work (run_id, object_id, next_attempt) VALUES ('{run}', '{outsider}', SYSDATETIMEOFFSET()), ('{run}', '{member}', SYSDATETIMEOFFSET());
+INSERT INTO dbo.copilot_cost_history (run_id, publication_id, observation_date, object_id, observed_at, quality, bundle)
+VALUES ('{run}', NEWID(), '2026-09-01', '{outsider}', SYSDATETIMEOFFSET(), 2, N'{{}}');");
+                var members = new UserScopeMembers();
+                members.Add(member.ToString(), token + "-member@contoso.local", token + "-member@contoso.local");
+                var scope = UserImportScope.ForMembers(members, "test");
+
+                var found = await NewEngine().FindUnlinkedCostObjectsOutsideScopeAsync(scope);
+
+                Assert.AreEqual(1, found.Count(id => id == outsider), "Found once, though it is in two of the preview's tables.");
+                CollectionAssert.DoesNotContain(found, member, "In scope, though it has no user row.");
+            }
+            finally
+            {
+                await ExecuteAsync($"DELETE FROM dbo.copilot_cost_history WHERE run_id = '{run}'; DELETE FROM dbo.copilot_cost_work WHERE run_id = '{run}'; DELETE FROM dbo.copilot_cost_runs WHERE run_id = '{run}';");
+            }
+        }
+
+        /// <summary>
         /// The one-purge-at-a-time rule is an application lock on the purge's own session: nothing is stored for it, only
         /// one session can hold it, and it goes when the session does.
         /// </summary>
@@ -1270,7 +1302,7 @@ IF OBJECT_ID(N'dbo.teams_addons_user_installed_log', N'U') IS NOT NULL DROP TABL
                 var reference = $"{child}.{column}";
                 if (parent == "email_addresses")
                 {
-                    if (!addresses.Match.Contains($"FROM dbo.{child} x WHERE x.{column} = t.id"))
+                    if (!addresses.Match.Contains($"FROM dbo.{child} x WITH (READCOMMITTEDLOCK) WHERE x.{column} = t.id"))
                         problems.Add($"{reference} is not checked before an email address is deleted");
                 }
                 else if (!checkedReferences[parent].Contains(reference, StringComparer.OrdinalIgnoreCase))

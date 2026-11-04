@@ -18,7 +18,7 @@ namespace Common.Entities.UserScope.Purge
     /// running the purge. SQL Server releases it when that session ends, however it ends, so a web app instance that
     /// crashes never leaves a purge locked, and every instance agrees about it without sharing any other state.</description></item>
     /// <item><description>The users being removed are a temporary table on that session, which every purge statement
-    /// joins to. It goes with the session.</description></item>
+    /// joins to, as are their Microsoft Entra object ids for data keyed by object id. They go with the session.</description></item>
     /// </list>
     /// </summary>
     public sealed class UserScopePurgeDatabase

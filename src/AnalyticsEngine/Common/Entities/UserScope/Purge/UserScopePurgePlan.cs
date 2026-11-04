@@ -375,8 +375,8 @@ namespace Common.Entities.UserScope.Purge
                     "INNER LOOP JOIN dbo.users u ON u.id = c.user_id " +
                     "CROSS APPLY (VALUES (CONVERT(nvarchar(900), u.mail)), (CONVERT(nvarchar(900), u.user_name))) n(address) " +
                     "INNER LOOP JOIN dbo.email_addresses t ON t.address = n.address " +
-                    "AND NOT EXISTS (SELECT 1 FROM dbo.sent_emails x WHERE x.from_address_id = t.id) " +
-                    "AND NOT EXISTS (SELECT 1 FROM dbo.sent_email_recipients x WHERE x.recipient_address_id = t.id)",
+                    "AND NOT EXISTS (SELECT 1 FROM dbo.sent_emails x WITH (READCOMMITTEDLOCK) WHERE x.from_address_id = t.id) " +
+                    "AND NOT EXISTS (SELECT 1 FROM dbo.sent_email_recipients x WITH (READCOMMITTEDLOCK) WHERE x.recipient_address_id = t.id)",
                     new[] { "email_addresses.address" }, window: AddressesWindow),
 
                 Delete(UserScopePurgePhases.Teams, "team_owners", "id", ByUser("owner_id"), "owner_id"),
@@ -419,8 +419,13 @@ namespace Common.Entities.UserScope.Purge
                     "INNER LOOP JOIN dbo.copilot_cost_observations p ON p.object_id = o.object_id " +
                     "INNER LOOP JOIN dbo.copilot_cost_unevaluated t ON t.observation_date = p.observation_date AND t.object_id = p.object_id",
                     new[] { "copilot_cost_observations" }, "observation_date", "object_id"),
+                // An observation the collector has just given a service reading again is left for the collector's next
+                // sweep rather than fail the purge.
                 DeleteByObject(costs, "copilot_cost_observations",
-                    "INNER LOOP JOIN dbo.copilot_cost_observations t ON t.object_id = o.object_id", null, "object_id", "user_id"),
+                    "INNER LOOP JOIN dbo.copilot_cost_observations t ON t.object_id = o.object_id " +
+                    "AND NOT EXISTS (SELECT 1 FROM dbo.copilot_cost_services s WITH (READCOMMITTEDLOCK) WHERE s.observation_date = t.observation_date AND s.object_id = t.object_id) " +
+                    "AND NOT EXISTS (SELECT 1 FROM dbo.copilot_cost_unevaluated s WITH (READCOMMITTEDLOCK) WHERE s.observation_date = t.observation_date AND s.object_id = t.object_id)",
+                    null, "object_id", "user_id"),
                 DeleteByObject(costs, "copilot_cost_history",
                     "INNER LOOP JOIN dbo.copilot_cost_history t ON t.object_id = o.object_id", null, "object_id"),
                 // A collection run's work list: one row per directory user, keyed by run, so it is sought run by run.

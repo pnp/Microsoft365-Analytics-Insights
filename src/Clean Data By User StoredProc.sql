@@ -1,4 +1,4 @@
-/*======================================================================
+﻿/*======================================================================
   Procedure:   [dbo].[CleanDataByUser]
   Purpose:     Permanently deletes what the analytics database stores about one person, in a single
                transaction. It removes and anonymises the same data as the portal's User scope purge
@@ -381,7 +381,7 @@ BEGIN
         BEGIN TRY
             DELETE l
             FROM dbo.search_terms l INNER JOIN #ReleasedSearchTerms r ON r.Id = l.id
-            WHERE NOT EXISTS (SELECT 1 FROM dbo.searches x WHERE x.search_term_id = l.id);
+            WHERE NOT EXISTS (SELECT 1 FROM dbo.searches x WITH (READCOMMITTEDLOCK) WHERE x.search_term_id = l.id);
         END TRY
         BEGIN CATCH
             IF ERROR_NUMBER() <> 547 OR XACT_STATE() <> 1
@@ -393,8 +393,8 @@ BEGIN
         BEGIN TRY
             DELETE l
             FROM dbo.email_addresses l INNER JOIN #ReleasedAddresses r ON r.Id = l.id
-            WHERE NOT EXISTS (SELECT 1 FROM dbo.sent_emails x WHERE x.from_address_id = l.id)
-              AND NOT EXISTS (SELECT 1 FROM dbo.sent_email_recipients x WHERE x.recipient_address_id = l.id);
+            WHERE NOT EXISTS (SELECT 1 FROM dbo.sent_emails x WITH (READCOMMITTEDLOCK) WHERE x.from_address_id = l.id)
+              AND NOT EXISTS (SELECT 1 FROM dbo.sent_email_recipients x WITH (READCOMMITTEDLOCK) WHERE x.recipient_address_id = l.id);
         END TRY
         BEGIN CATCH
             IF ERROR_NUMBER() <> 547 OR XACT_STATE() <> 1
@@ -408,8 +408,8 @@ BEGIN
             BEGIN TRY
                 DELETE l
                 FROM dbo.keywords l INNER JOIN #ReleasedKeywords r ON r.Id = l.id
-                WHERE NOT EXISTS (SELECT 1 FROM dbo.copilot_interaction_keywords x WHERE x.keyword_id = l.id)
-                  AND NOT EXISTS (SELECT 1 FROM dbo.teams_channel_stats_log_keywords x WHERE x.keyword_id = l.id);
+                WHERE NOT EXISTS (SELECT 1 FROM dbo.copilot_interaction_keywords x WITH (READCOMMITTEDLOCK) WHERE x.keyword_id = l.id)
+                  AND NOT EXISTS (SELECT 1 FROM dbo.teams_channel_stats_log_keywords x WITH (READCOMMITTEDLOCK) WHERE x.keyword_id = l.id);
             END TRY
             BEGIN CATCH
                 IF ERROR_NUMBER() <> 547 OR XACT_STATE() <> 1

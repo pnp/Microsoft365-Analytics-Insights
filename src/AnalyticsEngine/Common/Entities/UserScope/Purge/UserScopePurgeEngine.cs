@@ -853,9 +853,12 @@ END";
         /// </summary>
         /// <remarks>
         /// The importers keep running. A lookup row is only deleted when no column refers to it, checked in the delete
-        /// itself, the same guard <c>Clean Old Data Data.sql</c> uses. If an importer adds a reference between that check
-        /// and the delete, the foreign key refuses the delete (error 547): the statement alone is rolled back and tried
-        /// again, when the new reference is seen and its lookup row kept. Counts come back per table, like the calls window's.
+        /// itself, the same guard <c>Clean Old Data Data.sql</c> uses - with locking reads, so that under read-committed
+        /// snapshot (Azure SQL's default) a reference an importer has written but not yet committed is waited for rather
+        /// than missed: <c>copilot_interaction_keywords</c> cascades, so a missed one would be deleted with the phrase. If an
+        /// importer adds a reference between that check and the delete, the foreign key refuses the delete (error 547): the
+        /// statement alone is rolled back and tried again, when the new reference is seen and its lookup row kept. Counts
+        /// come back per table, like the calls window's.
         /// </remarks>
         private static string BuildReleasingWindowSql(UserScopePurgeStep step, string keyType, string key, string target,
             string afterWhere, string afterAnd, string resumeAt)
@@ -864,7 +867,7 @@ END";
             var unreferenced = string.Concat(lookup.References.Select(reference =>
             {
                 var dot = reference.IndexOf('.');
-                return $"{Environment.NewLine}                      AND NOT EXISTS (SELECT 1 FROM dbo.[{reference.Substring(0, dot)}] x WHERE x.[{reference.Substring(dot + 1)}] = l.[id])";
+                return $"{Environment.NewLine}                      AND NOT EXISTS (SELECT 1 FROM dbo.[{reference.Substring(0, dot)}] x WITH (READCOMMITTEDLOCK) WHERE x.[{reference.Substring(dot + 1)}] = l.[id])";
             }));
 
             return $@"
@@ -930,6 +933,11 @@ END";
         /// window's own keys, so a window reads its own people's rows and nothing else, however many other people's rows
         /// share their days or runs - and however little the optimiser can estimate about a window bounded by a variable.
         /// </summary>
+        /// <remarks>
+        /// These steps only delete rows nothing refers to (their joins check), but the Copilot credit collector and the
+        /// sent-email import keep writing. If one of them refers to a row between the check and the delete, the foreign key
+        /// refuses the statement (error 547); it is tried again, when the check sees the new reference and leaves that row.
+        /// </remarks>
         internal static string BuildCandidateWindowSql(UserScopePurgeStep step, bool hasAfter)
         {
             var walk = WalkOf(step);
@@ -945,10 +953,24 @@ IF @end IS NULL
     SELECT CAST(0 AS int) AS affected, CAST(NULL AS {walk.KeyType}) AS next_after, CAST(1 AS bit) AS done;
 ELSE
 BEGIN
-    DELETE TOP (@batch) t
-    FROM {walk.Table} {walk.Alias} {step.Match}
-    WHERE {key} <= @end{afterAnd};
-    DECLARE @affected int = @@ROWCOUNT;
+    DECLARE @affected int = 0, @attempt int = 0;
+    WHILE @attempt < 3
+    BEGIN
+        BEGIN TRY
+            DELETE TOP (@batch) t
+            FROM {walk.Table} {walk.Alias} {step.Match}
+            WHERE {key} <= @end{afterAnd};
+            SET @affected = @@ROWCOUNT;
+            BREAK;
+        END TRY
+        BEGIN CATCH
+            IF ERROR_NUMBER() <> 547 OR XACT_STATE() = -1
+            BEGIN
+                ;THROW;
+            END
+            SET @attempt += 1;
+        END CATCH
+    END
     SELECT @affected AS affected, CASE WHEN @affected >= @batch THEN {resumeAt} ELSE @end END AS next_after, CAST(0 AS bit) AS done;
 END";
         }
