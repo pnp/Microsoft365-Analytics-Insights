@@ -241,6 +241,7 @@ namespace Common.Entities.CopilotAdoption
                 // narrowed themselves, where it is labelled tenant-wide; never with one the administrator's
                 // filter restricts, whose reader may not see figures about the people outside it.
                 Agents = scope.Restriction == null ? analysis.Agents : new List<AgentUsageRow>(),
+                AgentPeriodUsage = scope.Restriction == null ? analysis.AgentPeriodUsage : null,
                 // Unlike the inventory, a person: narrowed like every other per-person list, so a filtered
                 // view lists its own heaviest agent users. The cap was tenant-wide, so a slice inherits it.
                 AgentUsers = Narrow(analysis.AgentUsers, u => u.UserId, u => u.EmailDomain, scope),

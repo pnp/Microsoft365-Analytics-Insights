@@ -1114,8 +1114,12 @@ namespace Common.Entities.CopilotAdoption
                 sheet.AddRow(XlsxCell.Wrapped(
                     "Habit by department, worst first. Ordered by habit rate rather than adoption rate, so a "
                     + "department where everyone has tried Copilot and nobody kept using it rises to the top "
-                    + "where it belongs - it is invisible in the adoption table above."));
-                sheet.AddHeaderRow("Department", "Seats", "Active", "Habitual", "Never used", "Habit rate %", "Adoption rate %", "Avg. score");
+                    + "where it belongs - it is invisible in the adoption table above. Licence candidates are the "
+                    + "department's unlicensed people recommended for a licence: a department with never-used seats "
+                    + "AND candidates can reassign rather than buy. Blank means fewer than "
+                    + $"{summary.Options.MinSeatsPerSegment} candidates, left out so that no one is singled out, or "
+                    + "none found in a candidate list that stopped at its limit."));
+                sheet.AddHeaderRow("Department", "Seats", "Active", "Habitual", "Never used", "Habit rate %", "Adoption rate %", "Avg. score", "Licence candidates");
 
                 foreach (var row in summary.HabitByDepartment)
                 {
@@ -1124,7 +1128,7 @@ namespace Common.Entities.CopilotAdoption
                     // service orders by - habitual users over seats.
                     sheet.AddRow(row.Segment, row.LicensedUsers, row.ActiveUsers, row.HabitualUsers,
                         row.NeverUsedUsers, Percentage(row.HabitualUsers, row.LicensedUsers),
-                        row.AdoptionRatePct, row.AverageAdoptionScore);
+                        row.AdoptionRatePct, row.AverageAdoptionScore, row.RecommendedCandidates);
                 }
             }
 

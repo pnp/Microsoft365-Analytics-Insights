@@ -109,6 +109,7 @@ export const copilotAdoptionAgents = {
   'copilotAdoptionAgents.agents.kpi.users.source': 'Agents are available to unlicensed Copilot Chat users too, which is why this can exceed the licensed figure.',
   'copilotAdoptionAgents.agents.kpi.intensity.label': 'Interactions per agent user',
   'copilotAdoptionAgents.agents.kpi.intensity.hint': '{interactions} agent interactions in total',
+  'copilotAdoptionAgents.agents.kpi.notMeasuredForPeriod': 'Not measured for this period',
   'copilotAdoptionAgents.agents.kpi.intensity.what': 'How much the people who use agents actually use them.',
   'copilotAdoptionAgents.agents.kpi.intensity.how': 'Total agent interactions in the period divided by the number of distinct people who ran at least one. Only people who used an agent are in the denominator - including everyone else would just restate the adoption rate.',
   'copilotAdoptionAgents.agents.kpi.intensity.source': 'A high figure across very few users is one or two enthusiasts, not an adopted capability.',

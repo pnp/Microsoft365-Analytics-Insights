@@ -628,9 +628,9 @@ namespace Tests.UnitTests
 
             var values = SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
 
-            Assert.AreEqual(summary.Agents.ActiveAgents.ToString(CultureInfo.InvariantCulture), values["agents.activeAgents"]);
+            Assert.AreEqual(summary.Agents.ActiveAgents.Value.ToString(CultureInfo.InvariantCulture), values["agents.activeAgents"]);
             Assert.AreEqual(summary.Agents.KnownAgents.ToString(CultureInfo.InvariantCulture), values["agents.knownAgents"]);
-            Assert.AreEqual(summary.Agents.AgentInteractions.ToString(CultureInfo.InvariantCulture), values["agents.agentInteractions"]);
+            Assert.AreEqual(summary.Agents.AgentInteractions.Value.ToString(CultureInfo.InvariantCulture), values["agents.agentInteractions"]);
             Assert.AreEqual(summary.Agents.Agents.Count.ToString(CultureInfo.InvariantCulture), values["agents.agents.count"],
                 "A list inside a section is written as its row count, like a top-level one.");
             Assert.AreEqual("37", values["unlicensed.activeUsers"]);

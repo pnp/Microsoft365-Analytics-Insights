@@ -377,6 +377,7 @@ namespace Common.Entities.CopilotAdoption
         public const string CoworkCreditCapacity = "CoworkCreditCapacity";
         public const string CoworkCreditProbe = "CoworkCreditProbe";
         public const string AgentUsage = "AgentUsage";
+        public const string AgentPeriodUsage = "AgentPeriodUsage";
         public const string AgentUsageByDepartment = "AgentUsageByDepartment";
         public const string AgentUsers = "AgentUsers";
         public const string AgentReach = "AgentReach";

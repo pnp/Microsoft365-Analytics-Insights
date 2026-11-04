@@ -302,6 +302,15 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("breadthScore")]
         public double BreadthScore { get; set; }
 
+        /// <summary>
+        /// True when the person's Copilot use is confined to too few apps for the configured breadth target -
+        /// at most half of it (<see cref="CopilotAdoptionScoring.NeedsBroadening"/>). What turns a Developing or
+        /// Established habit into "Add another app" and adds "and broaden" to a Champion's advice, sent as a
+        /// fact so the portal words the advice without re-deriving the rule.
+        /// </summary>
+        [JsonProperty("needsBroadening")]
+        public bool NeedsBroadening => CopilotAdoptionScoring.NeedsBroadening(this);
+
         [JsonProperty("band")]
         public AdoptionBand Band { get; set; }
 

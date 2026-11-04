@@ -45,6 +45,7 @@ export const COPILOT_ADOPTION_WARNING_KEYS = {
   PastRangeNamedListsHidden: 'pastRangeNamedListsHidden',
   CurrentOrgDataForPastRange: 'currentOrgDataForPastRange',
   AgentInventoryAsOfNow: 'agentInventoryAsOfNow',
+  AgentPeriodFiguresUnavailable: 'agentPeriodFiguresUnavailable',
   CoworkEligibilityUnknown: 'coworkEligibilityUnknown',
   PurchasedSeatsUnknown: 'purchasedSeatsUnknown',
   SkuSeatMismatch: 'skuSeatMismatch',
@@ -289,6 +290,7 @@ export function actionDescription(t: TFunction, code: string, fallback: string, 
     developingScore: options.developingScore,
     establishedScore: options.establishedScore,
     championScore: options.championScore,
+    breadthTargetApps: options.breadthTargetApps,
   });
   return translated === key ? fallback : translated;
 }
@@ -410,16 +412,18 @@ export function recommendedActionText(t: TFunction, row: LicensedUserAdoptionRow
       });
     case AdoptionBand.Trialling:
       return t('copilotAdoptionUsers.server.recommendedAction.trialling');
+    // Whether someone needs another app depends on the configured breadth target, so it is the server's fact
+    // (needsBroadening) rather than a breadth-score threshold that only held at the default target.
     case AdoptionBand.Developing:
-      return row.breadthScore < 34
+      return row.needsBroadening
         ? t('copilotAdoptionUsers.server.recommendedAction.developing.broaden', { apps: appsPhrase(t, row.appsUsed) })
         : t('copilotAdoptionUsers.server.recommendedAction.developing.grow');
     case AdoptionBand.Established:
-      return row.breadthScore < 50
+      return row.needsBroadening
         ? t('copilotAdoptionUsers.server.recommendedAction.established.broaden', { apps: appsPhrase(t, row.appsUsed) })
         : t('copilotAdoptionUsers.server.recommendedAction.established.sustain');
     case AdoptionBand.Champion:
-      return row.breadthScore < 50
+      return row.needsBroadening
         ? t('copilotAdoptionUsers.server.recommendedAction.champion.broaden', { apps: appsPhrase(t, row.appsUsed) })
         : t('copilotAdoptionUsers.server.recommendedAction.champion.advocate');
     default:
