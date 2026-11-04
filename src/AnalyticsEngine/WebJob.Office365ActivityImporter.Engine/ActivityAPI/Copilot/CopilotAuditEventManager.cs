@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
+using CostEstimate = WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 
 namespace ActivityImporter.Engine.ActivityAPI.Copilot
 {
@@ -41,6 +42,13 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
         // Of those, the ones with no durable retry queue to recover them (no Storage connection string).
         private int _totalUnenrichedWithoutDurableRetry;
+
+        // Optional values staged in a form that fits their column (see WithMessageIdsThatFit / WithModelNamesThatFit),
+        // reported once per batch at commit: by length, never by value.
+        private int _totalOverWidthMessageIds;
+        private int _longestOverWidthMessageId;
+        private int _totalOverWidthModelNames;
+        private int _longestOverWidthModelName;
 
         // The run-scoped loader's in-lock lookup counters when this batch started, so the commit can report the batch's share.
         private CopilotLookupStats _inLockStatsAtBatchStart;
@@ -199,7 +207,22 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         {
             try
             {
-                var userGuid = await _copilotEventAdaptor.GetUserIdFromUpn(baseOfficeEvent.User.UserPrincipalName);
+                string userGuid;
+                if (_copilotEventAdaptor is GraphFileMetadataLoader boundedLoader)
+                {
+                    // Bounded and made once inside the save lock, like the meeting lookup below. A user Graph can't read is
+                    // remembered for the run, so it costs one call, not one per meeting interaction.
+                    userGuid = await boundedLoader.GetUserIdFromUpnSingleAttempt(baseOfficeEvent.User.UserPrincipalName);
+                    if (userGuid == null)
+                    {
+                        _logger.LogDebug($"Event {baseOfficeEvent.Id}: its user could not be read from Microsoft Graph; staging the Copilot interaction without meeting enrichment.");
+                        return false;
+                    }
+                }
+                else
+                {
+                    userGuid = await _copilotEventAdaptor.GetUserIdFromUpn(baseOfficeEvent.User.UserPrincipalName);
+                }
                 var meetingId = StringUtils.GetOnlineMeetingId(contextId, userGuid);
                 // Bounded and made once inside the save lock, like the file lookup below.
                 var meetingInfo = _copilotEventAdaptor is GraphFileMetadataLoader graphLoader
@@ -453,13 +476,49 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             try
             {
-                return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.Messages);
+                return JsonConvert.SerializeObject(WithMessageIdsThatFit(auditRecord.ParsedAuditEvent.Messages));
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to serialize Messages from audit record");
                 return null;
             }
+        }
+
+        /// <summary>
+        /// The messages as staged: an Id longer than <c>copilot_event_messages.message_id</c> is replaced by its
+        /// <see cref="AuditStagingText.FitIdentifier"/> form. The merge reads the Id out of the staged JSON, and one longer
+        /// value used to fail the shared Copilot merge for the whole batch, on every retry. The parsed event is not
+        /// changed: credit estimation reads it too.
+        /// </summary>
+        private List<CostEstimate.Message> WithMessageIdsThatFit(List<CostEstimate.Message> messages)
+        {
+            if (!messages.Any(m => m?.Id != null && m.Id.Length > AuditStagingText.CopilotMessageIdMaxLength))
+            {
+                return messages;
+            }
+
+            var staged = new List<CostEstimate.Message>(messages.Count);
+            foreach (var message in messages)
+            {
+                if (message?.Id == null || message.Id.Length <= AuditStagingText.CopilotMessageIdMaxLength)
+                {
+                    staged.Add(message);
+                    continue;
+                }
+
+                _totalOverWidthMessageIds++;
+                _longestOverWidthMessageId = Math.Max(_longestOverWidthMessageId, message.Id.Length);
+                staged.Add(new CostEstimate.Message
+                {
+                    Id = AuditStagingText.FitIdentifier(message.Id, AuditStagingText.CopilotMessageIdMaxLength),
+                    IsPrompt = message.IsPrompt,
+                    JailbreakDetected = message.JailbreakDetected,
+                    Size = message.Size,
+                    Type = message.Type,
+                });
+            }
+            return staged;
         }
 
         /// <summary>
@@ -530,13 +589,46 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             try
             {
-                return JsonConvert.SerializeObject(auditRecord.ParsedAuditEvent.ModelTransparencyDetails);
+                return JsonConvert.SerializeObject(WithModelNamesThatFit(auditRecord.ParsedAuditEvent.ModelTransparencyDetails));
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to serialize ModelTransparencyDetails from audit record");
                 return null;
             }
+        }
+
+        /// <summary>
+        /// The model details as staged: a ModelName longer than <c>copilot_ai_models.name</c> is trimmed to it, as the merge
+        /// already trims the provider and version beside it. One longer name used to fail the shared Copilot merge for the
+        /// whole batch, on every retry. The parsed event is not changed: credit estimation reads the model names.
+        /// </summary>
+        private List<CostEstimate.ModelTransparencyDetail> WithModelNamesThatFit(List<CostEstimate.ModelTransparencyDetail> models)
+        {
+            if (!models.Any(m => m?.ModelName != null && m.ModelName.Length > AuditStagingText.CopilotAiModelNameMaxLength))
+            {
+                return models;
+            }
+
+            var staged = new List<CostEstimate.ModelTransparencyDetail>(models.Count);
+            foreach (var model in models)
+            {
+                if (model?.ModelName == null || model.ModelName.Length <= AuditStagingText.CopilotAiModelNameMaxLength)
+                {
+                    staged.Add(model);
+                    continue;
+                }
+
+                _totalOverWidthModelNames++;
+                _longestOverWidthModelName = Math.Max(_longestOverWidthModelName, model.ModelName.Length);
+                staged.Add(new CostEstimate.ModelTransparencyDetail
+                {
+                    ModelName = AuditStagingText.TrimToLength(model.ModelName, AuditStagingText.CopilotAiModelNameMaxLength),
+                    ModelProviderName = model.ModelProviderName,
+                    ModelVersion = model.ModelVersion,
+                });
+            }
+            return staged;
         }
 
         /// <summary>
@@ -603,12 +695,26 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
 
             LogInLockLookupStats();
 
+            if (_totalOverWidthMessageIds > 0 || _totalOverWidthModelNames > 0)
+            {
+                _logger.LogWarning($"Copilot metadata: {_totalOverWidthMessageIds:n0} message id(s) were longer than " +
+                    $"copilot_event_messages.message_id ({AuditStagingText.CopilotMessageIdMaxLength} characters; longest {_longestOverWidthMessageId:n0}) " +
+                    "and were stored in a shortened form that still tells them apart; " +
+                    $"{_totalOverWidthModelNames:n0} AI model name(s) were longer than copilot_ai_models.name " +
+                    $"({AuditStagingText.CopilotAiModelNameMaxLength} characters; longest {_longestOverWidthModelName:n0}) and were trimmed to it. " +
+                    "The interactions were saved.");
+            }
+
             // Clear counters for next batch. The staged rows are cleared by the writer.
             _totalFilesCount = 0;
             _totalMeetingsCount = 0;
             _totalChatOnlyCount = 0;
             _totalUnenrichedAfterTransientFailure = 0;
             _totalUnenrichedWithoutDurableRetry = 0;
+            _totalOverWidthMessageIds = 0;
+            _longestOverWidthMessageId = 0;
+            _totalOverWidthModelNames = 0;
+            _longestOverWidthModelName = 0;
         }
 
         /// <summary>

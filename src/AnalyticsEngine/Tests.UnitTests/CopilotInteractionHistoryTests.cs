@@ -641,6 +641,50 @@ VALUES (2, '20000101', 0, NULL), (6, NULL, 2, '20000103');");
         #region Capped reads - watermark progress through the real pipeline (LocalDB)
 
         /// <summary>
+        /// R1-8: a prompt-category storage failure is logged with what kind of failure it was, but never with its message,
+        /// which can quote values derived from a prompt.
+        /// </summary>
+        [TestMethod]
+        public void StorageFailure_IsDescribedByItsType_NeverByItsMessage()
+        {
+            var failure = new InvalidOperationException("Synthetic failure quoting " + GreekPrompt);
+
+            var described = CopilotInteractionHistoryImporter.DescribeStorageFailure(new System.Data.Entity.Infrastructure.DbUpdateException("Outer", failure));
+
+            Assert.AreEqual("DbUpdateException", described);
+            Assert.IsFalse(described.Contains(GreekPrompt));
+        }
+
+        /// <summary>
+        /// R1-7: an interaction whose Graph session id is longer than copilot_interaction_sessions.session_ref (450) was
+        /// dropped without a word. Its session was stored under the trimmed id, and the save looked it up by the full one.
+        /// </summary>
+        [TestMethod]
+        public async Task Interaction_WithASessionIdLongerThanItsColumn_IsSavedAndRecognisedWhenReRead()
+        {
+            RequireIsolatedLocalDb();
+            var now = new DateTime(2026, 6, 2, 0, 0, 0, DateTimeKind.Utc);
+            var watermark = now.AddHours(-12);
+            var longSession = "long-thread-" + new string('s', 500);
+            var interactions = new List<AiInteraction>
+            {
+                NewPrompt("long-1", longSession, "long-request-1", watermark.AddMinutes(1), GreekPrompt),
+                NewPrompt("short-1", "short-thread", "short-request-1", watermark.AddMinutes(2), GreekPrompt),
+            };
+            var source = new ScriptedInteractionSource(() => new AiInteractionLoadResult { Interactions = interactions });
+
+            using (var fixture = await HistoryFixture.CreateAsync(watermark))
+            {
+                var run = await fixture.ImportOnceAsync(source, now);
+                Assert.IsNull(run.Error);
+                Assert.AreEqual(2, run.InteractionsSaved, "The interaction in the long session is saved too.");
+
+                var replay = await fixture.ImportOnceAsync(source, now.AddMinutes(30));
+                Assert.AreEqual(0, replay.InteractionsSaved, "Re-read, it is recognised as already imported.");
+            }
+        }
+
+        /// <summary>
         /// A page-capped read whose interactions committed but whose watermark update did not (a crash, or a
         /// failed save) is re-read in full next cycle. Every row is then already stored and de-duplicates away -
         /// which used to leave the truncated-read watermark with no timestamp to advance to, so the user re-read

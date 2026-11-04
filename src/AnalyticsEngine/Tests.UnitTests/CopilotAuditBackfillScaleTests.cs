@@ -233,13 +233,17 @@ GROUP BY t.name").ToList())
             foreach (var batch in new[] { 100, 1000, 5000 })
             foreach (var percentExisting in new[] { 0, 10, 100 })
             {
-                var ids = Enumerable.Range(1, batch).Select(i => i <= batch * percentExisting / 100
-                    ? Guid.Parse(SyntheticScaleSource.ScaleEventId(i)) : Guid.Parse(SyntheticId(80000000 + i))).ToList();
+                // The same payload shape the synthetic source imported: one accessed resource per interaction, which the
+                // completeness check then expects to find.
+                var interactions = Enumerable.Range(1, batch).Select(i => CopilotAuditSearchRecordMapper.Map(SyntheticRecord(i <= batch * percentExisting / 100
+                        ? SyntheticScaleSource.ScaleEventId(i) : SyntheticId(80000000 + i),
+                        "\"AppHost\":\"Word\",\"AccessedResources\":[{\"Id\":\"https://contoso.sharepoint.com/sites/example/Shared Documents/Καλημέρα κόσμε.docx\",\"Name\":\"Καλημέρα κόσμε.docx\",\"Type\":\"File\"}],\"Contexts\":[],\"Messages\":[]"),
+                    NullLogger.Instance).Content).ToList();
                 var times = new List<double>();
                 for (var iteration = 0; iteration < 6; iteration++)
                 {
                     var sw = Stopwatch.StartNew();
-                    var found = await filter.GetExistingIdsAsync(ids);
+                    var found = await filter.GetCompletelySavedIdsAsync(interactions);
                     sw.Stop();
                     Assert.AreEqual(batch * percentExisting / 100, found.Count);
                     if (iteration > 0) times.Add(sw.Elapsed.TotalMilliseconds);
@@ -336,10 +340,10 @@ GROUP BY t.name").ToList())
             public HashSet<Guid> Ids = new HashSet<Guid>();
             public int Commits;
             public int MaxBatch;
-            public Task<HashSet<Guid>> GetExistingIdsAsync(IEnumerable<Guid> ids)
+            public Task<HashSet<Guid>> GetCompletelySavedIdsAsync(IEnumerable<AbstractAuditLogContent> interactions)
             {
                 // Model live arrivals immediately before each backfill existence check.
-                var list = ids.ToList();
+                var list = interactions.Select(a => a.Id).ToList();
                 for (var i = 0; i < list.Count; i += 10) Ids.Add(list[i]);
                 return Task.FromResult(new HashSet<Guid>(list.Where(Ids.Contains)));
             }
