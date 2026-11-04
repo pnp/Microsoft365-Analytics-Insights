@@ -10,7 +10,7 @@ export class MetadataInfo {
     // Input fieldValue example:
     //      2;#Term 2|f5b7ced7-2039-47f9-a22d-32c66d2eec65
     // Invalid:
-    //      6;#i:0#.f|membership|admin@m365x72460609.onmicrosoft.com
+    //      6;#i:0#.f|membership|admin@contoso.onmicrosoft.com
     public static FromFieldValue(propName: string, fieldValue: string): MetadataInfo {
 
         if (typeof (fieldValue) === "string") {
