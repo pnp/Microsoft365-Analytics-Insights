@@ -1132,11 +1132,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Email
         {
             using (var db = _dbContextFactory.Create())
             {
-                return await db.users.Where(u => u.Mail != null && u.Mail != "")
+                return await UsersWithAMailbox(db.users)
                     .OrderBy(u => u.ID)
                     .ToListAsync();
             }
         }
+
+        /// <summary>
+        /// The users whose mailbox the import reads: everyone with a mail address, whether or not their account can sign in.
+        /// </summary>
+        /// <remarks>
+        /// <c>account_enabled</c> is deliberately not a condition. An Exchange shared mailbox's account is disabled by design, and so
+        /// is a leaver's whose mailbox is kept, yet mail is still sent from both. A mailbox that no longer exists (a deleted account,
+        /// or one without an Exchange licence) is kept out by the no-mailbox skip list instead: its Graph 404 is recorded, and it is
+        /// only asked for again on the next full sweep, every <see cref="AppConfig.SentEmailNoMailboxRetryHours"/>.
+        /// UserGroupsFilter and the mailbox quarantine are applied on top of this.
+        /// </remarks>
+        internal static IQueryable<Common.Entities.User> UsersWithAMailbox(IQueryable<Common.Entities.User> users)
+            => users.Where(u => u.Mail != null && u.Mail != "");
 
         /// <summary>
         /// The users whose mailbox may be read: matched on UPN, mail address or Entra object id, so a user whose UPN

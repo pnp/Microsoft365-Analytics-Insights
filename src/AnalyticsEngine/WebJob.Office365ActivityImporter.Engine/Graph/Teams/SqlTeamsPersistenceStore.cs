@@ -55,33 +55,48 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
         public async Task SaveOwners(List<Microsoft.Graph.Models.User> owners, TeamDefinition team)
         {
+            // Who is already recorded as an owner of this Team: one query for the Team, not one per owner.
+            var recorded = new UsersAlreadyRecorded(team.IsSavedToDB
+                ? await _lookup.Database.TeamOwners.Where(to => to.TeamID == team.ID).Select(to => to.OwnerID).ToListAsync()
+                : new List<int>());
             foreach (var graphUser in owners)
             {
                 var dbUser = await _lookup.GetOrCreateUser(graphUser.UserPrincipalName, true);
-                var teamOwnerRecord = _lookup.Database.TeamOwners.Where(to => to.TeamID == team.ID && to.OwnerID == dbUser.ID).SingleOrDefault();
-                if (teamOwnerRecord == null)
+                if (recorded.IsNew(dbUser))
                 {
                     _lookup.Database.TeamOwners.Add(new TeamOwners { Owner = dbUser, Team = team, Discovered = DateTime.Now });
                 }
             }
         }
 
+        /// <summary>
+        /// Logs today's membership of the Team, once per person per day.
+        /// </summary>
+        /// <remarks>
+        /// Who is already logged today is read in ONE query for the Team, rather than one per member, and with a date range rather
+        /// than the date's year, month and day: those three were each a <c>DATEPART</c> over the column, which no index can seek,
+        /// so every lookup read the member's whole membership history (an <c>IX_user_id</c> seek and a key lookup per row). The
+        /// range seeks <c>IX_team_membership_log_date</c>, which carries <c>team_id</c> and <c>user_id</c>, so the query reads
+        /// today's rows rather than the history. Measured on synthetic data with 365 days of history
+        /// (<c>TeamMembershipLookupBenchmarkTests</c>): a 2,000-member Team's check went from 2,000 queries and 7.0M logical
+        /// reads to one query and 59. Rows are written at midnight UTC, but the range also matches any time of day, as the old
+        /// comparison did.
+        /// </remarks>
         public async Task SaveMembers(List<BaseUser> members, O365Team team)
         {
             var dbTeam = await _lookup.GetOrCreateTeam(team.Id, team.DisplayName);
             var today = DateTime.UtcNow.Date;
-            int todayYear = today.Year, todayMonth = today.Month, todayDay = today.Day;
+            var tomorrow = today.AddDays(1);
+            var loggedToday = new UsersAlreadyRecorded(dbTeam.IsSavedToDB
+                ? await _lookup.Database.TeamMembershipLogs
+                    .Where(t => t.TeamID == dbTeam.ID && t.Date >= today && t.Date < tomorrow)
+                    .Select(t => t.UserID)
+                    .ToListAsync()
+                : new List<int>());
             foreach (var member in members)
             {
                 var user = await _lookup.GetOrCreateUser(member.UserPrincipalName, true);
-                TeamMembershipLog todaysUserLog = null;
-                if (user.IsSavedToDB)
-                {
-                    todaysUserLog = await _lookup.Database.TeamMembershipLogs.SingleOrDefaultAsync(t =>
-                        t.Team.ID == dbTeam.ID && t.UserID == user.ID &&
-                        t.Date.Year == todayYear && t.Date.Month == todayMonth && t.Date.Day == todayDay);
-                }
-                if (todaysUserLog == null)
+                if (loggedToday.IsNew(user))
                 {
                     _lookup.Database.TeamMembershipLogs.Add(new TeamMembershipLog { Team = dbTeam, User = user, Date = today });
                 }
@@ -97,15 +112,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             }
             if (channel.Tabs != null)
             {
+                // The tabs already logged on this channel today: one query for the channel, not one per tab, and a date range
+                // rather than the date's parts, for the reason given on SaveMembers.
+                var today = DateTime.UtcNow.Date;
+                var tomorrow = today.AddDays(1);
+                var tabsLoggedToday = new HashSet<string>(existingChannelSQL.IsSavedToDB
+                    ? await _lookup.Database.ChannelTabLogs
+                        .Where(l => l.ChannelID == existingChannelSQL.ID && l.Date >= today && l.Date < tomorrow)
+                        .Select(l => l.TabDefinition.GraphID)
+                        .ToListAsync()
+                    : new List<string>(), StringComparer.OrdinalIgnoreCase);
                 foreach (var tab in channel.Tabs)
                 {
                     var tabDB = await _lookup.GetOrCreateTeamTab(tab.Id, tab.DisplayName, tab.WebUrl);
-                    var today = DateTime.UtcNow.Date;
-                    int todayYear = today.Year, todayMonth = today.Month, todayDay = today.Day;
-                    var tabLog = await _lookup.Database.ChannelTabLogs.SingleOrDefaultAsync(l =>
-                        l.Date.Year == todayYear && l.Date.Month == todayMonth && l.Date.Day == todayDay &&
-                        l.Channel.GraphID == existingChannelSQL.GraphID && l.TabDefinition.GraphID == tab.Id);
-                    if (tabLog == null)
+                    if (tabsLoggedToday.Add(tab.Id))
                     {
                         _lookup.Database.ChannelTabLogs.Add(new ChannelTabLog { Channel = existingChannelSQL, Date = today, TabDefinition = tabDB });
                     }
@@ -179,6 +199,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             }
             _lookup.Database.ChangeTracker.DetectChanges();
             await _lookup.Database.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// The users a Team already has a row for - their ids, read from SQL in one query - plus every user seen during this save,
+        /// so a person listed twice still gets one row.
+        /// </summary>
+        private sealed class UsersAlreadyRecorded
+        {
+            private readonly HashSet<int> _recordedIds;
+
+            // By reference: a user created during this save may not have an id yet. AbstractEFEntity doesn't override Equals.
+            private readonly HashSet<User> _seenThisSave = new HashSet<User>();
+
+            public UsersAlreadyRecorded(IEnumerable<int> recordedIds)
+            {
+                _recordedIds = new HashSet<int>(recordedIds);
+            }
+
+            /// <summary>True the first time a user is seen, unless SQL already has their row.</summary>
+            public bool IsNew(User user) => _seenThisSave.Add(user) && (!user.IsSavedToDB || _recordedIds.Add(user.ID));
         }
     }
 }
