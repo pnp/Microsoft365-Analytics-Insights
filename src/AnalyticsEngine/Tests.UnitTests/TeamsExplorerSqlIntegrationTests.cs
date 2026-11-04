@@ -93,7 +93,7 @@ namespace Tests.UnitTests
             _connectionString =
                 $@"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog={_database};Integrated Security=true;MultipleActiveResultSets=True;TrustServerCertificate=True";
 
-            Execute(MasterConnection, $"CREATE DATABASE [{_database}];");
+            Execute(MasterConnection, ScratchDatabase.CreateDatabaseSql(_database));
 
             // The full migration chain, so the queries run against the schema customers actually get
             // rather than a hand-built subset that could omit the very column a query needs.

@@ -229,7 +229,7 @@ namespace Tests.UnitTests
                 await connection.OpenAsync();
                 using (var command = connection.CreateCommand())
                 {
-                    command.CommandText = $"CREATE DATABASE [{name}]";
+                    command.CommandText = ScratchDatabase.CreateDatabaseSql(name);
                     await command.ExecuteNonQueryAsync();
                 }
                 try

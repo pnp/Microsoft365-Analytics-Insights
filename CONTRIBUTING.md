@@ -184,6 +184,13 @@ vstest.console.exe src\AnalyticsEngine\Tests.UnitTests\bin\Debug\Tests.UnitTests
   of their own. Don't run two test runs against the shared database at the same
   time: they interfere with each other. If its schema gets out of step with the
   code, drop `UnitTestingSPOInsights` and the next run rebuilds it.
+* **A test that creates its own database uses `ScratchDatabase`**: `Create`, or
+  `CreateDatabaseSql` when the fixture needs its own connection, or
+  `AutoCloseOffSql` straight after EF has created the database. Each turns
+  `AUTO_CLOSE` off. LocalDB creates every database with it on, so the database
+  shuts down whenever its last connection closes, which a production database
+  never does, and a test that changes the database between connections then
+  fails now and then.
 * **Inconclusive means "not run here", not "passed"** (`vstest` reports it as
   skipped). Tests go Inconclusive when something they need isn't configured:
 
