@@ -19,8 +19,10 @@
                  deleted; ones that anything else still uses stay.
                - Not touched: tenant-wide data, the anonymous "Unknown User" (refused), anything kept
                  outside this database, and the user-organisation import history.
-               - The importers can keep running. If one adds data about the person while this runs, the
-                 delete it conflicts with fails and everything is rolled back: run it again.
+               - Stop the Office 365 importer WebJob while this runs. Most data an importer adds about the
+                 person meanwhile makes the delete it conflicts with fail, and everything is rolled back: run
+                 it again. But an audit event saved after this procedure has deleted the person's events, and
+                 before it deletes the person, has no foreign key to stop it, so it would be left behind.
   Returns:     Return code (0=OK), @ReturnMessage OUTPUT
 ======================================================================*/
 

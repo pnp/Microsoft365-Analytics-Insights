@@ -120,6 +120,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
         private async Task<int> LoadAndSaveWeeklySnapshotCoreAsync(ICopilotUsagePersistenceManager persistence)
         {
+            WeeklySnapshotAttempted = false;
             var recentImports = await persistence.GetRecentUserDetailImportsAsync(DateTime.UtcNow.AddDays(-WeeklySnapshotLookBackDays));
             var weekEnd = CopilotUsageReportPolicy.WeeklySnapshotDue(recentImports);
             if (!weekEnd.HasValue)
@@ -131,9 +132,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             _logger.LogInformation($"Copilot per-user weekly reading: Microsoft's newest per-user report is dated Sunday {weekEnd.Value:yyyy-MM-dd}; " +
                 $"collecting its {CopilotReportRequest.WeeklyPeriod} report for Licence activity.");
+            WeeklySnapshotAttempted = true;
             return await LoadAndSaveCoreAsync(persistence,
                 new CopilotReportRequest(CopilotReportNames.UsageUserDetail, CopilotReportRequest.WeeklyPeriod), weekEnd.Value);
         }
+
+        /// <summary>
+        /// Whether the last weekly call found a reading due and asked Graph for it, whatever came of that; false when none was
+        /// due. The importer's cadence gate stamps the weekly reading only after an attempt, so a run that found nothing to do
+        /// never holds back the one that next finds something.
+        /// </summary>
+        public bool WeeklySnapshotAttempted { get; private set; }
 
         /// <summary>How far back the import log is read to decide whether a weekly reading is due.</summary>
         internal const int WeeklySnapshotLookBackDays = 14;

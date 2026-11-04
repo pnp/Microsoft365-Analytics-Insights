@@ -1434,6 +1434,10 @@ SELECT TOP (1)
        @copilotLogError = error
 FROM dbo.copilot_usage_report_import_log
 WHERE report_name = N'getMicrosoft365CopilotUsageUserDetail'
+  -- A failed weekly 7-day attempt says nothing about the readings already stored: its own week is simply missing,
+  -- and the coverage below says so. It runs just after the 28-day import, so counting it here made every range read
+  -- as 'the last attempt failed' until the next per-user import.
+  AND NOT (ISNULL(report_period, N'') = N'D7' AND error IS NOT NULL)
 ORDER BY imported_utc DESC, id DESC;
 
 DECLARE @copilotPreferredStatus varchar(32) =

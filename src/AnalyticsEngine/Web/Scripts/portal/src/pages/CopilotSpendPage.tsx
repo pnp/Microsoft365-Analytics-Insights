@@ -715,8 +715,12 @@ function ConsumedOnCard({ summary, onOpenTab }: { summary: CopilotSpendSummary; 
             display: value(a.credits, studio.agentLedgerCredits),
           }))
       : [];
-  const credited = balances.available ? balances.services.filter((s) => s.unit === CREDIT_UNIT && s.quantity > 0) : [];
-  const categoryTotal = credited.reduce((sum, s) => sum + s.quantity, 0);
+  // A category withheld from a reader without See PII is sent with no quantity, so the shown categories don't add up to
+  // the breakdown: a share of their total would overstate every one (one shown category of three read as 100%). The
+  // shares are then a dash rather than a share of whatever happens to be shown.
+  const creditRows = balances.available ? balances.services.filter((s) => s.unit === CREDIT_UNIT) : [];
+  const credited = creditRows.filter((s) => !s.withheld && s.quantity > 0);
+  const categoryTotal = creditRows.some((s) => s.withheld) ? null : credited.reduce((sum, s) => sum + s.quantity, 0);
   const categories: BarRowData[] = [...credited]
     .sort((a, b) => b.quantity - a.quantity)
     .slice(0, CONSUMED_ON_ROWS)

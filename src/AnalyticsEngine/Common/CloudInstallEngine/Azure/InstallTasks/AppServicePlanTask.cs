@@ -53,7 +53,21 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     _logger.LogInformation($"App Service '{webAppName}' already runs on plan '{hostingPlan.Data.Name}', so that plan is kept. " +
                         $"The configured plan name '{_config.ResourceName}' is only used when the installer creates the web app; it never moves an existing web app to another plan.");
                 }
-                await UseExistingPlan(hostingPlan);
+
+                // A plan in another resource group (or subscription) is a shared one the operator chose: it is used as it is.
+                // Installers before this one never touched it, and writing the solution's tags to it needs write access
+                // outside the deployment's resource group, which the installer's identity need not have - a refused tag
+                // write would otherwise abort an upgrade that has everything else it needs.
+                if (IsInDeploymentResourceGroup(hostingPlan))
+                {
+                    await UseExistingPlan(hostingPlan);
+                }
+                else
+                {
+                    _logger.LogInformation($"Plan '{hostingPlan.Data.Name}' is in resource group '{hostingPlan.Id.ResourceGroupName}', outside this deployment's, " +
+                        "so it is used as it is: the installer doesn't add its tags to it.");
+                    WarnIfAlwaysOnUnsupported(hostingPlan);
+                }
                 return hostingPlan;
             }
 
@@ -99,10 +113,24 @@ namespace CloudInstallEngine.Azure.InstallTasks
         private async Task UseExistingPlan(AppServicePlanResource plan)
         {
             await base.EnsureTagsOnExisting(plan.Data.Tags, plan.GetTagResource());     // Add configured tags
+            WarnIfAlwaysOnUnsupported(plan);
+        }
+
+        private void WarnIfAlwaysOnUnsupported(AppServicePlanResource plan)
+        {
             if (!AppServicePlanCapabilities.SupportsAlwaysOn(plan.Data.Sku))
             {
                 _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(plan.Data.Name, plan.Data.Sku));
             }
+        }
+
+        private bool IsInDeploymentResourceGroup(AppServicePlanResource plan)
+        {
+            var group = Container?.Id;
+            var id = plan?.Id;
+            if (group == null || id == null) return true;
+            return string.Equals(id.SubscriptionId, group.SubscriptionId, System.StringComparison.OrdinalIgnoreCase)
+                && string.Equals(id.ResourceGroupName, group.ResourceGroupName, System.StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>

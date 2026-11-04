@@ -582,6 +582,29 @@ describe('CopilotSpendPage', () => {
     expect(within(table).getByText('6,000')).toBeInTheDocument();
   });
 
+  it('gives no category a share of the consumed credits when another category is withheld, rather than a share of what is shown', async () => {
+    const balances = summary().balances;
+    const shown = { ...balances.services[0], category: 'copilotChatAgents', consumers: 40, quantity: 6000 };
+    const withheld = { ...balances.services[0], category: 'coworkAgent', consumers: 3, quantity: 0, withheld: true };
+    vi.mocked(fetchSpendSummary).mockResolvedValue(summary({ balances: { ...balances, services: [shown, withheld] } }));
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    expect(await screen.findByText('Consumed credits by category (latest reading)')).toBeInTheDocument();
+    expect(screen.getByText('6,000 credits (\u2014)')).toBeInTheDocument();
+    expect(screen.queryByText('6,000 credits (100%)')).not.toBeInTheDocument();
+  });
+
+  it('gives each category its share of the consumed credits when none is withheld', async () => {
+    const balances = summary().balances;
+    const first = { ...balances.services[0], category: 'copilotChatAgents', consumers: 40, quantity: 6000 };
+    const second = { ...balances.services[0], category: 'coworkAgent', consumers: 30, quantity: 2000 };
+    vi.mocked(fetchSpendSummary).mockResolvedValue(summary({ balances: { ...balances, services: [first, second] } }));
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: true } });
+
+    expect(await screen.findByText('6,000 credits (75%)')).toBeInTheDocument();
+    expect(screen.getByText('2,000 credits (25%)')).toBeInTheDocument();
+  });
+
   it('says a category withheld from a reader without See PII is withheld, never zero', async () => {
     const balances = summary().balances;
     vi.mocked(fetchSpendSummary).mockResolvedValue(
