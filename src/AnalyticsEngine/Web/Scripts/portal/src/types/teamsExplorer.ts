@@ -11,6 +11,11 @@ export type TeamsQueryInfo = {
   sql: string;
   /** Present when the section failed. The section renders this instead of a chart. */
   error: string | null;
+  /**
+   * A stable code when the server itself decided the section could not run (`error` is then only its English
+   * fallback); absent for a failed query, whose `error` is the database's own message.
+   */
+  errorCode?: string | null;
   elapsedMs: number;
 };
 

@@ -203,6 +203,20 @@ export function queryFor(queries: TeamsQueryInfo[], key: string): TeamsQueryInfo
 }
 
 /**
+ * The failure codes the server sends with a section it decided not to run (`SqlTeamsExplorerStore`), each with its
+ * sentence. Any other failure is the database's own message, shown as it came.
+ */
+export const TEAMS_QUERY_ERROR_CODE_KEYS: Record<string, TranslationKey> = {
+  queryQueueTimeout: 'teamsExplorer.shared.queryQueueTimeout',
+};
+
+/** What a failed section says: the page's own sentence for a known code, otherwise the error it was sent. */
+export function sectionErrorText(t: TFunction, query: TeamsQueryInfo): string {
+  const key = query.errorCode ? TEAMS_QUERY_ERROR_CODE_KEYS[query.errorCode] : undefined;
+  return key ? t(key) : t('teamsExplorer.shared.sectionLoadError', { error: query.error ?? '' });
+}
+
+/**
  * Why licensed people with no Teams activity are not called dormant, or undefined when they can be (or when an
  * older API sent no answer). The usage reports list only the people active each day, so the server says when
  * absence proves nothing and this writes the sentence.
@@ -339,7 +353,7 @@ export function SectionCard({
       <div className={styles.body}>
         {query?.error ? (
           <MessageBar intent="error">
-            <MessageBarBody>{t('teamsExplorer.shared.sectionLoadError', { error: query.error })}</MessageBarBody>
+            <MessageBarBody>{sectionErrorText(t, query)}</MessageBarBody>
           </MessageBar>
         ) : isEmpty ? (
           <Text size={200} className={styles.muted}>
