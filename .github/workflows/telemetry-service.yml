@@ -25,6 +25,11 @@ on:
     paths:
       - src/TelemetryService/**
       - src/AnalyticsEngine/Common/UsageReporting/**
+      # Importers sign uploads with DataUtils' StringUtils.GetHashedStringWithSalt, and the server refuses any
+      # signature but that exact shape (Web.Server/Auth/UploadSignature.cs). Running the tests when DataUtils
+      # changes catches a change to the client's signing before it ships. Not a push trigger: a DataUtils
+      # change alone is no reason to redeploy the service.
+      - src/AnalyticsEngine/Common/DataUtils/**
       - .github/workflows/telemetry-service.yml
       - .github/scripts/telemetry-deployment*
       - .nvmrc

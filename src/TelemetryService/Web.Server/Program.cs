@@ -66,6 +66,9 @@ builder.Services.AddAuthorization(options =>
 // Config, Cosmos, telemetry store and dashboard services (see TelemetryServiceCollectionExtensions).
 builder.Services.AddTelemetryServices(builder.Configuration);
 
+// Per-address budget for the anonymous upload endpoint. Only endpoints that opt in are limited - see UploadLimits.
+builder.Services.AddUploadRateLimiting();
+
 var app = builder.Build();
 
 app.UseDefaultFiles();
@@ -78,6 +81,9 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+// Before authentication, so an address over its upload budget is turned away before any other work.
+app.UseRateLimiter();
 
 app.UseAuthentication();
 app.UseAuthorization();
