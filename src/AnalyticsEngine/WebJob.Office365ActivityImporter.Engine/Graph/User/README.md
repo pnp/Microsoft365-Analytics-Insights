@@ -45,5 +45,8 @@ Two more pure classes live outside `Rules\`: `UserLicenseAssignmentDelta` works 
 | `IUserLicenseStore` | `SqlUserLicenseStore` | Reads and writes `user_license_type_lookups` and the licence history |
 | `IUserIdentityQuarantineStore` | `UserIdentityQuarantineStore` | Keeps quarantined users in the `AnalyticsState` table |
 | `IAnalyticsDbContextFactory` (in `Common.Entities`) | `DefaultAnalyticsDbContextFactory` | Creates the `AnalyticsEntitiesContext` the import uses |
+| `IOfficeLicenseNameResolver` | `OfficeLicenseNameResolver` (in `Graph\`) | Resolves a SKU part number to the licence display name stored in `dbo.license_types` |
 
 Tests substitute these ports to exercise the rules and the orchestration without SQL Server.
+
+`GraphUser` and `ManagerInfo` (in `UserGraphResponse.cs`) are a user and their manager as Microsoft Graph returns them.
