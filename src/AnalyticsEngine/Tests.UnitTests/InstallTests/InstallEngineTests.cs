@@ -339,6 +339,30 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(new[] { "pause", "stop", "schema", "start" }, stages);
         }
 
+        [TestMethod]
+        public async Task UpgradeDeployment_PreflightRefusalPausesAndStopsNothing_AndAPassingPreflightRunsFirst()
+        {
+            // A downloaded build too old for this installer used to be refused inside the schema stage, after the WebJobs
+            // were paused: the refusal left WEBJOBS_STOPPED=1 and the imports stopped until a later run succeeded.
+            var stages = new List<string>();
+            Func<string, Task> stage = name => { stages.Add(name); return Task.CompletedTask; };
+            var refusal = new UnexpectedInstallException("Synthetic: the downloaded build is too old.");
+
+            var error = await Assert.ThrowsExceptionAsync<UnexpectedInstallException>(() =>
+                ConfigureAzureComponentsTasks.RunUpgradeDeploymentAsync(true, true,
+                    () => stage("pause"), () => stage("resume"), () => stage("stop"), () => stage("start"),
+                    () => stage("schema"), () => stage("content"), _logger, preflight: () => Task.FromException(refusal)));
+
+            Assert.AreSame(refusal, error);
+            CollectionAssert.AreEqual(new string[0], stages, "A refused upgrade must leave the WebJobs and the site as they were.");
+
+            await ConfigureAzureComponentsTasks.RunUpgradeDeploymentAsync(true, true,
+                () => stage("pause"), () => stage("resume"), () => stage("stop"), () => stage("start"),
+                () => stage("schema"), () => stage("content"), _logger, preflight: () => stage("preflight"));
+
+            CollectionAssert.AreEqual(new[] { "preflight", "pause", "stop", "schema", "start", "content", "resume" }, stages);
+        }
+
         [DataTestMethod]
         [DataRow(null)]
         [DataRow("")]

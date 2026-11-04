@@ -413,6 +413,7 @@ namespace Tests.UnitTests
             var weekly = new CopilotUsageUserDetailLoader(source, NullLogger.Instance, null, store);
 
             Assert.AreEqual(1, await weekly.LoadAndSaveWeeklySnapshotAsync());
+            Assert.IsTrue(weekly.WeeklySnapshotAttempted, "A reading was due and asked for.");
             Assert.AreEqual(CopilotReportRequest.WeeklyPeriod, source.Requests.Single().Period);
             var reading = store.UserDetail.Values.Single(r => r.ReportPeriodDays == 7);
             Assert.AreEqual(WeekEnd, reading.Date);
@@ -421,6 +422,7 @@ namespace Tests.UnitTests
                 "The 28-day reading Copilot Adoption reads is kept beside the weekly one.");
 
             Assert.AreEqual(0, await weekly.LoadAndSaveWeeklySnapshotAsync());
+            Assert.IsFalse(weekly.WeeklySnapshotAttempted, "Nothing was due, so nothing was attempted: the cadence gate must not stamp this run.");
             Assert.AreEqual(1, source.Requests.Count, "One reading per week: the second run has nothing to collect.");
         }
 
@@ -434,7 +436,9 @@ namespace Tests.UnitTests
             midWeek.SeedUser(upn);
             await DetailLoader(UserDetailReport(upn, 28, 140, 20, monday), midWeek).LoadAndSaveAsync(DetailRequest("D28"));
             var unused = new RecordingReportSource(request => UserDetailReport(upn, 7, 30, 5, monday));
-            Assert.AreEqual(0, await new CopilotUsageUserDetailLoader(unused, NullLogger.Instance, null, midWeek).LoadAndSaveWeeklySnapshotAsync());
+            var notDue = new CopilotUsageUserDetailLoader(unused, NullLogger.Instance, null, midWeek);
+            Assert.AreEqual(0, await notDue.LoadAndSaveWeeklySnapshotAsync());
+            Assert.IsFalse(notDue.WeeklySnapshotAttempted);
             Assert.AreEqual(0, unused.Requests.Count, "On any day but a week end there is no 7-day download at all.");
 
             var store = new InMemoryCopilotUsagePersistenceManager();
@@ -442,7 +446,9 @@ namespace Tests.UnitTests
             await DetailLoader(UserDetailReport(upn, 28, 140, 20, WeekEnd), store).LoadAndSaveAsync(DetailRequest("D28"));
             var movedOn = new RecordingReportSource(request => UserDetailReport(upn, 7, 30, 5, monday));
 
-            Assert.AreEqual(0, await new CopilotUsageUserDetailLoader(movedOn, NullLogger.Instance, null, store).LoadAndSaveWeeklySnapshotAsync());
+            var discarded = new CopilotUsageUserDetailLoader(movedOn, NullLogger.Instance, null, store);
+            Assert.AreEqual(0, await discarded.LoadAndSaveWeeklySnapshotAsync());
+            Assert.IsTrue(discarded.WeeklySnapshotAttempted, "Asked for, then discarded: still an attempt, so it is stamped and not asked for again every cycle.");
             Assert.AreEqual(1, movedOn.Requests.Count);
             Assert.IsFalse(store.UserDetail.Values.Any(r => r.ReportPeriodDays == 7),
                 "A 7-day report ending on Monday covers no Monday-to-Sunday week, so it must not be stored as one.");

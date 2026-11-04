@@ -117,7 +117,8 @@ namespace App.ControlPanel.Engine
                 async () => { await webApp.StartAsync(); },
                 () => sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLogEvents),
                 () => InstallSolutionContent(solutionSources, subscription, automationAccount), _logger, CancellationToken,
-                () => sqlInstallerTasks.SchemaUpgradeDeferred);
+                () => sqlInstallerTasks.SchemaUpgradeDeferred,
+                () => sqlInstallerTasks.CheckDownloadedBuildBeforeUpgradeAsync());
 
             CancellationToken.ThrowIfCancellationRequested();
             if (this.Config.SolutionConfig.ImportTaskSettings.WebTraffic)
@@ -141,9 +142,27 @@ namespace App.ControlPanel.Engine
         internal static async Task RunUpgradeDeploymentAsync(bool installContent, bool upgradeSchema,
             Func<Task> pauseWebJobs, Func<Task> resumeWebJobs, Func<Task> stopSite, Func<Task> startSite,
             Func<Task> upgradeDatabase, Func<Task> deployContent, ILogger logger, CancellationToken cancellationToken = default(CancellationToken),
-            Func<bool> schemaUpgradeDeferred = null)
+            Func<bool> schemaUpgradeDeferred = null, Func<Task> preflight = null)
         {
             var elapsed = Stopwatch.StartNew();
+            if (preflight != null)
+            {
+                // Checks that can refuse the upgrade, such as a downloaded build too old to take the database credentials
+                // from a file, run before anything is paused or stopped: a refusal then leaves the WebJobs and the site as
+                // they were, instead of leaving WEBJOBS_STOPPED=1 and the imports stopped until a later run succeeds.
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    await preflight();
+                }
+                catch (Exception ex) when (!(ex is OperationCanceledException))
+                {
+                    logger.LogError("UpgradeDeployment: stage=preflight outcome=Refused exceptionType={ExceptionType}; nothing was paused or stopped, so the WebJobs and the site are as they were.",
+                        ex.GetType().Name);
+                    throw;
+                }
+            }
+
             var stage = "pause";
             var stopAttempted = false;
             Exception upgradeFailure = null;

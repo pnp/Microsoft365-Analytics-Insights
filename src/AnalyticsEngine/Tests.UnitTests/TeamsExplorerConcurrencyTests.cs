@@ -140,6 +140,39 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public async Task SharedBuild_ABuildOutlastingItsTtl_IsStillShared_AndItsResultThenExpiresOnTime()
+        {
+            // A build may queue for a slot and run every query of the tab, which can take longer than the 60-second ttl.
+            // Its entry used to expire while it ran, and the next request started a second build of the same section.
+            using (var cache = new MemoryCache("teamsExplorerLongBuild"))
+            {
+                var builds = 0;
+                var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                Func<Task<TeamsMeetings>> build = async () =>
+                {
+                    Interlocked.Increment(ref builds);
+                    await release.Task.ConfigureAwait(false);
+                    return new TeamsMeetings();
+                };
+                var ttl = TimeSpan.FromMilliseconds(200);
+
+                var first = TeamsExplorerAPIController.SharedBuild(cache, "k", build, ttl);
+                await Task.Delay(ttl + ttl);
+                var late = TeamsExplorerAPIController.SharedBuild(cache, "k", build, ttl);
+                Assert.IsFalse(late.IsCompleted, "A request arriving after the ttl, while the build still runs, waits for it.");
+                release.SetResult(true);
+
+                Assert.AreSame(await first, await late);
+                Assert.AreEqual(1, builds, "One build, however long it took.");
+
+                // Once built, the result lasts its ttl from when it was ready, as before.
+                await Task.Delay(ttl + ttl + ttl);
+                await TeamsExplorerAPIController.SharedBuild(cache, "k", () => { Interlocked.Increment(ref builds); return Task.FromResult(new TeamsMeetings()); }, ttl);
+                Assert.AreEqual(2, builds, "An expired result is built again.");
+            }
+        }
+
         /// <summary>
         /// Readers with and without See PII who open Meetings together share the one build, and each is still sent what they
         /// may see: the trim is applied to a copy after the shared build, never to what is cached.

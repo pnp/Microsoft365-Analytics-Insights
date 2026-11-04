@@ -446,6 +446,24 @@ namespace Common.Entities.TeamsExplorer
         private static bool IsSmall(TeamsDemographicRow row, int minimumPeople) =>
             row.KnownUsers < minimumPeople || (row.ActiveUsers > 0 && row.ActiveUsers < minimumPeople);
 
+        /// <summary>
+        /// This section with its breakdown cut to the first <paramref name="top"/> named groups, keeping the combined row.
+        /// For a reader without See PII, <see cref="WithoutSmallGroups"/> runs over every group the query can return
+        /// (<see cref="TeamsExplorerQuery.MaximumTop"/>) and this then cuts the result to the rows the page asked for. When
+        /// the fold ran over only the rows a reader-chosen <c>top</c> had returned, two requests one row apart folded
+        /// different groups, and subtracting one combined row from the other recovered a small group. Cutting after the
+        /// fold means nothing the reader can vary changes what was folded. A shallow copy, like WithoutSmallGroups.
+        /// </summary>
+        public TeamsAdoption WithFirstGroups(int top)
+        {
+            if (top < 1) throw new ArgumentOutOfRangeException(nameof(top));
+
+            var rows = Breakdown ?? new List<TeamsDemographicRow>();
+            var copy = (TeamsAdoption)MemberwiseClone();
+            copy.Breakdown = rows.Where(r => !r.Other).Take(top).Concat(rows.Where(r => r.Other)).ToList();
+            return copy;
+        }
+
         private static TeamsDemographicRow Combine(List<TeamsDemographicRow> rows)
         {
             var known = rows.Sum(r => r.KnownUsers);
@@ -807,6 +825,21 @@ namespace Common.Entities.TeamsExplorer
             copy.ChampionsByDepartment = shown;
             copy.MinimumGroupSize = minimumPeople;
             copy.OtherChampionDepartments = folded.Count;
+            return copy;
+        }
+
+        /// <summary>
+        /// This section with its departments cut to the first <paramref name="top"/> named ones, keeping the combined row.
+        /// Applied after <see cref="WithoutIndividualData"/> has folded every department the query can return, for the
+        /// reason <see cref="TeamsAdoption.WithFirstGroups"/> gives. A shallow copy.
+        /// </summary>
+        public TeamsPeople WithFirstDepartments(int top)
+        {
+            if (top < 1) throw new ArgumentOutOfRangeException(nameof(top));
+
+            var rows = ChampionsByDepartment ?? new List<TeamsNamedCountRow>();
+            var copy = (TeamsPeople)MemberwiseClone();
+            copy.ChampionsByDepartment = rows.Where(r => !r.Other).Take(top).Concat(rows.Where(r => r.Other)).ToList();
             return copy;
         }
     }

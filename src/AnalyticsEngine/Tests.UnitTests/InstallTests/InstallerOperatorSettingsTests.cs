@@ -395,7 +395,60 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
-        private static AppServicePlanTask PlanTaskFromTheInstallJob(FakeArm arm, string webAppName, string planName, ILogger logger = null)
+        [TestMethod]
+        public async Task Plan_AnExistingWebAppOnASharedPlanInAnotherResourceGroup_UsesItAsItIs_WithoutWritingToIt()
+        {
+            // A plan outside the deployment's resource group is one the operator chose to share. Writing the solution's
+            // tags to it needs access the installer's identity need not have there, and a refused write aborted the
+            // install. Installers before #828 never touched it.
+            const string sharedPlan = "/subscriptions/" + Sub + "/resourceGroups/contoso-hosting/providers/Microsoft.Web/serverfarms/contoso-shared";
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite(minTls: "1.2");
+                arm.Resource(Site)["properties"]["serverFarmId"] = sharedPlan;
+                arm.Add(sharedPlan, new JObject
+                {
+                    ["name"] = "contoso-shared", ["type"] = "Microsoft.Web/serverfarms", ["location"] = "westeurope", ["kind"] = "app",
+                    ["sku"] = new JObject { ["name"] = "P1v3", ["tier"] = "PremiumV3", ["family"] = "Pv3" }, ["properties"] = new JObject()
+                });
+                var logger = new CapturingLogger();
+                var task = PlanTaskFromTheInstallJob(arm, webAppName: "contoso-web", planName: "contoso-plan", logger: logger,
+                    tags: new[] { new AzTag("CostCentre", "Contoso-42") });
+
+                var plan = await task.ExecuteTaskReturnResult(null);
+
+                Assert.AreEqual(sharedPlan, plan.Id.ToString(), true, "The web app stays on the plan it runs on.");
+                Assert.AreEqual(0, arm.Mutations.Count, "Nothing is written to a plan outside the deployment's resource group: no tags, no second plan.");
+                Assert.IsTrue(logger.Lines.Any(l => l.Message.Contains("outside this deployment's")));
+            }
+        }
+
+        [TestMethod]
+        public async Task Plan_AnExistingWebAppOnAPlanInTheDeploymentResourceGroup_StillGetsTheConfiguredTags()
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite(minTls: "1.2");
+                const string ownPlan = Rg + "/providers/Microsoft.Web/serverfarms/contoso-web";
+                arm.Add(ownPlan + "/providers/Microsoft.Resources/tags/default", new JObject
+                {
+                    ["name"] = "default", ["type"] = "Microsoft.Resources/tags", ["properties"] = new JObject { ["tags"] = new JObject() }
+                });
+                var task = PlanTaskFromTheInstallJob(arm, webAppName: "contoso-web", planName: "contoso-plan",
+                    tags: new[] { new AzTag("CostCentre", "Contoso-42") });
+
+                var plan = await task.ExecuteTaskReturnResult(null);
+
+                Assert.AreEqual("contoso-web", plan.Data.Name);
+                var write = arm.Mutations.Single();
+                Assert.AreEqual("PATCH", write.Method);
+                Assert.AreEqual(ownPlan + "/providers/Microsoft.Resources/tags/default", write.Path, true);
+                Assert.AreEqual("Contoso-42", (string)write.Body.SelectToken("properties.tags.CostCentre"), "The deployment's own plan is tagged, as before.");
+            }
+        }
+
+        private static AppServicePlanTask PlanTaskFromTheInstallJob(FakeArm arm, string webAppName, string planName, ILogger logger = null,
+            IEnumerable<AzTag> tags = null)
         {
             var config = new SolutionInstallConfig
             {
@@ -406,7 +459,8 @@ namespace Tests.UnitTests.InstallTests
                 ResourceGroupName = "contoso", AzureLocationName = "westeurope",
                 AppServiceWebAppName = webAppName, AppServicePlanName = planName,
                 SQLServerName = "contoso-sql", SQLServerDatabaseName = "contoso-analytics", KeyVaultName = "contoso-vault",
-                StorageAccountName = "contosoanalytics", AppInsightsName = "contoso-insights", AppInsightsWorkspaceName = "contoso-workspace"
+                StorageAccountName = "contosoanalytics", AppInsightsName = "contoso-insights", AppInsightsWorkspaceName = "contoso-workspace",
+                Tags = tags?.ToList() ?? new List<AzTag>()
             };
             var job = new AzurePaaSInstallJob(logger ?? NullLogger.Instance, config, arm.Subscription);
             var task = job.PlanTask;

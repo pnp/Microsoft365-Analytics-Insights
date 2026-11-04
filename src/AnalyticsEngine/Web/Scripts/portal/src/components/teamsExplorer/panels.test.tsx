@@ -90,6 +90,33 @@ describe('AdoptionPanel', () => {
     ).toBeInTheDocument();
   });
 
+  it('says the smaller groups were left out, not combined, when even together they were too few to show', () => {
+    // Groups of 1 to 4 active people that no shown group with active people could top up: the combined row is dropped.
+    renderWithProvider(
+      <AdoptionPanel
+        data={adoption({ breakdown: adoption().breakdown.slice(0, 1), otherGroups: 2 })}
+        groupBy="jobTitle"
+        onGroupByChange={noop}
+        demographicsAvailable
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        'Groups of fewer than 5 people, or with fewer than 5 active people, are left out: even together they are too few to show without singling someone out.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/combined into one row/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/smaller groups?, combined/)).not.toBeInTheDocument();
+  });
+
+  it('says the smaller groups were combined, not left out, when their row is shown', () => {
+    renderWithProvider(<AdoptionPanel data={adoption()} groupBy="jobTitle" onGroupByChange={noop} demographicsAvailable />);
+
+    expect(screen.queryByText(/are left out/)).not.toBeInTheDocument();
+    expect(screen.getByText(/combined into one row/)).toBeInTheDocument();
+  });
+
   it('explains an empty breakdown when every group is too small to show', () => {
     renderWithProvider(
       <AdoptionPanel data={adoption({ breakdown: [], otherGroups: 4 })} groupBy="jobTitle" onGroupByChange={noop} demographicsAvailable />,
