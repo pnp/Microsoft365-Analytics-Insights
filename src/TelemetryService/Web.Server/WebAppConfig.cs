@@ -42,6 +42,24 @@ namespace Web.Config
             return TimeSpan.FromSeconds(60);
         }
 
+        /// <summary>
+        /// Optional. How many uploads one IP address may send to the anonymous upload endpoint in an hour.
+        /// Defaults to <see cref="DefaultMaxUploadsPerAddressPerHour"/> if unset / unparseable. See
+        /// <c>UploadLimits</c> for why it is this size.
+        /// </summary>
+        [ConfigValue(optional: true)] public string MaxUploadsPerAddressPerHour { get; set; } = string.Empty;
+
+        public const int DefaultMaxUploadsPerAddressPerHour = 30;
+
+        public int GetMaxUploadsPerAddressPerHour()
+        {
+            if (int.TryParse(MaxUploadsPerAddressPerHour, out var value) && value > 0)
+            {
+                return value;
+            }
+            return DefaultMaxUploadsPerAddressPerHour;
+        }
+
         [ConfigSection("CosmosDb")] public CosmosConfig CosmosDb { get; set; } = null!;
         [ConfigSection("AzureAd")] public AzureAdConfig AzureAd { get; set; } = null!;
 

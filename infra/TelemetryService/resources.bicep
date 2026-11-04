@@ -28,6 +28,9 @@ var cosmosAccountName = take('cosmos${compactPrefix}${suffix}', 44)
 var cosmosDatabaseName = 'Telemetry'
 var currentContainerName = 'Current'
 var historyContainerName = 'History'
+// Must match CosmosConfig.DefaultAnnotationsContainer in Web.Server/WebAppConfig.cs. The app setting below passes
+// it explicitly as well, so the two cannot silently disagree.
+var annotationsContainerName = 'annotations'
 var keyVaultName = take('kv${compactPrefix}${suffix}', 24)
 var telemetrySecretName = 'telemetry-upload-signing-key'
 var logAnalyticsName = take('log-${namePrefix}-${suffix}', 63)
@@ -241,6 +244,42 @@ resource historyContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
       partitionKey: {
         paths: [
           '/AnonClientId'
+        ]
+        kind: 'Hash'
+        version: 2
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/*'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/"_etag"/?'
+          }
+        ]
+      }
+    }
+    options: {}
+  }
+}
+
+// Maintainer annotations: which anonymous client is which customer (see ClientAnnotation). Provisioned here
+// because the web app cannot create it: its Cosmos access is Entra data-plane RBAC, which does not authorise
+// creating containers, so before this was declared a fresh deployment had no annotations container at all.
+// Partitioned on /id, which is what CosmosClientAnnotationStore reads and writes by.
+resource annotationsContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-11-15' = {
+  parent: cosmosDatabase
+  name: annotationsContainerName
+  properties: {
+    resource: {
+      id: annotationsContainerName
+      partitionKey: {
+        paths: [
+          '/id'
         ]
         kind: 'Hash'
         version: 2
@@ -538,6 +577,7 @@ resource webAppSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     CosmosDb__DatabaseName: cosmosDatabaseName
     CosmosDb__ContainerNameCurrent: currentContainerName
     CosmosDb__ContainerNameHistory: historyContainerName
+    CosmosDb__ContainerNameAnnotations: annotationsContainerName
     AzureAd__Instance: environment().authentication.loginEndpoint
     AzureAd__TenantId: azureAdTenantId
     AzureAd__ClientId: azureAdClientId
@@ -556,8 +596,12 @@ resource webAppSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     WEBSITE_LOAD_FIRST_PARTY_AUTH: 'true'
   } : {})
   dependsOn: [
+    // The app checks its containers when it starts (CosmosSchemaVerifier), and a settings change restarts it.
+    annotationsContainer
     cosmosDataRoleAssignment
     cosmosPrivateDnsZoneGroup
+    currentContainer
+    historyContainer
     keyVaultPrivateDnsZoneGroup
     keyVaultRoleAssignment
     telemetrySigningSecret
