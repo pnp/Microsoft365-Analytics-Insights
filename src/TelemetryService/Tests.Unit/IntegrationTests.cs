@@ -279,7 +279,7 @@ public class DependencyInjectionTests
         services.AddTelemetryServices(configuration);
 
         // ValidateOnBuild proves every constructor-injected registration can be satisfied - which is
-        // how CosmosSchemaInitializer's dependencies get checked - without instantiating anything,
+        // how CosmosSchemaVerifier's dependencies get checked - without instantiating anything,
         // so no Cosmos client is ever built and no network call is attempted.
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions
         {

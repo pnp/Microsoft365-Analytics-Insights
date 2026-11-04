@@ -1,6 +1,8 @@
+using System.Net;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -18,7 +20,7 @@ namespace Tests.Unit;
 /// Hosts the real telemetry service in-process so the wiring itself can be tested.
 ///
 /// Everything the production composition root builds is kept, with three deliberate substitutions:
-/// the Cosmos-backed adaptors become <see cref="FakeTelemetryStore"/>, the Cosmos schema initialiser
+/// the Cosmos-backed adaptors become <see cref="FakeTelemetryStore"/>, the Cosmos schema verifier
 /// is removed, and JWT bearer validation is replaced by a header-driven test scheme. What remains
 /// under test is exactly what unit tests cannot reach - routing, the authorisation policy wiring,
 /// model binding, and the DI graph - running as it does in Azure.
@@ -30,6 +32,12 @@ internal sealed class TelemetryWebAppFactory : WebApplicationFactory<Program>
 
     public const string TenantId = "00000000-0000-0000-0000-000000000000";
     public const string ClientId = "11111111-1111-1111-1111-111111111111";
+
+    /// <summary>
+    /// Request header a test sets to choose the caller's IP address. TestServer has no network connection, so
+    /// otherwise every request arrives from the same (unknown) address and per-address limits cannot be told apart.
+    /// </summary>
+    public const string RemoteAddressHeader = "X-Test-Remote-Address";
 
     /// <summary>
     /// Configuration is injected through environment variables rather than
@@ -92,12 +100,12 @@ internal sealed class TelemetryWebAppFactory : WebApplicationFactory<Program>
         {
             // Would reach for Cosmos on startup. It swallows the failure, but only after the SDK has
             // exhausted its retries, so leaving it in makes every test pay that timeout.
-            var schemaInitialiser = services.SingleOrDefault(d =>
+            var schemaVerifier = services.SingleOrDefault(d =>
                 d.ServiceType == typeof(IHostedService) &&
-                d.ImplementationType == typeof(CosmosSchemaInitializer));
-            if (schemaInitialiser != null)
+                d.ImplementationType == typeof(CosmosSchemaVerifier));
+            if (schemaVerifier != null)
             {
-                services.Remove(schemaInitialiser);
+                services.Remove(schemaVerifier);
             }
 
             // Registered last, so these win for both interfaces. StatsSaveService and
@@ -110,12 +118,37 @@ internal sealed class TelemetryWebAppFactory : WebApplicationFactory<Program>
             // after the app's own registrations, so this configuration of AuthenticationOptions wins.
             services.AddAuthentication(TestAuthHandler.SchemeName)
                 .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, _ => { });
+
+            services.AddTransient<IStartupFilter, TestRemoteAddressStartupFilter>();
         });
     }
 
     /// <summary>A client that surfaces a redirect as a redirect instead of quietly following it.</summary>
     public HttpClient CreateApiClient() =>
         CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+}
+
+/// <summary>
+/// Sets the connection's remote address from <see cref="TelemetryWebAppFactory.RemoteAddressHeader"/>. A startup
+/// filter wraps the whole application pipeline, so this runs before the rate limiter reads the address.
+/// </summary>
+internal sealed class TestRemoteAddressStartupFilter : IStartupFilter
+{
+    public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+    {
+        app.Use((context, nextMiddleware) =>
+        {
+            if (context.Request.Headers.TryGetValue(TelemetryWebAppFactory.RemoteAddressHeader, out var value)
+                && IPAddress.TryParse(value.ToString(), out var address))
+            {
+                context.Connection.RemoteIpAddress = address;
+            }
+
+            return nextMiddleware(context);
+        });
+
+        next(app);
+    };
 }
 
 /// <summary>
