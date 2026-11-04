@@ -503,7 +503,9 @@ INSERT dbo.__MigrationHistory VALUES('202610221500003_UniqueOnlineMeetingIds','S
             await documents.WriteAsync("connection", CostConnectionEncoding.Serialize(new CostConnectionState
             { AccountId = "synthetic-reader", Cache = Convert.ToBase64String(new byte[] { 1 }), Status = "connected" }), null, Ct);
             var connection = new CostConnectionService(documents, new Identity(), tenant, client,
-                "https://contoso.example/copilot-cost/callback", publicationFence: _store);
+                "https://contoso.example/copilot-cost/callback",
+                _ => Task.FromResult(new Common.Entities.State.AgentCostTokenProtection("synthetic-runtime-credential", null, CostTokenCacheProtection.Purpose)),
+                publicationFence: _store);
             var failSecond = true;
             var userReads = 0;
             using (var http = new HttpClient(new CopilotCostCollectorTests.Handler(request =>

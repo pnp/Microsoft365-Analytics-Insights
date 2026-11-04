@@ -62,7 +62,8 @@ namespace Common.Entities.CopilotCosts
                     var history = CreateHistoryStore(config);
                     var identity = new CollectorIdentity(config, callback);
                     var connection = new CostConnectionService(CreateDocumentStore(config), identity,
-                        config.TenantGUID.ToString(), config.ClientID, callback, publicationFence: history);
+                        config.TenantGUID.ToString(), config.ClientID, callback, CostTokenCacheProtection.ForConfig(config),
+                        publicationFence: history);
                     using (var slice = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
                     using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(12) })
                     {

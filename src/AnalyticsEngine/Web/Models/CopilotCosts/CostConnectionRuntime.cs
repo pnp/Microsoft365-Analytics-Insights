@@ -34,6 +34,7 @@ namespace Web.AnalyticsWeb.Models.CopilotCosts
             _store = new Lazy<ICostDocumentStore>(() => CreateStore(config), LazyThreadSafetyMode.PublicationOnly);
             _service = new Lazy<CostConnectionService>(() => new CostConnectionService(Store,
                 new CostMsalIdentity(config, Callback), config.TenantGUID.ToString(), config.ClientID, Callback,
+                CostTokenCacheProtection.ForConfig(config),
                 publicationFence: CostCollectorRuntime.CreateHistoryStore(config)),
                 LazyThreadSafetyMode.PublicationOnly);
         }

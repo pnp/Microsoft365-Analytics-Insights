@@ -1,4 +1,9 @@
+using Common.Entities.Config;
+using Common.Entities.State;
+using DataUtils;
+using Microsoft.Extensions.Logging.Abstractions;
 using System;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,6 +24,44 @@ namespace Common.Entities.CopilotCosts
         Task<CostToken> RefreshAsync(string accountId, byte[] cache, CancellationToken cancellationToken);
     }
 
+    /// <summary>
+    /// How the delegated administrator's MSAL token cache is protected in the <c>CopilotCostConnections</c> table:
+    /// encrypt-then-MAC with keys from the runtime credential (<see cref="AgentCostTokenProtection"/>), as the
+    /// Copilot Studio billing connection protects its own, under a purpose of its own.
+    /// </summary>
+    /// <remarks>
+    /// A protected cache is stored as <see cref="Prefix"/> followed by the envelope. Builds before this one stored the
+    /// cache as plain base64, which never contains a colon: such a value is still read, once, and the first write after
+    /// that stores it protected. A cache that can't be unprotected - the runtime secret or certificate has changed, or
+    /// the value was altered - needs the administrator to reconnect, never a fallback to the unprotected bytes.
+    /// </remarks>
+    public static class CostTokenCacheProtection
+    {
+        public const string Purpose = "AnalyticsState.CopilotCostDelegatedAuth.v1";
+        public const string Prefix = "protected:";
+
+        public static bool IsProtected(string value) => value != null && value.StartsWith(Prefix, StringComparison.Ordinal);
+
+        /// <summary>The protection for this deployment's runtime credential, built when it is first needed.</summary>
+        public static Func<CancellationToken, Task<AgentCostTokenProtection>> ForConfig(AppConfig config) => async ct =>
+        {
+            System.Security.Cryptography.X509Certificates.X509Certificate2 certificate = null;
+            if (config.UseClientCertificate)
+            {
+                try
+                {
+                    certificate = await AuthHelper.RetrieveKeyVaultCertificate(AuthHelper.CertificateName, config.KeyVaultUrl, NullLogger.Instance);
+                }
+                catch (Exception) when (!ct.IsCancellationRequested)
+                {
+                    throw new CostConnectionException("identityUnavailable");
+                }
+            }
+            try { return new AgentCostTokenProtection(config.ClientSecret, certificate, Purpose); }
+            catch (ArgumentException) { throw new CostConnectionException("configurationRequired"); }
+        };
+    }
+
     public sealed class CostConnectionService
     {
         internal const string Key = "connection";
@@ -29,12 +72,17 @@ namespace Common.Entities.CopilotCosts
         private readonly string _callback;
         private readonly Func<DateTimeOffset> _clock;
         private readonly ICostPublicationFence _publicationFence;
+        private readonly Func<CancellationToken, Task<AgentCostTokenProtection>> _protectionFactory;
+        private readonly object _protectionGate = new object();
+        private Task<AgentCostTokenProtection> _protection;
 
         public CostConnectionService(ICostDocumentStore store, ICostIdentity identity, string tenant, string client,
-            string callback, Func<DateTimeOffset> clock = null, ICostPublicationFence publicationFence = null)
+            string callback, Func<CancellationToken, Task<AgentCostTokenProtection>> protection,
+            Func<DateTimeOffset> clock = null, ICostPublicationFence publicationFence = null)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _identity = identity ?? throw new ArgumentNullException(nameof(identity));
+            _protectionFactory = protection ?? throw new ArgumentNullException(nameof(protection));
             _tenant = Guid.Parse(tenant).ToString();
             _client = Guid.Parse(client).ToString();
             var uri = new Uri(callback);
@@ -119,7 +167,7 @@ namespace Common.Entities.CopilotCosts
                     || (lease.State.AccountId != null && token.AccountId != lease.State.AccountId))
                     throw new CostConnectionException("accountMismatch");
                 lease.State.AccountId = token.AccountId;
-                lease.State.Cache = Convert.ToBase64String(token.Cache);
+                lease.State.Cache = await ProtectCacheAsync(token.Cache, ct);
                 lease.State.Status = "connected";
                 lease.State.ConnectedAt = _clock();
                 lease.State.RefreshedAt = _clock();
@@ -157,14 +205,12 @@ namespace Common.Entities.CopilotCosts
                 var tokenAcquired = false;
                 try
                 {
-                    byte[] cache;
-                    try { cache = Convert.FromBase64String(lease.State.Cache); }
-                    catch (FormatException) { throw new CostConnectionException("storageCorrupt"); }
+                    var cache = await ReadCacheAsync(lease.State.Cache, ct);
                     var token = await _identity.RefreshAsync(lease.State.AccountId, cache, ct);
                     tokenAcquired = true;
                     if (token.AccountId != lease.State.AccountId || token.TenantId != _tenant)
                         throw new CostConnectionException("accountMismatch");
-                    lease.State.Cache = Convert.ToBase64String(token.Cache);
+                    lease.State.Cache = await ProtectCacheAsync(token.Cache, ct);
                     lease.State.RefreshedAt = _clock();
                     lease.State.Status = "connected";
                     await lease.SaveAsync(ct);
@@ -224,8 +270,56 @@ namespace Common.Entities.CopilotCosts
             state.Owner = Guid.NewGuid().ToString("N");
             state.OwnedUntil = _clock().AddMinutes(2);
             state.Fence++;
+            await ProtectLegacyCacheAsync(state, ct);
             var version = await _store.WriteAsync(Key, CostConnectionEncoding.Serialize(state), doc?.Version, ct);
             return new Lease(_store, state, version, _clock);
+        }
+
+        /// <summary>
+        /// A cache stored unprotected by an earlier build is protected by the first write that follows - every operation
+        /// starts by writing its lease - so it is read in the clear at most once more.
+        /// </summary>
+        private async Task ProtectLegacyCacheAsync(CostConnectionState state, CancellationToken ct)
+        {
+            if (state.Cache == null || CostTokenCacheProtection.IsProtected(state.Cache)) return;
+            byte[] legacy;
+            try { legacy = Convert.FromBase64String(state.Cache); }
+            catch (FormatException) { return; } // Left for RunWithTokenAsync to report as storageCorrupt.
+            state.Cache = await ProtectCacheAsync(legacy, ct);
+        }
+
+        private async Task<string> ProtectCacheAsync(byte[] cache, CancellationToken ct)
+        {
+            if (cache == null) throw new CostConnectionException("reconnectRequired");
+            return CostTokenCacheProtection.Prefix + (await ProtectionAsync(ct)).Protect(cache);
+        }
+
+        private async Task<byte[]> ReadCacheAsync(string stored, CancellationToken ct)
+        {
+            if (!CostTokenCacheProtection.IsProtected(stored))
+            {
+                try { return Convert.FromBase64String(stored); }
+                catch (FormatException) { throw new CostConnectionException("storageCorrupt"); }
+            }
+            var protection = await ProtectionAsync(ct);
+            try { return protection.Unprotect(stored.Substring(CostTokenCacheProtection.Prefix.Length)); }
+            catch (Exception ex) when (ex is CryptographicException || ex is Newtonsoft.Json.JsonException
+                || ex is FormatException || ex is ArgumentException)
+            {
+                // The runtime secret or certificate changed, or the value was altered. Never fall back to anything else.
+                throw new CostConnectionException("reconnectRequired");
+            }
+        }
+
+        /// <summary>Built once per service, and built again after a failure (Key Vault unavailable, say).</summary>
+        private Task<AgentCostTokenProtection> ProtectionAsync(CancellationToken ct)
+        {
+            lock (_protectionGate)
+            {
+                if (_protection == null || _protection.IsFaulted || _protection.IsCanceled)
+                    _protection = _protectionFactory(ct);
+                return _protection;
+            }
         }
 
         private sealed class Lease
