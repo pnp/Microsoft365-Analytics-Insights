@@ -18,6 +18,12 @@ export const app = {
   'app.nav.expand': 'Expand navigation',
   'app.nav.ariaLabel': '{area} navigation',
 
+  // A page that failed to render, shown inside the shell so the navigation still works.
+  'app.routeError.title': 'This page could not be shown',
+  'app.routeError.body': 'Something went wrong while opening it. Reload to try again, or choose another page from the navigation. If it keeps happening, pass the details below to your administrator.',
+  'app.routeError.detail': 'Details: {message}',
+  'app.routeError.reload': 'Reload',
+
   'app.language.label': 'Language',
   'app.language.choose': 'Change language',
   'app.language.current': 'Language: {language}',

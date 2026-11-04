@@ -66,6 +66,7 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
   const credits = sources.credits;
   const metered = summary.metered;
   const points = trend?.points ?? [];
+  const trendFailed = !!trend?.failureCode;
   const maxCredits = Math.max(1, ...points.map((p) => p.credits ?? 0));
   // A reading withheld from a reader without See PII is a dash with its reason, never a zero.
   const withheld = t('copilotInvestment.trend.withheld', { count: formatNumber(trend?.minPeople ?? 5) });
@@ -144,7 +145,9 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
         />
         {trendLoading && <Spinner size="small" label={t('copilotInvestment.trend.loading')} />}
         {trendError && <Text>{trendError}</Text>}
-        {!trendLoading && !trendError && points.length === 0 && <Text size={200}>{t('copilotInvestment.trend.empty')}</Text>}
+        {/* A failed read of the readings is said as such: "no readings" would read as confirmed absence. */}
+        {!trendLoading && !trendError && trendFailed && <Text size={200}>{t('copilotInvestment.sources.credits.failed')}</Text>}
+        {!trendLoading && !trendError && !trendFailed && points.length === 0 && <Text size={200}>{t('copilotInvestment.trend.empty')}</Text>}
         {points.length > 0 && (
           <>
             <div className={styles.chart} role="list" aria-label={t('copilotInvestment.trend.title')}>

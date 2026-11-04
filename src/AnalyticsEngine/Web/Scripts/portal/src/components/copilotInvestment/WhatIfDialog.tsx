@@ -97,11 +97,21 @@ export const ILLUSTRATIVE_SCENARIO: Readonly<InvestmentScenarioOverrides> = Obje
   realisationHigh: 0.7,
 });
 
-/** Accepts the reader's decimal separator: "0,5" and "0.5" are both one half. */
+/**
+ * Reads a figure typed with either decimal separator: "0,5" and "0.5" are both one half, so a figure typed in one
+ * language still reads the same after a switch to the other.
+ *
+ * One separator followed by exactly three digits, after a whole part that does not start with 0 - "4,500" or "4.500" -
+ * is refused rather than guessed at. It is a thousands separator in one language and a decimal point in the other, and
+ * reading it the wrong way would model a price a thousand times too small for every reader. "0.125" and "4500" are not
+ * ambiguous, and are read as written.
+ */
 export function parseDecimal(text: string): number | null | 'invalid' {
   const trimmed = text.trim();
   if (trimmed === '') return null;
-  const normalised = trimmed.replace(/\s/g, '').replace(',', '.');
+  const compact = trimmed.replace(/\s/g, '');
+  if (/^[1-9]\d{0,2}[.,]\d{3}$/.test(compact)) return 'invalid';
+  const normalised = compact.replace(',', '.');
   if (!/^\d+(\.\d+)?$/.test(normalised)) return 'invalid';
   return Number(normalised);
 }

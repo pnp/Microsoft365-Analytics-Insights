@@ -218,6 +218,7 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   // Unlicensed panel
   'copilotAdoptionUsers.unlicensed.emptyTitle': 'Sin uso de Copilot sin licencia en este periodo',
   'copilotAdoptionUsers.unlicensed.emptyBody': 'Nadie sin licencia de Microsoft 365 Copilot usó Copilot en los últimos {days} días. Puede ser un hallazgo real o una señal de que la importación de auditoría de Copilot no se está ejecutando; la página Estado indicará cuál.',
+  'copilotAdoptionUsers.unlicensed.emptyBody.range': 'Nadie sin licencia de Microsoft 365 Copilot usó Copilot del {from} al {to}. Puede ser un hallazgo real o una señal de que la importación de auditoría de Copilot no se estaba ejecutando; la página Estado indicará cuál.',
   'copilotAdoptionUsers.unlicensed.truncated': 'La población sin licencia se limitó a {count} usuarios, así que estas cifras son un mínimo, no un total.',
   'copilotAdoptionUsers.unlicensed.habitTitle': 'Formación de hábito sin licencia',
   'copilotAdoptionUsers.unlicensed.habitSubtitle': 'Los mismos intervalos que usa la población con licencia, para que ambas se puedan comparar.',
@@ -241,6 +242,7 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.unlicensed.noDepartment': 'No hay información de departamento disponible para estos usuarios.',
   'copilotAdoptionUsers.unlicensed.usersLabel': 'Usuarios de Copilot sin licencia',
   'copilotAdoptionUsers.unlicensed.usersHint': 'Usó Copilot en los últimos {days} días sin licencia',
+  'copilotAdoptionUsers.unlicensed.usersHint.range': 'Usó Copilot del {from} al {to} sin licencia',
   'copilotAdoptionUsers.unlicensed.usersWhat': 'Personas distintas sin licencia de Microsoft 365 Copilot que, aun así, usaron Copilot en el periodo; en la práctica, Copilot Chat, disponible sin licencia.',
   'copilotAdoptionUsers.unlicensed.usersHow': 'Contadas desde el registro de auditoría de Copilot para cada usuario que no tiene ninguna de las SKU clasificadas como licencia de Copilot. Personas distintas, no interacciones.',
   'copilotAdoptionUsers.unlicensed.usersSource': 'Totalmente invisible en los informes de uso propios de Copilot de Microsoft, que solo cubren usuarios con licencia. Es la prueba más sólida de demanda no cubierta disponible en cualquier lugar.',
@@ -248,6 +250,7 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.unlicensed.interactionsHint': '{value} por usuario y mes',
   'copilotAdoptionUsers.unlicensed.interactionsWhat': 'Total de interacciones de Copilot realizadas por personas sin licencia y media mensual por persona.',
   'copilotAdoptionUsers.unlicensed.interactionsHow': 'Interacciones en los últimos {windowDays} días, expresadas por mes de {normalisationDays} días para que la cifra por usuario no cambie de significado al cambiar el periodo.',
+  'copilotAdoptionUsers.unlicensed.interactionsHow.range': 'Interacciones del {from} al {to}, expresadas por mes de {normalisationDays} días para que la cifra por usuario no cambie de significado al cambiar el periodo.',
   'copilotAdoptionUsers.unlicensed.interactionsSource': 'Compare la cifra por usuario con la población con licencia: que los usuarios sin licencia usen más que los usuarios con licencia es un problema de asignación de licencias, no de adopción.',
   'copilotAdoptionUsers.unlicensed.habitualLabel': 'Habitual sin licencia',
   'copilotAdoptionUsers.unlicensed.habitualHint': '{days}+ días activos al mes',

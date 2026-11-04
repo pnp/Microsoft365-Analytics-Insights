@@ -12,8 +12,13 @@ namespace Tests.UnitTests.FakeLoaderClasses
     /// <summary>
     /// Fake implementation of IUserMetadataLoader for testing
     /// </summary>
-    public class FakeUserMetadataLoader : IUserMetadataLoader
+    public class FakeUserMetadataLoader : IUserMetadataLoader, IReusedUpnVerifier
     {
+        internal Func<GraphUser, string, Task<bool>> ReusedUpnVerification { get; set; }
+
+        public Task<bool> VerifyReusedUpnAsync(GraphUser currentOwner, string previousObjectId)
+            => ReusedUpnVerification?.Invoke(currentOwner, previousObjectId) ?? Task.FromResult(false);
+
         private List<GraphUser> _fakeUsers;
         private List<SubscribedSku> _fakeSkus;
         private Dictionary<Guid, List<Microsoft.Graph.Models.User>> _fakeUsersBySku;

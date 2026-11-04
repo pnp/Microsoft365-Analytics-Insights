@@ -7,6 +7,7 @@
 export const agentCosts = {
   // Shared states and units
   'agentCosts.state.notReported': 'Not reported',
+  'agentCosts.state.loadFailed': 'These figures could not be loaded, so none are shown. Refresh to try again.',
   'agentCosts.unit.credits': 'credits',
 
   // Harness values
@@ -35,6 +36,7 @@ export const agentCosts = {
   'agentCosts.title': 'Agent costs',
   'agentCosts.intro': 'What Microsoft charged for your Copilot Studio agents, broken down as far as the billing data allows - by agent, environment, harness and billing feature, plus Azure spend for the subscriptions you import. Breakdowns only appear once Microsoft actually reports the dimension behind them.',
   'agentCosts.loading': 'Loading agent costs...',
+  'agentCosts.window.ariaLabel': 'Reporting period',
   'agentCosts.window.last7Days': 'Last 7 days',
   'agentCosts.window.last30Days': 'Last 30 days',
   'agentCosts.window.last60Days': 'Last 60 days',
@@ -97,6 +99,7 @@ export const agentCosts = {
   'agentCosts.capacity.payAsYouGo': 'Pay-as-you-go credits',
   'agentCosts.capacity.payAsYouGo.hint': 'Billed on top of pre-purchased capacity',
   'agentCosts.azureSpend.title': 'Azure spend',
+  'agentCosts.azureSpend.dimension.ariaLabel': 'Break Azure spend down by',
   'agentCosts.azureSpend.meteredUnitsBilled': '{quantity} metered units billed',
   'agentCosts.azureSpend.includesEstimates': 'Includes estimates that can still change',
 

@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import { renderWithProvider } from '../test/renderWithProvider';
-import CopilotSpendPage from './CopilotSpendPage';
+import CopilotSpendPage, { SPEND_USER_FILTER_URL_PARAM } from './CopilotSpendPage';
+import { MemoryRouter } from 'react-router-dom';
+import { serializeUserFilter } from '../components/userFilter/userFilterModel';
 import { loadCatalog } from '../i18n';
 import { fetchSpendPeople, fetchSpendPerson, fetchSpendSummary, fetchSpendTrend, spendWorkbookUrl } from '../api/copilotSpendApi';
 import type {
@@ -642,6 +644,49 @@ describe('CopilotSpendPage', () => {
     renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
 
     expect(await screen.findByText(/The newest reading is from 10 Oct 2026, before the selected period starts/)).toBeInTheDocument();
+  });
+
+  it('tells a reader without See PII that a shared link’s filter was not applied, and applies it for one with See PII', async () => {
+    const link = serializeUserFilter({ clauses: [{ join: 'and', dimension: 'department', operator: 'is', values: ['Contoso Sales'], includeNotSet: false }] })!;
+    const openLink = (seePii: boolean) =>
+      renderWithProvider(
+        <MemoryRouter initialEntries={[`/insights/copilot-spend?${SPEND_USER_FILTER_URL_PARAM}=${encodeURIComponent(link)}`]}>
+          <CopilotSpendPage />
+        </MemoryRouter>,
+        { access: { administration: false, seePii } },
+      );
+
+    const { unmount } = openLink(false);
+    expect(await screen.findByText('The filter in this link was not applied')).toBeInTheDocument();
+    await waitFor(() => expect(fetchSpendSummary).toHaveBeenCalled());
+    expect(vi.mocked(fetchSpendSummary).mock.calls[0][0].userFilter ?? null).toBeNull();
+    unmount();
+
+    vi.mocked(fetchSpendSummary).mockClear();
+    openLink(true);
+    await waitFor(() => expect(fetchSpendSummary).toHaveBeenCalled());
+    expect(vi.mocked(fetchSpendSummary).mock.calls[0][0].userFilter).toBe(link);
+    expect(screen.queryByText('The filter in this link was not applied')).not.toBeInTheDocument();
+  });
+
+  it('says the readings over time could not be read, not that there are none, when that read fails', async () => {
+    const failed = 'Copilot credits consumed could not be read just now.';
+    const none = 'There is no reading of Copilot credits consumed in this period.';
+    vi.mocked(fetchSpendTrend).mockResolvedValue({ points: [], snapshotDate: null, failureCode: 'creditsUnavailable', minPeople: 5 });
+    const { unmount } = renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Copilot credits consumed (readings)' }));
+    expect((await screen.findAllByText(failed)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(none)).not.toBeInTheDocument();
+    unmount();
+
+    // A read that worked and found nothing still says there is nothing.
+    vi.mocked(fetchSpendTrend).mockResolvedValue({ points: [], snapshotDate: null, failureCode: null, minPeople: 5 });
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Copilot credits consumed (readings)' }));
+    expect((await screen.findAllByText(none)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(failed)).not.toBeInTheDocument();
   });
 
   it('shows how consumption is spread across people, one source at a time, and names the largest and smallest consumers to a reader with See PII', async () => {

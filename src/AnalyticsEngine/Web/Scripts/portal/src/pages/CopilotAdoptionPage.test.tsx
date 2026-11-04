@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
-import CopilotAdoptionPage from './CopilotAdoptionPage';
+import CopilotAdoptionPage, { USER_FILTER_URL_PARAM } from './CopilotAdoptionPage';
+import { MemoryRouter } from 'react-router-dom';
+import { serializeUserFilter } from '../components/userFilter/userFilterModel';
 import { lastCalendarMonthRange, lastCalendarQuarterRange } from '../components/copilotAdoption/AdoptionPeriodControl';
 import {
   fetchAdoptionAvailability,
@@ -1669,5 +1671,58 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     const cowork = await tile('Tiempo recuperado con Cowork');
     expect(within(cowork).getByText('15\u201330 h')).toBeVisible();
     expect(within(cowork).getByText('al mes si las 20 personas preparadas usaran Cowork')).toBeVisible();
+  });
+});
+
+describe('CopilotAdoptionPage shared links', () => {
+  it('tells a reader without See PII that a shared link’s filter was not applied, and applies it for one with See PII', async () => {
+    const link = serializeUserFilter({ clauses: [FABRIKAM_ONLY] })!;
+    const openLink = (seePii: boolean) =>
+      renderWithProvider(
+        <MemoryRouter initialEntries={[`/insights/copilot-adoption?${USER_FILTER_URL_PARAM}=${encodeURIComponent(link)}`]}>
+          <CopilotAdoptionPage />
+        </MemoryRouter>,
+        { access: { administration: false, seePii } },
+      );
+
+    const { unmount } = openLink(false);
+    expect(await screen.findByText('The filter in this link was not applied')).toBeInTheDocument();
+    await waitFor(() => expect(fetchAdoptionSummary).toHaveBeenCalled());
+    expect(vi.mocked(fetchAdoptionSummary).mock.calls.every((call) => !call[4])).toBe(true);
+    unmount();
+
+    vi.mocked(fetchAdoptionSummary).mockClear();
+    openLink(true);
+    await waitFor(() => expect(fetchAdoptionSummary).toHaveBeenCalled());
+    expect(vi.mocked(fetchAdoptionSummary).mock.calls[0][4]).toBe(link);
+    expect(screen.queryByText('The filter in this link was not applied')).not.toBeInTheDocument();
+  });
+});
+
+describe('CopilotAdoptionPage periods with their own dates', () => {
+  const PAST_QUARTER_SUMMARY = () => summary({
+    windowDays: 92,
+    fromUtc: '2026-07-01T00:00:00Z',
+    toUtc: '2026-09-30T00:00:00Z',
+    options: { ...options, windowDays: 92, usesExplicitDates: true, fromUtc: '2026-07-01T00:00:00Z', toUtc: '2026-09-30T00:00:00Z', toExclusiveUtc: '2026-10-01T00:00:00Z' },
+  });
+
+  it('dates unlicensed use by the quarter analysed, never by the rolling window the selector last held', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(PAST_QUARTER_SUMMARY());
+    await renderPage();
+    choosePeriod('lastQuarter');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Unlicensed usage' }));
+
+    expect(await screen.findByText(/^Used Copilot from 1 Jul 2026 to 30 Sept? 2026 with no licence$/)).toBeInTheDocument();
+    expect(screen.queryByText(/in the last 28 days/)).not.toBeInTheDocument();
+  });
+
+  it('keeps "the last N days" for a rolling window', async () => {
+    await renderPage();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Unlicensed usage' }));
+
+    expect(await screen.findByText('Used Copilot in the last 28 days with no licence')).toBeInTheDocument();
   });
 });

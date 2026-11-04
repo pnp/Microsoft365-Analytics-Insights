@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import { renderWithProvider } from '../test/renderWithProvider';
-import CopilotInvestmentPage from './CopilotInvestmentPage';
+import CopilotInvestmentPage, { USER_FILTER_URL_PARAM } from './CopilotInvestmentPage';
+import { MemoryRouter } from 'react-router-dom';
+import { serializeUserFilter } from '../components/userFilter/userFilterModel';
 import { loadCatalog } from '../i18n';
 import {
   fetchInvestmentAvailability,
@@ -384,6 +386,47 @@ describe('CopilotInvestmentPage', () => {
     const table = screen.getByRole('table', { name: 'Consumed-credit readings over time' });
     expect(within(table).getByRole('img', { name: 'Not shown: it could single out fewer than 5 people' })).toBeInTheDocument();
     expect(within(table).queryByText('0')).not.toBeInTheDocument();
+  });
+
+  it('says the consumption readings could not be read, not that there are none, when that read fails', async () => {
+    vi.mocked(fetchInvestmentTrend).mockResolvedValue({ points: [], snapshotDate: null, failureCode: 'creditsUnavailable', minPeople: 5 });
+    const { unmount } = renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Credits & sources' }));
+    expect(await screen.findByText('The credit history could not be read just now: readings are missing, not zero.')).toBeInTheDocument();
+    expect(screen.queryByText('No consumption readings in this period.')).not.toBeInTheDocument();
+    unmount();
+
+    // A read that worked and found nothing still says there is nothing.
+    vi.mocked(fetchInvestmentTrend).mockResolvedValue({ points: [], snapshotDate: null, failureCode: null, minPeople: 5 });
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Credits & sources' }));
+    expect(await screen.findByText('No consumption readings in this period.')).toBeInTheDocument();
+    expect(screen.queryByText('The credit history could not be read just now: readings are missing, not zero.')).not.toBeInTheDocument();
+  });
+
+  it('tells a reader without See PII that a shared link’s filter was not applied, and applies it for one with See PII', async () => {
+    const link = serializeUserFilter({ clauses: [{ join: 'and', dimension: 'department', operator: 'is', values: ['Contoso Sales'], includeNotSet: false }] })!;
+    const openLink = (seePii: boolean) =>
+      renderWithProvider(
+        <MemoryRouter initialEntries={[`/insights/copilot-investment?${USER_FILTER_URL_PARAM}=${encodeURIComponent(link)}`]}>
+          <CopilotInvestmentPage />
+        </MemoryRouter>,
+        { access: { administration: false, seePii } },
+      );
+
+    const { unmount } = openLink(false);
+    expect(await screen.findByText('The filter in this link was not applied')).toBeInTheDocument();
+    await waitFor(() => expect(fetchInvestmentSummary).toHaveBeenCalled());
+    expect(vi.mocked(fetchInvestmentSummary).mock.calls[0][0].userFilter ?? null).toBeNull();
+    unmount();
+
+    vi.mocked(fetchInvestmentSummary).mockClear();
+    openLink(true);
+    await waitFor(() => expect(fetchInvestmentSummary).toHaveBeenCalled());
+    expect(vi.mocked(fetchInvestmentSummary).mock.calls[0][0].userFilter).toBe(link);
+    expect(screen.queryByText('The filter in this link was not applied')).not.toBeInTheDocument();
   });
 
   it('leads with the answer and the modelled figures it rests on, each labelled as modelled', async () => {

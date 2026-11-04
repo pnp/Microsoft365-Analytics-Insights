@@ -320,7 +320,7 @@ const ESTATE: AgentEstateSummary = {
 
 describe('Agent inventory: reach across departments (#647)', () => {
   it('shows departments reached and the home department with its share, withholding a small one', () => {
-    renderWithProvider(<AgentsPanel estate={ESTATE} agents={AGENTS} options={OPTIONS} windowDays={28} sql={null} />);
+    renderWithProvider(<AgentsPanel estate={ESTATE} agents={AGENTS} options={OPTIONS} sql={null} />);
 
     expect(screen.getByRole('columnheader', { name: 'Departments' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Home department' })).toHaveAttribute(

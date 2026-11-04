@@ -436,6 +436,7 @@ export const copilotAdoption = {
 
   'copilotAdoption.page.theSameMeasuresDepartmentTableOrganisationsRunEnablementRegionally': 'The same measures as the department table, for organisations that run enablement regionally.',
   'copilotAdoption.page.notEnoughLicensedUsersAnyAccountableGroupBreakDown': 'Not enough licensed users in any accountable group to break down reliably.',
+  'copilotAdoption.page.pastRangeManagerRollupHidden': 'This period does not end today, so the roll-up by manager is not shown: each of its rows names a manager, and lists that name people are only shown for periods ending today. Choose a period ending today to see it.',
   'copilotAdoption.page.seats2': 'Seats',
   'copilotAdoption.page.adoption': 'Adoption',
   'copilotAdoption.page.habit': 'Habit',

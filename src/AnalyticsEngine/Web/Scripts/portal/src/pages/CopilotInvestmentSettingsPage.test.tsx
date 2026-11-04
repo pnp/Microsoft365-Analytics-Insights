@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../test/renderWithProvider';
 import { LANGUAGE_STORAGE_KEY, LanguageSwitcher, loadCatalog } from '../i18n';
 import CopilotInvestmentSettingsPage from './CopilotInvestmentSettingsPage';
+import { parseDecimal } from '../components/copilotInvestment/WhatIfDialog';
 import {
   InvestmentSettingsError,
   fetchInvestmentSettings,
@@ -99,7 +100,17 @@ describe('CopilotInvestmentSettingsPage', () => {
     fireEvent.change(await screen.findByLabelText('Licence price a month'), { target: { value: 'thirty' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save assumptions' }));
 
-    expect(await screen.findByText('Enter a number, using a full stop or comma for decimals.')).toBeInTheDocument();
+    expect(await screen.findByText('Enter a number, using a full stop or comma for decimals and no thousands separator.')).toBeInTheDocument();
+    expect(saveInvestmentSettings).not.toHaveBeenCalled();
+  });
+
+  it.each(['4,500', '4.500'])('refuses %s rather than guessing whether it is four and a half or four thousand five hundred', async (typed) => {
+    renderWithProvider(<CopilotInvestmentSettingsPage />);
+
+    fireEvent.change(await screen.findByLabelText('Fully loaded hourly cost'), { target: { value: typed } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save assumptions' }));
+
+    expect(await screen.findByText('Enter a number, using a full stop or comma for decimals and no thousands separator.')).toBeInTheDocument();
     expect(saveInvestmentSettings).not.toHaveBeenCalled();
   });
 
@@ -180,12 +191,12 @@ describe('CopilotInvestmentSettingsPage', () => {
     );
     fireEvent.change(await screen.findByLabelText('Licence price a month'), { target: { value: 'thirty' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save assumptions' }));
-    expect(await screen.findByText('Enter a number, using a full stop or comma for decimals.')).toBeInTheDocument();
+    expect(await screen.findByText('Enter a number, using a full stop or comma for decimals and no thousands separator.')).toBeInTheDocument();
 
     await switchToSpanish();
 
-    expect(await screen.findByText('Escriba un n\u00famero, con punto o coma para los decimales.')).toBeInTheDocument();
-    expect(screen.queryByText('Enter a number, using a full stop or comma for decimals.')).not.toBeInTheDocument();
+    expect(await screen.findByText('Escriba un n\u00famero, con punto o coma para los decimales y sin separador de miles.')).toBeInTheDocument();
+    expect(screen.queryByText('Enter a number, using a full stop or comma for decimals and no thousands separator.')).not.toBeInTheDocument();
     expect(saveInvestmentSettings).not.toHaveBeenCalled();
   });
 
@@ -249,5 +260,23 @@ describe('CopilotInvestmentSettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save assumptions' }));
     await waitFor(() => expect(saveInvestmentSettings).toHaveBeenCalledTimes(1));
     expect(vi.mocked(saveInvestmentSettings).mock.calls[0][1].hourlyCost).toBe(52.5);
+  });
+});
+
+describe('parseDecimal', () => {
+  it('reads either decimal separator, and figures with no separator, as written', () => {
+    expect(parseDecimal('52,5')).toBe(52.5);
+    expect(parseDecimal('52.5')).toBe(52.5);
+    expect(parseDecimal('0,125')).toBe(0.125);
+    expect(parseDecimal('12.25')).toBe(12.25);
+    expect(parseDecimal('4500')).toBe(4500);
+    expect(parseDecimal('')).toBeNull();
+  });
+
+  it('refuses a figure whose separator could be a thousands separator in either language', () => {
+    expect(parseDecimal('4,500')).toBe('invalid');
+    expect(parseDecimal('4.500')).toBe('invalid');
+    expect(parseDecimal('1,000')).toBe('invalid');
+    expect(parseDecimal('1,000.50')).toBe('invalid');
   });
 });

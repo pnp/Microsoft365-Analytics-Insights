@@ -15,6 +15,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class SqlInstallerTasks
     {
         public CancellationToken CancellationToken { get; set; }
+        internal bool SchemaUpgradeDeferred { get; private set; }
         private readonly SolutionInstallConfig _config;
         private readonly FileInfo _exeFile;
         private readonly DatabasePaaSInfo _dbInfo;
@@ -129,6 +130,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _logger.LogInformation($"Calling downloaded control-panel app to init/update database. This could take a while if the existing schema needs updating.");
 
             var result = await SendMsgToInstaller(InstallerConstants.PARAM_INITDB, upgradeInfo.ToBase64());
+            if (result.FailedToStart)
+            {
+                SchemaUpgradeDeferred = true;
+                _logger.LogError("Database initialisation did not run because Windows could not launch the downloaded installer. " +
+                    "Continuing the remaining installation tasks, but WebJobs will remain paused (WEBJOBS_STOPPED=1). " +
+                    "Apply the matching release's manual SQL upgrade scripts in migration-id order, or re-run the installer from an approved machine. " +
+                    "Verify the schema and matching binaries before restoring WebJobs.");
+                return;
+            }
             if (!result.Success)
             {
                 throw new UnexpectedInstallException(
@@ -191,6 +201,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // The payload goes in a file whatever the build: --registerconfig has always taken one.
             var result = await SendMsgToInstaller(InstallerConstants.PARAM_REGISTERCONFIG, status.ToBase64());
 
+            if (result.FailedToStart)
+            {
+                _logger.LogWarning("Configuration and installation status were not registered because Windows could not launch the downloaded installer. " +
+                    "Continuing installation. Keep the saved installer configuration and local install log; re-run from an approved machine to register them.");
+                return;
+            }
             if (!result.Success)
             {
                 throw new UnexpectedInstallException(
@@ -205,6 +221,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         private class ChildResult
         {
+            public bool FailedToStart { get; set; }
             public bool Success { get; set; }
             public int ExitCode { get; set; }
             public string StandardOutput { get; set; }
@@ -278,7 +295,19 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     stderr.AppendLine(e.Data);
                     _logger.LogWarning($"  [child stderr] {e.Data}");
                 };
-                proc.Start();
+                try
+                {
+                    StartChildProcess(proc);
+                }
+                catch (Exception ex) when (ex is System.ComponentModel.Win32Exception ||
+                    ex is UnauthorizedAccessException || ex is System.Security.SecurityException)
+                {
+                    CancellationToken.ThrowIfCancellationRequested();
+                    _logger.LogWarning("Downloaded installer launch failed: operation={Operation} exceptionType={ExceptionType} nativeError={NativeError}. " +
+                        "The executable could not be started; check Windows application-control policy and file permissions. No command arguments are logged.",
+                        param, ex.GetType().Name, (ex as System.ComponentModel.Win32Exception)?.NativeErrorCode);
+                    return new ChildResult { FailedToStart = true };
+                }
                 proc.BeginOutputReadLine();
                 proc.BeginErrorReadLine();
 
@@ -293,6 +322,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 };
             }
         }
+
+        internal virtual void StartChildProcess(Process process) => process.Start();
 
         internal static async Task WaitForChildExitAsync(Process process, CancellationToken cancellationToken, ILogger logger)
         {

@@ -18,7 +18,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// <summary>
     /// Graph API implementation of user metadata loader
     /// </summary>
-    public class GraphUserLoader : IUserMetadataLoader
+    public class GraphUserLoader : IUserMetadataLoader, IReusedUpnVerifier
     {
         private readonly ManualGraphCallClient _httpClient;
         private readonly IDeltaValueProvider _deltaValueProvider;
@@ -199,6 +199,66 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <inheritdoc />
         public GraphUserDeactivations LastLoadDeactivations { get; private set; } = GraphUserDeactivations.None;
+
+        /// <summary>
+        /// Only used for conflicting identities, never for the directory's general population. All requests use this
+        /// loader's tenant/app credentials. A successful bounded directory query is required even after a 404:
+        /// a 404 alone cannot distinguish absence from an unreadable object. Do not request eventual consistency.
+        /// </summary>
+        public async Task<bool> VerifyReusedUpnAsync(GraphUser currentOwner, string previousObjectId)
+        {
+            if (currentOwner?.AccountEnabled != true || !Guid.TryParse(currentOwner.Id, out var currentId)
+                || !Guid.TryParse(previousObjectId, out var previousId) || currentId == previousId)
+                return DeclineReusedUpn("invalid or inactive current identity");
+
+            try
+            {
+                var current = await _graphServiceClient.Users[currentId.ToString()].GetAsync(rc =>
+                    rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" });
+                if (current?.AccountEnabled != true
+                    || !string.Equals(current.Id, currentOwner.Id, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(current.UserPrincipalName, currentOwner.UserPrincipalName, StringComparison.OrdinalIgnoreCase))
+                    return DeclineReusedUpn("fresh current-owner response differs from the profile being reconciled");
+
+                try
+                {
+                    await _graphServiceClient.Users[previousId.ToString()].GetAsync(rc =>
+                        rc.QueryParameters.Select = new[] { "id" });
+                    return DeclineReusedUpn("previous object still exists (disabled is not deleted)");
+                }
+                catch (ODataError ex) when (ex.ResponseStatusCode == 404)
+                {
+                    // Even a prior deletion can be stale after a restore, and /users can lag. Always require this
+                    // fresh object-ID 404, corroborated by the successful directory query below, never on its own.
+                }
+
+                // Include the known current owner as a positive read/permission control in the same response, and
+                // every owner of the name as well as the old object. A nextLink is deliberately not followed: these
+                // predicates can legitimately match at most two users, so a partial answer establishes nothing.
+                var name = currentOwner.UserPrincipalName.Replace("'", "''");
+                var page = await _graphServiceClient.Users.GetAsync(rc =>
+                {
+                    rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" };
+                    rc.QueryParameters.Filter = $"id eq '{currentId}' or id eq '{previousId}' or userPrincipalName eq '{name}'";
+                });
+                var only = page?.Value?.Count == 1 ? page.Value[0] : null;
+                var confirmed = string.IsNullOrEmpty(page?.OdataNextLink) && only?.AccountEnabled == true
+                    && string.Equals(only.Id, currentOwner.Id, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(only.UserPrincipalName, currentOwner.UserPrincipalName, StringComparison.OrdinalIgnoreCase);
+                return confirmed || DeclineReusedUpn("directory response is partial, ambiguous or does not corroborate previous-object absence");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("User import - reused UPN verification unavailable ({ExceptionType}); retaining identity quarantine.", ex.GetType().Name);
+                return false;
+            }
+        }
+
+        private bool DeclineReusedUpn(string reason)
+        {
+            _logger.LogInformation("User import - reused UPN verification declined: {Reason}; retaining identity quarantine.", reason);
+            return false;
+        }
 
         /// <summary>The same endpoint and API version as the <c>/users/delta</c> read it is compared with.</summary>
         internal const string DirectoryUserCountUrl = "https://graph.microsoft.com:443/v1.0/users/$count";

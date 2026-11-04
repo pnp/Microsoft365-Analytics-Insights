@@ -20,6 +20,22 @@ namespace Tests.UnitTests
     public class UserMetadataUpdaterMetadataTests
     {
         [TestMethod]
+        public void DirectMetadataUpdate_DistinctObjectCannotReplaceIdentity_ButPlaceholderCanBeAdopted()
+        {
+            var row = new User { AzureAdId = "00000000-0000-0000-0000-000000000001", AccountEnabled = false, PostalCode = "12345" };
+            var graph = new GraphUser { Id = "00000000-0000-0000-0000-000000000002", AccountEnabled = true, PostalCode = "54321" };
+            var updater = new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), new FakeUserMetadataLoader());
+            Assert.ThrowsException<InvalidOperationException>(() => updater.UpdateDbUserFromGraphUser(row, graph));
+            Assert.AreEqual("00000000-0000-0000-0000-000000000001", row.AzureAdId);
+            Assert.AreEqual("12345", row.PostalCode);
+            Assert.AreEqual(false, row.AccountEnabled);
+            row.AzureAdId = null;
+            updater.UpdateDbUserFromGraphUser(row, graph);
+            Assert.AreEqual(graph.Id, row.AzureAdId);
+            Assert.AreEqual("54321", row.PostalCode);
+        }
+
+        [TestMethod]
         public async Task UserMetadataUpdater_UserDeactivated_AccountEnabledUpdated()
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
@@ -118,23 +134,27 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// A deleted account's sign-in name given to a new account in the same read - a rehire, say. The row is matched by
-        /// sign-in name, so this run moves it to the new account; marking it disabled for the deleted one would disable
-        /// the person who just started.
+        /// A reused sign-in name belongs to a separate identity. The old row and its references must not move to
+        /// the new object, even when the new object has never had a SQL row.
         /// </summary>
         [TestMethod]
-        public async Task UserMetadataUpdater_DeletedAccountsSignInNameReused_TheNewAccountStaysEnabled()
+        public async Task UserMetadataUpdater_DeletedAccountsSignInNameReused_PreservesBothIdentities()
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var userUpn = $"reusedname{DateTime.Now.Ticks}@contoso.com";
             var oldId = Guid.NewGuid().ToString();
             var newId = Guid.NewGuid().ToString();
             await DeleteUsers(userUpn);
+            int oldRowId = 0;
 
             try
             {
                 var loader = new FakeUserMetadataLoader(new List<GraphUser> { new GraphUser { UserPrincipalName = userUpn, Id = oldId, AccountEnabled = true, Mail = userUpn } });
                 Assert.IsTrue(await new UserMetadataUpdater(logger, new AppConfig(), loader).InsertAndUpdateDatabaseFromExternalUsers(), "Cycle 1");
+                using (var db = new AnalyticsEntitiesContext())
+                    oldRowId = (await db.users.SingleAsync(u => u.UserPrincipalName == userUpn)).ID;
+                loader.ReusedUpnVerification = (owner, previous) =>
+                    Task.FromResult(owner.Id == newId && previous == oldId);
 
                 loader.DeltaUsersOverride = new List<GraphUser>
                 {
@@ -148,11 +168,18 @@ namespace Tests.UnitTests
                     var dbUser = await db.users.SingleAsync(u => u.UserPrincipalName == userUpn);
                     Assert.AreEqual(newId, dbUser.AzureAdId);
                     Assert.AreEqual(true, dbUser.AccountEnabled);
+                    Assert.AreNotEqual(oldRowId, dbUser.ID, "The new account must not inherit the deleted account's PK/history.");
+                    var old = await db.users.SingleAsync(u => u.ID == oldRowId);
+                    Assert.AreEqual(oldId, old.AzureAdId);
+                    Assert.AreEqual(false, old.AccountEnabled);
+                    Assert.AreEqual(UserRenameProcessor.HistoricalName(oldRowId, Guid.Parse(oldId)), old.UserPrincipalName);
                 }
             }
             finally
             {
                 await DeleteUsers(userUpn);
+                if (oldRowId != 0)
+                    await DeleteUsers(UserRenameProcessor.HistoricalName(oldRowId, Guid.Parse(oldId)));
             }
         }
 

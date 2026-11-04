@@ -33,6 +33,12 @@ vi.mock('./api/activityAnalysisApi', () => ({
   fetchActivityAnalysisReport: vi.fn(),
   fetchActivityAnalysisPeople: vi.fn(),
 }));
+// Stands in for any page with a render-time fault; no other test here opens the DLP page.
+vi.mock('./pages/DlpPage', () => ({
+  default: () => {
+    throw new Error('Synthetic render failure');
+  },
+}));
 
 /** Records each distinct location react-router lands on, including duplicate pushes. */
 function LocationLog({ log }: { log: string[] }) {
@@ -167,6 +173,29 @@ describe('Activity analysis navigation', () => {
     expect(await screen.findByText('Activity analysis is not set up on this deployment')).toBeVisible();
     expect(within(screen.getByLabelText('Insights navigation')).getByText('Activity analysis')).toBeVisible();
     expect(fetchActivityAnalysisReport).not.toHaveBeenCalled();
+  });
+});
+
+describe('A page that fails to render', () => {
+  it('costs only that page: the header and navigation stay, and the next page opens normally', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const user = userEvent.setup();
+      renderAt('/insights/dlp');
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('This page could not be shown');
+      expect(screen.getByRole('button', { name: 'Reload' })).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible();
+
+      const nav = screen.getByLabelText('Insights navigation');
+      await user.click(within(nav).getByText('Apps & licences'));
+      await user.click(within(nav).getByText('Licence activity'));
+
+      expect(await screen.findByText(/Licence activity reporting is not available on this deployment/)).toBeVisible();
+      expect(screen.queryByText('This page could not be shown')).not.toBeInTheDocument();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 });
 
