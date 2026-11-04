@@ -34,6 +34,12 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>A Service Bus connection string exists - a hard prerequisite of the calls webhook.</summary>
         public bool ServiceBus { get; set; }
 
+        /// <summary>
+        /// The importers are narrowed to members of some groups, so the usage reports are not imported for everyone
+        /// in the directory and a person with no usage row may simply never have been looked at.
+        /// </summary>
+        public bool UsageReportsGroupFiltered { get; set; }
+
         /// <summary>Reads the toggles from application configuration.</summary>
         public static TeamsExplorerSources FromConfig(AppConfig config)
         {
@@ -49,6 +55,8 @@ namespace Common.Entities.TeamsExplorer
                 ServiceBus = config != null
                     && config.ConnectionStrings != null
                     && !string.IsNullOrWhiteSpace(config.ConnectionStrings.ServiceBusConnectionString),
+                // A match-everything filter ('*') narrows nothing, so it is not a group filter.
+                UsageReportsGroupFiltered = config != null && new UserGroupsFilterModel(config.UserGroupsFilter).IsNarrowing,
             };
         }
     }

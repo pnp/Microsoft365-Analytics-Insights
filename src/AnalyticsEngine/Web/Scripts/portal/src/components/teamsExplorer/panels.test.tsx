@@ -181,6 +181,49 @@ describe('PeoplePanel', () => {
     expect(screen.getByText(/not for performance management/)).toBeInTheDocument();
   });
 
+  it('says why nobody is listed as dormant when the period was not imported in full', () => {
+    renderWithProvider(
+      <PeoplePanel
+        data={people({
+          dormancy: {
+            known: false,
+            reason: 'incompleteImport',
+            expectedDays: 28,
+            importedDays: 26,
+            teamsLicensedUsers: 40,
+            unmeasuredUsers: 0,
+          },
+        })}
+        usageReportsAvailable
+        onExportChampions={noop}
+        onExportDormant={noop}
+        exporting={false}
+        showPii
+      />,
+    );
+
+    expect(screen.getByText(/were imported for 26 of its 28 days/)).toBeInTheDocument();
+    expect(screen.queryByText('Everyone licensed for Teams did something in Teams this period.')).not.toBeInTheDocument();
+  });
+
+  it('keeps the plain empty message when dormancy was measured in full', () => {
+    renderWithProvider(
+      <PeoplePanel
+        data={people({
+          dormancy: { known: true, reason: null, expectedDays: 28, importedDays: 28, teamsLicensedUsers: 40, unmeasuredUsers: 0 },
+        })}
+        usageReportsAvailable
+        onExportChampions={noop}
+        onExportDormant={noop}
+        exporting={false}
+        showPii
+      />,
+    );
+
+    expect(screen.getByText('Everyone licensed for Teams did something in Teams this period.')).toBeInTheDocument();
+    expect(screen.queryByText(/Dormant people cannot be identified/)).not.toBeInTheDocument();
+  });
+
   it('explains anonymised usage reports as a tenant setting, not a product fault', () => {
     renderWithProvider(
       <PeoplePanel

@@ -5,6 +5,7 @@ import type { KpiTone } from '../shared/KpiGrid';
 import { formatDateParts, formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
 import type {
   TeamsBucket,
+  TeamsDormancy,
   TeamsNamedCount,
   TeamsQueryInfo,
   TeamsWindow,
@@ -199,6 +200,31 @@ export function translatedBucketsToCategories(
 /** Looks up one section's query diagnostics by key. */
 export function queryFor(queries: TeamsQueryInfo[], key: string): TeamsQueryInfo | undefined {
   return queries.find((q) => q.key === key);
+}
+
+/**
+ * Why licensed people with no Teams activity are not called dormant, or undefined when they can be (or when an
+ * older API sent no answer). The usage reports list only the people active each day, so the server says when
+ * absence proves nothing and this writes the sentence.
+ */
+export function dormancyText(t: TFunction, dormancy: TeamsDormancy | undefined): string | undefined {
+  if (!dormancy || dormancy.known) return undefined;
+
+  switch (dormancy.reason) {
+    case 'incompleteImport':
+      return t('teamsExplorer.dormancy.incompleteImport', {
+        imported: formatCount(dormancy.importedDays),
+        expected: formatCount(dormancy.expectedDays),
+      });
+    case 'groupFiltered':
+      return t('teamsExplorer.dormancy.groupFiltered');
+    case 'namesConcealed':
+      return t('teamsExplorer.dormancy.namesConcealed');
+    case 'noTeamsLicences':
+      return t('teamsExplorer.dormancy.noTeamsLicences');
+    default:
+      return t('teamsExplorer.dormancy.notChecked');
+  }
 }
 
 const useStyles = makeStyles({

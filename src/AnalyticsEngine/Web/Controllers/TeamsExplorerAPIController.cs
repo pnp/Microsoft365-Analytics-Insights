@@ -349,7 +349,8 @@ namespace Web.AnalyticsWeb.Controllers
             string groupBy = TeamsExplorerQuery.DefaultGrouping,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = TeamsExplorerQuery.Create(days, DateTime.UtcNow, groupBy, top);
+            var query = TeamsExplorerQuery.Create(days, DateTime.UtcNow, groupBy, top)
+                .WithUsageReportsGroupFiltered(ReadSources().UsageReportsGroupFiltered);
             var scope = await _scopes.ResolveAsync(Request, User, null, CancellationToken.None).ConfigureAwait(false);
             return scope.IsRestricted ? query.WithUserScope(scope.Sql) : query;
         }

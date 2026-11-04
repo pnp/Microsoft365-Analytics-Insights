@@ -21,6 +21,7 @@ import { plural, useT, useTNode, type TFunction } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
+  dormancyText,
   formatCount,
   formatDate,
   queryFor,
@@ -110,6 +111,14 @@ export default function PeoplePanel({
       ? t('teamsExplorer.people.championDepartments.allSmall', { count: formatCount(minimumGroupSize) })
       : undefined;
 
+  // The usage reports list only the people active each day, so a licensed person with no activity is listed as
+  // dormant only when the server could prove it. Otherwise the card says why they are not.
+  const dormancyNote = dormancyText(t, data.dormancy);
+  const dormantEmptyMessage = dormancyNote ?? t('teamsExplorer.people.dormant.empty');
+  const dormantNote = dormancyNote && data.dormant.length > 0
+    ? `${t('teamsExplorer.people.dormant.note')} ${dormancyNote}`
+    : t('teamsExplorer.people.dormant.note');
+
   if (!usageReportsAvailable) {
     return (
       <MessageBar intent="warning">
@@ -174,10 +183,8 @@ export default function PeoplePanel({
               description={t('teamsExplorer.people.dormant.description')}
               query={queryFor(data.queries, 'people-dormant')}
               isEmpty={data.dormant.length === 0}
-              emptyMessage={t('teamsExplorer.people.dormant.empty')}
-              note={
-                t('teamsExplorer.people.dormant.note')
-              }
+              emptyMessage={dormantEmptyMessage}
+              note={dormantNote}
             >
               <div className={styles.exportRow}>
                 <Button

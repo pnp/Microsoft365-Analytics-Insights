@@ -120,7 +120,11 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>Directory users the reach percentage is measured against.</summary>
         public int KnownUsers { get; set; }
 
-        /// <summary>Distinct users with any Teams activity in the usage-report window.</summary>
+        /// <summary>
+        /// Enabled (or unknown) directory users with any Teams activity in the usage-report window - the same
+        /// population as <see cref="KnownUsers"/>, so reach can never count a since-disabled account on one side
+        /// only.
+        /// </summary>
         public int ActiveUsers { get; set; }
 
         public double ReachPct { get; set; }
@@ -190,6 +194,82 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsTrendPoint> Trend { get; set; } = new List<TeamsTrendPoint>();
         public List<TeamsSegmentSlice> SegmentMix { get; set; } = new List<TeamsSegmentSlice>();
         public List<TeamsJudgement> Judgements { get; set; } = new List<TeamsJudgement>();
+
+        /// <summary>Whether the engagement mix's Dormant share could be measured, and why not.</summary>
+        public TeamsDormancy Dormancy { get; set; } = new TeamsDormancy();
+    }
+
+    /// <summary>
+    /// Whether the usage reports can prove that somebody did nothing in Teams in the window, and the facts behind
+    /// the answer, so the page can say why when they cannot.
+    /// </summary>
+    /// <remarks>
+    /// The importer reads Graph's Teams user-activity report one date at a time, and Microsoft documents that form
+    /// as listing the users who performed activity on that date. A licensed person with no row is therefore dormant
+    /// only when every day of the window was imported, the import covers everyone, and the reports carry real
+    /// names (see <see cref="TeamsExplorerSql.UsageCoverageDeclarations"/>). When any of those fails, such people
+    /// are left out of the Dormant segment and list - and counted in <see cref="UnmeasuredUsers"/> - rather than
+    /// called dormant on evidence that cannot show it.
+    /// </remarks>
+    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
+    public sealed class TeamsDormancy
+    {
+        /// <summary><see cref="Reason"/> when a day of the window has no usage report imported.</summary>
+        public const string IncompleteImport = "incompleteImport";
+
+        /// <summary><see cref="Reason"/> when the usage import is narrowed to members of some groups.</summary>
+        public const string GroupFiltered = "groupFiltered";
+
+        /// <summary><see cref="Reason"/> when the usage reports carry concealed names.</summary>
+        public const string NamesConcealed = "namesConcealed";
+
+        /// <summary><see cref="Reason"/> when nobody in scope holds a licence that includes Teams, as far as the directory shows.</summary>
+        public const string NoTeamsLicences = "noTeamsLicences";
+
+        /// <summary><see cref="Reason"/> when the check itself failed, so nothing can be said.</summary>
+        public const string NotChecked = "notChecked";
+
+        /// <summary>True when a licensed person with no Teams activity can be called dormant.</summary>
+        public bool Known { get; set; }
+
+        /// <summary>A stable key for why <see cref="Known"/> is false (the page writes the sentence); null when it is true.</summary>
+        public string Reason { get; set; }
+
+        /// <summary>Days in the usage window.</summary>
+        public int ExpectedDays { get; set; }
+
+        /// <summary>Days in the usage window with a Teams usage report imported - any row at all, from anyone.</summary>
+        public int ImportedDays { get; set; }
+
+        /// <summary>Enabled people in scope holding a licence that includes Teams.</summary>
+        public int TeamsLicensedUsers { get; set; }
+
+        /// <summary>
+        /// Licensed people with no usage row in the window, left out of the engagement mix because
+        /// <see cref="Known"/> is false. Always 0 when it is true, and on the People tab.
+        /// </summary>
+        public int UnmeasuredUsers { get; set; }
+
+        /// <summary>The answer for the facts <see cref="TeamsExplorerSql.UsageCoverage"/> returned; null when it failed.</summary>
+        public static TeamsDormancy From(TeamsExplorerRows.UsageCoverageRow row)
+        {
+            if (row == null) return new TeamsDormancy { Known = false, Reason = NotChecked };
+
+            string reason = null;
+            if (row.ImportedDays < row.ExpectedDays) reason = IncompleteImport;
+            else if (row.GroupFiltered) reason = GroupFiltered;
+            else if (row.NamesConcealed) reason = NamesConcealed;
+            else if (row.TeamsLicensedUsers == 0) reason = NoTeamsLicences;
+
+            return new TeamsDormancy
+            {
+                Known = reason == null,
+                Reason = reason,
+                ExpectedDays = row.ExpectedDays,
+                ImportedDays = row.ImportedDays,
+                TeamsLicensedUsers = row.TeamsLicensedUsers,
+            };
+        }
     }
 
     #endregion
@@ -283,6 +363,9 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsDemographicRow> Breakdown { get; set; } = new List<TeamsDemographicRow>();
         public List<TeamsDeviceRow> Devices { get; set; } = new List<TeamsDeviceRow>();
         public TeamsLifecycle Lifecycle { get; set; } = new TeamsLifecycle();
+
+        /// <summary>Whether the segment mix's Dormant share could be measured, and why not.</summary>
+        public TeamsDormancy Dormancy { get; set; } = new TeamsDormancy();
 
         /// <summary>
         /// The fewest people a breakdown row describes, for a reader without See PII; <c>null</c> when every group is
@@ -645,6 +728,12 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsPersonRow> Champions { get; set; } = new List<TeamsPersonRow>();
         public List<TeamsPersonRow> Dormant { get; set; } = new List<TeamsPersonRow>();
         public List<TeamsNamedCountRow> ChampionsByDepartment { get; set; } = new List<TeamsNamedCountRow>();
+
+        /// <summary>
+        /// Whether <see cref="Dormant"/> can include licensed people with no Teams activity at all, and why not.
+        /// An aggregate, so it stays for a reader without See PII.
+        /// </summary>
+        public TeamsDormancy Dormancy { get; set; } = new TeamsDormancy();
 
         /// <summary>
         /// The fewest power users a <see cref="ChampionsByDepartment"/> row counts, for a reader without See PII;

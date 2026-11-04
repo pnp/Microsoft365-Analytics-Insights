@@ -17,6 +17,78 @@ namespace Tests.UnitTests
     [TestClass]
     public class TeamsExplorerScoringTests
     {
+        #region Dormancy (positive-only usage reports)
+
+        [TestMethod]
+        public void TeamsLicences_TheServicePlanDecides_AndRoomAccountsAreNotPeople()
+        {
+            var partNumbers = new HashSet<string>(TeamsLicences.EmbeddedSkuPartNumbers, StringComparer.OrdinalIgnoreCase);
+
+            Assert.IsTrue(partNumbers.Contains("ENTERPRISEPACK"), "Office 365 E3 carries the Teams service plan.");
+            Assert.IsTrue(partNumbers.Contains("Microsoft_Teams_Enterprise_New"), "Teams sold on its own.");
+            Assert.IsTrue(partNumbers.Contains("M365_G3_GOV"), "Government clouds have their own Teams plan.");
+            Assert.IsFalse(partNumbers.Contains("Microsoft_365_E3_(no_Teams)"), "A suite sold without Teams.");
+            Assert.IsFalse(partNumbers.Contains("Microsoft_Teams_Rooms_Pro"), "A meeting-room account is not a person to enable.");
+            Assert.IsFalse(partNumbers.Contains("MCOCAP"), "Nor is a shared device.");
+            Assert.IsFalse(partNumbers.Contains("POWER_BI_PRO"));
+        }
+
+        [TestMethod]
+        public void SegmentMix_ALicensedPersonWithNoRowIsDormantOnlyWhenTheWindowWasMeasuredInFull()
+        {
+            var histogram = new List<TeamsExplorerRows.ActiveDayHistogramRow>
+            {
+                new TeamsExplorerRows.ActiveDayHistogramRow { ActiveDays = 0, Reported = false, Users = 3 },
+                new TeamsExplorerRows.ActiveDayHistogramRow { ActiveDays = 0, Reported = true, Users = 1 },
+                new TeamsExplorerRows.ActiveDayHistogramRow { ActiveDays = 20, Reported = true, Users = 4 },
+            };
+
+            var known = new TeamsDormancy { Known = true };
+            var measured = SqlTeamsExplorerStore.BuildSegmentMix(histogram, 20, known).ToDictionary(s => s.Segment);
+            Assert.AreEqual(4, measured["Dormant"].Users, "No row in a fully imported window is no activity.");
+            Assert.AreEqual(50, measured["Dormant"].SharePct, 0.001);
+            Assert.AreEqual(0, known.UnmeasuredUsers);
+
+            var unknown = new TeamsDormancy { Known = false, Reason = TeamsDormancy.IncompleteImport };
+            var partial = SqlTeamsExplorerStore.BuildSegmentMix(histogram, 20, unknown).ToDictionary(s => s.Segment);
+            Assert.AreEqual(1, partial["Dormant"].Users, "Only the person the report saw doing nothing counted.");
+            Assert.AreEqual(20, partial["Dormant"].SharePct, 0.001, "Shares are of the people actually measured.");
+            Assert.AreEqual(3, unknown.UnmeasuredUsers, "The rest are reported as unmeasured, not dropped silently.");
+        }
+
+        [TestMethod]
+        public void Dormancy_SaysWhyItCannotBeKnown()
+        {
+            TeamsExplorerRows.UsageCoverageRow Row() => new TeamsExplorerRows.UsageCoverageRow
+            {
+                ExpectedDays = 28, ImportedDays = 28, TeamsLicensedUsers = 10,
+            };
+
+            Assert.IsTrue(TeamsDormancy.From(Row()).Known);
+
+            var missingDay = Row();
+            missingDay.ImportedDays = 27;
+            Assert.AreEqual(TeamsDormancy.IncompleteImport, TeamsDormancy.From(missingDay).Reason);
+
+            var filtered = Row();
+            filtered.GroupFiltered = true;
+            Assert.AreEqual(TeamsDormancy.GroupFiltered, TeamsDormancy.From(filtered).Reason);
+
+            var concealed = Row();
+            concealed.NamesConcealed = true;
+            Assert.AreEqual(TeamsDormancy.NamesConcealed, TeamsDormancy.From(concealed).Reason);
+
+            var unlicensed = Row();
+            unlicensed.TeamsLicensedUsers = 0;
+            Assert.AreEqual(TeamsDormancy.NoTeamsLicences, TeamsDormancy.From(unlicensed).Reason);
+
+            var failed = TeamsDormancy.From(null);
+            Assert.IsFalse(failed.Known);
+            Assert.AreEqual(TeamsDormancy.NotChecked, failed.Reason);
+        }
+
+        #endregion
+
         #region Small groups for a reader without See PII
 
         [TestMethod]

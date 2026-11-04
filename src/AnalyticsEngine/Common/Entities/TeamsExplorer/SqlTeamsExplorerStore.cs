@@ -121,9 +121,10 @@ namespace Common.Entities.TeamsExplorer
             var trendTask = RunAsync<UsageTrendRow>("overview-trend", TeamsExplorerSql.OverviewTrend(), query, championDays);
             var callTrendTask = RunAsync<WeekCallCountRow>("overview-call-trend", TeamsExplorerSql.OverviewCallTrend(), query, championDays);
             var segmentTask = RunAsync<ActiveDayHistogramRow>("overview-segments", TeamsExplorerSql.SegmentHistogram, query, championDays);
+            var coverageTask = RunAsync<UsageCoverageRow>("overview-coverage", TeamsExplorerSql.UsageCoverage, query, championDays);
             var organiserTask = RunAsync<OrganiserVolumeRow>("overview-organisers", TeamsExplorerSql.CallOrganiserVolumes, query, championDays);
 
-            await Task.WhenAll(usageTask, callsTask, teamsTask, trendTask, callTrendTask, segmentTask, organiserTask)
+            await Task.WhenAll(usageTask, callsTask, teamsTask, trendTask, callTrendTask, segmentTask, coverageTask, organiserTask)
                 .ConfigureAwait(false);
 
             var usage = usageTask.Result;
@@ -134,7 +135,7 @@ namespace Common.Entities.TeamsExplorer
             model.Queries.AddRange(new[]
             {
                 usage.Info, calls.Info, teams.Info, trendTask.Result.Info,
-                callTrendTask.Result.Info, segmentTask.Result.Info, organiserTask.Result.Info,
+                callTrendTask.Result.Info, segmentTask.Result.Info, coverageTask.Result.Info, organiserTask.Result.Info,
             });
 
             var usageRow = usage.Rows.FirstOrDefault() ?? new OverviewUsageRow();
@@ -155,7 +156,7 @@ namespace Common.Entities.TeamsExplorer
                 MeetingsAttended = usageRow.MeetingsAttended,
                 MeetingsOrganised = usageRow.MeetingsOrganised,
                 MeetingsPerActiveUser = usageRow.ActiveUsers > 0
-                    ? (double)usageRow.MeetingsAttended / usageRow.ActiveUsers
+                    ? (double)usageRow.ActiveUserMeetingsAttended / usageRow.ActiveUsers
                     : 0,
                 AudioHours = audioHours,
                 VideoSharePct = TeamsExplorerScoring.Percentage(usageRow.VideoSeconds, usageRow.AudioSeconds),
@@ -168,7 +169,8 @@ namespace Common.Entities.TeamsExplorer
             };
 
             model.Trend = MergeTrend(trendTask.Result.Rows, callTrendTask.Result.Rows);
-            model.SegmentMix = BuildSegmentMix(segmentTask.Result.Rows, window.WorkingDays, usageRow.MeasuredUsers);
+            model.Dormancy = Dormancy(coverageTask.Result);
+            model.SegmentMix = BuildSegmentMix(segmentTask.Result.Rows, window.WorkingDays, model.Dormancy);
 
             model.Judgements = TeamsExplorerScoring.Judgements(new TeamsJudgementInputs
             {
@@ -230,11 +232,20 @@ namespace Common.Entities.TeamsExplorer
             return byWeek.Values.ToList();
         }
 
-        /// <summary>Turns the raw active-day histogram into the four named segments.</summary>
-        private static List<TeamsSegmentSlice> BuildSegmentMix(
+        /// <summary>
+        /// Turns the raw active-day histogram into the four named segments.
+        /// </summary>
+        /// <remarks>
+        /// The denominator is the population the histogram covers - enabled people with a usage row or a Teams
+        /// licence - not the whole directory: someone with no Teams licence and no activity is not a dormant
+        /// Teams user, they are not a Teams user. A licensed person with no row at all is counted as Dormant only
+        /// when <paramref name="dormancy"/> says the window was measured in full. Otherwise they are left out of
+        /// every share, and counted in <see cref="TeamsDormancy.UnmeasuredUsers"/> so the page can say how many.
+        /// </remarks>
+        internal static List<TeamsSegmentSlice> BuildSegmentMix(
             List<ActiveDayHistogramRow> histogram,
             int workingDays,
-            int measuredUsers)
+            TeamsDormancy dormancy)
         {
             var counts = new Dictionary<TeamsUserSegment, int>
             {
@@ -244,15 +255,22 @@ namespace Common.Entities.TeamsExplorer
                 { TeamsUserSegment.Dormant, 0 },
             };
 
+            var unmeasured = 0;
             foreach (var row in histogram)
             {
+                if (!row.Reported && (dormancy == null || !dormancy.Known))
+                {
+                    unmeasured += (int)row.Users;
+                    continue;
+                }
+
                 var segment = TeamsExplorerScoring.Segment(row.ActiveDays, workingDays);
                 counts[segment] += (int)row.Users;
             }
 
-            // The denominator is the users the usage report actually covered, not the whole directory:
-            // someone with no licence is not a dormant Teams user, they are an unmeasured one.
-            var total = measuredUsers > 0 ? measuredUsers : counts.Values.Sum();
+            if (dormancy != null) dormancy.UnmeasuredUsers = unmeasured;
+
+            var total = counts.Values.Sum();
 
             return counts
                 .OrderByDescending(pair => (int)pair.Key)
@@ -265,6 +283,12 @@ namespace Common.Entities.TeamsExplorer
                     SharePct = TeamsExplorerScoring.Percentage(pair.Value, total),
                 })
                 .ToList();
+        }
+
+        /// <summary>The dormancy answer from the coverage query - "not checked" when that query failed.</summary>
+        private static TeamsDormancy Dormancy(QueryResult<UsageCoverageRow> coverage)
+        {
+            return TeamsDormancy.From(coverage.Info.Error == null ? coverage.Rows.FirstOrDefault() : null);
         }
 
         #endregion
@@ -282,9 +306,9 @@ namespace Common.Entities.TeamsExplorer
             var breakdownTask = RunAsync<BreakdownRow>("adoption-breakdown", TeamsExplorerSql.AdoptionBreakdown(query.GroupBy), query, championDays);
             var devicesTask = RunAsync<DevicesRow>("adoption-devices", TeamsExplorerSql.AdoptionDevices, query, championDays);
             var lifecycleTask = RunAsync<LifecycleRow>("adoption-lifecycle", TeamsExplorerSql.AdoptionLifecycle, query, championDays);
-            var measuredTask = RunAsync<OverviewUsageRow>("adoption-usage", TeamsExplorerSql.OverviewUsage, query, championDays);
+            var coverageTask = RunAsync<UsageCoverageRow>("adoption-coverage", TeamsExplorerSql.UsageCoverage, query, championDays);
 
-            await Task.WhenAll(rhythmTask, segmentTask, segmentTrendTask, breakdownTask, devicesTask, lifecycleTask, measuredTask)
+            await Task.WhenAll(rhythmTask, segmentTask, segmentTrendTask, breakdownTask, devicesTask, lifecycleTask, coverageTask)
                 .ConfigureAwait(false);
 
             var model = new TeamsAdoption { Window = window, GroupBy = query.GroupBy };
@@ -292,7 +316,7 @@ namespace Common.Entities.TeamsExplorer
             {
                 rhythmTask.Result.Info, segmentTask.Result.Info, segmentTrendTask.Result.Info,
                 breakdownTask.Result.Info, devicesTask.Result.Info, lifecycleTask.Result.Info,
-                measuredTask.Result.Info,
+                coverageTask.Result.Info,
             });
 
             var rhythm = rhythmTask.Result.Rows.FirstOrDefault() ?? new RhythmRow();
@@ -304,8 +328,8 @@ namespace Common.Entities.TeamsExplorer
                 StickinessPct = TeamsExplorerScoring.Percentage(rhythm.MeanDailyActiveUsers, rhythm.MonthlyActiveUsers),
             };
 
-            var measured = measuredTask.Result.Rows.FirstOrDefault() ?? new OverviewUsageRow();
-            model.SegmentMix = BuildSegmentMix(segmentTask.Result.Rows, window.WorkingDays, measured.MeasuredUsers);
+            model.Dormancy = Dormancy(coverageTask.Result);
+            model.SegmentMix = BuildSegmentMix(segmentTask.Result.Rows, window.WorkingDays, model.Dormancy);
             model.SegmentTrend = BuildSegmentTrend(segmentTrendTask.Result.Rows, query);
 
             model.Breakdown = breakdownTask.Result.Rows
@@ -795,15 +819,18 @@ namespace Common.Entities.TeamsExplorer
             var dormantTask = RunAsync<PersonRow>("people-dormant", TeamsExplorerSql.DormantUsers, query, championDays);
             var departmentTask = RunAsync<NameCountRow>("people-departments", TeamsExplorerSql.ChampionsByDepartment, query, championDays);
             var obfuscationTask = RunAsync<ObfuscationProbeRow>("people-obfuscation", TeamsExplorerSql.ObfuscationProbe, query, championDays);
+            var coverageTask = RunAsync<UsageCoverageRow>("people-coverage", TeamsExplorerSql.UsageCoverage, query, championDays);
 
-            await Task.WhenAll(championTask, dormantTask, departmentTask, obfuscationTask).ConfigureAwait(false);
+            await Task.WhenAll(championTask, dormantTask, departmentTask, obfuscationTask, coverageTask).ConfigureAwait(false);
 
             var model = new TeamsPeople { Window = window };
             model.Queries.AddRange(new[]
             {
                 championTask.Result.Info, dormantTask.Result.Info,
-                departmentTask.Result.Info, obfuscationTask.Result.Info,
+                departmentTask.Result.Info, obfuscationTask.Result.Info, coverageTask.Result.Info,
             });
+
+            model.Dormancy = Dormancy(coverageTask.Result);
 
             model.Champions = championTask.Result.Rows
                 .Select(r => ToPerson(r, window.WorkingDays))
@@ -967,6 +994,7 @@ namespace Common.Entities.TeamsExplorer
                 IntParameter("workStart", TeamsExplorerScoring.WorkingDayStartHour),
                 IntParameter("workEnd", TeamsExplorerScoring.WorkingDayEndHour),
                 IntParameter("championDays", championDays),
+                new SqlParameter("groupFiltered", SqlDbType.Bit) { Value = query.UsageReportsGroupFiltered },
             };
         }
 

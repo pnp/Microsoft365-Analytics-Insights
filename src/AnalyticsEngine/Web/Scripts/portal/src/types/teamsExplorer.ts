@@ -124,6 +124,33 @@ export type TeamsOverview = TeamsSection & {
   trend: TeamsTrendPoint[];
   segmentMix: TeamsSegmentSlice[];
   judgements: TeamsJudgement[];
+  /** Whether the engagement mix's Dormant share could be measured. Absent from an older API. */
+  dormancy?: TeamsDormancy;
+};
+
+/** Why a licensed person with no Teams activity can or cannot be called dormant (mirrors TeamsDormancy). */
+export type TeamsDormancyReason =
+  | 'incompleteImport'
+  | 'groupFiltered'
+  | 'namesConcealed'
+  | 'noTeamsLicences'
+  | 'notChecked';
+
+/**
+ * Whether the usage reports can prove somebody did nothing in Teams in the window. They list only the people
+ * active on each day, so a licensed person with no activity is dormant only when every day was imported, the
+ * import covers everyone and the reports carry real names. When not, such people are left out of the Dormant
+ * segment and list and counted in `unmeasuredUsers`.
+ */
+export type TeamsDormancy = {
+  known: boolean;
+  /** A stable key, null when `known`; the page writes the sentence. */
+  reason: TeamsDormancyReason | string | null;
+  expectedDays: number;
+  importedDays: number;
+  teamsLicensedUsers: number;
+  /** Licensed people with no activity left out of the engagement mix because dormancy is not known. */
+  unmeasuredUsers: number;
 };
 
 export type TeamsAdoptionRhythm = {
@@ -175,6 +202,8 @@ export type TeamsAdoption = TeamsSection & {
   breakdown: TeamsDemographicRow[];
   devices: TeamsDeviceRow[];
   lifecycle: TeamsLifecycle;
+  /** Whether the segment mix's Dormant share could be measured. Absent from an older API. */
+  dormancy?: TeamsDormancy;
   /**
    * For a reader without See PII, the fewest people - and active people - a breakdown row describes. Null or
    * absent when every group is shown.
@@ -334,6 +363,8 @@ export type TeamsPeople = TeamsSection & {
   champions: TeamsPersonRow[];
   dormant: TeamsPersonRow[];
   championsByDepartment: TeamsDepartmentCount[];
+  /** Whether `dormant` can include licensed people with no Teams activity at all. Absent from an older API. */
+  dormancy?: TeamsDormancy;
   /**
    * For a reader without See PII, the fewest power users a department row counts. Null or absent when every
    * department is shown.
