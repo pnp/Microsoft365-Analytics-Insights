@@ -26,6 +26,9 @@
  * - **Numbers and dates follow the language**, through `formatNumber`/`formatDateParts` and the
  *   per-area format helpers built on them. `1,234` and `1.234` mean different things in English
  *   and Spanish, so this is correctness, not polish.
+ * - **A date from the API is read with `parseApiDate`**, never `new Date(string)`. The API sends
+ *   dates read from SQL with no offset, which `new Date` reads as the browser's local time - the
+ *   day before, east of UTC. See `apiDate.ts`.
  * - **English is bundled; every other language is fetched as its own chunk.** `main.tsx` awaits
  *   the reader's language before the first render, so a new language costs existing readers
  *   nothing. See the note in `catalog/index.ts`.
@@ -66,6 +69,8 @@ export {
   formatList,
   compareStrings,
 } from './locale';
+
+export { parseApiDate } from './apiDate';
 
 export { setActiveLanguage, activeLanguage, translateActive } from './runtime';
 
