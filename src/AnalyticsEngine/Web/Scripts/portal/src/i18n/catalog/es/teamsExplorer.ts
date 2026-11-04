@@ -257,6 +257,8 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.adoption.reachBy.metadataUnavailableNote': 'Los metadatos de usuario no se están importando, por lo que cada grupo mostrará "(sin establecer)".',
   'teamsExplorer.adoption.reachBy.otherNote':
     'Los grupos de menos de {count} personas, o con menos de {count} personas activas, se combinan en una sola fila para que no se pueda identificar a nadie.',
+  'teamsExplorer.adoption.reachBy.leftOutNote':
+    'Los grupos de menos de {count} personas, o con menos de {count} personas activas, se omiten: incluso juntos son demasiado pocos para mostrarlos sin identificar a alguien.',
   'teamsExplorer.adoption.reachBy.allGroupsSmall':
     'Todos los grupos tienen menos de {count} personas, o menos de {count} personas activas, así que este desglose se oculta para proteger su privacidad.',
   'teamsExplorer.adoption.otherGroups.one': '1 grupo más pequeño, combinado',

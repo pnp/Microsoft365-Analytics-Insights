@@ -88,11 +88,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 var capability = DownloadedBuildCapabilityProbe.SupportsEntraSqlAuth(_exeFile?.Directory);
                 if (capability == DownloadedBuildCapability.NotSupported)
                 {
-                    throw new UnexpectedInstallException(
-                        "This database uses Microsoft Entra ID authentication, but the control-panel app downloaded for this " +
-                        "release has no support for it, so it cannot sign in to the database at all. Nothing was changed in the " +
-                        "database. Either install from a local release override built from a version that supports Microsoft " +
-                        "Entra ID authentication for Azure SQL, or use a SQL server that has SQL authentication enabled.");
+                    throw new UnexpectedInstallException(DownloadedBuildLacksEntraSqlAuth);
                 }
 
                 if (capability == DownloadedBuildCapability.Supported)
@@ -161,7 +157,37 @@ namespace App.ControlPanel.Engine.InstallerTasks
             "Sysmon or Security event 4688) records them. This installer no longer passes them that way, so the schema " +
             "upgrade was not run and nothing was changed in the database. Deploy a release at least as new as this " +
             "installer (with a local release override, use the ControlPanelApp.zip from this installer's release), or " +
-            "deploy the older release with the installer from that release.";
+            "deploy the older release with the installer from that release. An older installer can't read the secrets in a " +
+            "configuration file this installer has saved, and says the password is wrong: enter the secrets again there " +
+            "before you save the file, or saving it will store them empty.";
+
+        internal const string DownloadedBuildLacksEntraSqlAuth =
+            "This database uses Microsoft Entra ID authentication, but the control-panel app downloaded for this " +
+            "release has no support for it, so it cannot sign in to the database at all. Nothing was changed in the " +
+            "database. Either install from a local release override built from a version that supports Microsoft " +
+            "Entra ID authentication for Azure SQL, or use a SQL server that has SQL authentication enabled.";
+
+        /// <summary>
+        /// The refusals <see cref="InitDatabaseSchema"/> makes about the downloaded build, made before the upgrade pauses the
+        /// WebJobs and stops the site (<c>ConfigureAzureComponentsTasks.RunUpgradeDeploymentAsync</c>'s preflight), so that a
+        /// refusal leaves both as they were. InitDatabaseSchema still makes them too. Only a build the probe can positively
+        /// identify as lacking the support is refused; one it can't read proceeds, as it does there.
+        /// </summary>
+        internal Task CheckDownloadedBuildBeforeUpgradeAsync()
+        {
+            if (!_config.TasksConfig.UpgradeSchema || _exeFile == null) return Task.CompletedTask;
+
+            if (AzureSqlTokenAuth.NeedsAccessToken(_dbInfo?.ConnectionString)
+                && DownloadedBuildCapabilityProbe.SupportsEntraSqlAuth(_exeFile.Directory) == DownloadedBuildCapability.NotSupported)
+            {
+                throw new UnexpectedInstallException(DownloadedBuildLacksEntraSqlAuth);
+            }
+            if (DownloadedBuildCapabilityProbe.ReadsInitDbPayloadFile(_exeFile.Directory) == DownloadedBuildCapability.NotSupported)
+            {
+                throw new UnexpectedInstallException(DownloadedBuildTooOldForPayloadFile);
+            }
+            return Task.CompletedTask;
+        }
 
         internal DatabaseUpgradeInfo CreateDatabaseUpgradeInfo(List<string> targetSites)
         {

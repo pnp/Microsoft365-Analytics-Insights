@@ -115,9 +115,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             ("copilot_dlp_events", CopilotChildRows.DlpMatches, "EXISTS (SELECT 1 FROM dbo.copilot_dlp_events x WHERE x.copilot_chat_id = c.event_id)"),
         };
 
-        private const string TurnMateExists =
-            "EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates d WHERE d.event_id = c.event_id) " +
-            "OR EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates d WHERE d.counted_event_id = c.event_id)";
+        // A record of a paired turn with no DLP row of its own is complete only when one of its turn mates holds one: the
+        // record it is counted on, that record's other extra records, or its own extra records - the mates
+        // insert_copilot_dlp_events_from_staging_table.sql checks before it stores a match. Being paired proves nothing on
+        // its own. The Copilot merge records the pairing before the DLP merge runs, so a backfill commit that failed in
+        // between left both records paired with no DLP row on either; counting that as complete dropped the retry's matches.
+        private const string TurnMateDlpExists =
+            "EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates d " +
+                "INNER JOIN dbo.copilot_dlp_events x ON x.copilot_chat_id = d.counted_event_id WHERE d.event_id = c.event_id) " +
+            "OR EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates d " +
+                "INNER JOIN dbo.copilot_chat_duplicates other ON other.counted_event_id = d.counted_event_id AND other.event_id <> d.event_id " +
+                "INNER JOIN dbo.copilot_dlp_events x ON x.copilot_chat_id = other.event_id WHERE d.event_id = c.event_id) " +
+            "OR EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates d " +
+                "INNER JOIN dbo.copilot_dlp_events x ON x.copilot_chat_id = d.event_id WHERE d.counted_event_id = c.event_id)";
 
         public SqlCopilotAuditBackfillExistingEventFilter(Func<AnalyticsEntitiesContext> createContext = null)
         {
@@ -181,7 +191,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 var exists = child.Exists;
                 if (child.Kind == CopilotChildRows.DlpMatches && existingTables.Contains("copilot_chat_duplicates"))
                 {
-                    exists += " OR " + TurnMateExists;
+                    exists += " OR " + TurnMateDlpExists;
                 }
                 kinds.Add($"CASE WHEN {exists} THEN {bit} ELSE 0 END");
             }

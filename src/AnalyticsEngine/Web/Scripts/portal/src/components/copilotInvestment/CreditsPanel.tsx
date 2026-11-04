@@ -33,6 +33,7 @@ const useStyles = makeStyles({
   chart: { display: 'flex', alignItems: 'flex-end', gap: '6px', height: '160px', paddingTop: '8px', borderBottom: `1px solid ${tokens.colorNeutralStroke1}` },
   column: { flex: '1 1 0', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%', minWidth: '18px' },
   bar: { width: '100%', maxWidth: '36px', backgroundColor: tokens.colorBrandBackground, borderRadius: '4px 4px 0 0', minHeight: '2px' },
+  withheldMark: { color: tokens.colorNeutralForeground3, lineHeight: 1, paddingBottom: '2px' },
   axis: { display: 'flex', gap: '6px' },
   axisLabel: { flex: '1 1 0', textAlign: 'center', minWidth: '18px', fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, overflow: 'hidden' },
   facts: { display: 'grid', gridTemplateColumns: 'minmax(200px, 1fr) auto', gap: '6px 16px', alignItems: 'baseline' },
@@ -165,7 +166,14 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
                     });
                 return (
                   <div key={p.date} className={styles.column} role="listitem" aria-label={label} title={label}>
-                    <div className={styles.bar} style={{ height: `${((p.credits ?? 0) / maxCredits) * 100}%` }} />
+                    {/* A withheld day is the table's dash, not a bar: a zero-height bar is what a day with no credits looks like. */}
+                    {p.withheld ? (
+                      <span className={styles.withheldMark} aria-hidden="true" data-withheld="true">
+                        {'\u2014'}
+                      </span>
+                    ) : (
+                      <div className={styles.bar} style={{ height: `${((p.credits ?? 0) / maxCredits) * 100}%` }} />
+                    )}
                   </div>
                 );
               })}

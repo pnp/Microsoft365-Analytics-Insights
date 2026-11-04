@@ -255,6 +255,8 @@ export const teamsExplorer = {
   'teamsExplorer.adoption.reachBy.metadataUnavailableNote': 'User metadata is not being imported, so every group will read "(not set)".',
   'teamsExplorer.adoption.reachBy.otherNote':
     'Groups of fewer than {count} people, or with fewer than {count} active people, are combined into one row so that nobody can be singled out.',
+  'teamsExplorer.adoption.reachBy.leftOutNote':
+    'Groups of fewer than {count} people, or with fewer than {count} active people, are left out: even together they are too few to show without singling someone out.',
   'teamsExplorer.adoption.reachBy.allGroupsSmall':
     'Every group has fewer than {count} people, or fewer than {count} active people, so this breakdown is hidden to protect their privacy.',
   'teamsExplorer.adoption.otherGroups.one': '1 smaller group, combined',

@@ -301,9 +301,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
 
         /// <summary>
         /// Imports the three Graph Microsoft 365 Copilot usage reports - the per-user one as its 28-day report
-        /// and, once a week, its 7-day report. Each has its own cadence
+        /// and, once a week, its 7-day report. Each 28-day report has its own cadence
         /// stamp behind the section-level gate: if one report fails, the failed report retries on
         /// the next cycle while reports that already succeeded are skipped until their interval elapses.
+        /// The weekly 7-day reading has no stamp of its own: it decides for itself whether it is due.
         ///
         /// Order is deliberate: the two tenant-aggregate reports go first because they are cheap (a few
         /// thousand rows whatever the tenant size), need no per-user joins, and are unaffected by the tenant's
@@ -370,12 +371,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                 // Licence activity measures Copilot by the week, from one 7-day reading per Monday-to-Sunday week.
                 // After the 28-day import above, so its refresh date decides whether this week's reading is due;
                 // on every other day this makes no Graph call. The 28-day import stays: Copilot Adoption reads it.
+                //
+                // Not behind its own cadence stamp: the reading can only be taken while Microsoft's newest report
+                // is dated that Sunday, and its due check already makes no Graph call on any other day. A stamp
+                // written by a run that found nothing due (say, because the 28-day import had just failed) would
+                // hold the reading back for a whole interval after the 28-day import recovered - by which time
+                // Graph has moved on to Monday and that week's reading can no longer be taken.
                 new CopilotUsageReportCadenceRunner.Report(
                     "Copilot per-user weekly reading",
                     GraphCopilotUsageReportWeeklyUsageUserDetailLastImportedKey,
                     () => RunCopilotReport("Copilot per-user weekly reading", db =>
                         new CopilotUsageUserDetailLoader(reportSource, _logger, userScope)
-                            .LoadAndSaveWeeklySnapshotAsync(db))),
+                            .LoadAndSaveWeeklySnapshotAsync(db)),
+                    gated: false),
 
                 // There is deliberately no Cowork report here. Stable builds 1833 to 1846 requested a Graph
                 // function (the name kept as CopilotUsageReportNames.RetiredCoworkUsageUserDetail) that does
@@ -467,6 +475,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
 
                 foreach (var report in reports)
                 {
+                    if (!report.Gated)
+                    {
+                        // Decides for itself whether anything is due, so it gets no stamp: one written by a run that
+                        // found nothing to do would hold back the run that next finds something.
+                        allDueReportsSucceeded &= await report.Import();
+                        continue;
+                    }
+
                     var lastRun = await _lastRunStore.GetLastRunUtc(report.CadenceKey);
                     if (!ImportCadenceGate.ShouldRun(lastRun, _intervalHours, _force, _clock.UtcNow))
                     {
@@ -496,18 +512,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
 
             public class Report
             {
-                public Report(string description, string cadenceKey, Func<Task<bool>> import)
+                /// <param name="gated">
+                /// False for a report that decides for itself, cheaply and without a Graph call, whether it is due:
+                /// it then runs whenever the section does and is never stamped. See the weekly reading.
+                /// </param>
+                public Report(string description, string cadenceKey, Func<Task<bool>> import, bool gated = true)
                 {
                     if (string.IsNullOrWhiteSpace(description)) throw new ArgumentException($"'{nameof(description)}' is required.", nameof(description));
                     if (string.IsNullOrWhiteSpace(cadenceKey)) throw new ArgumentException($"'{nameof(cadenceKey)}' is required.", nameof(cadenceKey));
                     Description = description;
                     CadenceKey = cadenceKey;
                     Import = import ?? throw new ArgumentNullException(nameof(import));
+                    Gated = gated;
                 }
 
                 public string Description { get; }
                 public string CadenceKey { get; }
                 public Func<Task<bool>> Import { get; }
+                public bool Gated { get; }
             }
         }
     }

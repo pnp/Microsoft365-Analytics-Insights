@@ -166,7 +166,9 @@ export default function AdoptionPanel({
 
   const otherGroups = data.otherGroups ?? 0;
   const minimumGroupSize = data.minimumGroupSize ?? null;
-  // The combined row a reader without See PII gets in place of every group too small to name.
+  // The combined row a reader without See PII gets in place of every group too small to name. It is left out when even
+  // all those groups together are too few people, so the note says which of the two happened.
+  const hasOtherRow = data.breakdown.some((row) => row.other);
   const rowLabel = (row: TeamsAdoption['breakdown'][number]): string =>
     row.other
       ? t(plural(otherGroups, 'teamsExplorer.adoption.otherGroups.one', 'teamsExplorer.adoption.otherGroups.other'), {
@@ -175,7 +177,9 @@ export default function AdoptionPanel({
       : row.name ?? '';
   const otherNote =
     otherGroups > 0 && minimumGroupSize != null && data.breakdown.length > 0
-      ? t('teamsExplorer.adoption.reachBy.otherNote', { count: formatCount(minimumGroupSize) })
+      ? t(hasOtherRow ? 'teamsExplorer.adoption.reachBy.otherNote' : 'teamsExplorer.adoption.reachBy.leftOutNote', {
+          count: formatCount(minimumGroupSize),
+        })
       : undefined;
   const allGroupsSmall =
     otherGroups > 0 && minimumGroupSize != null && data.breakdown.length === 0

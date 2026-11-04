@@ -153,6 +153,44 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, job.RecordsAlreadyPresent, "A completely saved interaction is still dropped before the commit.");
         }
 
+        /// <summary>
+        /// Being paired does not prove a DLP match was stored. The Copilot merge records a turn's pairing before the DLP merge
+        /// runs, so a backfill commit that failed in between leaves the records paired with no DLP row on any of them; counted
+        /// as complete, the retry dropped them and their matches were never written. A record without a DLP row of its own is
+        /// complete only when one of its turn mates holds one, whichever record of the turn that is.
+        /// </summary>
+        [TestMethod]
+        public async Task CompletenessQuery_APairedTurn_IsDlpCompleteOnlyWhenARecordOfTheTurnHoldsAMatch()
+        {
+            var upn = NewUpn();
+            var counted = Interaction(Guid.NewGuid(), upn, ResourcesAndMessages);
+            var extra = Interaction(Guid.NewGuid(), upn, ResourcesAndMessages);
+            var sibling = Interaction(Guid.NewGuid(), upn, ResourcesAndMessages);
+            var unpaired = Interaction(Guid.NewGuid(), upn, ResourcesAndMessages);
+            await MergeAsync(counted, extra, sibling, unpaired);
+            Execute(@"INSERT dbo.copilot_chat_duplicates (event_id, time_stamp, counted_event_id, reason)
+                      VALUES (@extra, @time, @counted, 1), (@sibling, @time, @counted, 1);",
+                ("@extra", extra.Id), ("@sibling", sibling.Id), ("@counted", counted.Id), ("@time", Now.AddDays(-1)));
+            var all = new AbstractAuditLogContent[] { counted, extra, sibling, unpaired };
+
+            var dlp = DlpComplete(all);
+            Assert.IsFalse(dlp[counted.Id] || dlp[extra.Id] || dlp[sibling.Id] || dlp[unpaired.Id],
+                "No record of the turn holds a match, so none of them is DLP-complete: being paired is not enough.");
+
+            Execute("INSERT dbo.copilot_dlp_events (copilot_chat_id, is_blocked) VALUES (@id, 1);", ("@id", counted.Id));
+            dlp = DlpComplete(all);
+            Assert.IsTrue(dlp[counted.Id] && dlp[extra.Id] && dlp[sibling.Id],
+                "The match is stored once for the turn, on the counted record, and completes every record of the turn.");
+            Assert.IsFalse(dlp[unpaired.Id], "A record outside the turn is not completed by it.");
+
+            Execute("DELETE dbo.copilot_dlp_events WHERE copilot_chat_id = @counted; INSERT dbo.copilot_dlp_events (copilot_chat_id, is_blocked) VALUES (@extra, 1);",
+                ("@counted", counted.Id), ("@extra", extra.Id));
+            dlp = DlpComplete(all);
+            Assert.IsTrue(dlp[counted.Id] && dlp[extra.Id] && dlp[sibling.Id],
+                "Stored on an extra record, the match completes the counted record and the turn's other extra record too.");
+            Assert.IsFalse(dlp[unpaired.Id]);
+        }
+
         #endregion
 
         #region Helpers
@@ -262,6 +300,32 @@ IF NOT EXISTS (SELECT 1 FROM dbo.audit_events WHERE id = @id)
                 con.Open();
                 return Convert.ToInt32(cmd.ExecuteScalar());
             }
+        }
+
+        /// <summary>Whether the completeness query counts each interaction's DLP matches as stored.</summary>
+        private static Dictionary<Guid, bool> DlpComplete(params AbstractAuditLogContent[] interactions)
+        {
+            var tables = new HashSet<string>(new[]
+            {
+                "copilot_event_accessed_resources", "copilot_event_messages", "copilot_event_ai_models", "copilot_event_contexts",
+                "copilot_event_ai_system_plugins", "copilot_dlp_events", "copilot_chat_duplicates",
+            }, StringComparer.OrdinalIgnoreCase);
+            var result = new Dictionary<Guid, bool>();
+            using (var con = new SqlConnection(_database.ConnectionString))
+            using (var cmd = new SqlCommand(SqlCopilotAuditBackfillExistingEventFilter.BuildQuery(interactions.Length, tables), con))
+            {
+                for (var i = 0; i < interactions.Length; i++) cmd.Parameters.AddWithValue("@p" + i, interactions[i].Id);
+                con.Open();
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        result[reader.GetGuid(0)] = (Convert.ToInt32(reader.GetValue(1)) & (int)CopilotChildRows.DlpMatches) != 0;
+                    }
+                }
+            }
+            Assert.AreEqual(interactions.Length, result.Count, "Every interaction has its chat row.");
+            return result;
         }
 
         private static List<string> Strings(string sql, Guid id)

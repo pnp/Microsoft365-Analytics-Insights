@@ -61,6 +61,12 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         private const int CacheSeconds = 60;
 
+        /// <summary>
+        /// How much longer than its ttl a build in progress stays shared (see <see cref="SharedBuild"/>): more than App
+        /// Service's 230-second request limit, so no request still waiting can outlive it.
+        /// </summary>
+        internal static readonly TimeSpan InFlightBuildAllowance = TimeSpan.FromMinutes(5);
+
         private readonly ITeamsExplorerStore _store;
         private readonly Func<TeamsExplorerSources> _sourcesFactory;
         private readonly ReportScopeResolver _scopes;
@@ -128,10 +134,16 @@ namespace Web.AnalyticsWeb.Controllers
             string groupBy = TeamsExplorerQuery.DefaultGrouping,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
+            var seePii = PortalAccess.Evaluate(Request, User).SeePii;
+            // Without See PII, small groups are folded over every group, whatever top was asked for, and only then cut to
+            // it: see TeamsAdoption.WithFirstGroups.
+            var query = await BuildQueryAsync(days, groupBy, seePii ? top : TeamsExplorerQuery.MaximumTop).ConfigureAwait(false);
             Func<TeamsAdoption, TeamsAdoption> forReader = null;
-            if (!PortalAccess.Evaluate(Request, User).SeePii)
-                forReader = a => a.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
+            if (!seePii)
+            {
+                var shown = TeamsExplorerQuery.NormaliseTop(top);
+                forReader = a => a.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii).WithFirstGroups(shown);
+            }
             return await CachedAsync("adoption", query, () => _store.GetAdoptionAsync(query), forReader).ConfigureAwait(false);
         }
 
@@ -178,10 +190,15 @@ namespace Web.AnalyticsWeb.Controllers
             int days = TeamsExplorerQuery.DefaultWindowDays,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
+            var seePii = PortalAccess.Evaluate(Request, User).SeePii;
+            // As for adoption: departments are folded over every department, then cut to top (TeamsPeople.WithFirstDepartments).
+            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, seePii ? top : TeamsExplorerQuery.MaximumTop).ConfigureAwait(false);
             Func<TeamsPeople, TeamsPeople> forReader = null;
-            if (!PortalAccess.Evaluate(Request, User).SeePii)
-                forReader = p => p.WithoutIndividualData(ReportScopeResolver.MinimumPeopleWithoutSeePii);
+            if (!seePii)
+            {
+                var shown = TeamsExplorerQuery.NormaliseTop(top);
+                forReader = p => p.WithoutIndividualData(ReportScopeResolver.MinimumPeopleWithoutSeePii).WithFirstDepartments(shown);
+            }
             return await CachedAsync("people", query, () => _store.GetPeopleAsync(query), forReader).ConfigureAwait(false);
         }
 
@@ -226,8 +243,11 @@ namespace Web.AnalyticsWeb.Controllers
                 return PortalPermissionDenied.Response(Request, PortalPermission.SeePii);
             }
 
-            var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
             var normalised = section.ToLowerInvariant();
+            var seePii = PortalAccess.Evaluate(Request, User).SeePii;
+            // The adoption breakdown is folded over every group for a reader without See PII, as on the page.
+            var foldsGroups = normalised == "adoption" && !seePii;
+            var query = await BuildQueryAsync(days, groupBy, foldsGroups ? TeamsExplorerQuery.MaximumTop : top).ConfigureAwait(false);
             byte[] csv;
             string failedQuery;
             TeamsExplorerQueryInfo failedInfo;
@@ -262,8 +282,9 @@ namespace Web.AnalyticsWeb.Controllers
                     var adoption = await _store.GetAdoptionAsync(query).ConfigureAwait(false);
                     failedQuery = FailedQuery(adoption, "adoption-breakdown", out failedInfo);
                     // Never less redacted than the page: the same groups are folded for a reader without See PII.
-                    if (!PortalAccess.Evaluate(Request, User).SeePii)
-                        adoption = adoption.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
+                    if (foldsGroups)
+                        adoption = adoption.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii)
+                            .WithFirstGroups(TeamsExplorerQuery.NormaliseTop(top));
                     csv = CsvSerialiser.ToBytes(
                         adoption.Breakdown,
                         TeamsExplorerExports.DemographicColumns(query.GroupBy));
@@ -395,7 +416,11 @@ namespace Web.AnalyticsWeb.Controllers
             where T : class
         {
             var building = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-            if (cache.AddOrGetExisting(key, building.Task, DateTimeOffset.UtcNow.Add(ttl)) is Task<T> shared)
+            // The build in progress is kept for as long as a build can take, not for the result's ttl: a build may queue for
+            // a query slot and then run every query of the tab, and an entry that expired while it ran would let the next
+            // request start a second build of the same section - when the database is already slow. The ttl starts once the
+            // build is done (cache.Set below), and a build that throws removes its entry at once.
+            if (cache.AddOrGetExisting(key, building.Task, DateTimeOffset.UtcNow.Add(ttl).Add(InFlightBuildAllowance)) is Task<T> shared)
             {
                 return await shared.ConfigureAwait(false);
             }

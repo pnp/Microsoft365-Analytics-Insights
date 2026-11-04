@@ -223,6 +223,37 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        /// <summary>
+        /// The same refusal, made by the upgrade's preflight before the WebJobs are paused and the site stopped, so a refused
+        /// upgrade leaves the imports running. A current build passes it.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task PreflightCheck_RefusesOnlyABuildTooOldForThePayloadFile(bool readsPayloadFile)
+        {
+            using (var arm = new SqlArmFixture())
+            using (var child = new FakeDownloadedInstaller(readsPayloadFile))
+            {
+                var config = SyntheticConfigWithSecrets();
+                var server = (await arm.Server.GetAsync()).Value;
+                var database = (await server.GetSqlDatabases().GetAsync("analytics")).Value;
+                var tasks = new SqlInstallerTasks(config, child.Executable, new DatabasePaaSInfo(server, database, config), new CapturingLogger(),
+                    "Synthetic operator", null, connectionString => Task.FromResult(true));
+
+                if (readsPayloadFile)
+                {
+                    await tasks.CheckDownloadedBuildBeforeUpgradeAsync();
+                }
+                else
+                {
+                    var ex = await Assert.ThrowsExceptionAsync<UnexpectedInstallException>(() => tasks.CheckDownloadedBuildBeforeUpgradeAsync());
+                    Assert.AreEqual(SqlInstallerTasks.DownloadedBuildTooOldForPayloadFile, ex.Message);
+                }
+                Assert.AreEqual(0, child.Launches().Count, "The preflight only inspects the build; it never runs it.");
+            }
+        }
+
         static SolutionInstallConfig SyntheticConfigWithSecrets() => new SolutionInstallConfig
         {
             SQLServerAdminUsername = "sqladmin",

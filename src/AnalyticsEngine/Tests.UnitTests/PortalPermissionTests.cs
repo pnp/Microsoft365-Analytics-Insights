@@ -943,7 +943,10 @@ namespace Tests.UnitTests
             // Power users per department is a count, so every reader sees it; only the lists that name people go.
             var store = new FakeTeamsStore();
             var query = TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, 37);
+            // A reader without See PII is served from the section read at the maximum top, whatever top they asked for.
+            var shared = TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, TeamsExplorerQuery.MaximumTop);
             MemoryCache.Default.Remove(query.CacheKey("people"));
+            MemoryCache.Default.Remove(shared.CacheKey("people"));
             try
             {
                 using (var host = new PortalTestHost(
@@ -972,7 +975,7 @@ namespace Tests.UnitTests
 
                     // The next reader holds the permission and is served from the same cache entry.
                     host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
-                    var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/people?days=28&top=37"));
+                    var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/people?days=28&top=" + TeamsExplorerQuery.MaximumTop));
                     Assert.AreEqual("champion@contoso.com", (string)full["champions"][0]["userPrincipalName"]);
                     Assert.AreEqual("dormant@contoso.com", (string)full["dormant"][0]["userPrincipalName"]);
                     CollectionAssert.AreEqual(
@@ -986,6 +989,7 @@ namespace Tests.UnitTests
             finally
             {
                 MemoryCache.Default.Remove(query.CacheKey("people"));
+                MemoryCache.Default.Remove(shared.CacheKey("people"));
             }
         }
 
@@ -995,8 +999,10 @@ namespace Tests.UnitTests
             // A job title held by one person is that person: their messages per active user are their own message count.
             var store = new FakeTeamsStore();
             var query = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 37);
+            var shared = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", TeamsExplorerQuery.MaximumTop);
             var small = new[] { "Contoso Chief Explorer", "Contoso Four Title", "Contoso Night Office" };
             MemoryCache.Default.Remove(query.CacheKey("adoption"));
+            MemoryCache.Default.Remove(shared.CacheKey("adoption"));
             try
             {
                 using (var host = new PortalTestHost(
@@ -1030,7 +1036,7 @@ namespace Tests.UnitTests
                     // The next reader holds the permission and is served from the same cache entry, untouched.
                     var storeCalls = store.AdoptionCalls;
                     host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
-                    var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/adoption?days=28&groupBy=jobTitle&top=37"));
+                    var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/adoption?days=28&groupBy=jobTitle&top=" + TeamsExplorerQuery.MaximumTop));
                     Assert.AreEqual(5, ((JArray)full["breakdown"]).Count);
                     Assert.AreEqual(777d, (double)full["breakdown"].Single(row => (string)row["name"] == "Contoso Chief Explorer")["messagesPerActiveUser"]);
                     Assert.AreEqual(0, (int)full["otherGroups"]);
@@ -1044,6 +1050,75 @@ namespace Tests.UnitTests
             finally
             {
                 MemoryCache.Default.Remove(query.CacheKey("adoption"));
+                MemoryCache.Default.Remove(shared.CacheKey("adoption"));
+            }
+        }
+
+        [TestMethod]
+        public async Task TeamsAdoptionAndPeople_WithoutSeePii_FoldTheSameGroupsWhateverTopIsAskedFor()
+        {
+            // The SQL cuts its rows to top before the fold. When the fold ran over only those rows, asking for one row more
+            // folded a 4-person job title with the smallest shown one, and subtracting that shown row (from the request one
+            // row shorter) recovered the job title's own figures. Folded over every group, the combined row is the same
+            // whatever top a reader asks for, and only named groups of five or more come and go.
+            var store = new FakeTeamsStore();
+            var keys = new[] { 1, 2, 3, 37, TeamsExplorerQuery.MaximumTop }
+                .SelectMany(top => new[]
+                {
+                    TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", top).CacheKey("adoption"),
+                    TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, top).CacheKey("people"),
+                })
+                .ToArray();
+            foreach (var key in keys) MemoryCache.Default.Remove(key);
+            try
+            {
+                using (var host = new PortalTestHost(
+                    new[] { typeof(TeamsExplorerAPIController) },
+                    PortalTestHost.SignedIn(),
+                    PortalAccessPolicy.Enforcing,
+                    _ => new TeamsExplorerAPIController(store, () => new TeamsExplorerSources())))
+                {
+                    string otherRow = null;
+                    foreach (var top in new[] { 1, 2, 3, 37 })
+                    {
+                        var json = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/adoption?days=28&groupBy=jobTitle&top=" + top));
+                        Assert.AreEqual(TeamsExplorerQuery.MaximumTop, store.LastAdoptionTop, "Read at the maximum top, so the fold sees every group.");
+                        var rows = json["breakdown"].ToArray();
+                        var other = rows.Single(row => (bool?)row["other"] == true);
+                        otherRow = otherRow ?? other.ToString(Formatting.None);
+                        Assert.AreEqual(otherRow, other.ToString(Formatting.None), "top=" + top + ": the combined row does not depend on top.");
+                        Assert.AreEqual(Math.Min(top, 2), rows.Count(row => (bool?)row["other"] != true), "top=" + top + ": named groups are cut to top.");
+                        Assert.IsFalse(json.ToString().Contains("Contoso Four Title"), "top=" + top);
+
+                        var csv = await host.Client.GetStringAsync("api/TeamsExplorer/export/adoption?days=28&groupBy=jobTitle&top=" + top);
+                        Assert.AreEqual(TeamsExplorerQuery.MaximumTop, store.LastAdoptionTop, "The export folds the same way.");
+                        Assert.IsFalse(csv.Contains("Contoso Four Title"), "top=" + top + " export");
+                    }
+
+                    string otherDepartments = null;
+                    foreach (var top in new[] { 1, 2, 3, 37 })
+                    {
+                        var json = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/people?days=28&top=" + top));
+                        Assert.AreEqual(TeamsExplorerQuery.MaximumTop, store.LastPeopleTop);
+                        var rows = json["championsByDepartment"].ToArray();
+                        var other = rows.Single(row => (bool?)row["other"] == true);
+                        otherDepartments = otherDepartments ?? other.ToString(Formatting.None);
+                        Assert.AreEqual(otherDepartments, other.ToString(Formatting.None), "top=" + top + ": the combined departments do not depend on top.");
+                        Assert.AreEqual(5, (int)other["count"], "Contoso Four's 4 and Contoso One's 1, never Contoso Seven's 7 as well.");
+                        Assert.AreEqual(Math.Min(top, 2), rows.Count(row => (bool?)row["other"] != true));
+                    }
+
+                    // A reader with See PII is unaffected: the store is asked for the top they asked for.
+                    host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                    var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/adoption?days=28&groupBy=jobTitle&top=2"));
+                    Assert.AreEqual(2, store.LastAdoptionTop);
+                    CollectionAssert.AreEqual(new[] { "Contoso Analysts", "Contoso Five Title" },
+                        full["breakdown"].Select(row => (string)row["name"]).ToArray());
+                }
+            }
+            finally
+            {
+                foreach (var key in keys) MemoryCache.Default.Remove(key);
             }
         }
 
@@ -1453,6 +1528,8 @@ namespace Tests.UnitTests
             internal int MeetingsCalls;
             internal int PeopleCalls;
             internal int AdoptionCalls;
+            internal int LastAdoptionTop;
+            internal int LastPeopleTop;
 
             public Task<Tuple<int, int>> GetTeamCountsAsync() => Task.FromResult(Tuple.Create(1, 1));
 
@@ -1461,17 +1538,23 @@ namespace Tests.UnitTests
 
             /// <summary>
             /// Job titles held by 1, 4, 5 and 12 people, and an office of 30 with only two people active: the one-person
-            /// title's messages per active user are that person's own.
+            /// title's messages per active user are that person's own. Cut to <c>top</c> in the SQL's order, as the SQL is.
             /// </summary>
             public Task<TeamsAdoption> GetAdoptionAsync(TeamsExplorerQuery query)
             {
                 Interlocked.Increment(ref AdoptionCalls);
+                LastAdoptionTop = query.Top;
                 var adoption = new TeamsAdoption { GroupBy = query.GroupBy };
-                adoption.Breakdown.Add(Row("Contoso Analysts", 12, 10, 40));
-                adoption.Breakdown.Add(Row("Contoso Night Office", 30, 2, 90));
-                adoption.Breakdown.Add(Row("Contoso Five Title", 5, 5, 20));
-                adoption.Breakdown.Add(Row("Contoso Four Title", 4, 4, 30));
-                adoption.Breakdown.Add(Row("Contoso Chief Explorer", 1, 1, 777));
+                adoption.Breakdown.AddRange(new[]
+                    {
+                        Row("Contoso Analysts", 12, 10, 40),
+                        Row("Contoso Night Office", 30, 2, 90),
+                        Row("Contoso Five Title", 5, 5, 20),
+                        Row("Contoso Four Title", 4, 4, 30),
+                        Row("Contoso Chief Explorer", 1, 1, 777),
+                    }
+                    .OrderByDescending(r => r.ActiveUsers).ThenByDescending(r => r.KnownUsers)
+                    .Take(query.Top));
                 return Task.FromResult(adoption);
             }
 
@@ -1503,13 +1586,17 @@ namespace Tests.UnitTests
             public Task<TeamsPeople> GetPeopleAsync(TeamsExplorerQuery query)
             {
                 Interlocked.Increment(ref PeopleCalls);
+                LastPeopleTop = query.Top;
                 var people = new TeamsPeople();
                 people.Champions.Add(new TeamsPersonRow { UserPrincipalName = "champion@contoso.com", Department = "Ventes" });
                 people.Dormant.Add(new TeamsPersonRow { UserPrincipalName = "dormant@contoso.com", Department = "Ventes" });
-                people.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Πωλήσεις", Count = 9 });
-                people.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Contoso Seven", Count = 7 });
-                people.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Contoso Four", Count = 4 });
-                people.ChampionsByDepartment.Add(new TeamsNamedCountRow { Name = "Contoso One", Count = 1 });
+                people.ChampionsByDepartment.AddRange(new[]
+                    {
+                        new TeamsNamedCountRow { Name = "Πωλήσεις", Count = 9 },
+                        new TeamsNamedCountRow { Name = "Contoso Seven", Count = 7 },
+                        new TeamsNamedCountRow { Name = "Contoso Four", Count = 4 },
+                        new TeamsNamedCountRow { Name = "Contoso One", Count = 1 },
+                    }.Take(query.Top));
                 return Task.FromResult(people);
             }
         }

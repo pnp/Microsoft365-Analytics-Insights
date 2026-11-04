@@ -380,9 +380,16 @@ describe('CopilotInvestmentPage', () => {
 
     fireEvent.click(await screen.findByRole('tab', { name: 'Credits & sources' }));
     expect(await screen.findByRole('listitem', { name: '19 Oct 2026: 9,800 credits, 90 people' })).toBeInTheDocument();
-    expect(
-      screen.getByRole('listitem', { name: '26 Oct 2026: credits not shown, they could single out fewer than 5 people; 2 people' }),
-    ).toBeInTheDocument();
+    const withheldDay = screen.getByRole('listitem', {
+      name: '26 Oct 2026: credits not shown, they could single out fewer than 5 people; 2 people',
+    });
+    expect(withheldDay).toBeInTheDocument();
+    // The chart draws the withheld day as the table's dash: a bar, even an empty one, reads as "no credits".
+    expect(withheldDay.querySelector('[data-withheld="true"]')).not.toBeNull();
+    expect(withheldDay.querySelectorAll('div')).toHaveLength(0);
+    const measuredDay = screen.getByRole('listitem', { name: '19 Oct 2026: 9,800 credits, 90 people' });
+    expect(measuredDay.querySelector('[data-withheld="true"]')).toBeNull();
+    expect(measuredDay.querySelectorAll('div')).toHaveLength(1);
     const table = screen.getByRole('table', { name: 'Consumed-credit readings over time' });
     expect(within(table).getByRole('img', { name: 'Not shown: it could single out fewer than 5 people' })).toBeInTheDocument();
     expect(within(table).queryByText('0')).not.toBeInTheDocument();

@@ -85,13 +85,19 @@
    reading it for every batch.
  - A run that finds nothing to repair records nothing, so you can run it again with another
    @CutoffUtc.
+ - Only one run at a time: the script holds an application lock on the database while it runs, so a
+   second run started meanwhile, in another window or after a lost connection that left the first one
+   running on the server, stops at once without changing anything. Two runs working through the same
+   batches would each multiply them by 10.
 
  IF IT STOPS PART-WAY
  --------------------
  A lost connection, a cancelled query or an error undoes only the batch in progress. Run the script
  again with the same @CutoffUtc and @DryRun = 0, and it carries on after the last batch it
  completed. After cancelling it in SSMS, run ROLLBACK if the window still has a transaction open:
- the script won't start while one is.
+ the script won't start while one is. Run it again in the same window, or close that window first:
+ until then, the window holds the script's lock and a run from any other connection stops at once.
+ After a lost connection, wait for the server to notice it before running the script again.
 
  HOW LONG IT TAKES
  -----------------
@@ -140,6 +146,19 @@ BEGIN
     RETURN;
 END;
 
+-- One run at a time. Two runs that read the same progress would each multiply the same batch by 10, and a lost
+-- connection can leave a run going on the server while you start another. So a second run stops here, at once and
+-- without changing anything. The lock belongs to this connection: the script releases it on every way out except
+-- an error, after which running the script again in the same window, or closing that window, releases it.
+DECLARE @lockResult int = 0;
+IF APPLOCK_MODE(N'public', N'PageLoadTimeRepair', N'Session') = N'NoLock'
+    EXEC @lockResult = sys.sp_getapplock @Resource = N'PageLoadTimeRepair', @LockMode = N'Exclusive', @LockOwner = N'Session', @LockTimeout = 0;
+IF @lockResult < 0
+BEGIN
+    RAISERROR(N'Another run of this script is in progress on this database, perhaps one whose connection was lost but is still running on the server, or one that stopped with an error in another window that is still open. Nothing was changed. Let it finish or close its window, then run the script again. The session holding it is: SELECT request_session_id FROM sys.dm_tran_locks WHERE resource_type = N''APPLICATION'';', 16, 1);
+    RETURN;
+END;
+
 -- What an earlier run recorded, if anything.
 DECLARE @prevCutoff datetime, @lastHitId int, @doneUpTo int, @rows bigint, @startedUtc datetime2(0), @completedUtc datetime2(0), @props int;
 SELECT @props = COUNT(*) FROM sys.extended_properties WHERE class = 0 AND name LIKE N'PageLoadTimeRepair.%';
@@ -156,13 +175,13 @@ BEGIN
         N' UTC with @CutoffUtc ''', CONVERT(varchar(19), @prevCutoff, 126), N''' and repaired ', FORMAT(@rows, 'N0', 'en-US'),
         N' hits. Running it again would multiply their load times by 10 a second time, so it stops here without changing anything.');
     RAISERROR(N'%s', 16, 1, @msg);
-    RETURN;
+    GOTO ReleaseLock;
 END;
 
 IF @props > 0 AND (@prevCutoff IS NULL OR @lastHitId IS NULL OR @doneUpTo IS NULL OR @rows IS NULL)
 BEGIN
     RAISERROR(N'Some PageLoadTimeRepair.* extended properties are missing from this database, so the script can''t tell how far an earlier run got. Nothing was changed. Check them with: SELECT name, value FROM sys.extended_properties WHERE class = 0 AND name LIKE N''PageLoadTimeRepair.%%'';', 16, 1);
-    RETURN;
+    GOTO ReleaseLock;
 END;
 
 IF @prevCutoff IS NOT NULL AND (@CutoffUtc IS NULL OR @CutoffUtc <> @prevCutoff)
@@ -171,13 +190,13 @@ BEGIN
         N' UTC and stopped after hits.id ', FORMAT(@doneUpTo, 'N0', 'en-US'), N', having repaired ', FORMAT(@rows, 'N0', 'en-US'),
         N' hits. To finish it, set @CutoffUtc = ''', CONVERT(varchar(19), @prevCutoff, 126), N''' and run the script again. Nothing was changed.');
     RAISERROR(N'%s', 16, 1, @msg);
-    RETURN;
+    GOTO ReleaseLock;
 END;
 
 IF @CutoffUtc IS NULL
 BEGIN
     RAISERROR(N'Set @CutoffUtc to the UTC time from which the fixed importer stored hits, for example ''2026-11-20T14:00:00''. See BEFORE YOU START at the top of the script.', 16, 1);
-    RETURN;
+    GOTO ReleaseLock;
 END;
 
 IF @CutoffUtc > @nowUtc
@@ -185,13 +204,13 @@ BEGIN
     SET @msg = CONCAT(N'@CutoffUtc ''', CONVERT(varchar(19), @CutoffUtc, 126), N''' is in the future (it is now ', CONVERT(varchar(19), @nowUtc, 126),
         N' UTC). Use the time the fixed importer started storing hits.');
     RAISERROR(N'%s', 16, 1, @msg);
-    RETURN;
+    GOTO ReleaseLock;
 END;
 
 IF @BatchSize IS NULL OR @BatchSize < 1 OR @LastLegacyHitId < 1
 BEGIN
     RAISERROR(N'@BatchSize must be at least 1, and @LastLegacyHitId must be NULL or at least 1.', 16, 1);
-    RETURN;
+    GOTO ReleaseLock;
 END;
 
 IF @prevCutoff IS NOT NULL AND @LastLegacyHitId < @lastHitId
@@ -199,7 +218,7 @@ BEGIN
     SET @msg = CONCAT(N'The repair in progress checks hits up to id ', FORMAT(@lastHitId, 'N0', 'en-US'),
         N', and that can''t be lowered once it has started. Set @LastLegacyHitId to NULL to finish it. Nothing was changed.');
     RAISERROR(N'%s', 16, 1, @msg);
-    RETURN;
+    GOTO ReleaseLock;
 END;
 
 DECLARE @firstId int, @maxId int;
@@ -208,7 +227,7 @@ SELECT @firstId = MIN(id), @maxId = MAX(id) FROM dbo.hits;
 IF @prevCutoff IS NULL AND @maxId IS NULL
 BEGIN
     RAISERROR(N'dbo.hits is empty: there is nothing to repair. Nothing was changed or recorded.', 0, 1) WITH NOWAIT;
-    RETURN;
+    GOTO ReleaseLock;
 END;
 
 IF @prevCutoff IS NULL
@@ -262,7 +281,7 @@ BEGIN
     FROM measured
     ORDER BY [Hour (UTC)];
 
-    RETURN;
+    GOTO ReleaseLock;
 END;
 
 -- ===== REPAIR ======================================================================================
@@ -351,7 +370,7 @@ BEGIN
         EXEC sys.sp_dropextendedproperty @name = @PropStarted;
     COMMIT TRANSACTION;
     RAISERROR(N'Nothing to repair: no hit with a load time above 0 is timestamped before @CutoffUtc and stored up to the last id. Nothing was changed or recorded.', 0, 1) WITH NOWAIT;
-    RETURN;
+    GOTO ReleaseLock;
 END;
 
 SET @nowUtc = SYSUTCDATETIME();
@@ -360,3 +379,7 @@ EXEC sys.sp_addextendedproperty @name = @PropCompleted, @value = @nowUtc;
 SET @msg = CONCAT(N'Done: ', FORMAT(@rows, 'N0', 'en-US'), N' hits repaired. Completion is recorded in PageLoadTimeRepair.CompletedUtc, ',
     N'so the script won''t run again on this database. Now refresh the Power BI datasets (step 6).');
 RAISERROR(N'%s', 0, 1, @msg) WITH NOWAIT;
+
+ReleaseLock:
+IF APPLOCK_MODE(N'public', N'PageLoadTimeRepair', N'Session') <> N'NoLock'
+    EXEC sys.sp_releaseapplock @Resource = N'PageLoadTimeRepair', @LockOwner = N'Session';
