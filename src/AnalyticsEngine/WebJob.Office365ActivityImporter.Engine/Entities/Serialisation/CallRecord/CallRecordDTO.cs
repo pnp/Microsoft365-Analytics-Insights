@@ -257,10 +257,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                         await existingCallRecord.DeleteAll(context.Database);
                     }
 
-                    var feedbackList = new Dictionary<Common.Entities.User, CallFeedback>();
+                    var feedbackList = new Dictionary<string, CallFeedback>(StringComparer.OrdinalIgnoreCase);
                     // Agregate session data
                     foreach (var session in this.Sessions)
                     {
+                        // Feedback first, from every session including the organiser's own: what an endpoint's user said
+                        // about the call is theirs, whoever the session is stored against.
+                        await AddFeedbackIfUnique(session.Callee, call, feedbackList, context, scope);
+                        await AddFeedbackIfUnique(session.Caller, call, feedbackList, context, scope);
+
                         bool saveSession = session.Callee.HaveUserEmail || session.Caller.HaveUserEmail;
 
                         if (saveSession)
@@ -296,10 +301,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                                         dbSession.AddCallModality(m);
                                     }
                                 }
-
-                                // Add feedback from either
-                                AddFeedbackIfUnique(session.Callee, otherPerson, call, feedbackList, scope);
-                                AddFeedbackIfUnique(session.Caller, otherPerson, call, feedbackList, scope);
 
                                 // Save failure info
                                 if (session.FailureInfo != null)
@@ -395,24 +396,33 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             }
         }
 
+        /// <summary>
+        /// Keeps the feedback an endpoint's user gave, stored against that user: in a peer-to-peer call the caller's and
+        /// the callee's feedback each belong to the person who gave it, and in a meeting the organiser's own session, with
+        /// the meeting service, carries the organiser's feedback.
+        /// </summary>
         /// <remarks>
-        /// Feedback is written by the endpoint's own user, so it is kept only when that user is in the
-        /// <c>UserGroupsFilter</c> scope: the rating and free text of someone outside it are never stored.
+        /// Kept only when that user is in the <c>UserGroupsFilter</c> scope: the rating and free text of someone outside it
+        /// are never stored. An endpoint with no user address - the meeting service's end of a session, a phone number,
+        /// someone from another tenant - has nobody to store feedback against, so its feedback is not kept. When the same
+        /// person gave feedback in more than one session of a call, the first is kept.
         /// </remarks>
-        private void AddFeedbackIfUnique(ParticipantEndpointDTO userEndpointContext, Common.Entities.User userLookup, CallRecord relatedCall,
-            Dictionary<Common.Entities.User, CallFeedback> feedbackList, UserImportScope scope)
+        private static async Task AddFeedbackIfUnique(ParticipantEndpointDTO endpoint, CallRecord relatedCall,
+            Dictionary<string, CallFeedback> feedbackByUser, TeamsAndCallsDBLookupManager context, UserImportScope scope)
         {
-            if (userEndpointContext.Feedback != null && !feedbackList.ContainsKey(userLookup) && scope.IsInScope(userEndpointContext.UserEmailAddress))
+            if (endpoint?.Feedback == null || !endpoint.HaveUserEmail || feedbackByUser.ContainsKey(endpoint.UserEmailAddress)
+                || !scope.IsInScope(endpoint.UserEmailAddress))
             {
-                var dbFeedback = new CallFeedback()
-                {
-                    Call = relatedCall,
-                    Rating = userEndpointContext.Feedback.Rating,
-                    Text = userEndpointContext.Feedback.Text,
-                    User = userLookup
-                };
-                feedbackList.Add(userLookup, dbFeedback);
+                return;
             }
+
+            feedbackByUser.Add(endpoint.UserEmailAddress, new CallFeedback()
+            {
+                Call = relatedCall,
+                Rating = endpoint.Feedback.Rating,
+                Text = endpoint.Feedback.Text,
+                User = await GetUserForStorage(context, endpoint.UserEmailAddress, scope)
+            });
         }
 
 

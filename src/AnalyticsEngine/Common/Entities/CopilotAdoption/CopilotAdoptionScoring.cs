@@ -527,6 +527,30 @@ namespace Common.Entities.CopilotAdoption
         #endregion
 
         /// <summary>
+        /// The highest breadth score at which someone is told to add another app: half the configured breadth
+        /// target, because the breadth score is the apps used over <see cref="CopilotAdoptionOptions.BreadthTargetApps"/>.
+        /// </summary>
+        /// <remarks>
+        /// At the default target of 3 this is one app, which is all the fixed thresholds it replaced - a breadth
+        /// score below 34 for a Developing user and below 50 for an Established or Champion one - ever meant, and
+        /// only at that default: with a target of 6 they told someone in two apps to "add a second app", and with
+        /// a target of 2 they never told someone in one app to broaden at all.
+        /// </remarks>
+        public const double BroadenMaxBreadthScore = 50d;
+
+        /// <summary>
+        /// Whether this person's Copilot use is confined to too few apps for the configured breadth target: at most
+        /// half of it (<see cref="BroadenMaxBreadthScore"/>). Shared by <see cref="RecommendedActionCode"/>,
+        /// <see cref="RecommendedAction"/> and <see cref="LicensedUserAdoptionRow.NeedsBroadening"/>, so the tag,
+        /// the sentence and the portal's wording follow one rule.
+        /// </summary>
+        public static bool NeedsBroadening(LicensedUserAdoptionRow row)
+        {
+            if (row == null) throw new ArgumentNullException(nameof(row));
+            return row.BreadthScore <= BroadenMaxBreadthScore;
+        }
+
+        /// <summary>
         /// The single next step for this user, in plain English. Exported in the CSV so the list can be
         /// handed to a department lead and acted on without further interpretation.
         ///
@@ -599,23 +623,22 @@ namespace Common.Entities.CopilotAdoption
                          + "the app they already live in.";
 
                 case AdoptionBand.Developing:
-                    return row.BreadthScore < 34
-                        ? $"Add a second app - building a habit but only in {AppsPhrase(row.AppsUsed)}. Introduce "
-                          + "a second surface such as Outlook or Teams meeting recaps."
+                    return NeedsBroadening(row)
+                        ? $"Add another app - building a habit but only in {AppsPhrase(row.AppsUsed)}. Introduce "
+                          + "another surface such as Outlook or Teams meeting recaps."
                         : "Deepen to daily use - a habit is forming. A short scenario-based session should move "
                           + "them to daily use.";
 
                 case AdoptionBand.Established:
-                    return row.BreadthScore < 50
-                        ? $"Add a second app - solid regular use, but confined to {AppsPhrase(row.AppsUsed)}; "
+                    return NeedsBroadening(row)
+                        ? $"Add another app - solid regular use, but confined to {AppsPhrase(row.AppsUsed)}; "
                           + "showing them one more surface is the cheapest remaining gain."
                         : "No action needed - Copilot is part of their working week.";
 
                 case AdoptionBand.Champion:
-                    // A Champion who only ever works in one surface is still leaving value on the
-                    // table, and is the cheapest possible win - so say so rather than congratulating
-                    // them and moving on.
-                    return row.BreadthScore < 50
+                    // A Champion who works in too few surfaces is still leaving value on the table, and is
+                    // the cheapest possible win - so say so rather than congratulating them and moving on.
+                    return NeedsBroadening(row)
                         ? $"Recruit as an advocate, and broaden - deep, frequent use but only in "
                           + $"{AppsPhrase(row.AppsUsed)}. Showing them one more surface is the cheapest gain available."
                         : "Recruit as an advocate - among your deepest users. Ask them to run a peer session "
@@ -690,9 +713,9 @@ namespace Common.Entities.CopilotAdoption
                 case AdoptionBand.Dormant: return AdoptionActionCodes.Reengage;
                 case AdoptionBand.Trialling: return AdoptionActionCodes.Coach;
                 case AdoptionBand.Developing:
-                    return row.BreadthScore < 34 ? AdoptionActionCodes.Broaden : AdoptionActionCodes.Grow;
+                    return NeedsBroadening(row) ? AdoptionActionCodes.Broaden : AdoptionActionCodes.Grow;
                 case AdoptionBand.Established:
-                    return row.BreadthScore < 50 ? AdoptionActionCodes.Broaden : AdoptionActionCodes.Sustain;
+                    return NeedsBroadening(row) ? AdoptionActionCodes.Broaden : AdoptionActionCodes.Sustain;
                 case AdoptionBand.Champion:
                     return AdoptionActionCodes.Advocate;
                 default: return string.Empty;
@@ -714,7 +737,7 @@ namespace Common.Entities.CopilotAdoption
                 case AdoptionActionCodes.Reclaim: return "Reclaim or onboard";
                 case AdoptionActionCodes.Reengage: return "Win back";
                 case AdoptionActionCodes.Coach: return "Build a first habit";
-                case AdoptionActionCodes.Broaden: return "Add a second app";
+                case AdoptionActionCodes.Broaden: return "Add another app";
                 case AdoptionActionCodes.Grow: return "Deepen to daily use";
                 case AdoptionActionCodes.Sustain: return "No action needed";
                 case AdoptionActionCodes.Advocate: return "Recruit as advocate";
@@ -756,20 +779,23 @@ namespace Common.Entities.CopilotAdoption
                          + "Copilot training session.";
 
                 case AdoptionActionCodes.Broaden:
-                    return "Real, regular use - but almost entirely in a single Copilot surface. Introducing "
-                         + "one more surface (Outlook summaries, Teams meeting recaps) is the cheapest "
-                         + "remaining gain for these users, because they have already accepted Copilot and "
-                         + "simply have not been shown where else it works.";
+                    return "Real, regular use - but in no more than half of the "
+                         + $"{o.BreadthTargetApps.ToString(CultureInfo.InvariantCulture)} Copilot apps the breadth "
+                         + "target asks for. Introducing one more surface (Outlook summaries, Teams meeting recaps) "
+                         + "is the cheapest remaining gain for these users, because they have already accepted "
+                         + "Copilot and simply have not been shown where else it works.";
 
                 case AdoptionActionCodes.Grow:
-                    return $"Engagement between {o.DevelopingScore} and {o.EstablishedScore} across more than "
-                         + "one surface. A short scenario-based session aimed at their actual job is what "
-                         + "moves this group to daily use.";
+                    return $"Engagement between {o.DevelopingScore} and {o.EstablishedScore}, in more than half of "
+                         + $"the {o.BreadthTargetApps.ToString(CultureInfo.InvariantCulture)} Copilot apps the "
+                         + "breadth target asks for. A short scenario-based session aimed at their actual job is "
+                         + "what moves this group to daily use.";
 
                 case AdoptionActionCodes.Sustain:
-                    return $"Engagement at or above {o.EstablishedScore} across multiple surfaces - Copilot is "
-                         + "part of their working week. No action needed; these are the licences that are paying "
-                         + "for themselves.";
+                    return $"Engagement at or above {o.EstablishedScore}, in more than half of the "
+                         + $"{o.BreadthTargetApps.ToString(CultureInfo.InvariantCulture)} Copilot apps the breadth "
+                         + "target asks for - Copilot is part of their working week. No action needed; these are "
+                         + "the licences that are paying for themselves.";
 
                 case AdoptionActionCodes.Advocate:
                     return $"Engagement at or above {o.ChampionScore} - among your deepest users. Ask them to "

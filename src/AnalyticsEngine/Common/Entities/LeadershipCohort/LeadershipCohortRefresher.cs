@@ -233,15 +233,30 @@ namespace Common.Entities.LeadershipCohort
                 {
                     var page = await directory.ListUserMembersAsync(snapshot.GroupId, next).ConfigureAwait(false);
                     snapshot.GraphPages++;
-                    foreach (var user in page?.Items ?? new List<DirectoryUser>())
+
+                    // A page that isn't there is a failed read, not the end of the membership: stopping here would save the
+                    // members read so far as the whole cohort, labelled Ready.
+                    if (page?.Items == null)
+                    {
+                        _logger.LogWarning($"Leadership cohort: Graph page {snapshot.GraphPages} of the group's members came back without its members.");
+                        return Fail(snapshot, LeadershipCohortRefreshStatuses.Failed, LeadershipCohortFailureKinds.GraphError, null);
+                    }
+
+                    foreach (var user in page.Items)
                     {
                         if (!string.IsNullOrWhiteSpace(user?.Id)) objectIds.Add(user.Id.Trim());
                     }
                     if (objectIds.Count > _maxMembers) return TooLarge(snapshot, objectIds.Count);
-                    next = page?.NextLink;
+                    next = page.NextLink;
                     if (!string.IsNullOrEmpty(next) && snapshot.GraphPages >= maxGraphPages) return TooLarge(snapshot, objectIds.Count);
                 }
                 while (!string.IsNullOrEmpty(next));
+            }
+            catch (IncompleteDirectoryResponseException ex)
+            {
+                // Graph answered, but not with the group or page asked for (a blank body, or no 'value' collection).
+                _logger.LogWarning($"Leadership cohort: {ex.Message}");
+                return Fail(snapshot, LeadershipCohortRefreshStatuses.Failed, LeadershipCohortFailureKinds.GraphError, null);
             }
             catch (DirectoryReadException ex)
             {

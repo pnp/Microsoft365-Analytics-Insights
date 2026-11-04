@@ -90,6 +90,12 @@ export interface AdoptionSegmentRow {
   neverUsedUsers: number;
   adoptionRatePct: number;
   averageAdoptionScore: number;
+  /**
+   * The department's unlicensed people recommended for a licence, over every candidate. Department rows only;
+   * null when withheld (fewer than minSeatsPerSegment) or unknown - never a substitute zero. Optional only so
+   * fixtures written before it still type-check.
+   */
+  recommendedCandidates?: number | null;
 }
 
 /**
@@ -319,7 +325,8 @@ export interface AgentUsageRow {
 /** The agent estate at a glance. */
 export interface AgentEstateSummary {
   historyDays: number;
-  activeAgents: number;
+  /** Agents used in the reporting period. Null for a past period that could not be measured - never the inventory's count. */
+  activeAgents: number | null;
   knownAgents: number;
   /** Customer-built agents only. */
   customAgents: number;
@@ -327,8 +334,9 @@ export interface AgentEstateSummary {
   unknownOriginAgents: number;
   agentUsers: number;
   licensedAgentUsers: number;
-  agentInteractions: number;
-  interactionsPerAgentUser: number;
+  /** Agent interactions in the reporting period; null when activeAgents is. */
+  agentInteractions: number | null;
+  interactionsPerAgentUser: number | null;
   mostPopularAgent: string | null;
   mostVersatileAgent: string | null;
   healthBreakdown: ReportCategory[];
@@ -796,6 +804,11 @@ export interface LicensedUserAdoptionRow {
   frequencyScore: number;
   depthScore: number;
   breadthScore: number;
+  /**
+   * True when the person's Copilot use is confined to at most half the configured breadth target's apps - what
+   * makes the server advise adding another app. Optional only so fixtures written before it still type-check.
+   */
+  needsBroadening?: boolean;
   band: AdoptionBand;
   bandName: string;
   signalSource: string;

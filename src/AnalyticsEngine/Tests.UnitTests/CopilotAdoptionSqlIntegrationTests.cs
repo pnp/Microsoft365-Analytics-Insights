@@ -1044,6 +1044,42 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public void LatestReportSnapshot_KeepsReadingTheRollingReport_NotTheWeeklySevenDayReading()
+        {
+            // Licence activity has a 7-day per-user reading collected every Sunday, beside the daily 28-day one.
+            // This page keeps reading the rolling report it always has, whatever its window, rather than
+            // switching to the 7-day one on the days a Sunday is the newest snapshot.
+            using (var db = ScratchDatabase.Create("CopilotAdoptWeekly"))
+            {
+                CreateCopilotReportTable(db);
+                var sunday = new DateTime(2031, 3, 23);
+                db.Execute(
+                    @"INSERT INTO dbo.copilot_usage_user_activity_log
+                          (id, [date], user_id, report_period_days, prompts_all_apps, active_usage_days)
+                      VALUES (1, '2031-03-22', 1, 28, 10, 3),
+                             (2, '2031-03-23', 1, 7, 4, 1),
+                             (3, '2031-03-23', 1, 28, 12, 4);");
+
+                Assert.AreEqual(sunday, Query<DateTime?>(db, CopilotAdoptionSql.LatestCopilotReportDateSql,
+                    new SqlParameter("@settled", sunday.AddDays(1))).Single());
+                foreach (var windowDays in new[] { 7, 28, 90 })
+                {
+                    Assert.AreEqual(28, Query<int?>(db, CopilotAdoptionSql.LatestCopilotReportPeriodSql,
+                        new SqlParameter("@copilotReportDate", sunday),
+                        new SqlParameter("@windowDays", windowDays)).Single(),
+                        "A " + windowDays + "-day window must not switch to the weekly reading.");
+                }
+
+                // A date holding only a weekly reading is not a snapshot this page can read.
+                db.Execute(
+                    @"INSERT INTO dbo.copilot_usage_user_activity_log (id, [date], user_id, report_period_days)
+                      VALUES (4, '2031-03-30', 1, 7);");
+                Assert.AreEqual(sunday, Query<DateTime?>(db, CopilotAdoptionSql.LatestCopilotReportDateSql,
+                    new SqlParameter("@settled", sunday.AddDays(8))).Single());
+            }
+        }
+
         #endregion
 
         #region Licence opportunities

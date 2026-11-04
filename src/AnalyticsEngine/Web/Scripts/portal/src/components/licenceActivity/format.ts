@@ -5,7 +5,7 @@
 // "nobody did this" when the truth is "we didn't measure it". These helpers force the caller to be
 // explicit about the null case rather than letting `null` coerce to 0 somewhere in a template.
 
-import { formatDateParts, formatNumber, type TFunction } from '../../i18n';
+import { formatDateParts, formatNumber, parseApiDate, type TFunction } from '../../i18n';
 import type { LicenceActivitySku } from '../../types/licenceActivity';
 import { translateActive } from '../../i18n/runtime';
 
@@ -80,7 +80,7 @@ export function ratioPct(active: number | null | undefined, total: number | null
 /** A UTC ISO timestamp as a short local-format date, or the unknown marker when absent. */
 export function formatDate(iso: string | null | undefined, unknown: string = DASH): string {
   if (!iso) return unknown;
-  const date = new Date(iso);
+  const date = parseApiDate(iso);
   if (Number.isNaN(date.getTime())) return unknown;
   return formatDateParts(date, {
     day: 'numeric',
@@ -93,7 +93,7 @@ export function formatDate(iso: string | null | undefined, unknown: string = DAS
 /** A UTC ISO timestamp as a short local date-and-time, or the unknown marker when absent. */
 export function formatDateTime(iso: string | null | undefined, unknown: string = DASH): string {
   if (!iso) return unknown;
-  const date = new Date(iso);
+  const date = parseApiDate(iso);
   if (Number.isNaN(date.getTime())) return unknown;
   return formatDateParts(date, {
     day: 'numeric',
@@ -111,7 +111,7 @@ export function formatDateTime(iso: string | null | undefined, unknown: string =
  */
 export function daysAgo(iso: string | null | undefined, now: Date = new Date()): number | null {
   if (!iso) return null;
-  const then = new Date(iso);
+  const then = parseApiDate(iso);
   if (Number.isNaN(then.getTime())) return null;
   const ms = now.getTime() - then.getTime();
   if (ms < 0) return 0;

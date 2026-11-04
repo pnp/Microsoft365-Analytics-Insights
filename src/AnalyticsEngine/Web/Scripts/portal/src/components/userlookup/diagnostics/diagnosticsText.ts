@@ -1,11 +1,11 @@
-import { formatDateParts, type TFunction, type TranslationKey } from '../../../i18n';
+import { formatDateParts, parseApiDate, type TFunction, type TranslationKey } from '../../../i18n';
 import type { ClassificationExplanation, DiagnosticFinding } from '../../../types/userDiagnostics';
 
 /** An instant, always shown in UTC and labelled as such - these are compared with importer logs. */
 export function formatUtc(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
   // Explicit fields: Intl rejects dateStyle/timeStyle combined with timeZoneName.
-  return formatDateParts(new Date(iso), {
+  return formatDateParts(parseApiDate(iso), {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
@@ -19,7 +19,7 @@ export function formatUtc(iso: string | null | undefined): string {
 /** A date-only value (a usage-report day or last-activity date): no time, read in UTC so it never shifts a day. */
 export function formatUtcDate(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
-  return formatDateParts(new Date(iso), { dateStyle: 'medium', timeZone: 'UTC' });
+  return formatDateParts(parseApiDate(iso), { dateStyle: 'medium', timeZone: 'UTC' });
 }
 
 const REASON_KEYS: Record<string, TranslationKey> = {

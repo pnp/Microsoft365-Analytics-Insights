@@ -481,7 +481,7 @@ namespace App.ControlPanel.Frames.InstallWizard
             this.lblHybridWorkerVmHelp.Name = "lblHybridWorkerVmHelp";
             this.lblHybridWorkerVmHelp.Size = new System.Drawing.Size(430, 42);
             this.lblHybridWorkerVmHelp.TabIndex = 20;
-            this.lblHybridWorkerVmHelp.Text = "Azure VM Resource ID. The VM must be connected to the VNet specified above.\r\nThe installer will automatically deploy the Hybrid Worker extension to the VM\r\nand register it so automation runbooks can access private-endpoint resources.";
+            this.lblHybridWorkerVmHelp.Text = "Azure VM Resource ID. The VM must be connected to the VNet specified above.\r\nThe installer will automatically deploy the Hybrid Worker extension to the VM\r\nand register it so automation runbooks can access private-endpoint resources.\r\nA healthy extension is left alone. Repairing a failed one restarts the VM, but\r\nnever the VM the installer is running on: you are asked to repair that one.";
             // 
             // lblSkuWarning
             // 

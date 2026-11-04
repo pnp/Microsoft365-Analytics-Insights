@@ -1,6 +1,6 @@
 import { makeStyles, mergeClasses, tokens, Text } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
-import { formatDateParts, formatNumber, type TFunction, type TranslationKey } from '../../i18n';
+import { formatDateParts, formatNumber, parseApiDate, type TFunction, type TranslationKey } from '../../i18n';
 import type { InvestmentAction, InvestmentFinding, InvestmentTrustReason } from '../../types/copilotInvestment';
 
 /**
@@ -113,19 +113,10 @@ export function WithheldMark({ reason }: { reason: string }) {
   );
 }
 
-/** A UTC date or instant as a short date in the reader's language. */
-/**
- * A server date as a moment in UTC. The API sends the dates it reads from SQL without an offset ("2026-10-26T00:00:00"),
- * which a browser would otherwise read as its own local midnight: a day early anywhere east of UTC. Every date these
- * reports send is UTC, so one without an offset is read as UTC too.
- */
-export function parseUtcDate(iso: string): Date {
-  return new Date(/T[^Zz+-]*$/.test(iso) ? `${iso}Z` : iso);
-}
-
+/** A UTC date or instant as a short date in the reader's language; a date with no offset is UTC (see parseApiDate). */
 export function formatShortDate(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
-  return formatDateParts(parseUtcDate(iso), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  return formatDateParts(parseApiDate(iso), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
 
 export const SIGNAL_LABEL_KEYS: Record<string, TranslationKey> = {

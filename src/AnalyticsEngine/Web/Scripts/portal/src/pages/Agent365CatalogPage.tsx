@@ -22,7 +22,7 @@ import { ArrowClockwise16Regular, ChevronLeft16Regular, ChevronRight16Regular } 
 import Spinner from '../components/Spinner';
 import { fetchAgent365Catalog } from '../api/agent365CatalogApi';
 import type { Agent365CatalogPackage, Agent365CatalogResponse } from '../types/agent365Catalog';
-import { formatDateParts, formatList, formatNumber, useT } from '../i18n';
+import { formatDateParts, formatList, formatNumber, parseApiDate, useT } from '../i18n';
 
 const PAGE_SIZE = 50;
 
@@ -79,7 +79,7 @@ const useStyles = makeStyles({
 
 function formatDate(value: string | null): string {
   return value
-    ? formatDateParts(new Date(value), { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' })
+    ? formatDateParts(parseApiDate(value), { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' })
     : '';
 }
 

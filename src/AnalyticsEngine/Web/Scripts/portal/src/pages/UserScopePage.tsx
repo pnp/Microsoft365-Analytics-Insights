@@ -59,6 +59,8 @@ const PHASE_KEYS: Record<UserScopePurgePhase, TranslationKey> = {
   usageReports: 'admin.userScope.phase.usageReports',
   copilotInteractions: 'admin.userScope.phase.copilotInteractions',
   licencesAndCredits: 'admin.userScope.phase.licencesAndCredits',
+  copilotCostPreview: 'admin.userScope.phase.copilotCostPreview',
+  retiredFeatures: 'admin.userScope.phase.retiredFeatures',
   sharedWith: 'admin.userScope.phase.sharedWith',
   managers: 'admin.userScope.phase.managers',
   users: 'admin.userScope.phase.users',
@@ -350,6 +352,7 @@ function PurgeExplanation({ durable }: { durable: boolean }) {
       <ul>
         <li>{t('admin.userScope.purge.deleteList')}</li>
         <li>{t('admin.userScope.purge.anonymiseList')}</li>
+        <li>{t('admin.userScope.purge.keptList')}</li>
         <li>{t('admin.userScope.purge.operationalList')}</li>
         <li>{t(durable ? 'admin.userScope.purge.restartDurable' : 'admin.userScope.purge.restartMemory')}</li>
       </ul>

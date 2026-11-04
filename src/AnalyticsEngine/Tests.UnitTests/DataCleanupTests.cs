@@ -395,29 +395,313 @@ namespace Tests.UnitTests
             return sqlPath;
         }
 
+        /// <summary>
+        /// <c>CleanDataByUser</c> removes one person the way the portal's User scope purge does. The person here has what
+        /// nearly every user of a tracked tenant has - a page view in a web session - plus Microsoft Entra ID, Power Platform
+        /// and Copilot Studio audit metadata, shares and a call with someone else, Copilot Studio credits and credit history
+        /// readings: every one of them a foreign key that does not cascade, or a reference with no foreign key at all. It runs
+        /// as a DBA runs it, outside any transaction of the caller's.
+        /// </summary>
         [TestMethod]
         public async Task CleanupDataForUserDataTests()
         {
-            var userId = 0;
+            int userId;
             using (var db = new AnalyticsEntitiesContext())
             {
                 var user = await InsertTestDataAll(db);
                 userId = user.ID;
-
-                // Ensure stored proc exists
-                var statements = StringUtils.SplitSqlStatements(ResourceProxy.CreateOrUpdateClean_Data_By_User_StoredProc);
-                foreach (var statement in statements)
-                    await db.Database.ExecuteSqlCommandAsync(statement);
-
-                // Run cleanup for user
-                await db.Database.ExecuteSqlCommandAsync("EXEC CleanDataByUser @p0", userId);
             }
+            var other = await SeedWhatOnlyThePurgeHandlesAsync(userId);
+            var profiles = await WeeklyProfileTables.EnsureAsync(ConnectionString());
+            try
+            {
+                await ExecuteAsync(WeeklyProfileTables.InsertSql(userId) + WeeklyProfileTables.InsertSql(other.OtherUser));
+                await CreateCleanDataByUserAsync();
+                await ExecuteCleanDataByUserAsync(userId);
+
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    Assert.IsNull(await db.users.FindAsync(userId), "The user is gone.");
+                }
+
+                async Task Count(int expected, string what, string sql)
+                    => Assert.AreEqual(expected, Convert.ToInt32(await ScalarAsync(sql.Replace("@user", userId.ToString()).Replace("@other", other.OtherUser.ToString()))), what);
+
+                await Count(0, "Their audit events are gone.", "SELECT COUNT(*) FROM dbo.audit_events WHERE user_id = @user");
+                await Count(0, "Their sessions are gone, with the page views in them.", "SELECT COUNT(*) FROM dbo.sessions WHERE user_id = @user");
+                await Count(0, "Their Copilot Studio credits are gone.", "SELECT COUNT(*) FROM dbo.copilot_studio_credit_user_daily WHERE entra_object_id = '" + other.UserObject + "'");
+                await Count(0, "Their Copilot credit history is gone.", "SELECT COUNT(*) FROM dbo.copilot_cost_observations WHERE object_id = '" + other.UserObject + "'");
+                await Count(0, "...including the service readings under it.", "SELECT COUNT(*) FROM dbo.copilot_cost_services WHERE object_id = '" + other.UserObject + "'");
+                await Count(0, "...and their history bundles.", "SELECT COUNT(*) FROM dbo.copilot_cost_history WHERE object_id = '" + other.UserObject + "'");
+                await Count(0, "Search text only they used is gone...", $"SELECT COUNT(*) FROM dbo.search_terms WHERE id = {other.OwnSearchTerm}");
+                await Count(1, "...while search text someone else used too stays.", $"SELECT COUNT(*) FROM dbo.search_terms WHERE id = {other.SharedSearchTerm}");
+                await Count(0, "A prompt phrase only they used is gone...", $"SELECT COUNT(*) FROM dbo.keywords WHERE id = {other.OwnPhrase}");
+                await Count(1, "...while one someone else used too stays.", $"SELECT COUNT(*) FROM dbo.keywords WHERE id = {other.SharedPhrase}");
+                await Count(0, "Their own email address is gone once no email refers to it.", $"SELECT COUNT(*) FROM dbo.email_addresses WHERE id = {other.OwnAddress}");
+
+                await Count(1, "The other person's reply to their comment stays...", $"SELECT COUNT(*) FROM dbo.page_comments WHERE id = {other.Reply} AND parent_id IS NULL");
+                await Count(2, "...as do the shares the other person made to them, without a recipient...",
+                    $"SELECT (SELECT COUNT(*) FROM dbo.event_meta_power_app_share WHERE id = {other.AppShare} AND shared_with_user_id IS NULL) + " +
+                    $"(SELECT COUNT(*) FROM dbo.event_meta_power_automate_flow_share WHERE id = {other.FlowShare} AND shared_with_user_id IS NULL)");
+                await Count(1, "...and the other person's call, with them as the anonymous Unknown User.",
+                    $"SELECT COUNT(*) FROM dbo.call_sessions s JOIN dbo.users u ON u.id = s.attendee_user_id WHERE s.call_record_id = {other.Call} AND u.user_name = 'Unknown User'");
+                await Count(1, "The other person is untouched.", "SELECT COUNT(*) FROM dbo.users WHERE id = @other");
+                foreach (var table in WeeklyProfileTables.Names)
+                {
+                    await Count(0, $"Their weekly profile ({table}) is gone...", $"SELECT COUNT(*) FROM profiling.[{table}] WHERE user_id = @user");
+                    await Count(2, $"...while the other person's ({table}) stays.", $"SELECT COUNT(*) FROM profiling.[{table}] WHERE user_id = @other");
+                }
+            }
+            finally
+            {
+                await ExecuteAsync(WeeklyProfileTables.DeleteSql(userId, other.OtherUser));
+                await WeeklyProfileTables.DropAsync(ConnectionString(), profiles);
+                await RemoveWhatOnlyThePurgeHandlesAsync(other);
+            }
+        }
+
+        /// <summary>
+        /// The procedure is all or nothing. When one of its deletes fails - here because something it doesn't know about
+        /// still refers to the user - nothing it deleted before stays deleted, so a failed run never leaves someone
+        /// half-erased.
+        /// </summary>
+        [TestMethod]
+        public async Task CleanDataByUser_RollsEverythingBack_WhenADeleteFails()
+        {
+            int userId;
             using (var db = new AnalyticsEntitiesContext())
             {
-                // Find user again in new context for caching. Should be gone
-                var checkUser = await db.users.FindAsync(userId);
-                Assert.IsNull(checkUser);
+                var user = await InsertTestDataAll(db);
+                userId = user.ID;
             }
+            var blocker = "test_clean_by_user_blocker_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            try
+            {
+                await CreateCleanDataByUserAsync();
+                await ExecuteAsync($"CREATE TABLE dbo.{blocker} (user_id int NOT NULL REFERENCES dbo.users (id)); INSERT INTO dbo.{blocker} (user_id) VALUES ({userId});");
+
+                var failure = await CaptureAsync(() => ExecuteCleanDataByUserAsync(userId));
+                Assert.AreEqual(547, SqlErrorNumber(failure), failure?.ToString());
+
+                Assert.AreEqual(1, Convert.ToInt32(await ScalarAsync($"SELECT COUNT(*) FROM dbo.users WHERE id = {userId}")));
+                Assert.IsTrue(Convert.ToInt32(await ScalarAsync($"SELECT COUNT(*) FROM dbo.page_likes WHERE user_id = {userId}")) > 0,
+                    "Their page likes, deleted early on, are back.");
+                Assert.IsTrue(Convert.ToInt32(await ScalarAsync($"SELECT COUNT(*) FROM dbo.audit_events WHERE user_id = {userId}")) > 0,
+                    "So are their audit events.");
+                Assert.IsTrue(Convert.ToInt32(await ScalarAsync($"SELECT COUNT(*) FROM dbo.sessions WHERE user_id = {userId}")) > 0,
+                    "And their web sessions.");
+
+                await ExecuteAsync($"DROP TABLE dbo.{blocker};");
+                await ExecuteCleanDataByUserAsync(userId);
+                Assert.AreEqual(0, Convert.ToInt32(await ScalarAsync($"SELECT COUNT(*) FROM dbo.users WHERE id = {userId}")), "Run again, it finishes.");
+            }
+            finally
+            {
+                await ExecuteAsync($"IF OBJECT_ID(N'dbo.{blocker}', N'U') IS NOT NULL DROP TABLE dbo.{blocker};");
+            }
+        }
+
+        private sealed class OtherPeoplesData
+        {
+            public int OtherUser, Reply, AppShare, FlowShare, Call, CallType;
+            public int OwnSearchTerm, SharedSearchTerm, OwnPhrase, SharedPhrase, OwnAddress, OtherSession, OtherInteractionSession;
+            public Guid UserObject, CostRun;
+        }
+
+        /// <summary>
+        /// What <see cref="InsertTestDataAll(AnalyticsEntitiesContext)"/> doesn't create: the person's audit metadata that
+        /// does not cascade, their credits and credit history, and someone else's records that name them.
+        /// </summary>
+        private static async Task<OtherPeoplesData> SeedWhatOnlyThePurgeHandlesAsync(int userId)
+        {
+            var token = "cdu" + Guid.NewGuid().ToString("N").Substring(0, 12);
+            const string sql = @"
+SET NOCOUNT ON;
+DECLARE @now datetime = SYSUTCDATETIME(), @other int, @userObject uniqueidentifier = NEWID();
+UPDATE dbo.users SET azure_ad_id = CONVERT(nvarchar(36), @userObject), user_name = @token + '-user@contoso.local', mail = @token + '-user@contoso.local' WHERE id = @user;
+INSERT INTO dbo.users (user_name, mail) VALUES (@token + '-other@contoso.local', @token + '-other@contoso.local'); SET @other = SCOPE_IDENTITY();
+
+-- Audit metadata whose foreign keys to the event don't cascade.
+DECLARE @entra uniqueidentifier = NEWID(), @app uniqueidentifier = NEWID(), @flow uniqueidentifier = NEWID(), @bi uniqueidentifier = NEWID(),
+        @studio uniqueidentifier = NEWID(), @otherShare uniqueidentifier = NEWID();
+INSERT INTO dbo.audit_events (id, time_stamp, user_id) VALUES (@entra, @now, @user), (@app, @now, @user), (@flow, @now, @user), (@bi, @now, @user),
+    (@studio, @now, @user), (@otherShare, @now, @other);
+INSERT INTO dbo.event_meta_azure_ad (event_id) VALUES (@entra);
+INSERT INTO dbo.event_meta_power_app (event_id) VALUES (@app);
+INSERT INTO dbo.event_meta_power_automate_flow (event_id) VALUES (@flow);
+INSERT INTO dbo.event_meta_power_bi (event_id) VALUES (@bi);
+INSERT INTO dbo.event_meta_copilot_studio (event_id) VALUES (@studio);
+
+-- Someone else shared an app and a flow with them, and replied to their page comment.
+DECLARE @appShare int, @flowShare int, @reply int;
+INSERT INTO dbo.event_meta_power_app_share (event_id, shared_with_user_id) VALUES (@otherShare, @user); SET @appShare = SCOPE_IDENTITY();
+INSERT INTO dbo.event_meta_power_automate_flow_share (event_id, shared_with_user_id) VALUES (@otherShare, @user); SET @flowShare = SCOPE_IDENTITY();
+INSERT INTO dbo.page_comments (user_id, url_id, created, sp_id, comment, parent_id)
+SELECT TOP (1) @other, c.url_id, @now, 1, N'reply', c.id FROM dbo.page_comments c WHERE c.user_id = @user;
+SET @reply = SCOPE_IDENTITY();
+
+-- The other person called them.
+DECLARE @callType int, @call int;
+INSERT INTO dbo.call_types (name) VALUES (@token); SET @callType = SCOPE_IDENTITY();
+INSERT INTO dbo.call_records (organizer_id, call_type_id, start, [end], graph_id) VALUES (@other, @callType, @now, @now, @token); SET @call = SCOPE_IDENTITY();
+INSERT INTO dbo.call_sessions (attendee_user_id, start, [end], call_record_id) VALUES (@user, @now, @now, @call);
+
+-- Search text, prompt phrases and an address: some only theirs, some shared with the other person.
+DECLARE @ownTerm int, @sharedTerm int, @otherSession int, @ownPhrase int, @sharedPhrase int, @ownAddress int;
+DECLARE @userSession int = (SELECT TOP (1) id FROM dbo.sessions WHERE user_id = @user);
+INSERT INTO dbo.search_terms (search_term) VALUES (N'own ' + @token); SET @ownTerm = SCOPE_IDENTITY();
+INSERT INTO dbo.search_terms (search_term) VALUES (N'shared ' + @token); SET @sharedTerm = SCOPE_IDENTITY();
+INSERT INTO dbo.sessions (user_id) VALUES (@other); SET @otherSession = SCOPE_IDENTITY();
+INSERT INTO dbo.searches (session_id, search_term_id) VALUES (@userSession, @ownTerm), (@userSession, @sharedTerm), (@otherSession, @sharedTerm);
+
+DECLARE @userChats int, @otherChats int, @userPrompt int, @otherPrompt int;
+INSERT INTO dbo.copilot_interaction_sessions (session_ref, user_id) VALUES (@token + '-user', @user); SET @userChats = SCOPE_IDENTITY();
+INSERT INTO dbo.copilot_interaction_sessions (session_ref, user_id) VALUES (@token + '-other', @other); SET @otherChats = SCOPE_IDENTITY();
+INSERT INTO dbo.copilot_interactions (graph_interaction_id, session_id, user_id, created_utc, body_char_count, body_word_count, attachment_count, link_count, mention_count, context_count)
+VALUES (@token + '-user', @userChats, @user, @now, 1, 1, 0, 0, 0, 0); SET @userPrompt = SCOPE_IDENTITY();
+INSERT INTO dbo.copilot_interactions (graph_interaction_id, session_id, user_id, created_utc, body_char_count, body_word_count, attachment_count, link_count, mention_count, context_count)
+VALUES (@token + '-other', @otherChats, @other, @now, 1, 1, 0, 0, 0, 0); SET @otherPrompt = SCOPE_IDENTITY();
+INSERT INTO dbo.keywords (name) VALUES (N'own ' + @token); SET @ownPhrase = SCOPE_IDENTITY();
+INSERT INTO dbo.keywords (name) VALUES (N'shared ' + @token); SET @sharedPhrase = SCOPE_IDENTITY();
+INSERT INTO dbo.copilot_interaction_keywords (interaction_id, keyword_id) VALUES (@userPrompt, @ownPhrase), (@userPrompt, @sharedPhrase), (@otherPrompt, @sharedPhrase);
+
+INSERT INTO dbo.email_addresses (address) VALUES (@token + '-user@contoso.local'); SET @ownAddress = SCOPE_IDENTITY();
+INSERT INTO dbo.sent_emails (sent_date, graph_message_id, from_address_id, user_id) VALUES (@now, @token, @ownAddress, @user);
+
+-- Copilot Studio credits, and Copilot credit history keyed by their object id (not yet linked to their user row).
+INSERT INTO dbo.copilot_studio_credit_user_daily (usage_date, billed_credits, dimension_hash, imported_utc, user_id, entra_object_id)
+VALUES (@now, 1, @token + '-linked', @now, @user, CONVERT(nvarchar(36), @userObject)),
+       (@now, 1, @token + '-unlinked', @now, NULL, CONVERT(nvarchar(36), @userObject));
+DECLARE @costRun uniqueidentifier = NEWID();
+INSERT INTO dbo.copilot_cost_runs (run_id, generation, inventory_date, last_served) VALUES (@costRun, @token, '2026-09-01', SYSDATETIMEOFFSET());
+INSERT INTO dbo.copilot_cost_work (run_id, object_id, user_id, next_attempt) VALUES (@costRun, @userObject, @user, SYSDATETIMEOFFSET());
+INSERT INTO dbo.copilot_cost_observations (observation_date, object_id, user_id, observed_at, quality, selection_status)
+VALUES ('2026-09-01', @userObject, NULL, SYSDATETIMEOFFSET(), 2, N'{}');
+INSERT INTO dbo.copilot_cost_services (observation_date, object_id, category_hash, category, policy_id)
+VALUES ('2026-09-01', @userObject, HASHBYTES('SHA2_256', N'chat'), N'chat', N'policy');
+INSERT INTO dbo.copilot_cost_history (run_id, publication_id, observation_date, object_id, observed_at, quality, bundle)
+VALUES (@costRun, NEWID(), '2026-09-01', @userObject, SYSDATETIMEOFFSET(), 2, N'{}');
+
+SELECT @other, @reply, @appShare, @flowShare, @call, @callType, @ownTerm, @sharedTerm, @ownPhrase, @sharedPhrase, @ownAddress,
+       @otherSession, @otherChats, @userObject, @costRun;";
+
+            using (var connection = new System.Data.SqlClient.SqlConnection(ConnectionString()))
+            using (var command = new System.Data.SqlClient.SqlCommand(sql, connection))
+            {
+                await connection.OpenAsync();
+                command.Parameters.AddWithValue("@token", token);
+                command.Parameters.AddWithValue("@user", userId);
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    Assert.IsTrue(await reader.ReadAsync());
+                    return new OtherPeoplesData
+                    {
+                        OtherUser = reader.GetInt32(0), Reply = reader.GetInt32(1), AppShare = reader.GetInt32(2), FlowShare = reader.GetInt32(3),
+                        Call = reader.GetInt32(4), CallType = reader.GetInt32(5), OwnSearchTerm = reader.GetInt32(6), SharedSearchTerm = reader.GetInt32(7),
+                        OwnPhrase = reader.GetInt32(8), SharedPhrase = reader.GetInt32(9), OwnAddress = reader.GetInt32(10),
+                        OtherSession = reader.GetInt32(11), OtherInteractionSession = reader.GetInt32(12),
+                        UserObject = reader.GetGuid(13), CostRun = reader.GetGuid(14),
+                    };
+                }
+            }
+        }
+
+        private static Task RemoveWhatOnlyThePurgeHandlesAsync(OtherPeoplesData other) => ExecuteAsync($@"
+DELETE FROM dbo.copilot_cost_services WHERE object_id = '{other.UserObject}';
+DELETE FROM dbo.copilot_cost_observations WHERE object_id = '{other.UserObject}';
+DELETE FROM dbo.copilot_cost_history WHERE run_id = '{other.CostRun}';
+DELETE FROM dbo.copilot_cost_work WHERE run_id = '{other.CostRun}';
+DELETE FROM dbo.copilot_cost_runs WHERE run_id = '{other.CostRun}';
+DELETE FROM dbo.copilot_studio_credit_user_daily WHERE entra_object_id = '{other.UserObject}';
+DELETE FROM dbo.copilot_interaction_keywords WHERE keyword_id IN ({other.OwnPhrase}, {other.SharedPhrase});
+DELETE FROM dbo.copilot_interactions WHERE session_id = {other.OtherInteractionSession};
+DELETE FROM dbo.copilot_interaction_sessions WHERE id = {other.OtherInteractionSession};
+DELETE FROM dbo.keywords WHERE id IN ({other.OwnPhrase}, {other.SharedPhrase});
+DELETE FROM dbo.searches WHERE search_term_id IN ({other.OwnSearchTerm}, {other.SharedSearchTerm});
+DELETE FROM dbo.sessions WHERE id = {other.OtherSession};
+DELETE FROM dbo.search_terms WHERE id IN ({other.OwnSearchTerm}, {other.SharedSearchTerm});
+DELETE FROM dbo.sent_emails WHERE from_address_id = {other.OwnAddress};
+DELETE FROM dbo.email_addresses WHERE id = {other.OwnAddress};
+DELETE FROM dbo.page_comments WHERE id = {other.Reply};
+DELETE FROM dbo.event_meta_power_app_share WHERE id = {other.AppShare};
+DELETE FROM dbo.event_meta_power_automate_flow_share WHERE id = {other.FlowShare};
+DELETE FROM dbo.audit_events WHERE user_id = {other.OtherUser};
+DELETE s FROM dbo.call_sessions s JOIN dbo.call_records r ON r.id = s.call_record_id WHERE r.call_type_id = {other.CallType};
+DELETE FROM dbo.call_records WHERE call_type_id = {other.CallType};
+DELETE FROM dbo.call_types WHERE id = {other.CallType};
+DELETE FROM dbo.users WHERE id = {other.OtherUser};");
+
+        private static async Task CreateCleanDataByUserAsync()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                foreach (var statement in StringUtils.SplitSqlStatements(ResourceProxy.CreateOrUpdateClean_Data_By_User_StoredProc))
+                {
+                    await db.Database.ExecuteSqlCommandAsync(statement);
+                }
+            }
+        }
+
+        /// <summary>As a DBA runs it: <c>EXEC dbo.CleanDataByUser</c>, with no transaction of the caller's around it.</summary>
+        private static async Task ExecuteCleanDataByUserAsync(int userId)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Database.CommandTimeout = 300;
+                await db.Database.ExecuteSqlCommandAsync(System.Data.Entity.TransactionalBehavior.DoNotEnsureTransaction, "EXEC dbo.CleanDataByUser @p0", userId);
+            }
+        }
+
+        private static async Task ExecuteAsync(string sql)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.Database.CommandTimeout = 300;
+                await db.Database.ExecuteSqlCommandAsync(System.Data.Entity.TransactionalBehavior.DoNotEnsureTransaction, sql);
+            }
+        }
+
+        private static string ConnectionString()
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                return db.Database.Connection.ConnectionString;
+            }
+        }
+
+        private static async Task<object> ScalarAsync(string sql)
+        {
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                return await db.Database.SqlQuery<int>(sql).FirstAsync();
+            }
+        }
+
+        private static async Task<Exception> CaptureAsync(Func<Task> action)
+        {
+            try
+            {
+                await action();
+            }
+            catch (Exception ex)
+            {
+                return ex;
+            }
+            Assert.Fail("Expected the procedure to fail.");
+            return null;
+        }
+
+        /// <summary>The SQL Server error number of the first SqlException in <paramref name="error"/>'s chain, whichever client raised it.</summary>
+        private static int? SqlErrorNumber(Exception error)
+        {
+            for (var e = error; e != null; e = e.InnerException)
+            {
+                if (e.GetType().Name == "SqlException")
+                {
+                    return (int)e.GetType().GetProperty("Number").GetValue(e);
+                }
+            }
+            return null;
         }
 
 
@@ -519,7 +803,10 @@ namespace Tests.UnitTests
             };
             db.sharepoint_events.Add(spEvent);
 
-            // Hit (minimal)
+            // A web session, and a page view in it: what anyone who visits a tracked page has.
+            var session = new UserSession { ai_session_id = "sess-" + ticks, user = user };
+            db.sessions.Add(session);
+
             var hit = new Hit
             {
                 url = url,
@@ -531,14 +818,12 @@ namespace Tests.UnitTests
                 os = os,
                 hit_timestamp = oneYearAgo,
                 page_title = pageTitle,
-                page_request_id = Guid.NewGuid()
+                page_request_id = Guid.NewGuid(),
+                session = session
             };
             db.hits.Add(hit);
 
-            // Search term + session + search
-            var session = new UserSession { ai_session_id = "sess-" + ticks, user = user };
-            db.sessions.Add(session);
-
+            // Search term + search
             var term = new SearchTerm { search_term = "term-" + ticks };
             db.search_terms.Add(term);
 

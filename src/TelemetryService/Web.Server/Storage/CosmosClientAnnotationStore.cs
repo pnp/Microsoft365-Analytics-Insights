@@ -13,7 +13,8 @@ namespace Web.Storage
     /// </remarks>
     public class CosmosClientAnnotationStore : IClientAnnotationStore
     {
-        private static readonly string PARTITION_KEY = "/" + nameof(ClientAnnotation.id);
+        /// <summary>Partition key of the annotations container. <c>infra/TelemetryService</c> provisions it with it.</summary>
+        internal const string PartitionKeyPath = "/" + nameof(ClientAnnotation.id);
 
         private readonly Container _container;
         private readonly CosmosClient _cosmosClient;
@@ -86,12 +87,15 @@ namespace Web.Storage
             }
         }
 
-        public async Task Init()
+        /// <summary>
+        /// Checks the annotations container exists with <see cref="PartitionKeyPath"/>, and returns what is wrong.
+        /// Never creates it - see <see cref="CosmosSchema"/>.
+        /// </summary>
+        public async Task<IReadOnlyList<string>> VerifySchemaAsync(CancellationToken cancellationToken)
         {
-            await _cosmosClient.CreateDatabaseIfNotExistsAsync(_config.DatabaseName);
-            var db = _cosmosClient.GetDatabase(_config.DatabaseName);
-            await db.CreateContainerIfNotExistsAsync(
-                id: _config.ContainerNameAnnotations, partitionKeyPath: PARTITION_KEY);
+            var problem = await CosmosSchema.CheckContainerAsync(
+                _cosmosClient, _config.DatabaseName, _config.ContainerNameAnnotations, PartitionKeyPath, cancellationToken);
+            return problem == null ? Array.Empty<string>() : new[] { problem };
         }
     }
 

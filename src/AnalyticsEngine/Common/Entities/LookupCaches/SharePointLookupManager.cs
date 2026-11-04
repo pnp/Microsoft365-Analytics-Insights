@@ -77,7 +77,9 @@ namespace Common.Entities
         #endregion
 
         /// <summary>
-        /// Gets closest web for a URL, optionally or creates new webs + corrsponding site if no matching site found.
+        /// Gets the web for an audit event, creating it and its site collection when <paramref name="createIfNoneFound"/>.
+        /// With it, <paramref name="webUrl"/> is the web's own address (an audit record's <c>SiteUrl</c>); without it, an
+        /// address inside a web, such as a file's. See <see cref="SPWebResolver.GetWeb"/>.
         /// </summary>
         public async Task<Web> GetWebOrCreateWebPlusSite(string webUrl, bool createIfNoneFound)
         {

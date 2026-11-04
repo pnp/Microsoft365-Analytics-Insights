@@ -99,6 +99,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        [TestCategory("TimeZone")]
         public void ActivityReportsGate_TreatsALocalStoredTimestampAsAnInstant()
         {
             // Both ISingleDateStore implementations stamp DateTime.Now, so the value read back has
@@ -150,6 +151,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        [TestCategory("TimeZone")]
         public void ActivityReportsGate_NextRunUtc_IsTheLastInstantTheGateIsStillShut()
         {
             // The "will import again after ..." line an operator reads must name the threshold the gate

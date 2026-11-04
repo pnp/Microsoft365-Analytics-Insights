@@ -2,8 +2,10 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { loadCatalog } from '../../i18n/catalog';
 import { setActiveLanguage, translateStatic, type TFunction } from '../../i18n';
+import { inTimeZone } from '../../test/timeZone';
 import { AdoptionBand, type CopilotAdoptionOptions, type CopilotAdoptionWarningDetail, type CoworkReadinessRow, type LicensedUserAdoptionRow } from '../../types/copilotAdoption';
 import {
+  actionDescription,
   COPILOT_ADOPTION_WARNING_KEYS,
   copilotAdoptionWarningText,
   coworkRationaleText,
@@ -97,6 +99,33 @@ describe('Copilot Adoption server-authored text reproduction', () => {
       licensed({ tooNewToJudge: true, tenureBasis: 'futureSignal', daysSinceTenureStart: 4 }),
       OPTIONS,
     )).toContain('futureSignal');
+  });
+
+  it('advises another app from the server\u2019s needsBroadening fact, not a breadth score that only held at a target of 3', () => {
+    // A breadth score of 40 is two apps of a target of five: below the old fixed threshold for Established
+    // (50) but above Developing's (34), so the two bands disagreed. The server decides; the text follows it.
+    setActiveLanguage('en');
+    const developing = licensed({ band: AdoptionBand.Developing, breadthScore: 40, appsUsed: 2, needsBroadening: true });
+    expect(recommendedActionText(tEn, developing, OPTIONS))
+      .toBe('Add another app - building a habit but only in 2 Copilot apps. Introduce another surface such as Outlook or Teams meeting recaps.');
+    expect(recommendedActionText(tEn, { ...developing, breadthScore: 33.3, appsUsed: 1, needsBroadening: false }, OPTIONS))
+      .toBe(translateStatic('en', 'copilotAdoptionUsers.server.recommendedAction.developing.grow'));
+    expect(recommendedActionText(tEn, { ...developing, band: AdoptionBand.Champion, breadthScore: 50, appsUsed: 1 }, OPTIONS))
+      .toContain('and broaden');
+
+    setActiveLanguage('es');
+    const spanish = recommendedActionText(tEs, licensed({ band: AdoptionBand.Established, appsUsed: 2, needsBroadening: true }), OPTIONS);
+    expect(spanish).toContain('Añadir otra aplicación');
+    expect(spanish).not.toMatch(/segunda/);
+  });
+
+  it('states the configured breadth target in the broaden, grow and no-action descriptions', () => {
+    const options = { ...OPTIONS, developingScore: 25, establishedScore: 50, championScore: 75, breadthTargetApps: 5 } as CopilotAdoptionOptions;
+    setActiveLanguage('en');
+    expect(actionDescription(tEn, 'broaden', 'fallback', options)).toContain('no more than half of the 5 Copilot apps');
+    expect(actionDescription(tEn, 'grow', 'fallback', options)).toContain('more than half of the 5 Copilot apps');
+    setActiveLanguage('es');
+    expect(actionDescription(tEs, 'sustain', 'fallback', options)).toContain('más de la mitad de las 5 aplicaciones de Copilot');
   });
 
   it('translates Cowork tier labels from the stable tier code with a server fallback for unknown tiers', () => {
@@ -199,6 +228,19 @@ describe('Copilot Adoption server-authored text reproduction', () => {
       },
       'server fallback',
     )).toContain('2 oct 2026');
+  });
+
+  it('keeps a warning date sent with no offset on its UTC day for a reader east of UTC', () => {
+    setActiveLanguage('es');
+    const text = inTimeZone('Europe/Madrid', () => copilotAdoptionWarningText(
+      tEs,
+      {
+        key: COPILOT_ADOPTION_WARNING_KEYS.LicenceHistoryPartialForRange,
+        values: { historyStart: '2026-10-19T00:00:00.0000000' },
+      },
+      'server fallback',
+    ));
+    expect(text).toContain('empieza el 19 oct 2026.');
   });
 
   it('keeps SKU names verbatim while translating the SKU mismatch warning', () => {
