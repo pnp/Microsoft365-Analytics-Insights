@@ -136,8 +136,9 @@ namespace Web.AnalyticsWeb.Controllers
         {
             var seePii = PortalAccess.Evaluate(Request, User).SeePii;
             // Without See PII, small groups are folded over every group, whatever top was asked for, and only then cut to
-            // it: see TeamsAdoption.WithFirstGroups.
-            var query = await BuildQueryAsync(days, groupBy, seePii ? top : TeamsExplorerQuery.MaximumTop).ConfigureAwait(false);
+            // it: see TeamsAdoption.WithFirstGroups and TeamsExplorerQuery.WithEveryRow.
+            var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
+            if (!seePii) query = query.WithEveryRow();
             Func<TeamsAdoption, TeamsAdoption> forReader = null;
             if (!seePii)
             {
@@ -191,7 +192,8 @@ namespace Web.AnalyticsWeb.Controllers
             int top = TeamsExplorerQuery.DefaultTop)
         {
             var seePii = PortalAccess.Evaluate(Request, User).SeePii;
-            // As for adoption: departments are folded over every department, then cut to top (TeamsPeople.WithFirstDepartments).
+            // As for adoption, departments are folded before the cut to top (TeamsPeople.WithFirstDepartments), over the
+            // first MaximumTop departments: this section also lists people, so it is never read with every row.
             var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, seePii ? top : TeamsExplorerQuery.MaximumTop).ConfigureAwait(false);
             Func<TeamsPeople, TeamsPeople> forReader = null;
             if (!seePii)
@@ -247,7 +249,8 @@ namespace Web.AnalyticsWeb.Controllers
             var seePii = PortalAccess.Evaluate(Request, User).SeePii;
             // The adoption breakdown is folded over every group for a reader without See PII, as on the page.
             var foldsGroups = normalised == "adoption" && !seePii;
-            var query = await BuildQueryAsync(days, groupBy, foldsGroups ? TeamsExplorerQuery.MaximumTop : top).ConfigureAwait(false);
+            var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
+            if (foldsGroups) query = query.WithEveryRow();
             byte[] csv;
             string failedQuery;
             TeamsExplorerQueryInfo failedInfo;

@@ -561,6 +561,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.licensedUsersOnlyUnavailableEntirelyWhenTenantConcealsUser': '. Solo usuarios con licencia, y totalmente no disponible cuando el inquilino oculta información de usuario.',
   'copilotAdoption.page.microsoftReport.title': 'Informe de uso de Copilot de Microsoft',
   'copilotAdoption.page.microsoftReport.period': 'periodo de {days} días hasta el {date}',
+  'copilotAdoption.page.microsoftReport.withheld': 'no se muestra, porque describe a toda la organización y se aplica el filtro de informes de un administrador del portal',
   'copilotAdoption.page.microsoftReport.tenantWide': 'Todo el inquilino',
   'copilotAdoption.page.microsoftReport.promptsSubmitted': 'indicaciones enviadas',
   'copilotAdoption.page.microsoftReport.averagePerActiveUser': 'indicaciones por usuario activo',
