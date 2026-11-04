@@ -34,6 +34,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// </summary>
         public const string INSTALLER_FIREWALL_RULE_NAME = "O365 Adv Analytics Setup Rule";
 
+        /// <summary>The Service Bus queue the calls webhook sends to and the importer receives from.</summary>
+        public const string CALLS_QUEUE_NAME = "graphcalls";
+
         private readonly GetOrCreateResourceGroupTask _rgCreateTask;
         private readonly AutomationAccountTask _automationAccountTask;
 
@@ -131,8 +134,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 this.AddTask(_vnetInstallTask);
             }
 
-            // Web 
-            var appServicePlanConfig = TaskConfig.GetConfigForName(config.AppServiceWebAppName).AddSetting(AppServicePlanTask.CONFIG_KEY_PERF_TIER, appPerfTier);
+            // Web. The plan is created under the configured plan name; an existing web app keeps the plan it runs on
+            // (earlier installers named that plan after the web app, so existing deployments keep a plan of that name).
+            var appServicePlanName = string.IsNullOrWhiteSpace(config.AppServicePlanName) ? config.AppServiceWebAppName : config.AppServicePlanName;
+            var appServicePlanConfig = TaskConfig.GetConfigForName(appServicePlanName)
+                .AddSetting(AppServicePlanTask.CONFIG_KEY_PERF_TIER, appPerfTier)
+                .AddSetting(AppServicePlanTask.CONFIG_KEY_WEB_APP_NAME, config.AppServiceWebAppName);
             _appServicePlanTask = new AppServicePlanTask(appServicePlanConfig, logger, Location, tagDic);
 
             var appServiceConfig = TaskConfig.GetConfigForName(config.AppServiceWebAppName);
@@ -161,7 +168,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // 'DenyPublicEndpointEnabled' and connectivity is expected to come via private endpoint.
             if (allowPublicAccess)
             {
-                _sqlServerFirewallConfigTask = new SqlServerFirewallConfigTask(TaskConfig.GetConfigForName(FIREWALL_RULE_NAME), logger, Location, config.KeyVaultName);
+                _sqlServerFirewallConfigTask = new SqlServerFirewallConfigTask(TaskConfig.GetConfigForName(FIREWALL_RULE_NAME), logger, Location, config.KeyVaultName,
+                    config.AppServiceWebAppName, () => !_sqlServerTask.ServerAlreadyExisted);
                 this.AddTask(_sqlServerTask, _sqlServerFirewallConfigTask, _sqlDatabaseTask);
             }
             else
@@ -225,7 +233,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // Service Bus is only required by the Teams calls import; skip provisioning when disabled.
             if (config.ServiceBusEnabled)
             {
-                const string QUEUE_NAME = "graphcalls";
+                const string QUEUE_NAME = CALLS_QUEUE_NAME;
                 const string RULE_NAME = "ListenAndSendPolicy";
                 _serviceBusNamespaceInstallTask = new ServiceBusNamespaceInstallTask(TaskConfig.GetConfigForName(config.ServiceBusName), logger, Location, tagDic, requirePremiumSku: vnetEnabled, allowPublicAccess: allowPublicAccess);
 
@@ -711,6 +719,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public SqlServerResource CreatedSqlServer => GetTaskResult<SqlServerResource>(_sqlServerTask);
         public SqlDatabaseResource CreatedSqlDatabase => GetTaskResult<SqlDatabaseResource>(_sqlDatabaseTask);
         public AppServicePlanResource CreatedAppServicePlan => GetTaskResult<AppServicePlanResource>(_appServicePlanTask);
+        internal AppServicePlanTask PlanTask => _appServicePlanTask;
         public WebSiteResource CreatedWebSiteResource => GetTaskResult<WebSiteResource>(_appServiceWebsiteTask);
 
         /// <summary>

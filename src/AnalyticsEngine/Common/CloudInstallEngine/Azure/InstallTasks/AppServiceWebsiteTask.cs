@@ -62,51 +62,52 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
+                // PATCH, never a PUT of a fresh WebSiteData. That PUT carried only the identity, public access, site
+                // config and the configured tags, so it removed every other tag on the site and risked resetting
+                // anything else it left out. A PATCH changes only the properties it names.
+                var patch = new SitePatchInfo();
                 var needsUpdate = false;
-                var webAppUpdateInfo = new WebSiteData(base.AzureLocation);
 
                 // Ensure app has system assigned identity
                 if (webApp.HasData && webApp.Data.Identity == null)
                 {
-                    webAppUpdateInfo.Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned);
+                    patch.Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned);
                     _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to use System Assigned identity...");
                     needsUpdate = true;
                 }
 
-                // Ensure minimum TLS version is 1.2 and enable Always On when the plan supports it.
+                // Raise a minimum TLS version below 1.2, disable FTP/FTPS and enable Always On when the plan supports it.
+                // Only the settings that need changing are sent, so a stricter setting an operator chose (TLS 1.3) stays.
                 var siteConfig = (await webApp.GetWebSiteConfig().GetAsync(cancellationToken: CancellationToken)).Value.Data;
-                var needsTlsUpdate = siteConfig.MinTlsVersion == null || !siteConfig.MinTlsVersion.Value.ToString().Equals(AppServiceSupportedTlsVersion.Tls1_2.ToString());
-                var needsAlwaysOnUpdate = supportsAlwaysOn && siteConfig.IsAlwaysOn != true;
-                var needsFtpsDisable = siteConfig.FtpsState != AppServiceFtpsState.Disabled;
-                var needsPublicAccessUpdate = !string.Equals(webApp.Data.PublicNetworkAccess, desiredAccess, System.StringComparison.OrdinalIgnoreCase);
-                if (needsTlsUpdate || needsAlwaysOnUpdate || needsFtpsDisable || needsPublicAccessUpdate)
+                var configChanges = new List<string>();
+                var siteConfigPatch = BuildSiteConfigChanges(siteConfig, supportsAlwaysOn, configChanges);
+                if (siteConfigPatch != null)
                 {
-                    webAppUpdateInfo.PublicNetworkAccess = desiredAccess;
-                    webAppUpdateInfo.SiteConfig = BuildSecureSiteConfig(appServicePlanSku, supportsAlwaysOn);
-                    if (needsTlsUpdate)
-                        _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enforce TLS 1.2...");
-                    if (needsAlwaysOnUpdate)
-                        _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to enable Always On...");
-                    if (needsFtpsDisable)
-                        _logger.LogInformation($"Disabling FTP/FTPS on App Service '{_config.ResourceName}' because deployment uses SCM HTTPS...");
-                    if (needsPublicAccessUpdate)
-                        _logger.LogInformation($"Updating App Service '{_config.ResourceName}' public network access to '{desiredAccess}'...");
+                    patch.SiteConfig = siteConfigPatch;
+                    foreach (var change in configChanges)
+                        _logger.LogInformation($"Updating App Service '{_config.ResourceName}': {change}...");
+                    needsUpdate = true;
+                }
+
+                if (!string.Equals(webApp.Data.PublicNetworkAccess, desiredAccess, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    patch.PublicNetworkAccess = desiredAccess;
+                    _logger.LogInformation($"Updating App Service '{_config.ResourceName}' public network access to '{desiredAccess}'...");
                     needsUpdate = true;
                 }
 
                 if (needsUpdate)
                 {
-                    base.EnsureTagsOnNew(webAppUpdateInfo.Tags);
                     try
                     {
-                        await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, webAppUpdateInfo, cancellationToken: CancellationToken);
+                        webApp = (await webApp.UpdateAsync(patch, CancellationToken)).Value;
                     }
                     catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
                     {
                         _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan.Data.Name, appServicePlanSku));
-                        if (webAppUpdateInfo.SiteConfig != null)
-                            webAppUpdateInfo.SiteConfig.IsAlwaysOn = null;
-                        await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, webAppUpdateInfo, cancellationToken: CancellationToken);
+                        if (patch.SiteConfig != null)
+                            patch.SiteConfig.IsAlwaysOn = null;
+                        webApp = (await webApp.UpdateAsync(patch, CancellationToken)).Value;
                     }
                 }
 
@@ -115,21 +116,10 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 _logger.LogInformation($"Using existing App Service '{webApp.Data.DefaultHostName}'.");
             }
 
-            // Kudu ZIP deployment requires SCM publishing credentials.
-            var scmPolicy = await webApp.GetScmSiteBasicPublishingCredentialsPolicy().GetAsync(cancellationToken: CancellationToken);
+            // Content is deployed through Kudu with a Microsoft Entra token (InstallAppServiceContentsTask), so the
+            // installer no longer switches SCM basic publishing credentials on. A site whose operator turned them off
+            // keeps them off. FTP basic credentials are still turned off, because nothing here uses FTP.
             var ftpPolicy = await webApp.GetWebSiteFtpPublishingCredentialsPolicy().GetAsync(cancellationToken: CancellationToken);
-
-            var publishingCredentialsPolicyData = new CsmPublishingCredentialsPoliciesEntityData()
-            {
-                Allow = true,
-            };
-
-            if (scmPolicy.Value.Data.Allow != true)
-            {
-                _logger.LogInformation($"Enabling basic publishing credentials (SCM) for '{_config.ResourceName}'...");
-                await webApp.GetScmSiteBasicPublishingCredentialsPolicy().CreateOrUpdateAsync(
-                    WaitUntil.Completed, publishingCredentialsPolicyData, cancellationToken: CancellationToken);
-            }
             if (ftpPolicy.Value.Data.Allow != false)
             {
                 _logger.LogInformation($"Disabling FTP basic publishing credentials for '{_config.ResourceName}'...");
@@ -160,7 +150,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     try
                     {
                         _logger.LogInformation($"Configuring VNet integration for App Service '{_config.ResourceName}'...");
-                        var vnetUpdateData = new WebSiteData(base.AzureLocation)
+                        // PATCH: the PUT this replaced carried no tags, so it removed every tag on the site.
+                        var vnetPatch = new SitePatchInfo
                         {
                             VirtualNetworkSubnetId = new global::Azure.Core.ResourceIdentifier(vnetSubnetId),
                             SiteConfig = new SiteConfigProperties
@@ -168,7 +159,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                                 IsVnetRouteAllEnabled = true
                             }
                         };
-                        await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, vnetUpdateData, cancellationToken: CancellationToken);
+                        webApp = (await webApp.UpdateAsync(vnetPatch, CancellationToken)).Value;
                         Networking?.ConfirmCreate(integration.Id);
                         _logger.LogInformation($"VNet integration configured for App Service '{_config.ResourceName}' with route-all enabled.");
                     }
@@ -223,6 +214,34 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
 
             return siteConfig;
+        }
+
+        /// <summary>
+        /// The site-config changes an existing site needs, or null when it needs none. Each setting is only ever
+        /// tightened: a minimum TLS version below 1.2 is raised (1.2 and 1.3 are left alone), FTP/FTPS is turned off,
+        /// and Always On is turned on when the plan supports it. Nothing else is sent.
+        /// </summary>
+        public static SiteConfigProperties BuildSiteConfigChanges(SiteConfigData current, bool supportsAlwaysOn, ICollection<string> changes = null)
+        {
+            SiteConfigProperties patch = null;
+            SiteConfigProperties Patch() => patch ?? (patch = new SiteConfigProperties());
+
+            if (TlsVersionPolicy.NeedsRaising(current?.MinTlsVersion?.ToString()))
+            {
+                Patch().MinTlsVersion = AppServiceSupportedTlsVersion.Tls1_2;
+                changes?.Add($"raise the minimum TLS version from '{current?.MinTlsVersion?.ToString() ?? "not set"}' to 1.2");
+            }
+            if (current?.FtpsState != AppServiceFtpsState.Disabled)
+            {
+                Patch().FtpsState = AppServiceFtpsState.Disabled;
+                changes?.Add("disable FTP/FTPS, because deployment uses SCM HTTPS");
+            }
+            if (supportsAlwaysOn && current?.IsAlwaysOn != true)
+            {
+                Patch().IsAlwaysOn = true;
+                changes?.Add("enable Always On");
+            }
+            return patch;
         }
     }
 }

@@ -80,13 +80,14 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
                 if (needsUpdate)
                 {
-                    var updateParams = new CognitiveServicesAccountData(AzureLocation)
+                    // PATCH, not a PUT of fresh properties: that PUT carried only the subdomain and public access, so it
+                    // removed the account's tags and risked resetting anything else it left out (network rules,
+                    // disableLocalAuth). A PATCH changes only what it names.
+                    var updateParams = new CognitiveServicesAccountData(analytics.Data.Location)
                     {
-                        Sku = analytics.Data.Sku,
-                        Kind = analytics.Data.Kind,
                         Properties = updateProps
                     };
-                    var result = await Container.GetCognitiveServicesAccounts().CreateOrUpdateAsync(WaitUntil.Completed, name, updateParams, cancellationToken: CancellationToken);
+                    var result = await analytics.UpdateAsync(WaitUntil.Completed, updateParams, cancellationToken: CancellationToken);
                     analytics = result.Value;
                 }
 
