@@ -194,11 +194,6 @@
     <None Include="App.Release.config">
       <DependentUpon>App.Template.config</DependentUpon>
     </None>
-    <None Include="Complete_TestSuite_Summary.md" />
-    <None Include="DBLookupCacheDuplicateKeyErrorTests.md" />
-    <None Include="DBLookupCacheTests.md" />
-    <None Include="DBLookupCache_TestSummary.md" />
-    <None Include="EntityFramework_LINQ_Query_Fix.md" />
     <None Include="Example Data\Azure AD 2.json" />
     <None Include="Example Data\Azure AD Login.json" />
     <None Include="Example Data\Project.json" />
