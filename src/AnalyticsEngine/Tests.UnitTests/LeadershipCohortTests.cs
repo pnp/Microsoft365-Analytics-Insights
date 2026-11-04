@@ -5,6 +5,8 @@ using Common.Entities.CopilotAdoption;
 using Common.Entities.LeadershipCohort;
 using Common.Entities.State;
 using Common.Entities.UserScope;
+using DataUtils.Http;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using System;
@@ -15,6 +17,7 @@ using System.Net;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using Tests.UnitTests.FakeLoaderClasses;
 
 namespace Tests.UnitTests
 {
@@ -133,6 +136,59 @@ namespace Tests.UnitTests
             var snapshot = await Refresher(store, new FakeDirectory(20) { GroupExists = false }).RefreshAsync();
 
             Assert.AreEqual(LeadershipCohortRefreshStatuses.GroupNotFound, snapshot.Status);
+        }
+
+        [DataTestMethod]
+        [DataRow("")]
+        [DataRow("null")]
+        [DataRow("{}")]
+        [DataRow("{\"value\":null}")]
+        public async Task Refresh_AMemberPageWithoutItsMembers_FailsInsteadOfSavingATruncatedCohort(string secondPage)
+        {
+            var store = NewStore();
+            await Configure(store);
+            Assert.AreEqual(LeadershipCohortRefreshStatuses.Ready, (await Refresher(store, new FakeDirectory(20)).RefreshAsync()).Status);
+
+            var snapshot = await RefreshOverGraph(store, secondPage, Now.AddHours(7));
+
+            Assert.AreEqual(LeadershipCohortRefreshStatuses.Failed, snapshot.Status, "Page 1's members are not the whole cohort.");
+            Assert.AreEqual(LeadershipCohortFailureKinds.GraphError, snapshot.FailureKind);
+            Assert.IsNull(snapshot.HttpStatus, "Graph answered 200, so there is no failing status to show.");
+
+            var stored = await store.GetSnapshotAsync();
+            Assert.AreEqual(LeadershipCohortRefreshStatuses.Failed, stored.Status);
+            Assert.IsNull(await store.ReadMembersAsync(stored), "Nothing from the partial read is stored as the cohort.");
+        }
+
+        [TestMethod]
+        public async Task Refresh_AnExplicitlyEmptyLastPage_EndsTheMembership()
+        {
+            var store = NewStore();
+            await Configure(store);
+
+            var snapshot = await RefreshOverGraph(store, "{\"value\":[]}", Now);
+
+            Assert.AreEqual(LeadershipCohortRefreshStatuses.Ready, snapshot.Status);
+            Assert.AreEqual(2, snapshot.DirectMembers);
+            Assert.AreEqual(2, snapshot.GraphPages);
+        }
+
+        /// <summary>A refresh through the real Graph reader: two members on the first page, then <paramref name="secondPage"/>.</summary>
+        private static async Task<LeadershipCohortSnapshot> RefreshOverGraph(TestStore store, string secondPage, DateTime now)
+        {
+            var group = GroupId.ToString("D");
+            var members = "/v1.0/groups/" + group + "/members/microsoft.graph.user";
+            var graph = new FakeGraphDirectoryHandler()
+                .On("/v1.0/groups/" + group + "?", "{\"id\":\"" + group + "\",\"displayName\":\"Contoso Leadership\"}")
+                .On(members + "?$select", FakeGraphDirectoryHandler.Page("https://graph.microsoft.com" + members + "?$skiptoken=page-2",
+                    new { id = ObjectId(1) }, new { id = ObjectId(2) }))
+                .On(members + "?$skiptoken=page-2", secondPage);
+
+            using (var http = new AutoThrottleHttpClient(graph, NullLogger.Instance))
+            {
+                return await new LeadershipCohortRefresher(store.Store, () => new GraphGroupDirectoryReader(http, NullLogger.Instance),
+                    new FakeMapper { All = true }, utcNow: () => now, gate: new SemaphoreSlim(1, 1)).RefreshAsync();
+            }
         }
 
         [TestMethod]

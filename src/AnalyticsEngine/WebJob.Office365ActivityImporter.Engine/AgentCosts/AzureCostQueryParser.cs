@@ -2,6 +2,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 
 namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 {
@@ -45,14 +46,25 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         private static readonly string[] TagKeyColumns = { "TagKey" };
         private static readonly string[] TagValueColumns = { "TagValue" };
 
+        private const string NothingStored = "Nothing was stored or removed for this scope rather than a figure that would look "
+            + "like no spend; it will be retried on the next cycle.";
+
         /// <summary>
-        /// Parses one page. Returns an empty list for a response with no rows - which is a legitimate answer
-        /// (a filter that matched nothing) and not an error.
+        /// Parses one page. A page whose <c>rows</c> is an empty array returns no rows: that is a legitimate answer (a
+        /// filter that matched nothing), not an error.
         /// </summary>
+        /// <exception cref="AgentCostIncompleteReadException">
+        /// The page has no <c>columns</c> or no <c>rows</c> array, or it has rows but no usage-date column to place them on.
+        /// Its rows are unknown, and reading it as "no spend" would let the replace that follows delete the scope's
+        /// stored window.
+        /// </exception>
         public static IReadOnlyList<AzureCostRow> ParsePage(JObject response)
         {
-            var results = new List<AzureCostRow>();
-            if (response == null) return results;
+            if (response == null)
+            {
+                throw new AgentCostIncompleteReadException(
+                    "Azure Cost Management returned no query result, so the window could not be read. " + NothingStored);
+            }
 
             var properties = GetProperty(response, "properties") as JObject;
 
@@ -61,10 +73,26 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             var columns = GetProperty(container, "columns") as JArray;
             var rows = GetProperty(container, "rows") as JArray;
-            if (columns == null || rows == null) return results;
+            if (columns == null || rows == null)
+            {
+                var missing = columns == null && rows == null ? "'columns' and 'rows' arrays"
+                    : columns == null ? "'columns' array"
+                    : "'rows' array";
+                throw new AgentCostIncompleteReadException(
+                    $"Azure Cost Management returned a query result without its {missing}, so the rows it should have held "
+                    + "are unknown. " + NothingStored);
+            }
 
             var index = BuildColumnIndex(columns);
+            if (rows.Count > 0 && !DateColumns.Any(index.ContainsKey))
+            {
+                // Every row would be dropped below for having no date, which would read as "no spend" just the same.
+                throw new AgentCostIncompleteReadException(
+                    $"Azure Cost Management returned {rows.Count} row(s) without a usage-date column, so none of them could be "
+                    + "placed on a day. " + NothingStored);
+            }
 
+            var results = new List<AzureCostRow>();
             foreach (var row in rows)
             {
                 var cells = row as JArray;

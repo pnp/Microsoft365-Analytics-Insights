@@ -83,10 +83,10 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 var json = await PostJsonAsync(url, body, scope);
                 if (json == null)
                 {
-                    // An empty body on the FIRST request means the scope genuinely had nothing in the window.
-                    // An empty body after following a nextLink means the page chain broke part way through -
-                    // and because the write REPLACES the scope and window, silently accepting that truncated
-                    // result would delete the spend the missing pages were going to supply.
+                    // 204 No Content, which the query API documents as an answer: on the FIRST request the query had
+                    // nothing in the window. After following a nextLink it means the page chain broke part way through -
+                    // and because the write REPLACES the scope and window, silently accepting that truncated result
+                    // would delete the spend the missing pages were going to supply.
                     if (pages > 1)
                     {
                         throw new AgentCostIncompleteReadException(
@@ -97,6 +97,7 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                     break;
                 }
 
+                // Throws when the page has no 'columns' or 'rows' array: only an explicit empty 'rows' means no spend.
                 results.AddRange(AzureCostQueryParser.ParsePage(json));
 
                 // Paging is by nextLink, which already carries the skip token. The body is re-posted unchanged.
@@ -265,8 +266,25 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                         $"Azure Cost Management returned HTTP {(int)response.StatusCode} ({response.StatusCode}) for scope '{scope}'. {errorBody}");
                 }
 
-                var content = await response.Content.ReadAsStringAsync();
-                return string.IsNullOrWhiteSpace(content) ? null : JObject.Parse(content);
+                // The query API documents two successful answers: 200 with a QueryResult, and 204 No Content
+                // ("There is no content to send for this request"). Only the 204 is an answer without a body.
+                if (response.StatusCode == HttpStatusCode.NoContent)
+                {
+                    return null;
+                }
+
+                var content = response.Content == null ? string.Empty : await response.Content.ReadAsStringAsync();
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    // Not the documented empty answer, so its rows are unknown. Read as "no spend", the replace that follows
+                    // would delete the scope's stored window - and, for a closed month, record it as read for good.
+                    throw new AgentCostIncompleteReadException(
+                        $"Azure Cost Management answered the cost query for scope '{scope}' with HTTP {(int)response.StatusCode} "
+                        + $"({response.StatusCode}) and an empty body, so the window could not be read. Nothing was stored or "
+                        + "removed for this scope; it will be retried on the next cycle.");
+                }
+
+                return JObject.Parse(content);
             }
         }
 

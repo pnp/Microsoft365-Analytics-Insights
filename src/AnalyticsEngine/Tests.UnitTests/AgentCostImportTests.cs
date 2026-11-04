@@ -499,6 +499,21 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, AzureCostQueryParser.ParsePage(json).Count);
         }
 
+        [DataTestMethod]
+        [DataRow(@"{}")]
+        [DataRow(@"{ ""properties"": {} }")]
+        [DataRow(@"{ ""properties"": { ""columns"": [ { ""name"": ""UsageDate"" } ] } }")]
+        [DataRow(@"{ ""properties"": { ""rows"": [] } }")]
+        [DataRow(@"{ ""properties"": { ""columns"": [ { ""name"": ""UsageDate"" } ], ""rows"": null } }")]
+        [DataRow(@"{ ""properties"": { ""columns"": {}, ""rows"": [] } }")]
+        [DataRow(@"{ ""properties"": { ""columns"": [ { ""name"": ""PreTaxCost"" } ], ""rows"": [ [ 5 ] ] } }")]
+        public void AzureParser_AResultWithoutItsColumnsOrRows_IsAnIncompleteRead_NotNoSpend(string json)
+        {
+            // Only an explicit, empty 'rows' array means no spend. Read as "no rows", any of these would let the replace that
+            // follows delete the scope's stored window.
+            Assert.ThrowsException<AgentCostIncompleteReadException>(() => AzureCostQueryParser.ParsePage(JObject.Parse(json)));
+        }
+
         #endregion
 
         #region Azure cost mapping
@@ -616,6 +631,61 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(2, handler.Bodies.Count, "The 503 must be retried exactly once.");
             Assert.AreEqual(handler.Bodies[0], handler.Bodies[1], "The retry must re-post the identical query.");
+        }
+
+        [DataTestMethod]
+        [DataRow(1)]
+        [DataRow(2)]
+        public async Task AzureSource_ABlankOrRowlessSuccess_IsAnIncompleteRead_OnAnyPage(int failingPage)
+        {
+            const string scope = "/subscriptions/00000000-0000-0000-0000-000000000000";
+            var day = new DateTime(2026, 9, 16);
+            foreach (var body in new[] { string.Empty, "  ", @"{ ""properties"": { ""columns"": [ { ""name"": ""UsageDate"" } ] } }", @"{ ""id"": ""query"" }" })
+            {
+                var responses = new List<HttpResponseMessage>();
+                if (failingPage == 2)
+                {
+                    responses.Add(new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(@"{ ""properties"": { ""nextLink"": ""https://management.azure.com/next-page"",
+                            ""columns"": [ { ""name"": ""UsageDate"" }, { ""name"": ""PreTaxCost"" } ], ""rows"": [ [ 20260916, 5 ] ] } }"),
+                    });
+                }
+                responses.Add(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+
+                using (var client = new DataUtils.Http.AutoThrottleHttpClient(new RecordingPostHandler(responses.ToArray()), Logger))
+                {
+                    var source = new AzureCostManagementSource(client, new AzureCostImportSettings { Scopes = new[] { scope } }, Logger);
+
+                    await Assert.ThrowsExceptionAsync<AgentCostIncompleteReadException>(() => source.GetDailyCostsAsync(scope, day, day),
+                        $"Page {failingPage} answered 200 with '{body}': its rows are unknown, so it is not 'no spend'.");
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task AzureSource_TheDocumentedEmptyAnswers_AreNoSpend()
+        {
+            // The query API documents 204 No Content beside 200 with a QueryResult, and a result whose rows array is empty
+            // matched nothing. Both are real answers: no spend in the window.
+            const string scope = "/subscriptions/00000000-0000-0000-0000-000000000000";
+            var day = new DateTime(2026, 9, 16);
+            foreach (var empty in new Func<HttpResponseMessage>[]
+            {
+                () => new HttpResponseMessage(HttpStatusCode.NoContent) { Content = new StringContent(string.Empty) },
+                () => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(@"{ ""properties"": { ""columns"": [ { ""name"": ""UsageDate"" }, { ""name"": ""PreTaxCost"" } ], ""rows"": [] } }"),
+                },
+            })
+            {
+                using (var client = new DataUtils.Http.AutoThrottleHttpClient(new RecordingPostHandler(empty()), Logger))
+                {
+                    var source = new AzureCostManagementSource(client, new AzureCostImportSettings { Scopes = new[] { scope } }, Logger);
+
+                    Assert.AreEqual(0, (await source.GetDailyCostsAsync(scope, day, day)).Count);
+                }
+            }
         }
 
         [TestMethod]
@@ -1751,6 +1821,69 @@ namespace Tests.UnitTests
             var eleventh = await RunOn(new DateTime(2026, 9, 11));
             Assert.IsFalse(ReadAugust(eleventh, flaky));
             Assert.IsFalse(ReadAugust(eleventh, healthy));
+        }
+
+        [TestMethod]
+        public async Task AzureImporter_ABlankSuccessOnTheReadThatFinalisesAMonth_NeitherClearsNorFinalisesIt()
+        {
+            // On the 7th the main window still covers August, and a successful read finalises it. Read as "no spend", a
+            // blank 200 here cleared the scope's window and recorded August as read for good, so it was never read again.
+            const string scope = "/subscriptions/00000000-0000-0000-0000-000000000000";
+            var settings = new AzureCostImportSettings { Scopes = new[] { scope } };
+            var store = new RecordingAgentCostStore();
+            var markers = new InMemoryImportLastRunStore();
+            var clock = new FixedClock(new DateTime(2026, 9, 7, 6, 0, 0, DateTimeKind.Utc));
+            var handler = new RecordingPostHandler(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(string.Empty) });
+
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(handler, Logger))
+            {
+                var outcome = await new AzureCostImporter(Logger, new AzureCostManagementSource(client, settings, Logger), store, settings, clock, markers)
+                    .ImportAsync();
+
+                Assert.IsTrue(outcome.IsTransientFailure, "Retried on the next cycle.");
+                Assert.AreEqual(0, store.AzureReplaceCalls.Count, "Nothing stored for the scope was cleared.");
+                Assert.IsNull(await markers.GetLastRunUtc(AzureCostImporter.FinalisedPeriodKeyPrefix + scope), "August is still to be read as final.");
+            }
+        }
+
+        [TestMethod]
+        public async Task AzureImporter_ARowlessSuccessOnTheClosedMonthCatchUp_LeavesTheMonthToBeReadAgain()
+        {
+            // On the 9th August is read on its own, after the main window. A result without its rows there replaced August
+            // with nothing and marked it read as final.
+            const string scope = "/subscriptions/00000000-0000-0000-0000-000000000000";
+            var settings = new AzureCostImportSettings { Scopes = new[] { scope } };
+            var markers = new InMemoryImportLastRunStore();
+            var clock = new FixedClock(new DateTime(2026, 9, 9, 6, 0, 0, DateTimeKind.Utc));
+            var marker = AzureCostImporter.FinalisedPeriodKeyPrefix + scope;
+            Func<HttpResponseMessage> rowless = () => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(@"{ ""properties"": { ""columns"": [ { ""name"": ""UsageDate"" }, { ""name"": ""PreTaxCost"" } ] } }"),
+            };
+
+            var store = new RecordingAgentCostStore();
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(new RecordingPostHandler(OkCostPage(), rowless()), Logger))
+            {
+                var outcome = await new AzureCostImporter(Logger, new AzureCostManagementSource(client, settings, Logger), store, settings, clock, markers)
+                    .ImportAsync();
+
+                Assert.IsTrue(outcome.IsTransientFailure);
+                Assert.AreEqual(new DateTime(2026, 9, 1), store.AzureReplaceCalls.Single().Item2, "Only the main window was replaced, not August.");
+                Assert.IsNull(await markers.GetLastRunUtc(marker));
+            }
+
+            // The next cycle reads August again, and only a complete read marks it final.
+            clock.UtcNow = clock.UtcNow.AddDays(1);
+            store = new RecordingAgentCostStore();
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(new RecordingPostHandler(OkCostPage(), OkCostPage()), Logger))
+            {
+                var outcome = await new AzureCostImporter(Logger, new AzureCostManagementSource(client, settings, Logger), store, settings, clock, markers)
+                    .ImportAsync();
+
+                Assert.IsTrue(outcome.Succeeded);
+                Assert.IsTrue(store.AzureReplaceCalls.Any(c => c.Item2 == new DateTime(2026, 8, 1) && c.Item3 == new DateTime(2026, 8, 31)));
+                Assert.AreEqual(new DateTime(2026, 8, 1), (await markers.GetLastRunUtc(marker))?.Date);
+            }
         }
 
         [TestMethod]
