@@ -6,7 +6,7 @@ import {
   beginAgentCostConnection, disconnectAgentCostConnection, fetchAgentCostConnection,
   type AgentCostConnectionStatus,
 } from '../api/agentCostConnectionApi';
-import { formatDateParts, useT, type TranslationKey } from '../i18n';
+import { formatDateParts, parseApiDate, useT, type TranslationKey } from '../i18n';
 
 const outcomes = new Map<string, TranslationKey>([
   ['connected', 'admin.agentCostConnection.connectedOutcome'],
@@ -93,7 +93,7 @@ export default function AgentCostConnectionPage() {
                 : t('admin.agentCostConnection.accountUnavailable')}</Text>
               {status.details?.verifiedUtc && (
                 <Text>{t('admin.agentCostConnection.verified', {
-                  when: formatDateParts(new Date(status.details.verifiedUtc), {
+                  when: formatDateParts(parseApiDate(status.details.verifiedUtc), {
                     year: 'numeric', month: 'short', day: 'numeric',
                     hour: '2-digit', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short',
                   }),

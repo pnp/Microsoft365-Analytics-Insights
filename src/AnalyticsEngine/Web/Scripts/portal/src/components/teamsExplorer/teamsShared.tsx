@@ -2,7 +2,7 @@ import { makeStyles, tokens, Text, Card, MessageBar, MessageBarBody } from '@flu
 import type { ReactNode } from 'react';
 import SqlPopover from '../SqlPopover';
 import type { KpiTone } from '../shared/KpiGrid';
-import { formatDateParts, formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
+import { formatDateParts, formatNumber, parseApiDate, useT, type TFunction, type TranslationKey } from '../../i18n';
 import type {
   TeamsBucket,
   TeamsNamedCount,
@@ -56,7 +56,7 @@ export function formatHours(value: number): string {
 /** A UTC ISO date as a short local-format date, or a dash when absent. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
-  return formatDateParts(new Date(iso), {
+  return formatDateParts(parseApiDate(iso), {
     day: 'numeric',
     month: 'short',
     year: 'numeric',

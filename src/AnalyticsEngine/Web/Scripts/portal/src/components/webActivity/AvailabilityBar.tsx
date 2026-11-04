@@ -17,7 +17,7 @@ import {
   Question16Regular,
 } from '@fluentui/react-icons';
 import type { WebActivityAvailability } from '../../types/webActivity';
-import { formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
+import { formatNumber, parseApiDate, useT, type TFunction, type TranslationKey } from '../../i18n';
 import { formatDate } from './webActivityShared';
 
 const useStyles = makeStyles({
@@ -91,7 +91,7 @@ export function availabilityReasonTexts(
         : WEB_ACTIVITY_AVAILABILITY_REASON_KEYS.pageViewCheckFailed,
     ));
   } else {
-    const lastHit = new Date(availability.lastHitUtc);
+    const lastHit = parseApiDate(availability.lastHitUtc);
     const staleDays = (nowUtc.getTime() - lastHit.getTime()) / 86_400_000;
 
     if (staleDays >= WEB_ACTIVITY_STALE_COLLECTION_DAYS) {

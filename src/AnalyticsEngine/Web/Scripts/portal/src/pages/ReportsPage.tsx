@@ -27,7 +27,7 @@ import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 import PromptCategoryReport from '../components/PromptCategoryReport';
 import ReportAreasProvider, { useReportAreas } from '../components/ReportAreasProvider';
 import { REPORT_PAGES, PROMPT_CHART_KEYS, reportImportLabelKey, reportMonths, reportPageEnabled, reportPath, type ReportPageDefinition } from '../reportNavigation';
-import { EN_CATALOG, formatDateParts, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
+import { EN_CATALOG, formatDateParts, formatNumber, parseApiDate, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 
 const MONTH_OPTIONS = [
   { value: 1, labelKey: 'reports.period.lastMonth' },
@@ -377,7 +377,7 @@ function seriesWarningText(t: TFunction, warning: ReportSeriesWarning): string {
   const values = {
     series: warning.series,
     error: warning.error ?? '',
-    week: warning.week ? formatDateParts(new Date(warning.week), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '',
+    week: warning.week ? formatDateParts(parseApiDate(warning.week), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '',
   };
 
   switch (warning.reason) {
@@ -536,7 +536,7 @@ function ReportAreaView({
 
   if (!data) return null;
 
-  const fromLabel = formatDateParts(new Date(data.fromWeek), {
+  const fromLabel = formatDateParts(parseApiDate(data.fromWeek), {
     day: 'numeric',
     month: 'short',
     year: 'numeric',

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { setActiveLanguage, translateActive } from '../../i18n/runtime';
 import { loadCatalog, type TFunction } from '../../i18n';
 import type { InvestmentAction, InvestmentFinding } from '../../types/copilotInvestment';
-import { actionText, findingText, formatMoney, formatShortDate, parseUtcDate } from './investmentShared';
+import { actionText, findingText, formatMoney, formatShortDate } from './investmentShared';
 
 const t = translateActive as unknown as TFunction;
 
@@ -75,7 +75,6 @@ describe('server dates', () => {
       expect(formatShortDate('2026-10-26T00:00:00Z')).toBe('26 Oct 2026');
       expect(formatShortDate('2026-10-26T08:00:00+09:00')).toBe('25 Oct 2026');
       expect(formatShortDate('2026-10-26')).toBe('26 Oct 2026');
-      expect(parseUtcDate('2026-10-26T00:00:00').toISOString()).toBe('2026-10-26T00:00:00.000Z');
     } finally {
       if (previous === undefined) delete process.env.TZ;
       else process.env.TZ = previous;

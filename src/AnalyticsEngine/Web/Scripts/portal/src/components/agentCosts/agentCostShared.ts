@@ -1,4 +1,4 @@
-import { EN_CATALOG, formatDateParts, formatNumber, translateActive, type TFunction, type TranslationKey } from '../../i18n';
+import { EN_CATALOG, formatDateParts, formatNumber, parseApiDate, translateActive, type TFunction, type TranslationKey } from '../../i18n';
 import type { AgentCostDetailRow, AzureDimension, CreditDimension } from '../../types/agentCosts';
 
 /** Shown for a dimension the billing API did not report for a row. */
@@ -122,14 +122,14 @@ export function capacityConsumptionTypeLabel(value: string | null | undefined, t
 /** A UTC ISO date as a short date. Rendered in UTC - the underlying grain is a UTC usage day. */
 export function formatDay(iso: string | null | undefined): string {
   if (!iso) return DASH;
-  const date = new Date(iso);
+  const date = parseApiDate(iso);
   if (Number.isNaN(date.getTime())) return DASH;
   return formatDateParts(date, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
 
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return DASH;
-  const date = new Date(iso);
+  const date = parseApiDate(iso);
   if (Number.isNaN(date.getTime())) return DASH;
   return formatDateParts(date, {
     day: 'numeric',

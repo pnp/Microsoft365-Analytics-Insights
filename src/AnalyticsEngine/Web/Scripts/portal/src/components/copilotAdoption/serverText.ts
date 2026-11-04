@@ -12,7 +12,7 @@ import type {
 import { AdoptionBand, AgentHealth } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
-import { activeLocale, EN_CATALOG, formatDateParts, formatNumber, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
+import { activeLocale, EN_CATALOG, formatDateParts, formatNumber, parseApiDate, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
 
 function catalogText(t: TFunction, key: TranslationKey, fallback: string, values?: TranslationValues): string {
   if (activeLocale().startsWith('en')) return fallback;
@@ -92,7 +92,7 @@ function warningValues(values?: CopilotAdoptionWarningDetail['values']): Transla
   const mapped: TranslationValues = {};
   Object.entries(values ?? {}).forEach(([key, value]) => {
     if (key === 'historyStart') {
-      const date = new Date(String(value ?? ''));
+      const date = parseApiDate(String(value ?? ''));
       mapped[key] = Number.isNaN(date.getTime())
         ? String(value ?? '')
         : formatDateParts(date, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });

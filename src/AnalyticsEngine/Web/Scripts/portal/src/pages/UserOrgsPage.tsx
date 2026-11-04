@@ -28,7 +28,7 @@ import OrgMembersBrowser from '../components/userOrgs/OrgMembersBrowser';
 import OrgTypeDialog from '../components/userOrgs/OrgTypeDialog';
 import { createOrgType, deleteOrgType, fetchOrgTypes, updateOrgType } from '../api/userOrgsApi';
 import { invalidateUserFilterDimensions } from '../components/userFilter/useUserFilterDimensions';
-import { formatDateParts, formatNumber, plural, useT } from '../i18n';
+import { formatDateParts, formatNumber, parseApiDate, plural, useT } from '../i18n';
 import { isStaleTypeRefusal, neverRefreshedKey, STATUS_KEYS, userOrgErrorMessage } from '../components/userOrgs/userOrgShared';
 import type { UserOrgType, UserOrgTypeSave } from '../types/userOrgs';
 
@@ -221,7 +221,7 @@ export default function UserOrgsPage() {
                           {type.lastImport && (
                             <Text size={200} block className={styles.muted}>
                               {t('userOrgs.source.lastImported', {
-                                when: formatDateParts(new Date(type.lastImport.queuedUtc), {
+                                when: formatDateParts(parseApiDate(type.lastImport.queuedUtc), {
                                   dateStyle: 'short',
                                   timeStyle: 'short',
                                 }),
@@ -239,7 +239,7 @@ export default function UserOrgsPage() {
                         // time from before - would tell the admin nothing is wrong.
                         <Text className={styles.warning}>{t('userOrgs.lastRefreshed.holdsLists')}</Text>
                       ) : type.lastRefreshedUtc ? (
-                        formatDateParts(new Date(type.lastRefreshedUtc), {
+                        formatDateParts(parseApiDate(type.lastRefreshedUtc), {
                           dateStyle: 'short',
                           timeStyle: 'short',
                         })
