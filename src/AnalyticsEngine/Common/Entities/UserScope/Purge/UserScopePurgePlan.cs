@@ -29,7 +29,7 @@ namespace Common.Entities.UserScope.Purge
 
         /// <summary>
         /// Delete rows found from the people being purged (<see cref="UserScopePurgePlan.CandidatesTable"/>), a window of
-        /// them at a time, rather than by walking the rows' own table: the email addresses that are their own.
+        /// them at a time, rather than by walking the rows' own table: their own email addresses, and their weekly profiles.
         /// </summary>
         DeleteByCandidate,
     }
@@ -72,7 +72,7 @@ namespace Common.Entities.UserScope.Purge
     {
         internal UserScopePurgeStep(string phase, string table, string keyColumn, UserScopePurgeStepKind kind, string match,
             IReadOnlyList<string> handles, string set = null, int window = UserScopePurgePlan.DefaultWindow,
-            UserScopePurgeLookup lookup = null, IReadOnlyList<string> requires = null)
+            UserScopePurgeLookup lookup = null, IReadOnlyList<string> requires = null, string schema = "dbo")
         {
             Phase = phase;
             Table = table;
@@ -84,10 +84,20 @@ namespace Common.Entities.UserScope.Purge
             Window = window;
             Lookup = lookup;
             Requires = requires ?? Array.Empty<string>();
+            Schema = schema;
         }
 
         public string Phase { get; }
         public string Table { get; }
+
+        /// <summary>The table's schema: <c>dbo</c>, or <c>profiling</c> for the weekly profiles the installer adds.</summary>
+        public string Schema { get; }
+
+        /// <summary>The table as SQL names it, e.g. <c>dbo.[users]</c>.</summary>
+        public string QualifiedTable => $"{Schema}.[{Table}]";
+
+        /// <summary>The table as the logs and the counts name it: without its schema when that is <c>dbo</c>.</summary>
+        public string DisplayTable => Schema == "dbo" ? Table : $"{Schema}.{Table}";
 
         /// <summary>
         /// The leading column of the table's clustered key, which the step walks in order. It need not be unique: a window is
@@ -134,9 +144,9 @@ namespace Common.Entities.UserScope.Purge
         /// anonymises - so rows cleared in place are never mistaken for rows removed. The calls step does both, so its
         /// window reports a count per table and column itself and this key only names it in the log.
         /// </summary>
-        public string CountKey => Kind == UserScopePurgeStepKind.Update ? Handles[0] : Table;
+        public string CountKey => Kind == UserScopePurgeStepKind.Update ? Handles[0] : DisplayTable;
 
-        public override string ToString() => $"{Kind} {Table}";
+        public override string ToString() => $"{Kind} {DisplayTable}";
     }
 
     /// <summary>
@@ -146,10 +156,11 @@ namespace Common.Entities.UserScope.Purge
     /// <remarks>
     /// <para>
     /// Deletes what is about the person: their audit events and everything hanging off them, their web sessions, page
-    /// comments and likes, sent-email records, Teams ownership, membership and reactions, usage-report rows, Copilot
-    /// interaction statistics, licences, Copilot Studio credits, Copilot credit history (preview) readings and reclaim
-    /// exclusions - and whatever a retired feature left behind about them in a table an upgrade kept because it still held
-    /// data. The search text, prompt phrases and email addresses that only their rows used go with those rows.
+    /// comments and likes, sent-email records, Teams ownership, membership and reactions, usage-report rows and the weekly
+    /// activity profiles compiled from them, Copilot interaction statistics, licences, Copilot Studio credits, Copilot
+    /// credit history (preview) readings and reclaim exclusions - and whatever a retired feature left behind about them in
+    /// a table an upgrade kept because it still held data. The search text, prompt phrases and email addresses that only
+    /// their rows used go with those rows.
     /// </para>
     /// <para>
     /// Anonymises what is someone else's but names them: they become the anonymous "Unknown User" on calls they share
@@ -196,6 +207,11 @@ namespace Common.Entities.UserScope.Purge
         /// name), so a window stays within <see cref="BatchSize"/>.
         /// </summary>
         public const int AddressesWindow = 2000;
+
+        /// <summary>
+        /// People per window of a weekly profile step: a year of weekly rows, one per metric, is about 1,500 rows a person.
+        /// </summary>
+        public const int ProfilesWindow = 50;
 
         /// <summary>The anonymous user the call import records people as when they can't be identified or are outside the scope.</summary>
         public const string UnknownUserName = "Unknown User";
@@ -280,6 +296,15 @@ namespace Common.Entities.UserScope.Purge
 
         private static UserScopePurgeStep Anonymise(string phase, string table, string key, string column, string match)
             => new UserScopePurgeStep(phase, table, key, UserScopePurgeStepKind.Update, match, new[] { $"{table}.{column}" }, set: $"[{column}] = NULL");
+
+        /// <summary>
+        /// A weekly profile table in the <c>profiling</c> schema. Clustered on the person's user id, with a row per week (and
+        /// metric), so it is sought from the people being purged rather than walked whole.
+        /// </summary>
+        private static UserScopePurgeStep DeleteProfile(string phase, string table)
+            => new UserScopePurgeStep(phase, table, "user_id", UserScopePurgeStepKind.DeleteByCandidate,
+                $"INNER LOOP JOIN profiling.[{table}] t ON t.[user_id] = c.user_id",
+                new[] { $"profiling.{table}.user_id" }, window: ProfilesWindow, schema: "profiling");
 
         private static UserScopePurgeLookup Lookup(string column, string table, params string[] references)
             => new UserScopePurgeLookup(column, table, references);
@@ -394,6 +419,12 @@ namespace Common.Entities.UserScope.Purge
                 Delete(usage, "yammer_device_activity_log", "id", ByUser("user_id"), "user_id"),
                 Delete(usage, "copilot_usage_user_activity_log", "id", ByUser("user_id"), "user_id"),
                 Delete(usage, "cowork_usage_user_activity_log", "id", ByUser("user_id"), "user_id"),
+                // The weekly activity profiles the installer's profiling extension compiles from the usage reports, one row
+                // per person and week (and metric). They never refer to users by foreign key, so nothing else would stop
+                // them outliving the person.
+                DeleteProfile(usage, "ActivitiesWeekly"),
+                DeleteProfile(usage, "ActivitiesWeeklyColumns"),
+                DeleteProfile(usage, "UsageWeekly"),
 
                 DeleteReleasing(UserScopePurgePhases.CopilotInteractions, "copilot_interaction_keywords", "id", ByInteraction("interaction_id"), keywords, "interaction_id"),
                 Delete(UserScopePurgePhases.CopilotInteractions, "copilot_prompt_classifications", "interaction_id", ByInteraction("interaction_id"), "interaction_id"),

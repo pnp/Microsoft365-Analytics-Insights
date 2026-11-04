@@ -534,13 +534,13 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
             using (var connection = await _database.OpenAsync().ConfigureAwait(false))
             {
                 keyType = IsWalkOfTheCandidates(step)
-                    ? (await TableExistsAsync(connection, step.Table).ConfigureAwait(false) ? WalkOf(step).KeyType : null)
-                    : await KeyTypeAsync(connection, step.Table, step.KeyColumn).ConfigureAwait(false);
+                    ? (await TableExistsAsync(connection, step.Table, step.Schema).ConfigureAwait(false) ? WalkOf(step).KeyType : null)
+                    : await KeyTypeAsync(connection, step.Table, step.KeyColumn, step.Schema).ConfigureAwait(false);
                 foreach (var required in step.Requires)
                 {
                     if (keyType != null && !await TableExistsAsync(connection, required).ConfigureAwait(false))
                     {
-                        _logger.LogInformation($"User scope purge {job.Id}: dbo.{required} is not in this database, skipping the dbo.{step.Table} step.");
+                        _logger.LogInformation($"User scope purge {job.Id}: dbo.{required} is not in this database, skipping the {step.Schema}.{step.Table} step.");
                         return null;
                     }
                 }
@@ -548,7 +548,7 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
 
             if (keyType == null)
             {
-                _logger.LogInformation($"User scope purge {job.Id}: dbo.{step.Table} is not in this database, skipping that step.");
+                _logger.LogInformation($"User scope purge {job.Id}: {step.Schema}.{step.Table} is not in this database, skipping that step.");
                 return null;
             }
 
@@ -602,7 +602,7 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
                 var outcome = step.Kind == UserScopePurgeStepKind.Calls ? "call(s) deleted or anonymised"
                     : step.Kind == UserScopePurgeStepKind.Update ? "row(s) changed in place"
                     : "row(s) deleted";
-                _logger.LogInformation($"User scope purge {job.Id}: dbo.{step.CountKey} - {stepRows:N0} {outcome}.");
+                _logger.LogInformation($"User scope purge {job.Id}: {(step.Schema == "dbo" ? "dbo." : string.Empty)}{step.CountKey} - {stepRows:N0} {outcome}.");
             }
             return null;
         }
@@ -801,7 +801,7 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
             var afterWhere = hasAfter ? $"WHERE {key} > @after " : "";
             var afterAnd = hasAfter ? $" AND {key} > @after" : "";
             var resumeAt = hasAfter ? "@after" : $"CAST(NULL AS {keyType})";
-            var target = $"dbo.[{step.Table}] t WITH (INDEX(1))";
+            var target = $"{step.QualifiedTable} t WITH (INDEX(1))";
 
             string action;
             switch (step.Kind)
@@ -834,7 +834,7 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
 
             return $@"
 SET NOCOUNT ON;
-DECLARE @end {keyType} = (SELECT TOP (1) w.k FROM (SELECT TOP (@window) {key} AS k FROM dbo.[{step.Table}] t {afterWhere}ORDER BY {key}) w ORDER BY w.k DESC);
+DECLARE @end {keyType} = (SELECT TOP (1) w.k FROM (SELECT TOP (@window) {key} AS k FROM {step.QualifiedTable} t {afterWhere}ORDER BY {key}) w ORDER BY w.k DESC);
 IF @end IS NULL
     SELECT CAST(0 AS int) AS affected, CAST(NULL AS {keyType}) AS next_after, CAST(1 AS bit) AS done;
 ELSE
@@ -872,7 +872,7 @@ END";
 
             return $@"
 SET NOCOUNT ON;
-DECLARE @end {keyType} = (SELECT TOP (1) w.k FROM (SELECT TOP (@window) {key} AS k FROM dbo.[{step.Table}] t {afterWhere}ORDER BY {key}) w ORDER BY w.k DESC);
+DECLARE @end {keyType} = (SELECT TOP (1) w.k FROM (SELECT TOP (@window) {key} AS k FROM {step.QualifiedTable} t {afterWhere}ORDER BY {key}) w ORDER BY w.k DESC);
 IF @end IS NULL
     SELECT CAST(0 AS int) AS affected, CAST(NULL AS {keyType}) AS next_after, CAST(1 AS bit) AS done, CAST(0 AS int) AS [{step.Table}], CAST(0 AS int) AS [{lookup.Table}];
 ELSE
@@ -1141,24 +1141,24 @@ SELECT @id;";
             job.RowsAffected[table] = existing + rows;
         }
 
-        private static async Task<bool> TableExistsAsync(SqlConnection connection, string table)
+        private static async Task<bool> TableExistsAsync(SqlConnection connection, string table, string schema = "dbo")
         {
             using (var command = new SqlCommand("SELECT CASE WHEN OBJECT_ID(@name, N'U') IS NULL THEN 0 ELSE 1 END;", connection))
             {
-                command.Parameters.Add("@name", SqlDbType.NVarChar, 300).Value = "dbo." + table;
+                command.Parameters.Add("@name", SqlDbType.NVarChar, 300).Value = schema + "." + table;
                 return (int)await command.ExecuteScalarAsync().ConfigureAwait(false) == 1;
             }
         }
 
         /// <summary>The key column's SQL type (int, bigint or uniqueidentifier), or null when the table is not there.</summary>
-        internal static async Task<string> KeyTypeAsync(SqlConnection connection, string table, string column)
+        internal static async Task<string> KeyTypeAsync(SqlConnection connection, string table, string column, string schema = "dbo")
         {
             const string sql = @"
 SELECT TYPE_NAME(c.system_type_id) FROM sys.columns c
 WHERE c.object_id = OBJECT_ID(@table, N'U') AND c.name = @column;";
             using (var command = new SqlCommand(sql, connection))
             {
-                command.Parameters.Add("@table", SqlDbType.NVarChar, 300).Value = "dbo." + table;
+                command.Parameters.Add("@table", SqlDbType.NVarChar, 300).Value = schema + "." + table;
                 command.Parameters.Add("@column", SqlDbType.NVarChar, 128).Value = column;
                 var type = await command.ExecuteScalarAsync().ConfigureAwait(false) as string;
                 switch (type)

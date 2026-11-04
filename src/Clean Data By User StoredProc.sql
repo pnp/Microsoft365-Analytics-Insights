@@ -261,6 +261,15 @@ BEGIN
         IF OBJECT_ID('dbo.cowork_usage_user_activity_log', 'U') IS NOT NULL
             DELETE FROM dbo.cowork_usage_user_activity_log WHERE user_id = @UserId;
 
+        -- The weekly activity profiles the installer's profiling extension compiles from the usage reports, where it is
+        -- installed. They have no foreign key to users, so nothing else would stop them outliving the person.
+        IF OBJECT_ID('profiling.ActivitiesWeekly', 'U') IS NOT NULL
+            EXEC sp_executesql N'DELETE FROM profiling.ActivitiesWeekly WHERE user_id = @UserId;', N'@UserId INT', @UserId = @UserId;
+        IF OBJECT_ID('profiling.ActivitiesWeeklyColumns', 'U') IS NOT NULL
+            EXEC sp_executesql N'DELETE FROM profiling.ActivitiesWeeklyColumns WHERE user_id = @UserId;', N'@UserId INT', @UserId = @UserId;
+        IF OBJECT_ID('profiling.UsageWeekly', 'U') IS NOT NULL
+            EXEC sp_executesql N'DELETE FROM profiling.UsageWeekly WHERE user_id = @UserId;', N'@UserId INT', @UserId = @UserId;
+
         -------------------------------------------------
         -- Copilot AI interaction history (optional import). Deleted explicitly rather than left to cascade:
         -- copilot_interactions.user_id is intentionally a non-cascading FK. Leaf -> parent order.

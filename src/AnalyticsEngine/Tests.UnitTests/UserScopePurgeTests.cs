@@ -1275,6 +1275,47 @@ INSERT INTO dbo.teams_addons_user_installed_log (date, addon_id, user_id) VALUES
             }
         }
 
+        /// <summary>
+        /// The installer's profiling extension compiles weekly activity profiles - one row per person and week, and per
+        /// metric - with no foreign key to users. The purge removes the outsider's and leaves the pilot's.
+        /// </summary>
+        [TestMethod]
+        public async Task Purge_RemovesTheirWeeklyActivityProfiles()
+        {
+            Seed seed = null;
+            IReadOnlyList<string> created = Array.Empty<string>();
+            try
+            {
+                created = await WeeklyProfileTables.EnsureAsync(ConnectionString);
+                seed = await SeedAsync();
+                await ExecuteAsync(WeeklyProfileTables.InsertSql(seed.Pilot) + WeeklyProfileTables.InsertSql(seed.Outsider));
+
+                var jobId = await StartJobWithCandidatesAsync(seed.Outsider);
+                var engine = NewEngine();
+                engine.BatchSizeOverride = 1;
+                Assert.AreEqual(UserScopePurgeRunOutcome.Completed, await engine.RunAsync(jobId, null));
+
+                foreach (var table in WeeklyProfileTables.Names)
+                {
+                    Assert.AreEqual(0, await CountAsync($"SELECT COUNT(*) FROM profiling.[{table}] WHERE user_id = @id", ("@id", seed.Outsider)),
+                        $"The outsider's weekly profile ({table}) is gone.");
+                    Assert.AreEqual(2, await CountAsync($"SELECT COUNT(*) FROM profiling.[{table}] WHERE user_id = @id", ("@id", seed.Pilot)),
+                        $"The pilot's weekly profile ({table}) stays.");
+                }
+                Assert.AreEqual(2L, (await State.GetAsync(jobId)).RowsAffected["profiling.UsageWeekly"]);
+                await AssertPurgedAsync(seed);
+            }
+            finally
+            {
+                if (seed != null)
+                {
+                    await ExecuteAsync(WeeklyProfileTables.DeleteSql(seed.Pilot, seed.Outsider));
+                }
+                await WeeklyProfileTables.DropAsync(ConnectionString, created);
+                await CleanupAsync(seed);
+            }
+        }
+
         private static Task DropRetainedTablesAsync() => ExecuteAsync(@"
 IF OBJECT_ID(N'dbo.yammer_msg_to_stream', N'U') IS NOT NULL DROP TABLE dbo.yammer_msg_to_stream;
 IF OBJECT_ID(N'dbo.yammer_messages', N'U') IS NOT NULL DROP TABLE dbo.yammer_messages;
@@ -1513,11 +1554,12 @@ JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.p
                 {
                     using (var exists = new SqlCommand("SELECT OBJECT_ID(@table, N'U');", connection))
                     {
-                        exists.Parameters.AddWithValue("@table", "dbo." + step.Table);
+                        exists.Parameters.AddWithValue("@table", step.Schema + "." + step.Table);
                         if (await exists.ExecuteScalarAsync() is DBNull)
                         {
-                            Assert.IsTrue(step.Phase == UserScopePurgePhases.RetiredFeatures || step.Phase == UserScopePurgePhases.AuditEvents,
-                                $"{step}: dbo.{step.Table} is not in the database, but is not a table only a retired feature kept.");
+                            Assert.IsTrue(step.Phase == UserScopePurgePhases.RetiredFeatures || step.Phase == UserScopePurgePhases.AuditEvents
+                                || step.Schema == "profiling",
+                                $"{step}: {step.Schema}.{step.Table} is not in the database, but is neither a table only a retired feature kept nor an installer extension's.");
                             continue;
                         }
                     }
@@ -1528,7 +1570,7 @@ JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.p
 SELECT COUNT(*) FROM sys.index_columns ic JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
 WHERE ic.object_id = OBJECT_ID(@table) AND ic.key_ordinal BETWEEN 1 AND 2 AND c.name = N'object_id';", connection))
                         {
-                            command.Parameters.AddWithValue("@table", "dbo." + step.Table);
+                            command.Parameters.AddWithValue("@table", step.Schema + "." + step.Table);
                             if ((int)await command.ExecuteScalarAsync() == 0)
                             {
                                 problems.Add($"{step}: no index has object_id among its first two key columns");
@@ -1548,7 +1590,7 @@ JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.inde
 JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
 WHERE i.object_id = OBJECT_ID(@table) AND i.type = 1;", connection))
                     {
-                        command.Parameters.AddWithValue("@table", "dbo." + step.Table);
+                        command.Parameters.AddWithValue("@table", step.Schema + "." + step.Table);
                         using (var reader = await command.ExecuteReaderAsync())
                         {
                             await reader.ReadAsync();
@@ -1577,7 +1619,7 @@ WHERE i.object_id = OBJECT_ID(@table) AND i.type = 1;", connection))
             {
                 foreach (var hasAfter in new[] { false, true })
                 {
-                    StringAssert.Contains(UserScopePurgeEngine.BuildWindowSql(step, "int", hasAfter), $"FROM dbo.[{step.Table}] t WITH (INDEX(1)) WHERE", step.ToString());
+                    StringAssert.Contains(UserScopePurgeEngine.BuildWindowSql(step, "int", hasAfter), $"FROM {step.QualifiedTable} t WITH (INDEX(1)) WHERE", step.ToString());
                 }
             }
             StringAssert.Contains(UserScopePurgeEngine.BuildCallsWindowSql("int", hasAfter: true), "FROM dbo.call_records r WITH (INDEX(1))", "The calls window's INSERT INTO #calls.");
@@ -1589,6 +1631,74 @@ WHERE i.object_id = OBJECT_ID(@table) AND i.type = 1;", connection))
                 StringAssert.Contains(sql, step.Kind == UserScopePurgeStepKind.DeleteByObject ? "FROM #purge_objects o INNER LOOP JOIN" : "FROM #purge_candidates c INNER LOOP JOIN", step.ToString());
                 var joins = System.Text.RegularExpressions.Regex.Matches(step.Match, @"\bJOIN\b").Count;
                 Assert.AreEqual(joins, System.Text.RegularExpressions.Regex.Matches(step.Match, @"\bLOOP JOIN\b").Count, $"{step}: every join carries LOOP.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The three weekly profile tables of the installer's profiling extension (<c>Profiling-03-CreateSchema.sql</c>), for
+    /// tests of the purges. Where a test database doesn't have them, they are created with the same keys and dropped after.
+    /// </summary>
+    internal static class WeeklyProfileTables
+    {
+        public static readonly IReadOnlyList<string> Names = new[] { "ActivitiesWeekly", "ActivitiesWeeklyColumns", "UsageWeekly" };
+
+        private static readonly Dictionary<string, string> Definitions = new Dictionary<string, string>
+        {
+            ["ActivitiesWeekly"] = "user_id bigint NOT NULL, MetricDate date NOT NULL, Metric varchar(250) NOT NULL, Sum int NOT NULL, " +
+                                   "CONSTRAINT PK_test_ActivitiesWeekly PRIMARY KEY CLUSTERED (user_id, MetricDate, Metric)",
+            ["ActivitiesWeeklyColumns"] = "user_id bigint NOT NULL, date date NOT NULL, CONSTRAINT PK_test_ActivitiesWeeklyColumns PRIMARY KEY CLUSTERED (user_id, date)",
+            ["UsageWeekly"] = "user_id int NOT NULL, date date NOT NULL, CONSTRAINT PK_test_UsageWeekly PRIMARY KEY CLUSTERED (user_id, date)",
+        };
+
+        /// <summary>Creates whichever of the tables are missing, and returns their names.</summary>
+        public static async Task<IReadOnlyList<string>> EnsureAsync(string connectionString)
+        {
+            var created = new List<string>();
+            using (var connection = new SqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                using (var schema = new SqlCommand("IF SCHEMA_ID(N'profiling') IS NULL EXEC (N'CREATE SCHEMA profiling');", connection))
+                {
+                    await schema.ExecuteNonQueryAsync();
+                }
+                foreach (var name in Names)
+                {
+                    using (var create = new SqlCommand(
+                        $"IF OBJECT_ID(N'profiling.{name}', N'U') IS NULL BEGIN CREATE TABLE profiling.[{name}] ({Definitions[name]}); SELECT 1; END ELSE SELECT 0;", connection))
+                    {
+                        if (Convert.ToInt32(await create.ExecuteScalarAsync()) == 1)
+                        {
+                            created.Add(name);
+                        }
+                    }
+                }
+            }
+            return created;
+        }
+
+        /// <summary>Two weeks of profile for <paramref name="userId"/> in each table.</summary>
+        public static string InsertSql(int userId) => $@"
+INSERT INTO profiling.ActivitiesWeekly (user_id, MetricDate, Metric, Sum) VALUES ({userId}, '2026-08-24', 'Emails Sent', 3), ({userId}, '2026-08-31', 'Emails Sent', 4);
+INSERT INTO profiling.ActivitiesWeeklyColumns (user_id, date) VALUES ({userId}, '2026-08-24'), ({userId}, '2026-08-31');
+INSERT INTO profiling.UsageWeekly (user_id, date) VALUES ({userId}, '2026-08-24'), ({userId}, '2026-08-31');";
+
+        public static string DeleteSql(params int[] userIds) => string.Concat(Names.Select(name =>
+            $"IF OBJECT_ID(N'profiling.{name}', N'U') IS NOT NULL DELETE FROM profiling.[{name}] WHERE user_id IN ({string.Join(",", userIds)});"));
+
+        public static async Task DropAsync(string connectionString, IReadOnlyList<string> created)
+        {
+            if (created == null || created.Count == 0) return;
+            using (var connection = new SqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                foreach (var name in created)
+                {
+                    using (var drop = new SqlCommand($"DROP TABLE profiling.[{name}];", connection))
+                    {
+                        await drop.ExecuteNonQueryAsync();
+                    }
+                }
             }
         }
     }

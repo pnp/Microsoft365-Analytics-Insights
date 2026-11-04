@@ -412,8 +412,10 @@ namespace Tests.UnitTests
                 userId = user.ID;
             }
             var other = await SeedWhatOnlyThePurgeHandlesAsync(userId);
+            var profiles = await WeeklyProfileTables.EnsureAsync(ConnectionString());
             try
             {
+                await ExecuteAsync(WeeklyProfileTables.InsertSql(userId) + WeeklyProfileTables.InsertSql(other.OtherUser));
                 await CreateCleanDataByUserAsync();
                 await ExecuteCleanDataByUserAsync(userId);
 
@@ -444,9 +446,16 @@ namespace Tests.UnitTests
                 await Count(1, "...and the other person's call, with them as the anonymous Unknown User.",
                     $"SELECT COUNT(*) FROM dbo.call_sessions s JOIN dbo.users u ON u.id = s.attendee_user_id WHERE s.call_record_id = {other.Call} AND u.user_name = 'Unknown User'");
                 await Count(1, "The other person is untouched.", "SELECT COUNT(*) FROM dbo.users WHERE id = @other");
+                foreach (var table in WeeklyProfileTables.Names)
+                {
+                    await Count(0, $"Their weekly profile ({table}) is gone...", $"SELECT COUNT(*) FROM profiling.[{table}] WHERE user_id = @user");
+                    await Count(2, $"...while the other person's ({table}) stays.", $"SELECT COUNT(*) FROM profiling.[{table}] WHERE user_id = @other");
+                }
             }
             finally
             {
+                await ExecuteAsync(WeeklyProfileTables.DeleteSql(userId, other.OtherUser));
+                await WeeklyProfileTables.DropAsync(ConnectionString(), profiles);
                 await RemoveWhatOnlyThePurgeHandlesAsync(other);
             }
         }
