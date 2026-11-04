@@ -3,6 +3,7 @@ import { InMemoryPageStateManager } from '../src/PageProps/PageState';
 import { IPageDataService, LikesUserEntity, PageComment } from '../src/Definitions';
 import { PagePropertyManager } from '../src/PageProps/PagePropertyManager';
 import { PageProps } from '../src/PageProps/Models/PageProps';
+import { MetadataInfo } from '../src/PageProps/Models/MetadataInfo';
 import { BasePageStateManager } from '../src/PageProps/PageState';
 
 /**
@@ -149,6 +150,16 @@ describe('PagePropertyManager.handleNewPage', () => {
         const manager = new TestPagePropertyManager('val', stateManager, dataService);
         await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
         expect(recordSpy).toHaveBeenCalled();
+    });
+
+    test('sends the taxonomy fields it parsed from the page properties', async () => {
+        const recordSpy = jest.spyOn(dataService, 'recordPageProps');
+        const manager = new TestPagePropertyManager('val', stateManager, dataService);
+
+        await manager.handleNewPage(WEB, 1, 'http://url', 'Site Pages');
+
+        const sentTaxonomy = recordSpy.mock.calls.reduce((all, call) => all.concat((call[0] as PageProps).taxonomyProps), [] as MetadataInfo[]);
+        expect(sentTaxonomy).toEqual([{ id: 'f5b7ced7-2039-47f9-a22d-32c66d2eec65', label: 'Fake Term 1', propName: 'testTag' }]);
     });
 
     test('adds likes count to props when likes load succeeds', async () => {

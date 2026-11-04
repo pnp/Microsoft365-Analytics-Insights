@@ -12,7 +12,7 @@ export class PageProps {
     pageLikes: LikesUserEntity[];
     taxonomyProps: MetadataInfo[];
 
-    constructor(url: string, propsAll: any, pageComments?: PageComment[], pageLikes?: LikesUserEntity[]) {
+    constructor(url: string, propsAll: any, pageComments?: PageComment[], pageLikes?: LikesUserEntity[], taxonomyProps?: MetadataInfo[]) {
 
         let validProps = {};
 
@@ -31,7 +31,7 @@ export class PageProps {
 
         this.props = validProps;
         this.url = url;
-        this.taxonomyProps = [];
+        this.taxonomyProps = taxonomyProps ?? [];
         this.pageComments = pageComments ?? [];
         this.pageLikes = pageLikes ?? [];
     }
@@ -83,7 +83,10 @@ export class PageProps {
         for (let i = 0; i < maxArrayLength; i++) {
             const propsObj = propsArray[i] || {};
             const flattenedProps = Object.assign({}, ...propsObj);   
-            const p = new PageProps(this.url, flattenedProps, pageCommentsArray[i] || [], pageLikesArray[i] || []);
+
+            // Every part carries its share of the taxonomy fields, as it does of the comments and likes. Parts used to be
+            // sent with none, so the importer stored managed metadata only as the raw "id;#Label|termGuid" value.
+            const p = new PageProps(this.url, flattenedProps, pageCommentsArray[i] || [], pageLikesArray[i] || [], taxonomyPropsArray[i] || []);
             result.push(p);
         }
 
