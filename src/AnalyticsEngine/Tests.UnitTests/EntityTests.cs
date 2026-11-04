@@ -71,12 +71,60 @@ namespace Tests.UnitTests
             var subNewWeb2 = webResolver.GetWeb(randomSub1URL.ToUpper(), true);
             Assert.AreEqual(subNewWeb, subNewWeb2);
 
-            // Get web for random doc URL from a subsite we should have cached
-            var randoDocWeb = webResolver.GetWeb(randomSub1URL + "/randoDoc.docx", true);
+            // Get web for random doc URL from a subsite we should have cached: a file's address finds the web it is in
+            var randoDocWeb = webResolver.GetWeb(randomSub1URL + "/randoDoc.docx", false);
             Assert.AreEqual(randoDocWeb, subNewWeb);
 
             var neverSeenWeb = webResolver.GetWeb("https://whatevers/newsitenotcached/randoDoc.docx", false);
             Assert.IsNull(neverSeenWeb);
+        }
+
+        /// <summary>
+        /// Once the tenant's root site has a web, as it does after any event there, events for every other site collection
+        /// still get a web and site of their own. Nor is a site taken for another whose address starts the same way.
+        /// </summary>
+        [TestMethod()]
+        public void SPWebResolver_RootAndSiblingSites_AreNotTakenForEachOther()
+        {
+            var webResolver = new SPWebResolver();
+
+            // As PopulateCaches loads the root site's rows from SQL
+            var rootSite = new Site { UrlBase = "https://contoso.sharepoint.com/" };
+            var root = new Web { url_base = "https://contoso.sharepoint.com", site = rootSite };
+            webResolver.CacheSite(rootSite);
+            webResolver.CacheWeb(root);
+
+            var hr = webResolver.GetWeb("https://contoso.sharepoint.com/sites/hr/", true);
+            var hrDocs = webResolver.GetWeb("https://contoso.sharepoint.com/sites/hrdocs/", true);
+            var oneDriveHost = webResolver.GetWeb("https://contoso-my.sharepoint.com/", true);
+            var oneDrive = webResolver.GetWeb("https://contoso-my.sharepoint.com/personal/alex_contoso_com/", true);
+
+            Assert.AreEqual("https://contoso.sharepoint.com/sites/hr", hr.url_base, "Not the root web.");
+            Assert.AreNotSame(rootSite, hr.site, "/sites/hr is a site collection of its own, not part of the root site.");
+            Assert.AreEqual("https://contoso.sharepoint.com/sites/hrdocs", hrDocs.url_base, "Not /sites/hr.");
+            Assert.AreNotSame(hr.site, hrDocs.site);
+            Assert.AreEqual("https://contoso-my.sharepoint.com/personal/alex_contoso_com", oneDrive.url_base);
+            Assert.AreNotSame(oneDriveHost.site, oneDrive.site, "A OneDrive is not part of the OneDrive host's root site.");
+            Assert.AreSame(root, webResolver.GetWeb("https://contoso.sharepoint.com", true), "The root site's own events still go to it.");
+
+            // A file's address: the nearest web in the same site collection, or none
+            Assert.AreSame(hr, webResolver.GetWeb("https://contoso.sharepoint.com/sites/hr/Shared Documents/Καλημέρα κόσμε.docx", false));
+            Assert.AreSame(root, webResolver.GetWeb("https://contoso.sharepoint.com/Shared Documents/a.docx", false));
+            Assert.IsNull(webResolver.GetWeb("https://contoso.sharepoint.com/sites/finance/Shared Documents/a.docx", false),
+                "Not the root web: /sites/finance is a site collection not seen yet.");
+        }
+
+        [TestMethod()]
+        public void SPWebResolver_SameWeb_WhateverTheCaseOrTrailingSlash_AndASubsiteIsInItsParentsSite()
+        {
+            var webResolver = new SPWebResolver();
+            var hr = webResolver.GetWeb("https://contoso.sharepoint.com/sites/hr/", true);
+
+            Assert.AreSame(hr, webResolver.GetWeb("https://CONTOSO.sharepoint.com/Sites/HR", true));
+
+            var subsite = webResolver.GetWeb("https://contoso.sharepoint.com/sites/hr/team/", true);
+            Assert.AreEqual("https://contoso.sharepoint.com/sites/hr/team", subsite.url_base, "A subsite's events go to its own web...");
+            Assert.AreSame(hr.site, subsite.site, "...in its parent's site collection.");
         }
 
 
