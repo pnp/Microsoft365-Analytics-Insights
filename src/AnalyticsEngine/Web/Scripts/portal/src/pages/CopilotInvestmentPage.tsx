@@ -24,6 +24,7 @@ import PrintButton from '../components/shared/PrintButton';
 import CostApiWarnings from '../components/shared/CostApiWarnings';
 import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 import UserFilterBar from '../components/userFilter/UserFilterBar';
+import LinkFilterNotApplied from '../components/userFilter/LinkFilterNotApplied';
 import UserFilterPrintSummary from '../components/userFilter/UserFilterPrintSummary';
 import { useUserFilterDimensions } from '../components/userFilter/useUserFilterDimensions';
 import { parseUserFilter, serializeUserFilter } from '../components/userFilter/userFilterModel';
@@ -292,6 +293,7 @@ function InvestmentView({ userFilter: controlledFilter, onUserFilterChange }: {
 
       <GlobalFilterBar />
       <CostApiWarnings />
+      <LinkFilterNotApplied requested={requestedFilter} />
 
       {canSeePii && (
         <>

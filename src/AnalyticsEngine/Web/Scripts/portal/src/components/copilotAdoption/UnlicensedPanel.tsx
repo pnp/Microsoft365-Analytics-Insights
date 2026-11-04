@@ -8,6 +8,7 @@ import HabitStrip from './HabitStrip';
 import { KpiGrid, formatCount } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
 import { useT, type TFunction } from '../../i18n';
+import { explicitPeriodDates } from './AdoptionPeriodControl';
 
 const useStyles = makeStyles({
   stack: {
@@ -56,19 +57,19 @@ const useStyles = makeStyles({
 export default function UnlicensedPanel({
   unlicensed,
   options,
-  windowDays,
   sql,
   usageByAppWithheld = false,
 }: {
   unlicensed: UnlicensedPopulationSummary;
+  /** The analysed period comes from here - its length, and its dates when it has them - never from the selector. */
   options: CopilotAdoptionOptions;
-  windowDays: number;
   sql: Record<string, string> | null;
   /** True when the server left the by-app breakdown out because the administrator's report filter applies. */
   usageByAppWithheld?: boolean;
 }) {
   const styles = useStyles();
   const t = useT();
+  const period = explicitPeriodDates(options);
 
   if (unlicensed.activeUsers === 0) {
     return (
@@ -77,7 +78,9 @@ export default function UnlicensedPanel({
           {t('copilotAdoptionUsers.unlicensed.emptyTitle')}
         </Text>
         <Text size={200} block className={styles.muted} style={{ marginTop: '6px' }}>
-          {t('copilotAdoptionUsers.unlicensed.emptyBody', { days: windowDays })}
+          {period
+            ? t('copilotAdoptionUsers.unlicensed.emptyBody.range', { from: period.from, to: period.to })
+            : t('copilotAdoptionUsers.unlicensed.emptyBody', { days: options.windowDays })}
         </Text>
       </Card>
     );
@@ -85,7 +88,7 @@ export default function UnlicensedPanel({
 
   return (
     <div className={styles.stack}>
-      <KpiGrid items={buildUnlicensedKpis(t, unlicensed, options, windowDays)} />
+      <KpiGrid items={buildUnlicensedKpis(t, unlicensed, options)} />
 
       {unlicensed.truncated && (
         <Text size={200} className={styles.muted}>
@@ -200,8 +203,8 @@ function buildUnlicensedKpis(
   t: TFunction,
   u: UnlicensedPopulationSummary,
   o: CopilotAdoptionOptions,
-  windowDays: number,
 ): KpiDefinition[] {
+  const period = explicitPeriodDates(o);
   const habitual = u.habitBuckets
     .filter((b) => b.label === 'Frequent' || b.label === 'Daily')
     .reduce((sum, b) => sum + b.users, 0);
@@ -212,7 +215,9 @@ function buildUnlicensedKpis(
       label: t('copilotAdoptionUsers.unlicensed.usersLabel'),
       value: formatCount(u.activeUsers),
       tone: 'opportunity',
-      hint: t('copilotAdoptionUsers.unlicensed.usersHint', { days: windowDays }),
+      hint: period
+        ? t('copilotAdoptionUsers.unlicensed.usersHint.range', { from: period.from, to: period.to })
+        : t('copilotAdoptionUsers.unlicensed.usersHint', { days: o.windowDays }),
       info: {
         what: t('copilotAdoptionUsers.unlicensed.usersWhat'),
         how: t('copilotAdoptionUsers.unlicensed.usersHow'),
@@ -227,10 +232,16 @@ function buildUnlicensedKpis(
       hint: t('copilotAdoptionUsers.unlicensed.interactionsHint', { value: u.interactionsPerUserPerMonth }),
       info: {
         what: t('copilotAdoptionUsers.unlicensed.interactionsWhat'),
-        how: t('copilotAdoptionUsers.unlicensed.interactionsHow', {
-          windowDays,
-          normalisationDays: o.habitBucketNormalisationDays,
-        }),
+        how: period
+          ? t('copilotAdoptionUsers.unlicensed.interactionsHow.range', {
+              from: period.from,
+              to: period.to,
+              normalisationDays: o.habitBucketNormalisationDays,
+            })
+          : t('copilotAdoptionUsers.unlicensed.interactionsHow', {
+              windowDays: o.windowDays,
+              normalisationDays: o.habitBucketNormalisationDays,
+            }),
         source: t('copilotAdoptionUsers.unlicensed.interactionsSource'),
       },
     },

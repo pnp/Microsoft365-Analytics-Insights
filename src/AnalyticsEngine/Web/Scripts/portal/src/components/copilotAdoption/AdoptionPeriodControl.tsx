@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react';
 import { makeStyles, tokens, Button, Input, Label, Select, Text } from '@fluentui/react-components';
 import { CalendarLtr16Regular } from '@fluentui/react-icons';
 import type { DateRange } from '../../types/licenceActivity';
+import type { CopilotAdoptionOptions } from '../../types/copilotAdoption';
 import { useT, type TFunction, type TranslationKey } from '../../i18n';
 import { MIN_SUPPORTED_DATE, addDays, latestEndString, toDateString, validateRange } from '../licenceActivity/dateRange';
 import { formatDate } from '../shared/KpiGrid';
@@ -51,6 +52,20 @@ export function periodLabel(t: TFunction, windowDays: number, fixed: FixedPeriod
   if (fixed) return t(FIXED_PERIOD_LABEL_KEYS[fixed.kind]);
   const rolling = ROLLING_WINDOWS.find((w) => w.value === windowDays);
   return rolling ? t(rolling.labelKey) : t('copilotAdoption.page.print.lastDays', { v0: windowDays });
+}
+
+/**
+ * The first and last days a summary for a period with explicit dates describes, ready for a sentence; null for a
+ * rolling window, whose texts say "the last N days".
+ *
+ * Read from the summary's own options - what the server analysed - never from the period selector, which keeps the
+ * last rolling window it was given while a fixed period is chosen.
+ */
+export function explicitPeriodDates(
+  options: Pick<CopilotAdoptionOptions, 'usesExplicitDates' | 'fromUtc' | 'toUtc'>,
+): { from: string; to: string } | null {
+  if (!options.usesExplicitDates || !options.fromUtc || !options.toUtc) return null;
+  return { from: formatDate(options.fromUtc), to: formatDate(options.toUtc) };
 }
 
 /** The dates a rolling window would cover if it were pinned to dates: it, ending yesterday. */

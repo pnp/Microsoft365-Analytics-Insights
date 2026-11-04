@@ -399,4 +399,24 @@ describe('CopilotAdoptionPage without See PII', () => {
     expect(await screen.findByText('manager@contoso.com')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Licensed users' })).toBeInTheDocument();
   });
+
+  it('tells a reader who holds See PII that a past period names no managers, rather than calling every group too small', async () => {
+    // The server withholds the roll-up by manager from every reader for a period that does not end today.
+    const summary = managerRollup();
+    summary.accountabilityRollup = [];
+    summary.options = {
+      ...summary.options,
+      usesExplicitDates: true,
+      fromUtc: '2026-07-01T00:00:00Z',
+      toUtc: '2026-09-30T00:00:00Z',
+      toExclusiveUtc: '2026-10-01T00:00:00Z',
+    };
+    fetchAdoptionSummary.mockResolvedValue(summary);
+    renderWithProvider(<CopilotAdoptionPage />, { access: { administration: false, seePii: true } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Analyst view' }));
+
+    expect(await screen.findByText(/^This period does not end today, so the roll-up by manager is not shown/)).toBeInTheDocument();
+    expect(screen.queryByText('Not enough licensed users in any accountable group to break down reliably.')).not.toBeInTheDocument();
+  });
 });

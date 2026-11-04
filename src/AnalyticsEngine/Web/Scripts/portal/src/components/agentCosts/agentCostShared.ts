@@ -49,6 +49,14 @@ export function formatCount(value: number | null | undefined): string {
 }
 
 /**
+ * A share of a total (0.125 is 12.5%) to one decimal place, with the reader's own decimal separator and
+ * percent spacing - "12,5 %" in Spanish.
+ */
+export function formatShare(value: number): string {
+  return formatNumber(value, { style: 'percent', maximumFractionDigits: 1 });
+}
+
+/**
  * A metered quantity, keeping its fractional part.
  *
  * Deliberately not `formatCount`. Azure's `UsageQuantity` is routinely fractional (GB, GB-hours,

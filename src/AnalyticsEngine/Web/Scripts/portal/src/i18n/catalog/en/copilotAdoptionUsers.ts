@@ -216,6 +216,7 @@ export const copilotAdoptionUsers = {
   // Unlicensed panel
   'copilotAdoptionUsers.unlicensed.emptyTitle': 'No unlicensed Copilot use in this period',
   'copilotAdoptionUsers.unlicensed.emptyBody': 'Nobody without a Microsoft 365 Copilot licence used Copilot in the last {days} days. That is either a genuine finding or a sign the Copilot audit import is not running - the Health page will say which.',
+  'copilotAdoptionUsers.unlicensed.emptyBody.range': 'Nobody without a Microsoft 365 Copilot licence used Copilot from {from} to {to}. That is either a genuine finding or a sign the Copilot audit import was not running - the Health page will say which.',
   'copilotAdoptionUsers.unlicensed.truncated': 'The unlicensed population was capped at {count} users, so these figures are a floor rather than a total.',
   'copilotAdoptionUsers.unlicensed.habitTitle': 'Habit formation without a licence',
   'copilotAdoptionUsers.unlicensed.habitSubtitle': 'The same buckets the licensed population uses, so the two can be read against each other.',
@@ -239,6 +240,7 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.unlicensed.noDepartment': 'No department information available for these users.',
   'copilotAdoptionUsers.unlicensed.usersLabel': 'Unlicensed Copilot users',
   'copilotAdoptionUsers.unlicensed.usersHint': 'Used Copilot in the last {days} days with no licence',
+  'copilotAdoptionUsers.unlicensed.usersHint.range': 'Used Copilot from {from} to {to} with no licence',
   'copilotAdoptionUsers.unlicensed.usersWhat': 'Distinct people with no Microsoft 365 Copilot licence who nevertheless used Copilot in the period - in practice Copilot Chat, which is available without a licence.',
   'copilotAdoptionUsers.unlicensed.usersHow': 'Counted from the Copilot audit log for every user holding none of the SKUs classified as a Copilot licence. Distinct people, not interactions.',
   'copilotAdoptionUsers.unlicensed.usersSource': 'Entirely invisible in Microsoft\u2019s own Copilot usage reports, which cover licensed users only. This is the single strongest piece of evidence for unmet demand available anywhere.',
@@ -246,6 +248,7 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.unlicensed.interactionsHint': '{value} per user per month',
   'copilotAdoptionUsers.unlicensed.interactionsWhat': 'Total Copilot interactions run by people without a licence, and the monthly average per person.',
   'copilotAdoptionUsers.unlicensed.interactionsHow': 'Interactions in the last {windowDays} days, restated per {normalisationDays}-day month so the per-user figure does not change meaning when the period changes.',
+  'copilotAdoptionUsers.unlicensed.interactionsHow.range': 'Interactions from {from} to {to}, restated per {normalisationDays}-day month so the per-user figure does not change meaning when the period changes.',
   'copilotAdoptionUsers.unlicensed.interactionsSource': 'Compare the per-user figure against the licensed population: unlicensed users out-using licensed ones is a licence-allocation problem, not an adoption problem.',
   'copilotAdoptionUsers.unlicensed.habitualLabel': 'Habitual without a licence',
   'copilotAdoptionUsers.unlicensed.habitualHint': '{days}+ active days a month',

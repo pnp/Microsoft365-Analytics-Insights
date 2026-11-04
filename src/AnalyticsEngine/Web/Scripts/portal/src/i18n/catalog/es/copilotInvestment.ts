@@ -781,7 +781,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.whatIf.high': 'Optimista',
   'copilotInvestment.whatIf.minutes': 'Minutos que Copilot devuelve en un día activo',
   'copilotInvestment.whatIf.realisation': 'Parte de ese tiempo que se convierte en valor para el negocio (%)',
-  'copilotInvestment.whatIf.invalidNumber': 'Escriba un número, con punto o coma para los decimales.',
+  'copilotInvestment.whatIf.invalidNumber': 'Escriba un número, con punto o coma para los decimales y sin separador de miles.',
   'copilotInvestment.whatIf.outOfRange': 'Escriba un número entre {min} y {max}.',
   'copilotInvestment.whatIf.outOfRangeAbove': 'Escriba un número mayor que {min} y como máximo {max}.',
   'copilotInvestment.whatIf.status.none':
