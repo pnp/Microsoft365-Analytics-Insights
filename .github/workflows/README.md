@@ -63,6 +63,21 @@ The dependency rules exist because every package references `Common/DataUtils` a
 `Common/Entities`: a package reference added there ships in all four zips. If the check fails, move
 the reference to the project that actually needs it rather than relaxing the rule.
 
+## Secrets in the package build
+
+`build-packages.yml` gives a secret only to the step that uses it:
+
+* `STATSAPISECRET` and `STATSAPIURL` go to the Office 365 importer's *Configure packages* step, which
+  writes them into that importer's `App.Release.config` for the usage-stats upload. No other package's
+  release config takes a secret.
+* `PFX_BASE64` and `PFX_KEY` go to *Sign and verify installer*, which runs in release builds only.
+
+No other step sees a secret: not the MSBuild step that runs the portal's `npm ci` and build, not
+AITracker's `npm ci`, and not the other third-party actions. `ci` and `pr` still pass
+`secrets: inherit`, but a secret that the workflow never names reaches no step. Put a new
+secret-backed value in the `env` of the step that consumes it, never in workflow- or job-level `env`,
+where every step and every npm lifecycle script would get it.
+
 ## SPFx package
 
 CI never builds the SharePoint Framework extension (`src/SPO/ModernPagesAITrackerExtension`). The
