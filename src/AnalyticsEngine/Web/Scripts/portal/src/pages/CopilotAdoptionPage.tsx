@@ -2527,12 +2527,15 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               <Text>
                 {tNode('copilotAdoption.page.microsoftReport.method', {
                   heading: <strong>{t('copilotAdoption.page.microsoftReport.methodHeading')}</strong>,
-                  status: summary.microsoftReportDate && summary.microsoftReportPeriodDays != null
-                    ? t('copilotAdoption.page.microsoftReport.period', {
-                        days: formatCount(summary.microsoftReportPeriodDays),
-                        date: formatDate(summary.microsoftReportDate),
-                      })
-                    : t('copilotAdoption.page.notImported'),
+                  // Under an administrator's report filter the tenant-wide report is withheld, not missing: say which.
+                  status: isWithheld(summary, UNSCOPED_SECTIONS.microsoftReport)
+                    ? t('copilotAdoption.page.microsoftReport.withheld')
+                    : summary.microsoftReportDate && summary.microsoftReportPeriodDays != null
+                      ? t('copilotAdoption.page.microsoftReport.period', {
+                          days: formatCount(summary.microsoftReportPeriodDays),
+                          date: formatDate(summary.microsoftReportDate),
+                        })
+                      : t('copilotAdoption.page.notImported'),
                 })}
               </Text>
               <Text>

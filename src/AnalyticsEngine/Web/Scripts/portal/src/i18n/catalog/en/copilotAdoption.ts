@@ -560,6 +560,7 @@ export const copilotAdoption = {
   'copilotAdoption.page.licensedUsersOnlyUnavailableEntirelyWhenTenantConcealsUser': '. Licensed users only, and unavailable entirely when the tenant conceals user information.',
   'copilotAdoption.page.microsoftReport.title': 'Microsoft\'s Copilot usage report',
   'copilotAdoption.page.microsoftReport.period': '{days}-day period to {date}',
+  'copilotAdoption.page.microsoftReport.withheld': 'not shown, because it describes the whole organisation and a portal administrator\'s report filter applies',
   'copilotAdoption.page.microsoftReport.tenantWide': 'Tenant-wide',
   'copilotAdoption.page.microsoftReport.promptsSubmitted': 'prompts submitted',
   'copilotAdoption.page.microsoftReport.averagePerActiveUser': 'prompts per active user',

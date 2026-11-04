@@ -999,7 +999,8 @@ namespace Tests.UnitTests
             // A job title held by one person is that person: their messages per active user are their own message count.
             var store = new FakeTeamsStore();
             var query = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 37);
-            var shared = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", TeamsExplorerQuery.MaximumTop);
+            // A reader without See PII is served from the breakdown read with every row, whatever top they asked for.
+            var shared = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 37).WithEveryRow();
             var small = new[] { "Contoso Chief Explorer", "Contoso Four Title", "Contoso Night Office" };
             MemoryCache.Default.Remove(query.CacheKey("adoption"));
             MemoryCache.Default.Remove(shared.CacheKey("adoption"));
@@ -1033,15 +1034,19 @@ namespace Tests.UnitTests
                     }
                     Assert.IsFalse(trimmed.Contains("777") || csv.Contains("777"), "The one person's message count.");
 
-                    // The next reader holds the permission and is served from the same cache entry, untouched.
-                    var storeCalls = store.AdoptionCalls;
+                    // What is cached is the whole breakdown: the fold was applied to a copy for this reader.
+                    var cached = ((System.Threading.Tasks.Task<TeamsAdoption>)MemoryCache.Default.Get(shared.CacheKey("adoption"))).Result;
+                    Assert.AreEqual(5, cached.Breakdown.Count, "The cached section keeps every group, named.");
+                    Assert.IsTrue(small.All(name => cached.Breakdown.Any(row => row.Name == name)));
+
+                    // A reader with the permission sees every group.
                     host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
-                    var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/adoption?days=28&groupBy=jobTitle&top=" + TeamsExplorerQuery.MaximumTop));
+                    var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/adoption?days=28&groupBy=jobTitle&top=37"));
                     Assert.AreEqual(5, ((JArray)full["breakdown"]).Count);
                     Assert.AreEqual(777d, (double)full["breakdown"].Single(row => (string)row["name"] == "Contoso Chief Explorer")["messagesPerActiveUser"]);
                     Assert.AreEqual(0, (int)full["otherGroups"]);
                     Assert.AreEqual(JTokenType.Null, full["minimumGroupSize"].Type);
-                    Assert.AreEqual(storeCalls, store.AdoptionCalls, "The second reader must have been served from the cache.");
+                    Assert.AreEqual(37, store.LastAdoptionTop, "A reader with See PII reads the top they asked for.");
                     var fullCsv = await host.Client.GetStringAsync("api/TeamsExplorer/export/adoption?days=28&groupBy=jobTitle&top=37");
                     foreach (var name in small) StringAssert.Contains(fullCsv, name);
                     Assert.IsFalse(fullCsv.Contains(TeamsExplorerExports.OtherGroupsLabel));
@@ -1066,8 +1071,10 @@ namespace Tests.UnitTests
                 .SelectMany(top => new[]
                 {
                     TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", top).CacheKey("adoption"),
+                    TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", top).WithEveryRow().CacheKey("adoption"),
                     TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, top).CacheKey("people"),
                 })
+                .Distinct()
                 .ToArray();
             foreach (var key in keys) MemoryCache.Default.Remove(key);
             try
@@ -1082,7 +1089,7 @@ namespace Tests.UnitTests
                     foreach (var top in new[] { 1, 2, 3, 37 })
                     {
                         var json = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/adoption?days=28&groupBy=jobTitle&top=" + top));
-                        Assert.AreEqual(TeamsExplorerQuery.MaximumTop, store.LastAdoptionTop, "Read at the maximum top, so the fold sees every group.");
+                        Assert.AreEqual(int.MaxValue, store.LastAdoptionTop, "Read with every row, so the fold sees every group.");
                         var rows = json["breakdown"].ToArray();
                         var other = rows.Single(row => (bool?)row["other"] == true);
                         otherRow = otherRow ?? other.ToString(Formatting.None);
@@ -1091,7 +1098,7 @@ namespace Tests.UnitTests
                         Assert.IsFalse(json.ToString().Contains("Contoso Four Title"), "top=" + top);
 
                         var csv = await host.Client.GetStringAsync("api/TeamsExplorer/export/adoption?days=28&groupBy=jobTitle&top=" + top);
-                        Assert.AreEqual(TeamsExplorerQuery.MaximumTop, store.LastAdoptionTop, "The export folds the same way.");
+                        Assert.AreEqual(int.MaxValue, store.LastAdoptionTop, "The export folds the same way.");
                         Assert.IsFalse(csv.Contains("Contoso Four Title"), "top=" + top + " export");
                     }
 
@@ -1120,6 +1127,71 @@ namespace Tests.UnitTests
             {
                 foreach (var key in keys) MemoryCache.Default.Remove(key);
             }
+        }
+
+        [TestMethod]
+        public async Task TeamsAdoption_WithoutSeePii_FoldsGroupsBeyondTheMaximumTop_SoNoneCanBeWorkedOutFromTheTotals()
+        {
+            // 500 job titles of five active people, and a 501st held by one. Read at the 500-row cap, the 501st never
+            // reached the fold; the tab's tenant-wide totals less every row shown was then that one person's figures.
+            var store = new ManyGroupsTeamsStore(500, tail: 1);
+            var key = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 3).WithEveryRow().CacheKey("adoption");
+            MemoryCache.Default.Remove(key);
+            try
+            {
+                using (var host = new PortalTestHost(
+                    new[] { typeof(TeamsExplorerAPIController) },
+                    PortalTestHost.SignedIn(),
+                    PortalAccessPolicy.Enforcing,
+                    _ => new TeamsExplorerAPIController(store, () => new TeamsExplorerSources())))
+                {
+                    var json = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/adoption?days=28&groupBy=jobTitle&top=3"));
+
+                    Assert.AreEqual(501, store.RowsServed, "Every group was read, not the first 500.");
+                    Assert.IsFalse(json.ToString().Contains("Contoso Lone Title"));
+                    // Read at the cap, no group among the 500 was small, so nothing was folded and there was no combined row:
+                    // the lone person was simply missing, recoverable from the totals. Now they are folded, topped up with
+                    // the smallest shown title so the combined row is not small either.
+                    var other = json["breakdown"].Single(row => (bool?)row["other"] == true);
+                    Assert.AreEqual(6, (int)other["knownUsers"], "The lone person and the five-person title that tops them up.");
+                    Assert.AreEqual(6, (int)other["activeUsers"]);
+                    Assert.AreEqual(2, (int)json["otherGroups"]);
+                    Assert.AreEqual(3, json["breakdown"].Count(row => (bool?)row["other"] != true), "Named groups are still cut to top.");
+                }
+            }
+            finally
+            {
+                MemoryCache.Default.Remove(key);
+            }
+        }
+
+        /// <summary>A breakdown of <c>groups</c> job titles of five active people, then one of <c>tail</c> people, cut to top as the SQL is.</summary>
+        private sealed class ManyGroupsTeamsStore : ITeamsExplorerStore
+        {
+            private readonly List<TeamsDemographicRow> _rows = new List<TeamsDemographicRow>();
+            internal int RowsServed;
+
+            public ManyGroupsTeamsStore(int groups, int tail)
+            {
+                for (var i = 0; i < groups; i++)
+                    _rows.Add(new TeamsDemographicRow { Name = "Contoso Title " + i.ToString("D3"), KnownUsers = 5, ActiveUsers = 5, ReachPct = 100, MessagesPerActiveUser = 10 });
+                _rows.Add(new TeamsDemographicRow { Name = "Contoso Lone Title", KnownUsers = tail, ActiveUsers = tail, ReachPct = 100, MessagesPerActiveUser = 4321 });
+            }
+
+            public Task<TeamsAdoption> GetAdoptionAsync(TeamsExplorerQuery query)
+            {
+                var adoption = new TeamsAdoption { GroupBy = query.GroupBy };
+                adoption.Breakdown.AddRange(_rows.OrderByDescending(r => r.ActiveUsers).ThenByDescending(r => r.KnownUsers).Take(query.Top));
+                RowsServed = adoption.Breakdown.Count;
+                return Task.FromResult(adoption);
+            }
+
+            public Task<Tuple<int, int>> GetTeamCountsAsync() => Task.FromResult(Tuple.Create(1, 1));
+            public Task<TeamsOverview> GetOverviewAsync(TeamsExplorerQuery query, TeamsExplorerSources sources) => Task.FromResult(new TeamsOverview());
+            public Task<TeamsMeetings> GetMeetingsAsync(TeamsExplorerQuery query) => Task.FromResult(new TeamsMeetings());
+            public Task<TeamsCollaboration> GetCollaborationAsync(TeamsExplorerQuery query) => Task.FromResult(new TeamsCollaboration());
+            public Task<TeamsConversations> GetConversationsAsync(TeamsExplorerQuery query, bool cognitiveAvailable) => Task.FromResult(new TeamsConversations());
+            public Task<TeamsPeople> GetPeopleAsync(TeamsExplorerQuery query) => Task.FromResult(new TeamsPeople());
         }
 
         [TestMethod]

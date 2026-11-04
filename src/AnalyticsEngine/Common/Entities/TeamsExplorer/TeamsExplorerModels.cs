@@ -448,8 +448,8 @@ namespace Common.Entities.TeamsExplorer
 
         /// <summary>
         /// This section with its breakdown cut to the first <paramref name="top"/> named groups, keeping the combined row.
-        /// For a reader without See PII, <see cref="WithoutSmallGroups"/> runs over every group the query can return
-        /// (<see cref="TeamsExplorerQuery.MaximumTop"/>) and this then cuts the result to the rows the page asked for. When
+        /// For a reader without See PII, <see cref="WithoutSmallGroups"/> runs over every group (the query is read with
+        /// <see cref="TeamsExplorerQuery.WithEveryRow"/>) and this then cuts the result to the rows the page asked for. When
         /// the fold ran over only the rows a reader-chosen <c>top</c> had returned, two requests one row apart folded
         /// different groups, and subtracting one combined row from the other recovered a small group. Cutting after the
         /// fold means nothing the reader can vary changes what was folded. A shallow copy, like WithoutSmallGroups.

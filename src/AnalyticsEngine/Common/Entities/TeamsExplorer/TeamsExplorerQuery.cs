@@ -119,6 +119,20 @@ namespace Common.Entities.TeamsExplorer
             return copy;
         }
 
+        /// <summary>
+        /// This window reading every row, not the first <see cref="MaximumTop"/>: for the adoption breakdown a reader without
+        /// See PII is sent folded (<c>TeamsAdoption.WithoutSmallGroups</c>). A group the cut left out would be left out of the
+        /// fold too, and subtracting what is shown from the tab's tenant-wide totals would then recover it - one person, when
+        /// the groups beyond the cut hold one. Only for a query whose rows are groups: a list of people read this way could be
+        /// every person in the tenant.
+        /// </summary>
+        public TeamsExplorerQuery WithEveryRow()
+        {
+            var copy = (TeamsExplorerQuery)MemberwiseClone();
+            copy.Top = int.MaxValue;
+            return copy;
+        }
+
         /// <summary>Inclusive last UTC date of the live-data window, for display.</summary>
         public DateTime ToInclusiveUtc => ToExclusiveUtc.AddDays(-1);
 

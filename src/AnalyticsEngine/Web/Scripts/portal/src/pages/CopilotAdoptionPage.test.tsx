@@ -741,6 +741,27 @@ describe('CopilotAdoptionPage email-domain filter', () => {
     expect(await screen.findByText(withheld, undefined, { timeout: 5000 })).toBeVisible();
   });
 
+  it('says Microsoft\'s tenant report is withheld by the report filter in the method, not that it was never imported', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(
+      summary({
+        globalFilter: { clauses: [], matchedPeople: 40, directoryPeople: 200, viewerFound: true, unknownDimensions: [], dimensionNames: {} },
+        withheldSections: ['microsoftReport'],
+        microsoftReportDate: null,
+        microsoftReportPeriodDays: null,
+      }),
+    );
+
+    await renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'How this is calculated' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Where the data comes from' }));
+
+    const withheld = await screen.findAllByText(/not shown, because it describes the whole organisation and a portal administrator's report filter applies\./);
+    expect(withheld.length).toBeGreaterThan(0);
+    const method = withheld[withheld.length - 1];
+    expect(method.textContent).toContain('Microsoft\'s own prompts submitted');
+    expect(method.textContent).not.toContain('not imported');
+  });
+
   it('lets the reader get back to the whole tenant from the banner', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({ userFilter: echo([FABRIKAM_ONLY]) }));
 
