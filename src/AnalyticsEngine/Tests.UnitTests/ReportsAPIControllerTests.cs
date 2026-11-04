@@ -222,6 +222,66 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void CompleteMultiTimeSeries_AWeekMissingADayOfReportsIsDrawnButFlaggedIncomplete()
+        {
+            // A week with a day's report not imported is drawn from the days it has - a floor, not the week's
+            // figure - and must say so, rather than reading as a fall in activity or being zero-filled.
+            var complete = new DateTime(2026, 6, 1);
+            var missingADay = new DateTime(2026, 6, 8);
+            var teams = new KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>(
+                "Teams",
+                new List<ReportsAPIController.WeekValueRow>
+                {
+                    new ReportsAPIController.WeekValueRow { WeekStart = complete, Value = 3 },
+                    new ReportsAPIController.WeekValueRow { WeekStart = missingADay, Value = 2 },
+                });
+
+            var result = ReportsAPIController.CompleteMultiTimeSeries(
+                Chart(),
+                new List<KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>> { teams },
+                new List<string>(),
+                new List<DateTime> { complete, missingADay },
+                null,
+                new Dictionary<string, List<DateTime>> { { "Teams", new List<DateTime> { missingADay } } });
+
+            Assert.IsNull(result.Error);
+            var points = result.Series.Single().Points;
+            Assert.IsFalse(points[0].Incomplete, "A week whose every day was imported is not flagged.");
+            Assert.AreEqual(3d, points[0].Value);
+            Assert.IsTrue(points[1].Incomplete, "A week missing a day of reports must be flagged incomplete.");
+            Assert.AreEqual(2d, points[1].Value, "It is still drawn, from the days that were imported - never zero-filled.");
+
+            var warning = result.SeriesWarnings.Single();
+            Assert.AreEqual("incompleteWeeks", warning.Reason);
+            Assert.AreEqual("Teams", warning.Series);
+            Assert.AreEqual(missingADay, warning.Week);
+            Assert.AreEqual(1, warning.Count);
+            StringAssert.Contains(result.Warning, "missing at least one day of usage reports");
+
+            var json = JsonConvert.SerializeObject(points);
+            Assert.AreEqual(1, json.Split(new[] { "\"incomplete\":true" }, StringSplitOptions.None).Length - 1,
+                "Only the incomplete week carries the flag on the wire.");
+        }
+
+        [TestMethod]
+        public void CompleteMultiTimeSeries_EveryDayImported_RaisesNoIncompleteWarning()
+        {
+            var week = new DateTime(2026, 6, 1);
+
+            var result = ReportsAPIController.CompleteMultiTimeSeries(
+                Chart(),
+                new List<KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>> { Series("Teams", week) },
+                new List<string>(),
+                new List<DateTime> { week },
+                null,
+                new Dictionary<string, List<DateTime>> { { "Teams", new List<DateTime>() } });
+
+            Assert.IsNull(result.Warning);
+            Assert.IsNull(result.SeriesWarnings);
+            Assert.IsFalse(result.Series.Single().Points.Single().Incomplete);
+        }
+
+        [TestMethod]
         public void CopilotQueries_NeverForceAJoinHint()
         {
             // Measured at 4m audit_events rows: a forced INNER MERGE JOIN degrades to a full scan

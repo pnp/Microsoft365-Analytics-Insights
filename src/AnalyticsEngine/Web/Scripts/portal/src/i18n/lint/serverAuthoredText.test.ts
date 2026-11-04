@@ -2591,7 +2591,7 @@ describe('Reports partial-data warning facts', () => {
     const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'ReportsAPIController.cs'), 'utf8');
     const reasons = [...source.matchAll(/Reason\s*=\s*"([^"]+)"/g)].map((m) => m[1]).sort();
 
-    expect(reasons).toEqual(['loadFailed', 'noSettledData', 'noSettledDataForWeek', 'notAttempted']);
+    expect(reasons).toEqual(['incompleteWeeks', 'loadFailed', 'noSettledData', 'noSettledDataForWeek', 'notAttempted']);
 
     const missing = reasons
       .map((reason) => `reports.chart.warning.series.${reason}`)

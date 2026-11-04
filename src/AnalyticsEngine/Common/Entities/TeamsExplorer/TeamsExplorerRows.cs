@@ -23,10 +23,12 @@ namespace Common.Entities.TeamsExplorer
         public class OverviewUsageRow
         {
             public int KnownUsers { get; set; }
+
+            /// <summary>Enabled (or unknown) directory users with Teams activity - the same people <see cref="KnownUsers"/> counts.</summary>
             public int ActiveUsers { get; set; }
 
-            /// <summary>Users the usage report covered at all - the denominator of the segment mix.</summary>
-            public int MeasuredUsers { get; set; }
+            /// <summary>Meetings attended by the people in <see cref="ActiveUsers"/>, for meetings per active user.</summary>
+            public long ActiveUserMeetingsAttended { get; set; }
 
             public long ChannelMessages { get; set; }
             public long PrivateMessages { get; set; }
@@ -35,6 +37,16 @@ namespace Common.Entities.TeamsExplorer
             public long AudioSeconds { get; set; }
             public long VideoSeconds { get; set; }
             public long ScreenShareSeconds { get; set; }
+        }
+
+        /// <summary>The facts <see cref="TeamsExplorerSql.UsageCoverage"/> returns.</summary>
+        public class UsageCoverageRow
+        {
+            public int ExpectedDays { get; set; }
+            public int ImportedDays { get; set; }
+            public bool GroupFiltered { get; set; }
+            public bool NamesConcealed { get; set; }
+            public int TeamsLicensedUsers { get; set; }
         }
 
         public class CallCountRow
@@ -74,6 +86,13 @@ namespace Common.Entities.TeamsExplorer
         public class ActiveDayHistogramRow
         {
             public int ActiveDays { get; set; }
+
+            /// <summary>
+            /// False for people in the population only because they hold a Teams licence: no usage row at all in
+            /// the window, which proves nothing unless every day of it was imported.
+            /// </summary>
+            public bool Reported { get; set; }
+
             public long Users { get; set; }
         }
 

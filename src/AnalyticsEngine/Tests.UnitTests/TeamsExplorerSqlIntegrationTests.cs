@@ -28,9 +28,12 @@ namespace Tests.UnitTests
     /// get quietly wrong:
     /// </para>
     /// <list type="number">
-    /// <item>A usage-report row with all-zero metrics is NOT an active user. Graph writes a row for
-    /// every user in the report scope, so <c>COUNT(DISTINCT user_id)</c> would silently report the
-    /// whole licensed population as active.</item>
+    /// <item>The usage report is POSITIVE-ONLY. The importer reads Graph's Teams user-activity report one
+    /// date at a time, and Microsoft documents that form as listing the users who performed activity on
+    /// that date - so the seed below never writes a row for somebody who did nothing. A licensed person
+    /// with no row is not "measured and idle"; whether they are dormant depends on the window having been
+    /// imported in full (see <c>TeamsExplorerDormancySqlIntegrationTests</c>), which this fixture's window
+    /// deliberately is not.</item>
     /// <item>Per-day metrics sum across the window. The report is requested per date, so the values
     /// are daily figures rather than rolling totals - if that ever changed, every total on the page
     /// would be multiplied by the window length.</item>
@@ -135,9 +138,9 @@ namespace Tests.UnitTests
         #region Seeding
 
         /// <summary>
-        /// A tiny but deliberately awkward tenant: one heavy user, one light user, one user the usage
-        /// report covers but who did nothing, and one user who is in the directory but not in the
-        /// report at all.
+        /// A tiny but deliberately awkward tenant: one heavy user, one light user, one person licensed for
+        /// Teams who did nothing - and so, the report being positive-only, has no usage row at all - and
+        /// one user who is in the directory without a Teams licence.
         /// </summary>
         private static void Seed()
         {
@@ -160,7 +163,20 @@ namespace Tests.UnitTests
                 db.users.Add(unreported);
                 db.SaveChanges();
 
-                SeedUsage(db, heavy, light, idle);
+                // Office 365 E3 includes Teams; Power BI Pro does not.
+                var e3 = new LicenseType { Name = "Office 365 E3", SKUID = "ENTERPRISEPACK" };
+                var powerBi = new LicenseType { Name = "Power BI Pro", SKUID = "POWER_BI_PRO" };
+                db.LicenseTypes.Add(e3);
+                db.LicenseTypes.Add(powerBi);
+                db.SaveChanges();
+                foreach (var licensed in new[] { heavy, light, idle })
+                {
+                    db.UserLicenseTypeLookups.Add(new UserLicenseTypeLookup { UserId = licensed.ID, LicenseTypeId = e3.ID });
+                }
+                db.UserLicenseTypeLookups.Add(new UserLicenseTypeLookup { UserId = unreported.ID, LicenseTypeId = powerBi.ID });
+                db.SaveChanges();
+
+                SeedUsage(db, heavy, light);
                 SeedCalls(db, heavy, light);
                 SeedTeams(db, heavy, light);
 
@@ -168,10 +184,11 @@ namespace Tests.UnitTests
             }
         }
 
-        private static void SeedUsage(AnalyticsEntitiesContext db, User heavy, User light, User idle)
+        private static void SeedUsage(AnalyticsEntitiesContext db, User heavy, User light)
         {
             // Two days inside the usage window (which ends three days before today), so the totals
-            // below prove that per-day values are summed rather than read from one snapshot.
+            // below prove that per-day values are summed rather than read from one snapshot. Rows only
+            // for the people active on each day: Graph's per-date report lists nobody else.
             foreach (var offset in new[] { 5, 6 })
             {
                 db.TeamUserActivityLogs.Add(new GlobalTeamsUserUsageLog
@@ -189,14 +206,6 @@ namespace Tests.UnitTests
                     AudioDurationSeconds = 3600,
                     VideoDurationSeconds = 1800,
                     ScreenShareDurationSeconds = 900,
-                });
-
-                // An all-zero row. Graph writes one of these for every user in the report scope, so
-                // this is the case that makes COUNT(DISTINCT user_id) the wrong active-user measure.
-                db.TeamUserActivityLogs.Add(new GlobalTeamsUserUsageLog
-                {
-                    UserID = idle.ID,
-                    Date = Today.AddDays(-offset),
                 });
             }
 
@@ -461,15 +470,14 @@ namespace Tests.UnitTests
         /// The single most important definition on the page.
         /// </summary>
         [TestMethod]
-        public async Task AUserWithAnAllZeroUsageRowIsNotCountedAsActive()
+        public async Task ReachIsActiveEnabledPeopleAgainstEnabledDirectoryUsers()
         {
             var overview = await NewStore().GetOverviewAsync(NewQuery(), new TeamsExplorerSources());
 
-            // Three users have usage rows (heavy, light, idle); only two of them did anything.
-            Assert.AreEqual(2, overview.Kpis.ActiveUsers,
-                "A usage-report row with all-zero metrics means 'measured', not 'active'.");
+            // Two people did something counted in Teams; the licensed person who did nothing has no row at all.
+            Assert.AreEqual(2, overview.Kpis.ActiveUsers);
 
-            // Four users are in the directory, so reach is 2 of 4 rather than 3 of 4.
+            // Four users are in the directory, so reach is 2 of 4.
             Assert.AreEqual(4, overview.Kpis.KnownUsers);
             Assert.AreEqual(50, overview.Kpis.ReachPct, 0.001);
         }
@@ -626,8 +634,15 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, top.CallsHosted);
             Assert.IsFalse(string.IsNullOrWhiteSpace(top.Segment));
 
-            Assert.AreEqual(1, people.Dormant.Count, "The all-zero user belongs in the dormant list.");
-            Assert.AreEqual("alan@contoso.com", people.Dormant.Single().UserPrincipalName);
+            // Alan holds a Teams licence and did nothing, but only two days of this 28-day window have a report
+            // imported: he could have been active on any of the other 26, so he must not be called dormant.
+            Assert.AreEqual(0, people.Dormant.Count,
+                "A licensed person with no usage row is dormant only when every day of the window was imported.");
+            Assert.IsFalse(people.Dormancy.Known);
+            Assert.AreEqual(TeamsDormancy.IncompleteImport, people.Dormancy.Reason);
+            Assert.AreEqual(2, people.Dormancy.ImportedDays);
+            Assert.AreEqual(28, people.Dormancy.ExpectedDays);
+            Assert.AreEqual(3, people.Dormancy.TeamsLicensedUsers);
         }
 
         [TestMethod]
