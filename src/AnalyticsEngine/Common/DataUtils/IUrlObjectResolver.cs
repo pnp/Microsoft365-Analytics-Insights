@@ -63,6 +63,17 @@ namespace DataUtils
             return end < 0 ? url.Length : end;
         }
 
+        /// <summary>
+        /// Where the next shorter candidate parent of <paramref name="url"/> ends, below <paramref name="length"/>: the
+        /// position of the last <c>/</c>, <c>?</c> or <c>#</c> before it, or 0 when there is none. Walking down from
+        /// <c>url.Length</c> visits every length <see cref="GetClosest{T}(IEnumerable{T}, string, int)"/> could match,
+        /// longest first.
+        /// </summary>
+        internal static int PreviousParentLength(string url, int length)
+        {
+            return length <= 1 ? 0 : Math.Max(0, url.LastIndexOfAny(PathDelimiters, length - 1));
+        }
+
         private static bool IsSameOrParent(string parent, int parentLength, string url)
         {
             if (parentLength == 0 || url.Length < parentLength
@@ -74,7 +85,7 @@ namespace DataUtils
             return url.Length == parentLength || Array.IndexOf(PathDelimiters, url[parentLength]) >= 0;
         }
 
-        private static int LengthWithoutTrailingSlashes(string url)
+        internal static int LengthWithoutTrailingSlashes(string url)
         {
             var length = url.Length;
             while (length > 0 && url[length - 1] == '/')
@@ -83,6 +94,103 @@ namespace DataUtils
             }
             return length;
         }
+    }
+
+    /// <summary>
+    /// URLs, each with a value, that answers <see cref="IUrlObjectResolver.GetClosest{T}(IEnumerable{T}, string, int)"/>'s
+    /// question - which is the longest that is a URL itself or one of its parents - without reading every URL it holds.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The URLs are keyed as <c>GetClosest</c> compares them: without case, and without trailing slashes. A lookup then
+    /// tries the URL itself and each parent it has on a whole path segment (cut at a <c>/</c>, <c>?</c> or <c>#</c>),
+    /// longest first, so it costs one dictionary probe per path segment rather than one comparison per URL held. The
+    /// answer is the same: the parents tried are exactly the lengths <c>GetClosest</c> can match.
+    /// </para>
+    /// <para>
+    /// Not thread-safe; callers that share one lock around it.
+    /// </para>
+    /// </remarks>
+    public sealed class UrlPrefixIndex<T>
+    {
+        private readonly Dictionary<string, T> _byKey = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+
+        public int Count => _byKey.Count;
+
+        public IEnumerable<T> Values => _byKey.Values;
+
+        /// <summary>The key a URL is held under: the URL without its trailing slashes. Null for a null URL.</summary>
+        public static string KeyFor(string url)
+        {
+            if (url == null)
+            {
+                return null;
+            }
+            var length = IUrlObjectResolver.LengthWithoutTrailingSlashes(url);
+            return length == url.Length ? url : url.Substring(0, length);
+        }
+
+        /// <summary>Holds <paramref name="value"/> for <paramref name="url"/>, replacing whatever was held for the same key.</summary>
+        public void Set(string url, T value)
+        {
+            var key = KeyFor(url);
+            if (key != null)
+            {
+                _byKey[key] = value;
+            }
+        }
+
+        /// <summary>Holds <paramref name="value"/> for <paramref name="url"/> unless something is already held for the same key.</summary>
+        public bool TryAdd(string url, T value)
+        {
+            var key = KeyFor(url);
+            if (key == null || _byKey.ContainsKey(key))
+            {
+                return false;
+            }
+            _byKey.Add(key, value);
+            return true;
+        }
+
+        /// <summary>The value held for exactly this URL, whatever its case or trailing slashes.</summary>
+        public bool TryGetExact(string url, out T value)
+        {
+            var key = KeyFor(url);
+            if (key == null)
+            {
+                value = default;
+                return false;
+            }
+            return _byKey.TryGetValue(key, out value);
+        }
+
+        /// <summary>
+        /// The value held for the longest URL that is <paramref name="url"/> itself or one of its parents, and at least
+        /// <paramref name="shortestMatch"/> characters long without trailing slashes: what <c>GetClosest</c> would return
+        /// over the same URLs.
+        /// </summary>
+        public bool TryGetClosest(string url, int shortestMatch, out T value)
+        {
+            value = default;
+            if (string.IsNullOrEmpty(url) || _byKey.Count == 0)
+            {
+                return false;
+            }
+
+            for (var length = url.Length; length > 0 && length >= shortestMatch; length = IUrlObjectResolver.PreviousParentLength(url, length))
+            {
+                // No key ends in a slash, so a prefix that does cannot be one.
+                if (url[length - 1] != '/' && _byKey.TryGetValue(length == url.Length ? url : url.Substring(0, length), out value))
+                {
+                    return true;
+                }
+            }
+
+            value = default;
+            return false;
+        }
+
+        public void Clear() => _byKey.Clear();
     }
 
 

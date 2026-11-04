@@ -28,6 +28,13 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>The innermost error message when the section failed; null when it succeeded.</summary>
         public string Error { get; set; }
 
+        /// <summary>
+        /// A stable code for a failure the server itself decided on, so the page can word it in the reader's language;
+        /// null for a failed query, whose <see cref="Error"/> is the database's own message. <see cref="Error"/> carries
+        /// an English fallback whenever this is set.
+        /// </summary>
+        public string ErrorCode { get; set; }
+
         /// <summary>How long the query took, for spotting the section that needs an index.</summary>
         public long ElapsedMs { get; set; }
     }

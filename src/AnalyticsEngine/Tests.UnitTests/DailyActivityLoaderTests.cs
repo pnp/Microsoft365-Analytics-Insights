@@ -13,6 +13,7 @@ using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules;
 
 namespace Tests.UnitTests
 {
@@ -730,6 +731,253 @@ namespace Tests.UnitTests
             await mixed.PopulateLoadedReportPagesFromGraph(daysBackMax: 5);
 
             Assert.AreEqual(5, mixed.GraphRequests.Count);
+        }
+
+        /// <summary>
+        /// The import downloads and saves one date at a time. The rows it writes are the ones the whole-window save wrote -
+        /// duplicates folded, blank identities skipped, a stored row updated - but each date is written before the next is
+        /// downloaded, and none is kept once saved.
+        /// </summary>
+        [TestMethod]
+        public async Task LoadAndSaveEachDate_WritesWhatTheWholeWindowSaveWrote_HoldingOneDateAtATime()
+        {
+            var now = new DateTime(2026, 6, 20, 11, 15, 0, DateTimeKind.Utc);
+            var pages = new Dictionary<DateTime, List<FakeUserActivityDetail>>
+            {
+                [now.Date.AddDays(-1)] = new List<FakeUserActivityDetail> { Page(UserA, 5, "2026-06-19"), Page(UserB, 7) },
+                [now.Date.AddDays(-2)] = new List<FakeUserActivityDetail> { Page(UserA, 3), Page(UserA, 4), Page(null, 1) },
+                [now.Date.AddDays(-3)] = new List<FakeUserActivityDetail> { Page(UserB, 2, "not-a-date") },
+            };
+            var stored = StoredRow(now.Date.AddDays(-3), UserBId, thingCount: 1);
+
+            var wholeWindow = new InMemoryDailyActivityLoader(NullLogger.Instance) { Clock = new FixedClock(now), SaveBatchSize = 2 };
+            var wholeWindowStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>().Seed(CloneRow(stored));
+            wholeWindow.ReportStore = wholeWindowStore;
+            foreach (var page in pages) wholeWindow.PagesByDate[page.Key] = page.Value;
+            await wholeWindow.PopulateLoadedReportPagesFromGraph(4);
+            await wholeWindow.SaveLoadedReportsToSql(SeededIdCache(), new UserCache(null));
+
+            var eachDate = new WriteObservingLoader { Clock = new FixedClock(now), SaveBatchSize = 2 };
+            var store = new InMemoryUsageReportStore<FakeUserUsageActivityLog>().Seed(CloneRow(stored));
+            eachDate.ReportStore = eachDate.Store = store;
+            foreach (var page in pages) eachDate.PagesByDate[page.Key] = page.Value;
+            var stampClears = 0;
+            await eachDate.LoadAndSaveEachDateAsync(4, null, () => { stampClears++; return Task.CompletedTask; }, SeededIdCache(), new UserCache(null));
+
+            CollectionAssert.AreEqual(RowsOf(wholeWindowStore), RowsOf(store), "The same rows with the same values.");
+            Assert.AreEqual(wholeWindow.LastSaveDbWriteCount, eachDate.LastSaveDbWriteCount);
+            CollectionAssert.AreEqual(new[] { 0, 2, 3, 4 }, eachDate.WritesBeforeEachDownload.ToArray(),
+                "Each date is written before the next is downloaded.");
+            Assert.AreEqual(0, eachDate.LoadedReportPages.Count, "No date is kept.");
+            Assert.AreEqual(4, eachDate.LastLoadedDateCount);
+            Assert.AreEqual(6, eachDate.LastLoadedRowCount);
+            Assert.AreEqual(1, stampClears, "The completion stamp is cleared once, before the first write.");
+            Assert.IsTrue(store.AllWritesInsideBulkScope);
+        }
+
+        [TestMethod]
+        public async Task LoadAndSaveEachDate_AConcealedTenantIsRefusedBeforeAnythingIsWritten_AndAMixedOneIsSaved()
+        {
+            var now = new DateTime(2026, 6, 20, 11, 15, 0, DateTimeKind.Utc);
+            var concealed = new InMemoryDailyActivityLoader(NullLogger.Instance) { Clock = new FixedClock(now) };
+            var concealedStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            concealed.ReportStore = concealedStore;
+            for (var daysBack = 2; daysBack <= 5; daysBack++)
+            {
+                concealed.PagesByDate[now.Date.AddDays(-daysBack)] = new List<FakeUserActivityDetail>
+                {
+                    Page("9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08", 1),
+                    Page("hash@hash", 2),
+                };
+            }
+            var stampClears = 0;
+
+            await Assert.ThrowsExceptionAsync<ConcealedUsageReportException>(() => concealed.LoadAndSaveEachDateAsync(
+                5, null, () => { stampClears++; return Task.CompletedTask; }, SeededIdCache(), new UserCache(null)));
+
+            CollectionAssert.AreEqual(new[] { now.Date.AddDays(-1), now.Date.AddDays(-2) }, concealed.GraphRequests.ToArray(),
+                "The first fully concealed date ends the download, as before.");
+            Assert.AreEqual(0, concealedStore.SaveCount, "Nothing is written for a refused report.");
+            Assert.AreEqual(1, stampClears, "Its stamp is cleared, as it was before.");
+
+            var mixed = new InMemoryDailyActivityLoader(NullLogger.Instance) { Clock = new FixedClock(now) };
+            var mixedStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            mixed.ReportStore = mixedStore;
+            mixed.PagesByDate[now.Date.AddDays(-1)] = new List<FakeUserActivityDetail> { Page(UserA, 1) };
+            for (var daysBack = 2; daysBack <= 5; daysBack++)
+            {
+                mixed.PagesByDate[now.Date.AddDays(-daysBack)] = new List<FakeUserActivityDetail> { Page("hash@hash", 2) };
+            }
+
+            await mixed.LoadAndSaveEachDateAsync(5, null, null, SeededIdCache(), new UserCache(null));
+
+            Assert.AreEqual(5, mixed.GraphRequests.Count);
+            Assert.AreEqual(1, mixedStore.Stored.Count, "The real identity is saved; the concealed rows are skipped.");
+        }
+
+        private static string[] RowsOf(InMemoryUsageReportStore<FakeUserUsageActivityLog> store)
+            => store.Stored
+                .Select(r => $"{r.Date:yyyy-MM-dd}|{r.UserID}|{r.ThingCount}|{r.LastActivityDate:yyyy-MM-dd}")
+                .OrderBy(r => r, StringComparer.Ordinal)
+                .ToArray();
+
+        /// <summary>
+        /// A download that runs past midnight UTC still asks for each date of the window once: the window is fixed when the
+        /// download starts, not re-read before every date.
+        /// </summary>
+        [TestMethod]
+        public async Task ADownloadRunningPastMidnight_AsksForEachDateOfTheWindowOnce()
+        {
+            var start = new DateTime(2026, 6, 20, 22, 0, 0, DateTimeKind.Utc);
+            var populated = new InMemoryDailyActivityLoader(NullLogger.Instance) { Clock = new SteppingClock(start, TimeSpan.FromHours(3)) };
+            await populated.PopulateLoadedReportPagesFromGraph(4);
+
+            var eachDate = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                Clock = new SteppingClock(start, TimeSpan.FromHours(3)),
+                ReportStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>(),
+            };
+            await eachDate.LoadAndSaveEachDateAsync(4, null, null, SeededIdCache(), new UserCache(null));
+
+            var window = Enumerable.Range(1, 4).Select(daysBack => start.Date.AddDays(-daysBack)).ToArray();
+            CollectionAssert.AreEqual(window, populated.GraphRequests.ToArray());
+            CollectionAssert.AreEqual(window, eachDate.GraphRequests.ToArray());
+        }
+
+        /// <summary>A clock that moves on by a fixed step every time it is read.</summary>
+        private sealed class SteppingClock : IClock
+        {
+            private readonly TimeSpan _step;
+            private DateTime _next;
+
+            public SteppingClock(DateTime start, TimeSpan step)
+            {
+                _next = start;
+                _step = step;
+            }
+
+            public DateTime UtcNow
+            {
+                get
+                {
+                    var now = _next;
+                    _next = _next.Add(_step);
+                    return now;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Opt-in (<c>DAILY_REPORT_MEMORY_SCALE=1</c>, users from <c>DAILY_REPORT_MEMORY_SCALE_USERS</c>, default 50,000):
+        /// how many downloaded rows one report holds, and the managed heap they take, with the whole 28-date window
+        /// downloaded before saving and with each date saved as it is downloaded. Nothing is asserted about bytes; the
+        /// figures go to the test output.
+        /// </summary>
+        [TestMethod]
+        [TestCategory("Performance")]
+        public async Task DailyReportDownload_RowsHeld_AtSyntheticScale()
+        {
+            if (!string.Equals(Environment.GetEnvironmentVariable("DAILY_REPORT_MEMORY_SCALE"), "1", StringComparison.Ordinal))
+            {
+                Assert.Inconclusive("Set DAILY_REPORT_MEMORY_SCALE=1 (and optionally DAILY_REPORT_MEMORY_SCALE_USERS) to run the synthetic-scale measurement.");
+            }
+
+            var users = int.TryParse(Environment.GetEnvironmentVariable("DAILY_REPORT_MEMORY_SCALE_USERS"), out var configured) && configured > 0
+                ? configured
+                : 50000;
+            const int Dates = 28;
+            var idCache = new ConcurrentLookupDbIdsCache();
+            for (var i = 0; i < users; i++) idCache.AddOrUpdateForName<User>($"user{i}@contoso.com", i + 1);
+            var now = new DateTime(2026, 6, 20, 11, 15, 0, DateTimeKind.Utc);
+
+            var baseline = GC.GetTotalMemory(true);
+            var wholeWindow = new GeneratingLoader(users) { Clock = new FixedClock(now), ReportStore = new DiscardingUsageReportStore() };
+            wholeWindow.MeasureHeld = () => GC.GetTotalMemory(true) - baseline;
+            await wholeWindow.PopulateLoadedReportPagesFromGraph(Dates);
+            var wholeWindowRows = wholeWindow.LoadedReportPages.Sum(p => p.Value.Count);
+            await wholeWindow.SaveLoadedReportsToSql(idCache, new UserCache(null));
+            var wholeWindowPeak = wholeWindow.MaxBytesHeld;
+            wholeWindow.LoadedReportPages.Clear();
+            wholeWindow = null;
+
+            baseline = GC.GetTotalMemory(true);
+            var eachDate = new GeneratingLoader(users) { Clock = new FixedClock(now), ReportStore = new DiscardingUsageReportStore() };
+            eachDate.MeasureHeld = () => GC.GetTotalMemory(true) - baseline;
+            await eachDate.LoadAndSaveEachDateAsync(Dates, null, null, idCache, new UserCache(null));
+
+            Console.WriteLine("{0:N0} users, {1} dates, one report; managed heap held by the download, at its largest:", users, Dates);
+            Console.WriteLine("  whole window before saving: {0:N0} rows, {1:N1} MB", wholeWindowRows, wholeWindowPeak / 1048576.0);
+            Console.WriteLine("  each date as downloaded:    {0:N0} rows, {1:N1} MB", users, eachDate.MaxBytesHeld / 1048576.0);
+            Assert.AreEqual(users * Dates, wholeWindowRows);
+            Assert.AreEqual(users * Dates, eachDate.LastLoadedRowCount);
+        }
+
+        /// <summary>"Graph" that makes a fresh day of rows, one per user, for every date asked for.</summary>
+        private sealed class GeneratingLoader : InMemoryDailyActivityLoader
+        {
+            private readonly int _users;
+
+            public GeneratingLoader(int users) : base(NullLogger.Instance)
+            {
+                _users = users;
+            }
+
+            /// <summary>Measures the heap while the date just made is held, with everything the loader still holds.</summary>
+            public Func<long> MeasureHeld { get; set; }
+
+            public long MaxBytesHeld { get; private set; }
+
+            protected override Task<List<FakeUserActivityDetail>> LoadReportPageForDateFromGraph(DateTime date)
+            {
+                var rows = new List<FakeUserActivityDetail>(_users);
+                for (var i = 0; i < _users; i++)
+                {
+                    rows.Add(new FakeUserActivityDetail { UserPrincipalName = $"user{i}@contoso.com", ThingCount = i % 7, LastActivityDateString = date.ToString("yyyy-MM-dd") });
+                }
+                if (MeasureHeld != null)
+                {
+                    MaxBytesHeld = Math.Max(MaxBytesHeld, MeasureHeld());
+                }
+                GC.KeepAlive(rows);
+                return Task.FromResult(rows);
+            }
+        }
+
+        /// <summary>A report table that keeps nothing, so only what the loader itself holds is measured.</summary>
+        private sealed class DiscardingUsageReportStore : IUsageReportStore<FakeUserUsageActivityLog>
+        {
+            public int TrackedEntityCount => 0;
+            public Task<bool> HasAnyRowForDateAsync(DateTime date) => Task.FromResult(false);
+            public Task<IReadOnlyList<DateTime>> GetStoredDatesInRangeAsync(DateTime fromInclusive, DateTime toExclusive) => Task.FromResult<IReadOnlyList<DateTime>>(new List<DateTime>());
+            public Task<IReadOnlyList<FakeUserUsageActivityLog>> GetRowsForDateAsync(DateTime date) => Task.FromResult<IReadOnlyList<FakeUserUsageActivityLog>>(new List<FakeUserUsageActivityLog>());
+            public void AddRow(FakeUserUsageActivityLog row) { }
+            public bool MarkUpdatedIfChanged(FakeUserUsageActivityLog row) => false;
+            public Task SaveChangesAsync() => Task.CompletedTask;
+            public void ReleaseSavedRows() { }
+            public IDisposable BeginBulkWrite() => new NoScope();
+
+            private sealed class NoScope : IDisposable
+            {
+                public void Dispose() { }
+            }
+        }
+
+        /// <summary>Records, as each date is requested from "Graph", how many rows have been written so far.</summary>
+        private sealed class WriteObservingLoader : InMemoryDailyActivityLoader
+        {
+            public WriteObservingLoader() : base(NullLogger.Instance)
+            {
+            }
+
+            public InMemoryUsageReportStore<FakeUserUsageActivityLog> Store { get; set; }
+
+            public List<int> WritesBeforeEachDownload { get; } = new List<int>();
+
+            protected override Task<List<FakeUserActivityDetail>> LoadReportPageForDateFromGraph(DateTime date)
+            {
+                WritesBeforeEachDownload.Add(Store.Inserted.Count + Store.Updated.Count);
+                return base.LoadReportPageForDateFromGraph(date);
+            }
         }
 
         private static FakeUserUsageActivityLog CloneRow(FakeUserUsageActivityLog row)
