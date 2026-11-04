@@ -760,7 +760,7 @@ export const copilotInvestment = {
   'copilotInvestment.whatIf.high': 'Upside',
   'copilotInvestment.whatIf.minutes': 'Minutes Copilot gives back on an active day',
   'copilotInvestment.whatIf.realisation': 'Share of that time turned into business value (%)',
-  'copilotInvestment.whatIf.invalidNumber': 'Enter a number, using a full stop or comma for decimals.',
+  'copilotInvestment.whatIf.invalidNumber': 'Enter a number, using a full stop or comma for decimals and no thousands separator.',
   'copilotInvestment.whatIf.outOfRange': 'Enter a number from {min} to {max}.',
   'copilotInvestment.whatIf.outOfRangeAbove': 'Enter a number above {min}, up to {max}.',
   'copilotInvestment.whatIf.status.none':
