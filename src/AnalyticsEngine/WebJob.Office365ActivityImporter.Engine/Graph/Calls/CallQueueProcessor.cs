@@ -60,7 +60,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             // never a SAS key. The namespace + queue are still read from the existing ServiceBus
             // connection string's Endpoint, so existing installs keep their current config; the shared
             // access key in it is ignored. The runtime SP needs the "Azure Service Bus Data Owner" role
-            // on the namespace (assigned by the installer). See issue #138.
+            // on the queue (assigned by the installer; earlier installers assigned it on the resource group). See issue #138.
             _logger.LogInformation("Initializing ServiceBusClient using Entra ID RBAC (no SAS keys).");
             var sbProps = ServiceBusConnectionStringProperties.Parse(config.ConnectionStrings.ServiceBusConnectionString);
             _sbClient = CreateRbacServiceBusClient(config);
@@ -84,7 +84,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// service principal via <see cref="ClientSecretCredential"/>) - never a SAS key. The fully
         /// qualified namespace is read from the configured Service Bus connection string's Endpoint; the
         /// shared access key in that string is ignored. The runtime service principal needs the
-        /// "Azure Service Bus Data Owner" role on the namespace (assigned by the installer). See issue #138.
+        /// "Azure Service Bus Data Owner" role on the queue (assigned by the installer). See issue #138.
         /// The web app, which sends to the same queue, builds its client the same way in
         /// <c>CallNotificationServiceBus.CreateRbacClient</c>; keep the two in step.
         /// </summary>

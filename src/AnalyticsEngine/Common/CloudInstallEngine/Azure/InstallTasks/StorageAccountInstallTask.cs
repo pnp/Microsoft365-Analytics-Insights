@@ -52,8 +52,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var patch = new StorageAccountPatch();
                 var needsPatch = false;
 
-                // Ensure minimum TLS version is 1.2
-                if (storageAccount.Data.MinimumTlsVersion == null || !storageAccount.Data.MinimumTlsVersion.Value.ToString().Equals(StorageMinimumTlsVersion.Tls1_2.ToString()))
+                // Raise a minimum TLS version below 1.2. Never lower one an operator has set to TLS 1.3.
+                if (TlsVersionPolicy.NeedsRaising(storageAccount.Data.MinimumTlsVersion?.ToString()))
                 {
                     _logger.LogInformation($"Updating storage account '{name}' to enforce TLS 1.2...");
                     patch.MinimumTlsVersion = StorageMinimumTlsVersion.Tls1_2;
