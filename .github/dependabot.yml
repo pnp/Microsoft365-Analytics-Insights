@@ -6,3 +6,75 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+
+  # npm: once a month, one pull request for each package's development dependencies and one for its
+  # production minor and patch updates. A production major update gets a pull request of its own.
+  - package-ecosystem: npm
+    directory: /src/AnalyticsEngine/Web/Scripts/portal
+    target-branch: dev
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      development-dependencies:
+        dependency-type: development
+      production-dependencies:
+        dependency-type: production
+        update-types: [minor, patch]
+
+  # AITracker.js loads on every tracked SharePoint page. Before merging, bump AI_TRACKER_VER
+  # (src/SPO/.github/copilot-instructions.md).
+  - package-ecosystem: npm
+    directory: /src/SPO/AITracker/TypeScript
+    target-branch: dev
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      development-dependencies:
+        dependency-type: development
+      production-dependencies:
+        dependency-type: production
+        update-types: [minor, patch]
+
+  # CI does not build the SPFx extension. Before merging, build it, bump the solution version with
+  # AITRACKER_MODERN_VERSION and commit the rebuilt package (src/SPO/.github/copilot-instructions.md).
+  - package-ecosystem: npm
+    directory: /src/SPO/ModernPagesAITrackerExtension
+    target-branch: dev
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    # The SPFx generator chose every version here for one SPFx release, and SPFx ships each release as a
+    # semver minor (1.22 to 1.23). Take majors, and a new SPFx release, only in a deliberate SPFx upgrade.
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
+      - dependency-name: "@microsoft/sp-*"
+        update-types: [version-update:semver-minor]
+      - dependency-name: "@microsoft/*spfx*"
+        update-types: [version-update:semver-minor]
+      - dependency-name: "@microsoft/decorators"
+        update-types: [version-update:semver-minor]
+    groups:
+      # First, so a patch moves every framework package together.
+      spfx:
+        patterns: ["@microsoft/sp-*", "@microsoft/*spfx*", "@microsoft/decorators"]
+      development-dependencies:
+        dependency-type: development
+      production-dependencies:
+        dependency-type: production
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /src/TelemetryService/web.client
+    target-branch: dev
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      development-dependencies:
+        dependency-type: development
+      production-dependencies:
+        dependency-type: production
+        update-types: [minor, patch]

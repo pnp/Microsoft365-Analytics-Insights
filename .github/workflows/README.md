@@ -123,8 +123,21 @@ If it fails, rebuild the extension and commit the package, as
 * Cancels superseded PR runs; jobs have explicit timeouts. CI helpers and actionlint run without
   tenant credentials. NuGet caches are keyed on dependency manifests, not build outputs.
 
-All workflow actions are pinned to immutable commits. Dependabot proposes action updates
-against `dev` weekly. To validate workflow changes locally:
+All workflow actions are pinned to immutable commits. Dependabot proposes updates against `dev`:
+actions weekly, and the four npm packages (the portal, AITracker, the SPFx extension and the
+telemetry dashboard) monthly. Each npm package gets one pull request for its development
+dependencies and one for its production minor and patch updates; a production major update gets
+its own. Two of them need more than a green build before merging, as
+[`src/SPO/.github/copilot-instructions.md`](../../src/SPO/.github/copilot-instructions.md) describes:
+
+* an AITracker update needs an `AI_TRACKER_VER` bump;
+* an SPFx extension update needs a local build (CI doesn't build the extension), a solution version
+  bump with `AITRACKER_MODERN_VERSION`, and the rebuilt package committed. For the extension,
+  Dependabot proposes no major update and no new SPFx release (SPFx ships each release as a semver
+  minor), because the SPFx generator chose those versions together. Take them in a deliberate SPFx
+  upgrade.
+
+To validate workflow changes locally:
 
 ```powershell
 node --test .github\scripts\*.test.mjs
