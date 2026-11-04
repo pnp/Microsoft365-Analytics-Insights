@@ -196,6 +196,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        [TestCategory("TimeZone")]
         public void CreditParser_OffsetlessTimestamp_IsReadAsUtcNotLocal()
         {
             // "2026-09-03T00:00:00" carries no offset. Read through the host's local zone it would land on a

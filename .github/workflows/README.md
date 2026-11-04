@@ -63,6 +63,21 @@ The dependency rules exist because every package references `Common/DataUtils` a
 `Common/Entities`: a package reference added there ships in all four zips. If the check fails, move
 the reference to the project that actually needs it rather than relaxing the rule.
 
+## Secrets in the package build
+
+`build-packages.yml` gives a secret only to the step that uses it:
+
+* `STATSAPISECRET` and `STATSAPIURL` go to the Office 365 importer's *Configure packages* step, which
+  writes them into that importer's `App.Release.config` for the usage-stats upload. No other package's
+  release config takes a secret.
+* `PFX_BASE64` and `PFX_KEY` go to *Sign and verify installer*, which runs in release builds only.
+
+No other step sees a secret: not the MSBuild step that runs the portal's `npm ci` and build, not
+AITracker's `npm ci`, and not the other third-party actions. `ci` and `pr` still pass
+`secrets: inherit`, but a secret that the workflow never names reaches no step. Put a new
+secret-backed value in the `env` of the step that consumes it, never in workflow- or job-level `env`,
+where every step and every npm lifecycle script would get it.
+
 ## SPFx package
 
 CI never builds the SharePoint Framework extension (`src/SPO/ModernPagesAITrackerExtension`). The
@@ -94,6 +109,13 @@ If it fails, rebuild the extension and commit the package, as
   New tests automatically join a shard; no category or test is dropped.
 * Each runner has its own LocalDB instance and Azurite. Separate catalogs on one shared SQL
   instance would not isolate the global staging tables.
+* Runs the `TimeZone` test category again in Romance Standard Time (UTC+1, or UTC+2 in summer) at
+  the end of the `migrations` shard, which finishes well before `core`. The runners' clock is UTC,
+  where a local and a UTC timestamp have the same ticks, so in the main run these tests are
+  Inconclusive or cannot fail. The second run counts Inconclusive as failed, fails if no test
+  matches, and then restores the zone. Tag a test `[TestCategory("TimeZone")]` when it converts
+  between local time and UTC and can only fail on a host outside UTC. `ci.test.mjs` checks that
+  every step limited to one shard names a shard that exists, so such a step can't silently stop running.
 * Downloadable test binaries contain synthetic configuration only. Credentials are substituted
   into the executing runner's config after download, and that config is never re-uploaded.
 * Runs portal production/test type checks and the complete Vitest suite independently on Linux.
@@ -108,8 +130,21 @@ If it fails, rebuild the extension and commit the package, as
 * Cancels superseded PR runs; jobs have explicit timeouts. CI helpers and actionlint run without
   tenant credentials. NuGet caches are keyed on dependency manifests, not build outputs.
 
-All workflow actions are pinned to immutable commits. Dependabot proposes action updates
-against `dev` weekly. To validate workflow changes locally:
+All workflow actions are pinned to immutable commits. Dependabot proposes updates against `dev`:
+actions weekly, and the four npm packages (the portal, AITracker, the SPFx extension and the
+telemetry dashboard) monthly. Each npm package gets one pull request for its development
+dependencies and one for its production minor and patch updates; a production major update gets
+its own. Two of them need more than a green build before merging, as
+[`src/SPO/.github/copilot-instructions.md`](../../src/SPO/.github/copilot-instructions.md) describes:
+
+* an AITracker update needs an `AI_TRACKER_VER` bump;
+* an SPFx extension update needs a local build (CI doesn't build the extension), a solution version
+  bump with `AITRACKER_MODERN_VERSION`, and the rebuilt package committed. For the extension,
+  Dependabot proposes no major update and no new SPFx release (SPFx ships each release as a semver
+  minor), because the SPFx generator chose those versions together. Take them in a deliberate SPFx
+  upgrade.
+
+To validate workflow changes locally:
 
 ```powershell
 node --test .github\scripts\*.test.mjs
