@@ -55,11 +55,11 @@ namespace CloudInstallEngine.Azure.InstallTasks
         /// <summary>
         /// True when an existing namespace still needs its minimum TLS version raising to
         /// <see cref="RequiredMinimumTlsVersion"/>. A namespace already at 1.2 must return false, or the
-        /// installer re-writes it on every run.
+        /// installer re-writes it on every run, and so must one an operator has raised to 1.3.
         /// </summary>
         public static bool NeedsMinimumTlsUpdate(ServiceBusMinimumTlsVersion? current)
         {
-            return current == null || current.Value != RequiredMinimumTlsVersion;
+            return TlsVersionPolicy.NeedsRaising(current?.ToString());
         }
 
         /// <summary>
@@ -139,6 +139,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     updateData.Sku = sbNS.Data.Sku;
                 updateData.MinimumTlsVersion = sbNS.Data.MinimumTlsVersion;
                 updateData.PublicNetworkAccess = sbNS.Data.PublicNetworkAccess;
+                CopyOperatorSettings(sbNS.Data, updateData);
 
                 // Carry the tags across. CreateOrUpdate is a PUT, so any tag missing from the payload is
                 // dropped - which is why the namespace was the only untagged resource in an otherwise
@@ -177,5 +178,20 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         private static bool IsPremium(ServiceBusNamespaceResource ns)
             => ns?.Data?.Sku != null && ns.Data.Sku.Name == ServiceBusSkuName.Premium;
+
+        /// <summary>
+        /// Carries the settings an operator may have changed into the update body. The update is a PUT, so anything left
+        /// out could fall back to its default: <c>disableLocalAuth</c> in particular, which would turn SAS keys back on for
+        /// a namespace that had them switched off.
+        /// </summary>
+        internal static void CopyOperatorSettings(ServiceBusNamespaceData current, ServiceBusNamespaceData update)
+        {
+            update.DisableLocalAuth = current.DisableLocalAuth;
+            update.IsZoneRedundant = current.IsZoneRedundant;
+            update.PremiumMessagingPartitions = current.PremiumMessagingPartitions;
+            update.AlternateName = current.AlternateName;
+            update.Identity = current.Identity;
+            update.Encryption = current.Encryption;
+        }
     }
 }

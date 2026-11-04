@@ -214,7 +214,10 @@ namespace Tests.UnitTests.InstallTests
             StringAssert.Contains(report.Requirements.Single(r => r.Id == "automation-sql").Identity, "Automation");
             StringAssert.Contains(report.Requirements.Single(r => r.Id == "sql-additional-users").Purpose, "db_owner, not read-only");
             StringAssert.Contains(report.Requirements.Single(r => r.Id == "resource-sql").AdminAction, "S2");
-            StringAssert.Contains(report.Requirements.Single(r => r.Id == "access-service-bus").AdminAction, "Data Sender + Data Receiver");
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "access-service-bus").Scope, "graphcalls");
+            foreach (var id in new[] { "access-blob", "access-table", "access-language", "access-openai", "access-service-bus" })
+                Assert.IsFalse(report.Requirements.Single(r => r.Id == id).Scope.Contains("resource group"),
+                    id + ": the installer now assigns data-plane roles on the one resource, not the resource group.");
 
             config.ServiceBusEnabled = false;
             config.SolutionConfig.ImportTaskSettings.Calls = true;
@@ -283,7 +286,7 @@ namespace Tests.UnitTests.InstallTests
             var dns = report.Requirements.Single(r => r.Id == "check-private-dns-routing").AdminAction;
             StringAssert.Contains(dns, "privatelink.table.core.windows.net");
             StringAssert.Contains(dns, "privatelink.openai.azure.com");
-            StringAssert.Contains(report.Requirements.Single(r => r.Id == "check-policy-compatibility").AdminAction, "SCM basic publishing");
+            StringAssert.Contains(report.Requirements.Single(r => r.Id == "check-policy-compatibility").AdminAction, "SCM basic publishing is forbidden and never turns it back on");
             Assert.IsTrue(report.Requirements.Any(r => r.Id == "check-release-download"));
         }
 

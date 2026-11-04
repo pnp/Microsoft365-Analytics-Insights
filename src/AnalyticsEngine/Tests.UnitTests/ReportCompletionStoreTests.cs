@@ -614,6 +614,40 @@ namespace Tests.UnitTests
             Assert.IsNull(await store.GetLastSuccessAsync(saveKey), "A save that failed part-way must not leave a stamp claiming its window.");
         }
 
+        /// <summary>
+        /// Each date is saved before the next is downloaded, so a download that fails after the first date has already
+        /// written something: that date is kept, and the stamp - cleared before the first write - is not put back, so the
+        /// next cycle downloads the whole window again rather than trusting one only partly written.
+        /// </summary>
+        [TestMethod]
+        public async Task ADownloadFailingAfterTheFirstDate_KeepsWhatWasSaved_AndLeavesNoStamp()
+        {
+            var store = new InMemoryReportCompletionStore();
+            var importer = NewImporter(store);
+            var now = new DateTime(2026, 9, 14, 4, 0, 0, DateTimeKind.Utc);
+            var reportStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            var loader = new FailingAfterFirstDateLoader
+            {
+                Clock = new FixedClock(now),
+                StorageInspector = new FakeUsageReportStorageInspector(),
+                ReportStore = reportStore,
+            };
+            loader.PagesByDate[now.Date.AddDays(-1)] = new List<FakeUserActivityDetail>
+            {
+                new FakeUserActivityDetail { UserPrincipalName = "alice@contoso.com", ThingCount = 1 },
+            };
+            var key = GraphImporter.GetReportKey(loader.GetType());
+            await store.SaveSuccessAsync(key);
+            var idCache = new DataUtils.ConcurrentLookupDbIdsCache();
+            idCache.AddOrUpdateForName<Common.Entities.User>("alice@contoso.com", 11);
+
+            await Assert.ThrowsExceptionAsync<GraphHttpException>(() => importer.LoadAndSaveDailyImportReport(
+                loader, 3, "Synthetic report", NullLogger.Instance, idCache, null));
+
+            Assert.AreEqual(1, reportStore.Stored.Count, "The date downloaded before the failure was saved.");
+            Assert.IsNull(await store.GetLastSuccessAsync(key), "No stamp claims a window the report only partly wrote.");
+        }
+
         [TestMethod]
         public async Task AnUnreadableWeeklyReportPageFailsThatReportOnce_TheDailyReportsAreUnaffected()
         {
@@ -890,6 +924,22 @@ namespace Tests.UnitTests
             protected override Task<List<FakeUserActivityDetail>> LoadReportPageForDateFromGraph(DateTime date)
                 => Task.FromException<List<FakeUserActivityDetail>>(new GraphHttpException(
                     System.Net.HttpStatusCode.InternalServerError, "https://graph.microsoft.com/beta/reports/synthetic", "{}", null));
+        }
+
+        /// <summary>A daily report whose first date downloads and whose second fails.</summary>
+        private sealed class FailingAfterFirstDateLoader : InMemoryDailyActivityLoader
+        {
+            private int _requests;
+
+            public FailingAfterFirstDateLoader() : base(NullLogger.Instance)
+            {
+            }
+
+            protected override Task<List<FakeUserActivityDetail>> LoadReportPageForDateFromGraph(DateTime date)
+                => ++_requests == 1
+                    ? base.LoadReportPageForDateFromGraph(date)
+                    : Task.FromException<List<FakeUserActivityDetail>>(new GraphHttpException(
+                        System.Net.HttpStatusCode.InternalServerError, "https://graph.microsoft.com/beta/reports/synthetic", "{}", null));
         }
 
         private sealed class ThrowOnSaveUsageReportStore : InMemoryUsageReportStore<FakeUserUsageActivityLog>

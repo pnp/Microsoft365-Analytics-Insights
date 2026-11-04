@@ -53,6 +53,8 @@ namespace Tests.UnitTests
                 // 1. Stand up the database exactly as a customer on the current stable release has it.
                 var migrator = NewMigrator(connectionString);
                 migrator.Update(StableMigrationId);
+                Execute(new SqlConnectionStringBuilder(connectionString) { InitialCatalog = "master" }.ConnectionString,
+                    ScratchDatabase.AutoCloseOffSql(dbName));
                 Assert.AreEqual(StableMigrationId, LatestApplied(connectionString),
                     "Database should be at the stable release's newest migration before the upgrade.");
 

@@ -25,8 +25,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
     /// <item>the App Service outbound IPs (so the web app / WebJobs can read secrets),</item>
     /// <item>for VNet-integrated deployments, a virtual-network rule for the App Service integration subnet.</item>
     /// </list>
-    /// The actual <c>defaultAction = Deny</c> / <c>bypass = AzureServices</c> is already set by
-    /// <see cref="KeyVaultTask"/> at create/update time; this task adds the allow rules via a PATCH so
+    /// The actual <c>defaultAction = Deny</c> is already set by <see cref="KeyVaultTask"/> at create/update time
+    /// (with <c>bypass = AzureServices</c> on a new vault; an existing vault keeps its bypass); this task adds the
+    /// allow rules via a PATCH so
     /// existing access policies are preserved. Best-effort (non-critical): a networking hiccup logs
     /// actionable guidance and does not abort an otherwise-successful install. See issue #136.
     /// </summary>
@@ -89,7 +90,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
             var ruleSet = BuildFirewallRuleSet(vault.Data.Properties?.NetworkRuleSet, allowIps, vnetSubnetId);
 
-            _logger.LogInformation($"Enabling Key Vault '{vault.Data.Name}' firewall: default action 'Deny', bypass 'AzureServices', {ruleSet.IPRules.Count} IP rule(s), {ruleSet.VirtualNetworkRules.Count} virtual-network rule(s).");
+            _logger.LogInformation($"Enabling Key Vault '{vault.Data.Name}' firewall: default action 'Deny', bypass '{ruleSet.Bypass}', {ruleSet.IPRules.Count} IP rule(s), {ruleSet.VirtualNetworkRules.Count} virtual-network rule(s).");
 
             var patch = new KeyVaultPatch { Properties = new KeyVaultPatchProperties { NetworkRuleSet = ruleSet } };
             PrivateNetworkArtifact subnetRule = null;
@@ -146,17 +147,18 @@ namespace CloudInstallEngine.Azure.InstallTasks
         }
 
         /// <summary>
-        /// Builds a firewall-enabled <see cref="KeyVaultNetworkRuleSet"/> (default action <c>Deny</c>,
-        /// bypass <c>AzureServices</c>) that preserves any existing IP / virtual-network rules and adds
-        /// the supplied allow IPs and (optional) VNet integration subnet. De-duplicates rules. Pure and
-        /// side-effect free so it can be unit tested without Azure.
+        /// Builds a firewall-enabled <see cref="KeyVaultNetworkRuleSet"/> (default action <c>Deny</c>) that preserves any
+        /// existing IP / virtual-network rules and adds the supplied allow IPs and (optional) VNet integration subnet.
+        /// De-duplicates rules. A new rule set lets trusted Azure services bypass the firewall (<c>AzureServices</c>); an
+        /// existing one keeps the bypass it has, so a vault an operator hardened to <c>None</c> stays that way. Nothing the
+        /// solution does relies on the trusted-services bypass. Pure and side-effect free so it can be unit tested without Azure.
         /// </summary>
         public static KeyVaultNetworkRuleSet BuildFirewallRuleSet(KeyVaultNetworkRuleSet existing, IEnumerable<string> allowIpAddresses, string vnetSubnetId)
         {
             var ruleSet = new KeyVaultNetworkRuleSet
             {
                 DefaultAction = KeyVaultNetworkRuleAction.Deny,
-                Bypass = KeyVaultNetworkRuleBypassOption.AzureServices,
+                Bypass = existing?.Bypass ?? KeyVaultNetworkRuleBypassOption.AzureServices,
             };
 
             var seenIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

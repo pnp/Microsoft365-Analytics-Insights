@@ -52,7 +52,7 @@ namespace Tests.UnitTests
             _connectionString =
                 $@"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog={_database};Integrated Security=true;MultipleActiveResultSets=True;TrustServerCertificate=True";
 
-            Execute(MasterConnection, $"CREATE DATABASE [{_database}];");
+            Execute(MasterConnection, ScratchDatabase.CreateDatabaseSql(_database));
             new DbMigrator(new Configuration
             {
                 TargetDatabase = new System.Data.Entity.Infrastructure.DbConnectionInfo(_connectionString, "Microsoft.Data.SqlClient"),

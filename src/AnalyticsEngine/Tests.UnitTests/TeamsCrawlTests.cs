@@ -1551,6 +1551,9 @@ namespace Tests.UnitTests
 
             public List<string> TokensRequested { get; } = new List<string>();
 
+            /// <summary>Replies by root message id; a message not listed has none.</summary>
+            public Dictionary<string, List<ChatMessage>> Replies { get; } = new Dictionary<string, List<ChatMessage>>(StringComparer.Ordinal);
+
             public Task<ChannelRootMessagesPageResult> LoadRootMessages(string teamId, string channelId, TeamChannelDeltaTokenInfo channelDeltaInfo)
             {
                 TokensRequested.Add(channelDeltaInfo?.Token ?? "(none)");
@@ -1558,7 +1561,11 @@ namespace Tests.UnitTests
             }
 
             public Task<ChannelRepliesPageResult> LoadReplies(string teamId, string channelId, string messageId)
-                => Task.FromResult(new ChannelRepliesPageResult { Completed = true });
+                => Task.FromResult(new ChannelRepliesPageResult
+                {
+                    Replies = Replies.TryGetValue(messageId, out var replies) ? replies : new List<ChatMessage>(),
+                    Completed = true,
+                });
         }
 
         private static Microsoft.Graph.Models.ODataErrors.ODataError GraphRefusal(int status, string code)
@@ -1578,14 +1585,15 @@ namespace Tests.UnitTests
         /// <summary>
         /// Graph refuses a stored channel delta token with 410, <c>syncStateNotFound</c>, or - its documented persistent answer - a
         /// bare 400. The channel used to be abandoned until the next cycle (and only for a 400 coded "BadRequest"); now it is read in
-        /// full at once, and only then is the dead token dropped.
+        /// full at once. The dead token's checkpoint stays in the store until the full read's token replaces it after SQL: deleting it
+        /// at read time lost the channel's counting watermark whenever that save then failed.
         /// </summary>
         [DataTestMethod]
         [DataRow(410, null)]
         [DataRow(410, "syncStateNotFound")]
         [DataRow(400, "UnknownError")]
         [DataRow(400, "BadRequest")]
-        public async Task ChannelMessagesLoader_ARejectedDeltaToken_IsDropped_AndTheChannelReadInFullOnce(int status, string code)
+        public async Task ChannelMessagesLoader_ARejectedDeltaToken_IsReplacedAfterSql_AndTheChannelReadInFullOnce(int status, string code)
         {
             var channel = Channel("channel-1");
             var store = new InMemoryTeamChannelDeltaTokenStore();
@@ -1596,9 +1604,45 @@ namespace Tests.UnitTests
 
             CollectionAssert.AreEqual(new[] { "stale-token", "(none)" }, reader.TokensRequested.ToArray(), "The retry carries no token, so it can't be refused for one.");
             Assert.AreEqual("fresh-token", newToken?.Token, "The full read's token is handed on to be committed after SQL.");
-            Assert.IsNull(await store.GetDeltaToken("team-1", "channel-1"), "The dead token is gone.");
+            Assert.AreEqual("stale-token", (await store.GetDeltaToken("team-1", "channel-1"))?.Token,
+                "Until SQL has saved the full read, the old checkpoint is still the channel's watermark.");
             Assert.IsTrue(channel.DeltaTokenWasReset);
             Assert.AreEqual(1, channel.Messages.Count, "The full read's messages are kept.");
+
+            await TeamChannelDeltaTokenCommitter.CommitPendingTokens(store, "team-1", new[] { new TeamChannelDeltaTokenCommit(channel.Id, newToken) });
+            Assert.AreEqual("fresh-token", (await store.GetDeltaToken("team-1", "channel-1"))?.Token, "The commit replaces the dead token.");
+        }
+
+        /// <summary>
+        /// Regression: the full read after Graph rejected a channel's delta token used to count the channel's whole history again -
+        /// every message, reply and reaction added on top of the stored statistics, and each message's text sent to Azure AI Language
+        /// again. Everything created before the rejected checkpoint's time was counted when that checkpoint was committed, so only
+        /// what is newer counts now: a new reply, a new reaction on an old message, and a new thread.
+        /// </summary>
+        [TestMethod]
+        public async Task ChannelMessagesLoader_TheFullReadAfterARejectedDeltaToken_CountsOnlyWhatIsNewerThanTheCheckpoint()
+        {
+            var channel = Channel("channel-1");
+            var store = new InMemoryTeamChannelDeltaTokenStore();
+            await store.SetDeltaToken("team-1", "channel-1", new TeamChannelDeltaTokenInfo { Token = "stale-token", LastUpdated = DeltaTokenWrittenAt });
+
+            var oldThread = Msg("old-root", BeforeToken, BeforeToken, AfterToken);
+            var reader = new ScriptedPageReader(info => info != null
+                ? throw GraphRefusal(400, "UnknownError")
+                : new ChannelRootMessagesPageResult
+                {
+                    Messages = new List<ChatMessage> { oldThread, Msg("new-root", AfterToken) },
+                    Deltalink = DeltaLink("fresh-token"),
+                    Completed = true,
+                });
+            reader.Replies["old-root"] = new List<ChatMessage> { Msg("old-reply", BeforeToken, BeforeToken), Msg("new-reply", AfterToken) };
+
+            await new ChannelMessagesLoader(reader, store, NullLogger.Instance).LoadTeamMessagesAndReplies(channel, "team-1");
+
+            CollectionAssert.AreEquivalent(new[] { "new-root", "new-reply" }, channel.Messages.Select(m => m.Id).ToArray(),
+                "Messages created before the checkpoint were counted when it was committed.");
+            Assert.AreEqual(1, channel.Reactions.Count, "Only the reaction added since the checkpoint is new.");
+            Assert.AreEqual(new DateTimeOffset(AfterToken), channel.Reactions[0].CreatedDateTime);
         }
 
         [TestMethod]

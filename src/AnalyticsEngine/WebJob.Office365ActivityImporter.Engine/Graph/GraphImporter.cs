@@ -699,7 +699,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         failures.Add($"{reportName} (HTTP {(int)ex.StatusCode} {ex.StatusCode})");
                         _logger.LogError($"{reportName} failed with HTTP {(int)ex.StatusCode} ({ex.StatusCode}): {ex.Message} " +
-                            "The other activity reports are unaffected and keep whatever they downloaded; this report saved nothing at all. " +
+                            "The other activity reports are unaffected and keep whatever they downloaded; this report kept only the dates it had " +
+                            "downloaded and saved before the failure. " +
                             retryConsequence + " " +
                             "A 401/403 here almost always means the Reports.Read.All application permission is missing or not admin-consented.");
                     }
@@ -938,22 +939,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     logger.LogInformation($"{thingWeAreImporting}: downloading the full {windowDates}-date window from Graph (UsageReportsDaysBack): {reason}.");
                 }
 
-                await abstractActivityLoader.PopulateLoadedReportPagesFromGraph(daysBackMax, datesToSkip);
-
-                if (_reportCompletionStore != null)
-                {
-                    // Clear before any writes, for the same reason the phase marker is cleared: if this report
-                    // fails part-way through its save, the next cycle must re-import rather than trust a stamp
-                    // that claims a window it only partly wrote. Not before the download, though: a download that
-                    // fails has written nothing, so the previous stamp - and with it this report's finalized-date
-                    // skip list - still holds, and the retry fetches only what is missing instead of the whole window.
-                    await _reportCompletionStore.ClearAsync(reportKey);
-                }
-
+                // One date at a time: each is saved before the next is downloaded, so this report holds one date's rows rather
+                // than its whole window (at 200,000 users, up to 28 x 200,000 rows for each report running at once).
                 using (var db = new AnalyticsEntitiesContext())
                 {
-                    _logger.LogInformation($"{this.GetType().Name} read {abstractActivityLoader.LoadedReportPages.SelectMany(p => p.Value).Count().ToString("N0")} {thingWeAreImporting} records from Graph API");
-                    await abstractActivityLoader.SaveLoadedReportsToSql(userEmailToDbIdCache, DBLookupCache<TLookupType>.Create<CACHETYPE>(db));
+                    // The completion stamp is cleared before any write, for the same reason the phase marker is cleared:
+                    // if this report fails part-way through, the next cycle must re-import rather than trust a stamp that
+                    // claims a window it only partly wrote. Not before the first date has downloaded, though: a download
+                    // that fails then has written nothing, so the previous stamp - and with it this report's finalized-date
+                    // skip list - still holds, and the retry fetches only what is missing instead of the whole window.
+                    Func<Task> clearCompletionStamp = null;
+                    if (_reportCompletionStore != null)
+                    {
+                        clearCompletionStamp = () => _reportCompletionStore.ClearAsync(reportKey);
+                    }
+
+                    await abstractActivityLoader.LoadAndSaveEachDateAsync(daysBackMax, datesToSkip, clearCompletionStamp,
+                        userEmailToDbIdCache, DBLookupCache<TLookupType>.Create<CACHETYPE>(db));
+                    _logger.LogInformation($"{this.GetType().Name} read {abstractActivityLoader.LastLoadedRowCount.ToString("N0")} {thingWeAreImporting} records from Graph API");
 
                     // Keep the columnstore index (ColumnstoreUsageReportMetrics) compacted. The upserts above
                     // land in the rowstore delta store, which is scanned uncompressed, so without this the
@@ -971,21 +974,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
 
-                var total = abstractActivityLoader.LoadedReportPages.SelectMany(r => r.Value).Count();
+                var total = abstractActivityLoader.LastLoadedRowCount;
                 logger.LogInformation($"Imported {total.ToString("N0")} {thingWeAreImporting} reports.");
                 _dailyReportOutcomes.Enqueue(new DailyReportOutcome
                 {
                     Name = thingWeAreImporting,
                     RowsRead = total,
                     RowsWritten = abstractActivityLoader.LastSaveDbWriteCount,
-                    Dates = abstractActivityLoader.LoadedReportPages.Count,
+                    Dates = abstractActivityLoader.LastLoadedDateCount,
                     DatesSkipped = datesToSkip?.Count ?? 0,
                     Milliseconds = reportWatch.ElapsedMilliseconds,
                 });
 
-                // Only reached when the download AND the save both completed - anything else threw and is caught
-                // by RunReportSafely. A failed save leaves this report's stamp cleared, so its window is retried next
-                // cycle; a failed download leaves the previous stamp in place.
+                // Only reached when every download AND save completed - anything else threw and is caught by
+                // RunReportSafely. A failure after the first date downloaded leaves this report's stamp cleared, so its
+                // window is retried next cycle; a failure downloading the first date leaves the previous stamp in place.
                 if (_reportCompletionStore != null)
                 {
                     await _reportCompletionStore.SaveSuccessAsync(reportKey);

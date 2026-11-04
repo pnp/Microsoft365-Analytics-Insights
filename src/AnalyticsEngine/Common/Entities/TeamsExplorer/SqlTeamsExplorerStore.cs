@@ -7,6 +7,7 @@ using System.Data;
 using System.Data.Entity;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using static Common.Entities.TeamsExplorer.TeamsExplorerRows;
 
@@ -37,7 +38,8 @@ namespace Common.Entities.TeamsExplorer
     /// <remarks>
     /// <para>
     /// Every section of a tab runs as its own command, on its own connection, in parallel, with its
-    /// own short timeout. A failure is captured as a <see cref="TeamsExplorerQueryInfo.Error"/> rather
+    /// own short timeout - at most <see cref="MaxConcurrentQueries"/> of them at once across the
+    /// process. A failure is captured as a <see cref="TeamsExplorerQueryInfo.Error"/> rather
     /// than thrown, so one slow leaderboard degrades to a message beside nine working charts instead
     /// of taking the whole tab down. This is the same trade
     /// <c>ReportsAPIController</c> makes per chart, and it matters more here because several of these
@@ -56,9 +58,43 @@ namespace Common.Entities.TeamsExplorer
     /// </remarks>
     public sealed class SqlTeamsExplorerStore : ITeamsExplorerStore
     {
+        /// <summary>
+        /// Database queries this store runs at once, across every request in the process.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Every section is its own command on its own connection, so one slow leaderboard fails alone - but the Meetings tab
+        /// has eleven of them, and unbounded, ten admins opening it on a cold cache would want 110 connections from an
+        /// ADO.NET pool of 100 that every other portal page shares. Acquiring a connection then times out, which surfaces
+        /// as an unexplained failure rather than as a slow query. The same bound as <c>SqlWebActivityStore</c>'s, for the
+        /// same reason.
+        /// </para>
+        /// <para>
+        /// Six against the 25-second command timeout: the largest tab is two waves, at most about 50 seconds even if every
+        /// query times out, well inside the ~230-second App Service request limit.
+        /// </para>
+        /// </remarks>
+        internal const int MaxConcurrentQueries = 6;
+
+        /// <summary>
+        /// How long a query waits for one of the <see cref="MaxConcurrentQueries"/> slots before its section reports
+        /// <see cref="QueueTimeoutErrorCode"/>, so a queue cannot push a request past the App Service limit.
+        /// </summary>
+        internal const int QueueTimeoutSeconds = 60;
+
+        /// <summary>The <see cref="TeamsExplorerQueryInfo.ErrorCode"/> of a query that did not get a slot in time.</summary>
+        internal const string QueueTimeoutErrorCode = "queryQueueTimeout";
+
+        /// <summary>Its English fallback; the page shows its own wording for <see cref="QueueTimeoutErrorCode"/>.</summary>
+        internal const string QueueTimeoutMessage = "The server was already running as many report queries as it allows, and this one did not get a turn within a minute. Try a shorter reporting period, or try again when the database is less busy.";
+
+        private static readonly SemaphoreSlim ProcessQuerySlots = new SemaphoreSlim(MaxConcurrentQueries, MaxConcurrentQueries);
+
         private readonly IAnalyticsDbContextFactory _contextFactory;
         private readonly int _commandTimeoutSeconds;
         private readonly ILogger _logger;
+        private readonly SemaphoreSlim _querySlots;
+        private readonly TimeSpan _queueTimeout;
 
         public SqlTeamsExplorerStore(IAnalyticsDbContextFactory contextFactory)
             : this(contextFactory, TeamsExplorerSql.CommandTimeoutSeconds)
@@ -71,11 +107,25 @@ namespace Common.Entities.TeamsExplorer
         }
 
         public SqlTeamsExplorerStore(IAnalyticsDbContextFactory contextFactory, int commandTimeoutSeconds, ILogger logger = null)
+            : this(contextFactory, commandTimeoutSeconds, logger, ProcessQuerySlots, TimeSpan.FromSeconds(QueueTimeoutSeconds))
+        {
+        }
+
+        /// <param name="querySlots">The slots every query waits for; the process-wide ones except in tests.</param>
+        internal SqlTeamsExplorerStore(IAnalyticsDbContextFactory contextFactory, int commandTimeoutSeconds, ILogger logger,
+            SemaphoreSlim querySlots, TimeSpan queueTimeout)
         {
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
             _commandTimeoutSeconds = commandTimeoutSeconds;
             _logger = logger;
+            _querySlots = querySlots ?? throw new ArgumentNullException(nameof(querySlots));
+            _queueTimeout = queueTimeout;
         }
+
+        /// <summary>The process-wide slots, for tests that check a store shares them.</summary>
+        internal static SemaphoreSlim SharedQuerySlots => ProcessQuerySlots;
+
+        internal SemaphoreSlim QuerySlots => _querySlots;
 
         #region Availability
 
@@ -914,6 +964,18 @@ namespace Common.Entities.TeamsExplorer
             info.Sql = TeamsExplorerSql.Describe(scopedSql, query, championDays);
             var watch = Stopwatch.StartNew();
 
+            // Bounded, so a queue degrades one section to a message rather than holding the whole request past the App
+            // Service limit: the command timeout below only starts once a slot is held.
+            if (!await _querySlots.WaitAsync(_queueTimeout).ConfigureAwait(false))
+            {
+                watch.Stop();
+                info.ElapsedMs = watch.ElapsedMilliseconds;
+                info.Error = QueueTimeoutMessage;
+                info.ErrorCode = QueueTimeoutErrorCode;
+                LogQueueTimeout(key, watch.ElapsedMilliseconds);
+                return result;
+            }
+
             try
             {
                 using (var db = _contextFactory.Create())
@@ -933,11 +995,27 @@ namespace Common.Entities.TeamsExplorer
             }
             finally
             {
+                _querySlots.Release();
                 watch.Stop();
                 info.ElapsedMs = watch.ElapsedMilliseconds;
             }
 
             return result;
+        }
+
+        private void LogQueueTimeout(string key, long elapsedMs)
+        {
+            if (_logger == null) return;
+
+            try
+            {
+                var message = $"TeamsExplorer query not run: key={key} elapsedMs={elapsedMs} reason={QueueTimeoutErrorCode} slots={MaxConcurrentQueries}";
+                _logger.Log(LogLevel.Warning, 0, message, null, (state, _) => state);
+            }
+            catch (Exception)
+            {
+                // Logging must not turn a degraded section into a failed page.
+            }
         }
 
         /// <summary>
