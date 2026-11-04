@@ -1,5 +1,6 @@
 using Common.Entities.UserFilters;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Data;
@@ -85,6 +86,7 @@ namespace Common.Entities.SpoWebActivity
     {
         private readonly IAnalyticsDbContextFactory _contextFactory;
         private readonly int _commandTimeoutSeconds;
+        private readonly ILogger _logger;
 
         /// <summary>
         /// Database queries this store will run at once, across all callers in the process.
@@ -129,9 +131,16 @@ namespace Common.Entities.SpoWebActivity
         }
 
         public SqlWebActivityStore(IAnalyticsDbContextFactory contextFactory, int commandTimeoutSeconds)
+            : this(contextFactory, commandTimeoutSeconds, null)
+        {
+        }
+
+        /// <param name="logger">Where a failed section's classification and error reference go. Optional.</param>
+        public SqlWebActivityStore(IAnalyticsDbContextFactory contextFactory, int commandTimeoutSeconds, ILogger logger)
         {
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
             _commandTimeoutSeconds = commandTimeoutSeconds;
+            _logger = logger;
         }
 
         #region Availability
@@ -1314,7 +1323,13 @@ namespace Common.Entities.SpoWebActivity
             }
             catch (Exception ex)
             {
-                info.Error = InnermostMessage(ex);
+                // The section's error reaches every reader of the page and its export: the reason and an error
+                // reference, never SqlClient's text, which names servers, databases, logins and objects.
+                var failure = ReportQueryFailure.From(ex);
+                info.Error = failure.EnglishText;
+                info.ErrorReason = failure.Reason;
+                info.ErrorReference = failure.Reference;
+                failure.Log(_logger, "WebActivity", key, watch.ElapsedMilliseconds);
             }
             finally
             {
@@ -1378,18 +1393,6 @@ namespace Common.Entities.SpoWebActivity
         private static SqlParameter FloatParameter(string name, double value)
         {
             return new SqlParameter(name, SqlDbType.Float) { Value = value };
-        }
-
-        /// <summary>EF wraps SQL errors; the innermost message (the SqlException) is the useful one.</summary>
-        private static string InnermostMessage(Exception ex)
-        {
-            var current = ex;
-            while (current.InnerException != null)
-            {
-                current = current.InnerException;
-            }
-
-            return current.Message;
         }
 
         #endregion

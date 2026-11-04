@@ -179,4 +179,28 @@ describe('section error text', () => {
       'This section could not be loaded: Something newer.',
     );
   });
+
+  it('words a failed query from its reason and error reference in the reader\'s language', async () => {
+    await loadCatalog('es');
+    const es: TFunction = (key, values) => translateStatic('es', key, values);
+    const failed = {
+      key: 'calls-kpis',
+      sql: 'SELECT 1',
+      error: 'the query timed out (error reference 00000000-0000-0000-0000-000000000000)',
+      errorReason: 'Timeout',
+      errorReference: '00000000-0000-0000-0000-000000000000',
+      elapsedMs: 25000,
+    };
+    const reason = translateStatic('es', 'errors.reportQuery.reason.Timeout');
+
+    expect(sectionErrorText(es, failed)).toBe(
+      translateStatic('es', 'teamsExplorer.shared.sectionLoadError', {
+        error: translateStatic('es', 'errors.reportQuery.failed', {
+          reason,
+          reference: '00000000-0000-0000-0000-000000000000',
+        }),
+      }),
+    );
+    expect(sectionErrorText(es, failed)).not.toContain('the query timed out');
+  });
 });

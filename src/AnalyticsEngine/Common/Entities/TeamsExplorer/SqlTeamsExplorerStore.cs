@@ -989,9 +989,14 @@ namespace Common.Entities.TeamsExplorer
             }
             catch (Exception ex)
             {
-                info.Error = InnermostMessage(ex);
+                // Every reader of the page sees the section's error: the reason and an error reference, never
+                // SqlClient's text, which names servers, databases, logins and objects.
+                var failure = ReportQueryFailure.From(ex);
+                info.Error = failure.EnglishText;
+                info.ErrorReason = failure.Reason;
+                info.ErrorReference = failure.Reference;
                 watch.Stop();
-                LogQueryFailure(key, watch.ElapsedMilliseconds, ex);
+                LogQueryFailure(key, watch.ElapsedMilliseconds, ex, failure.Reference);
             }
             finally
             {
@@ -1020,10 +1025,10 @@ namespace Common.Entities.TeamsExplorer
 
         /// <summary>
         /// One Warning per failed statement: the section degrades to a message and the page carries on, so nothing else
-        /// records it server-side. Exception type, SQL error number and timeout flag only - never the message, which can
-        /// carry SQL text or object names.
+        /// records it server-side. Exception type, SQL error number, timeout flag and the error reference the reader was
+        /// shown - never the message, which can carry SQL text or object names.
         /// </summary>
-        private void LogQueryFailure(string key, long elapsedMs, Exception ex)
+        private void LogQueryFailure(string key, long elapsedMs, Exception ex, string errorReference)
         {
             if (_logger == null) return;
 
@@ -1039,7 +1044,7 @@ namespace Common.Entities.TeamsExplorer
 
                 var timedOut = (sql != null && sql.Number == -2) || ex is TimeoutException || root is TimeoutException;
                 var sqlNumber = sql != null ? sql.Number.ToString() : "none";
-                var message = $"TeamsExplorer query failed: key={key} elapsedMs={elapsedMs} exceptionType={root.GetType().Name} sqlError={sqlNumber} timedOut={timedOut.ToString().ToLowerInvariant()}";
+                var message = $"TeamsExplorer query failed: key={key} elapsedMs={elapsedMs} exceptionType={root.GetType().Name} sqlError={sqlNumber} timedOut={timedOut.ToString().ToLowerInvariant()} errorReference={errorReference}";
                 _logger.Log(LogLevel.Warning, 0, message, null, (state, _) => state);
             }
             catch (Exception)
@@ -1088,18 +1093,6 @@ namespace Common.Entities.TeamsExplorer
         private static SqlParameter IntParameter(string name, int value)
         {
             return new SqlParameter(name, SqlDbType.Int) { Value = value };
-        }
-
-        /// <summary>EF wraps SQL errors; the innermost message (the SqlException) is the useful one.</summary>
-        private static string InnermostMessage(Exception ex)
-        {
-            var current = ex;
-            while (current.InnerException != null)
-            {
-                current = current.InnerException;
-            }
-
-            return current.Message;
         }
 
         #endregion

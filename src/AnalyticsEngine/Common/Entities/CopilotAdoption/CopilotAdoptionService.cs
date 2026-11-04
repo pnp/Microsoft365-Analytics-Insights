@@ -3884,6 +3884,12 @@ namespace Common.Entities.CopilotAdoption
                 // unpredictably. Rethrowing the latter faulted the whole analysis and returned a 500, so
                 // the same timeout produced a degraded page on one run and an error on the next - see
                 // issue #360.
+                //
+                // The warning reaches every signed-in reader, the CSV rows and the workbook, so it carries the
+                // failure's reason and error reference, never the exception's text: SqlClient's messages name
+                // servers, databases, logins and objects. The reference is the ErrorId of the QueryFailed
+                // lifecycle event below, which records the classification.
+                var safe = ReportQueryFailure.From(failure);
                 CopilotAdoptionWarnings.Add(
                     warnings,
                     warningDetails,
@@ -3892,7 +3898,9 @@ namespace Common.Entities.CopilotAdoption
                     {
                         { "description", description },
                         { "query", queryName },
-                        { "message", InnermostMessage(ex) },
+                        { "message", safe.EnglishText },
+                        { "failure", safe.Reason },
+                        { "reference", safe.Reference },
                     });
                 if (step != null && failure != null) _firstStepFailures.TryAdd(step, failure);
                 onFailure?.Invoke(failure);
@@ -4070,17 +4078,6 @@ namespace Common.Entities.CopilotAdoption
             return parameters
                 .Select(p => new SqlParameter(p.Key, p.Value ?? DBNull.Value))
                 .ToArray();
-        }
-
-        /// <summary>The innermost exception message - the one that actually says what went wrong.</summary>
-        internal static string InnermostMessage(Exception ex)
-        {
-            var current = ex;
-            while (current.InnerException != null)
-            {
-                current = current.InnerException;
-            }
-            return current.Message;
         }
 
         #endregion

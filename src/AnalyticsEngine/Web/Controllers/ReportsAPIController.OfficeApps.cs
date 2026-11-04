@@ -448,10 +448,12 @@ namespace Web.AnalyticsWeb.Controllers
                 }
                 catch (Exception ex)
                 {
+                    var failure = ReportQueryFailure.From(ex);
+                    LogQueryFailure(failure, chart.Key + "/copilot-usage-arrived");
                     chart.Categories = new List<ReportCategory>();
                     chart.Warning =
                         "Every app came back at 0% take-up, but whether a Copilot usage report actually arrived for "
-                        + "this period could not be confirmed (" + InnermostMessage(ex) + "), so the figures are not "
+                        + "this period could not be confirmed (" + failure.EnglishText + "), so the figures are not "
                         + "shown. Refresh to try again.";
                     return chart;
                 }
@@ -1057,7 +1059,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (Exception ex)
             {
-                chart.Error = InnermostMessage(ex);
+                MarkQueryFailed(chart, ex);
             }
 
             return chart;

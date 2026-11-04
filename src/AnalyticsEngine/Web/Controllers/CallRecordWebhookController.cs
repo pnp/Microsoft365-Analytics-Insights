@@ -40,6 +40,7 @@ namespace Web.AnalyticsWeb.Controllers
         // use (CallSubscriptionRules.CurrentNotificationUrl). The extra parameter needs no binding: Graph appends its
         // validation token as "&validationToken=", which binds below either way.
         [HttpPost]
+        [AllowCrossSiteRequests("Microsoft Graph posts call-record notifications here; no browser session is involved.")]
         public async Task<HttpResponseMessage> Post([FromBody] GraphChangeNotificationList changeMsg, string validationToken = "")
         {
             // Test ping from Graph, or the importer warming the webhook up before it asks Graph for a subscription?

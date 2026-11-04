@@ -2619,7 +2619,7 @@ describe('Reports partial-data warning facts', () => {
     const errorStatements = [...source.matchAll(/ErrorKey\s*=[^;]+;/g)].map((m) => m[0]).join('\n');
     const errorKeys = [...errorStatements.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
 
-    expect(errorKeys).toEqual(['noCompletedUsageWeeks', 'noCompletedUsageWeeksWithData', 'noWorkloadSeriesLoaded']);
+    expect(errorKeys).toEqual(['noCompletedUsageWeeks', 'noCompletedUsageWeeksWithData', 'noWorkloadSeriesLoaded', 'queryFailed']);
 
     const missing = errorKeys
       .map((errorKey) => `reports.chart.error.${errorKey}`)
@@ -3053,5 +3053,37 @@ describe('Copilot investment workbook wording', () => {
     const tones = sortedUnique(toneArguments.flatMap((argument) => [...argument.matchAll(/"([A-Za-z]+)"/g)].map((m) => m[1])));
     expect(tones).toEqual(['critical', 'good', 'neutral', 'opportunity', 'warning']);
     for (const tone of tones) expect(`${prefix}tone.${tone}` in EN_CATALOG, tone).toBe(true);
+  });
+});
+
+/**
+ * A report query that fails reaches its reader as a stable reason and an error reference, never the exception's text
+ * (`ReportQueryFailure` in Common.Entities). CSVs and workbooks carry the server's English; the portal words the same
+ * reasons from the catalog, so the two must not drift.
+ */
+const REPORT_QUERY_FAILURE_CS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'ReportQueryFailure.cs');
+const FAILURE_KINDS_CS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'CopilotAdoption', 'CopilotAdoptionTelemetry.cs');
+
+describe('Report query failure reasons', () => {
+  it('words every reason the server can send, with the server English as the English entry', async () => {
+    await loadCatalog('es');
+    const source = readFileSync(REPORT_QUERY_FAILURE_CS, 'utf8');
+    const kinds = csharpClassConstants(FAILURE_KINDS_CS, 'CopilotAdoptionFailureKinds');
+    const byConstant = new Map([...source.matchAll(/case\s+CopilotAdoptionFailureKinds\.(\w+):\s*return\s+"([^"]+)";/g)].map((m) => [m[1], m[2]]));
+    const fallback = source.match(/default:\s*return\s+"([^"]+)";/)?.[1];
+    expect(fallback, 'ReportQueryFailure.EnglishReason needs a default').toBeTruthy();
+    expect(byConstant.size).toBeGreaterThan(0);
+
+    for (const kind of kinds) {
+      const key = `errors.reportQuery.reason.${kind}` as TranslationKey;
+      expect(key in EN_CATALOG, `${kind} has no catalog entry`).toBe(true);
+      expect(EN_CATALOG[key], kind).toBe(byConstant.get(kind) ?? fallback);
+      expect(translateStatic('es', key), kind).not.toBe(EN_CATALOG[key]);
+    }
+    const catalogued = Object.keys(EN_CATALOG).filter((key) => key.startsWith('errors.reportQuery.reason.'));
+    expect(sortedUnique(catalogued)).toEqual(sortedUnique(kinds.map((kind) => `errors.reportQuery.reason.${kind}`)));
+
+    expect(source).toContain('$"{EnglishReason(reason)} (error reference {reference})"');
+    expect(EN_CATALOG['errors.reportQuery.failed']).toBe('{reason} (error reference {reference})');
   });
 });

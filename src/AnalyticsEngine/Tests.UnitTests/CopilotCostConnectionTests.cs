@@ -25,6 +25,7 @@ using System.Web.Helpers;
 using Common.Entities.CopilotCosts;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.State;
 using DataUtils.Health;
 using CostHealthController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotCostHealthAPIController;
 
@@ -578,6 +579,128 @@ namespace Tests.UnitTests
             Assert.ThrowsException<CostConnectionException>(() => CostConnectionEncoding.Deserialize<CostConnectionState>(Encoding.UTF8.GetBytes("null")));
         }
 
+        private static readonly byte[] SyntheticMsalCache = Encoding.UTF8.GetBytes("{\"RefreshToken\":{\"secret\":\"synthetic-refresh-token-0000\"}}");
+
+        /// <summary>Text that would be in the stored document if the cache were kept in the clear: as bytes or as base64.</summary>
+        private static void AssertCacheNotInTheClear(CostDocument stored)
+        {
+            var text = Encoding.UTF8.GetString(stored.Content);
+            Assert.IsFalse(text.Contains("synthetic-refresh-token-0000"), "The MSAL cache was stored in the clear.");
+            Assert.IsFalse(text.Contains(Convert.ToBase64String(SyntheticMsalCache)), "The MSAL cache was stored as plain base64.");
+        }
+
+        [TestMethod]
+        public async Task TokenCacheIsStoredProtected_AndRoundTripsThroughARefresh()
+        {
+            var store = new MemoryStore();
+            var identity = new Identity { Cache = SyntheticMsalCache };
+            var service = Service(store, identity);
+
+            await Connect(service);
+
+            var stored = await store.ReadAsync("connection", Ct);
+            AssertCacheNotInTheClear(stored);
+            Assert.IsTrue(CostTokenCacheProtection.IsProtected(CostConnectionEncoding.Deserialize<CostConnectionState>(stored.Content).Cache));
+
+            await Service(store, identity).RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct);
+
+            CollectionAssert.AreEqual(SyntheticMsalCache, identity.RefreshedCache, "MSAL must get back exactly the cache it saved.");
+            AssertCacheNotInTheClear(await store.ReadAsync("connection", Ct));
+        }
+
+        [TestMethod]
+        public async Task AlteredOrForeignTokenCache_RequiresReconnect_AndIsNeverUsed()
+        {
+            var store = new MemoryStore();
+            await Connect(Service(store, new Identity { Cache = SyntheticMsalCache }));
+            var doc = await store.ReadAsync("connection", Ct);
+            var state = CostConnectionEncoding.Deserialize<CostConnectionState>(doc.Content);
+            var envelope = JObject.Parse(state.Cache.Substring(CostTokenCacheProtection.Prefix.Length));
+            envelope["Ciphertext"] = Convert.ToBase64String(new byte[64]);
+            state.Cache = CostTokenCacheProtection.Prefix + envelope.ToString(Newtonsoft.Json.Formatting.None);
+            await store.WriteAsync("connection", CostConnectionEncoding.Serialize(state), doc.Version, Ct);
+
+            var identity = new Identity();
+            var altered = Service(store, identity);
+            await Fails("reconnectRequired", () => altered.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct));
+            Assert.IsNull(identity.RefreshedAccount, "An altered cache must not reach MSAL.");
+            Assert.AreEqual("reconnectRequired", (await altered.ReadAsync(Ct)).Status);
+
+            // A cache protected under another runtime credential - the secret was rotated - is no more usable.
+            var rotated = new MemoryStore();
+            await Connect(Service(rotated, new Identity { Cache = SyntheticMsalCache }));
+            var afterRotation = new Identity();
+            await Fails("reconnectRequired", () => Service(rotated, afterRotation, runtimeSecret: "rotated-synthetic-secret")
+                .RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct));
+            Assert.IsNull(afterRotation.RefreshedAccount);
+
+            // The other direction: the same credential still reads it.
+            var sameCredential = new Identity();
+            var fresh = new MemoryStore();
+            await Connect(Service(fresh, new Identity { Cache = SyntheticMsalCache }));
+            await Service(fresh, sameCredential).RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct);
+            CollectionAssert.AreEqual(SyntheticMsalCache, sameCredential.RefreshedCache);
+        }
+
+        [TestMethod]
+        public async Task TokenProtection_IsRebuiltAfterItsLifetime_SoARotatedCertificateIsPickedUp()
+        {
+            var store = new MemoryStore();
+            var now = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+            var builds = 0;
+            var service = new CostConnectionService(store, new Identity { Cache = SyntheticMsalCache }, Tenant, Client,
+                "https://contoso.example/copilot-cost/callback",
+                _ =>
+                {
+                    builds++;
+                    return Task.FromResult(new AgentCostTokenProtection(SyntheticRuntimeSecret, null, CostTokenCacheProtection.Purpose));
+                },
+                () => now);
+
+            await Connect(service);
+            await service.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct);
+            Assert.AreEqual(1, builds, "Within its lifetime one build serves every operation, without fetching the certificate again.");
+
+            now = now.Add(CostConnectionService.ProtectionLifetime);
+            await service.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct);
+            Assert.AreEqual(2, builds, "A long-lived web app must pick up a rotated certificate rather than keep the old one.");
+        }
+
+        [TestMethod]
+        public async Task UnprotectedCacheFromAnEarlierBuild_IsReadOnce_AndProtectedByTheNextWrite()
+        {
+            // What a build before this one wrote: the MSAL cache as plain base64.
+            var store = new MemoryStore();
+            await store.WriteAsync("connection", CostConnectionEncoding.Serialize(new CostConnectionState
+            {
+                AccountId = "reader", Cache = Convert.ToBase64String(SyntheticMsalCache), Status = "connected",
+            }), null, Ct);
+
+            // Any operation's first write protects it - here one that never touches a token.
+            var identity = new Identity { Cache = SyntheticMsalCache };
+            var service = Service(store, identity);
+            await service.ResetProbeAsync(Ct);
+
+            var migrated = await store.ReadAsync("connection", Ct);
+            AssertCacheNotInTheClear(migrated);
+            Assert.IsTrue(CostTokenCacheProtection.IsProtected(CostConnectionEncoding.Deserialize<CostConnectionState>(migrated.Content).Cache));
+            Assert.AreEqual("connected", (await service.ReadAsync(Ct)).Status, "Migrating must not disconnect the administrator.");
+
+            await service.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct);
+            CollectionAssert.AreEqual(SyntheticMsalCache, identity.RefreshedCache, "The migrated cache must be the one that was stored.");
+
+            // And a refresh straight after the upgrade reads the old value once, then stores what MSAL returns protected.
+            var direct = new MemoryStore();
+            await direct.WriteAsync("connection", CostConnectionEncoding.Serialize(new CostConnectionState
+            {
+                AccountId = "reader", Cache = Convert.ToBase64String(SyntheticMsalCache), Status = "connected",
+            }), null, Ct);
+            var directIdentity = new Identity { Cache = SyntheticMsalCache };
+            await Service(direct, directIdentity).RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct);
+            CollectionAssert.AreEqual(SyntheticMsalCache, directIdentity.RefreshedCache);
+            AssertCacheNotInTheClear(await direct.ReadAsync("connection", Ct));
+        }
+
         [TestMethod]
         public async Task InterruptedLargeInventoryResumesInBoundedSlicesWithoutLosingMembers()
         {
@@ -704,8 +827,11 @@ namespace Tests.UnitTests
         private static HttpResponseMessage Json(JObject json) => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json.ToString()) };
         private static CostGraphSource Source(Func<HttpRequestMessage, HttpResponseMessage> response) =>
             new CostGraphSource(new HttpClient(new Handler(response)), "test", (_, __) => Task.CompletedTask);
-        private static CostConnectionService Service(MemoryStore store, Identity identity, Func<DateTimeOffset> clock = null) =>
-            new CostConnectionService(store, identity, Tenant, Client, "https://contoso.example/copilot-cost/callback", clock);
+        private static CostConnectionService Service(MemoryStore store, Identity identity, Func<DateTimeOffset> clock = null,
+            string runtimeSecret = SyntheticRuntimeSecret) =>
+            new CostConnectionService(store, identity, Tenant, Client, "https://contoso.example/copilot-cost/callback",
+                _ => Task.FromResult(new AgentCostTokenProtection(runtimeSecret, null, CostTokenCacheProtection.Purpose)), clock);
+        private const string SyntheticRuntimeSecret = "synthetic-runtime-credential-for-unit-tests";
         private static async Task Stage(CostConnectionService service)
         {
             var url = new Uri(await service.StartAsync(UserId, "browser", Ct));
@@ -752,6 +878,7 @@ namespace Tests.UnitTests
             public string Account = "reader";
             public string Verifier, Nonce, RefreshedAccount, RefreshFailure;
             public byte[] RefreshedCache;
+            public byte[] Cache = { 1, 2, 3 };
             public int Redemptions;
             public Func<Task> OnRefresh;
             public Task<CostToken> RedeemAsync(string code, string verifier, string nonce, CancellationToken ct)
@@ -763,7 +890,7 @@ namespace Tests.UnitTests
                 if (RefreshFailure != null) throw new CostConnectionException(RefreshFailure);
                 return Token();
             }
-            private CostToken Token() => new CostToken { AccessToken = "access", AccountId = Account, TenantId = Tenant, Cache = new byte[] { 1, 2, 3 } };
+            private CostToken Token() => new CostToken { AccessToken = "access", AccountId = Account, TenantId = Tenant, Cache = Cache };
         }
     }
 }

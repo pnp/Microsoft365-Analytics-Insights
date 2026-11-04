@@ -176,6 +176,14 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("error")]
         public string Error { get; set; }
+
+        /// <summary>For <c>loadFailed</c>: the failure's stable reason (<see cref="Common.Entities.ReportQueryFailure.Reason"/>).</summary>
+        [JsonProperty("errorReason", NullValueHandling = NullValueHandling.Ignore)]
+        public string ErrorReason { get; set; }
+
+        /// <summary>For <c>loadFailed</c>: the error reference the server log carries.</summary>
+        [JsonProperty("errorReference", NullValueHandling = NullValueHandling.Ignore)]
+        public string ErrorReference { get; set; }
     }
 
     /// <summary>One bar of a categorical chart (e.g. an app host, or an operation type).</summary>
@@ -252,13 +260,24 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("sql")]
         public string Sql { get; set; }
 
-        /// <summary>Set when the query failed/timed out; the chart data is then empty.</summary>
+        /// <summary>
+        /// Set when the query failed/timed out; the chart data is then empty. For a query failure it is the reason and an
+        /// error reference in English (<see cref="Common.Entities.ReportQueryFailure"/>), never the exception's text.
+        /// </summary>
         [JsonProperty("error")]
         public string Error { get; set; }
 
         /// <summary>Stable key for a chart-level error the SPA can translate.</summary>
         [JsonProperty("errorKey")]
         public string ErrorKey { get; set; }
+
+        /// <summary>For <see cref="ErrorKey"/> <c>queryFailed</c>: the failure's stable reason, which the SPA words.</summary>
+        [JsonProperty("errorReason", NullValueHandling = NullValueHandling.Ignore)]
+        public string ErrorReason { get; set; }
+
+        /// <summary>For <see cref="ErrorKey"/> <c>queryFailed</c>: the error reference the server log carries.</summary>
+        [JsonProperty("errorReference", NullValueHandling = NullValueHandling.Ignore)]
+        public string ErrorReference { get; set; }
 
         /// <summary>Set when part of a chart could not load but other series remain usable.</summary>
         [JsonProperty("warning")]

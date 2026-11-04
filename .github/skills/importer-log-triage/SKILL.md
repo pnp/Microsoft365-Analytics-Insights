@@ -425,20 +425,23 @@ Not App Insights: this is `AnalyticsInstaller.exe --initdb` output, which the in
 A remote 500 returns `{ code: "unexpected", errorId: "<guid>" }`. The same value is `customDimensions.ErrorId` on the exception and is in the trace text.
 
 - Error `Unhandled web request error in {context}. [RunId {id}.] ErrorId {guid}. {base exception message}`. The `operation_Id` is the `ErrorId`, unless a Copilot Adoption run owns it (then it is that `RunId`). For Copilot Adoption pages also use events `CopilotAdoptionLifecycle` and `CopilotAdoptionAnalysis` and the decision table in `src/AnalyticsEngine/.github/copilot-instructions.md`.
+- A report section, chart or Copilot Adoption warning whose query failed shows the reader a reason and `error reference <guid>`, never the SQL message (`ReportQueryFailure`). The reference is `customDimensions.ErrorId` on the `CopilotAdoptionLifecycle` `QueryFailed` event, or `errorReference=<guid>` in a Warning `WebActivity query failed: key=... reason=... sqlError=... exceptionChain=...`, `Reports query failed: ...` or `TeamsExplorer query failed: ...`. These carry the classification only; the message is deliberately not logged, because SQL Server can quote a data value in it.
 
 | Last evidence | What it proves |
 |---|---|
 | Exception with `ErrorId` equal to the one quoted | That exact request; read `type`, `SqlErrorNumber`, `HttpStatus` and the stack |
+| `QueryFailed` event or `query failed` Warning with the quoted reference | That one degraded section; read `FailureKind`/`reason` and the SQL error number (-2 timeout, 207/208 schema not upgraded, 18456 login) |
 | Many distinct ErrorIds with the same `type` and `SqlErrorNumber` | One systemic cause (SQL timeout, schema mismatch), not many bugs |
 | No exception for a quoted ErrorId | Telemetry not flushed (host stopping), wrong resource, or the time window is too narrow |
 
 ```kusto
 let errorId = "00000000-0000-0000-0000-000000000000"; // replace
-union exceptions, traces
+union exceptions, traces, customEvents
 | where timestamp between (startUtc .. endUtc)
 | where tostring(customDimensions.ErrorId) == errorId or operation_Id == errorId or message has errorId
-| project timestamp, itemType, severityLevel, type, message, ErrorId=tostring(customDimensions.ErrorId),
-          Sql=tostring(customDimensions.SqlErrorNumber), Http=tostring(customDimensions.HttpStatus), operation_Id
+| project timestamp, itemType, severityLevel, type, name, message, ErrorId=tostring(customDimensions.ErrorId),
+          Sql=tostring(customDimensions.SqlErrorNumber), Http=tostring(customDimensions.HttpStatus),
+          FailureKind=tostring(customDimensions.FailureKind), Query=tostring(customDimensions.Query), operation_Id
 | order by timestamp asc
 ```
 

@@ -215,9 +215,10 @@ namespace App.ControlPanel.Engine
         /// Decrypts a secret read from a config file, or returns an empty string when none was saved.
         /// </summary>
         /// <remarks>
-        /// <see cref="StringCipher"/> has no integrity check, so a wrong password is only caught by the padding check,
-        /// which random output passes about one time in 256. What comes out then is random bytes, not text. Reject it
-        /// too, or a mistyped password would look like a successful load and the next save would keep the noise.
+        /// A version 1 value (<see cref="StringCipher"/>) has no integrity check, so a wrong password is only caught by the
+        /// padding check, which random output passes about one time in 256. What comes out then is random bytes, not text.
+        /// Reject it too, or a mistyped password would look like a successful load and the next save would keep the noise.
+        /// A version 2 value is authenticated and never gets this far with the wrong password.
         /// </remarks>
         /// <exception cref="System.Security.Cryptography.CryptographicException">The password is wrong.</exception>
         internal static string DecryptLoadedSecret(string cipherText, string password)

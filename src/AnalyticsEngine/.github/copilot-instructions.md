@@ -119,6 +119,7 @@ customEvents
          FailureKind=tostring(customDimensions.FailureKind),
          SqlErrorNumber=tostring(customDimensions.SqlErrorNumber),
          ExceptionChain=tostring(customDimensions.ExceptionChain),
+         ErrorId=tostring(customDimensions.ErrorId),
          SyncContext=tostring(customDimensions.SynchronizationContext),
          ActiveOperations=tostring(customDimensions.ActiveOperations),
          ElapsedMs=tolong(customMeasurements.ElapsedMs),
@@ -130,7 +131,7 @@ customEvents
          HeartbeatDriftMs=tolong(customMeasurements.HeartbeatDriftMs),
          DroppedEvents=toint(customMeasurements.DroppedEvents)
 | project timestamp, RunId, InstanceId, Sequence, Stage, Step, Query,
-          Outcome, ExceptionType, FailureKind, SqlErrorNumber, ExceptionChain,
+          Outcome, ExceptionType, FailureKind, SqlErrorNumber, ExceptionChain, ErrorId,
           SyncContext, ActiveOperations,
           ElapsedMs, DurationMs, WorkingSetMB, ManagedHeapMB,
           Gen2Collections, AvailableWorkers, HeartbeatDriftMs, DroppedEvents
@@ -148,7 +149,7 @@ Interpret boundaries literally:
 | `QueueFull` | Terminal. Both slots were busy and 8 runs (`DefaultMaxQueuedAnalyses`) were already queued, so the run was turned away at once, without queueing or touching the database. The page's next poll tries again. Sustained, it means more distinct periods and seat overrides are being asked for at once than one instance will queue. Unlike the other early endings it is not flushed immediately, so it normally arrives within the channel's 30-second send interval — normally, not guaranteed: nothing still buffered survives a crash, and a failing ingestion endpoint can delay or lose it |
 | `Abandoned` | Terminal. The run queued, and nobody had asked for its result for 60 seconds with no request waiting on it, so it never touched the database. A queued run re-checks every 15 seconds, so it can be abandoned while still queued (`Queued` then `Abandoned`), on reaching a slot (`GateAcquired` then `Abandoned`) or on taking the overflow slot (`GateBypassed` then `Abandoned`). A request that stops waiting counts as interest until that moment. Normal when someone clicks through periods |
 | `QueryStarted` without `QueryCompleted` | EF's full `ToListAsync` boundary did not return: connection acquisition, SQL execution, TDS transfer and materialisation are still combined here; Query Store decides whether SQL itself finished |
-| `QueryFailed` | Read `FailureKind` and `SqlErrorNumber`, not `ExceptionType`. A command timeout is `FailureKind=Timeout`, usually with `SqlErrorNumber=-2` and `DurationMs` about 90,000 (EF can also surface it as a bare cancellation, with no SQL number). Its `ExceptionType` is `Win32Exception`, because that is the innermost exception SqlClient wraps a timeout in, so `ExceptionType` alone cannot tell a timeout from a network failure. `SchemaMismatch` (207/208) means the database was not upgraded; `Throttled`/`Unavailable` are Azure SQL limits or failovers; `Deadlock` is 1205; `Cancelled` only when the caller asked for it |
+| `QueryFailed` | Read `FailureKind` and `SqlErrorNumber`, not `ExceptionType`. A command timeout is `FailureKind=Timeout`, usually with `SqlErrorNumber=-2` and `DurationMs` about 90,000 (EF can also surface it as a bare cancellation, with no SQL number). Its `ExceptionType` is `Win32Exception`, because that is the innermost exception SqlClient wraps a timeout in, so `ExceptionType` alone cannot tell a timeout from a network failure. `SchemaMismatch` (207/208) means the database was not upgraded; `Throttled`/`Unavailable` are Azure SQL limits or failovers; `Deadlock` is 1205; `Cancelled` only when the caller asked for it. `ErrorId` is the error reference the page's "Could not load ..." warning showed the reader, so a reader's report leads straight to this event |
 | `QueryCompleted` without `StepCompleted` | SQL/EF returned; the C# projection for that step did not finish |
 | All analysis steps complete without `ScoringCompleted` | Final in-memory summary scoring stalled or failed |
 | `ServiceReturned` without `CachePublished` | The result was published: the cache is written before either checkpoint is sent. Only the `CachePublished` event is missing — typically because the host was stopping and the telemetry queue no longer accepted it |

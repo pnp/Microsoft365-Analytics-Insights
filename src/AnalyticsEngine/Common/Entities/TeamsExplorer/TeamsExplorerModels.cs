@@ -25,15 +25,25 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>The SQL that produced the section, with its parameters declared, ready to paste into SSMS.</summary>
         public string Sql { get; set; }
 
-        /// <summary>The innermost error message when the section failed; null when it succeeded.</summary>
+        /// <summary>
+        /// When the section failed, what its reader is told in English: for a query that ran and failed, the reason and
+        /// an error reference, never the exception's text (<see cref="ReportQueryFailure"/>); for a section the server
+        /// did not run, the English fallback for <see cref="ErrorCode"/>. Null when it succeeded.
+        /// </summary>
         public string Error { get; set; }
 
         /// <summary>
         /// A stable code for a failure the server itself decided on, so the page can word it in the reader's language;
-        /// null for a failed query, whose <see cref="Error"/> is the database's own message. <see cref="Error"/> carries
-        /// an English fallback whenever this is set.
+        /// null for a query that ran and failed, which carries <see cref="ErrorReason"/> and <see cref="ErrorReference"/>
+        /// instead. <see cref="Error"/> carries an English fallback whenever this is set.
         /// </summary>
         public string ErrorCode { get; set; }
+
+        /// <summary>The failure's stable reason (<see cref="ReportQueryFailure.Reason"/>), which the portal words.</summary>
+        public string ErrorReason { get; set; }
+
+        /// <summary>The error reference the server log carries for this failure.</summary>
+        public string ErrorReference { get; set; }
 
         /// <summary>How long the query took, for spotting the section that needs an index.</summary>
         public long ElapsedMs { get; set; }

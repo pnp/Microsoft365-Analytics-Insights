@@ -64,8 +64,9 @@ namespace Tests.UnitTests
                 Assert.IsTrue(factory.SlotsHeldAtOpen.All(held => held >= 1 && held <= Capacity),
                     "Slots held when a connection was opened: " + string.Join(", ", factory.SlotsHeldAtOpen));
                 Assert.AreEqual(Capacity, slots.CurrentCount, "Every slot is back.");
-                Assert.IsTrue(tabs.SelectMany(t => t.Queries).All(q => q.ErrorCode == null && !string.IsNullOrEmpty(q.Error)),
-                    "A query that failed reports its own failure, not a queue.");
+                Assert.IsTrue(tabs.SelectMany(t => t.Queries).All(q => q.ErrorCode == null && !string.IsNullOrEmpty(q.Error)
+                        && !string.IsNullOrEmpty(q.ErrorReason) && !string.IsNullOrEmpty(q.ErrorReference)),
+                    "A query that failed reports its own failure - a reason and an error reference - not a queue.");
             }
         }
 

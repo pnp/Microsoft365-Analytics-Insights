@@ -205,6 +205,20 @@ const errors: Record<keyof typeof en, string> = {
   'errors.webActivity.exportFlowsFailed': 'No se han podido exportar los flujos ({status}).',
   'errors.webActivity.exportSearchTermsFailed': 'No se han podido exportar los términos de búsqueda ({status}).',
   'errors.webActivity.exportTechnologyFailed': 'No se ha podido exportar la tecnología ({status}).',
+
+  // Consulta de informe que ha fallado: el servidor envía un motivo estable y una referencia de error.
+  'errors.reportQuery.failed': '{reason} (referencia de error {reference})',
+  'errors.reportQuery.reason.Timeout': 'se ha agotado el tiempo de espera de la consulta',
+  'errors.reportQuery.reason.Deadlock': 'un interbloqueo de la base de datos ha detenido la consulta',
+  'errors.reportQuery.reason.Throttled': 'la base de datos estaba en su límite de recursos',
+  'errors.reportQuery.reason.Unavailable': 'la base de datos no estaba disponible',
+  'errors.reportQuery.reason.Connection': 'ha fallado la conexión con la base de datos',
+  'errors.reportQuery.reason.Permission': 'la base de datos ha denegado el acceso',
+  'errors.reportQuery.reason.SchemaMismatch': 'la base de datos no se ha actualizado a esta versión',
+  'errors.reportQuery.reason.SqlError': 'la base de datos ha devuelto un error',
+  'errors.reportQuery.reason.Cancelled': 'se ha cancelado la consulta',
+  'errors.reportQuery.reason.OutOfMemory': 'el servidor web se ha quedado sin memoria',
+  'errors.reportQuery.reason.Other': 'la consulta ha fallado',
 };
 
 export default errors;

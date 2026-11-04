@@ -2,6 +2,7 @@ import { makeStyles, tokens, Text, Card, MessageBar, MessageBarBody } from '@flu
 import type { ReactNode } from 'react';
 import SqlPopover from '../SqlPopover';
 import type { KpiTone } from '../shared/KpiGrid';
+import { reportQueryFailureText } from '../shared/reportQueryFailure';
 import { formatDateParts, formatNumber, parseApiDate, useT, type TFunction, type TranslationKey } from '../../i18n';
 import type {
   TeamsBucket,
@@ -204,16 +205,23 @@ export function queryFor(queries: TeamsQueryInfo[], key: string): TeamsQueryInfo
 
 /**
  * The failure codes the server sends with a section it decided not to run (`SqlTeamsExplorerStore`), each with its
- * sentence. Any other failure is the database's own message, shown as it came.
+ * sentence. Any other failure is a query that ran and failed, worded from its reason and error reference.
  */
 export const TEAMS_QUERY_ERROR_CODE_KEYS: Record<string, TranslationKey> = {
   queryQueueTimeout: 'teamsExplorer.shared.queryQueueTimeout',
 };
 
-/** What a failed section says: the page's own sentence for a known code, otherwise the error it was sent. */
+/**
+ * What a failed section says: the page's own sentence for a section the server did not run, otherwise the failed
+ * query's reason and error reference (`reportQueryFailureText`), never the exception's text. The English the server
+ * sent is shown only for a code or reason this build does not know.
+ */
 export function sectionErrorText(t: TFunction, query: TeamsQueryInfo): string {
   const key = query.errorCode ? TEAMS_QUERY_ERROR_CODE_KEYS[query.errorCode] : undefined;
-  return key ? t(key) : t('teamsExplorer.shared.sectionLoadError', { error: query.error ?? '' });
+  if (key) return t(key);
+  return t('teamsExplorer.shared.sectionLoadError', {
+    error: reportQueryFailureText(t, query.errorReason, query.errorReference, query.error ?? ''),
+  });
 }
 
 /**

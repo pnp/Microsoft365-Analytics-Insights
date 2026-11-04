@@ -48,6 +48,10 @@ export interface ReportSeriesWarning {
   /** How many weeks an `incompleteWeeks` warning covers; absent otherwise. */
   count?: number | null;
   error: string | null;
+  /** For `loadFailed`: the failure's stable reason, worded by `reportQueryFailureText`. */
+  errorReason?: string | null;
+  /** For `loadFailed`: the error reference the server log carries. */
+  errorReference?: string | null;
 }
 
 /** One bar of a categorical chart. */
@@ -100,6 +104,10 @@ export interface ReportChart {
   sql: string;
   error: string | null;
   errorKey?: string | null;
+  /** For `errorKey` `queryFailed`: the failure's stable reason, worded by `reportQueryFailureText`. */
+  errorReason?: string | null;
+  /** For `errorKey` `queryFailed`: the error reference the server log carries. */
+  errorReference?: string | null;
   warning: string | null;
   seriesWarnings?: ReportSeriesWarning[] | null;
 }
