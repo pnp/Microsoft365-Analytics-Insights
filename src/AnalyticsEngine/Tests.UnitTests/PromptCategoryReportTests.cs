@@ -155,7 +155,7 @@ namespace Tests.UnitTests
                     await db.OpenAsync();
                     using (var command = db.CreateCommand())
                     {
-                        command.CommandText = "CREATE DATABASE [" + name + "]";
+                        command.CommandText = ScratchDatabase.CreateDatabaseSql(name);
                         await command.ExecuteNonQueryAsync();
                     }
                 }

@@ -111,7 +111,7 @@ namespace Tests.UnitTests.InstallTests
                 {
                     using (var command = master.CreateCommand())
                     {
-                        command.CommandText = "CREATE DATABASE [" + catalog + "];";
+                        command.CommandText = ScratchDatabase.CreateDatabaseSql(catalog);
                         await command.ExecuteNonQueryAsync();
                         created = true;
                     }

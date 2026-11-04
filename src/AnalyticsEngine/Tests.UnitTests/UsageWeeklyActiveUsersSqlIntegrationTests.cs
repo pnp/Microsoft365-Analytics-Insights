@@ -59,7 +59,7 @@ namespace Tests.UnitTests
             _connectionString =
                 $@"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog={_database};Integrated Security=true;MultipleActiveResultSets=True;TrustServerCertificate=True";
 
-            Execute(MasterConnection, $"CREATE DATABASE [{_database}];");
+            Execute(MasterConnection, ScratchDatabase.CreateDatabaseSql(_database));
 
             // The full migration chain, so the query runs against the schema - and IX_date - customers actually get.
             new DbMigrator(new Configuration

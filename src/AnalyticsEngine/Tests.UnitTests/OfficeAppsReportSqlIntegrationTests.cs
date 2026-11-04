@@ -65,7 +65,7 @@ namespace Tests.UnitTests
             _connectionString =
                 $@"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog={_database};Integrated Security=true;MultipleActiveResultSets=True;TrustServerCertificate=True";
 
-            Execute(MasterConnection, $"CREATE DATABASE [{_database}];");
+            Execute(MasterConnection, ScratchDatabase.CreateDatabaseSql(_database));
 
             // The full migration chain, so the queries run against the schema customers actually get.
             var migrationConfig = new Configuration

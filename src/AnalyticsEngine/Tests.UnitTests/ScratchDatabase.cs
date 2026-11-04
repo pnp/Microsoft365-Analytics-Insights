@@ -15,6 +15,10 @@ namespace Tests.UnitTests
     /// untestable, because the first run would have already fixed it). Each test therefore builds
     /// its own database on the same server, creates just the tables the migration touches, and drops
     /// the database again on dispose.
+    ///
+    /// Every fixture that creates a database of its own creates it with <see cref="CreateDatabaseSql"/>, or runs
+    /// <see cref="AutoCloseOffSql"/> as soon as it exists, so that none of them auto-closes - see
+    /// <see cref="CreateDatabaseSql"/> for why.
     /// </summary>
     internal sealed class ScratchDatabase : IDisposable
     {
@@ -39,10 +43,10 @@ namespace Tests.UnitTests
         /// </param>
         public static ScratchDatabase Create(string purpose, string collation = null)
         {
-            if (collation != null && !Regex.IsMatch(collation, "^[A-Za-z0-9_]+$"))
-            {
-                throw new ArgumentException("Not a collation name.", nameof(collation));
-            }
+            // Unique per test run so parallel or repeated runs never collide. Well within SQL
+            // Server's 128-character identifier limit, so no truncation is needed.
+            var name = $"UT_{purpose}_{Guid.NewGuid():N}";
+            var createSql = CreateDatabaseSql(name, collation);
 
             // Read the connection string straight from configuration rather than constructing an
             // AnalyticsEntitiesContext: in a DEBUG build that context's initializer migrates the
@@ -51,10 +55,6 @@ namespace Tests.UnitTests
             var master = MasterConnectionString();
             var configured = ConfigurationManager.ConnectionStrings["SPOInsightsEntities"];
 
-            // Unique per test run so parallel or repeated runs never collide. Well within SQL
-            // Server's 128-character identifier limit, so no truncation is needed.
-            var name = $"UT_{purpose}_{Guid.NewGuid():N}";
-
             var scratch = new SqlConnectionStringBuilder(configured.ConnectionString) { InitialCatalog = name };
             if (scratch.DataSource.IndexOf("(localdb)", StringComparison.OrdinalIgnoreCase) >= 0)
             {
@@ -62,8 +62,45 @@ namespace Tests.UnitTests
             }
 
             var database = new ScratchDatabase(name, master, scratch.ConnectionString);
-            ExecuteOn(master, collation == null ? $"CREATE DATABASE [{name}];" : $"CREATE DATABASE [{name}] COLLATE {collation};");
+            ExecuteOn(master, createSql);
             return database;
+        }
+
+        /// <summary>
+        /// Creates database <paramref name="name"/>, in <paramref name="collation"/> or the server's when null,
+        /// with <c>AUTO_CLOSE OFF</c>. Run it on <c>master</c>.
+        /// </summary>
+        /// <remarks>
+        /// LocalDB, like every Express edition, creates a database with <c>AUTO_CLOSE ON</c> whatever <c>model</c>
+        /// says, so the database shuts down whenever its last connection closes and starts up again on the next one.
+        /// A production database never does: Azure SQL Database doesn't offer the option. That cycle is not what a
+        /// fixture sets out to test, and it is not reliable. The shutdown is asynchronous, and a database set
+        /// <c>READ_ONLY</c> from <c>master</c> just after its last connection closed came back <c>READ_WRITE</c> to
+        /// the next connection in 2-7% of tries on LocalDB 2019 and 2025, although <c>sys.databases</c> said
+        /// read-only - which is how <c>RuntimeHealthTests</c> failed on the CI runners. With the option off it never did.
+        /// </remarks>
+        public static string CreateDatabaseSql(string name, string collation = null)
+        {
+            if (collation != null && !Regex.IsMatch(collation, "^[A-Za-z0-9_]+$"))
+            {
+                throw new ArgumentException("Not a collation name.", nameof(collation));
+            }
+
+            return "CREATE DATABASE " + QuoteName(name) + (collation == null ? string.Empty : " COLLATE " + collation) + "; " +
+                AutoCloseOffSql(name);
+        }
+
+        /// <summary>
+        /// Turns <c>AUTO_CLOSE</c> off for database <paramref name="name"/>, for a fixture whose database is not
+        /// created by <see cref="CreateDatabaseSql"/> (one EF creates, or one placed in files of its own). Run it on
+        /// <c>master</c> as soon as the database exists.
+        /// </summary>
+        public static string AutoCloseOffSql(string name) => "ALTER DATABASE " + QuoteName(name) + " SET AUTO_CLOSE OFF;";
+
+        private static string QuoteName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) throw new ArgumentException("A database name is required.", nameof(name));
+            return "[" + name.Replace("]", "]]") + "]";
         }
 
         /// <summary>
