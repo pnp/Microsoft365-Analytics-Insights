@@ -116,7 +116,8 @@ namespace App.ControlPanel.Engine
                 // Recovery must finish even when the operation was cancelled after stopping the site.
                 async () => { await webApp.StartAsync(); },
                 () => sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLogEvents),
-                () => InstallSolutionContent(solutionSources, subscription, automationAccount), _logger, CancellationToken);
+                () => InstallSolutionContent(solutionSources, subscription, automationAccount), _logger, CancellationToken,
+                () => sqlInstallerTasks.SchemaUpgradeDeferred);
 
             CancellationToken.ThrowIfCancellationRequested();
             if (this.Config.SolutionConfig.ImportTaskSettings.WebTraffic)
@@ -139,7 +140,8 @@ namespace App.ControlPanel.Engine
 
         internal static async Task RunUpgradeDeploymentAsync(bool installContent, bool upgradeSchema,
             Func<Task> pauseWebJobs, Func<Task> resumeWebJobs, Func<Task> stopSite, Func<Task> startSite,
-            Func<Task> upgradeDatabase, Func<Task> deployContent, ILogger logger, CancellationToken cancellationToken = default(CancellationToken))
+            Func<Task> upgradeDatabase, Func<Task> deployContent, ILogger logger, CancellationToken cancellationToken = default(CancellationToken),
+            Func<bool> schemaUpgradeDeferred = null)
         {
             var elapsed = Stopwatch.StartNew();
             var stage = "pause";
@@ -202,6 +204,17 @@ namespace App.ControlPanel.Engine
                     stage = "content";
                     await deployContent();
                     cancellationToken.ThrowIfCancellationRequested();
+                }
+                if (schemaUpgradeDeferred?.Invoke() == true)
+                {
+                    logger.LogWarning("UpgradeDeployment: stage=complete outcome=Deferred elapsedMs={ElapsedMs} contentSelected={ContentSelected}; the schema upgrade did not run. " +
+                        "WEBJOBS_STOPPED=1 is retained. Complete the matching release's database upgrade manually or from an approved machine, " +
+                        "then re-run the installer with content deployment enabled to restore the previous WebJobs state. Continuing remaining installation tasks.",
+                        elapsed.ElapsedMilliseconds, installContent);
+                    return;
+                }
+                if (installContent)
+                {
                     stage = "resume";
                     await resumeWebJobs();
                     cancellationToken.ThrowIfCancellationRequested();

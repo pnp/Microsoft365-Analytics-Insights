@@ -360,7 +360,7 @@ namespace Tests.UnitTests.InstallTests
         }
 
         // Exercise the real SDK deserialisation and resource routes without any Azure calls.
-        sealed class SqlArmFixture : HttpMessageHandler
+        internal sealed class SqlArmFixture : HttpMessageHandler
         {
             const string ServerId = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/contoso/providers/Microsoft.Sql/servers/contoso-sql";
             readonly HttpClient _http;

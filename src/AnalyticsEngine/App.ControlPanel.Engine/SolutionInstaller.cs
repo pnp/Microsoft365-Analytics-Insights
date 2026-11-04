@@ -134,7 +134,7 @@ namespace App.ControlPanel.Engine
                 // Open admin site?
                 if (Config.TasksConfig.OpenAdminSitePostInstall)
                 {
-                    System.Diagnostics.Process.Start(adminSiteUrl);
+                    OpenAdminSite(log, adminSiteUrl);
                 }
 
                 // Warn if no sites configured for import (and needed)
@@ -182,6 +182,21 @@ namespace App.ControlPanel.Engine
             }
 
             PrintFinalStatus(summary);
+        }
+
+        internal static void OpenAdminSite(ILogger log, string adminSiteUrl, Action<string> open = null)
+        {
+            try
+            {
+                if (open != null) open(adminSiteUrl);
+                else System.Diagnostics.Process.Start(adminSiteUrl)?.Dispose();
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception ||
+                ex is UnauthorizedAccessException || ex is System.Security.SecurityException)
+            {
+                log.LogWarning("Could not open the administration website automatically (exceptionType={ExceptionType}). " +
+                    "Installation will continue. Open {AdminSiteUrl} manually in a browser.", ex.GetType().Name, adminSiteUrl);
+            }
         }
 
         /// <summary>
