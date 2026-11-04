@@ -309,7 +309,7 @@ namespace Tests.UnitTests
         public void EfConnectionsOpenedOutsideEf_GoThroughTheTokenHelper()
         {
             var root = ProductSourceRoot();
-            var excludedDirectories = new[] { "Tests.UnitTests", "Tests.FakeDataGen", "Benchmarks", "TestResults", "packages", "node_modules", "bin", "obj" };
+            var excludedDirectories = new[] { "Tests.UnitTests", "Tests.FakeDataGen", "Tests.FakeDataGen.Shared", "Benchmarks", "TestResults", "packages", "node_modules", "bin", "obj" };
 
             // Files allowed to construct a SqlConnection directly: the helper itself, and the installer bootstrap
             // that attaches the signed-in administrator's own token explicitly.
