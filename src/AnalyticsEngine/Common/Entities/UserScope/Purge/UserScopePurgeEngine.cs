@@ -101,6 +101,12 @@ namespace Common.Entities.UserScope.Purge
         /// <summary>Test hook: overrides <see cref="UserScopePurgePlan.BatchSize"/>.</summary>
         internal int? BatchSizeOverride { get; set; }
 
+        /// <summary>
+        /// Test hook: runs before each user the one-at-a-time fallback deletes, after it chose them - where an importer
+        /// can still add data about them.
+        /// </summary>
+        internal Func<int, Task> BeforeOneByOneDelete { get; set; }
+
         /// <summary>Test hook: overrides the pause between retries of a transient database error.</summary>
         internal TimeSpan? RetryDelayOverride { get; set; }
 
@@ -348,6 +354,7 @@ namespace Common.Entities.UserScope.Purge
                     $"{total} found, {ceiling} confirmed").ConfigureAwait(false);
             }
 
+            var otherObjects = new List<Guid>();
             if (CandidatesOverride == null)
             {
                 // Copilot Studio credit rows that were never linked to a user row carry only an Entra object id. They are
@@ -357,6 +364,10 @@ namespace Common.Entities.UserScope.Purge
                 {
                     Add(job, "copilot_studio_credit_user_daily", unlinked);
                 }
+
+                // Likewise people the Copilot credit history preview read but who have no user row: it reads the whole
+                // directory, whatever the scope. Their readings go in the preview's steps, by object id.
+                otherObjects = await FindUnlinkedCostObjectsOutsideScopeAsync(scope).ConfigureAwait(false);
             }
 
             job.StepIndex = 0;
@@ -364,7 +375,7 @@ namespace Common.Entities.UserScope.Purge
             job.Phase = UserScopePurgePhases.Snapshot;
             await WithRetriesAsync(session, async () =>
             {
-                await session.LoadCandidatesAsync(candidates, stopToken).ConfigureAwait(false);
+                await session.LoadCandidatesAsync(candidates, otherObjects, stopToken).ConfigureAwait(false);
                 return true;
             }, stopToken).ConfigureAwait(false);
 
@@ -416,6 +427,49 @@ namespace Common.Entities.UserScope.Purge
                             && !scope.IsAnyInScope(objectId, upn, mail))
                         {
                             outside.Add(id);
+                        }
+                    }
+                }
+            }
+            return outside;
+        }
+
+        /// <summary>
+        /// Object ids in the Copilot credit history preview that no user row has and the scope leaves out. The preview
+        /// reads every directory user, so it holds readings about people the imports never added a user row for.
+        /// </summary>
+        internal async Task<List<Guid>> FindUnlinkedCostObjectsOutsideScopeAsync(UserImportScope scope)
+        {
+            var outside = new List<Guid>();
+            using (var connection = await _database.OpenAsync().ConfigureAwait(false))
+            {
+                var sources = new List<string>();
+                foreach (var table in new[] { "copilot_cost_observations", "copilot_cost_history", "copilot_cost_work" })
+                {
+                    if (await TableExistsAsync(connection, table).ConfigureAwait(false))
+                    {
+                        sources.Add($"SELECT object_id FROM dbo.{table}");
+                    }
+                }
+                if (sources.Count == 0)
+                {
+                    return outside;
+                }
+
+                using (var command = new SqlCommand($@"
+SELECT x.object_id FROM ({string.Join(" UNION ", sources)}) x
+WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarchar(36), x.object_id));", connection))
+                {
+                    command.CommandTimeout = 600;
+                    using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
+                    {
+                        while (await reader.ReadAsync().ConfigureAwait(false))
+                        {
+                            var objectId = reader.GetGuid(0);
+                            if (!scope.IsInScope(objectId))
+                            {
+                                outside.Add(objectId);
+                            }
                         }
                     }
                 }
@@ -479,7 +533,17 @@ namespace Common.Entities.UserScope.Purge
             string keyType;
             using (var connection = await _database.OpenAsync().ConfigureAwait(false))
             {
-                keyType = await KeyTypeAsync(connection, step.Table, step.KeyColumn).ConfigureAwait(false);
+                keyType = IsWalkOfTheCandidates(step)
+                    ? (await TableExistsAsync(connection, step.Table).ConfigureAwait(false) ? WalkOf(step).KeyType : null)
+                    : await KeyTypeAsync(connection, step.Table, step.KeyColumn).ConfigureAwait(false);
+                foreach (var required in step.Requires)
+                {
+                    if (keyType != null && !await TableExistsAsync(connection, required).ConfigureAwait(false))
+                    {
+                        _logger.LogInformation($"User scope purge {job.Id}: dbo.{required} is not in this database, skipping the dbo.{step.Table} step.");
+                        return null;
+                    }
+                }
             }
 
             if (keyType == null)
@@ -558,8 +622,8 @@ namespace Common.Entities.UserScope.Purge
 
         private async Task<WindowResult> RunWindowAsync(SqlConnection connection, UserScopePurgeStep step, string keyType, string after, int window, int? unknownUserId)
         {
-            var sql = step.Kind == UserScopePurgeStepKind.Calls
-                ? BuildCallsWindowSql(keyType, after != null)
+            var sql = step.Kind == UserScopePurgeStepKind.Calls ? BuildCallsWindowSql(keyType, after != null)
+                : IsWalkOfTheCandidates(step) ? BuildCandidateWindowSql(step, after != null)
                 : BuildWindowSql(step, keyType, after != null);
 
             try
@@ -646,9 +710,17 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
             var deleted = 0;
             foreach (var id in ids)
             {
+                if (BeforeOneByOneDelete != null)
+                {
+                    await BeforeOneByOneDelete(id).ConfigureAwait(false);
+                }
+
                 try
                 {
-                    using (var delete = new SqlCommand("DELETE FROM dbo.users WHERE id = @id;", connection))
+                    // The audit-event check again, in the delete itself: audit_events.user_id has no foreign key, so an event
+                    // that arrived since the select above would otherwise be orphaned rather than keep its user.
+                    using (var delete = new SqlCommand(
+                        "DELETE FROM dbo.users WHERE id = @id AND NOT EXISTS (SELECT 1 FROM dbo.audit_events e WHERE e.user_id = @id);", connection))
                     {
                         delete.Parameters.Add("@id", SqlDbType.Int).Value = id;
                         deleted += await delete.ExecuteNonQueryAsync().ConfigureAwait(false);
@@ -657,6 +729,7 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
                 catch (SqlException ex) when (ex.Number == 547)
                 {
                     // Kept: counted as skipped when the purge finishes.
+                    NoteUncoveredReference(ex);
                 }
             }
 
@@ -675,6 +748,36 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
             return end == null || end == DBNull.Value
                 ? new WindowResult { Done = true }
                 : new WindowResult { Affected = deleted, NextAfter = KeyToString(end) };
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex ConflictLocation = new System.Text.RegularExpressions.Regex(
+            @"table ""(?:[^"".]+\.)?(?<table>[^""]+)"", column '(?<column>[^']+)'", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        private readonly HashSet<string> _uncoveredReferencesLogged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// A user the fallback could not delete is kept, and usually that is because data about them arrived while the
+        /// purge ran, which the next purge removes. But if what still refers to them is a column no step takes care of -
+        /// a table added to the database by hand, say - running the purge again keeps them every time, so that is logged
+        /// once, by table and column only.
+        /// </summary>
+        private void NoteUncoveredReference(SqlException conflict)
+        {
+            var match = ConflictLocation.Match(conflict.Message ?? string.Empty);
+            if (!match.Success)
+            {
+                return;
+            }
+
+            var reference = $"{match.Groups["table"].Value}.{match.Groups["column"].Value}";
+            if (UserScopePurgePlan.Steps.Any(s => s.Handles.Contains(reference, StringComparer.OrdinalIgnoreCase))
+                || !_uncoveredReferencesLogged.Add(reference))
+            {
+                return;
+            }
+
+            _logger.LogWarning($"User scope purge: dbo.{reference} refers to users and no step of the purge removes it, so the people " +
+                "it refers to are kept however often the purge runs. Remove those rows by hand, then run the purge again.");
         }
 
         /// <summary>
@@ -720,6 +823,15 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
                     throw new ArgumentOutOfRangeException(nameof(step));
             }
 
+            if (step.Lookup != null)
+            {
+                if (step.Kind != UserScopePurgeStepKind.Delete)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(step), "Only a delete step can release a lookup.");
+                }
+                return BuildReleasingWindowSql(step, keyType, key, target, afterWhere, afterAnd, resumeAt);
+            }
+
             return $@"
 SET NOCOUNT ON;
 DECLARE @end {keyType} = (SELECT TOP (1) w.k FROM (SELECT TOP (@window) {key} AS k FROM dbo.[{step.Table}] t {afterWhere}ORDER BY {key}) w ORDER BY w.k DESC);
@@ -728,6 +840,114 @@ IF @end IS NULL
 ELSE
 BEGIN
     {action}
+    DECLARE @affected int = @@ROWCOUNT;
+    SELECT @affected AS affected, CASE WHEN @affected >= @batch THEN {resumeAt} ELSE @end END AS next_after, CAST(0 AS bit) AS done;
+END";
+        }
+
+        /// <summary>
+        /// One window of a delete step whose rows point at a lookup (<see cref="UserScopePurgeStep.Lookup"/>): the rows'
+        /// lookup ids are kept as they are deleted, and, in the same transaction, the lookup rows among them that nothing
+        /// refers to any more are deleted too. Doing both in one transaction means a purge that stops between windows - or
+        /// whose session drops - never leaves a lookup row behind that only the deleted rows used.
+        /// </summary>
+        /// <remarks>
+        /// The importers keep running. A lookup row is only deleted when no column refers to it, checked in the delete
+        /// itself, the same guard <c>Clean Old Data Data.sql</c> uses. If an importer adds a reference between that check
+        /// and the delete, the foreign key refuses the delete (error 547): the statement alone is rolled back and tried
+        /// again, when the new reference is seen and its lookup row kept. Counts come back per table, like the calls window's.
+        /// </remarks>
+        private static string BuildReleasingWindowSql(UserScopePurgeStep step, string keyType, string key, string target,
+            string afterWhere, string afterAnd, string resumeAt)
+        {
+            var lookup = step.Lookup;
+            var unreferenced = string.Concat(lookup.References.Select(reference =>
+            {
+                var dot = reference.IndexOf('.');
+                return $"{Environment.NewLine}                      AND NOT EXISTS (SELECT 1 FROM dbo.[{reference.Substring(0, dot)}] x WHERE x.[{reference.Substring(dot + 1)}] = l.[id])";
+            }));
+
+            return $@"
+SET NOCOUNT ON;
+DECLARE @end {keyType} = (SELECT TOP (1) w.k FROM (SELECT TOP (@window) {key} AS k FROM dbo.[{step.Table}] t {afterWhere}ORDER BY {key}) w ORDER BY w.k DESC);
+IF @end IS NULL
+    SELECT CAST(0 AS int) AS affected, CAST(NULL AS {keyType}) AS next_after, CAST(1 AS bit) AS done, CAST(0 AS int) AS [{step.Table}], CAST(0 AS int) AS [{lookup.Table}];
+ELSE
+BEGIN
+    -- Statement errors leave the transaction open, so a refused lookup delete can be tried again within it.
+    SET XACT_ABORT OFF;
+    -- Through sp_executesql (it has parameters), so this temporary table belongs to this call and goes when it ends.
+    CREATE TABLE #released (id int NULL);
+    DECLARE @affected int = 0, @pruned int = 0, @attempt int = 0;
+    BEGIN TRY
+        BEGIN TRANSACTION;
+        DELETE TOP (@batch) t OUTPUT deleted.[{lookup.Column}] INTO #released (id)
+        FROM {target} WHERE {key} <= @end{afterAnd} AND ({step.Match});
+        SET @affected = @@ROWCOUNT;
+        WHILE @attempt < 3
+        BEGIN
+            BEGIN TRY
+                DELETE l FROM dbo.[{lookup.Table}] l
+                WHERE l.[id] IN (SELECT r.id FROM #released r WHERE r.id IS NOT NULL){unreferenced};
+                SET @pruned = @@ROWCOUNT;
+                BREAK;
+            END TRY
+            BEGIN CATCH
+                -- An importer referred to one of them since the check: it is in use again, and stays.
+                IF ERROR_NUMBER() <> 547 OR XACT_STATE() <> 1
+                BEGIN
+                    ;THROW;
+                END
+                SET @attempt += 1;
+            END CATCH
+        END
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+    SELECT @affected AS affected, CASE WHEN @affected >= @batch THEN {resumeAt} ELSE @end END AS next_after, CAST(0 AS bit) AS done,
+           @affected AS [{step.Table}], @pruned AS [{lookup.Table}];
+    DROP TABLE #released;
+END";
+        }
+
+        /// <summary>Whether <paramref name="step"/> walks the purge's own list of people or object ids rather than its table.</summary>
+        internal static bool IsWalkOfTheCandidates(UserScopePurgeStep step)
+            => step.Kind == UserScopePurgeStepKind.DeleteByObject || step.Kind == UserScopePurgeStepKind.DeleteByCandidate;
+
+        /// <summary>The temporary table, alias, key and key type a <see cref="IsWalkOfTheCandidates"/> step walks.</summary>
+        private static (string Table, string Alias, string Key, string KeyType) WalkOf(UserScopePurgeStep step)
+            => step.Kind == UserScopePurgeStepKind.DeleteByObject
+                ? (UserScopePurgePlan.ObjectsTable, "o", "object_id", "uniqueidentifier")
+                : (UserScopePurgePlan.CandidatesTable, "c", "user_id", "int");
+
+        /// <summary>
+        /// One window of a <see cref="UserScopePurgeStepKind.DeleteByObject"/> or
+        /// <see cref="UserScopePurgeStepKind.DeleteByCandidate"/> step: the next <c>@window</c> object ids or people being
+        /// purged, and at most <c>@batch</c> of their rows. The step's joins carry hints that seek each table from the
+        /// window's own keys, so a window reads its own people's rows and nothing else, however many other people's rows
+        /// share their days or runs - and however little the optimiser can estimate about a window bounded by a variable.
+        /// </summary>
+        internal static string BuildCandidateWindowSql(UserScopePurgeStep step, bool hasAfter)
+        {
+            var walk = WalkOf(step);
+            var key = $"{walk.Alias}.{walk.Key}";
+            var afterWhere = hasAfter ? $"WHERE {key} > @after " : "";
+            var afterAnd = hasAfter ? $" AND {key} > @after" : "";
+            var resumeAt = hasAfter ? "@after" : $"CAST(NULL AS {walk.KeyType})";
+
+            return $@"
+SET NOCOUNT ON;
+DECLARE @end {walk.KeyType} = (SELECT TOP (1) w.k FROM (SELECT TOP (@window) {key} AS k FROM {walk.Table} {walk.Alias} {afterWhere}ORDER BY {key}) w ORDER BY w.k DESC);
+IF @end IS NULL
+    SELECT CAST(0 AS int) AS affected, CAST(NULL AS {walk.KeyType}) AS next_after, CAST(1 AS bit) AS done;
+ELSE
+BEGIN
+    DELETE TOP (@batch) t
+    FROM {walk.Table} {walk.Alias} {step.Match}
+    WHERE {key} <= @end{afterAnd};
     DECLARE @affected int = @@ROWCOUNT;
     SELECT @affected AS affected, CASE WHEN @affected >= @batch THEN {resumeAt} ELSE @end END AS next_after, CAST(0 AS bit) AS done;
 END";

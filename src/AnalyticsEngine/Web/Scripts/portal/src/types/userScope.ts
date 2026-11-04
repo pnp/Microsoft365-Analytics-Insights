@@ -58,6 +58,8 @@ export type UserScopePurgePhase =
   | 'usageReports'
   | 'copilotInteractions'
   | 'licencesAndCredits'
+  | 'copilotCostPreview'
+  | 'retiredFeatures'
   | 'sharedWith'
   | 'managers'
   | 'users'
