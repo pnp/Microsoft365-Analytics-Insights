@@ -643,6 +643,30 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task TokenProtection_IsRebuiltAfterItsLifetime_SoARotatedCertificateIsPickedUp()
+        {
+            var store = new MemoryStore();
+            var now = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+            var builds = 0;
+            var service = new CostConnectionService(store, new Identity { Cache = SyntheticMsalCache }, Tenant, Client,
+                "https://contoso.example/copilot-cost/callback",
+                _ =>
+                {
+                    builds++;
+                    return Task.FromResult(new AgentCostTokenProtection(SyntheticRuntimeSecret, null, CostTokenCacheProtection.Purpose));
+                },
+                () => now);
+
+            await Connect(service);
+            await service.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct);
+            Assert.AreEqual(1, builds, "Within its lifetime one build serves every operation, without fetching the certificate again.");
+
+            now = now.Add(CostConnectionService.ProtectionLifetime);
+            await service.RunWithTokenAsync((_, __, ___) => Task.CompletedTask, Ct);
+            Assert.AreEqual(2, builds, "A long-lived web app must pick up a rotated certificate rather than keep the old one.");
+        }
+
+        [TestMethod]
         public async Task UnprotectedCacheFromAnEarlierBuild_IsReadOnce_AndProtectedByTheNextWrite()
         {
             // What a build before this one wrote: the MSAL cache as plain base64.

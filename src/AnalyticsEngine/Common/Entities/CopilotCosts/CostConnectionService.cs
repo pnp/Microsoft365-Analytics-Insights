@@ -75,6 +75,7 @@ namespace Common.Entities.CopilotCosts
         private readonly Func<CancellationToken, Task<AgentCostTokenProtection>> _protectionFactory;
         private readonly object _protectionGate = new object();
         private Task<AgentCostTokenProtection> _protection;
+        private DateTimeOffset _protectionBuiltAt;
 
         public CostConnectionService(ICostDocumentStore store, ICostIdentity identity, string tenant, string client,
             string callback, Func<CancellationToken, Task<AgentCostTokenProtection>> protection,
@@ -311,16 +312,27 @@ namespace Common.Entities.CopilotCosts
             }
         }
 
-        /// <summary>Built once per service, and built again after a failure (Key Vault unavailable, say).</summary>
+        /// <summary>
+        /// Built once and reused for <see cref="ProtectionLifetime"/>, then built again, as it is after a failure (Key Vault
+        /// unavailable, say). The web app's service lives as long as the process, while the importer builds one per slice:
+        /// without a limit, a certificate rotated in Key Vault would leave the web app protecting the cache with a key the
+        /// importer can no longer unwrap until the web app restarted.
+        /// </summary>
         private Task<AgentCostTokenProtection> ProtectionAsync(CancellationToken ct)
         {
             lock (_protectionGate)
             {
-                if (_protection == null || _protection.IsFaulted || _protection.IsCanceled)
+                if (_protection == null || _protection.IsFaulted || _protection.IsCanceled
+                    || _clock() - _protectionBuiltAt >= ProtectionLifetime)
+                {
                     _protection = _protectionFactory(ct);
+                    _protectionBuiltAt = _clock();
+                }
                 return _protection;
             }
         }
+
+        internal static readonly TimeSpan ProtectionLifetime = TimeSpan.FromMinutes(10);
 
         private sealed class Lease
         {
