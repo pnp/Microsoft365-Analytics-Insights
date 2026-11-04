@@ -3,6 +3,7 @@ using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using DataUtils;
 using System;
+using System.IO;
 using System.Windows.Forms;
 
 namespace App.ControlPanel
@@ -224,27 +225,81 @@ namespace App.ControlPanel
         {
             if (openFileDialog.ShowDialog() == DialogResult.OK)
             {
-                var passwordForm = (new EnterPasswordForm());
-                if (passwordForm.ShowDialog() == DialogResult.OK)
-                {
-                    // Get config from file
-                    var loadedConfig = SolutionInstallConfig.LoadFromFile(openFileDialog.FileName, passwordForm.Password);
-
-                    if (!loadedConfig.DecryptedOk)
-                    {
-                        MessageBox.Show("Could not decrypt this file so some configuration is not loaded. Wrong password?", "Open File", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
-                    }
-
-                    // Set as most current
-                    this.LoadedConfig = loadedConfig.Config;
-
-                    // Refresh current UI with new config
-                    this.SelectedUI.ConfigureUI(loadedConfig.Config);
-
-                    // Remember state
-                    SetCurrentSaveContext(openFileDialog.FileName, passwordForm.Password);
-                }
+                OpenConfigFile(openFileDialog.FileName, AskForPassword, AskAfterFailedDecryption,
+                    error => MessageBox.Show(this, error, "Open File", MessageBoxButtons.OK, MessageBoxIcon.Error));
             }
+        }
+
+        /// <summary>
+        /// Opens a config file. One that did not open completely - a wrong password, or a damaged file - never becomes
+        /// the file that Save writes to: saving it back would replace the secrets it holds with blanks, and client
+        /// secrets can't be read back from Azure.
+        /// </summary>
+        /// <param name="askForPassword">Returns the password to try, or null to give up.</param>
+        /// <param name="askAfterFailedDecryption">
+        /// Yes to try another password, No to open the other settings without the secrets, anything else to give up.
+        /// </param>
+        /// <param name="showError">Says why a file could not be opened at all.</param>
+        public void OpenConfigFile(string fileName, Func<string> askForPassword,
+            Func<string, DialogResult> askAfterFailedDecryption, Action<string> showError)
+        {
+            while (true)
+            {
+                var password = askForPassword();
+                if (password == null) return;
+
+                // Get config from file
+                var loadedConfig = SolutionInstallConfig.LoadFromFile(fileName, password);
+                if (!loadedConfig.LoadedOk)
+                {
+                    // Nothing to show, so whatever was open stays open, with its own save target.
+                    showError(loadedConfig.Error);
+                    return;
+                }
+
+                if (!loadedConfig.DecryptedOk)
+                {
+                    var choice = askAfterFailedDecryption(fileName);
+                    if (choice == DialogResult.Yes) continue;
+                    if (choice != DialogResult.No) return;
+                }
+
+                // Set as most current
+                this.LoadedConfig = loadedConfig.Config;
+
+                // Refresh current UI with new config
+                this.SelectedUI.ConfigureUI(loadedConfig.Config);
+
+                // Remember state
+                if (loadedConfig.CanBecomeSaveTarget)
+                {
+                    SetCurrentSaveContext(fileName, password);
+                }
+                else
+                {
+                    ClearSaveContext($"Opened '{Path.GetFileName(fileName)}' without its secrets. Saving asks for a new file, so this one is not changed.");
+                }
+                return;
+            }
+        }
+
+        static string AskForPassword()
+        {
+            using (var passwordForm = new EnterPasswordForm())
+            {
+                return passwordForm.ShowDialog() == DialogResult.OK ? passwordForm.Password : null;
+            }
+        }
+
+        DialogResult AskAfterFailedDecryption(string fileName)
+        {
+            return MessageBox.Show(this,
+                $"Could not decrypt the secrets in '{Path.GetFileName(fileName)}' with that password.\r\n\r\n" +
+                "Yes: enter the password again.\r\n" +
+                "No: open the other settings without the SQL administrator password and the app registration secrets. " +
+                "The file is not changed: saving asks for a new file.\r\n" +
+                "Cancel: don't open the file.",
+                "Open File", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Exclamation, MessageBoxDefaultButton.Button1);
         }
 
 
@@ -323,6 +378,18 @@ namespace App.ControlPanel
 
 
             txtConfigFile.Text = $"Loaded '{configFileInfo.Name}', modified: '{configFileInfo.LastWriteTime}'";
+        }
+
+        /// <summary>Forgets the file Save writes to, so the next save asks for one.</summary>
+        private void ClearSaveContext(string status)
+        {
+            mnuSaveConfig.Text = "Save Configuration";
+            this.LastConfigFilePath = null;
+            this.LastPassword = string.Empty;
+            this.HaveSavedConfig = false;
+            mnuSaveConfig.Enabled = false;
+
+            txtConfigFile.Text = status;
         }
 
 

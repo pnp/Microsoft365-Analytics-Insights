@@ -59,10 +59,7 @@ namespace App.ControlPanel.Engine.Entities
 
         internal void DecryptSecretFromLoadedHashProperty(string password)
         {
-            if (!string.IsNullOrEmpty(this.SecretHash))
-                this.Secret = StringCipher.Decrypt(this.SecretHash, password);
-            else
-                this.Secret = string.Empty;
+            this.Secret = SolutionInstallConfig.DecryptLoadedSecret(this.SecretHash, password);
         }
 
         internal void EncryptSecretToHashProperty(string password)
