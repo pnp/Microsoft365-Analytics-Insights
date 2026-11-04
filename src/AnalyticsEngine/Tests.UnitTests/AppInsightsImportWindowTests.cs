@@ -74,6 +74,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        [TestCategory("TimeZone")]
         public void ImportWindow_LocalWatermark_IsConvertedToUtcBeforeItIsComparedWithTheUtcClock()
         {
             if (TimeZoneInfo.Local.GetUtcOffset(Now) == TimeSpan.Zero)

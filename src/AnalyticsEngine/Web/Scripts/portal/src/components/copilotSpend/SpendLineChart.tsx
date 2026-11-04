@@ -1,8 +1,8 @@
 import { useId, useLayoutEffect, useMemo, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { Text, makeStyles, tokens } from '@fluentui/react-components';
-import { formatDateParts, useT } from '../../i18n';
+import { formatDateParts, parseApiDate, useT } from '../../i18n';
 import { formatCompact, lineSeriesStyle, niceTicks } from '../charts/chartCommon';
-import { formatCredits, formatShortDate, parseUtcDate } from '../copilotInvestment/investmentShared';
+import { formatCredits, formatShortDate } from '../copilotInvestment/investmentShared';
 
 export interface SpendLineSeries {
   /** Already translated, or tenant data shown as stored. */
@@ -123,7 +123,7 @@ function useMeasuredWidth(element: HTMLDivElement | null): number {
 }
 
 function shortDay(date: string): string {
-  return formatDateParts(parseUtcDate(date), { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  return formatDateParts(parseApiDate(date), { day: 'numeric', month: 'short', timeZone: 'UTC' });
 }
 
 /**

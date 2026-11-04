@@ -20,7 +20,7 @@ import { fetchReportVerdict } from '../../../api/userLookupApi';
 import type { ReportLicenceVerdict, UserDiagnosticsContext, VerdictReport } from '../../../types/userDiagnostics';
 import Spinner from '../../Spinner';
 import toast from '../../toast';
-import { useT, type TFunction, type TranslationKey } from '../../../i18n';
+import { parseApiDate, useT, type TFunction, type TranslationKey } from '../../../i18n';
 import { classificationReason, formatUtc, formatUtcDate } from './diagnosticsText';
 
 const useStyles = makeStyles({
@@ -212,7 +212,7 @@ export default function ReportVerdictCard({ upn, context }: { upn: string; conte
               <Text size={200}>
                 {t('userDiagnostics.verdict.customRange', {
                   from: formatUtcDate(verdict.fromUtc),
-                  to: formatUtcDate(new Date(new Date(verdict.toExclusiveUtc).getTime() - 86_400_000).toISOString()),
+                  to: formatUtcDate(new Date(parseApiDate(verdict.toExclusiveUtc).getTime() - 86_400_000).toISOString()),
                 })}
               </Text>
             )}

@@ -251,6 +251,49 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, channel.Reactions.Count);
         }
 
+        private static ChatMessage Post(string userId, string text, params ChatMessage[] replies) =>
+            new ChatMessage
+            {
+                Id = Guid.NewGuid().ToString(),
+                From = new ChatMessageFromIdentitySet { User = new Identity { Id = userId } },
+                Body = new ItemBody { Content = text, ContentType = BodyType.Text },
+                Reactions = new List<ChatMessageReaction>(),
+                Replies = replies.ToList(),
+            };
+
+        /// <summary>
+        /// The text each remaining message would send to Azure AI Language, after the crawl has flattened the thread and
+        /// applied the scope, as the save does.
+        /// </summary>
+        private static List<string> TextSentToAzureAI(ChatMessage thread, UserImportScope scope)
+        {
+            var channel = new ChannelWithReactions();
+            channel.Messages = ChannelMessageScopeRules.SelectNewMessagesAndReactions(new[] { thread }, null).NewMessages;
+            ChannelMessageScopeRules.RestrictToUserScope(channel, scope);
+
+            return channel.Messages.SelectMany(m => CognitiveHelper.BuildTextAnalysisSampleList(m)).Select(s => s.Text).ToList();
+        }
+
+        [TestMethod]
+        public void TeamsChannel_InScopeThreadWithAnOutsidersReply_SendsNoneOfTheOutsidersWordsToAzureAI()
+        {
+            var thread = Post(PilotId, "pilot's post", Post(PilotId, "pilot's reply"), Post(OutsiderId, "outsider's reply"));
+
+            var sent = TextSentToAzureAI(thread, PilotOnly());
+
+            CollectionAssert.DoesNotContain(sent, "outsider's reply", "The outsider's reply must not reach Azure AI Language through the in-scope post it answers.");
+            CollectionAssert.AreEquivalent(new[] { "pilot's post", "pilot's reply" }, sent, "Each in-scope message is analysed once.");
+        }
+
+        [TestMethod]
+        public void TeamsChannel_Unfiltered_EveryReplyIsAnalysedOnce()
+        {
+            var thread = Post(PilotId, "post", Post(PilotId, "first reply"), Post(OutsiderId, "second reply"));
+
+            CollectionAssert.AreEquivalent(new[] { "post", "first reply", "second reply" }, TextSentToAzureAI(thread, UserImportScope.Unfiltered),
+                "Each reply is analysed as a message of its own, and not a second time with its post.");
+        }
+
         #endregion
 
         #region Web traffic

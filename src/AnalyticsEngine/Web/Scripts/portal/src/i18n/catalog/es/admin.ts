@@ -692,9 +692,11 @@ const admin: Record<keyof typeof en, string> = {
   'admin.userScope.purge.intro':
     'La purga elimina datos de análisis de cada usuario de la base de datos que está fuera del ámbito resuelto. Nunca toca a las personas dentro del ámbito ni los agregados de todo el inquilino.',
   'admin.userScope.purge.deleteList':
-    'Elimina sus eventos de registro de auditoría y detalles de Copilot; sesiones web, vistas de página, clics y búsquedas; comentarios y Me gusta de páginas; registros de correos enviados; propiedad, pertenencia y reacciones de Teams; filas de uso de Microsoft 365, Copilot y Cowork; estadísticas del historial de interacciones de Copilot; asignaciones de licencias, créditos por usuario de Copilot Studio y exclusiones de recuperación de Copilot; y finalmente su registro de usuario.',
+    'Elimina sus eventos de registro de auditoría y detalles de Copilot; sesiones web, vistas de página, clics y búsquedas; comentarios y Me gusta de páginas; registros de correos enviados; propiedad, pertenencia y reacciones de Teams; filas de uso de Microsoft 365, Copilot y Cowork y los perfiles de actividad semanales compilados a partir de ellas; estadísticas del historial de interacciones de Copilot; asignaciones de licencias, créditos por usuario de Copilot Studio, lecturas del historial de créditos de Copilot (versión preliminar) y exclusiones de recuperación de Copilot; lo que una función retirada dejó sobre ellas en una tabla que una actualización conservó; los textos de búsqueda, las frases de indicaciones de Copilot y las direcciones de correo propias que ya nada más utiliza; y finalmente su registro de usuario.',
   'admin.userScope.purge.anonymiseList':
-    'Anonimiza en vez de eliminar cuando otras personas dependen de ellas: las llamadas de Teams muestran el usuario anónimo Unknown User y pierden sus comentarios; las llamadas sin nadie dentro del ámbito se eliminan; los recursos compartidos de Power App y flujos se conservan sin destinatario; las personas que gestionaban se conservan sin responsable.',
+    'Anonimiza en vez de eliminar cuando otras personas dependen de ellas: las llamadas de Teams muestran el usuario anónimo Unknown User y pierden sus comentarios; las llamadas sin nadie dentro del ámbito se eliminan; los recursos compartidos de Power App y flujos se conservan sin destinatario; las respuestas a sus comentarios de páginas y a sus mensajes de Viva Engage se conservan sin el vínculo con ellas; las personas que gestionaban se conservan sin responsable.',
+  'admin.userScope.purge.keptList':
+    'No se elimina: los correos que les enviaron personas dentro del ámbito siguen mostrando su dirección como destinatario; los registros de auditoría y las URL de otras personas pueden seguir nombrándolas, por ejemplo una dirección de OneDrive; los registros administrativos, como quién instaló la solución o cambió una configuración del portal; el registro de cambios de organizaciones de usuarios; y lo que se guarda fuera de la base de datos de análisis, como los registros de la aplicación y el estado de los importadores en Azure Table Storage. Si el historial de créditos de Copilot (versión preliminar) está activado, lee todos los usuarios del directorio sea cual sea el ámbito, por lo que su siguiente recopilación vuelve a almacenar lecturas sobre estas personas.',
   'admin.userScope.purge.operationalList':
     'Se ejecuta de forma asíncrona en pequeños lotes mientras los importadores siguen ejecutándose. Si llegan datos nuevos de alguien durante la purga, esa persona se conserva y se cuenta como omitida; ejecutar la purga de nuevo la elimina.',
   'admin.userScope.purge.restartDurable':
@@ -716,7 +718,7 @@ const admin: Record<keyof typeof en, string> = {
     'La purga no está disponible porque no se puede conectar con Azure Table Storage, donde las purgas guardan su progreso. Compruebe que esta aplicación web puede conectarse a la cuenta de almacenamiento de la solución y, a continuación, actualice.',
   'admin.userScope.confirm.title': '¿Purgar personas fuera del ámbito?',
   'admin.userScope.confirm.acknowledge':
-    'Entiendo que esto elimina permanentemente todo lo almacenado sobre estas {count} personas y no se puede deshacer',
+    'Entiendo que esto elimina permanentemente los datos descritos arriba sobre estas {count} personas y no se puede deshacer',
   'admin.userScope.confirm.start': 'Iniciar purga',
   'admin.userScope.confirm.starting': 'Iniciando...',
   'admin.userScope.progress.title': 'Progreso de la purga',
@@ -730,7 +732,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.userScope.progress.updated': 'Actualizada',
   'admin.userScope.progress.completed': 'Completada',
   'admin.userScope.progress.skippedWarning':
-    'Estas personas se conservaron porque llegaron datos nuevos sobre ellas durante la purga. Ejecutar la purga de nuevo las elimina.',
+    'Estas personas se conservaron porque algo sigue haciendo referencia a ellas: normalmente llegaron datos nuevos sobre ellas durante la purga. Ejecutar la purga de nuevo las elimina; si no lo hace, el registro de la aplicación web indica la tabla que sigue haciendo referencia a ellas.',
   'admin.userScope.progress.cancelRequested': 'La purga se detendrá después del lote actual.',
   'admin.userScope.progress.cancelFailed': 'No se pudo detener la purga.',
   'admin.userScope.progress.rowsAffected': 'Filas afectadas por tabla o columna',
@@ -757,6 +759,8 @@ const admin: Record<keyof typeof en, string> = {
   'admin.userScope.phase.usageReports': 'Informes de uso',
   'admin.userScope.phase.copilotInteractions': 'Historial de interacciones de Copilot',
   'admin.userScope.phase.licencesAndCredits': 'Licencias y créditos',
+  'admin.userScope.phase.copilotCostPreview': 'Historial de créditos de Copilot (versión preliminar)',
+  'admin.userScope.phase.retiredFeatures': 'Datos conservados de funciones retiradas',
   'admin.userScope.phase.sharedWith': 'Recursos compartidos de Power App y flujos',
   'admin.userScope.phase.managers': 'Vínculos de responsables',
   'admin.userScope.phase.users': 'Registros de usuario',

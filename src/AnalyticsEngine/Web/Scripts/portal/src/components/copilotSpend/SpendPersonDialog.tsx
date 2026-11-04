@@ -22,7 +22,7 @@ import {
   mergeClasses,
   tokens,
 } from '@fluentui/react-components';
-import { EN_CATALOG, formatDateParts, formatNumber, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
+import { EN_CATALOG, formatDateParts, formatNumber, parseApiDate, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
 import { fetchSpendPerson, type SpendQuery } from '../../api/copilotSpendApi';
 import type { SpendDay, SpendPersonDetail, SpendPersonRow, SpendPersonUsage } from '../../types/copilotSpend';
 import {
@@ -34,7 +34,6 @@ import {
   formatShare,
   formatShareAboveZero,
   formatShortDate,
-  parseUtcDate,
   type BarRowData,
 } from '../copilotInvestment/investmentShared';
 import { agentOriginLabel } from '../copilotAdoption/serverText';
@@ -114,11 +113,11 @@ function goalLabel(t: TFunction, id: string | null, name: string | null, nameKey
 }
 
 function promptDay(iso: string): string {
-  return formatDateParts(parseUtcDate(iso), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  return formatDateParts(parseApiDate(iso), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
 
 function promptClock(iso: string): string {
-  return formatDateParts(parseUtcDate(iso), { hour: '2-digit', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short' });
+  return formatDateParts(parseApiDate(iso), { hour: '2-digit', minute: '2-digit', timeZone: 'UTC', timeZoneName: 'short' });
 }
 
 function withShare(count: number, of: number): string {

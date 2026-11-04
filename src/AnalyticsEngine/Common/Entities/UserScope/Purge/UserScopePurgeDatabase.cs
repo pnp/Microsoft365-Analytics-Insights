@@ -18,7 +18,7 @@ namespace Common.Entities.UserScope.Purge
     /// running the purge. SQL Server releases it when that session ends, however it ends, so a web app instance that
     /// crashes never leaves a purge locked, and every instance agrees about it without sharing any other state.</description></item>
     /// <item><description>The users being removed are a temporary table on that session, which every purge statement
-    /// joins to. It goes with the session.</description></item>
+    /// joins to, as are their Microsoft Entra object ids for data keyed by object id. They go with the session.</description></item>
     /// </list>
     /// </summary>
     public sealed class UserScopePurgeDatabase
@@ -156,6 +156,7 @@ SELECT @result;";
     {
         private readonly UserScopePurgeDatabase _database;
         private IReadOnlyCollection<int> _candidates = Array.Empty<int>();
+        private IReadOnlyCollection<Guid> _otherObjects = Array.Empty<Guid>();
 
         internal UserScopePurgeSession(UserScopePurgeDatabase database, SqlConnection connection)
         {
@@ -169,10 +170,15 @@ SELECT @result;";
         /// <summary>How long re-opening waits for SQL Server to let go of a broken session's lock.</summary>
         internal TimeSpan ReopenWait { get; set; } = TimeSpan.FromSeconds(60);
 
-        /// <summary>Makes <paramref name="userIds"/> the session's <c>#purge_candidates</c>.</summary>
-        internal async Task LoadCandidatesAsync(IReadOnlyCollection<int> userIds, CancellationToken cancellationToken = default)
+        /// <summary>
+        /// Makes <paramref name="userIds"/> the session's <c>#purge_candidates</c>, and their Microsoft Entra object ids plus
+        /// <paramref name="otherObjectIds"/> - people outside the scope with no user row - its <c>#purge_objects</c>.
+        /// </summary>
+        internal async Task LoadCandidatesAsync(IReadOnlyCollection<int> userIds, IReadOnlyCollection<Guid> otherObjectIds = null,
+            CancellationToken cancellationToken = default)
         {
             _candidates = userIds ?? Array.Empty<int>();
+            _otherObjects = otherObjectIds ?? Array.Empty<Guid>();
             await FillCandidatesAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -180,27 +186,55 @@ SELECT @result;";
         {
             const string create = @"
 IF OBJECT_ID(N'tempdb..#purge_candidates') IS NOT NULL DROP TABLE #purge_candidates;
-CREATE TABLE #purge_candidates (user_id int NOT NULL PRIMARY KEY CLUSTERED);";
+CREATE TABLE #purge_candidates (user_id int NOT NULL PRIMARY KEY CLUSTERED);
+IF OBJECT_ID(N'tempdb..#purge_objects') IS NOT NULL DROP TABLE #purge_objects;
+CREATE TABLE #purge_objects (object_id uniqueidentifier NOT NULL PRIMARY KEY CLUSTERED);";
             using (var command = new SqlCommand(create, Connection))
             {
                 await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            if (_candidates.Count == 0)
+            if (_candidates.Count > 0)
             {
-                return;
+                var table = new DataTable();
+                table.Columns.Add("user_id", typeof(int));
+                foreach (var id in _candidates.Distinct().OrderBy(id => id))
+                {
+                    table.Rows.Add(id);
+                }
+
+                using (var bulk = new SqlBulkCopy(Connection) { DestinationTableName = "#purge_candidates", BatchSize = 10000, BulkCopyTimeout = 600 })
+                {
+                    await bulk.WriteToServerAsync(table, cancellationToken).ConfigureAwait(false);
+                }
             }
 
-            var table = new DataTable();
-            table.Columns.Add("user_id", typeof(int));
-            foreach (var id in _candidates.Distinct().OrderBy(id => id))
+            if (_otherObjects.Count > 0)
             {
-                table.Rows.Add(id);
+                var table = new DataTable();
+                table.Columns.Add("object_id", typeof(Guid));
+                foreach (var id in _otherObjects.Distinct())
+                {
+                    table.Rows.Add(id);
+                }
+
+                using (var bulk = new SqlBulkCopy(Connection) { DestinationTableName = "#purge_objects", BatchSize = 10000, BulkCopyTimeout = 600 })
+                {
+                    await bulk.WriteToServerAsync(table, cancellationToken).ConfigureAwait(false);
+                }
             }
 
-            using (var bulk = new SqlBulkCopy(Connection) { DestinationTableName = "#purge_candidates", BatchSize = 10000, BulkCopyTimeout = 600 })
+            // The candidates' own object ids, from their user rows: read again whenever the session is, which is always
+            // before the users step deletes those rows.
+            const string objects = @"
+INSERT INTO #purge_objects (object_id)
+SELECT DISTINCT u.object_id
+FROM (SELECT TRY_CONVERT(uniqueidentifier, x.azure_ad_id) AS object_id FROM #purge_candidates c JOIN dbo.users x ON x.id = c.user_id) u
+WHERE u.object_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM #purge_objects o WHERE o.object_id = u.object_id);";
+            using (var command = new SqlCommand(objects, Connection))
             {
-                await bulk.WriteToServerAsync(table, cancellationToken).ConfigureAwait(false);
+                command.CommandTimeout = 600;
+                await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
         }
 

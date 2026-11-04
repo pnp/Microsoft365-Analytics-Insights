@@ -22,13 +22,16 @@ namespace App.ControlPanel.Engine
         {
             logger.LogInformation($"Uninstalling AITracker from {Config.SharePointConfig.TargetSites.Count} site-collections...");
 
+            SiteListInstallResult result;
             using (var authenticator = new InteractiveSpoAuthenticator(Config.SharePointConfig, logger))
             {
                 var siteInstaller = new SpoSiteListInstaller(authenticator, logger);
-                await siteInstaller.UninstallFromSites(Config.SharePointConfig.TargetSites, Config.SharePointConfig.DestinationDocLibTitle);
+                result = await siteInstaller.UninstallFromSites(Config.SharePointConfig.TargetSites, Config.SharePointConfig.DestinationDocLibTitle);
             }
 
-            logger.LogInformation($"Uninstall complete. IMPORTANT: Please remember to uninstall the SPFx solution from '{Config.SharePointConfig.AppCatalogueURL}' manually.");
+            // Sites that couldn't be done have already been reported as errors
+            logger.LogInformation((result.AllSucceeded ? "Uninstall complete. " : "Uninstall finished, but not on every site. ") +
+                $"IMPORTANT: Please remember to uninstall the SPFx solution from '{Config.SharePointConfig.AppCatalogueURL}' manually.");
         }
     }
 }

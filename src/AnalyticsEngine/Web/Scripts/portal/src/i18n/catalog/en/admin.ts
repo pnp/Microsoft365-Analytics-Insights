@@ -682,9 +682,11 @@ export const admin = {
   'admin.userScope.purge.intro':
     'The purge removes analytics data for every database user who is outside the resolved scope. It never touches people inside the scope or tenant-wide aggregates.',
   'admin.userScope.purge.deleteList':
-    'Deletes their audit-log events and Copilot details; web sessions, page views, clicks and searches; page comments and likes; sent-email records; Teams ownership, membership and reactions; Microsoft 365, Copilot and Cowork usage rows; Copilot interaction-history statistics; licence assignments, Copilot Studio per-user credits and Copilot reclaim exclusions; then their user record.',
+    'Deletes their audit-log events and Copilot details; web sessions, page views, clicks and searches; page comments and likes; sent-email records; Teams ownership, membership and reactions; Microsoft 365, Copilot and Cowork usage rows and the weekly activity profiles compiled from them; Copilot interaction-history statistics; licence assignments, Copilot Studio per-user credits, Copilot credit history (preview) readings and Copilot reclaim exclusions; anything a retired feature left about them in a table an upgrade kept; the search text, Copilot prompt phrases and own email addresses that nothing else uses any more; then their user record.',
   'admin.userScope.purge.anonymiseList':
-    'Anonymises instead of deleting where other people depend on them: Teams calls show the anonymous Unknown User and lose their feedback; calls with nobody in scope left are deleted; Power App and flow shares stay without the recipient; people they managed stay without a manager.',
+    'Anonymises instead of deleting where other people depend on them: Teams calls show the anonymous Unknown User and lose their feedback; calls with nobody in scope left are deleted; Power App and flow shares stay without the recipient; replies to their page comments and Viva Engage messages stay without the link to them; people they managed stay without a manager.',
+  'admin.userScope.purge.keptList':
+    "Not removed: email that people in scope sent them still lists their address as a recipient; other people's audit records and URLs can still name them, such as a OneDrive address; administrative records, such as who installed the solution or changed a portal setting; the user-organisation change log; and anything kept outside the analytics database, such as application logs and the importers' state in Azure Table storage. If Copilot credit history (preview) is switched on, it reads every directory user whatever the scope, so its next collection stores readings about these people again.",
   'admin.userScope.purge.operationalList':
     'Runs asynchronously in small batches while importers keep running. If new data arrives for someone during the purge, that person is kept and counted as skipped; running the purge again removes them.',
   'admin.userScope.purge.restartDurable':
@@ -706,7 +708,7 @@ export const admin = {
     "Purging is unavailable because Azure Table storage, where purges keep their progress, can't be reached. Check that this web app can reach the solution's storage account, then refresh.",
   'admin.userScope.confirm.title': 'Purge people outside the scope?',
   'admin.userScope.confirm.acknowledge':
-    'I understand that this permanently deletes everything stored about these {count} people and cannot be undone',
+    'I understand that this permanently deletes the data described above about these {count} people and cannot be undone',
   'admin.userScope.confirm.start': 'Start purge',
   'admin.userScope.confirm.starting': 'Starting...',
   'admin.userScope.progress.title': 'Purge progress',
@@ -720,7 +722,7 @@ export const admin = {
   'admin.userScope.progress.updated': 'Updated',
   'admin.userScope.progress.completed': 'Completed',
   'admin.userScope.progress.skippedWarning':
-    'These people were kept because new data about them arrived during the purge. Running the purge again removes them.',
+    "These people were kept because something still refers to them: usually new data about them arrived during the purge. Running the purge again removes them; if it doesn't, the web app's log names the table that still refers to them.",
   'admin.userScope.progress.cancelRequested': 'The purge is stopping after the current batch.',
   'admin.userScope.progress.cancelFailed': "Couldn't stop the purge.",
   'admin.userScope.progress.rowsAffected': 'Rows affected by table or column',
@@ -747,6 +749,8 @@ export const admin = {
   'admin.userScope.phase.usageReports': 'Usage reports',
   'admin.userScope.phase.copilotInteractions': 'Copilot interaction history',
   'admin.userScope.phase.licencesAndCredits': 'Licences and credits',
+  'admin.userScope.phase.copilotCostPreview': 'Copilot credit history (preview)',
+  'admin.userScope.phase.retiredFeatures': 'Data kept from retired features',
   'admin.userScope.phase.sharedWith': 'Power App and flow shares',
   'admin.userScope.phase.managers': 'Manager links',
   'admin.userScope.phase.users': 'User records',

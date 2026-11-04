@@ -314,3 +314,40 @@ describe('AgentsPanel heaviest agent users', () => {
     expect(screen.getByText(/Only the 20,000 heaviest agent users in the tenant were read/)).toBeInTheDocument();
   });
 });
+
+describe('AgentsPanel headline figures', () => {
+  function tile(label: string): HTMLElement {
+    return screen.getAllByText(label)
+      .map((element) => element.closest('.fui-Card'))
+      .find((card) => card !== null) as HTMLElement;
+  }
+
+  it('shows a past period the audit log could not measure as a dash, never as the inventory\u2019s figures', () => {
+    renderWithProvider(
+      <AgentsPanel
+        estate={{ ...ESTATE, activeAgents: null, agentInteractions: null, interactionsPerAgentUser: null }}
+        agents={AGENTS}
+        options={OPTIONS}
+        windowDays={30}
+        sql={null}
+      />,
+    );
+
+    expect(within(tile('Active agents')).getByText('\u2014')).toBeInTheDocument();
+    const intensity = tile('Interactions per agent user');
+    expect(within(intensity).getByText('\u2014')).toBeInTheDocument();
+    expect(within(intensity).getByText('Not measured for this period')).toBeInTheDocument();
+    expect(within(tile('Agent users')).getByText('25')).toBeInTheDocument();
+  });
+
+  it('shows measured figures as numbers', () => {
+    renderWithProvider(
+      <AgentsPanel estate={{ ...ESTATE, interactionsPerAgentUser: 12.5 }} agents={AGENTS} options={OPTIONS} windowDays={30} sql={null} />,
+    );
+
+    expect(within(tile('Active agents')).getByText('3')).toBeInTheDocument();
+    const intensity = tile('Interactions per agent user');
+    expect(within(intensity).getByText('12.5')).toBeInTheDocument();
+    expect(within(intensity).getByText('300 agent interactions in total')).toBeInTheDocument();
+  });
+});

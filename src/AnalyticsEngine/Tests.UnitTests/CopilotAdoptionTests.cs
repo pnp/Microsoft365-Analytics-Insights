@@ -232,6 +232,63 @@ namespace Tests.UnitTests
                 "Even a deep user working in a single surface should be told the cheapest available gain.");
         }
 
+        [DataTestMethod]
+        [DataRow(2, 1, true)]
+        [DataRow(2, 2, false)]
+        [DataRow(3, 1, true)]
+        [DataRow(3, 2, false)]
+        [DataRow(5, 2, true)]
+        [DataRow(5, 3, false)]
+        public void AddAnotherApp_FollowsTheConfiguredBreadthTarget(int targetApps, int appsUsed, bool broaden)
+        {
+            // Broaden used fixed breadth-score thresholds (below 34, below 50) that meant "one app" only at the
+            // default target of 3: with a target of 2 nobody in one app was told to broaden, and with a target of
+            // 5 a Developing user in two apps was not either. The rule is now at most half the target, whatever
+            // it is, and the wording never assumes the person is in exactly one app.
+            var options = new CopilotAdoptionOptions { BreadthTargetApps = targetApps };
+
+            var developing = CopilotAdoptionScoring.Score(
+                UsageRow(interactions: 8, activeDays: 3, appsUsed: appsUsed, lastUse: Now), WindowStart, Now, auditAvailable: true, options);
+            var established = CopilotAdoptionScoring.Score(
+                UsageRow(interactions: 25, activeDays: 5, appsUsed: appsUsed, lastUse: Now), WindowStart, Now, auditAvailable: true, options);
+            var champion = CopilotAdoptionScoring.Score(
+                UsageRow(interactions: 100, activeDays: 20, appsUsed: appsUsed, lastUse: Now), WindowStart, Now, auditAvailable: true, options);
+
+            Assert.AreEqual(AdoptionBand.Developing, developing.Band, "Test setup: a Developing habit.");
+            Assert.AreEqual(AdoptionBand.Established, established.Band, "Test setup: an Established habit.");
+            Assert.AreEqual(AdoptionBand.Champion, champion.Band, "Test setup: a Champion.");
+
+            Assert.AreEqual(broaden ? CopilotAdoptionScoring.AdoptionActionCodes.Broaden : CopilotAdoptionScoring.AdoptionActionCodes.Grow,
+                developing.RecommendedActionCode, $"Developing, {appsUsed} of a target of {targetApps} apps.");
+            Assert.AreEqual(broaden ? CopilotAdoptionScoring.AdoptionActionCodes.Broaden : CopilotAdoptionScoring.AdoptionActionCodes.Sustain,
+                established.RecommendedActionCode, $"Established, {appsUsed} of a target of {targetApps} apps.");
+            Assert.AreEqual(broaden, champion.RecommendedAction.Contains("and broaden"), $"Champion, {appsUsed} of a target of {targetApps} apps.");
+            Assert.AreEqual(broaden, developing.NeedsBroadening, "The fact the portal words its advice from.");
+
+            foreach (var scored in new[] { developing, established, champion })
+            {
+                StringAssert.DoesNotMatch(scored.RecommendedAction, new System.Text.RegularExpressions.Regex("second"),
+                    "Someone in two apps of five is not adding a second app.");
+                StringAssert.DoesNotMatch(scored.RecommendedActionLabel ?? string.Empty, new System.Text.RegularExpressions.Regex("second"));
+            }
+
+            if (broaden)
+            {
+                StringAssert.StartsWith(developing.RecommendedAction, "Add another app");
+                StringAssert.Contains(developing.RecommendedAction, appsUsed == 1 ? "a single Copilot app" : $"{appsUsed} Copilot apps");
+            }
+        }
+
+        [TestMethod]
+        public void BroadenDescription_NamesTheConfiguredTargetRatherThanASingleSurface()
+        {
+            var description = CopilotAdoptionScoring.ActionDescription(
+                CopilotAdoptionScoring.AdoptionActionCodes.Broaden, new CopilotAdoptionOptions { BreadthTargetApps = 5 });
+
+            StringAssert.Contains(description, "half of the 5 Copilot apps");
+            Assert.IsFalse(description.Contains("single"), "With a target of 5, someone in two apps qualifies too.");
+        }
+
         [TestMethod]
         public void WhenAuditIsUnavailable_MicrosoftsReportIsUsedInstead()
         {
@@ -2263,6 +2320,73 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void DepartmentRows_CarryTheirOwnCandidateCount_NotTheTopCandidateDepartmentsLookup()
+        {
+            // The league table's rows are the departments with the LOWEST habit rate; the candidate chart keeps
+            // the departments with the MOST candidates. Joined, a low-habit department outside that chart read as
+            // having no candidates at all. Each row now carries its own count, over every candidate.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.LicensedUsers.AddRange(
+                Enumerable.Range(0, 5).Select(i => Departmental($"support{i}@contoso.com", "Support", 10)));
+            analysis.LicensedUsers.AddRange(
+                Enumerable.Range(0, 5).Select(i => Departmental($"legal{i}@contoso.com", "Legal", 10)));
+            analysis.LicensedUsers.AddRange(
+                Enumerable.Range(0, 5).Select(i => Departmental($"sales{i}@contoso.com", "Sales", 80)));
+            analysis.Opportunities.AddRange(Enumerable.Range(0, 6)
+                .Select(i => new LicenceOpportunityRow { UserId = 100 + i, Department = i % 2 == 0 ? "Support " : "Support", Recommended = true }));
+            analysis.Opportunities.AddRange(Enumerable.Range(0, 9)
+                .Select(i => new LicenceOpportunityRow { UserId = 200 + i, Department = "Sales", Recommended = true }));
+            analysis.Opportunities.AddRange(Enumerable.Range(0, 8)
+                .Select(i => new LicenceOpportunityRow { UserId = 400 + i, Department = "Marketing", Recommended = true }));
+            analysis.Opportunities.Add(new LicenceOpportunityRow { UserId = 300, Department = "Legal", Recommended = false });
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions { TopSegments = 2 }).FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+
+            CollectionAssert.AreEqual(new[] { "Sales", "Marketing" }, summary.OpportunityByDepartment.Select(c => c.Label).ToList(),
+                "The candidate chart keeps the departments with the most candidates - Support is not among them.");
+            CollectionAssert.AreEquivalent(new[] { "Support", "Legal" }, summary.HabitByDepartment.Select(r => r.Segment).ToList());
+            Assert.AreEqual(6, summary.HabitByDepartment.Single(r => r.Segment == "Support").RecommendedCandidates,
+                "A department's own candidates, trimmed to the segment key, whichever departments the chart kept.");
+            Assert.AreEqual(0, summary.HabitByDepartment.Single(r => r.Segment == "Legal").RecommendedCandidates,
+                "A department with nobody recommended has a measured zero.");
+            var expected = new Dictionary<string, int?> { { "Support", 6 }, { "Legal", 0 }, { "Sales", 9 } };
+            foreach (var row in summary.AdoptionByDepartment)
+            {
+                Assert.AreEqual(expected[row.Segment], row.RecommendedCandidates, $"The adoption breakdown's {row.Segment} row.");
+            }
+        }
+
+        [TestMethod]
+        public void DepartmentCandidateCounts_KeepTheSmallGroupFloor()
+        {
+            var rows = new List<AdoptionSegmentRow>
+            {
+                new AdoptionSegmentRow { Segment = "Finance" },
+                new AdoptionSegmentRow { Segment = "Legal" },
+                new AdoptionSegmentRow { Segment = "Support" },
+                new AdoptionSegmentRow { Segment = "(no department)" },
+            };
+            var candidates = new List<LicenceOpportunityRow>();
+            candidates.AddRange(Enumerable.Range(0, 5).Select(i => new LicenceOpportunityRow { UserId = i, Department = "Finance" }));
+            candidates.AddRange(Enumerable.Range(0, 4).Select(i => new LicenceOpportunityRow { UserId = 10 + i, Department = "Legal" }));
+            candidates.AddRange(Enumerable.Range(0, 5).Select(i => new LicenceOpportunityRow { UserId = 20 + i, Department = i == 0 ? null : "  " }));
+
+            CopilotAdoptionService.AssignRecommendedCandidates(rows, candidates, "(no department)", minSeatsPerSegment: 5, candidatesCapped: false);
+
+            Assert.AreEqual(5, rows[0].RecommendedCandidates, "At the floor: published.");
+            Assert.IsNull(rows[1].RecommendedCandidates, "Four of a small team's unlicensed people: withheld, not zero.");
+            Assert.AreEqual(0, rows[2].RecommendedCandidates, "No candidates: a measured zero.");
+            Assert.AreEqual(5, rows[3].RecommendedCandidates, "Blank departments count under the same label as the row.");
+
+            CopilotAdoptionService.AssignRecommendedCandidates(rows, candidates, "(no department)", minSeatsPerSegment: 5, candidatesCapped: true);
+
+            Assert.IsNull(rows[2].RecommendedCandidates,
+                "Past the candidate list's cap nobody was scored, so a zero there is unknown rather than measured.");
+            Assert.AreEqual(5, rows[0].RecommendedCandidates);
+        }
+
+        [TestMethod]
         public void DepartmentBreakdowns_LeaveOutDepartmentsWithFewerPeopleThanTheMinimum()
         {
             // One unlicensed Chat user's volume, or one or two candidates, would describe identifiable people in a
@@ -2415,10 +2539,102 @@ namespace Tests.UnitTests
 
             new CopilotAdoptionService().FinaliseSummary(analysis);
 
-            Assert.AreEqual(40, analysis.Summary.Agents.AgentInteractions,
+            Assert.AreEqual(40L, analysis.Summary.Agents.AgentInteractions,
                 "The headline interaction count must be the in-period figure, not the whole history.");
-            Assert.AreEqual(40, analysis.Summary.Agents.InteractionsPerAgentUser, 0.01,
+            Assert.AreEqual(40, analysis.Summary.Agents.InteractionsPerAgentUser.Value, 0.01,
                 "Numerator and denominator must share the reporting window.");
+        }
+
+        [TestMethod]
+        public void AgentHeadlineFigures_ForAPastRange_DescribeThePeriodNotTheLatestWeeks()
+        {
+            // A past range: the inventory reads up to now, so its agents look "active" since the period
+            // started and their window interactions are the latest weeks'. Divided by the PERIOD's agent
+            // users that gave a ratio belonging to no period. The period's own read must win.
+            var options = new CopilotAdoptionOptions { UsesExplicitDates = true };
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.FromUtc = Now.AddDays(-200);
+            analysis.Summary.DataSources.AuditAvailable = true;
+
+            for (var i = 0; i < 3; i++)
+            {
+                var user = ScoredUser($"agentuser{i}@contoso.com", 80, AdoptionBand.Champion);
+                user.AgentsUsed = 1;
+                analysis.LicensedUsers.Add(user);
+            }
+            analysis.Summary.LicensedUsers = 3;
+
+            var latest = Agent("Contoso Expenses Agent", users: 40, interactions: 5000, appsUsed: 2);
+            latest.WindowInteractions = 1000;
+            analysis.Agents.Add(latest);
+            analysis.Agents.Add(Agent("Contoso Travel Agent", users: 10, interactions: 900, appsUsed: 1));
+            analysis.AgentPeriodUsage = new AgentPeriodUsage { ActiveAgents = 1, Interactions = 60 };
+
+            new CopilotAdoptionService(options).FinaliseSummary(analysis);
+            var estate = analysis.Summary.Agents;
+
+            Assert.AreEqual(1, estate.ActiveAgents, "Agents used in the period, not the inventory's agents.");
+            Assert.AreEqual(60L, estate.AgentInteractions, "The period's interactions, not the latest weeks'.");
+            Assert.AreEqual(3, estate.AgentUsers);
+            Assert.AreEqual(20d, estate.InteractionsPerAgentUser.Value, 0.01, "Both sides of the ratio describe the period.");
+            Assert.AreEqual(2, estate.KnownAgents, "The inventory itself is still today's.");
+            Assert.IsFalse(analysis.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.AgentPeriodFiguresUnavailable));
+        }
+
+        [TestMethod]
+        public void AgentHeadlineFigures_ForAPastRangeTheAuditLogDoesNotHold_AreBlankAndSaySo()
+        {
+            // Only today's inventory exists: its figures must not stand in for the period's, and the reader is
+            // told why the tiles are blank.
+            var options = new CopilotAdoptionOptions { UsesExplicitDates = true };
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.FromUtc = Now.AddDays(-400);
+            analysis.Summary.DataSources.AuditAvailable = false;
+            analysis.Agents.Add(Agent("Contoso Expenses Agent", users: 40, interactions: 5000, appsUsed: 2));
+
+            new CopilotAdoptionService(options).FinaliseSummary(analysis);
+            var estate = analysis.Summary.Agents;
+
+            Assert.IsNull(estate.ActiveAgents, "Not measured, not the inventory's count.");
+            Assert.IsNull(estate.AgentInteractions);
+            Assert.IsNull(estate.InteractionsPerAgentUser);
+            Assert.AreEqual(1, estate.KnownAgents);
+            Assert.AreEqual(1, analysis.Summary.WarningDetails.Count(d => d.Key == CopilotAdoptionWarningKeys.AgentPeriodFiguresUnavailable));
+            AssertWarningDetailsMatchEnglish(analysis.Summary);
+        }
+
+        [TestMethod]
+        public void AgentHeadlineFigures_ForAPastRangeWhosePeriodReadFailed_AreBlankWithoutClaimingNoHistory()
+        {
+            // The audit log holds the period but its read failed: the couldNotLoad warning already says so,
+            // and "holds nothing for this period" would be untrue.
+            var options = new CopilotAdoptionOptions { UsesExplicitDates = true };
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.FromUtc = Now.AddDays(-200);
+            analysis.Summary.DataSources.AuditAvailable = true;
+            analysis.Agents.Add(Agent("Contoso Expenses Agent", users: 40, interactions: 5000, appsUsed: 2));
+
+            new CopilotAdoptionService(options).FinaliseSummary(analysis);
+
+            Assert.IsNull(analysis.Summary.Agents.ActiveAgents);
+            Assert.IsNull(analysis.Summary.Agents.InteractionsPerAgentUser);
+            Assert.IsFalse(analysis.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.AgentPeriodFiguresUnavailable));
+        }
+
+        [TestMethod]
+        public void AgentPeriodUsage_CountsTheAgentsUsedInThePeriodAndSumsTheirInteractions()
+        {
+            var usage = AgentPeriodUsage.From(new List<AgentUsageQueryRow>
+            {
+                new AgentUsageQueryRow { AgentId = 1, WindowInteractions = 40 },
+                new AgentUsageQueryRow { AgentId = 2, WindowInteractions = 2 },
+                new AgentUsageQueryRow { AgentId = 3, WindowInteractions = 0 },
+            });
+
+            Assert.AreEqual(2, usage.ActiveAgents, "An agent with no interaction in the period is not active in it.");
+            Assert.AreEqual(42L, usage.Interactions);
+            Assert.AreEqual(0, AgentPeriodUsage.From(new List<AgentUsageQueryRow>()).ActiveAgents, "A measured zero.");
+            Assert.IsNull(AgentPeriodUsage.From(null), "A failed read is unknown, not zero.");
         }
 
         [TestMethod]
@@ -2744,7 +2960,9 @@ namespace Tests.UnitTests
                 { CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange, Case("Licence assignment history starts on 1 Jan 2026. Seat holders before that date are reconstructed from seeded rows held at the first history refresh, so people whose seat was removed earlier are missing, and people first licensed after the selected period may be included from the range start.", "historyStart", new DateTime(2026, 1, 1)) },
                 { CopilotAdoptionWarningKeys.PastRangeNamedListsHidden, Case("This period does not end today, so named reclaim and recommendation lists and their exports are hidden. Counts remain visible; named action lists are only shown for periods ending today.") },
                 { CopilotAdoptionWarningKeys.CurrentOrgDataForPastRange, Case("Department, manager, country, office, company, account status and reclaim exclusions are today's values, not historical values for the selected period.") },
-                { CopilotAdoptionWarningKeys.AgentInventoryAsOfNow, Case("The agent inventory remains an as-of-now view even when the reporting period is historical.") },                { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, Case("Microsoft's pinned Copilot usage-report period is D90, but this analysis window is D28. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\".", "reportDays", 90, "analysisDays", 28) },
+                { CopilotAdoptionWarningKeys.AgentInventoryAsOfNow, Case("The agent inventory - the agents listed, their health verdicts and agent use by department - remains an as-of-now view even when the reporting period is historical. Active agents, agent users and interactions per agent user describe the selected period.") },
+                { CopilotAdoptionWarningKeys.AgentPeriodFiguresUnavailable, Case("The Copilot audit log holds nothing for this period, so its active agents, agent interactions and interactions per agent user are left blank rather than taken from the agent inventory, which describes the latest weeks and not this period.") },
+                { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, Case("Microsoft's pinned Copilot usage-report period is D90, but this analysis window is D28. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\".", "reportDays", 90, "analysisDays", 28) },
                 { CopilotAdoptionWarningKeys.CoworkEligibilityUnknown, Case("Cowork use is shown as a number of people, not as a percentage. Working out a percentage needs the number of people allowed to use Cowork. That is decided by your spending policies that include Cowork, not by the number of Copilot licences, and this tool can't read those policies. The Cowork entry in the Microsoft 365 admin centre (Agents > All Agents) no longer controls access, so it isn't used as a substitute. This is expected and needs no action.") },
                 { CopilotAdoptionWarningKeys.PurchasedSeatsUnknown, Case("Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits has not been imported. Grant Organization.Read.All and rerun the user metadata import; the report deliberately does not show zero for unassigned seats when the purchase inventory is missing.") },
                 { CopilotAdoptionWarningKeys.SkuSeatMismatch, Case("Purchased and assigned Copilot seats disagree for Contoso Copilot SKU: Graph reports 1,234 purchased but 1,200 assigned, so unassigned seats are shown as Unknown rather than zero.", "skuName", "Contoso Copilot SKU", "purchased", 1234, "assigned", 1200) },

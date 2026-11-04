@@ -226,8 +226,8 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
       { segment: 'Sales', licensedUsers: 50, activeUsers: 40, habitualUsers: 25, neverUsedUsers: 5, adoptionRatePct: 80, averageAdoptionScore: 62 },
     ],
     habitByDepartment: [
-      { segment: 'Support', licensedUsers: 25, activeUsers: 25, habitualUsers: 0, neverUsedUsers: 0, adoptionRatePct: 100, averageAdoptionScore: 30 },
-      { segment: 'Finance', licensedUsers: 30, activeUsers: 10, habitualUsers: 3, neverUsedUsers: 15, adoptionRatePct: 33.3, averageAdoptionScore: 22 },
+      { segment: 'Support', licensedUsers: 25, activeUsers: 25, habitualUsers: 0, neverUsedUsers: 0, adoptionRatePct: 100, averageAdoptionScore: 30, recommendedCandidates: null },
+      { segment: 'Finance', licensedUsers: 30, activeUsers: 10, habitualUsers: 3, neverUsedUsers: 15, adoptionRatePct: 33.3, averageAdoptionScore: 22, recommendedCandidates: 6 },
     ],
     adoptionByCountry: [{ segment: 'United Kingdom', licensedUsers: 120, activeUsers: 72, habitualUsers: 36, neverUsedUsers: 30, adoptionRatePct: 60, averageAdoptionScore: 42 }],
     emailDomains: [
@@ -479,16 +479,38 @@ describe('CopilotAdoptionPage view split', () => {
     expect(screen.queryByRole('button', { name: 'SQL' })).not.toBeInTheDocument();
   });
 
-  it('shows a dash, not zero candidates, for a league-table department the candidate breakdown does not list', async () => {
+  it('shows a dash, not zero candidates, for a league-table department whose count is withheld', async () => {
     await renderPage();
 
     const table = await screen.findByRole('table', { name: 'Department league table' });
-    // Support has no published candidate count - too few candidates to show, or past the breakdown's cap.
+    // Support has no published candidate count - too few candidates to show, or past the candidate list's cap.
     const support = within(within(table).getByText('Support').closest('tr') as HTMLElement);
     expect(support.getAllByText('\u2014')).toHaveLength(2);
     const finance = within(within(table).getByText('Finance').closest('tr') as HTMLElement);
     expect(finance.getByText('6')).toBeVisible();
     expect(finance.queryByText('\u2014')).toBeNull();
+  });
+
+  it('shows each league-table department its own candidate count, including a true zero, whatever the candidate chart keeps', async () => {
+    // The rows are the lowest habit-rate departments and the candidate chart the departments with the most
+    // candidates: Legal and Operations are in neither of the chart's two rows, but each row carries its own count.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      habitByDepartment: [
+        { segment: 'Legal', licensedUsers: 20, activeUsers: 10, habitualUsers: 1, neverUsedUsers: 2, adoptionRatePct: 50, averageAdoptionScore: 20, recommendedCandidates: 7 },
+        { segment: 'Operations', licensedUsers: 20, activeUsers: 10, habitualUsers: 2, neverUsedUsers: 4, adoptionRatePct: 50, averageAdoptionScore: 25, recommendedCandidates: 0 },
+      ],
+      opportunityByDepartment: [{ label: 'Finance', value: 9 }, { label: 'Sales', value: 8 }],
+    }));
+    await renderPage();
+
+    const table = await screen.findByRole('table', { name: 'Department league table' });
+    const legal = within(within(table).getByText('Legal').closest('tr') as HTMLElement);
+    expect(legal.getByText('7')).toBeVisible();
+    expect(legal.getByText('5 more candidates than never-used seats')).toBeVisible();
+    const operations = within(within(table).getByText('Operations').closest('tr') as HTMLElement);
+    expect(operations.getByText('0')).toBeVisible();
+    expect(operations.getByText('4 more never-used seats than candidates')).toBeVisible();
+    expect(operations.queryByText('\u2014')).toBeNull();
   });
 
   it('shows Microsoft’s tenant prompt figures on the executive view, named and dated, beside the audit figures', async () => {

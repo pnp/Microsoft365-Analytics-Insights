@@ -24,7 +24,7 @@ import { KpiGrid, formatCount, formatDate } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { PrintedFilters, printedSearch, useAdoptionTableStyles } from './adoptionShared';
-import { useT, type TFunction } from '../../i18n';
+import { formatNumber, useT, type TFunction } from '../../i18n';
 import { agentHealthReason, agentOriginLabel } from './serverText';
 import { AgentReachCells, AgentReachHeaderCells } from './AgentReachColumns';
 import AgentGrowthLine from './AgentGrowthLine';
@@ -739,12 +739,14 @@ function buildAgentKpis(
   t: TFunction,
 ): KpiDefinition[] {
   const retire = estate.healthBreakdown.find((h) => h.label === 'Retire')?.value ?? 0;
+  // Null for a past period the audit log could not measure: a dash, never the inventory's figure.
+  const notMeasured = t('copilotAdoptionAgents.agents.kpi.notMeasuredForPeriod');
 
   return [
     {
       key: 'active',
       label: t('copilotAdoptionAgents.agents.kpi.active.label'),
-      value: formatCount(estate.activeAgents),
+      value: estate.activeAgents === null ? '\u2014' : formatCount(estate.activeAgents),
       hint: t('copilotAdoptionAgents.agents.kpi.active.hint', {
         known: formatCount(estate.knownAgents),
         custom: formatCount(estate.customAgents),
@@ -774,8 +776,12 @@ function buildAgentKpis(
     {
       key: 'intensity',
       label: t('copilotAdoptionAgents.agents.kpi.intensity.label'),
-      value: estate.interactionsPerAgentUser,
-      hint: t('copilotAdoptionAgents.agents.kpi.intensity.hint', { interactions: formatCount(estate.agentInteractions) }),
+      value: estate.interactionsPerAgentUser === null
+        ? '\u2014'
+        : formatNumber(estate.interactionsPerAgentUser, { maximumFractionDigits: 1 }),
+      hint: estate.agentInteractions === null
+        ? notMeasured
+        : t('copilotAdoptionAgents.agents.kpi.intensity.hint', { interactions: formatCount(estate.agentInteractions) }),
       info: {
         what: t('copilotAdoptionAgents.agents.kpi.intensity.what'),
         how: t('copilotAdoptionAgents.agents.kpi.intensity.how'),

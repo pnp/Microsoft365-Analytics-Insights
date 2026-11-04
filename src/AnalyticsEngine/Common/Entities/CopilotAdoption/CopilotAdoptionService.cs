@@ -743,6 +743,41 @@ namespace Common.Entities.CopilotAdoption
                 output,
                 "Copilot agent usage", cancellationToken);
 
+            // A past range: the inventory above reads up to now, so its window figures are the latest weeks',
+            // while the agent users they are divided by are the period's. The period's own agent use is read
+            // with the same query over the period, so both sides of the headline figures describe it. Only
+            // where the audit log holds the period: otherwise there is nothing to read, and FinaliseAgents
+            // leaves the period's figures blank rather than borrowing today's.
+            var inventoryIsThePeriod = agentWindowStart == windowStart && agentToExclusive == toExclusive;
+            if (!inventoryIsThePeriod && summary.DataSources.AuditAvailable)
+            {
+                var periodParameters = new Dictionary<string, object>
+                {
+                    { "@from", windowStart },
+                    { "@toExclusive", toExclusive },
+                    { "@historyFrom", windowStart },
+                    { "@maxRows", _options.MaxAgents },
+                };
+                output.Sql["agentsInPeriod"] = CopilotAdoptionSql.ForDisplay(sql, periodParameters);
+
+                var periodRows = await SafeAsync(
+                    () => QueryAsync<AgentUsageQueryRow>(sql, cancellationToken, ToSqlParameters(periodParameters)),
+                    CopilotAdoptionSteps.AgentEstate,
+                    CopilotAdoptionQueries.AgentPeriodUsage,
+                    output,
+                    "Copilot agent usage in the reporting period", cancellationToken);
+
+                analysis.AgentPeriodUsage = AgentPeriodUsage.From(periodRows);
+                if (periodRows != null
+                    && periodRows.Count >= _options.MaxAgents
+                    && (rows == null || rows.Count < _options.MaxAgents))
+                {
+                    output.AddWarning(
+                        CopilotAdoptionWarningKeys.AgentInventoryCapped,
+                        new Dictionary<string, object> { { "maxAgents", _options.MaxAgents } });
+                }
+            }
+
             if (rows == null) return;
 
             analysis.Agents = rows
@@ -2139,6 +2174,13 @@ namespace Common.Entities.CopilotAdoption
             var opportunities = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
             var recommended = opportunities.Where(o => o.Recommended).ToList();
             summary.RecommendedForLicence = recommended.Count;
+
+            // Each department row's own candidate count, from every recommended candidate. The executive league
+            // table used to look its departments up in OpportunityByDepartment below - the departments with the
+            // MOST candidates - while its rows are the ones with the LOWEST habit rate, so most rows found nothing.
+            AssignRecommendedCandidates(summary.AdoptionByDepartment, recommended, "(no department)", _options.MinSeatsPerSegment, analysis.OpportunitiesCapped);
+            AssignRecommendedCandidates(summary.HabitByDepartment, recommended, "(no department)", _options.MinSeatsPerSegment, analysis.OpportunitiesCapped);
+
             // Like every other department breakdown, a department needs MinSeatsPerSegment people behind its
             // figure: one or two candidates would say which of a small team's few unlicensed people work hardest.
             summary.OpportunityByDepartment = recommended
@@ -2590,10 +2632,30 @@ namespace Common.Entities.CopilotAdoption
                 .Where(a => a.LastUsedUtc.HasValue && a.LastUsedUtc.Value >= summary.FromUtc)
                 .ToList();
 
-            estate.ActiveAgents = activeInWindow.Count;
-            // Window-scoped, to match the window-scoped user count it is divided by. Using the
-            // history-wide interaction total here inflated the KPI by the ratio of the two windows.
-            estate.AgentInteractions = activeInWindow.Sum(a => a.WindowInteractions);
+            if (!_options.UsesExplicitDates)
+            {
+                estate.ActiveAgents = activeInWindow.Count;
+                // Window-scoped, to match the window-scoped user count it is divided by. Using the
+                // history-wide interaction total here inflated the KPI by the ratio of the two windows.
+                estate.AgentInteractions = activeInWindow.Sum(a => a.WindowInteractions);
+            }
+            else if (analysis.AgentPeriodUsage != null)
+            {
+                // A past range: the inventory reads up to now, so its window figures are the latest weeks'.
+                // The period's own read is what the period's agent users can be divided by.
+                estate.ActiveAgents = analysis.AgentPeriodUsage.ActiveAgents;
+                estate.AgentInteractions = analysis.AgentPeriodUsage.Interactions;
+            }
+            else
+            {
+                // Not measured for this period - never the inventory's figures under the period's heading.
+                estate.ActiveAgents = null;
+                estate.AgentInteractions = null;
+                if (!(summary.DataSources?.AuditAvailable ?? false) && agents.Count > 0)
+                {
+                    CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.AgentPeriodFiguresUnavailable);
+                }
+            }
 
             // Agent users cannot be summed across agents without double-counting anyone who uses two,
             // so the figure comes from the per-user rows instead: licensed users carry AgentsUsed, and
@@ -2605,9 +2667,11 @@ namespace Common.Entities.CopilotAdoption
 
             estate.LicensedAgentUsers = licensedAgentUsers;
             estate.AgentUsers = licensedAgentUsers + unlicensedAgentUsers;
-            estate.InteractionsPerAgentUser = estate.AgentUsers == 0
-                ? 0
-                : Math.Round(estate.AgentInteractions / (double)estate.AgentUsers, 1, MidpointRounding.AwayFromZero);
+            estate.InteractionsPerAgentUser = !estate.AgentInteractions.HasValue
+                ? (double?)null
+                : estate.AgentUsers == 0
+                    ? 0
+                    : Math.Round(estate.AgentInteractions.Value / (double)estate.AgentUsers, 1, MidpointRounding.AwayFromZero);
 
             estate.MostPopularAgent = agents
                 .OrderByDescending(a => a.Users)
@@ -3576,6 +3640,44 @@ namespace Common.Entities.CopilotAdoption
                 .ThenByDescending(s => s.LicensedUsers)
                 .Take(_options.TopSegments)
                 .ToList();
+        }
+
+        /// <summary>
+        /// Writes each department row's recommended-candidate count onto it
+        /// (<see cref="AdoptionSegmentRow.RecommendedCandidates"/>), counted over every recommended candidate,
+        /// whatever departments any other breakdown keeps.
+        /// </summary>
+        /// <remarks>
+        /// Departments are keyed exactly as <see cref="BuildSegments"/> keys them - trimmed, with blanks under
+        /// <paramref name="emptyLabel"/> - so a candidate is counted against the row it belongs to. A count is
+        /// published when it is zero or reaches <paramref name="minSeatsPerSegment"/>, the floor every department
+        /// breakdown keeps; between the two it would say how many of a small team's unlicensed people work
+        /// hardest, so it is withheld (null). A zero from a candidate list that stopped at its row cap is
+        /// unknown, not measured: the people past the cap were never scored. Internal and static so it can be
+        /// tested from hand-built rows.
+        /// </remarks>
+        internal static void AssignRecommendedCandidates(
+            IEnumerable<AdoptionSegmentRow> rows,
+            IEnumerable<LicenceOpportunityRow> recommended,
+            string emptyLabel,
+            int minSeatsPerSegment,
+            bool candidatesCapped)
+        {
+            var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var candidate in recommended ?? Enumerable.Empty<LicenceOpportunityRow>())
+            {
+                var department = string.IsNullOrWhiteSpace(candidate.Department) ? emptyLabel : candidate.Department.Trim();
+                counts.TryGetValue(department, out var count);
+                counts[department] = count + 1;
+            }
+
+            foreach (var row in rows ?? Enumerable.Empty<AdoptionSegmentRow>())
+            {
+                counts.TryGetValue(row.Segment ?? emptyLabel, out var count);
+                row.RecommendedCandidates = count == 0
+                    ? (candidatesCapped ? (int?)null : 0)
+                    : count >= minSeatsPerSegment ? count : (int?)null;
+            }
         }
 
         /// <summary>

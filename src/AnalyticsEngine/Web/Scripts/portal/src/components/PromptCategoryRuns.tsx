@@ -5,7 +5,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular } from '@fluentui/react-icons';
 import { fetchPromptCategoryRuns, type PromptCategoryRun } from '../api/promptCategoriesApi';
-import { activeLocale, formatDateParts, formatNumber, useT, type TranslationKey } from '../i18n';
+import { activeLocale, formatDateParts, formatNumber, parseApiDate, useT, type TranslationKey } from '../i18n';
 import Spinner from './Spinner';
 import { promptCategoryErrorText } from './promptCategoryErrors';
 
@@ -94,7 +94,7 @@ export default function PromptCategoryRuns({ active, storageAvailable }: { activ
         </TableRow></TableHeader>
         <TableBody>
           {runs.map((run, index) => {
-            const started = new Date(run.startedUtc);
+            const started = parseApiDate(run.startedUtc);
             const reason = REASONS[run.counters.reason] ?? UNKNOWN_REASON;
             const c = run.counters;
             return <TableRow key={`${run.startedUtc}-${index}`}>

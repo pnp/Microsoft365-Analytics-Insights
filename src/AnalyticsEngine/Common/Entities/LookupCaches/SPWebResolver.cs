@@ -1,70 +1,139 @@
 ﻿using DataUtils;
+using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace Common.Entities
 {
+    /// <summary>
+    /// Finds the web, and the site collection, that a SharePoint audit event belongs to.
+    /// </summary>
+    /// <remarks>
+    /// URLs are compared without case, as the SQL collation of <c>webs.url_base</c> and <c>sites.url_base</c> compares them
+    /// (their unique indexes would refuse two rows that differ only in case), and without trailing slashes. A web or site
+    /// is only ever matched as a parent on whole path segments, and never across a site collection boundary.
+    /// </remarks>
     public class SPWebResolver
     {
-        private Dictionary<string, Site> _siteCache = null;
-        private Dictionary<string, Web> _websCache = null;
+        /// <summary>
+        /// SharePoint Online's wildcard managed paths. <c>/sites/name</c>, <c>/teams/name</c> and, on the OneDrive host,
+        /// <c>/personal/name</c> are each a site collection of their own, never part of the root site collection above them.
+        /// </summary>
+        private static readonly string[] SiteCollectionManagedPaths = { "sites", "teams", "personal" };
 
-        public SPWebResolver()
-        {
-            _siteCache = new Dictionary<string, Site>();
-            _websCache = new Dictionary<string, Web>();
-        }
+        private readonly Dictionary<string, Site> _siteCache = new Dictionary<string, Site>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Web> _websCache = new Dictionary<string, Web>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The web found for an address inside a web, such as a file's, or null when there was none.</summary>
+        private readonly Dictionary<string, Web> _containingWebCache = new Dictionary<string, Web>(StringComparer.OrdinalIgnoreCase);
+
+        private static string CacheKey(string url) => StringUtils.RemoveTrailingSlash(url);
 
         Site GetOrCreateSite(string siteUrl)
         {
-            // Populate cache with all sites
-            if (!_siteCache.ContainsKey(siteUrl))
+            var key = CacheKey(siteUrl);
+            if (!_siteCache.TryGetValue(key, out var site))
             {
-                var s = new Site() { UrlBase = siteUrl };
-                _siteCache.Add(siteUrl, s);
+                site = new Site() { UrlBase = siteUrl };
+                _siteCache.Add(key, site);
             }
 
-            return _siteCache[siteUrl];
+            return site;
         }
 
         /// <summary>
-        /// Gets closest web for a URL, optionally or creates new webs + corrsponding site if no matching site found.
-        /// Sometimes we don't want to create if not found if the original URL is a file, not a site so we can't with any confidence create a new site from it
+        /// Gets the web an audit event belongs to, or creates it and its site collection.
         /// </summary>
+        /// <param name="url">
+        /// With <paramref name="createIfNoneFound"/>, the address of the web itself: an audit record's <c>SiteUrl</c>. Without
+        /// it, an address inside a web, such as a file's.
+        /// </param>
+        /// <param name="createIfNoneFound">
+        /// <para>
+        /// True for a web's own address. Returns the web with exactly that address, created the first time it is seen. It is
+        /// never matched to a parent web: <c>/sites/hr</c> is not part of the root site, and <c>/sites/hrdocs</c> is not
+        /// <c>/sites/hr</c>.
+        /// </para>
+        /// <para>
+        /// False for an address inside a web. Returns the nearest web that contains it, in the same site collection, or null.
+        /// Nothing is created, because a file's address doesn't say where its web starts.
+        /// </para>
+        /// </param>
         public Web GetWeb(string url, bool createIfNoneFound)
         {
+            if (string.IsNullOrEmpty(url))
+            {
+                throw new ArgumentNullException(nameof(url));
+            }
+
             lock (this)
             {
-                var key = url.ToLower();
-                if (!_websCache.ContainsKey(key))
+                var key = CacheKey(url);
+                var siteCollectionRootLength = SiteCollectionRootLength(key);
+
+                if (!createIfNoneFound)
                 {
-                    // We need to find a site. 
-                    // This gonna be a hack, because we can't garauntee what site-collections there are really in SP.
-                    // Even if we could with an API call, who knows if it'll be so in the future.
-                    // So if we can't find a site with a base URL of the web, we assume the web URL is the site URL and create that as a "site".
-
-                    // Format URL
-                    var keyMinusSlash = StringUtils.RemoveTrailingSlash(key);
-
-                    var bestFitWeb = _websCache.Values.GetClosest(key);
-                    if (bestFitWeb == null && createIfNoneFound)
+                    if (!_containingWebCache.TryGetValue(key, out var containingWeb))
                     {
-                        // Find site that matches as much of the web URL as possible
-                        var bestFitSite = _siteCache.Values.GetClosest(keyMinusSlash);
-
-                        if (bestFitSite == null)
-                        {
-                            bestFitSite = GetOrCreateSite(url);
-                        }
-
-                        bestFitWeb = new Web() { url_base = keyMinusSlash, site = bestFitSite };
+                        containingWeb = _websCache.Values.GetClosest(key, siteCollectionRootLength);
+                        _containingWebCache.Add(key, containingWeb);
                     }
-                    _websCache.Add(key, bestFitWeb);
+                    return containingWeb;
                 }
 
-                return _websCache[key];
+                if (!_websCache.TryGetValue(key, out var web))
+                {
+                    // A new web belongs to the nearest site collection we know of that contains it. If there is none, we
+                    // assume the web is a site collection of its own: we can't know for sure which site collections exist,
+                    // and even an API call could only tell us what is true today.
+                    var site = _siteCache.Values.GetClosest(key, siteCollectionRootLength) ?? GetOrCreateSite(url);
+
+                    web = new Web() { url_base = key.ToLowerInvariant(), site = site };
+                    _websCache.Add(key, web);
+
+                    // A file looked up before this web existed may be in it.
+                    _containingWebCache.Clear();
+                }
+
+                return web;
             }
+        }
+
+        /// <summary>
+        /// The length of the shortest address that can be the site collection containing <paramref name="url"/>: for an
+        /// address under a managed path, such as <c>https://contoso.sharepoint.com/sites/hr/Shared Documents</c>, that site
+        /// collection (<c>https://contoso.sharepoint.com/sites/hr</c>); otherwise the host's root site collection. No web or
+        /// site shorter than this can contain the address.
+        /// </summary>
+        internal static int SiteCollectionRootLength(string url)
+        {
+            var schemeEnd = url.IndexOf("://", StringComparison.Ordinal);
+            if (schemeEnd < 0)
+            {
+                return 0;
+            }
+
+            var hostEnd = IUrlObjectResolver.EndOfPathSegment(url, schemeEnd + 3);
+            if (hostEnd >= url.Length || url[hostEnd] != '/')
+            {
+                return hostEnd;
+            }
+
+            var managedPathEnd = IUrlObjectResolver.EndOfPathSegment(url, hostEnd + 1);
+            var managedPath = url.Substring(hostEnd + 1, managedPathEnd - hostEnd - 1);
+            if (managedPathEnd < url.Length && url[managedPathEnd] == '/'
+                && SiteCollectionManagedPaths.Contains(managedPath, StringComparer.OrdinalIgnoreCase))
+            {
+                var siteCollectionEnd = IUrlObjectResolver.EndOfPathSegment(url, managedPathEnd + 1);
+                if (siteCollectionEnd > managedPathEnd + 1)
+                {
+                    return siteCollectionEnd;
+                }
+            }
+
+            return hostEnd;
         }
 
         internal async Task PopulateCaches(AnalyticsEntitiesContext database)
@@ -85,32 +154,17 @@ namespace Common.Entities
         {
             lock (this)
             {
-                if (_siteCache.ContainsKey(site.UrlBase))
-                {
-                    _siteCache[site.UrlBase] = site;
-                }
-                else
-                {
-                    _siteCache.Add(site.UrlBase, site);
-                }
+                _siteCache[CacheKey(site.UrlBase)] = site;
             }
-
         }
 
         public void CacheWeb(Web web)
         {
             lock (this)
             {
-                if (_websCache.ContainsKey(web.url_base))
-                {
-                    _websCache[web.url_base] = web;
-                }
-                else
-                {
-                    _websCache.Add(web.url_base, web);
-                }
+                _websCache[CacheKey(web.url_base)] = web;
+                _containingWebCache.Clear();
             }
-
         }
     }
 }

@@ -27,7 +27,8 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
         /// <summary>
         /// Install AITracker to site using chosen adaptor
         /// </summary>
-        public async Task InstallWebComponentsToSite(TrackerInstallConfig trackerInstallConfig, string solutionWebsiteBaseUrl)
+        /// <returns>False when the site couldn't be opened, so nothing was installed. The reason has been logged.</returns>
+        public async Task<bool> InstallWebComponentsToSite(TrackerInstallConfig trackerInstallConfig, string solutionWebsiteBaseUrl)
         {
             if (trackerInstallConfig is null)
             {
@@ -39,7 +40,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             if (!validSite)
             {
                 _logger.LogError($"{_siteInstallAdaptor.SiteUrl} does not appear to be a valid site, or you do not have permissions to access it with the user logged in");
-                return;
+                return false;
             }
 
             _logger.LogInformation($"Installing AI tracker to {_siteInstallAdaptor.SiteUrl}");
@@ -80,6 +81,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
                 await AddActionsToWeb(w, aiTrackerUrlWithToken, trackerInstallConfig, solutionWebsiteBaseUrl, cacheToken);
             }
             _logger.LogInformation($"Registered AITracker to all sub-webs");
+            return true;
         }
 
         private async Task AddActionsToWeb(WEBTYPE w, string aiTrackerUrlWithToken, TrackerInstallConfig trackerInstallConfig, string solutionWebsiteBaseUrl, string cacheToken)
@@ -88,16 +90,17 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             await _siteInstallAdaptor.AddModernUIAITrackerCustomActionToWeb(w, new ModernAppCustomAction(trackerInstallConfig.AppInsightsConnectionString, cacheToken, solutionWebsiteBaseUrl));
         }
 
-        private async Task RemoveActionsFromWeb(WEBTYPE rootWeb)
+        private async Task RemoveActionsFromWeb(WEBTYPE web)
         {
-            await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(_siteInstallAdaptor.RootWeb);
-            await _siteInstallAdaptor.RemoveModernUIAITrackerCustomActionFromWeb(_siteInstallAdaptor.RootWeb);
+            await _siteInstallAdaptor.RemoveAITrackerCustomActionFromWeb(web);
+            await _siteInstallAdaptor.RemoveModernUIAITrackerCustomActionFromWeb(web);
         }
 
         /// <summary>
-        /// Install AITracker to site using chosen adaptor
+        /// Uninstall AITracker from site using chosen adaptor
         /// </summary>
-        public async Task UninstallWebComponentsFromSite(string docLibTitle)
+        /// <returns>False when the site couldn't be opened, so nothing was removed. The reason has been logged.</returns>
+        public async Task<bool> UninstallWebComponentsFromSite(string docLibTitle)
         {
             if (string.IsNullOrEmpty(docLibTitle))
             {
@@ -109,7 +112,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
             if (!validSite)
             {
                 _logger.LogError($"{_siteInstallAdaptor.SiteUrl} does not appear to be a valid site, or you do not have permissions to access it with the user logged in");
-                return;
+                return false;
             }
 
             _logger.LogInformation($"Uninstalling AI tracker from {_siteInstallAdaptor.SiteUrl}");
@@ -125,6 +128,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
                 await RemoveActionsFromWeb(w);
             }
             _logger.LogInformation($"Uninstalled AITracker from all sub-webs");
+            return true;
         }
     }
 }
