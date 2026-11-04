@@ -138,6 +138,14 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("value")]
         public double? Value { get; set; }
+
+        /// <summary>
+        /// True when the week's source is missing part of the week - a Microsoft 365 usage week with at least one
+        /// day's report not imported. <see cref="Value"/> then counts only the days that were imported, so it is a
+        /// floor rather than the week's figure. Sent only when true.
+        /// </summary>
+        [JsonProperty("incomplete", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Incomplete { get; set; }
     }
 
     /// <summary>A named line in a time-series chart (e.g. one workload, or "Page views").</summary>
@@ -161,6 +169,10 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("week")]
         public DateTime? Week { get; set; }
+
+        /// <summary>How many weeks the warning covers, for <c>incompleteWeeks</c>; null otherwise.</summary>
+        [JsonProperty("count", NullValueHandling = NullValueHandling.Ignore)]
+        public int? Count { get; set; }
 
         [JsonProperty("error")]
         public string Error { get; set; }

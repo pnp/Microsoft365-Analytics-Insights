@@ -85,6 +85,7 @@ export const reports = {
   'reports.chart.warning.series.notAttempted': '{series}: not attempted after the database timeout',
   'reports.chart.warning.series.noSettledData': '{series}: no settled usage data',
   'reports.chart.warning.series.noSettledDataForWeek': '{series}: no settled usage data for the week of {week}',
+  'reports.chart.warning.series.incompleteWeeks': '{series}: {count} of the charted weeks are missing at least one day of usage reports (most recently the week of {week}), so those weeks count only the days that were imported',
   'reports.category.appBreadth.one': '{count} app',
   'reports.category.appBreadth.other': '{count} apps',
   'reports.platform.mobile': 'Mobile',

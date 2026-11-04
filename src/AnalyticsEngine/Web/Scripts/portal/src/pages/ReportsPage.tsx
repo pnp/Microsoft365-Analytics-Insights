@@ -378,6 +378,7 @@ function seriesWarningText(t: TFunction, warning: ReportSeriesWarning): string {
     series: warning.series,
     error: warning.error ?? '',
     week: warning.week ? formatDateParts(new Date(warning.week), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '',
+    count: formatNumber(warning.count ?? 0),
   };
 
   switch (warning.reason) {
@@ -389,6 +390,8 @@ function seriesWarningText(t: TFunction, warning: ReportSeriesWarning): string {
       return t('reports.chart.warning.series.noSettledData', values);
     case 'noSettledDataForWeek':
       return t('reports.chart.warning.series.noSettledDataForWeek', values);
+    case 'incompleteWeeks':
+      return t('reports.chart.warning.series.incompleteWeeks', values);
     default:
       return warning.error ? `${warning.series}: ${warning.error}` : warning.series;
   }

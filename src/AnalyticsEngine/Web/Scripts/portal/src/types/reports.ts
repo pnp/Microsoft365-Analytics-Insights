@@ -19,10 +19,12 @@ export interface ReportAreas {
 
 /** One point of a weekly series: the (Monday) week start (ISO date) and its value. A null value
  * means the week's figure is unknown (e.g. its usage report never arrived) rather than zero, and is
- * drawn as a gap in the line. */
+ * drawn as a gap in the line. `incomplete` (sent only when true) marks a week whose source is missing
+ * part of the week - a usage week with a day's report not imported - so its value is a floor. */
 export interface ReportTimePoint {
   weekStart: string;
   value: number | null;
+  incomplete?: boolean;
 }
 
 /** A named line in a time-series chart. */
@@ -31,13 +33,20 @@ export interface ReportSeries {
   points: ReportTimePoint[];
 }
 
-export type ReportSeriesWarningReason = 'loadFailed' | 'notAttempted' | 'noSettledData' | 'noSettledDataForWeek';
+export type ReportSeriesWarningReason =
+  | 'loadFailed'
+  | 'notAttempted'
+  | 'noSettledData'
+  | 'noSettledDataForWeek'
+  | 'incompleteWeeks';
 
 /** Structured reason for a workload series that could not be fully charted. */
 export interface ReportSeriesWarning {
   series: string;
   reason: ReportSeriesWarningReason | string;
   week: string | null;
+  /** How many weeks an `incompleteWeeks` warning covers; absent otherwise. */
+  count?: number | null;
   error: string | null;
 }
 
