@@ -83,6 +83,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         /// </summary>
         public const string DefaultRefreshPeriod = "D28";
 
+        /// <summary>
+        /// The weekly per-user reading Licence activity measures Copilot from: one 7-day report kept per
+        /// Monday-to-Sunday week, the one whose refresh date is that week's Sunday, so it covers exactly that
+        /// week. Collected in addition to <see cref="DefaultRefreshPeriod"/>, which Copilot Adoption reads.
+        /// See <see cref="CopilotUsageReportPolicy.WeeklySnapshotDue"/>.
+        /// </summary>
+        public const string WeeklyPeriod = "D7";
+
         public CopilotReportRequest(string reportName, string period, string version = CopilotReportVersions.V2)
         {
             if (string.IsNullOrWhiteSpace(reportName)) throw new ArgumentException($"'{nameof(reportName)}' is required.", nameof(reportName));

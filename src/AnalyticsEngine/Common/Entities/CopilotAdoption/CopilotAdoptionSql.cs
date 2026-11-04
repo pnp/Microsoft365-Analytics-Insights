@@ -106,10 +106,16 @@ namespace Common.Entities.CopilotAdoption
         /// The most recent per-user Copilot usage-report snapshot that Microsoft has settled.
         /// Resolved separately so the detail query can seek one date instead of scanning a range.
         /// </summary>
+        /// <remarks>
+        /// The weekly 7-day reading Licence activity collects every Sunday is left out here and in
+        /// <see cref="LatestCopilotReportPeriodSql"/>, so this page keeps reading the daily rolling report
+        /// rather than switching to the 7-day one on the days a Sunday happens to be the newest snapshot.
+        /// </remarks>
         public const string LatestCopilotReportDateSql =
             "SELECT MAX(r.[date]) AS Value\r\n" +
             "FROM dbo.copilot_usage_user_activity_log AS r\r\n" +
-            "WHERE r.[date] <= @settled;";
+            "WHERE r.[date] <= @settled\r\n" +
+            "  AND (r.report_period_days IS NULL OR r.report_period_days <> 7);";
 
         /// <summary>
         /// The report period to read for a given snapshot date, chosen as the one closest to the analysis
@@ -129,6 +135,7 @@ namespace Common.Entities.CopilotAdoption
             "SELECT TOP (1) ISNULL(r.report_period_days, 0) AS Value\r\n" +
             "FROM dbo.copilot_usage_user_activity_log AS r\r\n" +
             "WHERE r.[date] = @copilotReportDate\r\n" +
+            "  AND (r.report_period_days IS NULL OR r.report_period_days <> 7)\r\n" +
             "GROUP BY r.report_period_days\r\n" +
             "ORDER BY CASE WHEN r.report_period_days IS NULL THEN 1 ELSE 0 END,\r\n" +
             "         ABS(ISNULL(r.report_period_days, 0) - @windowDays),\r\n" +

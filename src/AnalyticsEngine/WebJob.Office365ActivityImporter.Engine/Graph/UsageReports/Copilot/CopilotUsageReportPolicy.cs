@@ -135,6 +135,42 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         }
 
         /// <summary>
+        /// The week end whose 7-day per-user reading should be collected now, or null when none is due.
+        ///
+        /// Licence activity reads Copilot from one 7-day report per Monday-to-Sunday week: the one Microsoft
+        /// published with that week's Sunday as its refresh date, which covers exactly that week. A 7-day report
+        /// can't be requested for a past date - Graph only returns its latest one - so the reading has to be
+        /// taken while Microsoft's newest per-user report is dated that Sunday. That is the case when the
+        /// newest per-user refresh date successfully imported (by the 28-day import that runs just before) is
+        /// a Sunday, and no 7-day import for that Sunday has completed yet. A completed 7-day import counts
+        /// even when its identities were concealed, so a concealed tenant isn't downloaded from every day.
+        /// Any other day needs no 7-day download at all.
+        /// </summary>
+        /// <param name="recentImports">The per-user report's recent import-log rows, any period or outcome.</param>
+        public static DateTime? WeeklySnapshotDue(IEnumerable<CopilotUsageReportImportLog> recentImports)
+        {
+            var imports = (recentImports ?? Enumerable.Empty<CopilotUsageReportImportLog>())
+                .Where(l => l != null && l.Error == null && l.ReportRefreshDate.HasValue && l.RowsRead > 0)
+                .ToList();
+
+            var newest = imports.Where(l => !l.IsUpnObfuscated)
+                .Select(l => (DateTime?)l.ReportRefreshDate.Value.Date)
+                .Max();
+            if (!newest.HasValue || !IsWeekEnd(newest.Value)) return null;
+
+            var alreadyRead = imports.Any(l =>
+                string.Equals(l.ReportPeriod, CopilotReportRequest.WeeklyPeriod, StringComparison.OrdinalIgnoreCase)
+                && l.ReportRefreshDate.Value.Date >= newest.Value);
+            return alreadyRead ? (DateTime?)null : newest.Value;
+        }
+
+        /// <summary>
+        /// True for the last day of a reporting week. Licence activity's weeks run Monday to Sunday
+        /// (<c>SET DATEFIRST 1</c> in <c>LicenceActivitySql</c>), so this is Sunday.
+        /// </summary>
+        public static bool IsWeekEnd(DateTime date) => date.DayOfWeek == DayOfWeek.Sunday;
+
+        /// <summary>
         /// Which of a report's identities may be created as new users.
         ///
         /// A new user is only ever created when its e-mail domain is one the database already holds users

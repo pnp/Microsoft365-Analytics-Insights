@@ -771,7 +771,7 @@ VALUES
         }
 
         [TestMethod]
-        public async Task Copilot_D7LeadingGapMakesCustomRangePartialAndDisablesLeastActive()
+        public async Task Copilot_D7LeadingPartWeekMakesCustomRangePartial_AndSaysWhy()
         {
             using (var fixture = LicenceActivitySqlFixture.Create("LicenceCopilotD7Gap"))
             {
@@ -792,6 +792,9 @@ INSERT dbo.copilot_usage_user_activity_log
 VALUES (7, 0, 0, 0, 1, '{date}', NULL);");
                 }
 
+                // Starting on a Tuesday, as the 90- and 180-day presets do: every whole week has its reading, but
+                // no 7-day reading inside the range covers its first six days, so the range stays partial and
+                // the message says that - not that a reading is missing.
                 var query = LicenceActivityQuery.Create(
                     "2000-05-02", "2000-06-25", LicenceActivitySqlFixture.NowUtc);
                 var sources = Sources(usageReports: false, copilotReports: true);
@@ -800,6 +803,7 @@ VALUES (7, 0, 0, 0, 1, '{date}', NULL);");
                     NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
                 var coverage = overview.Coverage.Single(c => c.Workload == "copilot");
                 Assert.AreEqual("partial", coverage.Status);
+                Assert.AreEqual("copilotReport.partialWeekStart", coverage.MessageKey);
                 Assert.AreEqual(new DateTime(2000, 5, 8), coverage.EffectiveFromUtc.Value);
                 Assert.AreEqual(new DateTime(2000, 6, 25), coverage.EffectiveToUtc.Value);
 
@@ -814,6 +818,16 @@ VALUES (7, 0, 0, 0, 1, '{date}', NULL);");
                 Assert.AreEqual(0, users.LeastActive.Count);
                 Assert.AreEqual("unknown", users.Users.Single(u => u.UserId == 1)
                     .Workloads.Single(w => w.Workload == "copilot").Band);
+
+                // Ending on a Wednesday is a different gap: the last week has no reading on its end date.
+                query = LicenceActivityQuery.Create(
+                    "2000-05-01", "2000-06-21", LicenceActivitySqlFixture.NowUtc);
+                overview = await fixture.Store().LoadOverviewAsync(
+                    query, sources,
+                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                coverage = overview.Coverage.Single(c => c.Workload == "copilot");
+                Assert.AreEqual("partial", coverage.Status);
+                Assert.AreEqual("copilotReport.partial", coverage.MessageKey);
             }
         }
 

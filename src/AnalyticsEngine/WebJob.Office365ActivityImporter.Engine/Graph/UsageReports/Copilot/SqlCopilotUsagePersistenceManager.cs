@@ -462,6 +462,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             }
         }
 
+        /// <inheritdoc />
+        public async Task<IReadOnlyList<CopilotUsageReportImportLog>> GetRecentUserDetailImportsAsync(DateTime sinceUtc)
+        {
+            return await _db.CopilotUsageReportImportLogs.AsNoTracking()
+                .Where(l => l.ReportName == CopilotReportNames.UsageUserDetail && l.ImportedUtc >= sinceUtc)
+                .ToListAsync();
+        }
+
         #endregion
     }
 }

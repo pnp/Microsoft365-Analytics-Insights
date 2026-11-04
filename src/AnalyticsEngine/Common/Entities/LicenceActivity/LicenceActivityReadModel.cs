@@ -763,26 +763,34 @@ namespace Common.Entities.LicenceActivity
         }
 
         /// <summary>
-        /// Adds one person's measured weeks to an adoption score. Only services whose activity level is known
-        /// count: a level is known exactly when every expected week was measured, so the person's measured
-        /// weeks for that service are the coverage's expected samples. Unknown services are left out rather
-        /// than counted as unused - the same rule as the distributions.
+        /// Adds one person's measured services to an adoption score. Only services whose activity level is known
+        /// count: a level is known exactly when the whole period was measured, so the person's measured samples
+        /// for that service are the coverage's expected samples. Unknown services are left out rather than
+        /// counted as unused - the same rule as the distributions.
+        ///
+        /// Each measured service adds the SHARE of its samples the person was active in, and counts once, so
+        /// every service carries the same weight whatever its unit or sample count. Adding raw samples used to
+        /// let a source with more samples outweigh the rest: Copilot measured from Microsoft's 28-day report
+        /// added 28 day-samples against 4 week-samples per Microsoft 365 service, about 7:1. For services
+        /// measured over the same weeks the share and the old sum give the same score.
         /// </summary>
         private void AddScore(ref ScoreAccumulator score, int user)
         {
             for (var workload = 0; workload < _bands.Length; workload++)
             {
                 if (_bands[workload][user] == UnknownBand) continue;
-                score.ActiveWeeks += _rankValues[workload][user].ActiveSamples;
-                score.MeasuredWeeks += _coverage[workload].ExpectedSamples;
+                var expected = _coverage[workload].ExpectedSamples;
+                if (expected <= 0) continue;
+                score.ActiveShare += Math.Min(1d, (double)_rankValues[workload][user].ActiveSamples / expected);
+                score.MeasuredServices++;
             }
         }
 
         private struct ScoreAccumulator
         {
-            internal long ActiveWeeks;
-            internal long MeasuredWeeks;
-            internal double? Score => LicenceActivityRules.Score(ActiveWeeks, MeasuredWeeks);
+            internal double ActiveShare;
+            internal long MeasuredServices;
+            internal double? Score => LicenceActivityRules.Score(ActiveShare, MeasuredServices);
         }
 
         private static DistributionAccumulator[] NewDistributions()
