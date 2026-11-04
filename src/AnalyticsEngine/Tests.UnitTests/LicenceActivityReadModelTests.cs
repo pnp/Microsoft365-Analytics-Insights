@@ -423,6 +423,37 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AdoptionScore_WeighsEveryMeasuredServiceEqually_WhateverItsUnit()
+        {
+            // Copilot measured from Microsoft's 28-day report counts days used against the period's 20 working
+            // days; the Microsoft 365 services count weeks. Each of these two people fully used two of their
+            // five measured services and nothing else, so each must score 40 - however many samples a service
+            // happens to be counted in.
+            var coverage = AvailableCoverage();
+            var copilot = coverage.Single(item => item.Workload == "copilot");
+            copilot.Granularity = "singleRollingWindow";
+            copilot.ReportPeriodDays = 28;
+            copilot.ExpectedSamples = 20;
+            copilot.ObservedSamples = 20;
+            var model = Model(
+                new[] { Sku(1, "Contoso E5"), Sku(2, "Contoso E3") },
+                Users(1, 2),
+                new[] { Member(1, 1), Member(2, 2) },
+                coverage,
+                Scores(
+                    ("teams", 1, Score(4, 4)), ("copilot", 1, Score(20, 20)),
+                    ("teams", 2, Score(4, 4)), ("outlook", 2, Score(4, 4)), ("copilot", 2, Score(0, 20))));
+
+            var overview = model.BuildOverview(Query(), CancellationToken.None);
+
+            Assert.AreEqual(40.0, overview.Licences.Single(sku => sku.LicenceTypeId == 1).AdoptionScore,
+                "Teams and Copilot fully used: 2 of 5 services. Adding raw samples gave (4 + 20) / (16 + 20) = 66.7.");
+            Assert.AreEqual(40.0, overview.Licences.Single(sku => sku.LicenceTypeId == 2).AdoptionScore,
+                "Teams and Outlook fully used, Copilot not at all: still 2 of 5. Adding raw samples gave 8 / 36 = 22.2.");
+            Assert.AreEqual(40.0, overview.AllLicences.AdoptionScore);
+        }
+
+        [TestMethod]
         public void AdoptionScore_AndEveryoneFollowTheDemographicFilter()
         {
             var model = ScoredModel();

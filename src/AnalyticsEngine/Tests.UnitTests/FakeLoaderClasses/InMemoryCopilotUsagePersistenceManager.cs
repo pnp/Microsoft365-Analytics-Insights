@@ -152,5 +152,12 @@ namespace Tests.UnitTests.FakeLoaderClasses
             ImportLogsRecordedAfterFailure.Add(importLog);
             return Task.CompletedTask;
         }
+
+        public Task<IReadOnlyList<CopilotUsageReportImportLog>> GetRecentUserDetailImportsAsync(DateTime sinceUtc)
+        {
+            return Task.FromResult<IReadOnlyList<CopilotUsageReportImportLog>>(ImportLogs
+                .Where(l => l.ReportName == CopilotReportNames.UsageUserDetail && l.ImportedUtc >= sinceUtc)
+                .ToList());
+        }
     }
 }

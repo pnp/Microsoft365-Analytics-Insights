@@ -49,6 +49,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         public const string GraphCopilotUsageReportUserCountTrendLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountTrend";
         public const string GraphCopilotUsageReportUserCountSummaryLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountSummary";
         public const string GraphCopilotUsageReportUsageUserDetailLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UsageUserDetail";
+        public const string GraphCopilotUsageReportWeeklyUsageUserDetailLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UsageUserDetailWeekly";
         public const string CopilotInteractionHistoryLastImportedKey = Common.Entities.State.ImportScheduleKeys.CopilotInteractionHistory;
 
         private readonly AnalyticsLogger _logger;
@@ -299,7 +300,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         }
 
         /// <summary>
-        /// Imports the three Graph Microsoft 365 Copilot usage reports. Each report has its own cadence
+        /// Imports the three Graph Microsoft 365 Copilot usage reports - the per-user one as its 28-day report
+        /// and, once a week, its 7-day report. Each has its own cadence
         /// stamp behind the section-level gate: if one report fails, the failed report retries on
         /// the next cycle while reports that already succeeded are skipped until their interval elapses.
         ///
@@ -364,6 +366,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     () => RunCopilotReport("Copilot per-user usage detail", db =>
                         new CopilotUsageUserDetailLoader(reportSource, _logger, userScope)
                             .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod))),
+
+                // Licence activity measures Copilot by the week, from one 7-day reading per Monday-to-Sunday week.
+                // After the 28-day import above, so its refresh date decides whether this week's reading is due;
+                // on every other day this makes no Graph call. The 28-day import stays: Copilot Adoption reads it.
+                new CopilotUsageReportCadenceRunner.Report(
+                    "Copilot per-user weekly reading",
+                    GraphCopilotUsageReportWeeklyUsageUserDetailLastImportedKey,
+                    () => RunCopilotReport("Copilot per-user weekly reading", db =>
+                        new CopilotUsageUserDetailLoader(reportSource, _logger, userScope)
+                            .LoadAndSaveWeeklySnapshotAsync(db))),
 
                 // There is deliberately no Cowork report here. Stable builds 1833 to 1846 requested a Graph
                 // function (the name kept as CopilotUsageReportNames.RetiredCoworkUsageUserDetail) that does
