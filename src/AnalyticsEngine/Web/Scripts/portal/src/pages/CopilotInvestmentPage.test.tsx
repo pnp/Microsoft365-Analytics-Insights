@@ -285,10 +285,13 @@ describe('CopilotInvestmentPage', () => {
       },
       actions: [
         { ...base.actions[0], roiBaseAfter: null },
+        { ...base.actions[1], credits: null, creditsWithheld: true, monthlyAmount: null, monthlyAmountWithheld: true },
         { code: 'licenceMeteredHeavy', people: 2, monthlyAmount: null, monthlyAmountWithheld: true, credits: null, roiBaseAfter: null, metric: null, signal: null,
           flag: 'meteredAboveSeat', effect: 'meteredSpend', assumesMonthlyBalances: false },
       ],
-      findings: base.findings.filter((f) => f.code !== 'valueRange'),
+      findings: base.findings
+        .filter((f) => f.code !== 'valueRange')
+        .map((f) => (f.code === 'highSpendThinEvidence' ? { ...f, values: { ...f.values, credits: null } } : f)),
     });
   }
 
@@ -302,7 +305,10 @@ describe('CopilotInvestmentPage', () => {
     expect(screen.getByText('Not shown: its Copilot Studio part could single out fewer than 5 people')).toBeInTheDocument();
     expect(screen.getAllByText(fromCost)).toHaveLength(3);
     expect(screen.getAllByText(withheld)).toHaveLength(2);
-    expect(screen.getByText('Amount not shown: it would give back Copilot Studio charges that could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.getAllByText('Amount not shown: it could single out fewer than 5 people')).toHaveLength(2);
+    expect(screen.getByText(/^4 people have consumed the most credits with little use of their own \(their credits are not shown: they could single out fewer than 5 people\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^4 people have consumed the most credits while showing little Copilot use of their own \(their credits are not shown/)).toBeInTheDocument();
+    expect(screen.queryByText(/4,200/)).not.toBeInTheDocument();
     expect(screen.getByText(/Reclaiming the 38 idle licences that are safe to reclaim frees €1,140 a month of licence cost\. A cash/)).toBeInTheDocument();
     expect(screen.queryByText(/Not available/)).not.toBeInTheDocument();
     expect(screen.queryByText(/clears its modelled cost|more than their modelled cost/)).not.toBeInTheDocument();
@@ -327,7 +333,7 @@ describe('CopilotInvestmentPage', () => {
     expect(screen.getByText('No se muestra: su parte de Copilot Studio podría identificar a menos de 5 personas')).toBeInTheDocument();
     expect(screen.getAllByText('No se muestra: se calcula con un coste modelado cuya parte de Copilot Studio podría identificar a menos de 5 personas')).toHaveLength(3);
     expect(screen.getAllByText('No se muestra: podría identificar a menos de 5 personas')).toHaveLength(2);
-    expect(screen.getByText('Importe no mostrado: revelaría cargos de Copilot Studio que podrían identificar a menos de 5 personas')).toBeInTheDocument();
+    expect(screen.getAllByText('Importe no mostrado: podría identificar a menos de 5 personas')).toHaveLength(2);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Valor y umbral de rentabilidad' }));
     const bands = await screen.findByRole('table', { name: 'Por nivel de adopción' });

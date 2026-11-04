@@ -713,6 +713,63 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AnActionAboutOneToFourPeople_DoesNotQuoteTheirBalancesOrTheirDays_WhileFiveAreQuoted()
+        {
+            foreach (var few in new[] { 1, 4, 5 })
+            {
+                // Forty-five regular users with small balances, and as few as one of each: dormant holders among the largest
+                // consumers, champions at their credit limit, and holders active on a single day - below their own break-even.
+                var people = Enumerable.Range(1, 45).Select(id => Holder(id, 15, "Champion", credit: Balance(id, 10))).ToList();
+                people.AddRange(Enumerable.Range(101, few).Select(id => Holder(id, 0, "Dormant", credit: Balance(id, 1000 + id + 0.25))));
+                people.AddRange(Enumerable.Range(201, few).Select(id =>
+                {
+                    var balance = Balance(id, 10);
+                    balance.LimitExhaustedRows = 1;
+                    return Holder(id, 15, "Champion", credit: balance);
+                }));
+                people.AddRange(Enumerable.Range(301, few).Select(id => Holder(id, 1, "Trialling")));
+                var summary = CopilotInvestmentCalculator.Calculate(Input(people, Assumptions()));
+                CopilotInvestmentAction Cached(string code) => summary.Actions.Single(a => a.Code == code);
+                Assert.AreEqual(few, Cached(CopilotInvestmentActionCodes.ReviewHighSpendThinEvidence).People, "The control.");
+                Assert.AreEqual(few, Cached(CopilotInvestmentActionCodes.RaiseLimitEvidenced).People);
+                Assert.AreEqual(few, Cached(CopilotInvestmentActionCodes.EnableBelowBreakEven).People);
+                var highSpend = Cached(CopilotInvestmentActionCodes.ReviewHighSpendThinEvidence).Credits.Value;
+
+                var trimmed = summary.WithoutIndividualData();
+                CopilotInvestmentAction Trimmed(string code) => trimmed.Actions.Single(a => a.Code == code);
+                var review = Trimmed(CopilotInvestmentActionCodes.ReviewHighSpendThinEvidence);
+                var limit = Trimmed(CopilotInvestmentActionCodes.RaiseLimitEvidenced);
+                var below = Trimmed(CopilotInvestmentActionCodes.EnableBelowBreakEven);
+                var finding = trimmed.Findings.Single(f => f.Code == CopilotInvestmentFindingCodes.HighSpendThinEvidence);
+                var json = JsonConvert.SerializeObject(new { trimmed.Actions, trimmed.Findings });
+                if (few < 5)
+                {
+                    Assert.IsTrue(review.CreditsWithheld && review.MonthlyAmountWithheld, few + " people");
+                    Assert.IsNull(review.Credits);
+                    Assert.IsNull(review.MonthlyAmount);
+                    Assert.IsTrue(limit.CreditsWithheld);
+                    Assert.IsNull(limit.Credits);
+                    Assert.IsTrue(below.MonthlyAmountWithheld && below.MetricWithheld);
+                    Assert.IsNull(below.MonthlyAmount);
+                    Assert.IsNull(below.Metric);
+                    Assert.IsNull(finding.Values["credits"]);
+                    Assert.AreEqual(few, finding.Values["people"], "How many is a count, not anyone's balance.");
+                    Assert.AreEqual(few, review.People);
+                    Assert.IsFalse(json.Contains(Json(highSpend)), Json(highSpend) + " left the server.");
+                }
+                else
+                {
+                    Assert.IsFalse(review.CreditsWithheld || review.MonthlyAmountWithheld || limit.CreditsWithheld || below.MonthlyAmountWithheld || below.MetricWithheld);
+                    Assert.AreEqual(highSpend, review.Credits.Value, 1e-9);
+                    Assert.AreEqual(Cached(CopilotInvestmentActionCodes.EnableBelowBreakEven).Metric, below.Metric);
+                    Assert.AreEqual(highSpend, finding.Values["credits"].Value, 1e-9);
+                }
+                Assert.AreEqual(highSpend, Cached(CopilotInvestmentActionCodes.ReviewHighSpendThinEvidence).Credits.Value, 1e-9, "The cached summary is never edited.");
+                Assert.IsNotNull(summary.Findings.Single(f => f.Code == CopilotInvestmentFindingCodes.HighSpendThinEvidence).Values["credits"]);
+            }
+        }
+
+        [TestMethod]
         public void AFilteredView_WithholdsTenantOnlyFacts()
         {
             var input = Input(new List<CopilotInvestmentPerson> { Holder(1, 10, credit: Balance(1, 10)) }, Assumptions());

@@ -428,8 +428,12 @@ export interface InvestmentAction {
   /** What `monthlyAmount` is - amounts of different kinds are never ranked against each other. */
   effect: string | null;
   assumesMonthlyBalances: boolean;
-  /** For a reader without See PII: `monthlyAmount` is null because it would be Copilot Studio charges the report withholds. */
+  /** For a reader without See PII: `monthlyAmount` is null because it could single out fewer than five people. */
   monthlyAmountWithheld?: boolean;
+  /** For a reader without See PII: `credits` is null - the balances of one to four people. */
+  creditsWithheld?: boolean;
+  /** For a reader without See PII: `metric` is null - the days one to four people need would be one of theirs. */
+  metricWithheld?: boolean;
 }
 
 export interface InvestmentFinding {

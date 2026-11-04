@@ -62,6 +62,33 @@ describe('investment wording for one person and for none', () => {
     expect(formatMoney(480, 'EUR')).toBe('\u20ac480');
     expect(formatMoney(43.72, 'EUR')).toBe('\u20ac43.72');
   });
+
+  it('says an action or finding about one to four people withholds their figures, never "not available", in both languages', async () => {
+    const withheld = { credits: null, creditsWithheld: true };
+    expect(actionText(t, action('raiseLimitEvidenced', 3, withheld))?.body).toBe(
+      '3 people with strong, regular Copilot use are at or near their credit limit (their credits are not shown: they could single out fewer than 5 people).',
+    );
+    expect(actionText(t, action('reviewHighSpendThinEvidence', 1, withheld))?.body).toMatch(
+      /^One person is among those who consumed the most credits with little use of their own \(their credits are not shown: they could single out fewer than 5 people\)/,
+    );
+    expect(actionText(t, action('enableBelowBreakEven', 2, { metric: null, metricWithheld: true }), 6)?.body).toBe(
+      '2 licensed users use Copilot, but not yet often enough to cover their own cost on the base case. How many more active days they need is not shown: it could single out fewer than 6 people.',
+    );
+    expect(findingText(t, finding('highSpendThinEvidence', { people: 4, credits: null }), 'EUR')).toMatch(
+      /^4 people have consumed the most credits while showing little Copilot use of their own \(their credits are not shown/,
+    );
+    // The legitimate case is unchanged: five people's figures are quoted.
+    expect(actionText(t, action('raiseLimitEvidenced', 5))?.body).toBe(
+      '5 people with strong, regular Copilot use are at or near their credit limit (1,200 credits).',
+    );
+
+    await loadCatalog('es');
+    setActiveLanguage('es');
+    expect(actionText(t, action('raiseLimitEvidenced', 1, withheld))?.body).toBe(
+      'Una persona con un uso intenso y regular de Copilot está en su límite de créditos o cerca de él (no se muestran sus créditos: podrían identificar a menos de 5 personas).',
+    );
+    expect(findingText(t, finding('highSpendThinEvidence', { people: 1, credits: null }), 'EUR')).toMatch(/\(no se muestran sus créditos: podrían identificar a menos de 5 personas\)/);
+  });
 });
 
 describe('server dates', () => {

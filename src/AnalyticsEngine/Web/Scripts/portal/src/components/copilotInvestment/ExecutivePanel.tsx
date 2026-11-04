@@ -373,7 +373,7 @@ function ActionCard({ action, summary, navigation, canSeePii }: {
 }) {
   const styles = useStyles();
   const t = useT();
-  const text = actionText(t, action);
+  const text = actionText(t, action, withheldMinimum(summary));
   if (!text) return null;
   const currency = summary.investment.currency;
   const amount = effectText(t, action, currency);
@@ -636,7 +636,7 @@ export default function ExecutivePanel({ summary, navigation, canSeePii }: {
   const kpis = headline(summary, t);
   const findings = summary.findings
     .filter((f) => !SHOWN_ELSEWHERE.has(f.code))
-    .map((f) => ({ finding: f, text: findingText(t, f, currency) }))
+    .map((f) => ({ finding: f, text: findingText(t, f, currency, withheldMinimum(summary)) }))
     .filter((f): f is { finding: InvestmentFinding; text: string } => f.text !== null)
     .sort((a, b) => (TONE_ORDER[a.finding.tone] ?? 9) - (TONE_ORDER[b.finding.tone] ?? 9));
   const shownFindings = allFindings ? findings : findings.slice(0, TOP_FINDINGS);

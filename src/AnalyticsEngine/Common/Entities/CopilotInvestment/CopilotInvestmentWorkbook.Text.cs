@@ -119,7 +119,8 @@ namespace Common.Entities.CopilotInvestment
         internal static string FindingText(CopilotInvestmentFinding finding, string currency, PortalLanguage language = PortalLanguage.English) =>
             FindingText(finding, currency, new Words(language));
 
-        private static string FindingText(CopilotInvestmentFinding finding, string currency, Words words)
+        /// <param name="minPeople">The fewest people a figure may describe without See PII, for the sentence that says one is withheld.</param>
+        private static string FindingText(CopilotInvestmentFinding finding, string currency, Words words, int minPeople = SmallPopulations.MinPeopleWithoutSeePii)
         {
             double? V(string key) => finding.Values.TryGetValue(key, out var v) ? v : null;
             switch (finding.Code)
@@ -144,7 +145,9 @@ namespace Common.Entities.CopilotInvestment
                     return words.W("finding.creditConcentration", ("consumers", words.Count(V("consumers"))), ("topFraction", words.Pct(V("topFraction"))),
                         ("topShare", words.Pct(V("topShare"))));
                 case CopilotInvestmentFindingCodes.HighSpendThinEvidence:
-                    return words.W("finding.highSpendThinEvidence", ("people", words.Count(V("people"))), ("credits", words.Num(V("credits"))));
+                    return V("credits").HasValue
+                        ? words.W("finding.highSpendThinEvidence", ("people", words.Count(V("people"))), ("credits", words.Num(V("credits"))))
+                        : words.W("finding.highSpendThinEvidenceWithheld", ("people", words.Count(V("people"))), ("count", words.Count(minPeople)));
                 case CopilotInvestmentFindingCodes.ExpandCandidates:
                     return words.W("finding.expandCandidates", ("people", words.Count(V("people"))), ("monthly", words.Num(V("monthly"))), ("currency", currency));
                 case CopilotInvestmentFindingCodes.LimitBlocked:
@@ -170,7 +173,8 @@ namespace Common.Entities.CopilotInvestment
             }
         }
 
-        private static string ActionText(CopilotInvestmentAction action, Words words)
+        /// <param name="minPeople">The fewest people a figure may describe without See PII, for the sentence that says one is withheld.</param>
+        private static string ActionText(CopilotInvestmentAction action, Words words, int minPeople = SmallPopulations.MinPeopleWithoutSeePii)
         {
             switch (action.Code)
             {
@@ -178,12 +182,17 @@ namespace Common.Entities.CopilotInvestment
                     var reclaim = words.W("action.reclaimIdle");
                     return action.RoiBaseAfter.HasValue ? reclaim + " " + words.W("action.reclaimIdle.roi", ("roi", words.Num(action.RoiBaseAfter) + MultipleUnit)) : reclaim;
                 case CopilotInvestmentActionCodes.ReviewIdle: return words.W("action.reviewIdle");
-                case CopilotInvestmentActionCodes.EnableBelowBreakEven: return words.W("action.enableBelowBreakEven", ("days", words.Num(action.Metric, 1)));
+                case CopilotInvestmentActionCodes.EnableBelowBreakEven:
+                    return action.MetricWithheld
+                        ? words.W("action.enableBelowBreakEvenWithheld", ("count", words.Count(minPeople)))
+                        : words.W("action.enableBelowBreakEven", ("days", words.Num(action.Metric, 1)));
                 case CopilotInvestmentActionCodes.EnableLightEvidence: return words.W("action.enableLightEvidence");
                 case CopilotInvestmentActionCodes.ExpandEvidenced: return words.W("action.expandEvidenced", ("days", words.Num(action.Metric, 1)));
                 case CopilotInvestmentActionCodes.ExpandRecommended: return words.W("action.expandRecommended");
                 case CopilotInvestmentActionCodes.ReviewHighSpendThinEvidence:
-                    var review = words.W("action.reviewHighSpendThinEvidence", ("credits", words.Num(action.Credits)));
+                    var review = action.CreditsWithheld
+                        ? words.W("action.reviewHighSpendThinEvidenceWithheld", ("count", words.Count(minPeople)))
+                        : words.W("action.reviewHighSpendThinEvidence", ("credits", words.Num(action.Credits)));
                     return action.AssumesMonthlyBalances ? review + " " + words.W("action.reviewHighSpendThinEvidence.monthly") : review;
                 case CopilotInvestmentActionCodes.RaiseLimitEvidenced: return words.W("action.raiseLimitEvidenced");
                 case CopilotInvestmentActionCodes.LicenceMeteredHeavy: return words.W("action.licenceMeteredHeavy");

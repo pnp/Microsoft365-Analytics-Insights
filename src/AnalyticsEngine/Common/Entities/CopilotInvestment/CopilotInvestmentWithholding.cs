@@ -5,9 +5,10 @@ namespace Common.Entities.CopilotInvestment
 {
     /// <summary>
     /// The Copilot investment report's totals for a reader without See PII: the Copilot Studio and balance totals and their
-    /// parts, the figures of the people without a seat, the adoption bands, and the modelled cost with everything computed
-    /// from it. A figure is withheld when one to four people are behind it, and so is any other figure from which it could be
-    /// worked out again - a total less the parts shown beside it, or a return from the value it is quoted with.
+    /// parts, the figures of the people without a seat, the adoption bands, the modelled cost with everything computed from
+    /// it, and the balances, shortfall or days an action or finding quotes for one to four people. A figure is withheld when
+    /// one to four people are behind it, and so is any other figure from which it could be worked out again - a total less
+    /// the parts shown beside it, or a return from the value it is quoted with.
     /// </summary>
     /// <remarks>
     /// <para>The Studio credits split into the analysed seat holders' (the Studio part of the modelled cost, and the bands'
@@ -162,12 +163,29 @@ namespace Common.Entities.CopilotInvestment
                         || (showStudioWithoutSeat && SmallPopulations.IsSmall((investment.Studio?.Contributors?[StudioWithoutSeat] ?? 0) - a.People, minPeople)));
                 var belowBreakEven = costWithheld && a.Code == CopilotInvestmentActionCodes.EnableBelowBreakEven && a.MonthlyAmount.HasValue;
                 var reclaim = costWithheld && a.RoiBaseAfter.HasValue;
-                if (!heavy && !belowBreakEven && !reclaim) return a;
+                // An action about one to four people quotes their own balances, their shortfall or the days they need.
+                var few = SmallPopulations.IsSmall(a.People, minPeople);
+                var fewAmount = few && a.MonthlyAmount.HasValue
+                    && (a.Code == CopilotInvestmentActionCodes.ReviewHighSpendThinEvidence || a.Code == CopilotInvestmentActionCodes.EnableBelowBreakEven);
+                var fewCredits = few && a.Credits.HasValue
+                    && (a.Code == CopilotInvestmentActionCodes.ReviewHighSpendThinEvidence || a.Code == CopilotInvestmentActionCodes.RaiseLimitEvidenced);
+                var fewMetric = few && a.Metric.HasValue && a.Code == CopilotInvestmentActionCodes.EnableBelowBreakEven;
+                if (!heavy && !belowBreakEven && !reclaim && !fewAmount && !fewCredits && !fewMetric) return a;
                 var action = a.Copy();
-                if (heavy || belowBreakEven)
+                if (heavy || belowBreakEven || fewAmount)
                 {
                     action.MonthlyAmount = null;
                     action.MonthlyAmountWithheld = true;
+                }
+                if (fewCredits)
+                {
+                    action.Credits = null;
+                    action.CreditsWithheld = true;
+                }
+                if (fewMetric)
+                {
+                    action.Metric = null;
+                    action.MetricWithheld = true;
                 }
                 if (reclaim) action.RoiBaseAfter = null;
                 return action;
@@ -182,6 +200,9 @@ namespace Common.Entities.CopilotInvestment
                 {
                     if (costWithheld && f.Code == CopilotInvestmentFindingCodes.IdleSeats) return f.Without(null, "roiAfter");
                     if (stressWithheld && f.Code == CopilotInvestmentFindingCodes.BalancesUnverified) return f.Without(null, "roiIfMonthly");
+                    if (f.Code == CopilotInvestmentFindingCodes.HighSpendThinEvidence && f.Values != null && f.Values.TryGetValue("people", out var people)
+                        && SmallPopulations.IsSmall((int)(people ?? 0), minPeople))
+                        return f.Without(null, "credits");
                     return f;
                 }).ToList();
             return decisions;

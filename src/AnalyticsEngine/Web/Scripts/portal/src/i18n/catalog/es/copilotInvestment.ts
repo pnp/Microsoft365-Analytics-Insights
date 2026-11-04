@@ -250,6 +250,10 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.finding.highSpendThinEvidence':
     '{people} personas son las que más créditos han consumido, con poco uso propio de Copilot ({credits} créditos). Más gasto no es más evidencia: revise qué se ejecuta en su nombre.',
   'copilotInvestment.finding.highSpendThinEvidenceOne': 'Una persona está entre las que más créditos han consumido, con poco uso propio de Copilot ({credits} créditos). Más gasto no es más evidencia: revise qué se ejecuta en su nombre.',
+  'copilotInvestment.finding.highSpendThinEvidenceWithheld':
+    '{people} personas son las que más créditos han consumido, con poco uso propio de Copilot (no se muestran sus créditos: podrían identificar a menos de {count} personas). Más gasto no es más evidencia: revise qué se ejecuta en su nombre.',
+  'copilotInvestment.finding.highSpendThinEvidenceOneWithheld':
+    'Una persona está entre las que más créditos han consumido, con poco uso propio de Copilot (no se muestran sus créditos: podrían identificar a menos de {count} personas). Más gasto no es más evidencia: revise qué se ejecuta en su nombre.',
   'copilotInvestment.finding.expandEvidenced':
     '{people} personas sin licencia ya usan Copilot más días activos de los que una licencia necesita para amortizarse. Darles licencia costaría {monthly} al mes.',
   'copilotInvestment.finding.expandEvidencedOne': 'Una persona sin licencia ya usa Copilot más días activos de los que una licencia necesita para amortizarse. Darle licencia costaría {monthly} al mes.',
@@ -281,6 +285,10 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.action.enableBelowBreakEven.title': 'Apoyar a quienes están por debajo del umbral',
   'copilotInvestment.action.enableBelowBreakEven.body': '{people} titulares usan Copilot, pero aún no lo bastante para cubrir su propio coste en el caso central. El típico necesita {days} días activos más al mes.',
   'copilotInvestment.action.enableBelowBreakEven.bodyOne': 'Un titular usa Copilot, pero aún no lo bastante para cubrir su propio coste en el caso central. Necesita {days} días activos más al mes.',
+  'copilotInvestment.action.enableBelowBreakEven.bodyWithheld':
+    '{people} titulares usan Copilot, pero aún no lo bastante para cubrir su propio coste en el caso central. No se muestra cuántos días activos más necesitan: podría identificar a menos de {count} personas.',
+  'copilotInvestment.action.enableBelowBreakEven.bodyOneWithheld':
+    'Un titular usa Copilot, pero aún no lo bastante para cubrir su propio coste en el caso central. No se muestra cuántos días activos más necesita: podría identificar a menos de {count} personas.',
   'copilotInvestment.action.enableLightEvidence.title': 'Ayudar a crear el hábito',
   'copilotInvestment.action.enableLightEvidence.body': '{people} titulares han probado Copilot, pero aún no tienen un hábito regular.',
   'copilotInvestment.action.enableLightEvidence.bodyOne': 'Un titular ha probado Copilot, pero aún no tiene un hábito regular.',
@@ -294,10 +302,18 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.action.reviewHighSpendThinEvidence.body':
     '{people} personas son las que más créditos han consumido ({credits} créditos) con poco uso propio. Busque agentes programados o automatizaciones antes de subir ningún límite.',
   'copilotInvestment.action.reviewHighSpendThinEvidence.bodyOne': 'Una persona está entre las que más créditos han consumido ({credits} créditos) con poco uso propio. Busque agentes programados o automatizaciones antes de subir ningún límite.',
+  'copilotInvestment.action.reviewHighSpendThinEvidence.bodyWithheld':
+    '{people} personas son las que más créditos han consumido con poco uso propio (no se muestran sus créditos: podrían identificar a menos de {count} personas). Busque agentes programados o automatizaciones antes de subir ningún límite.',
+  'copilotInvestment.action.reviewHighSpendThinEvidence.bodyOneWithheld':
+    'Una persona está entre las que más créditos han consumido con poco uso propio (no se muestran sus créditos: podrían identificar a menos de {count} personas). Busque agentes programados o automatizaciones antes de subir ningún límite.',
   'copilotInvestment.action.raiseLimitEvidenced.title': 'Revisar límites de los usuarios intensivos con evidencia',
   'copilotInvestment.action.raiseLimitEvidenced.body':
     '{people} personas con un uso intenso y regular de Copilot están en su límite de créditos o cerca de él ({credits} créditos).',
   'copilotInvestment.action.raiseLimitEvidenced.bodyOne': 'Una persona con un uso intenso y regular de Copilot está en su límite de créditos o cerca de él ({credits} créditos).',
+  'copilotInvestment.action.raiseLimitEvidenced.bodyWithheld':
+    '{people} personas con un uso intenso y regular de Copilot están en su límite de créditos o cerca de él (no se muestran sus créditos: podrían identificar a menos de {count} personas).',
+  'copilotInvestment.action.raiseLimitEvidenced.bodyOneWithheld':
+    'Una persona con un uso intenso y regular de Copilot está en su límite de créditos o cerca de él (no se muestran sus créditos: podrían identificar a menos de {count} personas).',
   'copilotInvestment.action.licenceMeteredHeavy.title': 'Comparar el consumo medido con una licencia',
   'copilotInvestment.action.licenceMeteredHeavy.body':
     'A {people} personas sin licencia se les facturaron más créditos de Copilot Studio de lo que costaría una licencia.',
@@ -455,7 +471,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
     'Recuperar las {count} licencias sin uso que se pueden recuperar con seguridad libera {monthly} al mes de coste de licencias. Solo es un ahorro de caja si se puede reducir el número de licencias.',
   'copilotInvestment.exec.path.reclaimOneNoReturn':
     'Recuperar la única licencia sin uso que se puede recuperar con seguridad libera {monthly} al mes de coste de licencias. Solo es un ahorro de caja si se puede reducir el número de licencias.',
-  'copilotInvestment.action.amountWithheld': 'Importe no mostrado: revelaría cargos de Copilot Studio que podrían identificar a menos de {count} personas',
+  'copilotInvestment.action.amountWithheld': 'Importe no mostrado: podría identificar a menos de {count} personas',
   'copilotInvestment.trend.empty': 'No hay lecturas de consumo en este periodo.',
   'copilotInvestment.trend.loading': 'Cargando las lecturas de consumo\u2026',
 
@@ -981,12 +997,16 @@ const copilotInvestment: Record<keyof typeof en, string> = {
     'Revisar las licencias sin actividad en Copilot que las reglas de adopción no marcan como seguras de recuperar: pregunte antes de reasignarlas.',
   'copilotInvestment.workbook.action.enableBelowBreakEven':
     'Apoyar a los titulares que usan Copilot pero por debajo de su propio umbral; el titular mediano necesita unos {days} días activos más al mes. El importe es el valor modelado que aún falta, no un coste.',
+  'copilotInvestment.workbook.action.enableBelowBreakEvenWithheld':
+    'Apoyar a los titulares que usan Copilot pero por debajo de su propio umbral; no se muestra cuántos días activos más necesitan, porque podría identificar a menos de {count} personas. El importe es el valor modelado que aún falta, no un coste.',
   'copilotInvestment.workbook.action.enableLightEvidence': 'Acompañar a los titulares con una actividad escasa en Copilot.',
   'copilotInvestment.workbook.action.expandEvidenced':
     'Ofrecer licencia a las personas sin ella cuyo uso de Copilot ya supera los {days} días activos al mes que necesita una licencia. El importe es el coste de licencias que añadiría; su uso muestra demanda, no la ganancia que aportaría una licencia.',
   'copilotInvestment.workbook.action.expandRecommended': 'Ofrecer licencia a las personas que recomienda el informe de adopción.',
   'copilotInvestment.workbook.action.reviewHighSpendThinEvidence':
     'Revisar a los mayores consumidores de créditos con poca actividad en Copilot ({credits} créditos).',
+  'copilotInvestment.workbook.action.reviewHighSpendThinEvidenceWithheld':
+    'Revisar a los mayores consumidores de créditos con poca actividad en Copilot (créditos no mostrados: podrían identificar a menos de {count} personas).',
   'copilotInvestment.workbook.action.reviewHighSpendThinEvidence.monthly':
     'El importe supone que cada lectura es un mes de uso, algo que la fuente no confirma.',
   'copilotInvestment.workbook.action.raiseLimitEvidenced':
@@ -1011,6 +1031,8 @@ const copilotInvestment: Record<keyof typeof en, string> = {
     'Consumidores de créditos: {consumers}. El {topFraction} superior de ellos concentra el {topShare} de los créditos consumidos en las últimas lecturas.',
   'copilotInvestment.workbook.finding.highSpendThinEvidence':
     'Personas entre los mayores consumidores de créditos con poca actividad en Copilot: {people} ({credits} créditos). Revise qué impulsa ese consumo.',
+  'copilotInvestment.workbook.finding.highSpendThinEvidenceWithheld':
+    'Personas entre los mayores consumidores de créditos con poca actividad en Copilot: {people} (créditos no mostrados: podrían identificar a menos de {count} personas). Revise qué impulsa ese consumo.',
   'copilotInvestment.workbook.finding.expandCandidates':
     'Personas sin licencia cuyo uso de Copilot ya justifica una: {people}. Darles licencia costaría {monthly} {currency} al mes (modelado).',
   'copilotInvestment.workbook.finding.limitBlocked':

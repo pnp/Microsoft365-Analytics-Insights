@@ -1577,11 +1577,22 @@ namespace Common.Entities.CopilotInvestment
         public bool AssumesMonthlyBalances { get; set; }
 
         /// <summary>
-        /// True when, for a reader without See PII, <see cref="MonthlyAmount"/> is null: it would be Copilot Studio charges
-        /// that the report withholds (one to four people's, or a part of a withheld modelled cost).
+        /// True when, for a reader without See PII, <see cref="MonthlyAmount"/> is null: it would be the charges or balances of
+        /// one to four people, or a part of a withheld modelled cost.
         /// </summary>
         [JsonProperty("monthlyAmountWithheld")]
         public bool MonthlyAmountWithheld { get; set; }
+
+        /// <summary>True when, for a reader without See PII, <see cref="Credits"/> is null: the balances of one to four people.</summary>
+        [JsonProperty("creditsWithheld")]
+        public bool CreditsWithheld { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Metric"/> is null: the typical active days a month that one to
+        /// four people need, which would be one of theirs.
+        /// </summary>
+        [JsonProperty("metricWithheld")]
+        public bool MetricWithheld { get; set; }
 
         internal CopilotInvestmentAction Copy() => (CopilotInvestmentAction)MemberwiseClone();
     }

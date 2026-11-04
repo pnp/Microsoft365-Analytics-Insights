@@ -129,14 +129,15 @@ namespace Common.Entities.CopilotInvestment
             sheet.AddBlankRow();
 
             sheet.AddHeaderRow(words.W("exec.col.assessment"), string.Empty, words.W("col.code"), words.W("exec.col.finding"));
+            var minPeople = Math.Max(summary.Organisation?.MinGroupSize ?? 0, SmallPopulations.MinPeopleWithoutSeePii);
             foreach (var finding in summary.Findings)
-                sheet.AddRow(words.Label(Words.Tone, finding.Tone), null, finding.Code, XlsxCell.Wrapped(FindingText(finding, currency, words)));
+                sheet.AddRow(words.Label(Words.Tone, finding.Tone), null, finding.Code, XlsxCell.Wrapped(FindingText(finding, currency, words, minPeople)));
             sheet.AddBlankRow();
 
             sheet.AddHeaderRow(words.W("exec.col.action"), words.W("col.people"), words.W("exec.col.amount"), words.W("exec.col.meaning"), words.W("col.code"));
             foreach (var action in summary.Actions)
             {
-                var meaning = ActionText(action, words);
+                var meaning = ActionText(action, words, minPeople);
                 var effect = action.Effect != null && words.Has(Words.Effect + action.Effect) ? words.Label(Words.Effect, action.Effect) : null;
                 sheet.AddRow(ActionTitle(action.Code, words), XlsxCell.Number(action.People), Shown(action.MonthlyAmount, action.MonthlyAmountWithheld, withheld),
                     XlsxCell.Wrapped(effect == null ? meaning : effect + " " + meaning), action.Code);
