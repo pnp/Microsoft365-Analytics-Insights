@@ -367,6 +367,74 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region A page that keeps timing out
+
+        private const string GatewayTimeoutBody = "{\"error\":{\"code\":\"UnknownError\",\"message\":\"\"}}";
+
+        /// <summary>
+        /// Page 1, then a page 2 that times out (504) <paramref name="timeouts"/> times before it loads. The throttling
+        /// client retries a 504 within its budget (MaxRetries attempts); once that is spent the page has failed.
+        /// </summary>
+        private static SequenceHandler PageTwoTimesOut(int timeouts)
+        {
+            var responses = new List<Tuple<HttpStatusCode, string>>
+            {
+                Tuple.Create(HttpStatusCode.OK, PageWithNextLink("https://graph.microsoft.com/v1.0/anything?page=2")),
+            };
+            responses.AddRange(Enumerable.Repeat(Tuple.Create(HttpStatusCode.GatewayTimeout, GatewayTimeoutBody), timeouts));
+            responses.Add(Tuple.Create(HttpStatusCode.OK, "{\"value\":[{\"reportRefreshDate\":\"2026-08-02\"}]}"));
+            return new SequenceHandler(responses.ToArray());
+        }
+
+        [TestMethod]
+        public async Task StrictPaging_APageThatKeepsTimingOut_FailsOnceTheRetryBudgetIsSpent()
+        {
+            // The pager used to retry such a page itself, with a fresh budget each time, for as long as it kept timing out:
+            // here until the 504s ran out, and in production for ever - while a strict caller never saw the failure.
+            using (var handler = PageTwoTimesOut(timeouts: 4))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance) { MaxRetries = 2 })
+            {
+                await Assert.ThrowsExceptionAsync<HttpRequestException>(() =>
+                    client.LoadAllPagesWithThrottleRetries<JObject>("https://graph.microsoft.com/beta/reports/anything",
+                        NullLogger.Instance, throwOnNotFound: true, throwOnHttpError: true));
+
+                Assert.AreEqual(3, handler.CallCount, "Page 1, then page 2 tried MaxRetries times - and no more.");
+            }
+        }
+
+        [TestMethod]
+        public async Task LenientPaging_APageThatKeepsTimingOut_IsReportedAsTheFailedPage()
+        {
+            using (var handler = PageTwoTimesOut(timeouts: 4))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance) { MaxRetries = 2 })
+            {
+                var failedPages = new List<int>();
+
+                var results = await client.LoadAllPagesPlusDeltaWithThrottleRetries<JObject>("https://graph.microsoft.com/v1.0/anything", NullLogger.Instance,
+                    deltaLink => Task.CompletedTask, onPageFailed: (ex, page) => failedPages.Add(page));
+
+                Assert.AreEqual(1, results.Count, "Page 1's rows, as for any failed page.");
+                CollectionAssert.AreEqual(new[] { 2 }, failedPages, "The caller is told which page failed; the user import keeps its checkpoint on it.");
+                Assert.AreEqual(3, handler.CallCount);
+            }
+        }
+
+        [TestMethod]
+        public async Task Paging_ATimeoutThatClearsWithinTheRetryBudget_StillLoadsEveryPage()
+        {
+            using (var handler = PageTwoTimesOut(timeouts: 1))
+            using (var client = new ManualGraphCallClient(handler, NullLogger.Instance) { MaxRetries = 2 })
+            {
+                var results = await client.LoadAllPagesWithThrottleRetries<JObject>("https://graph.microsoft.com/beta/reports/anything",
+                    NullLogger.Instance, throwOnNotFound: true, throwOnHttpError: true);
+
+                Assert.AreEqual(2, results.Count);
+                Assert.AreEqual(3, handler.CallCount, "Page 2 was retried once, by the throttling client.");
+            }
+        }
+
+        #endregion
+
         #region The Copilot report source opts in
 
         [TestMethod]

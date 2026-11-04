@@ -365,6 +365,7 @@ namespace Common.Entities.CopilotSpend
                 LimitExhaustedPeople = observed.Count(o => o.LimitExhaustedRows > 0),
                 NotEntitledPeople = observed.Count(o => o.NotEntitledRows > 0),
                 Credits = available ? Math.Round(observed.Concat(unresolved).Sum(o => o.Credits ?? 0), 6) : (double?)null,
+                Contributors = available ? observed.Count(o => (o.Credits ?? 0) != 0) : 0,
                 SweepsInWindow = credits.Sweeps.Count,
                 CompletedSweepsInWindow = credits.Sweeps.Count(s => s.LastCompleted.HasValue),
                 Services = CopilotInvestmentCalculator.ServiceRows(credits, observed, input.Filtered),
@@ -464,11 +465,19 @@ namespace Common.Entities.CopilotSpend
 
         /// <summary>
         /// One group's figures: a source that is not available leaves its figures null, and a row with fewer people than the
-        /// smallest group shown (only ever a combination of small groups) shows none at all.
+        /// smallest group shown (only ever a combination of small groups) shows none at all. Every row records how many of its
+        /// people each source's figures describe, withheld or not, so a copy for a reader without See PII can withhold a
+        /// source's figures that describe too few of them (<see cref="CopilotSpendOrganisation.WithoutSmallContributorPopulations"/>).
         /// </summary>
         private static CopilotSpendGroupRow GroupRow(List<CopilotSpendPersonRow> people, GroupTotals totals, int minGroupSize)
         {
-            var row = new CopilotSpendGroupRow { People = people.Count };
+            var row = new CopilotSpendGroupRow
+            {
+                People = people.Count,
+                StudioContributors = totals.StudioAvailable ? people.Count(p => (p.StudioCredits ?? 0) != 0) : 0,
+                BalanceContributors = totals.BalancesAvailable ? people.Count(p => (p.BalanceCredits ?? 0) != 0) : 0,
+                UnknownAmountContributors = totals.BalancesAvailable ? people.Count(p => p.UnknownAmounts) : 0,
+            };
             if (people.Count < minGroupSize)
             {
                 row.Withheld = true;

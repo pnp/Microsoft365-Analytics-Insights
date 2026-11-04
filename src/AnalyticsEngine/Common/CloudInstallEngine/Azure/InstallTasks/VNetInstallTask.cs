@@ -3,7 +3,9 @@ using Azure.Core;
 using Azure.ResourceManager.Network;
 using Azure.ResourceManager.Network.Models;
 using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace CloudInstallEngine.Azure.InstallTasks
@@ -86,7 +88,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
-                _logger.LogInformation($"Found existing VNet '{vnet.Data.Name}'.");
+                _logger.LogInformation($"Found existing VNet '{vnet.Data.Name}'. Preserving its address spaces and existing subnet settings.");
 
                 // Ensure the App Service integration subnet exists
                 if (!string.IsNullOrWhiteSpace(appIntegrationSubnetName))
@@ -128,12 +130,14 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     else
                     {
                         // Warn if the configured prefix doesn't match the existing subnet
-                        var existingPrefix = integrationSubnet.Data.AddressPrefix;
+                        var existingPrefixes = new List<string>(integrationSubnet.Data.AddressPrefixes);
+                        if (!string.IsNullOrWhiteSpace(integrationSubnet.Data.AddressPrefix))
+                            existingPrefixes.Add(integrationSubnet.Data.AddressPrefix);
                         if (!string.IsNullOrWhiteSpace(appIntegrationSubnetAddressPrefix) &&
-                            !string.Equals(existingPrefix, appIntegrationSubnetAddressPrefix, System.StringComparison.OrdinalIgnoreCase))
+                            !existingPrefixes.Contains(appIntegrationSubnetAddressPrefix, StringComparer.OrdinalIgnoreCase))
                         {
-                            _logger.LogWarning($"Integration subnet '{appIntegrationSubnetName}' exists with address prefix '{existingPrefix}' but configuration specifies '{appIntegrationSubnetAddressPrefix}'. " +
-                                $"Subnet address prefixes cannot be changed while the subnet is in use. To change, delete the subnet and re-run the installer.");
+                            _logger.LogWarning($"Integration subnet '{appIntegrationSubnetName}' exists with address prefix(es) '{string.Join(", ", existingPrefixes)}' but configuration specifies '{appIntegrationSubnetAddressPrefix}'. " +
+                                "The existing subnet will be reused without changing its address ranges or network settings. Update the installer configuration to match the existing subnet; do not delete a working subnet.");
                         }
 
                         _logger.LogInformation($"Integration subnet '{appIntegrationSubnetName}' already exists.");

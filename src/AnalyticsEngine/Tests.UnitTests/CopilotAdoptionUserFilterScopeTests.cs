@@ -91,6 +91,94 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void GlobalFilter_LeavesOutWhatDescribesTheWholeTenant_AndNamesIt()
+        {
+            // Everything a narrowed view used to carry across tenant-wide, set on the cached tenant analysis.
+            var analysis = Analysis();
+            var copilotSku = analysis.Summary.SeatLicenceTypes.Single();
+            copilotSku.UnassignedUnits = null;
+            CopilotAdoptionWarnings.Add(
+                analysis.Summary,
+                CopilotAdoptionWarningKeys.SkuSeatMismatch,
+                new Dictionary<string, object> { { "skuName", copilotSku.SkuPartNumber }, { "purchased", 10 }, { "assigned", 8 } });
+            analysis.Summary.WeeklyTrend.Add(new AdoptionSeries { Name = "Active users", Points = { new AdoptionTimePoint { WeekStart = Now.AddDays(-7), Value = 7 } } });
+            analysis.Summary.TopResourceTypes.Add(new AdoptionResourceTypeRow { Label = "docx", Value = 30 });
+            analysis.Summary.Unlicensed.UsageByApp.Add(new AdoptionCategory { Label = "Copilot Chat", Value = 12 });
+            analysis.Summary.MicrosoftReportDate = Now.AddDays(-3);
+            analysis.Summary.MicrosoftReportPeriodDays = 28;
+            analysis.Summary.MicrosoftReportPromptsSubmitted = 900;
+            analysis.Summary.CoworkCreditPosition = new CoworkCreditPosition { Available = true, Entitled = 1000m, PerUserCreditsAvailable = true };
+            analysis.Agents.Add(new AgentUsageRow { AgentId = 1, Name = "Contoso Expenses helper", Users = 6, Interactions = 50, HomeDepartment = "Engineering" });
+            var service = Service();
+            service.FinaliseSummary(analysis);
+            analysis.Summary.Agents.UsageByDepartment.Add(new AdoptionCategory { Label = "Engineering", Value = 40 });
+            analysis.Summary.Agents.HistoryDays = 120;
+            var sales = UserFilterCompiler.Compile(UserFilterCodec.Parse(Sales), Directory());
+
+            // A reader the administrator's filter limits to Sales sees Sales, and nothing about the rest.
+            var global = CopilotAdoptionScopeFilter.Apply(
+                analysis, CopilotAdoptionScope.Create(null, null, sales, null, null), service.FinaliseSummary);
+            var summary = global.Summary;
+            Assert.AreEqual(4, summary.LicensedUsers, "The narrowed figures are still there.");
+            Assert.IsNull(summary.UnscopedLicensedUsers, "Not the size of the population outside the filter...");
+            Assert.AreEqual(4, summary.SeatLicenceTypes.Single().AssignedUsers);
+            Assert.IsNull(summary.SeatLicenceTypes.Single().PurchasedUnits, "...nor the tenant's purchases, which less its unassigned seats are its assignments.");
+            Assert.IsNull(summary.SeatLicenceTypes.Single().UnassignedUnits);
+            Assert.IsNull(summary.PurchasedCopilotSeats);
+            Assert.IsNull(summary.UnassignedCopilotSeats);
+            Assert.IsFalse(summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.SkuSeatMismatch || d.Key == CopilotAdoptionWarningKeys.PurchasedSeatsUnknown),
+                "A warning quoting the tenant's seats is a tenant figure too, and the withheld purchases are not 'unreadable'.");
+            Assert.AreEqual(summary.Warnings.Count, summary.WarningDetails.Count);
+            Assert.AreEqual(0, summary.UsageByApp.Count);
+            Assert.AreEqual(0, summary.TopResourceTypes.Count);
+            Assert.AreEqual(0, summary.WeeklyTrend.Count);
+            Assert.AreEqual(0, summary.Unlicensed.UsageByApp.Count);
+            Assert.AreEqual(0, summary.Agents.KnownAgents, "The inventory names every department's agents and their use.");
+            Assert.AreEqual(0, summary.Agents.UsageByDepartment.Count);
+            Assert.AreEqual(120, summary.Agents.HistoryDays, "The look-back is a setting.");
+            Assert.AreEqual(0, global.Agents.Count);
+            Assert.IsNull(summary.MicrosoftReportPromptsSubmitted);
+            Assert.IsFalse(summary.CoworkCreditPosition.Available);
+            Assert.IsNull(summary.CoworkCreditPosition.Entitled);
+            Assert.IsTrue(summary.CoworkCreditPosition.PerUserCreditsAvailable, "Whether per-person credit rows exist is a fact about the import.");
+            Assert.AreEqual(0, summary.UnscopedSections.Count);
+            CollectionAssert.AreEquivalent(
+                new[]
+                {
+                    CopilotAdoptionUnscopedSections.UsageByApp, CopilotAdoptionUnscopedSections.TopResourceTypes,
+                    CopilotAdoptionUnscopedSections.WeeklyTrend, CopilotAdoptionUnscopedSections.Agents,
+                    CopilotAdoptionUnscopedSections.PurchasedSeats, CopilotAdoptionUnscopedSections.CoworkCredits,
+                    CopilotAdoptionUnscopedSections.MicrosoftReport,
+                },
+                summary.WithheldSections,
+                "Named, so the page says why they are missing rather than showing them as empty.");
+
+            // The list and export endpoints' cheaper narrowing withholds the same.
+            var rows = CopilotAdoptionScopeFilter.FilterRows(analysis, CopilotAdoptionScope.Create(null, null, sales, null, null));
+            Assert.IsNull(rows.Summary.UnscopedLicensedUsers);
+            Assert.AreEqual(0, rows.Agents.Count);
+            Assert.IsNull(rows.Summary.SeatLicenceTypes.Single().PurchasedUnits);
+            Assert.IsFalse(rows.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.SkuSeatMismatch));
+
+            // A reader who narrowed the view themselves still gets every section, labelled tenant-wide, as before.
+            var own = Narrow(analysis, Sales, service);
+            Assert.AreEqual(8, own.Summary.UnscopedLicensedUsers);
+            Assert.AreEqual(10, own.Summary.SeatLicenceTypes.Single(l => l.IsCopilotSeat).PurchasedUnits);
+            Assert.AreEqual(1, own.Summary.UsageByApp.Count);
+            Assert.AreEqual(1, own.Summary.Agents.KnownAgents);
+            Assert.AreEqual(900, own.Summary.MicrosoftReportPromptsSubmitted);
+            Assert.IsTrue(own.Summary.WarningDetails.Any(d => d.Key == CopilotAdoptionWarningKeys.SkuSeatMismatch));
+            Assert.AreEqual(0, own.Summary.WithheldSections.Count);
+            CollectionAssert.Contains(own.Summary.UnscopedSections, CopilotAdoptionUnscopedSections.Agents);
+
+            // And the cached tenant analysis is never edited for either.
+            Assert.AreEqual(10, analysis.Summary.SeatLicenceTypes.Single().PurchasedUnits);
+            Assert.AreEqual(1, analysis.Agents.Count);
+            Assert.AreEqual(1, analysis.Summary.Agents.UsageByDepartment.Count);
+            Assert.IsTrue(analysis.Summary.CoworkCreditPosition.Available);
+        }
+
+        [TestMethod]
         public void Filtering_LeavesTheCachedTenantAnalysisUntouched()
         {
             var analysis = Analysis();

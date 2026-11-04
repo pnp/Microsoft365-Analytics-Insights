@@ -27,7 +27,7 @@ import {
 import { SITE_TOKEN_ERROR_KEYS } from '../../auth/siteToken';
 import { ERROR_CODE_KEYS as USER_IMPORT_CHECKPOINT_ERROR_KEYS } from '../../api/userImportCheckpointApi';
 import { routesForArea } from '../../navigation';
-import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
+import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_QUERY_ERROR_CODE_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
 import { USER_ORG_MESSAGE_KEYS } from '../../components/userOrgs/userOrgShared';
@@ -201,6 +201,7 @@ function expectServerLabelsCoveredBySpaMap(serverLabels: string[], spaMap: Recor
 }
 
 const PORTAL_PERMISSIONS = join(process.cwd(), '..', '..', 'Security', 'PortalPermissions.cs');
+const TEAMS_EXPLORER_STORE = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'TeamsExplorer', 'SqlTeamsExplorerStore.cs');
 
 function csharpStringConstant(source: string, name: string): string {
   const match = source.match(new RegExp(`const\\s+string\\s+${name}\\s*=\\s*"([^"]*)"`));
@@ -215,6 +216,14 @@ describe('API error-code drift checks', () => {
     expect(PORTAL_PERMISSION_ERROR_CODE).toBe(csharpStringConstant(source, 'ErrorCode'));
     expect(EN_CATALOG['access.permissionRequired.administration']).toBe(csharpStringConstant(source, 'AdministrationMessage'));
     expect(EN_CATALOG['access.permissionRequired.seePii']).toBe(csharpStringConstant(source, 'SeePiiMessage'));
+  });
+
+  it('words every Teams Explorer section the server declined to run, and keeps its English fallback the same', () => {
+    const source = readFileSync(TEAMS_EXPLORER_STORE, 'utf8');
+    const code = csharpStringConstant(source, 'QueueTimeoutErrorCode');
+
+    expect(Object.keys(TEAMS_QUERY_ERROR_CODE_KEYS)).toEqual([code]);
+    expect(EN_CATALOG[TEAMS_QUERY_ERROR_CODE_KEYS[code]]).toBe(csharpStringConstant(source, 'QueueTimeoutMessage'));
   });
 });
 
@@ -2591,7 +2600,7 @@ describe('Reports partial-data warning facts', () => {
     const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'ReportsAPIController.cs'), 'utf8');
     const reasons = [...source.matchAll(/Reason\s*=\s*"([^"]+)"/g)].map((m) => m[1]).sort();
 
-    expect(reasons).toEqual(['loadFailed', 'noSettledData', 'noSettledDataForWeek', 'notAttempted']);
+    expect(reasons).toEqual(['incompleteWeeks', 'loadFailed', 'noSettledData', 'noSettledDataForWeek', 'notAttempted']);
 
     const missing = reasons
       .map((reason) => `reports.chart.warning.series.${reason}`)

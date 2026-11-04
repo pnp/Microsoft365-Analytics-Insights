@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 
 namespace Common.Entities.TeamsExplorer
 {
@@ -46,15 +47,26 @@ namespace Common.Entities.TeamsExplorer
 
         /// <summary>
         /// A user did something in Teams on a given day. Summed rather than tested column-by-column
-        /// because Graph writes a row for EVERY user in the report scope - including users who did
-        /// nothing at all - so the presence of a row means "measured", not "active".
+        /// because a report row does not by itself mean the user did any of these things.
         /// </summary>
         /// <remarks>
+        /// <para>
+        /// The importer reads Graph's Teams user-activity report one date at a time
+        /// (<c>getTeamsUserActivityUserDetail(date=...)</c>), and Microsoft documents that form as returning
+        /// the users who performed any activity on that date. So the table is POSITIVE-ONLY: somebody who did
+        /// nothing that day has no row at all, and a row whose counts below are all zero belongs to someone
+        /// whose only activity was something these columns leave out (ad hoc meetings, call or screen-share
+        /// time, other actions). Absence of a row is therefore never evidence on its own - see
+        /// <see cref="UsageCoverageDeclarations"/> for when it is - and nothing here assumes Graph writes a row
+        /// for every licensed user.
+        /// </para>
+        /// <para>
         /// Six of these eight columns are carried by <c>NCCI_teams_user_activity_log_metrics</c>;
         /// <c>calls_count</c> and <c>urgent_messages</c> are not, which is why the migration
         /// <c>WidenTeamsUsageColumnstore</c> exists. They are included anyway because a user whose only
         /// Teams activity was a 1:1 call genuinely is an active user, and quietly excluding them to
         /// suit an index would make the headline reach figure wrong.
+        /// </para>
         /// </remarks>
         public const string ActivitySum =
             "(t.private_chat_count + t.team_chat_count + t.post_messages + t.reply_messages"
@@ -69,6 +81,26 @@ namespace Common.Entities.TeamsExplorer
         /// denominator and inflate reach.
         /// </summary>
         public const string EnabledUsersPredicate = "(u.account_enabled IS NULL OR u.account_enabled = 1)";
+
+        /// <summary>
+        /// The user aliased <paramref name="userAlias"/> holds a licence that gives them Teams
+        /// (<see cref="TeamsLicences"/>). The part numbers are this build's constants, written in as literals.
+        /// </summary>
+        public static string TeamsLicensed(string userAlias)
+        {
+            return "EXISTS (SELECT 1 FROM dbo.user_license_type_lookups AS owned"
+                + " INNER JOIN dbo.license_types AS licence ON licence.id = owned.license_type_id"
+                + " WHERE owned.user_id = " + userAlias + ".id AND licence.sku_id IN (" + TeamsSkuList.Value + "))";
+        }
+
+        private static readonly Lazy<string> TeamsSkuList = new Lazy<string>(() =>
+        {
+            var partNumbers = TeamsLicences.EmbeddedSkuPartNumbers;
+            // An empty IN list is a syntax error; NULL matches nothing, which is the honest answer.
+            return partNumbers.Count == 0
+                ? "NULL"
+                : string.Join(", ", partNumbers.Select(p => "N'" + p.Replace("'", "''") + "'"));
+        });
 
         #region Scope markers
 
@@ -144,7 +176,17 @@ namespace Common.Entities.TeamsExplorer
 
         #region Overview
 
-        /// <summary>Tenant-wide usage-report totals and the active/known user counts behind reach.</summary>
+        /// <summary>
+        /// Tenant-wide usage-report totals and the active/known user counts behind reach.
+        /// </summary>
+        /// <remarks>
+        /// Reach compares like with like: <c>ActiveUsers</c> counts only enabled (or unknown) directory users,
+        /// the same people <c>KnownUsers</c> counts. Counting everyone with activity instead let somebody who
+        /// was active early in the window and disabled since add to the numerator but not the denominator,
+        /// and push reach past 100% in a narrowly scoped report. The message, meeting and call-time totals
+        /// still include them: that activity happened. <c>ActiveUserMeetingsAttended</c> is the enabled active
+        /// users' own meetings, so meetings per active user divides like by like too.
+        /// </remarks>
         public const string OverviewUsage = @"
 WITH PerUser AS (
     SELECT
@@ -163,8 +205,8 @@ WITH PerUser AS (
 )
 SELECT
     (SELECT COUNT(*) FROM dbo.users AS u WHERE " + EnabledUsersPredicate + DirectoryScope + @") AS KnownUsers,
-    ISNULL(SUM(CASE WHEN p.ActiveDays > 0 THEN 1 ELSE 0 END), 0) AS ActiveUsers,
-    COUNT(*)                                          AS MeasuredUsers,
+    ISNULL(SUM(CASE WHEN p.ActiveDays > 0 AND " + EnabledUsersPredicate + @" THEN 1 ELSE 0 END), 0) AS ActiveUsers,
+    ISNULL(SUM(CASE WHEN p.ActiveDays > 0 AND " + EnabledUsersPredicate + @" THEN p.MeetingsAttended ELSE 0 END), 0) AS ActiveUserMeetingsAttended,
     ISNULL(SUM(p.ChannelMessages), 0)                 AS ChannelMessages,
     ISNULL(SUM(p.PrivateMessages), 0)                 AS PrivateMessages,
     ISNULL(SUM(p.MeetingsAttended), 0)                AS MeetingsAttended,
@@ -173,7 +215,75 @@ SELECT
     ISNULL(SUM(p.VideoSeconds), 0)                    AS VideoSeconds,
     ISNULL(SUM(p.ScreenShareSeconds), 0)              AS ScreenShareSeconds
 FROM PerUser AS p
+INNER JOIN dbo.users AS u ON u.id = p.user_id
 OPTION (RECOMPILE);";
+
+        /// <summary>
+        /// Works out, at the top of a batch, whether the usage reports can prove somebody did nothing in the
+        /// window - the condition for calling a licensed person with no activity dormant.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Graph's per-date Teams report lists only the people active that day, so somebody with no row has
+        /// either done nothing or was never looked at. Only these rule out the second, and every one must hold
+        /// (<c>@dormancyKnown</c>):
+        /// </para>
+        /// <list type="bullet">
+        /// <item>Every day of the window has a report imported - any row at all, from anyone
+        /// (<c>@importedDays = @usageDays</c>). A missing day is a hole in the evidence for everyone. One
+        /// <c>TOP (1)</c>-style seek of <c>IX_date</c> per day, at most 365, the idea Licence activity's
+        /// coverage spine uses. Not narrowed to the reader's scope: whether a day was imported is a fact about
+        /// the import.</item>
+        /// <item>The usage import is not narrowed to a group (<c>@groupFiltered = 0</c>): the directory can
+        /// hold people outside the group, who are never looked at.</item>
+        /// <item>The reports carry real names (<c>@namesConcealed = 0</c>), tested as
+        /// <see cref="ObfuscationProbe"/> does. With the admin centre's concealment on, nobody's activity
+        /// lands on their directory record, and everyone would look dormant.</item>
+        /// <item>Somebody in the scope holds a licence that includes Teams (<c>@teamsLicensedUsers &gt; 0</c>).
+        /// Without the licence import there is no population to be dormant in.</item>
+        /// </list>
+        /// </remarks>
+        public static string UsageCoverageDeclarations => @"
+SET NOCOUNT ON;
+DECLARE @usageDays int = DATEDIFF(DAY, @usageFrom, @usageTo);
+DECLARE @importedDays int;
+WITH WindowDays AS (
+    SELECT 0 AS n
+    UNION ALL
+    SELECT n + 1 FROM WindowDays WHERE n + 1 < @usageDays
+)
+SELECT @importedDays = COUNT(*)
+FROM WindowDays AS d
+WHERE EXISTS (
+    SELECT 1 FROM dbo.teams_user_activity_log AS imported
+    WHERE imported.[date] >= DATEADD(DAY, d.n, @usageFrom)
+      AND imported.[date] < DATEADD(DAY, d.n + 1, @usageFrom))
+OPTION (MAXRECURSION 0);
+DECLARE @sampled int, @withAddress int;
+SELECT @sampled = COUNT(*), @withAddress = ISNULL(SUM(CASE WHEN sampled.user_name LIKE N'%@%' THEN 1 ELSE 0 END), 0)
+FROM (
+    SELECT DISTINCT TOP (200) reported.user_id
+    FROM dbo.teams_user_activity_log AS reported
+    WHERE reported.[date] >= @usageFrom AND reported.[date] < @usageTo
+) AS sample
+INNER JOIN dbo.users AS sampled ON sampled.id = sample.user_id;
+DECLARE @namesConcealed bit = CASE WHEN @sampled > 0 AND @withAddress = 0 THEN 1 ELSE 0 END;
+DECLARE @teamsLicensedUsers int = (
+    SELECT COUNT(*) FROM dbo.users AS u
+    WHERE " + EnabledUsersPredicate + DirectoryScope + @" AND " + TeamsLicensed("u") + @");
+DECLARE @dormancyKnown bit = CASE
+    WHEN @importedDays = @usageDays AND @groupFiltered = 0 AND @namesConcealed = 0 AND @teamsLicensedUsers > 0
+    THEN 1 ELSE 0 END;
+";
+
+        /// <summary>The facts behind <c>@dormancyKnown</c>, so the page can say why dormancy is or is not shown.</summary>
+        public static string UsageCoverage => UsageCoverageDeclarations + @"
+SELECT
+    @usageDays                    AS ExpectedDays,
+    @importedDays                 AS ImportedDays,
+    CAST(@groupFiltered AS bit)   AS GroupFiltered,
+    @namesConcealed               AS NamesConcealed,
+    @teamsLicensedUsers           AS TeamsLicensedUsers;";
 
         /// <summary>
         /// Call volume and out-of-hours share in the live window. Separate from the usage figures
@@ -233,20 +343,37 @@ OPTION (RECOMPILE);";
         }
 
         /// <summary>
-        /// How many users were active on how many days. Returned as a raw histogram so
-        /// <see cref="TeamsExplorerScoring.Segment"/> - and not this SQL - decides the bands.
+        /// How many people were active on how many days, over the population the engagement mix is measured
+        /// against. Returned as a raw histogram so <see cref="TeamsExplorerScoring.Segment"/> - and not this
+        /// SQL - decides the bands.
         /// </summary>
-        public const string SegmentHistogram = @"
+        /// <remarks>
+        /// The population is enabled (or unknown) directory users in scope who either have a Teams usage row in
+        /// the window or hold a licence that includes Teams (<see cref="TeamsLicensed"/>). <c>Reported</c> says
+        /// which: the usage report is positive-only, so a licensed person with no row is dormant only when
+        /// <see cref="UsageCoverageDeclarations"/> proves the window was measured in full, and the store leaves
+        /// them out of the mix - and counts them as unmeasured - when it cannot. Disabled accounts are not in it,
+        /// as they are not in reach.
+        /// </remarks>
+        public static string SegmentHistogram => @"
 WITH PerUser AS (
     SELECT t.user_id, SUM(CASE WHEN " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS ActiveDays
     FROM dbo.teams_user_activity_log AS t
     WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
     GROUP BY t.user_id
+),
+Population AS (
+    SELECT ISNULL(p.ActiveDays, 0) AS ActiveDays,
+           CASE WHEN p.user_id IS NULL THEN 0 ELSE 1 END AS Reported
+    FROM dbo.users AS u
+    LEFT JOIN PerUser AS p ON p.user_id = u.id
+    WHERE " + EnabledUsersPredicate + DirectoryScope + @"
+      AND (p.user_id IS NOT NULL OR " + TeamsLicensed("u") + @")
 )
-SELECT p.ActiveDays, COUNT_BIG(*) AS Users
-FROM PerUser AS p
-GROUP BY p.ActiveDays
-ORDER BY p.ActiveDays
+SELECT ActiveDays, CAST(Reported AS bit) AS Reported, COUNT_BIG(*) AS Users
+FROM Population
+GROUP BY ActiveDays, Reported
+ORDER BY ActiveDays, Reported
 OPTION (RECOMPILE);";
 
         #endregion
@@ -962,10 +1089,23 @@ ORDER BY p.ActiveDays DESC,
 OPTION (RECOMPILE);";
 
         /// <summary>
-        /// Users the usage report covered but who did nothing at all. These are the licence-holders an
+        /// Enabled people licensed for Teams who did nothing in Teams in the window - the people an
         /// enablement programme should target first.
         /// </summary>
-        public const string DormantUsers = @"
+        /// <remarks>
+        /// <para>
+        /// Built from the directory, not from the usage report: the report is positive-only (see
+        /// <see cref="ActivitySum"/>), so somebody who did nothing at all has no row to find. A licensed
+        /// person with no row is listed only when <see cref="UsageCoverageDeclarations"/> proves the whole
+        /// window was measured; otherwise they could have been active on a day that was never imported.
+        /// </para>
+        /// <para>
+        /// People with rows whose counted activity is zero are listed either way, as before: the report saw
+        /// them on a day it has, and they did none of the things <see cref="ActivitySum"/> counts. Ordered by
+        /// the last activity Microsoft recorded, so people with none in the window come first.
+        /// </para>
+        /// </remarks>
+        public static string DormantUsers => UsageCoverageDeclarations + @"
 WITH PerUser AS (
     SELECT
         t.user_id,
@@ -986,10 +1126,12 @@ SELECT TOP (@top)
     CAST(0 AS bigint)  AS CallsHosted,
     CAST(0 AS bigint)  AS CallsAttended,
     p.LastActivity     AS LastActivity
-FROM PerUser AS p
-INNER JOIN dbo.users AS u ON u.id = p.user_id
+FROM dbo.users AS u
+LEFT JOIN PerUser AS p ON p.user_id = u.id
 LEFT JOIN dbo.user_departments AS dep ON dep.id = u.department_id
-WHERE p.ActiveDays = 0 AND " + EnabledUsersPredicate + @"
+WHERE " + EnabledUsersPredicate + DirectoryScope + @"
+  AND ISNULL(p.ActiveDays, 0) = 0
+  AND (p.user_id IS NOT NULL OR (@dormancyKnown = 1 AND " + TeamsLicensed("u") + @"))
 ORDER BY p.LastActivity, u.user_name
 OPTION (RECOMPILE);";
 
@@ -1093,6 +1235,7 @@ OPTION (RECOMPILE);";
                 $"DECLARE @workStart int = {TeamsExplorerScoring.WorkingDayStartHour};",
                 $"DECLARE @workEnd int = {TeamsExplorerScoring.WorkingDayEndHour};",
                 $"DECLARE @championDays int = {championDays};",
+                $"DECLARE @groupFiltered bit = {(query.UsageReportsGroupFiltered ? 1 : 0)};",
             };
 
             lines.AddRange(Common.Entities.UserFilters.ReportScopeSql.DescribeScope(query.UserScope, sql));

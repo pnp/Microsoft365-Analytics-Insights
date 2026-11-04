@@ -30,8 +30,17 @@ namespace Common.Entities
 
         private readonly Dictionary<string, SPEventType> _eventTypeCache = null;
         private readonly AnalyticsEntitiesContext _db;
+        private readonly SharePointWebIndex _webIndex;
 
-        public SharePointLookupManager(AnalyticsEntitiesContext db)
+        public SharePointLookupManager(AnalyticsEntitiesContext db) : this(db, null)
+        {
+        }
+
+        /// <param name="webIndex">
+        /// The webs and site collections in SQL, shared with the other save batches of the import cycle. Null gives this
+        /// manager an index of its own, read in full the first time a web is looked up.
+        /// </param>
+        public SharePointLookupManager(AnalyticsEntitiesContext db, SharePointWebIndex webIndex)
         {
             this.HitCache = new List<Hit>();
             UrlCache = new Dictionary<string, Url>();
@@ -42,6 +51,7 @@ namespace Common.Entities
             _eventTypeCache = new Dictionary<string, SPEventType>();
             _o365ClientAppCache = new O365ClientApplicationCache(db);
             _db = db;
+            _webIndex = webIndex ?? new SharePointWebIndex();
         }
 
         #endregion
@@ -77,18 +87,28 @@ namespace Common.Entities
         #endregion
 
         /// <summary>
-        /// Gets closest web for a URL, optionally or creates new webs + corrsponding site if no matching site found.
+        /// Gets the web for an audit event, creating it and its site collection when <paramref name="createIfNoneFound"/>.
+        /// With it, <paramref name="webUrl"/> is the web's own address (an audit record's <c>SiteUrl</c>); without it, an
+        /// address inside a web, such as a file's. See <see cref="SPWebResolver.GetWeb"/>.
         /// </summary>
         public async Task<Web> GetWebOrCreateWebPlusSite(string webUrl, bool createIfNoneFound)
         {
             if (_spWebResolver == null)
             {
-                _spWebResolver = new SPWebResolver();
-                await _spWebResolver.PopulateCaches(_db);
+                // Once per batch, before its first lookup: picks up the sites this batch's staging merge has just inserted
+                // and the webs earlier batches saved. After the index's first load this reads only the rows added since.
+                await _webIndex.RefreshAsync(_db);
+                _spWebResolver = new SPWebResolver(_webIndex, _db);
             }
 
             return _spWebResolver.GetWeb(webUrl, createIfNoneFound);
         }
+
+        /// <summary>
+        /// For a save that failed: it may have collided with a web or site the shared index had not read, so the next batch
+        /// reads them all again.
+        /// </summary>
+        public void ForgetWebIndexAfterFailedSave() => _webIndex.Invalidate();
 
         #region Hit-Specific Lookups
 

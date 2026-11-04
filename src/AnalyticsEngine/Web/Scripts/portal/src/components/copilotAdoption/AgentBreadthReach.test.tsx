@@ -94,6 +94,47 @@ describe('Department table: agent breadth, depth and builders (#646, #647)', () 
     expect(greek.getAllByText('\u2014')).toHaveLength(2);
   });
 
+  it('leaves a side with too few people blank, with the agent figures, and says why rather than showing zero', () => {
+    renderWithProvider(
+      <CombinedSegmentTable
+        rows={[
+          segment({}),
+          segment({
+            segment: 'Legal',
+            unlicensedActiveUsers: null,
+            interactionsPerUnlicensedUser: null,
+            unlicensedAgentUserPct: null,
+            agentFiguresWithheld: true,
+            agentActiveUsers: null,
+            agentUsers: null,
+            agentUserPct: null,
+            distinctAgents: null,
+            agentsPer100ActiveUsers: null,
+            agentInteractions: null,
+            interactionsPerActiveAgent: null,
+            agentBuilders: 1,
+          }),
+        ]}
+        agentTotals={TOTALS}
+        minSeatsPerSegment={5}
+      />,
+    );
+
+    const legal = within(screen.getByText('Legal').closest('tr')!);
+    const blanks = legal.getAllByText('\u2014');
+    // Three unlicensed cells and four agent cells; the licensed side is shown, as are the builders.
+    expect(blanks).toHaveLength(7);
+    for (const blank of blanks) {
+      expect(blank.closest('[title]')).toHaveAttribute('title', 'Too few people to show without singling someone out');
+    }
+    expect(legal.getByText('30')).toBeInTheDocument();
+    expect(legal.getByText('1')).toBeInTheDocument();
+
+    const finance = within(screen.getByText('Finance').closest('tr')!);
+    expect(finance.queryByText('\u2014')).toBeNull();
+    expect(finance.getByText('25%')).toHaveAttribute('title', '4 of 16 active users');
+  });
+
   it('states the tenant-wide figures above the table and names which agents they count', () => {
     renderWithProvider(<CombinedSegmentTable rows={ROWS} agentTotals={TOTALS} minSeatsPerSegment={5} />);
 

@@ -23,14 +23,16 @@ namespace Common.Entities.CopilotInvestment
                 words.T("copilotInvestment.value.col.realisedHours"), words.T("copilotInvestment.value.col.value"),
                 words.T("copilotInvestment.value.col.monthly"), words.T("copilotInvestment.value.col.roi"),
                 words.T("copilotInvestment.value.col.net"), words.T("copilotInvestment.value.col.atOrAbove"));
+            var withheld = WithheldText(summary, words);
+            var costWithheld = summary.Investment.StudioCostWithheld;
             foreach (var s in summary.Value.Scenarios)
                 sheet.AddRow(words.Label(Words.Scenario, s.Scenario), s.MinutesPerActiveDay, XlsxCell.Percent(s.Realisation), s.AssistedHours, s.RealisedHours,
-                    s.Value, s.MonthlyValue, s.RoiMultiple, s.Net, XlsxCell.Number(s.HoldersAtOrAboveBreakEven));
+                    s.Value, s.MonthlyValue, Shown(s.RoiMultiple, costWithheld, withheld), Shown(s.Net, costWithheld, withheld), XlsxCell.Number(s.HoldersAtOrAboveBreakEven));
             sheet.AddBlankRow();
             var b = summary.BreakEven;
             sheet.AddHeaderRow(words.W("value.breakEven"), words.W("col.value"));
-            sheet.AddRow(words.W("value.minutesNeeded"), b.MinutesPerActiveDay);
-            sheet.AddRow(words.W("value.marginBase"), b.MarginOfSafety.HasValue ? (object)XlsxCell.Percent(b.MarginOfSafety.Value) : null);
+            sheet.AddRow(words.W("value.minutesNeeded"), Shown(b.MinutesPerActiveDay, costWithheld, withheld));
+            sheet.AddRow(words.W("value.marginBase"), Shown(b.MarginOfSafety.HasValue ? (object)XlsxCell.Percent(b.MarginOfSafety.Value) : null, costWithheld, withheld));
             sheet.AddRow(words.W("exec.seatDays"), b.ActiveDaysPerMonthPerSeat);
             sheet.AddRow(words.W("value.minutesPerWeekday"), b.MinutesPerWeekdayPerSeat);
             sheet.AddRow(words.W("value.atOrAbove"), XlsxCell.Number(b.HoldersAtOrAbove));
@@ -40,12 +42,14 @@ namespace Common.Entities.CopilotInvestment
             sheet.AddHeaderRow(words.W("value.col.minutesScenario"), words.W("value.col.realisationScenario"), words.T("copilotInvestment.value.col.value"),
                 words.T("copilotInvestment.value.col.roi"));
             foreach (var cell in summary.Sensitivity.Grid)
-                sheet.AddRow(words.Label(Words.Scenario, cell.MinutesScenario), words.Label(Words.Scenario, cell.RealisationScenario), cell.Value, cell.RoiMultiple);
+                sheet.AddRow(words.Label(Words.Scenario, cell.MinutesScenario), words.Label(Words.Scenario, cell.RealisationScenario), cell.Value,
+                    Shown(cell.RoiMultiple, costWithheld, withheld));
             sheet.AddBlankRow();
-            sheet.AddRow(words.W("value.hourlyLower"), summary.Sensitivity.RoiBaseHourlyMinus20);
-            sheet.AddRow(words.W("value.hourlyHigher"), summary.Sensitivity.RoiBaseHourlyPlus20);
-            sheet.AddRow(words.W("value.afterReclaim"), summary.Sensitivity.RoiBaseAfterReclaim);
-            sheet.AddRow(words.W("value.stressFloor"), summary.Sensitivity.RoiBaseIfBalancesMonthly);
+            sheet.AddRow(words.W("value.hourlyLower"), Shown(summary.Sensitivity.RoiBaseHourlyMinus20, costWithheld, withheld));
+            sheet.AddRow(words.W("value.hourlyHigher"), Shown(summary.Sensitivity.RoiBaseHourlyPlus20, costWithheld, withheld));
+            sheet.AddRow(words.W("value.afterReclaim"), Shown(summary.Sensitivity.RoiBaseAfterReclaim, costWithheld, withheld));
+            sheet.AddRow(words.W("value.stressFloor"), Shown(summary.Sensitivity.RoiBaseIfBalancesMonthly,
+                costWithheld || summary.Investment.Credits.HolderCreditsWithheld, withheld));
             sheet.AddBlankRow();
             sheet.AddHeaderRow(words.W("value.col.from"), words.W("value.col.to"), words.W("value.col.holders"), words.W("value.col.belowSeat"));
             foreach (var bucket in summary.Evidence.Distribution)
@@ -70,16 +74,18 @@ namespace Common.Entities.CopilotInvestment
             }
             else
             {
-                sheet.AddRow(words.W("path.cost"), path.MonthlyCost, currency);
+                var withheld = WithheldText(summary, words);
+                var costWithheld = summary.Investment.StudioCostWithheld;
+                sheet.AddRow(words.W("path.cost"), Shown(path.MonthlyCost, costWithheld, withheld), currency);
                 sheet.AddRow(words.W("path.value"), path.MonthlyValueBase, currency);
-                sheet.AddRow(words.W("path.gap"), path.MonthlyGap, currency);
+                sheet.AddRow(words.W("path.gap"), Shown(path.MonthlyGap, costWithheld, withheld), currency);
                 sheet.AddRow(words.W("path.dayValue"), path.ValuePerActiveDay, currency);
-                sheet.AddRow(words.W("path.extraDays"), path.ExtraActiveDaysPerMonth, days);
-                sheet.AddRow(words.W("path.extraPerHolder"), path.ExtraDaysPerActiveHolder, days);
-                sheet.AddRow(words.W("path.minutes"), words.Num(path.MinutesNeeded) + " / " + words.Num(path.MinutesAssumed), words.W("unit.minutes"));
+                sheet.AddRow(words.W("path.extraDays"), Shown(path.ExtraActiveDaysPerMonth, costWithheld, withheld), days);
+                sheet.AddRow(words.W("path.extraPerHolder"), Shown(path.ExtraDaysPerActiveHolder, costWithheld, withheld), days);
+                sheet.AddRow(words.W("path.minutes"), costWithheld ? withheld : words.Num(path.MinutesNeeded) + " / " + words.Num(path.MinutesAssumed), words.W("unit.minutes"));
                 sheet.AddRow(words.W("path.reclaimable"), XlsxCell.Number(path.Reclaimable), seats);
                 sheet.AddRow(words.W("path.reclaimMonthly"), path.ReclaimMonthly, currency);
-                sheet.AddRow(words.W("path.roiAfter"), path.RoiAfterReclaim, MultipleUnit);
+                sheet.AddRow(words.W("path.roiAfter"), Shown(path.RoiAfterReclaim, costWithheld, withheld), MultipleUnit);
                 sheet.AddRow(words.W("path.evidenced"), XlsxCell.Number(path.EvidencedWithoutSeat), people);
                 sheet.AddRow(words.W("path.reassignable"), XlsxCell.Number(path.Reassignable), people);
                 sheet.AddRow(words.W("path.netNew"), XlsxCell.Number(path.NetNewSeats), seats);
@@ -101,18 +107,23 @@ namespace Common.Entities.CopilotInvestment
                 sheet.AddRow(XlsxCell.Wrapped(words.T("copilotInvestment.quadrants.description",
                     ("median", words.Num(concentration.QuadrantMedianCredits)), ("days", words.Num(concentration.QuadrantDaysPerMonth)))));
                 sheet.AddHeaderRow(words.W("col.group"), words.W("col.people"), words.W("col.credits"));
-                foreach (var q in concentration.Quadrants) sheet.AddRow(QuadrantLabel(q.Key, words), XlsxCell.Number(q.People), q.Credits);
+                // Credits withheld from a reader without See PII are an empty cell that says why, never a zero.
+                var withheld = words.T("copilotInvestment.trend.withheld",
+                    ("count", words.Count(System.Math.Max(summary.Organisation?.MinGroupSize ?? 0, SmallPopulations.MinPeopleWithoutSeePii))));
+                foreach (var q in concentration.Quadrants)
+                    sheet.AddRow(QuadrantLabel(q.Key, words), XlsxCell.Number(q.People), q.Withheld ? null : (object)q.Credits, q.Withheld ? withheld : null);
                 sheet.AddBlankRow();
             }
 
             var metered = summary.Metered;
+            var meteredWithheld = WithheldText(summary, words);
             sheet.AddHeaderRow(words.W("path.col.withoutSeat"), words.W("col.value"), words.W("col.unit"));
             sheet.AddRow(words.W("path.metered.people"), XlsxCell.Number(metered.People), people);
             sheet.AddRow(words.W("path.metered.active"), XlsxCell.Number(metered.ActiveUsers), people);
-            sheet.AddRow(words.W("path.metered.days"), XlsxCell.Number(metered.ActiveDays), days);
-            sheet.AddRow(words.W("path.metered.studio"), metered.StudioCredits, words.W("unit.credits"));
-            sheet.AddRow(words.W("studio.valued"), metered.StudioWindowValue, currency);
-            sheet.AddRow(words.W("path.metered.balances"), metered.Credits, words.W("unit.credits"));
+            sheet.AddRow(words.W("path.metered.days"), metered.ActiveDaysWithheld ? (object)meteredWithheld : XlsxCell.Number(metered.ActiveDays ?? 0), days);
+            sheet.AddRow(words.W("path.metered.studio"), Shown(metered.StudioCredits, metered.StudioWithheld, meteredWithheld), words.W("unit.credits"));
+            sheet.AddRow(words.W("studio.valued"), Shown(metered.StudioWindowValue, metered.StudioWithheld, meteredWithheld), currency);
+            sheet.AddRow(words.W("path.metered.balances"), Shown(metered.Credits, metered.CreditsWithheld, meteredWithheld), words.W("unit.credits"));
             sheet.AddRow(words.W("path.metered.aboveSeat"), metered.StudioAboveSeatPrice, people);
             sheet.AddRow(words.W("path.metered.evidenced"), metered.EvidencedCandidates, people);
             sheet.AddRow(words.W("path.metered.recommended"), XlsxCell.Number(metered.RecommendedCandidates), people);
@@ -136,10 +147,14 @@ namespace Common.Entities.CopilotInvestment
             sheet.AddHeaderRow(words.T("copilotInvestment.value.col.band"), words.W("value.col.holders"), words.W("cohort.col.shareOfSeats"),
                 words.W("col.activeDays"), words.T("copilotInvestment.value.col.shareOfDays"), words.T("copilotInvestment.value.col.medianDays"),
                 words.W("col.costPeriod"), words.W("col.valuePeriod"), words.W("col.roiBase"), words.W("col.credits"), words.W("col.studioPeriod"));
+            // A band's figures withheld from a reader without See PII say why in their own cells; its holders are a count and stay.
+            var withheld = WithheldText(summary, words);
             foreach (var c in summary.Cohorts)
                 sheet.AddRow(words.Label(Words.Band, c.Band), XlsxCell.Number(c.Holders), c.ShareOfHolders.HasValue ? (object)XlsxCell.Percent(c.ShareOfHolders.Value) : null,
-                    XlsxCell.Number(c.ActiveDays), c.ShareOfActiveDays.HasValue ? (object)XlsxCell.Percent(c.ShareOfActiveDays.Value) : null,
-                    c.MedianActiveDays, c.Cost, c.ValueBase, c.RoiBase, c.Credits, c.StudioCredits);
+                    c.Withheld ? (object)withheld : XlsxCell.Number(c.ActiveDays ?? 0),
+                    Shown(c.ShareOfActiveDays.HasValue ? (object)XlsxCell.Percent(c.ShareOfActiveDays.Value) : null, c.Withheld, withheld),
+                    Shown(c.MedianActiveDays, c.Withheld, withheld), Shown(c.Cost, c.CostWithheld, withheld), Shown(c.ValueBase, c.Withheld, withheld),
+                    Shown(c.RoiBase, c.CostWithheld, withheld), Shown(c.Credits, c.CreditsWithheld, withheld), Shown(c.StudioCredits, c.StudioWithheld, withheld));
             sheet.FreezeTopRows(1);
         }
 
@@ -200,9 +215,13 @@ namespace Common.Entities.CopilotInvestment
             sheet.AddHeaderRow(words.W("credits.col.service"), words.W("col.unit"), words.W("credits.col.consuming"), words.W("credits.col.quantity"),
                 words.W("credits.col.unknownAmounts"), words.W("credits.col.limitExhausted"), words.W("credits.col.notEntitled"),
                 words.T("copilotInvestment.services.col.unevaluated"), words.W("credits.col.policies"));
+            // A quantity withheld from a reader without See PII says why in its own cell, never a zero.
+            var serviceWithheld = words.T("copilotInvestment.trend.withheld",
+                ("count", words.Count(System.Math.Max(summary.Organisation?.MinGroupSize ?? 0, SmallPopulations.MinPeopleWithoutSeePii))));
             foreach (var s in summary.Services)
-                sheet.AddRow(s.Category, s.Unit ?? words.W("credits.unknownUnit"), XlsxCell.Number(s.Consumers), s.Quantity, XlsxCell.Number(s.UnknownAmountUsers),
-                    XlsxCell.Number(s.LimitExhaustedUsers), XlsxCell.Number(s.NotEntitledUsers), XlsxCell.Number(s.UnevaluatedUsers), string.Join(", ", s.Policies));
+                sheet.AddRow(s.Category, s.Unit ?? words.W("credits.unknownUnit"), XlsxCell.Number(s.Consumers), s.Withheld ? (object)serviceWithheld : s.Quantity,
+                    XlsxCell.Number(s.UnknownAmountUsers), XlsxCell.Number(s.LimitExhaustedUsers), XlsxCell.Number(s.NotEntitledUsers), XlsxCell.Number(s.UnevaluatedUsers),
+                    string.Join(", ", s.Policies));
             sheet.AddBlankRow();
             sheet.AddHeaderRow(words.W("credits.col.policy"), words.W("credits.col.type"), words.W("credits.col.status"), words.W("credits.col.billing"),
                 words.W("credits.col.periodLimit"), words.W("credits.col.perUserLimit"), words.W("credits.col.groups"), words.T("copilotInvestment.policies.col.services"));
@@ -217,12 +236,14 @@ namespace Common.Entities.CopilotInvestment
                 sheet.AddRow(words.Label(BillingMethod, t.BillingMethod), t.Purchased, t.Consumed, t.Remaining, t.Unit, t.LastModified);
             sheet.AddBlankRow();
             var studio = summary.Investment.Studio;
+            var studioWithheld = WithheldText(summary, words);
             sheet.AddHeaderRow(words.W("credits.studio"), words.W("col.value"));
             sheet.AddRow(words.W("credits.studio.users"), XlsxCell.Number(studio.Users));
-            sheet.AddRow(words.W("credits.studio.credits"), studio.Credits);
-            sheet.AddRow(words.W("credits.studio.prior"), studio.PriorCredits.HasValue ? (object)studio.PriorCredits.Value : words.W("studio.notCompared"));
-            sheet.AddRow(words.W("credits.studio.holders"), studio.HolderCredits);
-            sheet.AddRow(words.W("studio.valued"), studio.WindowValue);
+            sheet.AddRow(words.W("credits.studio.credits"), Shown(studio.Credits, studio.CreditsWithheld, studioWithheld));
+            sheet.AddRow(words.W("credits.studio.prior"), studio.PriorCreditsWithheld ? studioWithheld
+                : studio.PriorCredits.HasValue ? (object)studio.PriorCredits.Value : words.W("studio.notCompared"));
+            sheet.AddRow(words.W("credits.studio.holders"), Shown(studio.HolderCredits, studio.HolderCreditsWithheld, studioWithheld));
+            sheet.AddRow(words.W("studio.valued"), Shown(studio.WindowValue, studio.CreditsWithheld, studioWithheld));
             if (summary.Sources.Studio.FailureCode != null)
                 sheet.AddRow(words.W("credits.studio.failed"));
         }

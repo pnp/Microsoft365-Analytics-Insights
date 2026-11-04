@@ -25,6 +25,7 @@ import { UserOrgApiError, fetchImportHistory, fetchImportJob, importCsv, preview
 import {
   formatDateParts,
   formatNumber,
+  parseApiDate,
   plural,
   useT,
   type TFunction,
@@ -1103,7 +1104,7 @@ function importCounts(job: UserOrgImportJob, t: TFunction): string {
 }
 
 function formatJobDate(iso: string): string {
-  return formatDateParts(new Date(iso), { dateStyle: 'short', timeStyle: 'short' });
+  return formatDateParts(parseApiDate(iso), { dateStyle: 'short', timeStyle: 'short' });
 }
 
 function isRowProblemCode(code: string): code is UserOrgCsvRowProblemCode {

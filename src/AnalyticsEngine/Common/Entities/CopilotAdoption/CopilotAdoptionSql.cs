@@ -106,10 +106,16 @@ namespace Common.Entities.CopilotAdoption
         /// The most recent per-user Copilot usage-report snapshot that Microsoft has settled.
         /// Resolved separately so the detail query can seek one date instead of scanning a range.
         /// </summary>
+        /// <remarks>
+        /// The weekly 7-day reading Licence activity collects every Sunday is left out here and in
+        /// <see cref="LatestCopilotReportPeriodSql"/>, so this page keeps reading the daily rolling report
+        /// rather than switching to the 7-day one on the days a Sunday happens to be the newest snapshot.
+        /// </remarks>
         public const string LatestCopilotReportDateSql =
             "SELECT MAX(r.[date]) AS Value\r\n" +
             "FROM dbo.copilot_usage_user_activity_log AS r\r\n" +
-            "WHERE r.[date] <= @settled;";
+            "WHERE r.[date] <= @settled\r\n" +
+            "  AND (r.report_period_days IS NULL OR r.report_period_days <> 7);";
 
         /// <summary>
         /// The report period to read for a given snapshot date, chosen as the one closest to the analysis
@@ -129,6 +135,7 @@ namespace Common.Entities.CopilotAdoption
             "SELECT TOP (1) ISNULL(r.report_period_days, 0) AS Value\r\n" +
             "FROM dbo.copilot_usage_user_activity_log AS r\r\n" +
             "WHERE r.[date] = @copilotReportDate\r\n" +
+            "  AND (r.report_period_days IS NULL OR r.report_period_days <> 7)\r\n" +
             "GROUP BY r.report_period_days\r\n" +
             "ORDER BY CASE WHEN r.report_period_days IS NULL THEN 1 ELSE 0 END,\r\n" +
             "         ABS(ISNULL(r.report_period_days, 0) - @windowDays),\r\n" +
@@ -1655,19 +1662,31 @@ namespace Common.Entities.CopilotAdoption
         /// Agent interactions per department in the window, so agent adoption can be read the same way
         /// as seat adoption. Departments come from the imported user metadata.
         /// </summary>
+        /// <remarks>
+        /// A department is only listed when at least <c>@minUsers</c> distinct people made its interactions -
+        /// <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/>, the floor every department breakdown
+        /// keeps - because the bar is a sum of its people's agent use, and a department with one agent user
+        /// would publish that person's. Counted per person first and then per department, rather than with
+        /// a COUNT(DISTINCT) beside COUNT_BIG(*), which would cost a spool for the same answer.
+        /// </remarks>
         public static string AgentUsageByDepartmentSql()
         {
             return
-                "SELECT TOP (@top) ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)') AS Label,\r\n" +
-                "       CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
-                "FROM dbo.copilot_chats AS c\r\n" +
-                "JOIN dbo.users AS u ON u.id = c.user_id\r\n" +
-                "LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
-                "WHERE c.time_stamp >= @from\r\n  AND c.time_stamp < @toExclusive\r\n" +
-                "  AND c.agent_id IS NOT NULL\r\n" +
-                $"  AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
-                $"  AND {Copilot.CopilotTurnSql.NotMakerTesting("c.app_host")}\r\n" +
-                "GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)')\r\n" +
+                "SELECT TOP (@top) x.Label AS Label,\r\n" +
+                "       CAST(SUM(x.Interactions) AS float) AS Value\r\n" +
+                "FROM (SELECT ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)') AS Label,\r\n" +
+                "             c.user_id AS user_id,\r\n" +
+                "             COUNT_BIG(*) AS Interactions\r\n" +
+                "      FROM dbo.copilot_chats AS c\r\n" +
+                "      JOIN dbo.users AS u ON u.id = c.user_id\r\n" +
+                "      LEFT JOIN dbo.user_departments AS dept ON dept.id = u.department_id\r\n" +
+                "      WHERE c.time_stamp >= @from\r\n        AND c.time_stamp < @toExclusive\r\n" +
+                "        AND c.agent_id IS NOT NULL\r\n" +
+                $"        AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
+                $"        AND {Copilot.CopilotTurnSql.NotMakerTesting("c.app_host")}\r\n" +
+                "      GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(dept.name)), ''), '(no department)'), c.user_id) AS x\r\n" +
+                "GROUP BY x.Label\r\n" +
+                "HAVING COUNT(*) >= @minUsers\r\n" +
                 "ORDER BY Value DESC\r\n" +
                 "OPTION (RECOMPILE);";
         }

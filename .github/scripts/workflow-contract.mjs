@@ -70,6 +70,20 @@ export function jobs(text) {
   }));
 }
 
+/**
+ * Lines that name a secret in a workflow-level or job-level env block. Every step of the workflow or job gets those
+ * values, including third-party actions and the lifecycle scripts `npm ci` runs, so a secret belongs in the env (or
+ * with) of the one step that uses it.
+ */
+export function broadlyScopedSecrets(text) {
+  const lines = split(text);
+  const root = { start: 0, end: lines.length };
+  const all = section(lines, root, 'jobs');
+  const blocks = [section(lines, root, 'env'), ...(all ? children(lines, all).map(job => section(lines, job, 'env')) : [])];
+  return blocks.filter(Boolean).flatMap(block => [block.value, ...lines.slice(block.start, block.end)])
+    .filter(line => meaningful(line) && /\bsecrets\./.test(line)).map(line => line.trim());
+}
+
 /** The status checks protected branches wait for. Branch protection matches these names exactly; which branch requires which is a GitHub setting, not something this repository records. */
 export const requiredChecks = [
   ['tests.yml', 'test_dotnet (Release)'],

@@ -87,6 +87,7 @@ const reports: Record<keyof typeof en, string> = {
   'reports.chart.warning.series.notAttempted': '{series}: no se intentó tras agotarse el tiempo de espera de la base de datos',
   'reports.chart.warning.series.noSettledData': '{series}: no hay datos de uso consolidados',
   'reports.chart.warning.series.noSettledDataForWeek': '{series}: no hay datos de uso consolidados para la semana del {week}',
+  'reports.chart.warning.series.incompleteWeeks': '{series}: a {count} de las semanas representadas les falta al menos un día de informes de uso (la más reciente, la semana del {week}), por lo que en esas semanas solo se cuentan los días que se importaron',
   'reports.category.appBreadth.one': '{count} aplicación',
   'reports.category.appBreadth.other': '{count} aplicaciones',
   'reports.platform.mobile': 'Móvil',

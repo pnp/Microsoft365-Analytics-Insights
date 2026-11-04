@@ -21,9 +21,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
     /// Extracted so the crawl logic does not depend on a storage technology directly
     /// and can be tested without one. See issue #377.
     ///
-    /// Losing a token is not fatal - the next read falls back to a full channel read - but silently
-    /// *keeping a stale one* means missed messages, which is why the crawl only ever writes a token
-    /// Graph actually handed back.
+    /// A token's <see cref="TeamChannelDeltaTokenInfo.LastUpdated"/> is also the channel's counting watermark: messages and
+    /// reactions created before it are already in the channel's statistics. Losing a token is not fatal - the next read falls
+    /// back to a full channel read - but it loses that watermark too, so the channel's history is counted again. That is why a
+    /// token Graph rejects is not removed: it is replaced once a full read's new token is committed. Writing a token that Graph
+    /// didn't hand back for a completed read, on the other hand, would mean missed messages, which is why the crawl only ever
+    /// writes a token Graph actually handed back.
     /// </summary>
     public interface ITeamChannelDeltaTokenStore
     {

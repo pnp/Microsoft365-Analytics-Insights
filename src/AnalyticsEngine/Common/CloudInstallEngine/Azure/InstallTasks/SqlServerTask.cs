@@ -111,20 +111,24 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 CreatedWithEntraOnlyAuth = false;
 
                 var needsUpdate = false;
-                var updateData = new SqlServerData(AzureLocation);
 
-                // Ensure minimum TLS version is 1.2
-                if (sqlServer.Data.MinimalTlsVersion == null || string.Compare(sqlServer.Data.MinimalTlsVersion, "1.2") < 0)
+                // PATCH, not a PUT of a fresh SqlServerData: a PUT body carrying only these two values left out the
+                // server's tags (which the tag check below, reading the pre-update snapshot, never put back) and every
+                // other setting on it. A PATCH changes only what it names.
+                var patch = new SqlServerPatch();
+
+                // Raise a minimum TLS version below 1.2 (or "None"). Never lower one an operator has set to 1.3.
+                if (TlsVersionPolicy.NeedsRaising(sqlServer.Data.MinimalTlsVersion))
                 {
                     _logger.LogInformation($"Updating SQL Server '{serverName}' to enforce TLS 1.2...");
-                    updateData.MinimalTlsVersion = "1.2";
+                    patch.MinimalTlsVersion = "1.2";
                     needsUpdate = true;
                 }
 
                 if (sqlServer.Data.PublicNetworkAccess == null || sqlServer.Data.PublicNetworkAccess.Value != desiredAccess)
                 {
                     _logger.LogInformation($"Updating SQL Server '{serverName}' public network access to '{desiredAccess}'...");
-                    updateData.PublicNetworkAccess = desiredAccess;
+                    patch.PublicNetworkAccess = desiredAccess;
                     needsUpdate = true;
                 }
 
@@ -134,7 +138,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 // other consumer of the database. See issue #117.
                 if (needsUpdate)
                 {
-                    await Container.GetSqlServers().CreateOrUpdateAsync(WaitUntil.Completed, serverName, updateData, cancellationToken: CancellationToken);
+                    sqlServer = (await sqlServer.UpdateAsync(WaitUntil.Completed, patch, cancellationToken: CancellationToken)).Value;
                 }
 
                 _logger.LogInformation($"Found existing SQL Server '{sqlServer.Data.FullyQualifiedDomainName}'.");

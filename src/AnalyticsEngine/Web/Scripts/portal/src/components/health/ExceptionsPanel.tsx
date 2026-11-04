@@ -12,7 +12,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import { fetchHealthExceptions } from '../../api/healthApi';
-import { formatNumber, useT } from '../../i18n';
+import { formatNumber, parseApiDate, useT } from '../../i18n';
 import { SectionFrame, buildHourBuckets, useHealthSection, useHealthStyles } from './healthShared';
 import { shortenProblemId } from './problemId';
 
@@ -85,7 +85,7 @@ export default function ExceptionsPanel({ active }: { active: boolean }) {
             <div className={styles.spark}>
               {hourBuckets.map((h, i) => {
                 const pct = Math.round((100 * h.count) / maxHourCount);
-                const label = `${h.hourUtc ? new Date(h.hourUtc).toISOString().slice(11, 16) : '?'} UTC: ${h.count}`;
+                const label = `${h.hourUtc ? parseApiDate(h.hourUtc).toISOString().slice(11, 16) : '?'} UTC: ${h.count}`;
                 return (
                   <div
                     key={h.hourUtc ?? i}

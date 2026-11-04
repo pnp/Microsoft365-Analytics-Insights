@@ -25,7 +25,7 @@ import {
 import { SearchRegular } from '@fluentui/react-icons';
 import Spinner from '../Spinner';
 import { MAX_CHANGE_PAGE_SIZE, fetchImportChanges } from '../../api/userOrgsApi';
-import { formatDateParts, formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
+import { formatDateParts, formatNumber, parseApiDate, useT, type TFunction, type TranslationKey } from '../../i18n';
 import { csvDocument, csvRows, derivedFileName, downloadCsv } from './csvUnusableRows';
 import type {
   UserOrgChange,
@@ -345,7 +345,7 @@ function SummaryLines({
   t: TFunction;
 }) {
   const styles = useStyles();
-  const date = formatDateParts(new Date(summary.finishedUtc ?? summary.queuedUtc), { dateStyle: 'medium', timeStyle: 'short' });
+  const date = formatDateParts(parseApiDate(summary.finishedUtc ?? summary.queuedUtc), { dateStyle: 'medium', timeStyle: 'short' });
   const who = summary.startedBy ?? t('userOrgs.source.unknownUser');
   const mode = t(summary.mode === 'replace' ? 'userOrgs.history.mode.replace' : 'userOrgs.history.mode.merge');
 

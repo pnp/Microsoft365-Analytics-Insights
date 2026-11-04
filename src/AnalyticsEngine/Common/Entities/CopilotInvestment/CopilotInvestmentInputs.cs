@@ -344,7 +344,31 @@ namespace Common.Entities.CopilotInvestment
                 TopShare = Math.Round(TopShare(values, topFraction), 4),
                 Gini = Math.Round(Gini(values), 4),
                 Lorenz = Lorenz(values),
+                SafeWithoutSeePii = EveryCutHoldsEnough(values, topFraction, SmallPopulations.MinPeopleWithoutSeePii),
             };
+        }
+
+        /// <summary>
+        /// Whether no share in a distribution - the Lorenz points, the top share, or the difference of any two - is the sum of
+        /// one to <paramref name="minPeople"/> - 1 people's values. Each share is a sum over the people below (or above) a cut
+        /// in the ordered values, so the people between every two neighbouring cuts must hold nobody with a value above zero
+        /// or at least that many. Ten people make a decile each one person: their curve is their ten values, in order.
+        /// </summary>
+        internal static bool EveryCutHoldsEnough(IReadOnlyCollection<double> values, double topFraction, int minPeople)
+        {
+            var sorted = values.Select(v => Math.Max(0, v)).OrderBy(v => v).ToList();
+            var n = sorted.Count;
+            var cuts = new SortedSet<int> { 0, n, n - TopCount(n, topFraction) };
+            for (var decile = 1; decile < 10; decile++) cuts.Add((int)Math.Round(n * decile / 10d, MidpointRounding.AwayFromZero));
+            var ordered = cuts.ToList();
+            for (var i = 1; i < ordered.Count; i++)
+            {
+                var people = 0;
+                for (var k = ordered[i - 1]; k < ordered[i]; k++)
+                    if (sorted[k] > 0) people++;
+                if (SmallPopulations.IsSmall(people, minPeople)) return false;
+            }
+            return true;
         }
     }
 }

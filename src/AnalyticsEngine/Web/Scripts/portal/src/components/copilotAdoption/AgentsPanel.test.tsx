@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { act, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import AgentsPanel from './AgentsPanel';
 import { AgentHealth } from '../../types/copilotAdoption';
+import { requestPrint, resetPrintPreparation } from '../shared/printPreparation';
 import type {
   AgentEstateSummary,
   AgentUsageRow,
@@ -173,6 +174,7 @@ describe('AgentsPanel inventory', () => {
 
     await user.type(screen.getByLabelText('Search agents by name or ID'), 'no such agent');
     expect(screen.getByText('No agents match these filters.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Clear agent search' }));
 
@@ -187,6 +189,135 @@ describe('AgentsPanel inventory', () => {
     // engine, so the truncation itself (max-width + text-overflow) cannot be verified from a test.
     // That was checked in a headless browser against a 180-character key.
     expect(screen.getByText(LONG_KEY)).toHaveAttribute('title', LONG_KEY);
+  });
+});
+
+describe('AgentsPanel inventory paging', () => {
+  const MANY_AGENTS = Array.from({ length: 105 }, (_, index) => agent({
+    agentId: index + 1,
+    name: `Contoso Agent ${String(index + 1).padStart(3, '0')}`,
+    agentKey: `contoso-key-${index + 1}`,
+    interactions: 105 - index,
+    health: index % 2 === 0 ? AgentHealth.Keep : AgentHealth.Review,
+    origin: index % 2 === 0 ? 'customerBuilt' : 'microsoft',
+    isCustomAgent: index % 2 === 0,
+  }));
+
+  function panel(agents = MANY_AGENTS) {
+    return <AgentsPanel estate={{ ...ESTATE, agents }} agents={agents} options={OPTIONS} windowDays={30} sql={null} />;
+  }
+
+  function inventory() {
+    return within(screen.getByText('Agent inventory').closest('.fui-Card') as HTMLElement);
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetPrintPreparation();
+  });
+
+  it('bounds the rendered rows, preserves the busiest-first order and reaches the final partial page', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(panel());
+    const table = inventory();
+
+    expect(table.getAllByRole('row')).toHaveLength(51);
+    expect(table.getAllByRole('row')[1]).toHaveTextContent('Contoso Agent 001');
+    expect(table.getByText('Showing 1-50 of 105 agents')).toBeInTheDocument();
+    expect(table.getByText('Page 1 of 3')).toBeInTheDocument();
+    expect(table.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    expect(table.queryByText('Contoso Agent 051')).not.toBeInTheDocument();
+
+    await user.click(table.getByRole('button', { name: 'Next' }));
+    expect(table.getByText('Showing 51-100 of 105 agents')).toBeInTheDocument();
+    expect(table.getAllByRole('row')[1]).toHaveTextContent('Contoso Agent 051');
+
+    await user.click(table.getByRole('button', { name: 'Next' }));
+    expect(table.getAllByRole('row')).toHaveLength(6);
+    expect(table.getByText('Showing 101-105 of 105 agents')).toBeInTheDocument();
+    expect(table.getByText('Page 3 of 3')).toBeInTheDocument();
+    expect(table.getByRole('button', { name: 'Next' })).toBeDisabled();
+
+    await user.click(table.getByRole('button', { name: 'Previous' }));
+    expect(table.getByText('Contoso Agent 051')).toBeInTheDocument();
+  });
+
+  it.each(['Contoso Agent 105', 'contoso-key-105'])('searches all pages for %s and resets the page when cleared', async (search) => {
+    const user = userEvent.setup();
+    renderWithProvider(panel());
+    const table = inventory();
+    await user.click(table.getByRole('button', { name: 'Next' }));
+
+    await user.type(table.getByLabelText('Search agents by name or ID'), search);
+
+    expect(table.getByText('Contoso Agent 105')).toBeInTheDocument();
+    expect(table.getAllByRole('row')).toHaveLength(2);
+    expect(table.getByText('Showing 1-1 of 1 agents')).toBeInTheDocument();
+    expect(table.getByText('1 of 105 agents')).toBeInTheDocument();
+    expect(table.getByRole('button', { name: 'Next' })).toBeDisabled();
+
+    await user.click(table.getByRole('button', { name: 'Clear agent search' }));
+    expect(table.getByText('Page 1 of 3')).toBeInTheDocument();
+    expect(table.getByText('Contoso Agent 001')).toBeInTheDocument();
+  });
+
+  it.each(['health', 'custom'])('resets to the first page when the %s filter changes', async (filter) => {
+    const user = userEvent.setup();
+    renderWithProvider(panel());
+    const table = inventory();
+    await user.click(table.getByRole('button', { name: 'Next' }));
+    await user.click(table.getByRole('button', { name: 'Next' }));
+
+    if (filter === 'health') {
+      await user.selectOptions(table.getByLabelText('Filter agents by health'), String(AgentHealth.Keep));
+    } else {
+      await user.click(table.getByRole('checkbox', { name: 'Customer-built agents only' }));
+    }
+
+    expect(table.getByText('Page 1 of 2')).toBeInTheDocument();
+    expect(table.getByText('Showing 1-50 of 53 agents')).toBeInTheDocument();
+    expect(table.getByText('Contoso Agent 001')).toBeInTheDocument();
+    expect(table.queryByText('Contoso Agent 002')).not.toBeInTheDocument();
+    await user.click(table.getByRole('button', { name: 'Next' }));
+    expect(table.getAllByRole('row')).toHaveLength(4);
+    expect(table.getByText('Showing 51-53 of 53 agents')).toBeInTheDocument();
+  });
+
+  it('returns to the first page when a refreshed inventory is shorter', async () => {
+    const user = userEvent.setup();
+    const rendered = renderWithProvider(panel());
+    await user.click(inventory().getByRole('button', { name: 'Next' }));
+
+    rendered.rerender(panel(MANY_AGENTS.slice(0, 3)));
+
+    expect(inventory().getByText('Showing 1-3 of 3 agents')).toBeInTheDocument();
+    expect(inventory().getByText('Contoso Agent 001')).toBeInTheDocument();
+    expect(inventory().getByRole('button', { name: 'Next' })).toBeDisabled();
+  });
+
+  it('prints every filtered agent and restores the current page afterwards', async () => {
+    const user = userEvent.setup();
+    renderWithProvider(panel());
+    const table = inventory();
+    await user.click(table.getByRole('checkbox', { name: 'Customer-built agents only' }));
+    await user.click(table.getByRole('button', { name: 'Next' }));
+    const captured = { rows: 0, range: '' };
+    vi.spyOn(window, 'print').mockImplementation(() => {
+      captured.rows = table.getAllByRole('row').length - 1;
+      captured.range = table.getByText(/^Showing /).textContent ?? '';
+      expect(table.queryByText('Contoso Agent 002')).not.toBeInTheDocument();
+      expect(table.getByText('Contoso Agent 001')).toBeInTheDocument();
+      expect(table.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument();
+    });
+
+    await act(async () => {
+      await expect(requestPrint()).resolves.toEqual({ kind: 'printed' });
+    });
+
+    expect(captured).toEqual({ rows: 53, range: 'Showing 1-53 of 53 agents' });
+    expect(table.getByText('Page 2 of 2')).toBeInTheDocument();
+    expect(table.getAllByRole('row')).toHaveLength(4);
+    expect(table.getByRole('button', { name: 'Next' }).closest('[data-print="hide"]')).not.toBeNull();
   });
 });
 
@@ -312,5 +443,42 @@ describe('AgentsPanel heaviest agent users', () => {
     renderWith({ topUsers: PEOPLE, topUsersCapped: true, canSeePii: true });
 
     expect(screen.getByText(/Only the 20,000 heaviest agent users in the tenant were read/)).toBeInTheDocument();
+  });
+});
+
+describe('AgentsPanel headline figures', () => {
+  function tile(label: string): HTMLElement {
+    return screen.getAllByText(label)
+      .map((element) => element.closest('.fui-Card'))
+      .find((card) => card !== null) as HTMLElement;
+  }
+
+  it('shows a past period the audit log could not measure as a dash, never as the inventory\u2019s figures', () => {
+    renderWithProvider(
+      <AgentsPanel
+        estate={{ ...ESTATE, activeAgents: null, agentInteractions: null, interactionsPerAgentUser: null }}
+        agents={AGENTS}
+        options={OPTIONS}
+        windowDays={30}
+        sql={null}
+      />,
+    );
+
+    expect(within(tile('Active agents')).getByText('\u2014')).toBeInTheDocument();
+    const intensity = tile('Interactions per agent user');
+    expect(within(intensity).getByText('\u2014')).toBeInTheDocument();
+    expect(within(intensity).getByText('Not measured for this period')).toBeInTheDocument();
+    expect(within(tile('Agent users')).getByText('25')).toBeInTheDocument();
+  });
+
+  it('shows measured figures as numbers', () => {
+    renderWithProvider(
+      <AgentsPanel estate={{ ...ESTATE, interactionsPerAgentUser: 12.5 }} agents={AGENTS} options={OPTIONS} windowDays={30} sql={null} />,
+    );
+
+    expect(within(tile('Active agents')).getByText('3')).toBeInTheDocument();
+    const intensity = tile('Interactions per agent user');
+    expect(within(intensity).getByText('12.5')).toBeInTheDocument();
+    expect(within(intensity).getByText('300 agent interactions in total')).toBeInTheDocument();
   });
 });

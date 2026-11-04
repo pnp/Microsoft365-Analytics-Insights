@@ -407,6 +407,23 @@ describe('ReportsPage', () => {
     expect(warning).not.toContain('2026-06-15');
   });
 
+  it('says how many weeks a workload is missing a day of usage reports in, in the reader\'s language', async () => {
+    await loadCatalog('es');
+    const es = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('es', key, values);
+
+    const warning = reportChartWarningText(es, baseChart({
+      key: 'usage-active-users',
+      warning: 'Some workload series are unavailable: Viva Engage: 2 of the charted weeks are missing at least one day of usage reports (most recently the week of 2026-06-15), so those weeks count only the days that were imported.',
+      seriesWarnings: [
+        { series: 'Viva Engage', reason: 'incompleteWeeks', error: null, week: '2026-06-15T00:00:00Z', count: 2 },
+      ],
+    }));
+
+    expect(warning).toContain('Viva Engage: a 2 de las semanas representadas les falta al menos un día de informes de uso');
+    expect(warning).not.toContain('missing at least one day');
+  });
+
   /**
    * A chart that explains why it is empty must not also print the generic "No data for this period."
    * The two together read as a contradiction, and the generic line is the less true of the pair -

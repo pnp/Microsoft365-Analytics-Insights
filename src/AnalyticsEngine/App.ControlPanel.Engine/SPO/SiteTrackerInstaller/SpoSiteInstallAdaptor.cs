@@ -5,6 +5,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -33,16 +34,27 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
         readonly ISpoAuthenticator _authenticator;
         readonly string _siteUrl;
         readonly ILogger _logger;
+        readonly HttpClient _httpClient;
         SpoRestClient _rest;
         SpoWeb _rootWeb;
         List<SpoWeb> _subWebs = new List<SpoWeb>();
         public CancellationToken CancellationToken { get; set; }
 
+        /// <summary>How long to give SharePoint to remove a custom action before listing them again.</summary>
+        internal TimeSpan DeleteSettleDelay { get; set; } = TimeSpan.FromSeconds(1);
+
         public SpoSiteInstallAdaptor(string siteUrl, ISpoAuthenticator authenticator, ILogger logger)
+            : this(siteUrl, authenticator, logger, null)
+        {
+        }
+
+        /// <param name="httpClient">For tests. Null makes the adaptor use its own.</param>
+        internal SpoSiteInstallAdaptor(string siteUrl, ISpoAuthenticator authenticator, ILogger logger, HttpClient httpClient)
         {
             _authenticator = authenticator ?? throw new ArgumentNullException(nameof(authenticator));
             _siteUrl = siteUrl;
             _logger = logger;
+            _httpClient = httpClient;
         }
 
         string SiteRoot => _siteUrl.TrimEnd('/');
@@ -54,7 +66,8 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
         {
             // A sign-in failure is fatal for the whole SharePoint stage, not a per-site problem, so let
             // SpoAuthenticationException propagate rather than reporting this site as merely inaccessible.
-            _rest = new SpoRestClient(_authenticator, _logger) { CancellationToken = CancellationToken };
+            _rest = _httpClient == null ? new SpoRestClient(_authenticator, _logger) : new SpoRestClient(_authenticator, _logger, _httpClient);
+            _rest.CancellationToken = CancellationToken;
 
             try
             {
@@ -129,12 +142,12 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
 
         public Task RemoveAITrackerCustomActionFromWeb(SpoWeb web)
         {
-            return DeleteAction(web, ModernAppCustomAction.DESCRIPTION, ModernAppCustomAction.LOCATION);
+            return DeleteAction(web, ClassicPageCustomAction.DESCRIPTION, ClassicPageCustomAction.LOCATION);
         }
 
         public Task RemoveModernUIAITrackerCustomActionFromWeb(SpoWeb web)
         {
-            return DeleteAction(web, ClassicPageCustomAction.DESCRIPTION, ClassicPageCustomAction.LOCATION);
+            return DeleteAction(web, ModernAppCustomAction.DESCRIPTION, ModernAppCustomAction.LOCATION);
         }
 
         async Task DeleteAction(SpoWeb web, string description, string location)
@@ -156,7 +169,7 @@ namespace App.ControlPanel.Engine.SPO.SiteTrackerInstaller
                         deletedAction = true;
 
                         // Give SPO a chance to remove the custom action
-                        await Task.Delay(1000, CancellationToken);
+                        await Task.Delay(DeleteSettleDelay, CancellationToken);
                         break;
                     }
                 }

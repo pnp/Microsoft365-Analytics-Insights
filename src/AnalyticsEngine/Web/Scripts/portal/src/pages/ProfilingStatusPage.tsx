@@ -26,7 +26,7 @@ import { fetchProfilingStatus, fetchTraceLogs } from '../api/profilingStatusApi'
 import type { DateRangeStat, ProfilingStatus, TraceLogPage } from '../types/profilingStatus';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
-import { formatDateParts, formatNumber, useT, type TFunction, type TranslationKey } from '../i18n';
+import { formatDateParts, formatNumber, parseApiDate, useT, type TFunction, type TranslationKey } from '../i18n';
 
 const PAGE_SIZES = [25, 50, 100];
 
@@ -72,9 +72,23 @@ const useStyles = makeStyles({
   },
 });
 
-/** Formats an ISO date string as a local date, or an em dash when there's no data. */
+/**
+ * An ISO date string as a short date, or an em dash when there's no data. These are the earliest and latest UTC
+ * report days (and Copilot interaction times) in each table, so the day is read and printed in UTC: in the reader's
+ * own zone it would move to the previous day west of UTC.
+ */
 function formatDate(d: string | null): string {
-  return d ? formatDateParts(new Date(d), { dateStyle: 'short' }) : '—';
+  return d ? formatDateParts(parseApiDate(d), { dateStyle: 'short', timeZone: 'UTC' }) : '—';
+}
+
+/**
+ * When a trace line was written, exactly as `profiling.usp_Trace` stored it. That is SQL's `GETDATE()`, the database
+ * server's own clock: UTC on Azure SQL Database, but local time on a SQL Server set to another zone. Nothing records
+ * which, so the time is neither converted nor labelled; reading and printing it in UTC just keeps the stored
+ * wall-clock time unchanged in every browser.
+ */
+function formatTraceTime(d: string): string {
+  return formatDateParts(parseApiDate(d), { dateStyle: 'short', timeStyle: 'medium', timeZone: 'UTC' });
 }
 
 
@@ -337,9 +351,7 @@ export default function ProfilingStatusPage() {
                 )}
                 {trace?.rows.map((r) => (
                   <TableRow key={r.id}>
-                    <TableCell>
-                      {formatDateParts(new Date(r.datetime), { dateStyle: 'short', timeStyle: 'medium' })}
-                    </TableCell>
+                    <TableCell>{formatTraceTime(r.datetime)}</TableCell>
                     <TableCell>
                       <span className={styles.message}>{r.message}</span>
                     </TableCell>

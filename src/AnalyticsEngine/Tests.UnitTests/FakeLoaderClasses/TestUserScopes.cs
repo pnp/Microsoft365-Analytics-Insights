@@ -1,7 +1,14 @@
 using Common.Entities.Config;
 using Common.Entities.UserScope;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Tests.UnitTests.FakeLoaderClasses
@@ -191,6 +198,59 @@ namespace Tests.UnitTests.FakeLoaderClasses
                 page.NextLink = (start + PageSize).ToString();
             }
             return page;
+        }
+    }
+
+    /// <summary>
+    /// Microsoft Graph's directory endpoints as <see cref="GraphGroupDirectoryReader"/> calls them, answered with canned
+    /// bodies - including ones Graph should never send - so the real reader can be tested without Graph.
+    /// </summary>
+    public sealed class FakeGraphDirectoryHandler : HttpMessageHandler
+    {
+        private readonly Dictionary<string, Tuple<HttpStatusCode, string>> _answers =
+            new Dictionary<string, Tuple<HttpStatusCode, string>>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Every request's unescaped path and query, in order.</summary>
+        public List<string> Requests { get; } = new List<string>();
+
+        /// <summary>
+        /// Answers each request whose unescaped path and query start with <paramref name="pathAndQuery"/>; the longest
+        /// match wins. A request nothing matches throws, naming the request.
+        /// </summary>
+        public FakeGraphDirectoryHandler On(string pathAndQuery, string body, HttpStatusCode status = HttpStatusCode.OK)
+        {
+            _answers[pathAndQuery] = Tuple.Create(status, body);
+            return this;
+        }
+
+        /// <summary>A page of a Graph collection: these items, and a next link when there is one.</summary>
+        public static string Page(string nextLink, params object[] items)
+        {
+            var page = new JObject { ["value"] = JArray.FromObject(items) };
+            if (nextLink != null)
+            {
+                page["@odata.nextLink"] = nextLink;
+            }
+            return page.ToString(Formatting.None);
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var target = Uri.UnescapeDataString(request.RequestUri.PathAndQuery);
+            Requests.Add(target);
+
+            var route = _answers.Keys.Where(k => target.StartsWith(k, StringComparison.OrdinalIgnoreCase)).OrderByDescending(k => k.Length).FirstOrDefault();
+            if (route == null)
+            {
+                throw new InvalidOperationException($"No canned Graph answer for {target}.");
+            }
+
+            var answer = _answers[route];
+            return Task.FromResult(new HttpResponseMessage(answer.Item1)
+            {
+                Content = new StringContent(answer.Item2 ?? string.Empty, Encoding.UTF8, "application/json"),
+                RequestMessage = request,
+            });
         }
     }
 }

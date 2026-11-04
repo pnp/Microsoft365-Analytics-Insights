@@ -29,6 +29,15 @@ namespace Common.Entities.LicenceActivity
         public int Page { get; private set; }
         public int PageSize { get; private set; }
 
+        /// <summary>
+        /// For a reader without See PII, the fewest people a figure may describe: the overview's licences, departments
+        /// and countries held by fewer people than this have their activity withheld or folded together, and a
+        /// selection of fewer people has every figure withheld (<see cref="LicenceActivityOverview.Suppressed"/>).
+        /// <c>null</c> for a reader with See PII, who sees every group. Part of the cache key, so the two kinds of
+        /// reader never share an overview.
+        /// </summary>
+        public int? MinimumGroupSize { get; private set; }
+
         [JsonIgnore]
         public DateTime FromUtc => ParseDate(From);
         [JsonIgnore]
@@ -110,6 +119,18 @@ namespace Common.Entities.LicenceActivity
             var copy = (LicenceActivityQuery)MemberwiseClone();
             copy.PeopleScope = scope;
             copy.PeopleScopeKey = scope == null ? null : (key ?? throw new ArgumentNullException(nameof(key)));
+            return copy;
+        }
+
+        /// <summary>
+        /// This query answered for a reader who may not see individuals: see <see cref="MinimumGroupSize"/>. A null
+        /// minimum shows every group.
+        /// </summary>
+        public LicenceActivityQuery WithMinimumGroupSize(int? minimum)
+        {
+            if (minimum < 1) throw new ArgumentOutOfRangeException(nameof(minimum), "The minimum group size must be at least 1.");
+            var copy = (LicenceActivityQuery)MemberwiseClone();
+            copy.MinimumGroupSize = minimum;
             return copy;
         }
 

@@ -9,10 +9,12 @@ To compile these projects in visual studio, you need to copy one of the template
 |WebJob.AppInsightsImporter & WebJob.Office365ActivityImporter | Webjobs/App.Debug.config
 |Web | Web/Web.Debug.config
 
-Each executable project is set to merge the appropriate configuration file on build:
+Each executable project merges its template with the transform for the build configuration before it builds. `App.ControlPanel.WinForms`, `Tests.UnitTests` and both WebJobs do it like this:
 
 ```xml
-  <Target Name="BeforeBuild">
+  <Target Name="TransformAppConfig" BeforeTargets="PrepareForBuild">
     <TransformXml Source="App.Template.config" Transform="App.$(Configuration).config" Destination="App.config" />
   </Target>
 ```
+
+`Web` does the same with `Web.Template.config` and `Web.$(Configuration).config`, in its `BeforeBuild` target. A Debug build fails at this step until the Debug transform has been copied in. See *Before your first build* in [CONTRIBUTING.md](../../CONTRIBUTING.md#before-your-first-build-create-your-local-config-files) for a script that copies them all.

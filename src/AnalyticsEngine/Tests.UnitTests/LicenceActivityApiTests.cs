@@ -10,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Security.Claims;
@@ -198,6 +199,107 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task WithoutSeePii_DepartmentAndCountryNarrowingIsRefused_AndTheOverviewWithholdsSmallGroups()
+        {
+            using (var app = new Harness())
+            {
+                // A department and a country can leave one person, whose licences and activity the figures then are.
+                app.Principal = SignedIn();
+                foreach (var url in new[] { "api/LicenceActivity/overview?departmentId=7", "api/LicenceActivity/overview?countryId=0",
+                    "api/LicenceActivity/overview?departmentId=7&countryId=3" })
+                {
+                    var refused = await app.Client.GetAsync(url);
+                    Assert.AreEqual(HttpStatusCode.Forbidden, refused.StatusCode, url);
+                    var body = JObject.Parse(await refused.Content.ReadAsStringAsync());
+                    Assert.AreEqual("portalPermissionRequired", (string)body["code"], url);
+                    Assert.AreEqual("seePii", (string)body["permission"], url);
+                }
+                Assert.AreEqual(0, app.Store.OverviewCalls, "A refused request must not read anything.");
+
+                // Everyone the administrator's filter admits stays open - built with the small-group floor.
+                var withoutSeePii = await app.Json("api/LicenceActivity/overview");
+                Assert.AreEqual(5, app.Store.LastQuery.MinimumGroupSize);
+                Assert.AreEqual(5, (int)withoutSeePii["query"]["minimumGroupSize"]);
+
+                // A See PII reader is never served that overview, nor its reader theirs: they are cached apart.
+                app.Principal = SignedIn(PortalRoles.SeePii);
+                var withSeePii = await app.Json("api/LicenceActivity/overview");
+                Assert.IsNull(app.Store.LastQuery.MinimumGroupSize);
+                Assert.AreNotEqual((string)withoutSeePii["snapshotId"], (string)withSeePii["snapshotId"]);
+                Assert.AreEqual(2, app.Store.OverviewCalls);
+                await app.Json("api/LicenceActivity/overview?departmentId=7&countryId=0");
+                Assert.AreEqual(7, app.Store.LastQuery.DepartmentId);
+                Assert.IsNull(app.Store.LastQuery.MinimumGroupSize, "See PII narrows and sees every group, as before.");
+
+                // Figures prepared for a See PII reader are never exported to a reader without it: they are expired,
+                // and the page fetches the reader's own.
+                app.Principal = SignedIn();
+                Assert.AreEqual(HttpStatusCode.Gone,
+                    (await app.Client.GetAsync("api/LicenceActivity/export?overviewId=" + withSeePii["snapshotId"])).StatusCode);
+                Assert.AreEqual(HttpStatusCode.OK,
+                    (await app.Client.GetAsync("api/LicenceActivity/export?overviewId=" + withoutSeePii["snapshotId"])).StatusCode);
+            }
+        }
+
+        [TestMethod]
+        public async Task WithoutSeePii_TheScreenAndTheWorkbookFoldTheSameSmallGroups_AndSeePiiSeesThemAll()
+        {
+            var sources = new LicenceActivitySources { UserMetadata = true, UsageReports = true, NowUtc = LicenceActivityTests.Now };
+            var store = new CachedLicenceActivityStore(
+                new SmallGroupsLoader(), new LicenceActivityReadModelCache(utcNow: () => LicenceActivityTests.Now), "synthetic-scope");
+            IPrincipal principal = SignedIn();
+            using (var host = new LicenceActivityHttpHost(store, sources, () => LicenceActivityTests.Now, () => principal))
+            {
+                const string url = "api/LicenceActivity/overview?from=2000-05-01&to=2000-06-25";
+                var hidden = new[] { "Contoso One Team", "Contoso Four Team", "Contoso One Land", "Contoso Four Land" };
+
+                var overview = await host.Client.GetStringAsync(url);
+                var json = JObject.Parse(overview);
+                Assert.AreEqual(2, (int)json["otherDepartments"]);
+                Assert.IsTrue((bool)json["departments"].Last["other"]);
+                Assert.IsTrue((bool)json["licences"].Single(sku => (int)sku["licenceTypeId"] == 2)["withheld"]);
+                var export = await host.Client.GetAsync("api/LicenceActivity/export?overviewId=" + json["snapshotId"]);
+                Assert.AreEqual(HttpStatusCode.OK, export.StatusCode);
+                var workbook = Worksheets(await export.Content.ReadAsByteArrayAsync());
+                StringAssert.Contains(workbook, "Smaller groups combined");
+                foreach (var name in hidden)
+                {
+                    Assert.IsFalse(overview.Contains(name), name + " on screen");
+                    Assert.IsFalse(workbook.Contains(name), name + " in the workbook");
+                }
+
+                principal = SignedIn(PortalRoles.SeePii);
+                var full = await host.Client.GetStringAsync(url);
+                var fullJson = JObject.Parse(full);
+                Assert.AreEqual(0, (int)fullJson["otherDepartments"]);
+                Assert.IsFalse((bool)fullJson["licences"].Single(sku => (int)sku["licenceTypeId"] == 2)["withheld"]);
+                var fullWorkbook = Worksheets(await (await host.Client.GetAsync(
+                    "api/LicenceActivity/export?overviewId=" + fullJson["snapshotId"])).Content.ReadAsByteArrayAsync());
+                foreach (var name in hidden)
+                {
+                    StringAssert.Contains(full, name);
+                    StringAssert.Contains(fullWorkbook, name);
+                }
+            }
+        }
+
+        private static string Worksheets(byte[] workbook)
+        {
+            using (var zip = new ZipArchive(new MemoryStream(workbook)))
+                return string.Join("\n", zip.Entries
+                    .Where(e => e.FullName.StartsWith("xl/", StringComparison.Ordinal) && e.FullName.EndsWith(".xml", StringComparison.Ordinal))
+                    .Select(e => new StreamReader(e.Open()).ReadToEnd()));
+        }
+
+        private sealed class SmallGroupsLoader : ILicenceActivityReadModelLoader
+        {
+            public Task<LicenceActivityReadModel> LoadReadModelAsync(
+                LicenceActivityQuery range, LicenceActivitySources sources,
+                ILicenceActivityDiagnostics diagnostics, CancellationToken cancellationToken) =>
+                Task.FromResult(LicenceActivityReadModelTests.SmallGroupsModel(range));
+        }
+
+        [TestMethod]
         public async Task FailedRun_IsTerminalAndRetryable_NotAnEmptySuccessfulReport()
         {
             using (var app = new Harness())
@@ -253,11 +355,13 @@ namespace Tests.UnitTests
         {
             internal int OverviewCalls;
             internal int UserCalls;
+            internal LicenceActivityQuery LastQuery;
             internal Func<Task<LicenceActivityOverview>> OverviewLoader = () => Task.FromResult(LicenceActivityTests.SampleOverview());
             public Task<LicenceActivityOverview> LoadOverviewAsync(LicenceActivityQuery query, LicenceActivitySources sources,
                 ILicenceActivityDiagnostics diagnostics, CancellationToken cancellationToken)
             {
                 Interlocked.Increment(ref OverviewCalls);
+                LastQuery = query;
                 return OverviewLoader();
             }
             public Task<LicenceActivityUsers> LoadUsersAsync(LicenceActivityOverview overview, LicenceActivityQuery query,

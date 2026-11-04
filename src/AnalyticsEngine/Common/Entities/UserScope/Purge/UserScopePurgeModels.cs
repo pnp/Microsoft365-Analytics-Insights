@@ -40,6 +40,8 @@ namespace Common.Entities.UserScope.Purge
         public const string UsageReports = "usageReports";
         public const string CopilotInteractions = "copilotInteractions";
         public const string LicencesAndCredits = "licencesAndCredits";
+        public const string CopilotCostPreview = "copilotCostPreview";
+        public const string RetiredFeatures = "retiredFeatures";
         public const string SharedWith = "sharedWith";
         public const string Managers = "managers";
         public const string Users = "users";

@@ -21,6 +21,10 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("messages")]
         public string Messages { get; set; }
 
+        /// <summary>
+        /// The configuration snapshot without its secrets (<see cref="Common.Entities.Installer.InstallConfigSnapshotRedactor"/>),
+        /// or null when none was recorded or it is not valid JSON.
+        /// </summary>
         [JsonProperty("configJson")]
         public string ConfigJson { get; set; }
 

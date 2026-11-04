@@ -125,7 +125,8 @@ namespace App.ControlPanel.Engine
                     azureBackeEndCreationJob.CreatedWebSiteResource,
                     _proxyConfig,
                     log,
-                    ct);
+                    ct,
+                    BaseAnalyticsSolutionInstallJob.InstallerCredential(Config));
                 ct.ThrowIfCancellationRequested();
 
                 log.LogInformation($"Reminder: Ensure Azure AD app registration for the runtime account has correct authentication configuration (see 'Configure Reply URLs' of deployment guide).");

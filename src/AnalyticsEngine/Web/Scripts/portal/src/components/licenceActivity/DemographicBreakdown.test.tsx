@@ -101,4 +101,33 @@ describe('DemographicBreakdown', () => {
     );
     expect(screen.getByText(/Showing only the 50 largest/i)).toBeInTheDocument();
   });
+
+  it('lists the groups combined for a reader without See PII last, by how many there are, and says why', () => {
+    renderWithProvider(
+      <DemographicBreakdown
+        title="By department"
+        segmentLabel="Department"
+        rows={[
+          demo({ id: -1, name: null, other: true, assignedUsers: 150 }),
+          demo({ id: 1, name: 'Engineering', assignedUsers: 100 }),
+        ]}
+        truncated={false}
+        otherGroups={3}
+        minimumGroupSize={5}
+      />,
+    );
+
+    const rows = screen.getAllByRole('row');
+    expect(rows[1]).toHaveTextContent('Engineering');
+    expect(rows[2]).toHaveTextContent('3 smaller groups, combined');
+    expect(rows[2]).toHaveTextContent('150');
+    expect(screen.getByText('Groups of fewer than 5 people are combined into one row, so that nobody can be singled out.')).toBeInTheDocument();
+  });
+
+  it('says nothing about combined groups when every group is shown', () => {
+    renderWithProvider(
+      <DemographicBreakdown title="By department" segmentLabel="Department" rows={[demo()]} truncated={false} />,
+    );
+    expect(screen.queryByText(/combined into one row/)).not.toBeInTheDocument();
+  });
 });

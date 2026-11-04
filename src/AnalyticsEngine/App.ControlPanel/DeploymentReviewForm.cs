@@ -66,7 +66,7 @@ namespace App.ControlPanel
             foreach (var workload in workloads) facts.Items.Add(new ListViewItem(new[] { "Import workload", workload }));
             facts.Items.Add(new ListViewItem(new[] { "Installer tenant", config.InstallerAccount.DirectoryId }));
             facts.Items.Add(new ListViewItem(new[] { "Runtime tenant", config.ActivityAccount.DirectoryId }));
-            facts.Items.Add(new ListViewItem(new[] { "App Service plan", config.AppServicePlanName }));
+            facts.Items.Add(new ListViewItem(new[] { "App Service plan", config.AppServicePlanName + " (used for a new web app; an existing web app keeps its plan)" }));
             facts.Items.Add(new ListViewItem(new[] { "Key Vault", config.KeyVaultName }));
             facts.Items.Add(new ListViewItem(new[] { "Application Insights", config.AppInsightsName }));
             facts.Items.Add(new ListViewItem(new[] { "Log Analytics", config.AppInsightsWorkspaceName }));

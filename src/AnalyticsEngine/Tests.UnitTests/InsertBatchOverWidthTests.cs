@@ -58,10 +58,11 @@ namespace Tests.UnitTests
                     var okId1 = Guid.NewGuid();
                     var okId2 = Guid.NewGuid();
                     var tooWideId = Guid.NewGuid();
+                    const string tenantText = "Contoso private file name";
 
                     var batch = new InsertBatch<OverWidthTestEntity>(connectionString, logger);
                     batch.Rows.Add(new OverWidthTestEntity { RowId = okId1, Value = "short" });
-                    batch.Rows.Add(new OverWidthTestEntity { RowId = tooWideId, Value = new string('x', 50) });
+                    batch.Rows.Add(new OverWidthTestEntity { RowId = tooWideId, Value = tenantText + new string('x', 25) });
                     batch.Rows.Add(new OverWidthTestEntity { RowId = okId2, Value = "alsoshort" });
 
                     const string mergeSql =
@@ -89,6 +90,9 @@ namespace Tests.UnitTests
                     Assert.IsTrue(
                         logger.Messages.Any(m => m.Contains("Skipping over-width record") && m.Contains("'v'")),
                         "The skip should be logged identifying the offending column. Captured: " + string.Join(" | ", logger.Messages));
+                    Assert.IsFalse(
+                        logger.Messages.Any(m => m.Contains(tenantText)),
+                        "The skipped value must not be logged, not even its start. Captured: " + string.Join(" | ", logger.Messages));
 
                     using (var drop = keepAlive.CreateCommand())
                     {

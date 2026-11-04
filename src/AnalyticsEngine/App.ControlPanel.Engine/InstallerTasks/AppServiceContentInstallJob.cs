@@ -61,7 +61,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
             var installTasks = new List<BaseInstallTask> { _sourceGetTask };
             if (!downloadReleaseOnly)
             {
-                installTasks.Add(new InstallAppServiceContentsTask(proxyConfig, TaskConfig.GetConfigForName(config.AppServiceWebAppName), logger, config.AzureLocation, config.Tags.ToDictionary(), config.NetworkConfig));
+                installTasks.Add(new InstallAppServiceContentsTask(proxyConfig, TaskConfig.GetConfigForName(config.AppServiceWebAppName), logger, config.AzureLocation, config.Tags.ToDictionary(), config.NetworkConfig,
+                    InstallerCredential(config)));
             }
             else
             {

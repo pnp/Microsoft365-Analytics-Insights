@@ -48,10 +48,9 @@ namespace Web.Startup
 
             services.AddTelemetryDomainServices(config);
 
-            // Container creation used to run inline before the host was built, which meant a Cosmos
-            // blip stopped the app booting outright - including the anonymous health endpoint. It now
-            // runs as a hosted service so startup is never blocked by it.
-            services.AddHostedService<CosmosSchemaInitializer>();
+            // Checks the containers exist (it never creates them - see CosmosSchemaVerifier). Runs as a hosted
+            // service so a Cosmos blip never stops the app booting, including the anonymous health endpoint.
+            services.AddHostedService<CosmosSchemaVerifier>();
 
             return services;
         }

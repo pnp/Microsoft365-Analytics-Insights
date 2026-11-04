@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The synthetic-data generators shared by Tests.UnitTests and the Tests.FakeDataGen console, compiled once. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>Tests.FakeDataGen</RootNamespace>
+    <AssemblyName>Tests.FakeDataGen.Shared</AssemblyName>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Partial DemoTables field initializers register SQL tables in foreign-key dependency order. -->
+    <Compile Remove="Demo\DemoTables.cs;Demo\DemoCollaborationTables.cs;Demo\DemoPowerPlatformTables.cs" />
+    <Compile Include="Demo\DemoTables.cs" />
+    <Compile Include="Demo\DemoCollaborationTables.cs" />
+    <Compile Include="Demo\DemoPowerPlatformTables.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Tests.UnitTests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Tests.FakeDataGen</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\App.ControlPanel.Engine\App.ControlPanel.Engine.csproj" />
+    <ProjectReference Include="..\Common\Entities\Entities.csproj" />
+    <ProjectReference Include="..\WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="EntityFramework" Version="6.5.2" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.4" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+</Project>

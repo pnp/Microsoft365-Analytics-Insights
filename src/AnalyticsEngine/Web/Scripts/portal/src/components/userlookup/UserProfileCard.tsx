@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import { Card, CardHeader, Subtitle2, Text, Badge, makeStyles, tokens } from '@fluentui/react-components';
 import type { UserProfile } from '../../types/userData';
-import { formatDateParts, formatNumber, useT, type TFunction } from '../../i18n';
+import { formatDateParts, formatNumber, parseApiDate, useT, type TFunction } from '../../i18n';
 
 const useStyles = makeStyles({
   grid: {
@@ -33,7 +33,7 @@ function yesNo(t: TFunction, value: boolean | null): string {
 
 function formatUtc(value: string | null): string {
   if (!value) return '—';
-  return formatDateParts(new Date(value), {
+  return formatDateParts(parseApiDate(value), {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
