@@ -448,24 +448,33 @@ each action is pinned in `PortalPermissionTests`; see [Permissions](#permissions
 
 The site authenticates with a cookie, and a browser sends that cookie with a request whichever page started it,
 so an action that changes state is open to cross-site request forgery unless the server checks where the request
-came from. Such actions carry `RequireSameOriginXhrAttribute` (in the `Web` project): the request must have
-`X-Requested-With: XMLHttpRequest` - which `apiFetch` always sends, an HTML form cannot set, and another origin
-can only add after a CORS preflight that this site never grants with credentials - and, when the browser sends
-`Sec-Fetch-Site`, it must be `same-origin`. A refused request gets a bare `403`. Call such an action through
-`apiFetch`, never raw `fetch`, or it will be refused. A new action that changes state carries the attribute too.
+came from. The `Web` project's `SameOriginStateChangeFilter` does that for **every** Web API call whose method is
+not `GET`, `HEAD`, `OPTIONS` or `TRACE`. It is registered globally in `WebApiConfig`, so a new action is protected
+without anyone remembering to protect it. The request must have `X-Requested-With: XMLHttpRequest` - which
+`apiFetch` always sends, an HTML form cannot set, and another origin can only add after a CORS preflight that this
+site never grants with credentials - and, when the browser sends `Sec-Fetch-Site`, it must be `same-origin`. A
+refused request gets a bare `403` and the action does not run. Call such an action through `apiFetch`, never raw
+`fetch`, or it will be refused. `RequireSameOriginXhrAttribute` applies the same test to one action; several still
+carry it, which is now redundant but harmless.
 
-These are the state-changing calls the portal makes to its own API, and the check each one gets:
+Two anonymous endpoints are exempt, with `AllowCrossSiteRequestsAttribute`, because other systems call them from
+other origins and they act on no signed-in session: the Graph call-records webhook (`POST api/CallRecordWebhook`)
+and the AITracker's `POST api/ImportConfig`. An action that requires sign-in can't be exempted: the filter ignores
+the attribute there. `SameOriginStateChangeFilterTests` pins both lists.
+
+These are the state-changing calls the portal makes to its own API, and the checks each one gets:
 
 | Calls | How the server checks the request came from the portal |
 | --- | --- |
-| `POST api/UserImportCheckpoint/clear`; `POST api/GlobalFilter` and `/preview`; `POST api/CopilotInvestmentSettings`; `POST api/CopilotAdoptionSettings` and `/reset`; `PUT api/LeadershipCohort` and `POST /refresh`; `POST api/PromptCategories`, `/reset` and `/test`; `POST api/CopilotAuditBackfill/start` and `/{id}/cancel`; `POST api/UserScope/refresh`, `/purge` and `/purge/{id}/cancel`; `POST api/UserDataLookup/refresh`; `POST api/AgentCostConnection/begin` and `/disconnect` | `RequireSameOriginXhrAttribute`, as above. `/preview` and `/test` change nothing stored, but are guarded the same way. |
-| `api/UserOrg`: `POST /types`, `PUT` and `DELETE /types/{id}`, `POST /test-entra`, `POST /preview-csv` and `POST /import-csv` | The controller's own `X-Requested-With: XMLHttpRequest` check, which answers `400` with the `notFromPortal` code. |
-| `POST api/CopilotCostConnection/connect`, `/disconnect`, `/probe` and `/resetProbe` | The `Origin` header must be this site, and the `X-Copilot-Cost-CSRF` header must carry the anti-forgery token from `GET api/CopilotCostConnection`, matched to its `__Host-CopilotCostCsrf` cookie. |
-| `PUT api/TeamsAuthAPI` (authorise or de-authorise Teams) | None of these; it relies on the browser. A `PUT` is never a simple request, so another origin can't send one without a CORS preflight, which this API never answers. |
+| `POST api/UserImportCheckpoint/clear`; `POST api/GlobalFilter` and `/preview`; `POST api/CopilotInvestmentSettings`; `POST api/CopilotAdoptionSettings` and `/reset`; `PUT api/LeadershipCohort` and `POST /refresh`; `POST api/PromptCategories`, `/reset` and `/test`; `POST api/CopilotAuditBackfill/start` and `/{id}/cancel`; `POST api/UserScope/refresh`, `/purge` and `/purge/{id}/cancel`; `POST api/UserDataLookup/refresh`; `POST api/AgentCostConnection/begin` and `/disconnect` | `SameOriginStateChangeFilter`, as above (and `RequireSameOriginXhrAttribute` on the action). `/preview` and `/test` change nothing stored, but are guarded the same way. |
+| `api/UserOrg`: `POST /types`, `PUT` and `DELETE /types/{id}`, `POST /test-entra`, `POST /preview-csv` and `POST /import-csv` | `SameOriginStateChangeFilter`, then the controller's own `X-Requested-With: XMLHttpRequest` check, which answers `400` with the `notFromPortal` code. |
+| `POST api/CopilotCostConnection/connect`, `/disconnect`, `/probe` and `/resetProbe` | `SameOriginStateChangeFilter`; then the `Origin` header must be this site, and the `X-Copilot-Cost-CSRF` header must carry the anti-forgery token from `GET api/CopilotCostConnection`, matched to its `__Host-CopilotCostCsrf` cookie. |
+| `PUT api/TeamsAuthAPI` (authorise or de-authorise Teams) | `SameOriginStateChangeFilter`. Before it, this call relied on browsers refusing a cross-site `PUT` without a CORS preflight. |
 
-`POST api/SiteTokenAPI` (mints an access token), `POST api/TeamsAuthAPI` (reads each Team's authorisation
-status) and the Service configuration page's validation `POST` to the call-records webhook (with a
-`validationToken`, which the webhook only echoes) change nothing, despite the verb.
+`POST api/SiteTokenAPI` (mints an access token) and `POST api/TeamsAuthAPI` (reads each Team's authorisation
+status) change nothing, despite the verb, and are checked by the filter all the same. The Service configuration
+page's validation `POST` to the call-records webhook (with a `validationToken`, which the webhook only echoes) uses
+raw `fetch`, which the webhook's exemption allows.
 
 `window.o365AnalyticsBuildLabel` is not an endpoint: it is the running build's label
 (`Common.Entities.BuildConstants.BuildLabel`, stamped as `Build <number>` by ci.yml), substituted

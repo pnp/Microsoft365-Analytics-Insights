@@ -15,6 +15,7 @@ namespace Web.AnalyticsWeb.Controllers
         // POST: api/ImportConfig?appInsightsStringEncoded=base64encodedstring
         [AllowCorsForOrgUrls()]
         [HttpPost]
+        [AllowCrossSiteRequests("The AITracker posts here from SharePoint pages, another origin, without the portal's cookie.")]
         public ImportConfig Post(string appInsightsStringEncoded = "")
         {
             if (string.IsNullOrEmpty(appInsightsStringEncoded))

@@ -1,4 +1,5 @@
-﻿using System.Web.Http;
+using System.Linq;
+using System.Web.Http;
 using System.Web.Http.ExceptionHandling;
 
 namespace Web.AnalyticsWeb
@@ -25,11 +26,25 @@ namespace Web.AnalyticsWeb
             config.SetCorsPolicyProviderFactory(new AllowCorsForOrgUrlsFactory());
             config.EnableCors();
 
+            AddCrossSiteRequestDefence(config);
+
             config.Routes.MapHttpRoute(
                 name: "DefaultApi",
                 routeTemplate: "api/{controller}/{id}",
                 defaults: new { id = RouteParameter.Optional }
             );
+        }
+
+        /// <summary>
+        /// Every state-changing call must come from the portal's own scripts (<see cref="SameOriginStateChangeFilter"/>).
+        /// It relies on the CORS policy never allowing credentials: <see cref="AllowCorsForOrgUrlsAttribute"/>.
+        /// </summary>
+        public static void AddCrossSiteRequestDefence(HttpConfiguration config)
+        {
+            if (!config.Filters.Any(f => f.Instance is SameOriginStateChangeFilter))
+            {
+                config.Filters.Add(new SameOriginStateChangeFilter());
+            }
         }
     }
 }

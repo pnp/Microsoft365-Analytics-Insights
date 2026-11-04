@@ -42,7 +42,8 @@ namespace Tests.UnitTests
             IPrincipal principal,
             PortalAccessPolicy policy,
             Func<Type, IHttpController> create = null,
-            bool productionExceptionHandler = false)
+            bool productionExceptionHandler = false,
+            bool crossSiteDefence = false)
         {
             Principal = principal;
             _configuration = new HttpConfiguration();
@@ -50,6 +51,11 @@ namespace Tests.UnitTests
             {
                 // What WebApiConfig registers: the generic 500 with an error reference.
                 _configuration.Services.Replace(typeof(IExceptionHandler), new AnalyticsWebApiExceptionHandler());
+            }
+            if (crossSiteDefence)
+            {
+                // What WebApiConfig registers: every state-changing call must come from the portal's own scripts.
+                WebApiConfig.AddCrossSiteRequestDefence(_configuration);
             }
             _configuration.Properties[typeof(PortalAccessPolicy)] = policy;
             _configuration.Services.Replace(typeof(IHttpControllerTypeResolver), new ControllerTypes(controllers.ToList()));
