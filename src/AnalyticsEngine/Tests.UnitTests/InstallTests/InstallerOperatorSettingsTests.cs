@@ -141,6 +141,86 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        // ---------------------------------------------------------------- Kudu without SCM basic auth (R11-5)
+
+        [TestMethod]
+        public async Task Kudu_IsCalledWithAnEntraToken_OnTheSitesOwnScmHost()
+        {
+            using (var arm = new FakeArm())
+            using (var kuduSite = new FakeKudu(HttpStatusCode.OK))
+            {
+                arm.AddSite(minTls: "1.2");
+                var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
+                using (var kudu = new KuduAccess(site, new SyntheticCredential(), kuduSite))
+                using (var client = new HttpClient(kudu, disposeHandler: false))
+                {
+                    await kudu.InitialiseAsync(CancellationToken.None);
+                    (await client.GetAsync(AppServiceWebJobHealthVerifier.BuildKuduContinuousWebJobsUri(kudu.ScmRootUrl))).Dispose();
+
+                    Assert.AreEqual("https://contoso-web.scm.azurewebsites.net", kudu.ScmRootUrl);
+                    Assert.AreEqual("Bearer synthetic", kuduSite.Authorizations.Single());
+                    Assert.IsTrue(kudu.UsesEntraToken);
+                    Assert.IsFalse(arm.Requests.Any(r => r.Path.IndexOf("basicPublishingCredentialsPolicies/scm", StringComparison.OrdinalIgnoreCase) >= 0
+                        || r.Path.EndsWith("/publishxml", StringComparison.OrdinalIgnoreCase)),
+                        "With a token there is no need for the publishing profile or the SCM basic-auth policy.");
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task Kudu_RefusingTheToken_FallsBackToBasicOnlyWhileItIsOn_AndNeverSwitchesItOn(bool basicAuthOn)
+        {
+            using (var arm = new FakeArm())
+            using (var kuduSite = new FakeKudu(HttpStatusCode.Unauthorized))
+            {
+                arm.AddSite(minTls: "1.2");
+                arm.Add(Site + "/basicPublishingCredentialsPolicies/scm", new JObject
+                {
+                    ["name"] = "scm", ["type"] = "Microsoft.Web/sites/basicPublishingCredentialsPolicies", ["properties"] = new JObject { ["allow"] = basicAuthOn }
+                });
+                arm.PostText[Site + "/publishxml"] = "<publishData><publishProfile publishMethod=\"MSDeploy\" publishUrl=\"contoso-web.scm.azurewebsites.net:443\" " +
+                    "userName=\"$contoso-web\" userPWD=\"not-a-real-password\" /></publishData>";
+                var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
+                using (var kudu = new KuduAccess(site, new SyntheticCredential(), kuduSite))
+                using (var client = new HttpClient(kudu, disposeHandler: false))
+                {
+                    await kudu.InitialiseAsync(CancellationToken.None);
+                    var refused = await client.GetAsync(kudu.ScmRootUrl + "/api/continuouswebjobs");
+                    Assert.IsTrue(KuduAccess.IsAuthRejection(refused.StatusCode));
+
+                    if (basicAuthOn)
+                    {
+                        await kudu.UseBasicCredentialsAsync(CancellationToken.None);
+                        (await client.GetAsync(kudu.ScmRootUrl + "/api/continuouswebjobs")).Dispose();
+                        StringAssert.StartsWith(kuduSite.Authorizations.Last(), "Basic ");
+                    }
+                    else
+                    {
+                        var ex = await Assert.ThrowsExceptionAsync<CloudInstallEngine.Models.InstallException>(() => kudu.UseBasicCredentialsAsync(CancellationToken.None));
+                        StringAssert.Contains(ex.Message, "does not turn SCM basic authentication back on");
+                        Assert.AreEqual(1, kuduSite.Authorizations.Count, "Nothing else is sent to Kudu.");
+                    }
+                    Assert.IsFalse(arm.Mutations.Any(m => m.Method != "POST"),
+                        "The installer never writes the SCM basic-auth policy: " + string.Join(", ", arm.Mutations.Select(m => m.Method + " " + m.Path)));
+                }
+            }
+        }
+
+        /// <summary>A Kudu site that answers every request with one status and records the Authorization headers.</summary>
+        private sealed class FakeKudu : HttpMessageHandler
+        {
+            private readonly HttpStatusCode _status;
+            public readonly List<string> Authorizations = new List<string>();
+            public FakeKudu(HttpStatusCode status) { _status = status; }
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                Authorizations.Add(request.Headers.Authorization?.ToString());
+                return Task.FromResult(new HttpResponseMessage(_status) { Content = new StringContent("[]", Encoding.UTF8, "application/json") });
+            }
+        }
+
         // ---------------------------------------------------------------- SQL server (R11-5, R11-6)
 
         [TestMethod]
@@ -433,6 +513,7 @@ namespace Tests.UnitTests.InstallTests
             private readonly HttpClient _http;
             public readonly HashSet<string> KnownLists = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public readonly Dictionary<string, JObject> PostResponses = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
+            public readonly Dictionary<string, string> PostText = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             public readonly Dictionary<string, JArray> InheritedAssignments = new Dictionary<string, JArray>(StringComparer.OrdinalIgnoreCase);
             public readonly List<(string Method, string Path, JObject Body)> Requests = new List<(string, string, JObject)>();
             public readonly List<(string Method, string Path, JObject Body)> Mutations = new List<(string, string, JObject)>();
@@ -474,6 +555,9 @@ namespace Tests.UnitTests.InstallTests
                         ["publicNetworkAccess"] = "Enabled", ["httpsOnly"] = true,
                         ["defaultHostName"] = "contoso-web.azurewebsites.net",
                         ["hostNames"] = new JArray("contoso-web.azurewebsites.net"),
+                        ["hostNameSslStates"] = new JArray(
+                            new JObject { ["name"] = "contoso-web.azurewebsites.net", ["hostType"] = "Standard", ["sslState"] = "Disabled" },
+                            new JObject { ["name"] = "contoso-web.scm.azurewebsites.net", ["hostType"] = "Repository", ["sslState"] = "Disabled" }),
                         ["possibleOutboundIpAddresses"] = "203.0.113.10,203.0.113.11",
                         ["virtualNetworkSubnetId"] = integrationSubnet
                     }
@@ -575,7 +659,10 @@ namespace Tests.UnitTests.InstallTests
 
                 Mutations.Add(entry);
                 if (request.Method.Method == "POST")
+                {
+                    if (PostText.TryGetValue(path, out var xml)) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(xml, Encoding.UTF8, "application/xml") };
                     return Json(HttpStatusCode.OK, PostResponses.TryGetValue(path, out var posted) ? posted : new JObject());
+                }
                 if (request.Method == HttpMethod.Delete)
                 {
                     _resources.Remove(path);
