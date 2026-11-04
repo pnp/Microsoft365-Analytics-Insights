@@ -10,10 +10,16 @@ export type TeamsQueryInfo = {
   key: string;
   sql: string;
   /**
-   * Present when the section failed. The section renders it instead of a chart: the reason and an error reference in
-   * English, never the exception's text.
+   * Present when the section failed. The section renders it instead of a chart, in English: for a query that ran and
+   * failed, the reason and an error reference, never the exception's text; for a section the server did not run, the
+   * fallback for `errorCode`.
    */
   error: string | null;
+  /**
+   * A stable code when the server itself decided the section could not run (`error` is then only its English
+   * fallback); absent for a query that ran and failed, which carries `errorReason` and `errorReference` instead.
+   */
+  errorCode?: string | null;
   /** The failure's stable reason (`ReportQueryFailure.Reason`), worded by `reportQueryFailureText`. */
   errorReason?: string | null;
   /** The error reference the server log carries for this failure. */

@@ -35,6 +35,7 @@ const teamsExplorer: Record<keyof typeof en, string> = {
 
   'teamsExplorer.shared.sqlBehind': 'SQL detrás de "{title}"',
   'teamsExplorer.shared.sectionLoadError': 'No se pudo cargar esta sección: {error}',
+  'teamsExplorer.shared.queryQueueTimeout': 'El servidor ya estaba ejecutando todas las consultas de informes que admite y esta no obtuvo turno en un minuto. Pruebe con un periodo de informe más corto o vuelva a intentarlo cuando la base de datos esté menos ocupada.',
   'teamsExplorer.shared.noData': 'No hay datos para este periodo.',
   'teamsExplorer.shared.callDataCovers': 'Los datos de llamadas cubren {range}.',
   'teamsExplorer.shared.usageReportFiguresCover': 'Las cifras de informes de uso cubren {range} \u2013 Microsoft las publica con unos días de retraso, por lo que la ventana se desplaza hacia atrás en lugar de quedar medio vacía.',

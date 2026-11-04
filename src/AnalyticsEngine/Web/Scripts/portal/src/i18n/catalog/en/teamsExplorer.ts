@@ -33,6 +33,7 @@ export const teamsExplorer = {
 
   'teamsExplorer.shared.sqlBehind': 'SQL behind "{title}"',
   'teamsExplorer.shared.sectionLoadError': 'This section could not be loaded: {error}',
+  'teamsExplorer.shared.queryQueueTimeout': 'The server was already running as many report queries as it allows, and this one did not get a turn within a minute. Try a shorter reporting period, or try again when the database is less busy.',
   'teamsExplorer.shared.noData': 'No data for this period.',
   'teamsExplorer.shared.callDataCovers': 'Call data covers {range}.',
   'teamsExplorer.shared.usageReportFiguresCover': 'Usage-report figures cover {range} \u2013 Microsoft publishes them a few days in arrears, so the window is shifted back rather than left half-empty.',

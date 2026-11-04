@@ -35,18 +35,28 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence
     {
         private readonly ILogger _logger;
         private readonly AppConfig _appConfig;
+        private readonly SharePointWebIndex _webIndex;
 
-        public SaveSessionFactory(ILogger logger, AppConfig appConfig)
+        public SaveSessionFactory(ILogger logger, AppConfig appConfig) : this(logger, appConfig, null)
+        {
+        }
+
+        /// <param name="webIndex">
+        /// Given to every session, so the batches of an import cycle share one read of the SharePoint webs and site
+        /// collections. Null gives each session its own.
+        /// </param>
+        public SaveSessionFactory(ILogger logger, AppConfig appConfig, SharePointWebIndex webIndex)
         {
             _logger = logger;
             _appConfig = appConfig;
+            _webIndex = webIndex;
         }
 
         public async Task<SaveSession> CreateAsync(AnalyticsEntitiesContext db, ICopilotMetadataLoader sharedCopilotLoader)
         {
             // Deliberately not disposed here or by the caller: SaveSession.Dispose() disposes the EF context,
             // which the save path owns and disposes itself. That is the pre-#373 behaviour.
-            var saveSession = new SaveSession(_logger, db, _appConfig, sharedCopilotLoader);
+            var saveSession = new SaveSession(_logger, db, _appConfig, sharedCopilotLoader, _webIndex);
             await saveSession.Init();
             return saveSession;
         }

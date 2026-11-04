@@ -26,10 +26,18 @@ namespace Common.Entities.TeamsExplorer
         public string Sql { get; set; }
 
         /// <summary>
-        /// When the section failed, what its reader is told: the reason in English and an error reference, never the
-        /// exception's text (<see cref="ReportQueryFailure"/>). Null when it succeeded.
+        /// When the section failed, what its reader is told in English: for a query that ran and failed, the reason and
+        /// an error reference, never the exception's text (<see cref="ReportQueryFailure"/>); for a section the server
+        /// did not run, the English fallback for <see cref="ErrorCode"/>. Null when it succeeded.
         /// </summary>
         public string Error { get; set; }
+
+        /// <summary>
+        /// A stable code for a failure the server itself decided on, so the page can word it in the reader's language;
+        /// null for a query that ran and failed, which carries <see cref="ErrorReason"/> and <see cref="ErrorReference"/>
+        /// instead. <see cref="Error"/> carries an English fallback whenever this is set.
+        /// </summary>
+        public string ErrorCode { get; set; }
 
         /// <summary>The failure's stable reason (<see cref="ReportQueryFailure.Reason"/>), which the portal words.</summary>
         public string ErrorReason { get; set; }

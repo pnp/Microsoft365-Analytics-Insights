@@ -125,7 +125,7 @@ namespace Tests.UnitTests
                 var ldf = Path.Combine(_folder, "CopilotCostPreview_log.ldf").Replace("'", "''");
                 using (var cmd = new SqlCommand(
                     $"CREATE DATABASE CopilotCostPreview ON (NAME=CopilotCostPreview,FILENAME=N'{mdf}') " +
-                    $"LOG ON (NAME=CopilotCostPreview_log,FILENAME=N'{ldf}');", db))
+                    $"LOG ON (NAME=CopilotCostPreview_log,FILENAME=N'{ldf}'); " + ScratchDatabase.AutoCloseOffSql("CopilotCostPreview"), db))
                     cmd.ExecuteNonQuery();
             }
             _connection = $@"Server=(localdb)\{_instance};Database=CopilotCostPreview;Integrated Security=true;TrustServerCertificate=true";

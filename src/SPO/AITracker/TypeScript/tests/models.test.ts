@@ -13,7 +13,7 @@ describe('Model tests', () => {
 
     // User ID field vals shouldn't be detected as a managed metadata field
     expect(MetadataInfo.FromFieldValue("OData__x005f_AuthorByline",
-      "6;#i:0#.f|membership|admin@m365x72460609.onmicrosoft.com").isValid()).toBeFalsy();
+      "6;#i:0#.f|membership|admin@contoso.onmicrosoft.com").isValid()).toBeFalsy();
 
   }),
     test('PageProps parse tests', () => {
@@ -65,5 +65,44 @@ describe('Model tests', () => {
       expect(likesResult.length).toBe(2);
       expect(likesResult[0].pageLikes.length).toBe(1);
       expect(likesResult[1].pageLikes.length).toBe(1);
+    });
+
+    // Every part used to be sent with no taxonomy fields at all, so the importer never received one
+    test('PageProps splitIntoMutliple keeps the taxonomy fields', () => {
+      const pp = new PageProps("http://url", {
+        Department: "2;#Contoso Finance|f5b7ced7-2039-47f9-a22d-32c66d2eec65",
+        Region: "3;#Contoso North|9c8d2e3a-4b5f-4a6e-8d7c-1b2a3c4d5e6f"
+      });
+      expect(pp.setTaxonomyFieldsFromRawLoadedProps()).toBe(2);
+
+      // Small enough that each field goes in a part of its own
+      const parts = pp.splitIntoMutliple(1);
+
+      expect(parts.length).toBe(2);
+      expect(parts[0].taxonomyProps).toEqual([{ id: "f5b7ced7-2039-47f9-a22d-32c66d2eec65", label: "Contoso Finance", propName: "Department" }]);
+      expect(parts[1].taxonomyProps).toEqual([{ id: "9c8d2e3a-4b5f-4a6e-8d7c-1b2a3c4d5e6f", label: "Contoso North", propName: "Region" }]);
+
+      // One part when everything fits, with every field in it
+      const single = pp.splitIntoMutliple(8192);
+      expect(single.length).toBe(1);
+      expect(single[0].taxonomyProps.map(t => t.propName)).toEqual(["Department", "Region"]);
+    });
+
+    test('PageProps splitIntoMutliple sends a page with no taxonomy fields without any', () => {
+      const parts = new PageProps("http://url", { Title: "Contoso home" }).splitIntoMutliple(8192);
+      expect(parts.length).toBe(1);
+      expect(parts[0].taxonomyProps).toEqual([]);
+    });
+
+    // App Insights sends a custom property holding an object as that object's JSON. The importer reads this exact
+    // string into TaxonomoyProperty (id, label, propName): PageUpdateEventListParseTests uses the same payload.
+    test('taxonomy fields are sent in the shape the importer reads', () => {
+      const pp = new PageProps("http://url", { Department: "2;#Contoso Finance|f5b7ced7-2039-47f9-a22d-32c66d2eec65" });
+      pp.setTaxonomyFieldsFromRawLoadedProps();
+
+      const part = pp.splitIntoMutliple(8192)[0];
+
+      expect(JSON.stringify(part.taxonomyProps))
+        .toBe('[{"id":"f5b7ced7-2039-47f9-a22d-32c66d2eec65","label":"Contoso Finance","propName":"Department"}]');
     });
 });

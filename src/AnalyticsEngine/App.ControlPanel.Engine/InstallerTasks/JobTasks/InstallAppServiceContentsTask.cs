@@ -29,6 +29,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     {
         private readonly InstallerProxyConfig _proxyConfig;
         private readonly VNetConfig _networkConfig;
+        private readonly TokenCredential _kuduCredential;
 
         /// <summary>How long to keep polling Kudu for the deployment outcome after the upload is accepted.</summary>
         internal static readonly TimeSpan DeploymentCompletionTimeout = TimeSpan.FromMinutes(30);
@@ -36,11 +37,17 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// <summary>Gap between deployment-status polls.</summary>
         internal static readonly TimeSpan DeploymentPollInterval = TimeSpan.FromSeconds(5);
 
-        public InstallAppServiceContentsTask(InstallerProxyConfig proxyConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, VNetConfig networkConfig)
+        /// <param name="kuduCredential">
+        /// The installer's Azure credential, used for a Microsoft Entra token to Kudu. Without it the task falls back to the
+        /// site's basic publishing credentials, which only works while SCM basic authentication is turned on.
+        /// </param>
+        public InstallAppServiceContentsTask(InstallerProxyConfig proxyConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, VNetConfig networkConfig,
+            TokenCredential kuduCredential = null)
             : base(config, logger, azureLocation, tags)
         {
             _proxyConfig = proxyConfig ?? throw new ArgumentNullException(nameof(proxyConfig));
             _networkConfig = networkConfig;
+            _kuduCredential = kuduCredential;
         }
 
         public override async Task<LocalStorageInstallSourceInfo> ExecuteTaskReturnResult(object contextArg)
@@ -52,24 +59,16 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             _logger.LogInformation("Configuring web-jobs in App Service ...");
 
-            var publishingProfile = await webApp.Value.GetPublishingProfileXmlWithSecretsAsync(
-                new CsmPublishingProfile { Format = PublishingProfileFormat.WebDeploy }, CancellationToken);
-            using (var ms = new StreamReader(publishingProfile.Value))
-            {
-                var profileData = publishData.FromXml(ms);
-                var kuduDetails = profileData.GetKuduPublishInfo();
+            _logger.LogInformation("Found latest stable release packages:");
+            _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.AITracker).FileLocation);
+            _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation);
+            _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights).FileLocation);
+            _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation);
 
-                _logger.LogInformation("Found latest stable release packages:");
-                _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.AITracker).FileLocation);
-                _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation);
-                _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights).FileLocation);
-                _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation);
-
-                _logger.LogInformation("Building App Service deployment package...");
-                var deploymentPackage = BuildDeploymentPackage(localSources, _logger, CancellationToken);
-                _logger.LogInformation("Deploying web-jobs and website to App Service over HTTPS...");
-                await PublishZipAsync(kuduDetails, deploymentPackage, _proxyConfig);
-            }
+            _logger.LogInformation("Building App Service deployment package...");
+            var deploymentPackage = BuildDeploymentPackage(localSources, _logger, CancellationToken);
+            _logger.LogInformation("Deploying web-jobs and website to App Service over HTTPS...");
+            await PublishZipAsync(webApp.Value, deploymentPackage, _proxyConfig);
 
             // The zip deploy wrote new binaries underneath a running AppDomain, which leaves the old worker
             // process holding shadow copies of the previous build. The first requests then fail with
@@ -153,38 +152,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
             CopyDirectory(webJobContents.FullName, webJobPath, cancellationToken);
         }
 
-        private async Task PublishZipAsync(KuduPublishInfo publishInfo, FileInfo deploymentPackage, InstallerProxyConfig proxyConfig)
+        private async Task PublishZipAsync(WebSiteResource webApp, FileInfo deploymentPackage, InstallerProxyConfig proxyConfig)
         {
-            var handler = CreateHttpClientHandler(proxyConfig);
-            using (handler)
-            using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(30) })
-            using (var packageStream = deploymentPackage.OpenRead())
-            using (var content = new StreamContent(packageStream))
+            using (var kudu = new KuduAccess(webApp, _kuduCredential, CreateHttpClientHandler(proxyConfig)))
+            using (var client = new HttpClient(kudu, disposeHandler: false) { Timeout = TimeSpan.FromMinutes(30) })
             {
-                var credentials = Convert.ToBase64String(
-                    Encoding.UTF8.GetBytes($"{publishInfo.Username}:{publishInfo.Password}"));
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
-                content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+                await kudu.InitialiseAsync(CancellationToken);
+                var publishUri = BuildKuduPublishUri(kudu.ScmRootUrl);
 
-                var publishUri = BuildKuduPublishUri(publishInfo.RootUrl);
-                HttpResponseMessage response;
-                try
+                var response = await PostPackageAsync(client, publishUri, deploymentPackage);
+                if (kudu.UsesEntraToken && KuduAccess.IsAuthRejection(response.StatusCode))
                 {
-                    response = await client.PostAsync(publishUri, content, CancellationToken);
-                }
-                catch (HttpRequestException ex)
-                {
-                    _logger.LogError($"App Service HTTPS deployment could not reach '{publishUri.GetLeftPart(UriPartial.Authority)}'. " +
-                        $"Check installer proxy and SCM access settings. Details: {CloudInstallEngine.ExceptionMessages.Format(ex)}");
-                    LogPrivateNetworkGuidanceIfApplicable();
-                    throw;
-                }
-                catch (TaskCanceledException ex) when (!CancellationToken.IsCancellationRequested)
-                {
-                    _logger.LogError($"App Service HTTPS deployment to '{publishUri.GetLeftPart(UriPartial.Authority)}' timed out after 30 minutes. " +
-                        $"Check installer proxy and SCM access settings. Details: {CloudInstallEngine.ExceptionMessages.Format(ex)}");
-                    LogPrivateNetworkGuidanceIfApplicable();
-                    throw;
+                    _logger.LogWarning($"Kudu refused the installer's Microsoft Entra token (HTTP {(int)response.StatusCode}). " +
+                        "Trying the web app's basic publishing credentials, which only works while SCM basic authentication is turned on.");
+                    response.Dispose();
+                    await kudu.UseBasicCredentialsAsync(CancellationToken);
+                    response = await PostPackageAsync(client, publishUri, deploymentPackage);
                 }
 
                 using (response)
@@ -204,8 +187,35 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     // size fails with an HTML "500 - The request timed out" even when the deployment itself
                     // is progressing fine server-side. We therefore publish with async=true and poll Kudu for
                     // the real outcome.
-                    var statusUri = ResolveDeploymentStatusUri(response.Headers.Location, publishInfo.RootUrl);
+                    var statusUri = ResolveDeploymentStatusUri(response.Headers.Location, kudu.ScmRootUrl);
                     await WaitForDeploymentAsync(client, statusUri);
+                }
+            }
+        }
+
+        private async Task<HttpResponseMessage> PostPackageAsync(HttpClient client, Uri publishUri, FileInfo deploymentPackage)
+        {
+            using (var packageStream = deploymentPackage.OpenRead())
+            using (var content = new StreamContent(packageStream))
+            {
+                content.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
+                try
+                {
+                    return await client.PostAsync(publishUri, content, CancellationToken);
+                }
+                catch (HttpRequestException ex)
+                {
+                    _logger.LogError($"App Service HTTPS deployment could not reach '{publishUri.GetLeftPart(UriPartial.Authority)}'. " +
+                        $"Check installer proxy and SCM access settings. Details: {CloudInstallEngine.ExceptionMessages.Format(ex)}");
+                    LogPrivateNetworkGuidanceIfApplicable();
+                    throw;
+                }
+                catch (TaskCanceledException ex) when (!CancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogError($"App Service HTTPS deployment to '{publishUri.GetLeftPart(UriPartial.Authority)}' timed out after 30 minutes. " +
+                        $"Check installer proxy and SCM access settings. Details: {CloudInstallEngine.ExceptionMessages.Format(ex)}");
+                    LogPrivateNetworkGuidanceIfApplicable();
+                    throw;
                 }
             }
         }

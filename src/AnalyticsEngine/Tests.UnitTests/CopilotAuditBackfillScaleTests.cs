@@ -204,7 +204,8 @@ namespace Tests.UnitTests
                 connection.Open();
                 using (var command = connection.CreateCommand())
                 {
-                    command.CommandText = "IF DB_ID(@catalog) IS NOT NULL THROW 51000, 'Synthetic catalog already exists; refusing to reuse it.', 1; CREATE DATABASE [" + catalog + "]";
+                    command.CommandText = "IF DB_ID(@catalog) IS NOT NULL THROW 51000, 'Synthetic catalog already exists; refusing to reuse it.', 1; " +
+                        ScratchDatabase.CreateDatabaseSql(catalog);
                     command.Parameters.AddWithValue("@catalog", catalog);
                     command.ExecuteNonQuery();
                 }

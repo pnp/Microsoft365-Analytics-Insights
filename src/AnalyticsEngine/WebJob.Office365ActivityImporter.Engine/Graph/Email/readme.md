@@ -44,6 +44,12 @@ The base solution permissions (e.g. `User.Read.All`, `Reports.Read.All`, etc.) a
 The importer is invoked from the Office 365 activity importer web job when sent-email import is
 enabled. Relevant settings:
 
+- **Which mailboxes are read** – Every user in the analytics database with a mail address, within
+  `UserGroupsFilter`, whether or not their account can sign in: an Exchange shared mailbox's account is
+  disabled by design, and so is a leaver's whose mailbox is kept, yet both can still send mail. A user
+  whose mailbox Graph can't find (HTTP 404: a deleted account, or one with no Exchange Online mailbox) is
+  remembered in a no-mailbox skip list and not asked for again until the next full sweep, every
+  `SentEmailNoMailboxRetryHours` (default 24; 0 checks every mailbox every cycle).
 - **Cognitive Services (optional)** – Set `CognitiveEndpoint` and `CognitiveKey` in app settings to
   enable sentiment scoring (`SentEmail.CognitiveScore`). When not configured, messages are imported
   without a sentiment score.
