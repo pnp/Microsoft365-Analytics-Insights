@@ -112,11 +112,22 @@ namespace Web.AnalyticsWeb.Controllers
         private const string CopilotReportScope = "/*scope: AND r.user_id IN {scopeUsers}*/";
 
         /// <summary>
-        /// Narrows the department-adoption denominator - everyone in <c>dbo.users</c> - to the people in
-        /// scope, so the rate divides in-scope active people by in-scope people. A whole WHERE clause,
-        /// because that statement has none.
+        /// Narrows the department-adoption population - the enabled accounts in <c>dbo.users</c> - to the
+        /// people in scope, so the rate divides in-scope active people by in-scope people.
         /// </summary>
-        private const string DirectoryWhereScope = "/*scope:    WHERE u.id IN {scopeUsers}\r\n*/";
+        private const string DirectoryScope = "/*scope: AND u.id IN {scopeUsers}*/";
+
+        /// <summary>
+        /// The directory accounts a department's adoption rate is measured over: enabled ones, and those
+        /// whose state is unknown.
+        /// </summary>
+        /// <remarks>
+        /// The user import keeps a disabled account - a leaver, a shared mailbox - with its department, so
+        /// without this every leaver stays in the denominator for good and makes the department look less
+        /// adopted than it is. Unknown counts as enabled, as in Teams Explorer and Web activity: treating
+        /// it as disabled would quietly shrink the denominator and inflate the rate.
+        /// </remarks>
+        private const string EnabledDirectoryUsers = "(u.account_enabled IS NULL OR u.account_enabled = 1)";
 
         /// <summary>
         /// How many of this area's queries may be in flight at once, across all callers.
@@ -828,11 +839,18 @@ namespace Web.AnalyticsWeb.Controllers
         /// Share of each department's people who used any Office app in the window.
         /// </summary>
         /// <remarks>
-        /// The denominator is every person in <c>dbo.users</c> carrying that department, NOT just the
-        /// people who appear in the activity table. That distinction is the whole point of the chart:
-        /// dividing active people by active people would return 100% for every department and say
-        /// nothing. It is only valid when the activity import covers the same population as the
+        /// <para>
+        /// The denominator is every enabled person in <c>dbo.users</c> carrying that department, NOT
+        /// just the people who appear in the activity table. That distinction is the whole point of the
+        /// chart: dividing active people by active people would return 100% for every department and
+        /// say nothing. It is only valid when the activity import covers the same population as the
         /// directory, which is why the caller suppresses the chart on a group-filtered deployment.
+        /// </para>
+        /// <para>
+        /// The numerator is counted over the same rows, so both sides describe one population. A person
+        /// disabled during the window can still have activity in it; they leave the numerator along with
+        /// the denominator, rather than counting as active in a department they are no longer counted in.
+        /// </para>
         /// </remarks>
         internal static string DepartmentAdoptionRateQuery()
         {
@@ -851,7 +869,7 @@ namespace Web.AnalyticsWeb.Controllers
                 "    FROM dbo.users AS u\r\n" +
                 "    LEFT JOIN dbo.user_departments AS dep ON dep.id = u.department_id\r\n" +
                 "    LEFT JOIN ActiveUsers AS act ON act.user_id = u.id\r\n" +
-                DirectoryWhereScope +
+                $"    WHERE {EnabledDirectoryUsers}" + DirectoryScope + "\r\n" +
                 $"    GROUP BY ISNULL(dep.[name], N'{NoDepartmentLabel}')\r\n" +
                 ")\r\n" +
                 $"SELECT TOP ({AdoptionRankLimit}) DepartmentName AS Label,\r\n" +
