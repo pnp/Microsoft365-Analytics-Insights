@@ -192,6 +192,7 @@ vstest.console.exe src\AnalyticsEngine\Tests.UnitTests\bin\Debug\Tests.UnitTests
   | Azurite listening on `127.0.0.1:10002` | `StateStoreAzuriteTests`, `DlpHistoricalRepairTests` |
   | Azure AI Language (`CognitiveEndpoint` / `CognitiveKey`) | the sentiment tests in `TeamsTests`, `GraphImportTests` and `AppInsightsImportTests` |
   | An opt-in environment variable, such as `UPN_LOOKUP_BENCHMARK=1` or `LICENCE_ACTIVITY_PERF=1` | benchmarks, performance, stress and synthetic-scale tests; CI never sets them |
+  | `RUN_LIVE_USAGE_REPORT_IMPORT=1` | `GraphUsageReportImportTests.AllO365ActivityTests`, the whole usage-report import against your development tenant's Graph. It can wait on Graph for 20 minutes or more, so CI doesn't run it |
   | PowerShell 7 (`pwsh.exe`) | `CopilotAdoptionWorkbookComparisonScriptTests` |
 
   CI sets `REQUIRE_AZURITE=true`, so a missing Azurite fails the Azurite tests
