@@ -96,6 +96,23 @@ export function formatMinutes(t: TFunction, value: number | null | undefined): s
   return t('copilotInvestment.format.minutes', { value: formatNumber(value, { maximumFractionDigits: 1 }) });
 }
 
+/**
+ * The fewest people a figure may describe to a reader without See PII: the page's own group minimum, never below the
+ * portal's five (the server's `ReportScopeResolver.MinimumPeopleWithoutSeePii`).
+ */
+export function withheldMinimum(summary: { organisation?: { minGroupSize: number } | null }): number {
+  return Math.max(summary.organisation?.minGroupSize ?? 0, 5);
+}
+
+/** A figure withheld from a reader without See PII: a dash whose name says why - never a zero, a blank or "not available". */
+export function WithheldMark({ reason }: { reason: string }) {
+  return (
+    <span role="img" aria-label={reason} title={reason}>
+      {'\u2014'}
+    </span>
+  );
+}
+
 /** A UTC date or instant as a short date in the reader's language. */
 /**
  * A server date as a moment in UTC. The API sends the dates it reads from SQL without an offset ("2026-10-26T00:00:00"),

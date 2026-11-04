@@ -107,11 +107,11 @@ namespace Tests.UnitTests
             ["CopilotCostHealthAPIController.Get"] = Any,              // connection outcomes and timestamps only; no account or tenant identifiers
 
             ["CopilotInvestmentAPIController.Availability"] = Any,
-            ["CopilotInvestmentAPIController.Summary"] = Any,          // trims the people; a user filter or manager grouping needs See PII
+            ["CopilotInvestmentAPIController.Summary"] = Any,          // trims the people and any figure of fewer than 5 people; a user filter or manager grouping needs See PII
             ["CopilotInvestmentAPIController.Trend"] = Any,            // balance totals only, a reading of fewer than 5 people withheld; a user filter needs See PII
             ["CopilotInvestmentAPIController.People"] = Pii,
             ["CopilotInvestmentAPIController.Person"] = Pii,
-            ["CopilotInvestmentAPIController.ExportWorkbook"] = Any,   // trims the people sheet
+            ["CopilotInvestmentAPIController.ExportWorkbook"] = Any,   // trims the people sheet, and withholds what the summary does
             ["CopilotInvestmentSettingsAPIController.Get"] = Admin,    // the history names who changed what
             ["CopilotInvestmentSettingsAPIController.Save"] = Admin,
 

@@ -510,6 +510,13 @@ namespace Common.Entities.CopilotInvestment
                 Users = studioPeople.Count(p => p.Studio.Credits > 0),
                 Credits = Math.Round(studioPeople.Sum(p => p.Studio.Credits), 6),
                 HolderCredits = Math.Round(studioPeople.Where(p => p.Licensed).Sum(p => p.Studio.Credits), 6),
+                Contributors = new[]
+                {
+                    studioPeople.Count(p => Context.Matched(p) && p.Studio.Credits != 0),
+                    studioPeople.Count(p => p.Licensed && !Context.Matched(p) && p.Studio.Credits != 0),
+                    studioPeople.Count(p => !p.Licensed && p.Studio.Credits != 0),
+                },
+                PriorContributors = studioPeople.Count(p => p.Studio.PriorCredits != 0),
             };
             // A ledger that does not reach back over the whole previous period has no like-for-like comparison to offer.
             if (studio.PriorComplete)
@@ -525,6 +532,16 @@ namespace Common.Entities.CopilotInvestment
 
             var observedCredits = ObservedCredits(input);
             var holderIds = new HashSet<int>(holders.Select(h => h.UserId));
+            var peopleById = new Dictionary<int, CopilotInvestmentPerson>();
+            foreach (var person in people) peopleById[person.UserId] = person;
+            int BalancePart(CreditUserFact c)
+            {
+                if (c.UserId.HasValue && holderIds.Contains(c.UserId.Value)) return CopilotInvestmentWithholding.BalanceAnalysedHolders;
+                if (!c.UserId.HasValue || !peopleById.TryGetValue(c.UserId.Value, out var person)) return CopilotInvestmentWithholding.BalanceQuiet;
+                return person.Licensed ? CopilotInvestmentWithholding.BalanceOtherHolders : CopilotInvestmentWithholding.BalanceWithoutSeat;
+            }
+            var balanceContributors = new int[4];
+            foreach (var c in observedCredits.Where(c => (c.Credits ?? 0) != 0)) balanceContributors[BalancePart(c)]++;
             spend.Credits = new CopilotInvestmentCreditBalances
             {
                 ObservedUsers = observedCredits.Count,
@@ -532,6 +549,7 @@ namespace Common.Entities.CopilotInvestment
                 Credits = Math.Round(observedCredits.Sum(c => c.Credits ?? 0), 6),
                 HolderCredits = Math.Round(observedCredits.Where(c => c.UserId.HasValue && holderIds.Contains(c.UserId.Value)).Sum(c => c.Credits ?? 0), 6),
                 NonHolderCredits = Math.Round(observedCredits.Where(c => !c.UserId.HasValue || !holderIds.Contains(c.UserId.Value)).Sum(c => c.Credits ?? 0), 6),
+                Contributors = balanceContributors,
                 PeriodStatus = PeriodStatus(observedCredits),
                 OtherUnitUsers = observedCredits.Count(c => c.OtherUnitRows > 0),
                 UnknownAmountUsers = observedCredits.Count(c => c.UnknownConsumptionRows > 0),

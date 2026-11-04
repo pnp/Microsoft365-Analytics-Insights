@@ -94,9 +94,12 @@ namespace Common.Entities.CopilotInvestment
                 sheet.AddRow(words.W("exec.notAnalysed"), XlsxCell.Number(seats.NotAnalysedHolders), people, words.W("exec.notAnalysed.basis"));
             sheet.AddRow(words.W("exec.runRate"), seats.MonthlyRunRate, currency, words.W("exec.runRate.basis"));
             sheet.AddRow(words.W("exec.windowCost"), seats.WindowCost, currency, words.W("exec.windowCost.basis"));
-            sheet.AddRow(words.W("exec.modelledCost"), summary.Investment.ModelledMonthlyCost, currency, words.W("exec.modelledCost.basis"));
+            // A figure withheld from a reader without See PII says why in its own cell, never a blank or a zero.
+            var withheld = WithheldText(summary, words);
+            var costWithheld = summary.Investment.StudioCostWithheld;
+            sheet.AddRow(words.W("exec.modelledCost"), Shown(summary.Investment.ModelledMonthlyCost, costWithheld, withheld), currency, words.W("exec.modelledCost.basis"));
             sheet.AddRow(Indent + words.W("exec.ofSeats"), summary.Investment.MonthlySeatCost, currency, words.W("exec.ofSeats.basis"));
-            sheet.AddRow(Indent + words.W("exec.ofStudio"), summary.Investment.MonthlyStudioCost, currency, words.W("exec.ofStudio.basis"));
+            sheet.AddRow(Indent + words.W("exec.ofStudio"), Shown(summary.Investment.MonthlyStudioCost, costWithheld, withheld), currency, words.W("exec.ofStudio.basis"));
             sheet.AddRow(words.W("exec.active"), XlsxCell.Number(summary.Evidence.ActiveHolders), people, words.W("exec.active.basis"));
             sheet.AddRow(words.W("exec.activeShare"), summary.Evidence.ActiveShare.HasValue ? (object)XlsxCell.Percent(summary.Evidence.ActiveShare.Value) : null,
                 PercentUnit, words.W("exec.observed"));
@@ -107,19 +110,22 @@ namespace Common.Entities.CopilotInvestment
                 var name = words.Label(Words.Scenario, scenario.Scenario);
                 sheet.AddRow(words.W("exec.valueScenario", ("scenario", name)), scenario.MonthlyValue, currency,
                     words.W("exec.valueScenario.basis", ("minutes", words.Num(scenario.MinutesPerActiveDay)), ("realisation", words.Pct(scenario.Realisation, 0))));
-                sheet.AddRow(words.W("exec.roiScenario", ("scenario", name)), scenario.RoiMultiple, MultipleUnit, words.W("exec.roiScenario.basis"));
+                sheet.AddRow(words.W("exec.roiScenario", ("scenario", name)), Shown(scenario.RoiMultiple, costWithheld, withheld), MultipleUnit, words.W("exec.roiScenario.basis"));
             }
             if (summary.Path.Available)
-                sheet.AddRow(words.W("exec.gap"), summary.Path.MonthlyGap, currency, words.W("exec.gap.basis"));
-            sheet.AddRow(words.W("exec.breakEvenMinutes"), summary.BreakEven.MinutesPerActiveDay, words.W("unit.minutes"), words.W("exec.breakEvenMinutes.basis"));
-            sheet.AddRow(words.W("exec.margin"), summary.BreakEven.MarginOfSafety.HasValue ? (object)XlsxCell.Percent(summary.BreakEven.MarginOfSafety.Value) : null,
-                PercentUnit, words.W("exec.margin.basis"));
+                sheet.AddRow(words.W("exec.gap"), Shown(summary.Path.MonthlyGap, costWithheld, withheld), currency, words.W("exec.gap.basis"));
+            sheet.AddRow(words.W("exec.breakEvenMinutes"), Shown(summary.BreakEven.MinutesPerActiveDay, costWithheld, withheld), words.W("unit.minutes"),
+                words.W("exec.breakEvenMinutes.basis"));
+            sheet.AddRow(words.W("exec.margin"), Shown(summary.BreakEven.MarginOfSafety.HasValue ? (object)XlsxCell.Percent(summary.BreakEven.MarginOfSafety.Value) : null,
+                costWithheld, withheld), PercentUnit, words.W("exec.margin.basis"));
             sheet.AddRow(words.W("exec.seatDays"), summary.BreakEven.ActiveDaysPerMonthPerSeat, days, words.W("exec.baseAssumptions"));
-            sheet.AddRow(words.W("exec.studioCredits"), summary.Investment.Studio.Credits, credits, words.W("exec.studioCredits.basis"));
-            sheet.AddRow(words.W("exec.studioPrior"), summary.Investment.Studio.PriorCredits, credits,
-                summary.Investment.Studio.PriorCredits.HasValue ? words.W("exec.studioPrior.basis") : words.W("studio.notCompared"));
-            sheet.AddRow(words.W("exec.balances"), summary.Investment.Credits.Credits, credits, words.W("exec.balances.basis"));
-            sheet.AddRow(words.W("exec.balanceValue"), summary.Investment.Credits.BalanceValue, currency, words.W("exec.balanceValue.basis"));
+            var studio = summary.Investment.Studio;
+            sheet.AddRow(words.W("exec.studioCredits"), Shown(studio.Credits, studio.CreditsWithheld, withheld), credits, words.W("exec.studioCredits.basis"));
+            sheet.AddRow(words.W("exec.studioPrior"), Shown(studio.PriorCredits, studio.PriorCreditsWithheld, withheld), credits,
+                studio.PriorCredits.HasValue || studio.PriorCreditsWithheld ? words.W("exec.studioPrior.basis") : words.W("studio.notCompared"));
+            var balances = summary.Investment.Credits;
+            sheet.AddRow(words.W("exec.balances"), Shown(balances.Credits, balances.CreditsWithheld, withheld), credits, words.W("exec.balances.basis"));
+            sheet.AddRow(words.W("exec.balanceValue"), Shown(balances.BalanceValue, balances.CreditsWithheld, withheld), currency, words.W("exec.balanceValue.basis"));
             sheet.AddBlankRow();
 
             sheet.AddHeaderRow(words.W("exec.col.assessment"), string.Empty, words.W("col.code"), words.W("exec.col.finding"));
@@ -132,10 +138,17 @@ namespace Common.Entities.CopilotInvestment
             {
                 var meaning = ActionText(action, words);
                 var effect = action.Effect != null && words.Has(Words.Effect + action.Effect) ? words.Label(Words.Effect, action.Effect) : null;
-                sheet.AddRow(ActionTitle(action.Code, words), XlsxCell.Number(action.People), action.MonthlyAmount,
+                sheet.AddRow(ActionTitle(action.Code, words), XlsxCell.Number(action.People), Shown(action.MonthlyAmount, action.MonthlyAmountWithheld, withheld),
                     XlsxCell.Wrapped(effect == null ? meaning : effect + " " + meaning), action.Code);
             }
         }
+
+        /// <summary>What a cell withheld from a reader without See PII says instead of a figure: why, never a blank or a zero.</summary>
+        private static string WithheldText(CopilotInvestmentSummary summary, Words words) =>
+            words.T("copilotInvestment.trend.withheld",
+                ("count", words.Count(Math.Max(summary.Organisation?.MinGroupSize ?? 0, SmallPopulations.MinPeopleWithoutSeePii))));
+
+        private static object Shown(object value, bool withheld, string withheldText) => withheld ? withheldText : value;
 
         /// <summary>Who the figures cover: everyone, or the administrator's filter and the reader's own, in the reader's language.</summary>
         private static string Coverage(CopilotInvestmentSummary summary, Words words)

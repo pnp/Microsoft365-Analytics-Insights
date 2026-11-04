@@ -337,7 +337,7 @@ namespace Tests.UnitTests
             CopilotInvestmentGroupRow Cached(string label) => summary.Organisation.Groups.Single(g => g.Label == label);
             Assert.IsTrue(Cached("Legal").Withheld);
             Assert.IsFalse(Cached("Sales").Withheld, "The control: a reader with See PII sees every group large enough on its own.");
-            Assert.AreEqual(8057.25, summary.Investment.Credits.Credits, 1e-9, "The total every reader is given.");
+            Assert.AreEqual(8057.25, summary.Investment.Credits.Credits.Value, 1e-9, "The total every reader is given.");
 
             var trimmed = summary.WithoutIndividualData().Organisation;
             CopilotInvestmentGroupRow Trimmed(string label) => trimmed.Groups.Single(g => g.Label == label);
@@ -346,7 +346,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, Trimmed("Sales").Credits + Trimmed("Sales").Holders + Trimmed("Sales").ActiveHolders);
             Assert.IsNull(Trimmed("Sales").Cost);
             Assert.IsFalse(Trimmed("Finance").Withheld);
-            var residual = summary.Investment.Credits.Credits - trimmed.Groups.Where(g => !g.Withheld).Sum(g => g.Credits);
+            var residual = summary.Investment.Credits.Credits.Value - trimmed.Groups.Where(g => !g.Withheld).Sum(g => g.Credits);
             Assert.AreNotEqual(7777.25, residual, 1e-6, "The total less the groups shown is two groups' readings together, six people.");
             Assert.IsFalse(JsonConvert.SerializeObject(summary.WithoutIndividualData()).Contains("7777.25"));
 
@@ -424,6 +424,292 @@ namespace Tests.UnitTests
             var few = new CopilotInvestmentConcentration { QuadrantMedianCredits = 40 };
             few.Quadrants.Add(new CopilotInvestmentQuadrant { Key = CopilotInvestmentCalculator.QuadrantKeys.HighSpendStrongEvidence, People = 3, Credits = 90 });
             Assert.IsNull(few.WithoutSmallPopulations(5).QuadrantMedianCredits, "Three people's median is one of their readings.");
+        }
+
+        /// <summary>A figure as the summary's JSON writes it, to show that a withheld one never leaves the server.</summary>
+        private static string Json(double figure) => JsonConvert.ToString(figure);
+
+        [TestMethod]
+        public void StudioChargesOfOneToFourSeatHolders_AreWithheldWithEverythingThatGivesThemBack_WhileFiveAreShown()
+        {
+            foreach (var billed in new[] { 1, 4, 5 })
+            {
+                // Twenty analysed holders; the first ones used Copilot Studio, each billed a distinctive 1234.5 credits.
+                var people = Enumerable.Range(1, 20)
+                    .Select(id => Holder(id, 10, studio: id <= billed ? new StudioUserFact { UserId = id, Credits = 1234.5 } : null)).ToList();
+                var summary = CopilotInvestmentCalculator.Calculate(Input(people, Assumptions()));
+                var total = 1234.5 * billed;
+                var cached = new
+                {
+                    summary.Investment.ModelledMonthlyCost,
+                    summary.Investment.ModelledWindowCost,
+                    summary.Investment.MonthlyStudioCost,
+                    Net = summary.Value.Scenarios.Single(s => s.Scenario == CopilotInvestmentScenarios.Base).Net,
+                };
+                Assert.AreEqual(total, summary.Investment.Studio.Credits.Value, 1e-9, "The control: a reader with See PII is given the total.");
+                Assert.IsTrue(cached.MonthlyStudioCost > 0);
+
+                var trimmed = summary.WithoutIndividualData();
+                var spend = trimmed.Investment;
+                var baseCase = trimmed.Value.Scenarios.Single(s => s.Scenario == CopilotInvestmentScenarios.Base);
+                var band = trimmed.Cohorts.Single(c => c.Holders > 0);
+                var json = JsonConvert.SerializeObject(trimmed);
+                if (billed < 5)
+                {
+                    Assert.IsTrue(spend.Studio.CreditsWithheld && spend.Studio.HolderCreditsWithheld, billed + " people billed");
+                    Assert.IsNull(spend.Studio.Credits);
+                    Assert.IsNull(spend.Studio.HolderCredits);
+                    Assert.IsNull(spend.Studio.WindowValue);
+                    Assert.IsNull(spend.Studio.HolderWindowValue);
+                    Assert.AreEqual(billed, spend.Studio.Users, "How many is a count, not anyone's charges.");
+
+                    // The seats beside the Studio part are the holders times the seat price, so the cost goes with it, and so does
+                    // everything computed from the cost: with the value beside them, each would give it back.
+                    Assert.IsTrue(spend.StudioCostWithheld);
+                    Assert.IsNull(spend.MonthlyStudioCost);
+                    Assert.IsNull(spend.ModelledMonthlyCost);
+                    Assert.IsNull(spend.ModelledWindowCost);
+                    Assert.AreEqual(summary.Investment.MonthlySeatCost, spend.MonthlySeatCost, "Seats are nobody's own charges.");
+                    Assert.IsTrue(trimmed.Value.Scenarios.All(s => s.RoiMultiple == null && s.Net == null));
+                    Assert.AreEqual(summary.Value.Scenarios.Single(s => s.Scenario == CopilotInvestmentScenarios.Base).Value, baseCase.Value, "The value is nobody's charges.");
+                    Assert.IsNull(trimmed.BreakEven.MinutesPerActiveDay);
+                    Assert.IsNull(trimmed.BreakEven.MarginOfSafety);
+                    Assert.IsTrue(trimmed.Sensitivity.Grid.All(g => g.RoiMultiple == null));
+                    Assert.IsNull(trimmed.Sensitivity.RoiBaseHourlyMinus20);
+                    Assert.IsNull(trimmed.Path.MonthlyCost);
+                    Assert.IsNull(trimmed.Path.MonthlyGap);
+                    Assert.IsNull(trimmed.Path.MinutesNeeded);
+                    Assert.IsTrue(band.StudioWithheld && band.CostWithheld && !band.Withheld);
+                    Assert.IsNull(band.StudioCredits);
+                    Assert.IsNull(band.Cost);
+                    Assert.IsNull(band.RoiBase);
+                    Assert.IsNotNull(band.ValueBase, "The band's activity is twenty people's.");
+                    Assert.IsTrue(trimmed.Organisation.Groups.Single().Withheld, "The one group's cost would be the seats and those people's charges.");
+                    Assert.IsFalse(trimmed.Findings.Any(f => f.Code == CopilotInvestmentFindingCodes.ValueRange || f.Code == CopilotInvestmentFindingCodes.BreakEven
+                        || f.Code == CopilotInvestmentFindingCodes.StudioTrend));
+                    foreach (var figure in new[] { total, Math.Round(total * 0.02, 2), cached.ModelledMonthlyCost.Value, cached.ModelledWindowCost.Value, cached.MonthlyStudioCost.Value, cached.Net.Value })
+                        Assert.IsFalse(json.Contains(Json(figure)), billed + " people billed: " + Json(figure) + " left the server.");
+                }
+                else
+                {
+                    Assert.IsFalse(spend.Studio.CreditsWithheld || spend.Studio.HolderCreditsWithheld || spend.StudioCostWithheld || band.StudioWithheld || band.CostWithheld);
+                    Assert.AreEqual(total, spend.Studio.Credits.Value, 1e-9);
+                    Assert.AreEqual(cached.MonthlyStudioCost, spend.MonthlyStudioCost);
+                    Assert.AreEqual(cached.ModelledMonthlyCost, spend.ModelledMonthlyCost);
+                    Assert.AreEqual(cached.Net, baseCase.Net);
+                    Assert.IsNotNull(baseCase.RoiMultiple);
+                    Assert.IsTrue(trimmed.Findings.Any(f => f.Code == CopilotInvestmentFindingCodes.StudioTrend));
+                    Assert.IsFalse(trimmed.Organisation.Groups.Single().Withheld);
+                }
+
+                // The cached summary is the one a reader with See PII is given: never edited.
+                Assert.AreEqual(total, summary.Investment.Studio.Credits.Value, 1e-9);
+                Assert.AreEqual(cached.ModelledMonthlyCost, summary.Investment.ModelledMonthlyCost);
+                Assert.AreEqual(cached.Net, summary.Value.Scenarios.Single(s => s.Scenario == CopilotInvestmentScenarios.Base).Net);
+                Assert.AreEqual(total, summary.Cohorts.Single(c => c.Holders > 0).StudioCredits.Value, 1e-9);
+                Assert.IsFalse(summary.Organisation.Groups.Single().Withheld);
+                Assert.IsFalse(summary.Investment.StudioCostWithheld);
+            }
+        }
+
+        [TestMethod]
+        public void BalancesOfOneToFourPeople_AreWithheldFromAReaderWithoutSeePii_WhileFiveAreShown()
+        {
+            foreach (var holding in new[] { 1, 4, 5 })
+            {
+                var people = Enumerable.Range(1, 20).Select(id => Holder(id, 10, credit: id <= holding ? Balance(id, 2468.25) : null)).ToList();
+                var summary = CopilotInvestmentCalculator.Calculate(Input(people, Assumptions()));
+                var total = 2468.25 * holding;
+                Assert.AreEqual(total, summary.Investment.Credits.Credits.Value, 1e-9, "The control: a reader with See PII is given the total.");
+                Assert.IsNotNull(summary.Sensitivity.RoiBaseIfBalancesMonthly);
+
+                var trimmed = summary.WithoutIndividualData();
+                var balances = trimmed.Investment.Credits;
+                var band = trimmed.Cohorts.Single(c => c.Holders > 0);
+                var json = JsonConvert.SerializeObject(trimmed);
+                if (holding < 5)
+                {
+                    Assert.IsTrue(balances.CreditsWithheld && balances.HolderCreditsWithheld, holding + " people with a balance");
+                    Assert.IsNull(balances.Credits);
+                    Assert.IsNull(balances.BalanceValue);
+                    Assert.IsNull(balances.HolderCredits);
+                    Assert.AreEqual(holding, balances.ConsumingUsers, "How many is a count, not anyone's balance.");
+                    Assert.IsNull(trimmed.Sensitivity.RoiBaseIfBalancesMonthly, "The what-if adds those balances to a cost the reader is given.");
+                    Assert.IsTrue(band.CreditsWithheld);
+                    Assert.IsNull(band.Credits);
+                    Assert.IsTrue(trimmed.Organisation.Groups.Single().Withheld, "The one group adds up to the withheld total.");
+                    Assert.IsFalse(trimmed.Findings.Any(f => f.Code == CopilotInvestmentFindingCodes.BalancesUnverified));
+                    Assert.IsFalse(trimmed.Investment.StudioCostWithheld, "Balances are never in the cost.");
+                    foreach (var figure in new[] { total, Math.Round(total * 0.01, 2) })
+                        Assert.IsFalse(json.Contains(Json(figure)), holding + " people with a balance: " + Json(figure) + " left the server.");
+                }
+                else
+                {
+                    Assert.IsFalse(balances.CreditsWithheld || balances.HolderCreditsWithheld || band.CreditsWithheld);
+                    Assert.AreEqual(total, balances.Credits.Value, 1e-9);
+                    Assert.AreEqual(total, balances.HolderCredits.Value, 1e-9);
+                    Assert.AreEqual(summary.Sensitivity.RoiBaseIfBalancesMonthly, trimmed.Sensitivity.RoiBaseIfBalancesMonthly);
+                    Assert.AreEqual(total, band.Credits.Value, 1e-9);
+                }
+                Assert.AreEqual(total, summary.Investment.Credits.Credits.Value, 1e-9, "The cached summary is never edited.");
+                Assert.AreEqual(total, summary.Cohorts.Single(c => c.Holders > 0).Credits.Value, 1e-9);
+            }
+        }
+
+        [TestMethod]
+        public void TheFiguresOfOneToFourPeopleWithoutASeat_AreWithheldFromAReaderWithoutSeePii_WhileFiveAreShown()
+        {
+            foreach (var metered in new[] { 1, 4, 5 })
+            {
+                var people = Enumerable.Range(1, 20).Select(id => Holder(id, 10)).ToList();
+                people.AddRange(Enumerable.Range(101, metered).Select(id => new CopilotInvestmentPerson
+                {
+                    UserId = id,
+                    Department = "Sales",
+                    ActiveDays = 7,
+                    Studio = new StudioUserFact { UserId = id, Credits = 1357.25 },
+                    Credit = Balance(id, 975.5),
+                }));
+                var summary = CopilotInvestmentCalculator.Calculate(Input(people, Assumptions()));
+                Assert.AreEqual(1357.25 * metered, summary.Metered.StudioCredits.Value, 1e-9, "The control: a reader with See PII is given them.");
+
+                var trimmed = summary.WithoutIndividualData();
+                var json = JsonConvert.SerializeObject(trimmed);
+                if (metered < 5)
+                {
+                    Assert.IsTrue(trimmed.Metered.StudioWithheld && trimmed.Metered.CreditsWithheld && trimmed.Metered.ActiveDaysWithheld);
+                    Assert.IsNull(trimmed.Metered.StudioCredits);
+                    Assert.IsNull(trimmed.Metered.StudioWindowValue);
+                    Assert.IsNull(trimmed.Metered.Credits);
+                    Assert.IsNull(trimmed.Metered.CreditBalanceValue);
+                    Assert.IsNull(trimmed.Metered.ActiveDays);
+                    Assert.IsTrue(trimmed.Evidence.UnlicensedActiveDaysWithheld);
+                    Assert.IsNull(trimmed.Evidence.UnlicensedActiveDays);
+                    Assert.AreEqual(metered, trimmed.Metered.People);
+                    Assert.AreEqual(metered, trimmed.Metered.StudioUsers);
+                    // They are everyone billed and everyone with a balance, so the totals are theirs too.
+                    Assert.IsNull(trimmed.Investment.Studio.Credits);
+                    Assert.IsNull(trimmed.Investment.Credits.Credits);
+                    Assert.IsNull(trimmed.Investment.Credits.NonHolderCredits);
+                    Assert.IsFalse(trimmed.Investment.StudioCostWithheld, "None of them is in the cost.");
+                    foreach (var figure in new[] { 1357.25 * metered, 975.5 * metered, Math.Round(1357.25 * metered * 0.02, 2), Math.Round(975.5 * metered * 0.01, 2) })
+                        Assert.IsFalse(json.Contains(Json(figure)), metered + " people without a seat: " + Json(figure) + " left the server.");
+                }
+                else
+                {
+                    Assert.IsFalse(trimmed.Metered.StudioWithheld || trimmed.Metered.CreditsWithheld || trimmed.Metered.ActiveDaysWithheld);
+                    Assert.AreEqual(1357.25 * metered, trimmed.Metered.StudioCredits.Value, 1e-9);
+                    Assert.AreEqual(975.5 * metered, trimmed.Metered.Credits.Value, 1e-9);
+                    Assert.AreEqual(7L * metered, trimmed.Metered.ActiveDays);
+                    Assert.AreEqual(7L * metered, trimmed.Evidence.UnlicensedActiveDays);
+                }
+                Assert.IsFalse(summary.Metered.StudioWithheld, "The cached summary is never edited.");
+                Assert.AreEqual(7L * metered, summary.Metered.ActiveDays);
+            }
+        }
+
+        [TestMethod]
+        public void ATotalLessThePartsShownBesideIt_NeverGivesBackAWithheldPart()
+        {
+            // Ten analysed holders, each billed 100 Studio credits and holding a balance of 50; two people without a seat, each
+            // billed 777.75 and holding 333.25. The two are too few to be shown on their own.
+            var people = Enumerable.Range(1, 10)
+                .Select(id => Holder(id, 10, credit: Balance(id, 50), studio: new StudioUserFact { UserId = id, Credits = 100 })).ToList();
+            people.AddRange(Enumerable.Range(101, 2).Select(id => new CopilotInvestmentPerson
+            {
+                UserId = id,
+                Department = "Sales",
+                ActiveDays = 3,
+                Studio = new StudioUserFact { UserId = id, Credits = 777.75 },
+                Credit = Balance(id, 333.25),
+            }));
+            var summary = CopilotInvestmentCalculator.Calculate(Input(people, Assumptions()));
+            var trimmed = summary.WithoutIndividualData();
+            var json = JsonConvert.SerializeObject(trimmed);
+            Assert.IsNull(trimmed.Metered.StudioCredits);
+            Assert.IsNull(trimmed.Metered.Credits);
+
+            // Studio: the total less the holders' part would be the two people's. The holders' part is in the cost the return
+            // is measured against, so the total is withheld instead, and the return is kept.
+            Assert.IsTrue(trimmed.Investment.Studio.CreditsWithheld);
+            Assert.IsNull(trimmed.Investment.Studio.Credits);
+            Assert.AreEqual(1000, trimmed.Investment.Studio.HolderCredits.Value, 1e-9);
+            Assert.IsFalse(trimmed.Investment.StudioCostWithheld);
+            Assert.AreEqual(summary.Investment.ModelledMonthlyCost, trimmed.Investment.ModelledMonthlyCost);
+            Assert.IsNotNull(trimmed.Value.Scenarios.Single(s => s.Scenario == CopilotInvestmentScenarios.Base).RoiMultiple);
+            Assert.IsTrue(trimmed.Organisation.Groups.Single().Withheld, "The groups add up to the withheld total.");
+
+            // Balances: the total stays, so the holders' part goes with the two people's, and the bands that add up to it.
+            Assert.AreEqual(500 + 666.5, trimmed.Investment.Credits.Credits.Value, 1e-9);
+            Assert.IsNull(trimmed.Investment.Credits.HolderCredits);
+            Assert.IsNull(trimmed.Investment.Credits.NonHolderCredits);
+            Assert.IsTrue(trimmed.Cohorts.Single(c => c.Holders > 0).CreditsWithheld, "Ten holders' balances, but they add up to the withheld part.");
+            Assert.IsNull(trimmed.Sensitivity.RoiBaseIfBalancesMonthly);
+
+            // (The holders' own 500 is null above: as a number it is also a cell of the sensitivity grid, so it is not searched for.)
+            foreach (var figure in new[] { 1555.5, 1000 + 1555.5, 666.5, Math.Round(1555.5 * 0.02, 2) })
+                Assert.IsFalse(json.Contains(Json(figure)), Json(figure) + " left the server.");
+            Assert.AreEqual(1000 + 1555.5, summary.Investment.Studio.Credits.Value, 1e-9, "The cached summary is never edited.");
+            Assert.AreEqual(500, summary.Investment.Credits.HolderCredits.Value, 1e-9);
+        }
+
+        [TestMethod]
+        public void AnAdoptionBandOfOneToFourHolders_IsWithheldWithEnoughOthers_WhileFiveAreShown()
+        {
+            foreach (var champions in new[] { 1, 4, 5 })
+            {
+                var people = Enumerable.Range(1, 10).Select(id => Holder(id, 10, "Established")).ToList();
+                people.AddRange(Enumerable.Range(11, champions).Select(id => Holder(id, 19, "Champion")));
+                people.AddRange(Enumerable.Range(31, 6).Select(id => Holder(id, 3, "Developing")));
+                var summary = CopilotInvestmentCalculator.Calculate(Input(people, Assumptions()));
+                var trimmed = summary.WithoutIndividualData();
+                CopilotInvestmentCohort Band(string band) => trimmed.Cohorts.Single(c => c.Band == band);
+
+                Assert.AreEqual(champions, Band("Champion").Holders, "How many is a count, never withheld.");
+                Assert.IsFalse(Band("Established").Withheld);
+                Assert.AreEqual(100L, Band("Established").ActiveDays);
+                if (champions < 5)
+                {
+                    var champion = Band("Champion");
+                    Assert.IsTrue(champion.Withheld && champion.CostWithheld, champions + " champions");
+                    Assert.IsNull(champion.ActiveDays);
+                    Assert.IsNull(champion.MedianActiveDays);
+                    Assert.IsNull(champion.ShareOfActiveDays);
+                    Assert.IsNull(champion.ValueBase);
+                    Assert.IsNull(champion.Cost);
+                    Assert.IsNull(champion.RoiBase);
+                    Assert.IsTrue(Band("Developing").Withheld, "The fewest holders of the rest: withheld with it.");
+                    // The report's total less the bands shown is the withheld bands together: at least five holders.
+                    var behind = trimmed.Cohorts.Where(c => c.Withheld).Sum(c => c.Holders);
+                    Assert.IsTrue(behind >= 5);
+                    Assert.AreEqual(trimmed.Evidence.TotalActiveDays - trimmed.Cohorts.Where(c => !c.Withheld).Sum(c => c.ActiveDays ?? 0), 19L * champions + 18L);
+                }
+                else
+                {
+                    Assert.IsFalse(trimmed.Cohorts.Any(c => c.Withheld || c.CostWithheld));
+                    Assert.AreEqual(19L * champions, Band("Champion").ActiveDays);
+                }
+                Assert.AreEqual(19L * champions, summary.Cohorts.Single(c => c.Band == "Champion").ActiveDays, "The cached summary is never edited.");
+            }
+        }
+
+        [TestMethod]
+        public void TheWorkbookWithoutSeePii_SaysWhyWhereThePageWithholds_AndCarriesNoWithheldFigure()
+        {
+            var people = Enumerable.Range(1, 20)
+                .Select(id => Holder(id, 10, studio: id == 1 ? new StudioUserFact { UserId = id, Credits = 4321.75 } : null)).ToList();
+            var summary = CopilotInvestmentCalculator.Calculate(Input(people, Assumptions()));
+            var withheld = "Not shown: it could single out fewer than 5 people";
+
+            var full = WorkbookParts(CopilotInvestmentWorkbook.Build(summary, includeIndividualData: true, buildLabel: "test"));
+            var aggregates = WorkbookParts(CopilotInvestmentWorkbook.Build(summary.WithoutIndividualData(), includeIndividualData: false, buildLabel: "test"));
+
+            StringAssert.Contains(full["Executive summary"], ">4321.75<", "The control: a reader with See PII is given the figure.");
+            Assert.IsFalse(full.Values.Any(xml => xml.Contains(withheld)));
+            foreach (var sheet in new[] { "Executive summary", "Value and break-even", "Path and concentration", "Adoption cohorts", "Credits and sources" })
+                StringAssert.Contains(aggregates[sheet], withheld, sheet);
+            foreach (var figure in new[] { 4321.75, Math.Round(4321.75 * 0.02, 2), summary.Investment.ModelledMonthlyCost.Value, summary.Investment.MonthlyStudioCost.Value })
+                Assert.IsFalse(aggregates.Values.Any(xml => xml.Contains(">" + figure.ToString(CultureInfo.InvariantCulture) + "<")), figure + " was written.");
         }
 
         [TestMethod]

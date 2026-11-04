@@ -243,6 +243,97 @@ async function reopenedDialog(): Promise<HTMLElement> {
 }
 
 describe('CopilotInvestmentPage', () => {
+  /**
+   * What a reader without See PII is given when one to four people are behind the Copilot Studio, balance, band and metered
+   * figures: those figures null with their flags, and the cost and everything worked out from it withheld with the Studio part.
+   */
+  function withheldSummary(): CopilotInvestmentSummary {
+    const base = summary();
+    return summary({
+      individualDataHidden: true,
+      investment: {
+        ...base.investment,
+        studio: {
+          ...base.investment.studio, credits: null, creditsWithheld: true, holderCredits: null, holderCreditsWithheld: true,
+          windowValue: null, holderWindowValue: null, priorCredits: null, priorCreditsWithheld: true,
+        },
+        credits: {
+          ...base.investment.credits, credits: null, creditsWithheld: true, holderCredits: null, holderCreditsWithheld: true,
+          nonHolderCredits: null, nonHolderCreditsWithheld: true, balanceValue: null,
+        },
+        modelledWindowCost: null,
+        modelledMonthlyCost: null,
+        monthlyStudioCost: null,
+        studioCostWithheld: true,
+      },
+      value: { ...base.value, scenarios: base.value.scenarios.map((s) => ({ ...s, roiMultiple: null, net: null })) },
+      breakEven: { ...base.breakEven, minutesPerActiveDay: null, marginOfSafety: null },
+      sensitivity: {
+        grid: base.sensitivity.grid.map((g) => ({ ...g, roiMultiple: null })),
+        roiBaseHourlyMinus20: null, roiBaseHourlyPlus20: null, roiBaseIfBalancesMonthly: null, roiBaseAfterReclaim: null,
+      },
+      path: { ...base.path, monthlyCost: null, monthlyGap: null, minutesNeeded: null, roiAfterReclaim: null },
+      cohorts: [
+        { band: 'Champion', holders: 3, medianActiveDays: null, activeDays: null, shareOfHolders: 0.01, shareOfActiveDays: null, cost: null, valueBase: null,
+          roiBase: null, credits: null, studioCredits: null, withheld: true, costWithheld: true, creditsWithheld: true, studioWithheld: true },
+        { band: 'Established', holders: 120, medianActiveDays: 9, activeDays: 1080, shareOfHolders: 0.5, shareOfActiveDays: 0.6, cost: null, valueBase: 6750,
+          roiBase: null, credits: 4100, studioCredits: null, costWithheld: true, studioWithheld: true },
+      ],
+      metered: {
+        ...base.metered, activeDays: null, activeDaysWithheld: true, studioCredits: null, studioWindowValue: null, studioWithheld: true,
+        credits: null, creditBalanceValue: null, creditsWithheld: true,
+      },
+      actions: [
+        { ...base.actions[0], roiBaseAfter: null },
+        { code: 'licenceMeteredHeavy', people: 2, monthlyAmount: null, monthlyAmountWithheld: true, credits: null, roiBaseAfter: null, metric: null, signal: null,
+          flag: 'meteredAboveSeat', effect: 'meteredSpend', assumesMonthlyBalances: false },
+      ],
+      findings: base.findings.filter((f) => f.code !== 'valueRange'),
+    });
+  }
+
+  it('says a figure withheld from a reader without See PII is withheld, never "not available" or zero', async () => {
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(withheldSummary());
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    const fromCost = 'Not shown: it is worked out from a modelled cost whose Copilot Studio part could single out fewer than 5 people';
+    const withheld = 'Not shown: it could single out fewer than 5 people';
+    expect(await screen.findByText(/^The return is not shown: the modelled cost it is measured against includes Copilot Studio charges/)).toBeInTheDocument();
+    expect(screen.getByText('Not shown: its Copilot Studio part could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.getAllByText(fromCost)).toHaveLength(3);
+    expect(screen.getAllByText(withheld)).toHaveLength(2);
+    expect(screen.getByText('Amount not shown: it would give back Copilot Studio charges that could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.getByText(/Reclaiming the 38 idle licences that are safe to reclaim frees €1,140 a month of licence cost\. A cash/)).toBeInTheDocument();
+    expect(screen.queryByText(/Not available/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/clears its modelled cost|more than their modelled cost/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Value & break-even' }));
+    const scenarios = await screen.findByRole('table', { name: 'Three scenarios' });
+    expect(within(scenarios).getAllByRole('img', { name: fromCost })).toHaveLength(6);
+    const bands = screen.getByRole('table', { name: 'By adoption band' });
+    expect(within(bands).getAllByRole('img', { name: withheld })).toHaveLength(10);
+    expect(within(bands).getByText('4,100')).toBeInTheDocument();
+    expect(screen.queryByText(/Not available/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Credits & sources' }));
+    expect(await screen.findAllByText(withheld)).toHaveLength(2);
+  });
+
+  it('says what is withheld in Spanish too', async () => {
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(withheldSummary());
+    renderWithProvider(<CopilotInvestmentPage />, { language: 'es', access: { administration: false, seePii: false } });
+
+    expect(await screen.findByText(/^No se muestra la rentabilidad: el coste modelado con el que se compara incluye cargos de Copilot Studio/)).toBeInTheDocument();
+    expect(screen.getByText('No se muestra: su parte de Copilot Studio podría identificar a menos de 5 personas')).toBeInTheDocument();
+    expect(screen.getAllByText('No se muestra: se calcula con un coste modelado cuya parte de Copilot Studio podría identificar a menos de 5 personas')).toHaveLength(3);
+    expect(screen.getAllByText('No se muestra: podría identificar a menos de 5 personas')).toHaveLength(2);
+    expect(screen.getByText('Importe no mostrado: revelaría cargos de Copilot Studio que podrían identificar a menos de 5 personas')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Valor y umbral de rentabilidad' }));
+    const bands = await screen.findByRole('table', { name: 'Por nivel de adopción' });
+    expect(within(bands).getAllByRole('img', { name: 'No se muestra: podría identificar a menos de 5 personas' })).toHaveLength(10);
+  });
+
   it('shows a quadrant withheld from a reader without See PII by its count alone, never a zero', async () => {
     const base = summary();
     vi.mocked(fetchInvestmentSummary).mockResolvedValue(

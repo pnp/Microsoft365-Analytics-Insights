@@ -29,6 +29,7 @@ import {
   formatSignedMoney,
   toneColour,
   trustText,
+  withheldMinimum,
 } from './investmentShared';
 
 const useStyles = makeStyles({
@@ -119,14 +120,19 @@ function headline(summary: CopilotInvestmentSummary, t: TFunction): KpiDefinitio
   const modelled = t('copilotInvestment.badge.modelled');
   const cost = spend.modelledMonthlyCost;
   const net = (monthly: number | undefined): number | null => (monthly === undefined || cost === null ? null : monthly - cost);
+  // Without See PII, a cost carrying one to four people's Copilot Studio charges is withheld with everything worked out from it.
+  const costWithheld = spend.studioCostWithheld === true;
+  const count = formatNumber(withheldMinimum(summary));
+  const fromCost = t('copilotInvestment.withheld.fromCost', { count });
   const items: KpiDefinition[] = [];
 
   items.push({
     key: 'cost',
     label: t('copilotInvestment.kpi.cost.label'),
     value: cost !== null ? perMonth(t, formatMoney(cost, currency)) : '\u2014',
-    hint:
-      cost === null
+    hint: costWithheld
+      ? t('copilotInvestment.withheld.cost', { count })
+      : cost === null
         ? t('copilotInvestment.kpi.runRate.missing')
         : spend.monthlyStudioCost !== null
           ? t('copilotInvestment.kpi.cost.hint', { seats: formatMoney(spend.monthlySeatCost, currency), studio: formatMoney(spend.monthlyStudioCost, currency) })
@@ -164,8 +170,9 @@ function headline(summary: CopilotInvestmentSummary, t: TFunction): KpiDefinitio
     key: 'net',
     label: t('copilotInvestment.kpi.net.label'),
     value: netBase !== null ? perMonth(t, formatSignedMoney(netBase, currency)) : '\u2014',
-    hint:
-      netBase !== null && conservative && upside
+    hint: costWithheld
+      ? fromCost
+      : netBase !== null && conservative && upside
         ? t('copilotInvestment.kpi.net.hint', {
             low: formatSignedMoney(net(conservative.monthlyValue), currency),
             high: formatSignedMoney(net(upside.monthlyValue), currency),
@@ -183,13 +190,14 @@ function headline(summary: CopilotInvestmentSummary, t: TFunction): KpiDefinitio
   items.push({
     key: 'roi',
     label: t('copilotInvestment.kpi.roi.label'),
-    value: base ? formatMultiple(t, base.roiMultiple) : '\u2014',
-    hint:
-      base && conservative && upside
+    value: base && !costWithheld ? formatMultiple(t, base.roiMultiple) : '\u2014',
+    hint: costWithheld
+      ? fromCost
+      : base && conservative && upside
         ? t('copilotInvestment.kpi.roi.hint', { low: formatMultiple(t, conservative.roiMultiple), high: formatMultiple(t, upside.roiMultiple) })
         : t('copilotInvestment.kpi.value.missing'),
     modelledBadge: modelled,
-    tone: base ? roiTone(conservative?.roiMultiple ?? null, base.roiMultiple) : 'neutral',
+    tone: base && !costWithheld ? roiTone(conservative?.roiMultiple ?? null, base.roiMultiple) : 'neutral',
     info: {
       what: t('copilotInvestment.kpi.roi.what'),
       how: t('copilotInvestment.kpi.roi.how'),
@@ -203,8 +211,9 @@ function headline(summary: CopilotInvestmentSummary, t: TFunction): KpiDefinitio
     key: 'breakEven',
     label: t('copilotInvestment.kpi.breakEven.label'),
     value: breakEven.available && breakEven.minutesPerActiveDay !== null ? formatMinutes(t, breakEven.minutesPerActiveDay) : '\u2014',
-    hint:
-      breakEven.available && breakEven.minutesPerActiveDay !== null
+    hint: costWithheld
+      ? fromCost
+      : breakEven.available && breakEven.minutesPerActiveDay !== null
         ? t('copilotInvestment.kpi.breakEven.hint', { assumed: formatMinutes(t, assumedMinutes), margin: formatShare(breakEven.marginOfSafety) })
         : t('copilotInvestment.kpi.value.missing'),
     modelledBadge: modelled,
@@ -273,12 +282,13 @@ function spendSources(summary: CopilotInvestmentSummary, t: TFunction): KpiDefin
   ];
 
   const credits = summary.investment.credits;
+  const withheld = t('copilotInvestment.trend.withheld', { count: formatNumber(withheldMinimum(summary)) });
   if (summary.sources.credits.hasData) {
     items.push({
       key: 'balances',
       label: t('copilotInvestment.kpi.balances.label'),
-      value: formatCredits(credits.credits),
-      hint: t('copilotInvestment.kpi.balances.hint', { consumers: formatNumber(credits.consumingUsers) }),
+      value: credits.creditsWithheld ? '\u2014' : formatCredits(credits.credits),
+      hint: credits.creditsWithheld ? withheld : t('copilotInvestment.kpi.balances.hint', { consumers: formatNumber(credits.consumingUsers) }),
       info: {
         what: t('copilotInvestment.kpi.balances.what'),
         how: t('copilotInvestment.kpi.balances.how'),
@@ -288,18 +298,21 @@ function spendSources(summary: CopilotInvestmentSummary, t: TFunction): KpiDefin
   }
 
   const studio = summary.investment.studio;
-  if (summary.sources.studio.hasData || studio.credits > 0) {
+  if (summary.sources.studio.hasData || (studio.credits ?? 0) > 0 || studio.creditsWithheld) {
     const days = formatNumber(summary.windowDays);
     items.push({
       key: 'studio',
       label: t('copilotInvestment.kpi.studio.label'),
-      value: formatCredits(studio.credits),
-      hint:
-        studio.priorCredits === null
-          ? t('copilotInvestment.kpi.studio.hintNotComparable', { days })
-          : studio.priorCredits > 0
-            ? t('copilotInvestment.kpi.studio.hint', { prior: formatCredits(studio.priorCredits), days })
-            : t('copilotInvestment.kpi.studio.hintNoPrior', { days }),
+      value: studio.creditsWithheld ? '\u2014' : formatCredits(studio.credits),
+      hint: studio.creditsWithheld
+        ? withheld
+        : studio.priorCreditsWithheld
+          ? t('copilotInvestment.kpi.studio.hintPriorWithheld', { days, count: formatNumber(withheldMinimum(summary)) })
+          : studio.priorCredits === null
+            ? t('copilotInvestment.kpi.studio.hintNotComparable', { days })
+            : studio.priorCredits > 0
+              ? t('copilotInvestment.kpi.studio.hint', { prior: formatCredits(studio.priorCredits), days })
+              : t('copilotInvestment.kpi.studio.hintNoPrior', { days }),
       info: {
         what: t('copilotInvestment.kpi.studio.what'),
         how: t('copilotInvestment.kpi.studio.how'),
@@ -320,6 +333,9 @@ function verdict(summary: CopilotInvestmentSummary, t: TFunction): { text: strin
       : { text: t('copilotInvestment.exec.verdict.missing', { count: formatNumber(value.missing.length) }), tone: 'neutral' };
   }
   const scenarios = Object.fromEntries(value.scenarios.map((s) => [s.scenario, s]));
+  if (summary.investment.studioCostWithheld) {
+    return { text: t('copilotInvestment.exec.verdict.withheld', { count: formatNumber(withheldMinimum(summary)) }), tone: 'neutral' };
+  }
   const path = summary.path;
   const gap = path.monthlyGap ?? 0;
   const values = {
@@ -372,6 +388,11 @@ function ActionCard({ action, summary, navigation, canSeePii }: {
           {amount}
         </Text>
       )}
+      {action.monthlyAmountWithheld && (
+        <Text size={200} className={styles.muted}>
+          {t('copilotInvestment.action.amountWithheld', { count: formatNumber(withheldMinimum(summary)) })}
+        </Text>
+      )}
       {action.roiBaseAfter !== null && (
         <Text size={200}>{t('copilotInvestment.action.reclaimIdle.after', { roi: formatMultiple(t, action.roiBaseAfter) })}</Text>
       )}
@@ -413,9 +434,13 @@ function PathCard({ summary, navigation }: { summary: CopilotInvestmentSummary; 
   const path = summary.path;
   const currency = summary.investment.currency;
   const lines: { key: string; tone: string; text: string }[] = [];
+  const costWithheld = summary.investment.studioCostWithheld === true;
   if (path.available) {
     const gap = path.monthlyGap ?? 0;
-    if (gap > 0 && path.extraActiveDaysPerMonth !== null) {
+    if (costWithheld) {
+      // The gap, and the days and minutes that close it, are worked out from the withheld cost.
+      lines.push({ key: 'gap', tone: 'neutral', text: t('copilotInvestment.value.costWithheld', { count: formatNumber(withheldMinimum(summary)) }) });
+    } else if (gap > 0 && path.extraActiveDaysPerMonth !== null) {
       lines.push({
         key: 'gap',
         tone: 'critical',
@@ -444,8 +469,11 @@ function PathCard({ summary, navigation }: { summary: CopilotInvestmentSummary; 
       lines.push({
         key: 'reclaim',
         tone: 'warning',
-        text:
-          path.reclaimable === 1
+        text: costWithheld
+          ? path.reclaimable === 1
+            ? t('copilotInvestment.exec.path.reclaimOneNoReturn', { monthly })
+            : t('copilotInvestment.exec.path.reclaimNoReturn', { count: formatNumber(path.reclaimable), monthly })
+          : path.reclaimable === 1
             ? t('copilotInvestment.exec.path.reclaimOne', { monthly, roi })
             : t('copilotInvestment.exec.path.reclaim', { count: formatNumber(path.reclaimable), monthly, roi }),
       });
@@ -653,6 +681,8 @@ export default function ExecutivePanel({ summary, navigation, canSeePii }: {
               currency={currency}
               t={t}
             />
+          ) : summary.investment.studioCostWithheld ? (
+            <Text size={200}>{t('copilotInvestment.value.costWithheld', { count: formatNumber(withheldMinimum(summary)) })}</Text>
           ) : (
             <Text size={200}>
               {summary.value.unavailableReason === 'noMatchedHolders' ? t('copilotInvestment.value.unmatched.body') : t('copilotInvestment.exec.valueVsCost.missing')}

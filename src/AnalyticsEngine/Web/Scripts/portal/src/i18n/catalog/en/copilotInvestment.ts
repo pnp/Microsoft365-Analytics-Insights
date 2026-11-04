@@ -433,6 +433,19 @@ export const copilotInvestment = {
   'copilotInvestment.trend.point': '{date}: {credits} credits, {consumers} people',
   'copilotInvestment.trend.pointWithheld': '{date}: credits not shown, they could single out fewer than {count} people; {consumers} people',
   'copilotInvestment.trend.withheld': 'Not shown: it could single out fewer than {count} people',
+  'copilotInvestment.withheld.cost': 'Not shown: its Copilot Studio part could single out fewer than {count} people',
+  'copilotInvestment.withheld.fromCost':
+    'Not shown: it is worked out from a modelled cost whose Copilot Studio part could single out fewer than {count} people',
+  'copilotInvestment.exec.verdict.withheld':
+    'The return is not shown: the modelled cost it is measured against includes Copilot Studio charges that could single out fewer than {count} people. The value and the evidence of use below are shown as usual.',
+  'copilotInvestment.value.costWithheld':
+    'Returns, net figures and the break-even are not shown: the modelled cost they are worked out from includes Copilot Studio charges that could single out fewer than {count} people.',
+  'copilotInvestment.kpi.studio.hintPriorWithheld': 'Previous {days} days not shown: they could single out fewer than {count} people',
+  'copilotInvestment.exec.path.reclaimNoReturn':
+    'Reclaiming the {count} idle licences that are safe to reclaim frees {monthly} a month of licence cost. A cash saving only where licences can be reduced.',
+  'copilotInvestment.exec.path.reclaimOneNoReturn':
+    'Reclaiming the one idle licence that is safe to reclaim frees {monthly} a month of licence cost. A cash saving only where licences can be reduced.',
+  'copilotInvestment.action.amountWithheld': 'Amount not shown: it would give back Copilot Studio charges that could single out fewer than {count} people',
   'copilotInvestment.trend.empty': 'No consumption readings in this period.',
   'copilotInvestment.trend.loading': 'Loading the consumption readings\u2026',
 

@@ -443,6 +443,19 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.trend.point': '{date}: {credits} créditos, {consumers} personas',
   'copilotInvestment.trend.pointWithheld': '{date}: créditos no mostrados, podrían identificar a menos de {count} personas; {consumers} personas',
   'copilotInvestment.trend.withheld': 'No se muestra: podría identificar a menos de {count} personas',
+  'copilotInvestment.withheld.cost': 'No se muestra: su parte de Copilot Studio podría identificar a menos de {count} personas',
+  'copilotInvestment.withheld.fromCost':
+    'No se muestra: se calcula con un coste modelado cuya parte de Copilot Studio podría identificar a menos de {count} personas',
+  'copilotInvestment.exec.verdict.withheld':
+    'No se muestra la rentabilidad: el coste modelado con el que se compara incluye cargos de Copilot Studio que podrían identificar a menos de {count} personas. El valor y la evidencia de uso de abajo se muestran como siempre.',
+  'copilotInvestment.value.costWithheld':
+    'No se muestran la rentabilidad, las cifras netas ni el punto de equilibrio: el coste modelado del que se calculan incluye cargos de Copilot Studio que podrían identificar a menos de {count} personas.',
+  'copilotInvestment.kpi.studio.hintPriorWithheld': 'Los {days} días anteriores no se muestran: podrían identificar a menos de {count} personas',
+  'copilotInvestment.exec.path.reclaimNoReturn':
+    'Recuperar las {count} licencias sin uso que se pueden recuperar con seguridad libera {monthly} al mes de coste de licencias. Solo es un ahorro de caja si se puede reducir el número de licencias.',
+  'copilotInvestment.exec.path.reclaimOneNoReturn':
+    'Recuperar la única licencia sin uso que se puede recuperar con seguridad libera {monthly} al mes de coste de licencias. Solo es un ahorro de caja si se puede reducir el número de licencias.',
+  'copilotInvestment.action.amountWithheld': 'Importe no mostrado: revelaría cargos de Copilot Studio que podrían identificar a menos de {count} personas',
   'copilotInvestment.trend.empty': 'No hay lecturas de consumo en este periodo.',
   'copilotInvestment.trend.loading': 'Cargando las lecturas de consumo\u2026',
 

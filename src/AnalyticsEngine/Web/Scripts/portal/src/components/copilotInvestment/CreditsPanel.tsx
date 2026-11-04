@@ -264,13 +264,13 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
           <Figure label={t('copilotInvestment.metered.active')} value={formatNumber(metered.activeUsers)} />
           <Figure
             label={t('copilotInvestment.metered.studio')}
-            value={formatCredits(metered.studioCredits)}
-            note={metered.studioWindowValue !== null ? formatMoney(metered.studioWindowValue, currency) : undefined}
+            value={metered.studioWithheld ? '\u2014' : formatCredits(metered.studioCredits)}
+            note={metered.studioWithheld ? serviceWithheld : metered.studioWindowValue !== null ? formatMoney(metered.studioWindowValue, currency) : undefined}
           />
           <Figure
             label={t('copilotInvestment.metered.balances')}
-            value={formatCredits(metered.credits)}
-            note={metered.creditBalanceValue !== null ? formatMoney(metered.creditBalanceValue, currency) : undefined}
+            value={metered.creditsWithheld ? '\u2014' : formatCredits(metered.credits)}
+            note={metered.creditsWithheld ? serviceWithheld : metered.creditBalanceValue !== null ? formatMoney(metered.creditBalanceValue, currency) : undefined}
           />
           {metered.evidencedCandidates !== null && (
             <Figure label={t('copilotInvestment.metered.evidenced')} value={formatNumber(metered.evidencedCandidates)} />
