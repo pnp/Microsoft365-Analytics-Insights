@@ -355,28 +355,36 @@ namespace App.ControlPanel.Engine
         /// Warn when an existing App Service plan cannot run Always On / 64-bit workers so Test Configuration
         /// catches under-provisioned plans before the install writes App Service settings. Logs only; never throws.
         /// </summary>
-        Task VerifyAppServicePlanCapabilities(ResourceGroupResource testRg)
+        async Task VerifyAppServicePlanCapabilities(ResourceGroupResource testRg)
         {
             if (testRg == null)
             {
                 _logger.LogInformation("Skipping App Service plan capability check - resource group is not available.");
-                return Task.CompletedTask;
+                return;
             }
 
             var planName = string.IsNullOrWhiteSpace(Config.AppServicePlanName) ? Config.AppServiceWebAppName : Config.AppServicePlanName;
             if (string.IsNullOrWhiteSpace(planName))
             {
                 _logger.LogInformation("Skipping App Service plan capability check - no App Service plan name is configured.");
-                return Task.CompletedTask;
+                return;
             }
 
             try
             {
-                var plan = testRg.GetAppServicePlans().AsEnumerable().Where(p => p.Data.Name == planName).SingleOrDefault();
+                // Check the plan the install will really use: an existing web app keeps the plan it runs on, whatever the
+                // configured plan name (earlier installers named that plan after the web app).
+                var plan = await CloudInstallEngine.Azure.InstallTasks.AppServicePlanTask.FindHostingPlanAsync(testRg, Config.AppServiceWebAppName)
+                    ?? testRg.GetAppServicePlans().AsEnumerable().Where(p => p.Data.Name == planName).SingleOrDefault();
                 if (plan == null)
                 {
                     _logger.LogInformation($"App Service plan '{planName}' not found yet; skipping capability check (it will be created during install).");
-                    return Task.CompletedTask;
+                    return;
+                }
+                if (!string.Equals(plan.Data.Name, planName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation($"App Service '{Config.AppServiceWebAppName}' runs on plan '{plan.Data.Name}', which the install keeps. " +
+                        $"The configured plan name '{planName}' is only used when the installer creates the web app.");
                 }
 
                 if (!AppServicePlanCapabilities.SupportsAlwaysOn(plan.Data.Sku))
@@ -392,8 +400,6 @@ namespace App.ControlPanel.Engine
             {
                 _logger.LogWarning($"Could not check App Service plan '{planName}' capabilities: {ex.Message}");
             }
-
-            return Task.CompletedTask;
         }
 
         #region Configuration & Key Vault checks

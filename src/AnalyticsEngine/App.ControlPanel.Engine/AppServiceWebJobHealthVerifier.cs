@@ -1,6 +1,7 @@
 using App.ControlPanel.Engine.InstallerTasks;
 using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
+using Azure.Core;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.AppService.Models;
 using Microsoft.Extensions.Logging;
@@ -32,19 +33,12 @@ namespace App.ControlPanel.Engine
             WebSiteResource webApp,
             InstallerProxyConfig proxyConfig,
             ILogger logger,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            TokenCredential kuduCredential = null)
         {
             try
             {
-                var publishingProfile = webApp.GetPublishingProfileXmlWithSecrets(
-                    new CsmPublishingProfile { Format = PublishingProfileFormat.WebDeploy });
-                KuduPublishInfo publishInfo;
-                using (var reader = new StreamReader(publishingProfile.Value))
-                {
-                    publishInfo = publishData.FromXml(reader).GetKuduPublishInfo();
-                }
-
-                var statuses = await GetStatusesAsync(publishInfo, proxyConfig, cancellationToken);
+                var statuses = await GetStatusesAsync(webApp, kuduCredential, proxyConfig, cancellationToken);
                 var failures = FindFailures(statuses);
 
                 if (failures.Count > 0)
@@ -88,20 +82,24 @@ namespace App.ControlPanel.Engine
         }
 
         internal static async Task<List<KuduContinuousWebJobStatus>> GetStatusesAsync(
-            KuduPublishInfo publishInfo,
+            WebSiteResource webApp,
+            TokenCredential kuduCredential,
             InstallerProxyConfig proxyConfig,
             CancellationToken cancellationToken)
         {
-            using (var handler = InstallAppServiceContentsTask.CreateHttpClientHandler(proxyConfig))
-            using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) })
+            using (var kudu = new KuduAccess(webApp, kuduCredential, InstallAppServiceContentsTask.CreateHttpClientHandler(proxyConfig)))
+            using (var client = new HttpClient(kudu, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(30) })
             {
-                var credentials = Convert.ToBase64String(
-                    Encoding.UTF8.GetBytes($"{publishInfo.Username}:{publishInfo.Password}"));
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+                await kudu.InitialiseAsync(cancellationToken);
+                var statusUri = BuildKuduContinuousWebJobsUri(kudu.ScmRootUrl);
 
-                var response = await client.GetAsync(
-                    BuildKuduContinuousWebJobsUri(publishInfo.RootUrl),
-                    cancellationToken);
+                var response = await client.GetAsync(statusUri, cancellationToken);
+                if (kudu.UsesEntraToken && KuduAccess.IsAuthRejection(response.StatusCode))
+                {
+                    response.Dispose();
+                    await kudu.UseBasicCredentialsAsync(cancellationToken);
+                    response = await client.GetAsync(statusUri, cancellationToken);
+                }
                 using (response)
                 {
                     var responseBody = await response.Content.ReadAsStringAsync();
