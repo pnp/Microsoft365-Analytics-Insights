@@ -15,8 +15,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         public int UserId { get; }
 
         /// <summary>
-        /// Checked again when the row is written: if the row no longer carries it - a new account has been given the
-        /// deleted one's sign-in name, and this run's update has already moved the row to it - the row is left alone.
+        /// Checked again when the row is written: if a concurrent writer changed the identity, the row is left alone.
+        /// Reused sign-in names preserve the deleted object's row rather than assigning it to the new object.
         /// </summary>
         public string ObjectId { get; }
     }
@@ -32,6 +32,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </remarks>
     internal static class UserIdentityRules
     {
+        internal static void EnsureSameObject(Common.Entities.User row, string objectId)
+        {
+            if (!string.IsNullOrEmpty(row.AzureAdId)
+                && !string.Equals(row.AzureAdId, objectId, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("User metadata cannot replace another Entra object's identity; reconcile the reused sign-in name first.");
+        }
+
         /// <summary>
         /// Adds <paramref name="user"/> to <paramref name="byObjectId"/>, keeping the canonical row when another row
         /// already holds its object id (see <see cref="IsPreferredRow"/>), whatever order the rows arrive in.
