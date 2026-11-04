@@ -217,6 +217,31 @@ jobs:
         if: matrix.name == 'demo'
         shell: pwsh
         run: ./src/AnalyticsEngine/Tests.FakeDataGen/Verify-DemoCommand.ps1 -Configuration Release
+      # The runners' clock is UTC, where a local and a UTC timestamp have the same ticks, so the TimeZone
+      # tests above were Inconclusive or could not fail. Run them again in a zone with an offset, in a shard
+      # that finishes well before core.
+      - name: Run the time-zone tests outside UTC
+        if: matrix.name == 'migrations'
+        shell: pwsh
+        run: |
+          $original = tzutil /g
+          tzutil /s 'Romance Standard Time'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not change the time zone.' }
+          try {
+            [TimeZoneInfo]::ClearCachedData()
+            if ([TimeZoneInfo]::Local.GetUtcOffset([DateTime]::UtcNow) -eq [TimeSpan]::Zero) { throw 'The clock is still at UTC.' }
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $vs = & $vswhere -latest -products * -property installationPath
+            $vstest = Join-Path $vs 'Common7\IDE\Extensions\TestPlatform\vstest.console.exe'
+            # Inconclusive would mean a test still saw UTC, so it fails here, and so does finding no tests.
+            & $vstest src\AnalyticsEngine\Tests.UnitTests\bin\Release\Tests.UnitTests.dll `
+              /TestCaseFilter:TestCategory=TimeZone '/Logger:trx;LogFileName=timezone.trx' `
+              "/ResultsDirectory:$env:RUNNER_TEMP\timezone-results" /Platform:x64 `
+              '--' MSTest.MapInconclusiveToFailed=true RunConfiguration.TreatNoTestsAsError=true
+            if ($LASTEXITCODE -ne 0) { throw 'Time-zone tests failed.' }
+          }
+          finally { tzutil /s $original }
+          ./.github/scripts/Write-TestSummary.ps1 -ResultsDirectory "$env:RUNNER_TEMP\timezone-results" -Name 'TimeZone tests in Romance Standard Time'
 
   test_portal:
     name: Portal type checks and tests

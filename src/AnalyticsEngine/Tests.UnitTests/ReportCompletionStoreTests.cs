@@ -823,6 +823,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        [TestCategory("TimeZone")]
         public async Task IsReportDueTreatsALocalStoredTimestampAsAnInstant()
         {
             var lastUtc = new DateTime(2026, 6, 15, 12, 0, 0, DateTimeKind.Utc);

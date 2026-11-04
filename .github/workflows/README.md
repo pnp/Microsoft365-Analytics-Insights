@@ -109,6 +109,13 @@ If it fails, rebuild the extension and commit the package, as
   New tests automatically join a shard; no category or test is dropped.
 * Each runner has its own LocalDB instance and Azurite. Separate catalogs on one shared SQL
   instance would not isolate the global staging tables.
+* Runs the `TimeZone` test category again in Romance Standard Time (UTC+1, or UTC+2 in summer) at
+  the end of the `migrations` shard, which finishes well before `core`. The runners' clock is UTC,
+  where a local and a UTC timestamp have the same ticks, so in the main run these tests are
+  Inconclusive or cannot fail. The second run counts Inconclusive as failed, fails if no test
+  matches, and then restores the zone. Tag a test `[TestCategory("TimeZone")]` when it converts
+  between local time and UTC and can only fail on a host outside UTC. `ci.test.mjs` checks that
+  every step limited to one shard names a shard that exists, so such a step can't silently stop running.
 * Downloadable test binaries contain synthetic configuration only. Credentials are substituted
   into the executing runner's config after download, and that config is never re-uploaded.
 * Runs portal production/test type checks and the complete Vitest suite independently on Linux.
