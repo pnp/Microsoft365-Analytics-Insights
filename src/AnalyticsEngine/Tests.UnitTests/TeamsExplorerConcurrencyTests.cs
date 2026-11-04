@@ -158,7 +158,8 @@ namespace Tests.UnitTests
                     withPii.Client.GetAsync("api/TeamsExplorer/meetings"),
                     withoutPii.Client.GetAsync("api/TeamsExplorer/meetings"),
                 };
-                await store.FirstBuildStarted.Task;
+                var first = await Task.WhenAny(store.FirstBuildStarted.Task, Task.WhenAll(requests), Task.Delay(TimeSpan.FromSeconds(60)));
+                Assert.AreSame(store.FirstBuildStarted.Task, first, "The requests reach the store and wait on its build.");
                 await Task.Delay(100);
                 store.Release.SetResult(true);
                 var responses = await Task.WhenAll(requests);
