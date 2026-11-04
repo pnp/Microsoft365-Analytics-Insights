@@ -15,8 +15,12 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using Microsoft.Data.SqlClient;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -149,6 +153,168 @@ namespace Tests.UnitTests.InstallTests
                 }
                 Assert.AreEqual(entraOnly ? 2 : 0, credential.TokenRequests);
             }
+        }
+
+        /// <summary>
+        /// The schema upgrade and the registration give the downloaded app its credentials in a file: the command line,
+        /// which process auditing records, carries only the file's name. The file is gone once the app has exited, and
+        /// the configuration snapshot it registers carries no secret, not even an encrypted one.
+        /// </summary>
+        [TestMethod]
+        public async Task DownloadedInstaller_GetsCredentialsInAFileThatIsDeletedAfterwards()
+        {
+            using (var arm = new SqlArmFixture())
+            using (var child = new FakeDownloadedInstaller(readsPayloadFile: true))
+            {
+                child.SkipUnlessItCanRun();
+                var config = SyntheticConfigWithSecrets();
+                var server = (await arm.Server.GetAsync()).Value;
+                var database = (await server.GetSqlDatabases().GetAsync("analytics")).Value;
+                var dbInfo = new DatabasePaaSInfo(server, database, config);
+                var tasks = new SqlInstallerTasks(config, child.Executable, dbInfo, new CapturingLogger(), "Synthetic operator", null,
+                    connectionString => Task.FromResult(true));
+
+                await tasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(child.Executable, new List<InstallLogEventArgs>());
+
+                var launches = child.Launches();
+                CollectionAssert.AreEqual(new[] { InstallerConstants.PARAM_INITDB, InstallerConstants.PARAM_REGISTERCONFIG },
+                    launches.Select(l => l.Operation).ToArray());
+                foreach (var launch in launches)
+                {
+                    foreach (var secret in new[] { config.SQLServerAdminPassword, config.InstallerAccount.Secret, config.ActivityAccount.Secret })
+                    {
+                        Assert.IsFalse(launch.CommandLine.Contains(secret) || launch.PayloadFile.Contains(secret),
+                            $"{launch.Operation} put a secret on the command line.");
+                    }
+                    Assert.IsFalse(File.Exists(launch.PayloadFile), $"{launch.Operation} left its payload file behind.");
+                }
+
+                var upgrade = DatabaseUpgradeInfo.GetFromBase64String(child.PayloadSeenBy(launches[0]));
+                Assert.AreEqual(dbInfo.ConnectionString, upgrade.ConnectionString, "The upgrade did not get its credentials in the file.");
+
+                var registration = InstallStatus.GetFromBase64String(child.PayloadSeenBy(launches[1]));
+                var snapshot = JObject.Parse(registration.ConfigurationJSon);
+                Assert.IsFalse(snapshot.Descendants().OfType<JProperty>().Any(p => p.Name.EndsWith("Hash", StringComparison.Ordinal)),
+                    "The registered snapshot carries encrypted secrets.");
+                Assert.AreEqual("synthetic-client", (string)snapshot["InstallerAccount"]["ClientId"]);
+            }
+        }
+
+        /// <summary>
+        /// A downloaded release older than the installer can take the credentials only on its command line, so it is not
+        /// run at all, and the operator is told why.
+        /// </summary>
+        [TestMethod]
+        public async Task DownloadedInstallerTooOldForThePayloadFile_IsNotRun()
+        {
+            using (var arm = new SqlArmFixture())
+            using (var child = new FakeDownloadedInstaller(readsPayloadFile: false))
+            {
+                var config = SyntheticConfigWithSecrets();
+                var server = (await arm.Server.GetAsync()).Value;
+                var database = (await server.GetSqlDatabases().GetAsync("analytics")).Value;
+                var tasks = new SqlInstallerTasks(config, child.Executable, new DatabasePaaSInfo(server, database, config), new CapturingLogger(),
+                    "Synthetic operator", null, connectionString => Task.FromResult(true));
+
+                var ex = await Assert.ThrowsExceptionAsync<UnexpectedInstallException>(() => tasks.InitDatabaseSchema(new List<string>()));
+
+                Assert.AreEqual(SqlInstallerTasks.DownloadedBuildTooOldForPayloadFile, ex.Message);
+                Assert.AreEqual(0, child.Launches().Count, "The older app was started anyway.");
+            }
+        }
+
+        static SolutionInstallConfig SyntheticConfigWithSecrets() => new SolutionInstallConfig
+        {
+            SQLServerAdminUsername = "sqladmin",
+            SQLServerAdminPassword = "Synthetic-Sql-P@ss1",
+            InstallerAccount = new AppRegistrationCredentials("synthetic-client", "Synthetic-Installer-Secret1", Guid.Empty.ToString()),
+            ActivityAccount = new AppRegistrationCredentials("synthetic-runtime", "Synthetic-Runtime-Secret1", Guid.Empty.ToString()),
+        };
+
+        /// <summary>
+        /// Stands in for the downloaded control-panel app: a batch file that records its command line and copies the
+        /// payload files it could see, so a test can check what the real app would have received.
+        /// </summary>
+        sealed class FakeDownloadedInstaller : IDisposable
+        {
+            readonly DirectoryInfo _folder;
+
+            public FileInfo Executable { get; }
+
+            public FakeDownloadedInstaller(bool readsPayloadFile)
+            {
+                _folder = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "AnalyticsInstallerTest-" + Guid.NewGuid().ToString("N")));
+
+                // What the installer's probe looks for in a downloaded release.
+                File.WriteAllText(Path.Combine(_folder.FullName, "App.ControlPanel.Engine.dll"), "synthetic assembly " +
+                    (readsPayloadFile ? DownloadedBuildCapabilityProbe.InitDbPayloadFileMarker : "from an older release"));
+
+                Executable = new FileInfo(Path.Combine(_folder.FullName, "AnalyticsInstaller.cmd"));
+                File.WriteAllText(Executable.FullName, string.Join("\r\n",
+                    "@echo off",
+                    ">>\"%~dp0args.txt\" echo %*",
+                    "if not exist \"%~dp0copies\" mkdir \"%~dp0copies\"",
+                    "copy /y \"%TMP%\\AnalyticsInstaller-*.tmp\" \"%~dp0copies\\\" >nul 2>nul",
+                    "copy /y \"%TEMP%\\AnalyticsInstaller-*.tmp\" \"%~dp0copies\\\" >nul 2>nul",
+                    "exit /b 0",
+                    ""));
+            }
+
+            /// <summary>Inconclusive where application control won't run a batch file from the temp folder.</summary>
+            public void SkipUnlessItCanRun()
+            {
+                try
+                {
+                    using (var process = Process.Start(new ProcessStartInfo(Executable.FullName, "--canary x")
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    }))
+                    {
+                        process.WaitForExit();
+                    }
+                }
+                catch (System.ComponentModel.Win32Exception ex)
+                {
+                    Assert.Inconclusive($"This machine won't run the stand-in installer: {ex.Message}");
+                }
+                File.Delete(Path.Combine(_folder.FullName, "args.txt"));
+            }
+
+            public IReadOnlyList<Launch> Launches()
+            {
+                var log = Path.Combine(_folder.FullName, "args.txt");
+                if (!File.Exists(log)) return new Launch[0];
+
+                return File.ReadAllLines(log).Where(line => line.Trim().Length > 0).Select(line =>
+                {
+                    var parts = line.Trim().Split(' ');
+                    return new Launch(parts[0], line, Encoding.UTF8.GetString(Convert.FromBase64String(parts[1])));
+                }).ToList();
+            }
+
+            /// <summary>What the app could read from the payload file while it ran.</summary>
+            public string PayloadSeenBy(Launch launch) =>
+                File.ReadAllText(Path.Combine(_folder.FullName, "copies", Path.GetFileName(launch.PayloadFile)));
+
+            public void Dispose()
+            {
+                try { _folder.Delete(true); } catch (IOException) { }
+            }
+        }
+
+        sealed class Launch
+        {
+            public Launch(string operation, string commandLine, string payloadFile)
+            {
+                Operation = operation;
+                CommandLine = commandLine;
+                PayloadFile = payloadFile;
+            }
+
+            public string Operation { get; }
+            public string CommandLine { get; }
+            public string PayloadFile { get; }
         }
 
         [DataTestMethod]

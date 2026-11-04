@@ -3,8 +3,11 @@
 Tracks issue [#144](https://github.com/pnp/Microsoft365-Analytics-Insights/issues/144).
 
 This is the **engineering design record** for opt-out monitoring provisioned by the installer.
-The implementation below is the current contract; the subsequent proposal sections retain the
-broader issue design and are **not a claim that every proposed signal is implemented**.
+The first part describes what is implemented: it is the current contract. The
+[design history](#design-history-the-144-proposal) after it keeps the original issue proposal for
+context, and notes where the delivered design took a different route; it is **not a claim that every
+proposed signal is implemented**. The operator procedure for alerts is the wiki's
+[Health Alerts](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Health-Alerts) page.
 
 ## Delivered monitoring contract
 
@@ -13,10 +16,11 @@ opt-out. Old JSON without `HealthMonitoring` stays opted out. The existing saved
 The installer writes `EnableDefaultHealthChecks` to the web app in both enabled and disabled states;
 the importers read it on startup. This runtime setting is not a new persisted installer property.
 
-When enabled, each expected importer runs two independent checks immediately and every five minutes,
-off the import loop. Each has a 30-second budget; cancellation is requested at timeout, late work
+When enabled, each expected importer runs its checks immediately and every five minutes, off the
+import loop: SQL and credential in both importers, plus the two Copilot cost-connection checks in the
+activity importer. Each has a 30-second budget; cancellation is requested at timeout, late work
 cannot emit success after disposal, and a non-cooperative check is not launched again until it returns.
-The other check and the one-minute process heartbeat continue while an import/check is stuck.
+The other checks and the one-minute process heartbeat continue while an import/check is stuck.
 
 - **SQL:** connects only to the configured database, reads read/write metadata and its
   `__MigrationHistory`, and compares that context's complete history with this build's local
@@ -29,7 +33,12 @@ The other check and the one-minute process heartbeat continue while an import/ch
   its `NotAfter` (<14 whole days degraded, <3 unhealthy). A successful secret-token acquisition is
   **degraded/expiry unknown**, never an invented expiry date or a claim that the secret cannot expire.
   No extra app-read permission, secret inspection or invasive permission probe is introduced.
-- Both checks emit privacy-safe `HealthCheck` results with `JobName`, `Monitor=DefaultHealth` and
+- **Copilot cost connections (activity importer only):** `CopilotCostApi` and
+  `CopilotStudioConsumption` report the stored state of the Copilot credit-history connection and
+  the Copilot Studio billing connection, read from Azure Table storage. A collection that is switched
+  off reports healthy (`costApi.disabled`); a connection that needs renewal or was refused reports
+  unhealthy.
+- The checks emit privacy-safe `HealthCheck` results with `JobName`, `Monitor=DefaultHealth` and
   stable `ReasonKey`. Exceptions, connection strings, tokens and tenant identifiers are not copied
   into those events. The existing bilingual Health page recognises these reasons, prefers fresh
   token evidence over its certificate-date-only check, and does not show stale success as current.
@@ -48,8 +57,11 @@ One action group (`<web-app>-health-notifications`) and **at most seven** severi
 
 Each importer rule evaluates every five minutes and combines: missing heartbeat (configurable
 15–1440 minutes), no completed cycle for 24 hours (including a first cycle still unfinished after
-24 hours, across restarts observed within the two-day query window), latest unhealthy SQL/credential
-check, known certificate expiry <14 days, and either expected check absent for 30 minutes.
+24 hours, across restarts observed within the two-day query window), latest unhealthy check,
+known certificate expiry <14 days, and any expected check absent for 30 minutes. The activity
+importer's rule expects its two cost checks only when the installer run that wrote the rule also
+deployed the release content: an older importer never sends them, so otherwise only SQL and
+credential are expected.
 Latest-per-component results allow recovery; an old failure alone does not pin the rule on.
 A completed loop is **not** proof of successful sub-imports or non-zero rows. The passive rule
 detects >10 logged SQL exceptions in one hour (both SqlClient namespaces), >2 logged full/read-only
@@ -68,7 +80,8 @@ failure is logged by the installer and must be remediated, but does not abort th
 ### Cost, scale and planned shutdowns
 
 Monitoring is not free: log/metric alert evaluation and telemetry ingestion/retention can be billed.
-At two jobs, the baseline is about 2,880 periodic heartbeat events and 1,152 check events per day,
+At two jobs, the baseline is about 2,880 periodic heartbeat events and 1,728 check events per day
+(four checks in the activity importer and two in the web-traffic importer, every five minutes),
 plus cycle-completion heartbeats. Up to three log rules and four metric rules evaluate every five
 minutes. The per-job log query reads at most two days of telemetry to distinguish a long first cycle
 from a fresh startup; this is a bounded query horizon, **not a currency spending cap**. Review Azure's
@@ -97,7 +110,8 @@ The complete #144 acceptance remains open: proactive **client-secret expiry**, a
 permission/anonymisation checks, SQL DTU/data/log-IO/deadlocks, Service Bus metrics/dead letters,
 Key Vault/Storage reachability, web availability, and workload-gated **non-zero data freshness**
 are not all delivered here. No Redis monitor is appropriate: Redis has been retired.
-The broader catalog below is a design proposal, not an enabled default or an approved cost ceiling.
+The broader catalog in the design history below is a proposal, not an enabled default or an approved
+cost ceiling.
 
 ## What's implemented now
 
@@ -106,7 +120,8 @@ Application Insights pipeline (no new sink):
 
 - **`HealthCheck`** custom event — one per check per cycle:
   - `Component` — one of `DataUtils.Health.HealthComponent` (`Sql`, `ActivityApi`, `Graph`, `KeyVault`,
-    `ServiceBus`, `Credential`, `Dns`, `BlobCheckpoint`).
+    `ServiceBus`, `Credential`, `Dns`, `BlobCheckpoint`, `CopilotAuditBackfill`, `MessageTracing`,
+    `CopilotCostApi`, `CopilotStudioConsumption`).
   - `Status` — one of `DataUtils.Health.HealthStatus` (`Healthy` | `Degraded` | `Unhealthy`).
   - `Detail` — optional free-text reason. **Must not contain secrets or customer data.**
   - `DaysToExpiry` — integer dimension in invariant text (`toint` in KQL), `Credential` only.
@@ -137,7 +152,7 @@ Beyond the telemetry primitive, this work now also ships the **Phase-2 surfacing
   future cleanup.
 - **Web Health section (in the portal)** — a `Service health` destination in the React portal SPA
   (`Scripts/portal/src/pages/HealthPage.tsx` + `components/health/*` + `api/healthApi.ts` +
-  `types/health.ts`, routed in `App.tsx`), backed by the `api/Health` controller (`HealthAPIController` →
+  `types/health.ts`, routed from the route table in `navigation.tsx`), backed by the `api/Health` controller (`HealthAPIController` →
   `Web/Models/Health/HealthService.cs` + `HealthModels.cs`). The page is split into **lazily-loaded
   sub-section tabs**, each backed by its own independently-cached endpoint
   (`api/Health/{summary,data,liveness,exceptions,components,config}`, best-effort, 60 s-cached, single-flight
@@ -154,10 +169,12 @@ Beyond the telemetry primitive, this work now also ships the **Phase-2 surfacing
     a "tracker not deployed" apart from an "AppInsightsImporter not running".
   - **Exceptions overview** — 24 h total, a **zero-filled 24-bar** per-hour sparkline, top types, and a
     dedicated **SQL capacity / read-only** sub-count (count only — no message text is surfaced).
-  - **Component health** — populated **today** for the two proactive checks the web app can run itself: the
-    runtime **credential expiry** (certificate `NotAfter` → days-to-expiry; a client secret's expiry isn't
-    visible at runtime) and the **Service Bus** Teams-calls queue depth / dead-letter count. SQL, Activity
-    API, Graph, Key Vault and DNS fill in as the runtime `HealthCheck` emitter lands.
+  - **Component health** — the two proactive checks the web app can run itself: the runtime
+    **credential expiry** (certificate `NotAfter` → days-to-expiry; a client secret's expiry isn't
+    visible at runtime) and the **Service Bus** Teams-calls queue depth / dead-letter count. It also
+    shows the latest `HealthCheck` events from Application Insights, which include the importers' SQL,
+    credential and Copilot cost-connection checks. Activity API, Graph, Key Vault and DNS have no
+    runtime check yet.
   - **Data overview** — **scale-safe**: approximate row counts per workload (from
     `sys.dm_db_partition_stats`, so a 200k-user tenant is never hit with `COUNT(*)` on fact tables),
     last-24 h / last-7 d volume on the indexed audit + hits tables, newest audit/hit freshness, and DB size.
@@ -189,20 +206,25 @@ section alerts on, via `AnalyticsLogger.TrackEvent` / `JobTimer.TrackFinishedEve
 These **are** the wiki's cycle/section-completion signals, so there is deliberate overlap and the plan
 is to **reuse them, not duplicate them**:
 
-- **Data-flow / freshness** monitoring (issue #144 default alert #9, "Activity import stalled") builds
-  directly on the existing `FinishedImportCycle` / `FinishedSectionImport` events — no new emit needed;
-  the design just codifies the wiki query (`FinishedImportCycle` count == 0 over the window) as a
-  shipped default rule.
+- **Data-flow / freshness** monitoring (issue #144 default alert #9, "Activity import stalled") was
+  planned to codify the wiki query (`FinishedImportCycle` count == 0 over the window) as a shipped
+  default rule. The delivered importer rule reads `LastCycleUtc` from `ImporterHeartbeat` instead (no
+  completed cycle for 24 hours), so it also catches a first cycle that never finishes.
 - **`ImporterHeartbeat`** is **not** a rename of `FinishedImportCycle`. `FinishedImportCycle` fires only
   when a cycle *completes*, so a job stuck **mid-cycle** emits nothing and looks identical to a dead job.
-  The Appendix E heartbeat is intended to be raised on an **independent timer** (Appendix D open
-  question: same web-job on its own timer vs a separate WebJob/Function) so a stuck import can't
-  suppress the liveness beat. It also adds structured `JobName` / `LastCycleUtc` /
-  `LastCycleDurationSeconds` dimensions (vs the free-text `context` string) so the same rule works
-  across both jobs. The independent host is now implemented; `FinishedImportCycle` remains a separate
-  loop-completion signal, not a dependency or non-zero-data success guarantee.
+  The Appendix E heartbeat is raised on an **independent timer** so a stuck import can't suppress the
+  liveness beat. It also adds structured `JobName` / `LastCycleUtc` / `LastCycleDurationSeconds`
+  dimensions (vs the free-text `context` string) so the same rule works across both jobs. Each importer
+  hosts its own heartbeat, on a one-minute timer in the same process; `FinishedImportCycle` remains a
+  separate loop-completion signal, not a dependency or non-zero-data success guarantee.
 
-## What should be monitored
+## Design history: the #144 proposal
+
+The rest of this record is the proposal the work started from, kept for its reasoning. Where the
+delivered design differs, the sections above are the contract. Where a part of the proposal was built
+differently, or not at all, its section below says so.
+
+### What should be monitored
 
 - **A. Liveness** — continuous web-jobs (`Office365ActivityImporter`, `AppInsightsImporter`) alive &
   completing cycles (interim: existing `FinishedImportCycle` event; target: independent-timer
@@ -227,7 +249,7 @@ is to **reuse them, not duplicate them**:
   a default rule on total `exceptions` volume in addition to the specific `SqlException` /
   "database is read-only" rules below.
 
-## Where to surface — options
+### Where to surface — options
 
 1. **Installer provisions Azure Monitor / App Insights alert rules + a default action group.** Native,
    no extra compute, "recommended set for free"; but resource sprawl, weak for *proactive* checks
@@ -244,61 +266,23 @@ is to **reuse them, not duplicate them**:
 installer provisions a default action group + a small heartbeat-driven rule set), optionally Option 3 +
 a `SystemStatus` health page; whole thing **opt-out**, thresholds documented + overridable.
 
-## Central health dashboard (web-app tab)
+### Central health dashboard (web-app tab)
 
-The most common operational question is simply *"is it working?"*, and today there is no single place
-to answer it — an admin has to open Application Insights and run ad-hoc queries. So, alongside the
-Azure-Monitor alerting above, ship a **central health view inside the web app** as a new nav tab so the
-answer is one click away. This complements (does not replace) the alert rules: alerts push when
-something breaks; the dashboard is the pull/at-a-glance "green board".
+**Delivered differently.** The proposal was a server-rendered MVC tab that reused the importer's
+`AppInsightsAPIClient`. What shipped is the portal's **Service health** page (`/admin/health`), backed
+by `api/Health` and a separate `Common/DataUtils/AppInsights/AppInsightsQueryClient.cs`: see *Also
+delivered* above. It kept the proposal's cards (component health, import liveness, exceptions overview
+and data overview), added a configuration section, and caches each section for 60 seconds so opening
+the page doesn't hammer the query API.
 
-**Surface** — add a `Health` tab to the nav in `Views/Shared/_Layout.cshtml` (next to the brand link),
-backed by a new `HomeController.Health` action + `Views/Home/Health.cshtml` view and a
-`Web/Models/HealthDashboard` view-model (mirrors the existing `SystemStatus.LoadFrom` pattern). Keep it
-`[Authorize]` like the rest of the app.
+### Reusing `SolutionInstallVerifier` at runtime
 
-**What it shows** (all read-only, best-effort — a data-source hiccup degrades a card, never errors the
-page):
-
-| Card | Content | Source |
-|-|-|-|
-| Component health | Latest `HealthCheck` per `Component` with `Status` (green/amber/red) + `Detail`; credential `DaysToExpiry` | App Insights `customEvents` (`HealthCheck`), newest per `Component` |
-| Import liveness | Per job: last `ImporterHeartbeat` / `FinishedImportCycle` time + "N min ago" freshness badge; last `FinishedSectionImport` per section | App Insights `customEvents` (interim: `FinishedImportCycle`/`FinishedSectionImport`) |
-| Exceptions overview | Count/hour sparkline over last 24h, top exception `type` / `problemId` with counts, total in window | App Insights `exceptions` table |
-| Data overview | Hits / Activity / Teams counts (already on Home) + newest audit/hit timestamps ("data as fresh as …") | SQL (`AnalyticsEntitiesContext`, as `SystemStatus` does today) |
-
-**Data access** — the exception/event cards need to *query* App Insights (not just receive telemetry).
-The solution already has a KQL query client, `WebJob.AppInsightsImporter.Engine.AppInsightsAPIClient`,
-that authenticates to `https://api.applicationinsights.io` with the app's **existing Entra credential**
-(`ClientId`/`ClientSecret`/`TenantGUID` already in web config) and parses the `ApplicationId` from the
-App Insights connection string — **no new API key or config is required**. Two clean ways to reuse it
-from the Web project (which does not currently reference `WebJob.AppInsightsImporter.Engine`):
-
-- **(preferred)** extract `AppInsightsAPIClient` + its connection-string parsing into `Common`
-  (`Common/DataUtils` or a small `Common.AppInsightsQuery`) so both the importer and the web app depend
-  on one copy — this also removes the duplicated `ParseInstrumentationKey` helper noted in
-  `ImportConfigController`; or
-- add a `ProjectReference` from `Web` to `WebJob.AppInsightsImporter.Engine`.
-
-Example queries the dashboard runs (KQL, same store the alerts use):
-
-```kusto
-// Exceptions per hour (last 24h)
-exceptions | where timestamp > ago(24h) | summarize count() by bin(timestamp, 1h) | order by timestamp asc
-// Top exception types (last 24h)
-exceptions | where timestamp > ago(24h) | summarize count() by type, problemId | top 10 by count_ desc
-// Latest health per component
-customEvents | where name == "HealthCheck" | summarize arg_max(timestamp, *) by tostring(customDimensions.Component)
-// Last confirmed import cycle per job
-customEvents | where name == "FinishedImportCycle" | summarize arg_max(timestamp, *) by operation_Name
-```
-
-The health values are cheap to cache (e.g. 60s `MemoryCache`) so opening the tab doesn't hammer the
-query API. When the runtime heartbeat (Option 2) is not yet deployed, the Component-health card is
-simply empty/greyed and the liveness card falls back to `FinishedImportCycle` — the dashboard degrades
-gracefully as later phases fill it in.
-
-## Reusing `SolutionInstallVerifier` at runtime
+**Not done this way.** The delivered SQL and credential checks were written for the runtime in
+`Common` (`Common/Entities/Health/DefaultRuntimeHealth.cs` and
+`Common/DataUtils/Health/RuntimeCredentialHealth.cs`), and `SolutionInstallVerifier` remains the
+installer's own. Activity API, Graph, Key Vault and DNS still have no runtime check, and the Service
+Bus queue is read by the web app's Service health page rather than reported as a `HealthCheck`. The
+proposal was:
 
 `App.ControlPanel.Engine/SolutionInstallVerifier.cs` already implements most checks (SQL, runtime-credential
 token acquisition, Graph/Activity permission probes, Key Vault data-plane, DNS) but only at install time.
@@ -315,118 +299,71 @@ Configuration") and the runtime heartbeat call the same code, each emitting the 
 | (new) | Credential days-to-expiry from KV secret/cert attributes | `HealthCheck{Component=Credential, DaysToExpiry=n}` |
 | (new) | Service Bus reachability + dead-letter depth | `HealthCheck{Component=ServiceBus}` |
 
-## Proposed default "ships-by-default" alert set
+### Proposed default "ships-by-default" alert set
 
 Kept small; heartbeat-driven where possible. All route to a single default action group (recipient
-configured at install).
+configured at install). The last column says what was delivered; the delivered rules are the ones in
+[Delivered monitoring contract](#delivered-monitoring-contract).
 
-| # | Monitored item | Signal source | Type | Default threshold |
-|-|-|-|-|-|
-| 1 | Any component unhealthy | `HealthCheck Status == Unhealthy` | log/heartbeat | any in 15m |
-| 2 | Web-jobs not heartbeating | `ImporterHeartbeat` absent (interim: `FinishedImportCycle` absent) | log/heartbeat | none in 30m |
-| 3 | Runtime credential expiring | `HealthCheck{Component=Credential}.DaysToExpiry` | metric/log | < 14 warn, < 3 critical |
-| 4 | SQL unreachable / schema mismatch | `HealthCheck{Component=Sql}` | log/heartbeat | any Unhealthy in 15m |
-| 5 | SQL full / read-only | `exceptions ... "database is read-only"` | log | > 2 in 10m |
-| 6 | SQL capacity | DTU/vCore % + storage % | metric | sustained high |
-| 7 | App Service Plan capacity | CPU/memory % | metric | > 90% for 1h |
-| 8 | Service Bus backlog (Teams calls) | dead-letter / throttled requests | metric | > 0 |
-| 9 | Activity import stalled | existing `FinishedImportCycle` / `FinishedSectionImport` custom events (wiki) | log | count == 0 in window |
-| 10 | Exception spike (general probe) | total App Insights `exceptions` volume | log | sustained spike vs baseline |
+| # | Monitored item | Signal source | Type | Default threshold | Delivered as |
+|-|-|-|-|-|-|
+| 1 | Any component unhealthy | `HealthCheck Status == Unhealthy` | log/heartbeat | any in 15m | Part of each importer rule: the latest check per component |
+| 2 | Web-jobs not heartbeating | `ImporterHeartbeat` absent (interim: `FinishedImportCycle` absent) | log/heartbeat | none in 30m | Part of each importer rule: missing heartbeat, 15–1440 minutes |
+| 3 | Runtime credential expiring | `HealthCheck{Component=Credential}.DaysToExpiry` | metric/log | < 14 warn, < 3 critical | Certificates only: a client secret's expiry is unknown at runtime |
+| 4 | SQL unreachable / schema mismatch | `HealthCheck{Component=Sql}` | log/heartbeat | any Unhealthy in 15m | Part of each importer rule |
+| 5 | SQL full / read-only | `exceptions ... "database is read-only"` | log | > 2 in 10m | The logged-failures rule |
+| 6 | SQL capacity | DTU/vCore % + storage % | metric | sustained high | SQL CPU and storage rules; no DTU or IO rule |
+| 7 | App Service Plan capacity | CPU/memory % | metric | > 90% for 1h | Yes |
+| 8 | Service Bus backlog (Teams calls) | dead-letter / throttled requests | metric | > 0 | Not delivered |
+| 9 | Activity import stalled | existing `FinishedImportCycle` / `FinishedSectionImport` custom events (wiki) | log | count == 0 in window | Part of each importer rule: no completed cycle for 24 hours, from `ImporterHeartbeat` |
+| 10 | Exception spike (general probe) | total App Insights `exceptions` volume | log | sustained spike vs baseline | Not delivered; the logged-failures rule counts SQL exceptions only |
 
-## Implementation pointers (remaining phases)
+### How the delivered implementation differs from the proposal
 
-- **Heartbeat host:** a `TimerTrigger` task — candidate `WebJob.Office365ActivityImporter` on an
-  *independent* timer, or a separate small WebJob/Function so a stuck import can't suppress it.
-- **Shared checks:** refactor `SolutionInstallVerifier` checks into a reusable `Common` health component
-  emitting the `HealthCheck` events defined here.
-- **Provisioning tasks:** new install tasks under `Common/CloudInstallEngine/Azure/InstallTasks`
-  following `AppInsightsInstallTask` / `LogAnalyticsInstallTask`, using `Azure.ResourceManager.Monitor`
-  for `ActionGroup`, `MetricAlert`, `ScheduledQueryRule`; wire into
-  `App.ControlPanel.Engine/InstallerTasks/AzurePaaSInstallJob`. Make them **non-critical**
-  (`BaseInstallTask.IsCritical = false`) so a monitoring-provisioning hiccup never fails the install.
-- **Config:** add `AlertEmail` + `EnableDefaultMonitoring` (opt-out) to `SolutionInstallConfig` and the
-  installer UI; the action group uses `AlertEmail`. (DB/config/permissions change → "migration needed".)
-- **Surfacing:** the central health dashboard tab (see "Central health dashboard (web-app tab)" above) —
-  new `HomeController.Health` action + `Views/Home/Health.cshtml` + `Web/Models/HealthDashboard`, nav
-  entry in `_Layout.cshtml`, reusing the extracted `AppInsightsAPIClient` for the exception/event cards
-  and `AnalyticsEntitiesContext` (as `SystemStatus` does) for the SQL cards; optionally add a `/health`
-  endpoint + availability test.
-- **Idempotency:** provision create-if-absent so admin edits to thresholds/recipients aren't clobbered
-  on upgrade.
+- **Heartbeat host:** each importer raises `ImporterHeartbeat` on its own one-minute timer, in the
+  same process; `RuntimeHealthMonitor`, started by `DefaultRuntimeHealth`, runs the checks every five
+  minutes. There is no separate WebJob or Function.
+- **Shared checks:** written for the runtime, as described under *Reusing `SolutionInstallVerifier`
+  at runtime* above.
+- **Provisioning:** `HealthMonitoringInstallTask` (in `Common/CloudInstallEngine/Azure/InstallTasks`)
+  creates the action group, log-search rules and metric alerts. It is non-critical: a failure is logged
+  and doesn't stop the install.
+- **Configuration:** the saved installer setting `HealthMonitoring` (`Enabled`, `NotificationEmail`,
+  `MissingHeartbeatMinutes`) and the runtime app setting `EnableDefaultHealthChecks`.
+- **Surfacing:** the portal's Service health page; see *Central health dashboard* above.
+- **Upgrades:** an upgrade updates the rules the installer owns, the opposite of the proposal's
+  create-if-absent. Operators keep their own thresholds in separately named rules.
 
-## Phasing
+### Phasing
 
-- **Phase 1 (MVP):** heartbeat liveness + SQL/schema + runtime-credential valid + credential expiry
-  warning; ship the action group (email) + heartbeat-based rules (#1–4, #6–7) **plus the two cheap
-  catch-alls that reuse events already emitted today** — activity import stalled (#9, existing
-  `FinishedImportCycle`) and the exception-spike general probe (#10); opt-out flag; doc update.
-  Delivers the originally-requested items. *(This PR lands the Phase-1 telemetry primitive.)*
-- **Phase 2:** the central health dashboard tab in the web app (exceptions overview + last-confirmed
-  import cycles + component-health + data-freshness cards) **— delivered, see "Also delivered" above** — plus
-  the remaining dependency checks (Service Bus dead-letter, Key Vault), data-freshness alerts,
-  web-app availability test, `SystemStatus` health page.
+- **Phase 1 (MVP):** heartbeat liveness, SQL/schema, runtime-credential validity and certificate
+  expiry, the action group, and rules #1–7 and #9 are delivered, within the limits the table above
+  notes. The exception-spike probe (#10) isn't.
+- **Phase 2:** the central health dashboard is delivered. Still open: the remaining dependency checks
+  (Service Bus dead letters as an alert, Key Vault), data-freshness alerts and a web-app
+  availability test.
 - **Phase 3:** Azure workbook/portal dashboard, richer overridable thresholds, extra notification
   channels (Teams/webhook/ITSM), tenant report-anonymisation re-check, cost/quota anomaly alerts.
 
-## Alert-setup guide (to publish to the wiki)
+### Alert-setup guide
 
-The wiki's [Monitoring](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Monitoring) page
-documents individual queries but not a repeatable "add another alert" procedure. The content below is
-the source for a **step-by-step admin guide to be published to the wiki** (the wiki lives in the sibling
-`Microsoft365-Analytics-Insights.wiki` repo; it is drafted here so it is version-controlled and reviewed
-with the code). Once the installer provisions the default action group, extra alerts are a few clicks.
+The admin guide drafted here is published, and maintained, as the wiki's
+[Health Alerts](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Health-Alerts) page.
 
-**One-time:** confirm the default action group exists (installer creates `<web-app>-health-notifications`, or
-create one under *Monitor → Alerts → Action groups* with an email/Teams-webhook receiver). Every alert
-below routes to it, so recipients are configured in one place.
+### Questions the delivered design settled
 
-**Add a log-search (KQL) alert** — for the custom-event / exception rules:
+- **Action-group recipient:** one notification email address. Teams, webhook, Logic App and ITSM
+  channels remain Phase 3.
+- **Heartbeat host:** inside each importer, on its own timer.
+- **Credential-expiry source:** for a certificate, the `NotAfter` of the certificate the importer
+  runs with. A client secret's expiry is still unknown at runtime, and proactive client-secret
+  expiry remains open.
+- **Alert-rule lifecycle on upgrade:** an upgrade updates the definitions, recipients and thresholds
+  of the rules the installer owns; portal edits to them are not preserved.
+- **Cost ceiling:** no currency cap. The contract documents the event volume, rule count and the
+  two-day query horizon instead; see *Cost, scale and planned shutdowns*.
 
-1. Application Insights resource → **Logs**, paste the query and confirm it returns rows.
-2. **New alert rule** (top of the Logs blade) → the query is pre-filled as the condition.
-3. Measurement: aggregate **Table rows** / **Count**; set the threshold and **Aggregation granularity**
-   + **Frequency of evaluation** to match the window (e.g. 30 min for liveness).
-4. Actions → select the default action group. Details → name + severity. **Create**.
+### Out of scope (for now)
 
-**Add a metric alert** — for capacity rules (SQL DTU, App Service CPU, Service Bus dead-letter):
-
-1. The resource (SQL DB / App Service Plan / Service Bus) → **Alerts → New alert rule**.
-2. Condition → pick the platform metric (e.g. *DTU percentage*, *CPU Percentage*,
-   *Dead-lettered messages*), set operator/threshold/window.
-3. Actions → default action group. Name + severity → **Create**.
-
-**Ready-to-paste queries for the default rules** (numbers match the ship-list table above):
-
-```kusto
-// #1 Any component unhealthy (last 15m)
-customEvents | where name == "HealthCheck" and timestamp > ago(15m)
-| where tostring(customDimensions.Status) == "Unhealthy"
-// #2 Web-jobs not heartbeating (alert when result is 0; interim uses FinishedImportCycle)
-customEvents | where name in ("ImporterHeartbeat","FinishedImportCycle") and timestamp > ago(30m)
-| summarize beats = count()
-// #3 Credential expiring (warn < 14 days)
-customEvents | where name == "HealthCheck" and tostring(customDimensions.Component) == "Credential"
-| extend days = toint(customDimensions.DaysToExpiry) | where days < 14
-// #9 Activity import stalled (alert when result is 0 over the window)
-customEvents | where name == "FinishedImportCycle" and timestamp > ago(24h) | summarize cycles = count()
-// #10 Exception spike (general health probe)
-exceptions | where timestamp > ago(1h) | summarize errors = count()
-```
-
-For "alert when a query returns **no** rows" rules (#2, #9), use *Number of results* **= 0** with the
-window as the evaluation period. Document the chosen thresholds next to each rule so admins can override
-them.
-
-## Open questions
-
-- Action-group recipient: email only, or also Teams webhook / Logic App / ITSM?
-- Heartbeat host: inside `Office365ActivityImporter` on its own timer, or a separate WebJob/Function?
-- Credential-expiry source: Key Vault secret/cert `exp` attributes (no extra Graph perms) vs the Entra
-  app registration (needs app-read permission)?
-- Alert-rule lifecycle on upgrade: re-provision/diff each install, or create-if-absent and never touch?
-- Acceptable cost ceiling for log-search alerts, or prefer metric/heartbeat alerts only?
-
-## Out of scope (for now)
-
-Cost/quota anomaly alerting, Azure portal workbooks/dashboards (the in-app Health tab above is the
+Cost/quota anomaly alerting, Azure portal workbooks/dashboards (the portal's Service health page is the
 Phase-2 dashboard; a portal workbook stays Phase 3), SIEM integration — possible follow-ups.

@@ -11,12 +11,13 @@ import {
   formatSentiment,
   queryFor,
   reachTone,
+  sectionErrorText,
   sentimentLabel,
   toCategories,
   translatedCodeBucketsToCategories,
   translatedCodeLabel,
 } from './teamsShared';
-import { loadCatalog, translateStatic } from '../../i18n';
+import { loadCatalog, translateStatic, type TFunction } from '../../i18n';
 
 describe('adoption bands', () => {
   it('uses the same boundaries as the server and the gauge', () => {
@@ -150,5 +151,32 @@ describe('query lookup', () => {
   it('finds a section by key and returns undefined for an unknown one', () => {
     expect(queryFor(queries, 'overview-calls')?.error).toBe('Timeout expired.');
     expect(queryFor(queries, 'not-a-section')).toBeUndefined();
+  });
+});
+
+describe('section error text', () => {
+  it('words a section the server did not run in the reader\'s language, not with its English fallback', async () => {
+    await loadCatalog('es');
+    const queued = {
+      key: 'calls-kpis',
+      sql: 'SELECT 1',
+      error: 'The server was already running as many report queries as it allows.',
+      errorCode: 'queryQueueTimeout',
+      elapsedMs: 60000,
+    };
+    const es: TFunction = (key, values) => translateStatic('es', key, values);
+
+    expect(sectionErrorText(es, queued)).toBe(translateStatic('es', 'teamsExplorer.shared.queryQueueTimeout'));
+    expect(sectionErrorText(es, queued)).not.toContain('The server');
+  });
+
+  it('shows a failed query\'s own message, and the fallback for a code this build does not know', () => {
+    const en: TFunction = (key, values) => translateStatic('en', key, values);
+    const failed = { key: 'calls-kpis', sql: 'SELECT 1', error: 'Timeout expired.', elapsedMs: 25000 };
+
+    expect(sectionErrorText(en, failed)).toBe('This section could not be loaded: Timeout expired.');
+    expect(sectionErrorText(en, { ...failed, error: 'Something newer.', errorCode: 'notKnownHere' })).toBe(
+      'This section could not be loaded: Something newer.',
+    );
   });
 });

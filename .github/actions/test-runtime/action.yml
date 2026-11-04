@@ -1,5 +1,5 @@
 name: Prepare test runtime
-description: Start the isolated runner's Azurite Table service for the .NET tests.
+description: Start the isolated runner's Azurite Table service and LocalDB instance for the .NET tests.
 runs:
   using: composite
   steps:
@@ -31,3 +31,9 @@ runs:
             Start-Sleep -Seconds 2
           }
         }
+    # LocalDB's first start on a fresh runner is slow and sometimes fails for good; start it here, retrying with a new
+    # instance, so the tests never pay for it one connection timeout at a time.
+    - name: Start LocalDB
+      shell: pwsh
+      run: |
+        & (Join-Path $env:GITHUB_WORKSPACE '.github/scripts/Start-LocalDb.ps1') -Recreate

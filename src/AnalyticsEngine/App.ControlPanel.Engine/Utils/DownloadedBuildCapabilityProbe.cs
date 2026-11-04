@@ -28,11 +28,13 @@ namespace App.ControlPanel.Engine
     /// downloaded build.
     /// </para>
     /// <para>
-    /// Microsoft Entra ID authentication for Azure SQL is the case that matters. A build without it opens
+    /// Microsoft Entra ID authentication for Azure SQL is one case that matters. A build without it opens
     /// the connection with no credentials at all, and the failure surfaces as an Entity Framework error
     /// about the <c>master</c> database - which names neither Entra ID nor the real cause. There is no way
     /// to make such a build connect to an Entra-only server, so the install must stop before it starts,
-    /// rather than fail confusingly part-way through.
+    /// rather than fail confusingly part-way through. The other is reading the schema upgrade's credentials
+    /// from a file: a build that can't must not be given them at all, because its only other way to receive
+    /// them is its command line.
     /// </para>
     /// <para>
     /// Detection is a byte scan for the type name in the downloaded assemblies rather than a reflection
@@ -58,6 +60,22 @@ namespace App.ControlPanel.Engine
         public static DownloadedBuildCapability SupportsEntraSqlAuth(DirectoryInfo downloadedAppFolder)
         {
             return HasMarker(downloadedAppFolder, EntraSqlAuthMarker);
+        }
+
+        /// <summary>
+        /// Type name that only exists in builds whose <c>--initdb</c> reads its payload from a file
+        /// (<see cref="InstallerChildPayloadFile"/>).
+        /// </summary>
+        internal const string InitDbPayloadFileMarker = nameof(InstallerChildPayloadFile);
+
+        /// <summary>
+        /// Whether the downloaded control-panel build reads the schema upgrade's credentials from a file. Older builds
+        /// read them only from their command line, where process auditing records them.
+        /// </summary>
+        /// <param name="downloadedAppFolder">Folder the control-panel release was extracted to.</param>
+        public static DownloadedBuildCapability ReadsInitDbPayloadFile(DirectoryInfo downloadedAppFolder)
+        {
+            return HasMarker(downloadedAppFolder, InitDbPayloadFileMarker);
         }
 
         internal static DownloadedBuildCapability HasMarker(DirectoryInfo folder, string marker)

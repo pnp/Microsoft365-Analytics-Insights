@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   makeStyles,
   tokens,
@@ -20,11 +20,12 @@ import DonutChart from '../charts/DonutChart';
 import SqlPopover from '../SqlPopover';
 import InfoTip from '../shared/InfoTip';
 import PiiHiddenNote from '../shared/PiiHiddenNote';
+import { usePrintAllRows } from '../shared/printPreparation';
 import { KpiGrid, formatCount, formatDate } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
-import { PrintedFilters, printedSearch, useAdoptionTableStyles } from './adoptionShared';
-import { useT, type TFunction } from '../../i18n';
+import { PartialPrintNote, PrintedFilters, printedSearch, useAdoptionTableStyles } from './adoptionShared';
+import { formatNumber, useT, type TFunction } from '../../i18n';
 import { agentHealthReason, agentOriginLabel } from './serverText';
 import { AgentReachCells, AgentReachHeaderCells } from './AgentReachColumns';
 import AgentGrowthLine from './AgentGrowthLine';
@@ -41,6 +42,7 @@ export const AGENT_HEALTH_COLOUR: Record<AgentHealth, string> = {
 };
 
 const HEALTH_ORDER = [AgentHealth.Retire, AgentHealth.Review, AgentHealth.New, AgentHealth.Keep];
+const PAGE_SIZE = 50;
 
 const useStyles = makeStyles({
   stack: {
@@ -83,6 +85,19 @@ const useStyles = makeStyles({
   },
   tableWrap: {
     overflowX: 'auto',
+  },
+  footer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    marginTop: '12px',
+    flexWrap: 'wrap',
+  },
+  pager: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
   },
   badge: {
     color: '#ffffff',
@@ -200,6 +215,7 @@ export default function AgentsPanel({
   const [health, setHealth] = useState<'' | string>('');
   const [customOnly, setCustomOnly] = useState(false);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(0);
 
   // Filtered in the browser rather than on the server: the whole inventory is already in memory,
   // so a name filter is instant and a round trip would only make it feel slower.
@@ -215,6 +231,18 @@ export default function AgentsPanel({
           (a.agentKey ?? '').toLowerCase().includes(needle)),
     );
   }, [agents, health, customOnly, needle]);
+
+  useEffect(() => setPage(0), [visible]);
+
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const pageRows = visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const printRows = usePrintAllRows<AgentUsageRow>({
+    enabled: estate.knownAgents > 0,
+    total: visible.length,
+    loadedRows: pageRows.length,
+    loadPage: (skip, take) => Promise.resolve({ rows: visible.slice(skip, skip + take) }),
+  });
+  const rows = printRows ?? pageRows;
 
   const legendStates = useMemo(() => {
     const present = new Set(visible.map((a) => a.health));
@@ -477,6 +505,7 @@ export default function AgentsPanel({
             <div className={styles.empty}>{t('copilotAdoptionAgents.agents.inventory.noMatches')}</div>
           ) : (
             <>
+              <PartialPrintNote shownRows={rows.length} totalRows={visible.length} truncated={printRows !== null} />
               <div className={styles.tableWrap}>
                 <table className={table.table}>
                   <thead>
@@ -493,7 +522,7 @@ export default function AgentsPanel({
                     </tr>
                   </thead>
                   <tbody>
-                    {visible.map((agent) => (
+                    {rows.map((agent) => (
                       <tr key={agent.agentId}>
                         <td className={table.td}>
                           <span className={styles.agentName}>
@@ -537,6 +566,32 @@ export default function AgentsPanel({
                     ))}
                   </tbody>
                 </table>
+              </div>
+
+              <div className={styles.footer}>
+                <Text size={200} className={styles.muted} role="status">
+                  {t('copilotAdoptionAgents.agents.inventory.showingAgents', {
+                    start: formatCount(printRows ? 1 : page * PAGE_SIZE + 1),
+                    end: formatCount(printRows ? printRows.length : Math.min((page + 1) * PAGE_SIZE, visible.length)),
+                    total: formatCount(visible.length),
+                  })}
+                </Text>
+                {!printRows && (
+                  <div className={styles.pager} data-print="hide">
+                    <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+                      {t('copilotAdoptionAgents.agents.inventory.previous')}
+                    </Button>
+                    <Text size={200} className={styles.muted}>
+                      {t('copilotAdoptionAgents.agents.inventory.page', {
+                        page: formatCount(page + 1),
+                        totalPages: formatCount(totalPages),
+                      })}
+                    </Text>
+                    <Button size="small" disabled={page + 1 >= totalPages} onClick={() => setPage((p) => p + 1)}>
+                      {t('copilotAdoptionAgents.agents.inventory.next')}
+                    </Button>
+                  </div>
+                )}
               </div>
 
               <div className={styles.legend}>
@@ -739,12 +794,14 @@ function buildAgentKpis(
   t: TFunction,
 ): KpiDefinition[] {
   const retire = estate.healthBreakdown.find((h) => h.label === 'Retire')?.value ?? 0;
+  // Null for a past period the audit log could not measure: a dash, never the inventory's figure.
+  const notMeasured = t('copilotAdoptionAgents.agents.kpi.notMeasuredForPeriod');
 
   return [
     {
       key: 'active',
       label: t('copilotAdoptionAgents.agents.kpi.active.label'),
-      value: formatCount(estate.activeAgents),
+      value: estate.activeAgents === null ? '\u2014' : formatCount(estate.activeAgents),
       hint: t('copilotAdoptionAgents.agents.kpi.active.hint', {
         known: formatCount(estate.knownAgents),
         custom: formatCount(estate.customAgents),
@@ -774,8 +831,12 @@ function buildAgentKpis(
     {
       key: 'intensity',
       label: t('copilotAdoptionAgents.agents.kpi.intensity.label'),
-      value: estate.interactionsPerAgentUser,
-      hint: t('copilotAdoptionAgents.agents.kpi.intensity.hint', { interactions: formatCount(estate.agentInteractions) }),
+      value: estate.interactionsPerAgentUser === null
+        ? '\u2014'
+        : formatNumber(estate.interactionsPerAgentUser, { maximumFractionDigits: 1 }),
+      hint: estate.agentInteractions === null
+        ? notMeasured
+        : t('copilotAdoptionAgents.agents.kpi.intensity.hint', { interactions: formatCount(estate.agentInteractions) }),
       info: {
         what: t('copilotAdoptionAgents.agents.kpi.intensity.what'),
         how: t('copilotAdoptionAgents.agents.kpi.intensity.how'),

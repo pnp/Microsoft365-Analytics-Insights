@@ -1,4 +1,5 @@
-﻿using Azure.Identity;
+using Azure.Core;
+using Azure.Identity;
 using Azure.ResourceManager.Resources;
 using CloudInstallEngine.Azure;
 using Common.Entities.Installer;
@@ -25,11 +26,17 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         public static SubscriptionResource FromConfig(SolutionInstallConfig config, CancellationToken cancellationToken = default(CancellationToken))
         {
-            var azureSub = FromTokenCredential(new ClientSecretCredential(config.InstallerAccount.DirectoryId, config.InstallerAccount.ClientId,
-                config.InstallerAccount.Secret), config.Subscription.SubId, cancellationToken);
+            var azureSub = FromTokenCredential(InstallerCredential(config), config.Subscription.SubId, cancellationToken);
 
 
             return azureSub;
+        }
+
+        /// <summary>The installer account's Azure credential: the one every Azure Resource Manager and Kudu call uses.</summary>
+        public static TokenCredential InstallerCredential(SolutionInstallConfig config)
+        {
+            return new ClientSecretCredential(config.InstallerAccount.DirectoryId, config.InstallerAccount.ClientId,
+                config.InstallerAccount.Secret);
         }
     }
 }

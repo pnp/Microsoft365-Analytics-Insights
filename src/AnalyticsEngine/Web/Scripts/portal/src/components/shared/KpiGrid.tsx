@@ -2,7 +2,7 @@ import { makeStyles, mergeClasses, tokens, Text, Card, Badge, Link } from '@flue
 import type { CSSProperties, ReactNode } from 'react';
 import InfoTip from './InfoTip';
 import type { InfoTipContent } from './InfoTip';
-import { formatDateParts, formatNumber } from '../../i18n';
+import { formatDateParts, formatNumber, parseApiDate } from '../../i18n';
 
 /**
  * Visual weight of a headline figure. This is judgement, not decoration: on a page that is used to
@@ -189,7 +189,7 @@ export function formatPct(value: number): string {
 /** A UTC ISO date as a short date in the reader's language, or a dash when absent. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
-  return formatDateParts(new Date(iso), {
+  return formatDateParts(parseApiDate(iso), {
     day: 'numeric',
     month: 'short',
     year: 'numeric',

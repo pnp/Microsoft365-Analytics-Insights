@@ -13,19 +13,6 @@ on:
 permissions:
   contents: read
 
-env:
-  ClientID: ${{ secrets.APP_CLIENTID }}
-  ClientSecret: ${{ secrets.APP_CLIENTSECRET }}
-  TenantGUID: ${{ secrets.APP_TENANTGUID }}
-  TenantDomain: ${{ secrets.APP_TENANTDOMAIN }}
-  CognitiveEndpoint: ${{ secrets.APP_COGNITIVEENDPOINT }}
-  CognitiveKey: ${{ secrets.APP_COGNITIVEKEY }}
-  ServiceBus: ${{ secrets.CONNECTIONSTRINGS_SERVICEBUS }}
-  Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}
-  SoftwareDownloadURL: ${{ secrets.SOFTWAREDOWNLOADURL }}
-  StatsApiSecret: ${{ secrets.STATSAPISECRET }}
-  StatsApiUrl: ${{ secrets.STATSAPIURL }}
-
 jobs:
   build_dotnet:
     runs-on: windows-2022
@@ -75,10 +62,16 @@ jobs:
           if ($env:BUILD_LABEL -notmatch '^(DEV_BUILD|Build [0-9]+)$') { throw 'Invalid build label.' }
           $path = Join-Path $env:GITHUB_WORKSPACE 'src\AnalyticsEngine\Common\Entities\BuildConstants.cs'
           [IO.File]::WriteAllText($path, [IO.File]::ReadAllText($path).Replace('"DEV_BUILD"', '"' + $env:BUILD_LABEL + '"'))
+      # The importer's release config is the only packaged file with secret-backed values (the usage-stats
+      # upload URL and secret). Keep them out of every other step, including npm's lifecycle scripts.
       - name: Configure packages
+        if: matrix.project.package == 'Office365ActivityImporter'
         uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
         with:
-          files: src/AnalyticsEngine/*/App.Release.config, src/AnalyticsEngine/Web/Web.Release.config
+          files: src/AnalyticsEngine/WebJob.Office365ActivityImporter/App.Release.config
+        env:
+          StatsApiSecret: ${{ secrets.STATSAPISECRET }}
+          StatsApiUrl: ${{ secrets.STATSAPIURL }}
       - name: Restore and build
         shell: pwsh
         env:

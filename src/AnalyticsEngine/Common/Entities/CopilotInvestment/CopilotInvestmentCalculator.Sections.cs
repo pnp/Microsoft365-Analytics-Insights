@@ -47,6 +47,13 @@ namespace Common.Entities.CopilotInvestment
                     ShareOfActiveDays = totalDays > 0 ? Math.Round(days / (double)totalDays, 4) : (double?)null,
                     Credits = Math.Round(members.Sum(h => h.Credit?.Credits ?? 0), 6),
                     StudioCredits = Math.Round(members.Sum(h => h.Studio?.Credits ?? 0), 6),
+                    Populations = new[]
+                    {
+                        members.Count,
+                        members.Count(h => h.ActiveDays > 0),
+                        members.Count(h => (h.Credit?.Credits ?? 0) != 0),
+                        members.Count(h => (h.Studio?.Credits ?? 0) != 0),
+                    },
                 };
                 if (context.SeatPrice.HasValue) cohort.Cost = Money(members.Sum(h => context.Cost(h) ?? 0));
                 if (context.ValueReady)
@@ -115,17 +122,24 @@ namespace Common.Entities.CopilotInvestment
             var creditContributors = people.Count(p => (p.Credit?.Credits ?? 0) != 0);
             var studioContributors = people.Count(p => (p.Studio?.Credits ?? 0) != 0);
             var unlicensedActiveUsers = people.Count(p => !p.Licensed && p.ActiveDays > 0);
+            var holderStudioContributors = holders.Count(h => (h.Studio?.Credits ?? 0) != 0);
+            var populations = new[]
+            {
+                holders.Count, active, creditContributors, studioContributors, unlicensedActiveUsers,
+                holderStudioContributors, studioContributors - holderStudioContributors,
+            };
             if (people.Count < minGroupSize
                 || HasSmallContributorPopulation(holders.Count, minGroupSize)
                 || HasSmallContributorPopulation(active, minGroupSize)
                 || HasSmallContributorPopulation(creditContributors, minGroupSize)
                 || HasSmallContributorPopulation(studioContributors, minGroupSize)
                 || HasSmallContributorPopulation(unlicensedActiveUsers, minGroupSize))
-                return new CopilotInvestmentGroupRow { Withheld = true };
+                return new CopilotInvestmentGroupRow { Withheld = true, Populations = populations };
 
             // The matched holders only, so a group's return compares the same people's value and cost.
             var row = new CopilotInvestmentGroupRow
             {
+                Populations = populations,
                 Holders = holders.Count,
                 ActiveHolders = active,
                 IdleHolders = holders.Count - active,
@@ -222,6 +236,7 @@ namespace Common.Entities.CopilotInvestment
                     Category = g.Key.Category,
                     Unit = g.Key.Unit.Length == 0 ? null : g.Key.Unit,
                     Consumers = g.Where(s => (s.Consumed ?? 0) > 0).Select(s => s.ObjectId).Distinct().Count(),
+                    Contributors = g.Where(s => (s.Consumed ?? 0) != 0).Select(s => s.ObjectId).Distinct().Count(),
                     Quantity = Math.Round(g.Sum(s => s.Consumed ?? 0), 6),
                     UnknownAmountUsers = g.Where(s => !s.Consumed.HasValue).Select(s => s.ObjectId).Distinct().Count(),
                     LimitExhaustedUsers = g.Where(s => string.Equals(s.DecisionReason, "limitExhausted", StringComparison.Ordinal)).Select(s => s.ObjectId).Distinct().Count(),
@@ -542,9 +557,9 @@ namespace Common.Entities.CopilotInvestment
             }
 
             var studio = summary.Investment.Studio;
-            if (studio.Credits > 0 || (studio.PriorCredits ?? 0) > 0)
+            if ((studio.Credits ?? 0) > 0 || (studio.PriorCredits ?? 0) > 0)
                 findings.Add(Finding(CopilotInvestmentFindingCodes.StudioTrend, "neutral", ("credits", studio.Credits), ("prior", studio.PriorCredits),
-                    ("change", (studio.PriorCredits ?? 0) > 0 ? Math.Round(studio.Credits / studio.PriorCredits.Value - 1, 4) : (double?)null)));
+                    ("change", (studio.PriorCredits ?? 0) > 0 ? Math.Round((studio.Credits ?? 0) / studio.PriorCredits.Value - 1, 4) : (double?)null)));
 
             var trajectory = summary.Trajectory;
             if (trajectory.Available)
@@ -635,7 +650,7 @@ namespace Common.Entities.CopilotInvestment
                     Add(balancesArea, CopilotInvestmentTrustCodes.CreditsPartial, "medium", ("share", Math.Round(credits.PartialUsers / (double)credits.ObservedUsers, 4)));
                 if ((credits.UnresolvedCredits ?? 0) > 0)
                 {
-                    var total = summary.Investment.Credits.Credits + credits.UnresolvedCredits.Value;
+                    var total = (summary.Investment.Credits.Credits ?? 0) + credits.UnresolvedCredits.Value;
                     // An unresolved balance below 5% of the total is reported but does not lower confidence.
                     Add(balancesArea, CopilotInvestmentTrustCodes.CreditsUnresolved, total > 0 && credits.UnresolvedCredits.Value / total > 0.05 ? "medium" : "info",
                         ("credits", credits.UnresolvedCredits), ("objects", credits.UnresolvedObjects));

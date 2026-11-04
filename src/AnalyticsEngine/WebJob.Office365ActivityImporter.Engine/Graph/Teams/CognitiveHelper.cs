@@ -37,6 +37,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         }
 
 
+        /// <summary>
+        /// What is sent to Azure AI Language for one message: the message's own text, and nothing else.
+        /// </summary>
+        /// <remarks>
+        /// A root message's <c>Replies</c> are deliberately not included. The channel's message list already holds every
+        /// new reply as a message of its own (<see cref="ChannelMessageScopeRules.SelectNewMessagesAndReactions"/>), and
+        /// <c>UserGroupsFilter</c> is applied to that list (<see cref="ChannelMessageScopeRules.RestrictToUserScope"/>), not
+        /// to a root's <c>Replies</c>. Adding the replies here again sent the reply of someone outside the scope to
+        /// Azure AI Language with an in-scope root, and analysed every other reply twice, the second time on the root's day.
+        /// </remarks>
         internal static List<TextAnalysisSample<ChatMessage>> BuildTextAnalysisSampleList(ChatMessage msg)
         {
             if (msg is null)
@@ -48,20 +58,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 throw new ArgumentNullException("Message ID");
             }
 
-            var l = new List<TextAnalysisSample<ChatMessage>>
+            return new List<TextAnalysisSample<ChatMessage>>
             {
                 new TextAnalysisSample<ChatMessage> { Text = msg.Body.ToPlainText(), Id = msg.Id, Parent = msg }
             };
-
-            if (msg.Replies != null)
-            {
-                foreach (var reply in msg.Replies)
-                {
-                    l.AddRange(BuildTextAnalysisSampleList(reply));
-                }
-            }
-
-            return l;
         }
     }
 }

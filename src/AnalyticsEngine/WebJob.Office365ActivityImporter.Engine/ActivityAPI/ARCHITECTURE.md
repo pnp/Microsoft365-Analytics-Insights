@@ -8,6 +8,9 @@ operational guidance for extending or debugging the pipeline.
 
 ## Message tracing (opt-in diagnostics)
 
+Operators: the wiki's [Message Tracing](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Message%20Tracing)
+page is the procedure. This section records how it works.
+
 Message tracing is off by default. Set the App Service app setting `MessageTraceMatch` to one or more
 semicolon-separated wildcard patterns to capture matching JSON API responses to Azure Blob storage. `*`
 matches any run of characters and `?` matches one character; `*00000000-0000-0000-0000-000000000000*`
@@ -44,8 +47,8 @@ skipped by the JSON-only content-type gate. Token endpoints, Key Vault, OAuth to
 interaction-history responses are explicitly excluded; the product does not store prompt/response text from
 the interaction-history API.
 
-Installer upgrades already merge unmanaged App Service app settings before writing the replacement settings
-collection (dev has done this since #318), so a manually-added `MessageTraceMatch` is preserved by an upgrade.
+Installer upgrades merge unmanaged App Service app settings before writing the replacement settings
+collection, so a manually-added `MessageTraceMatch` is preserved by an upgrade.
 Remove `MessageTraceMatch` from App Service application settings to stop tracing.
 
 ---
@@ -339,12 +342,13 @@ Located in `Common/Entities/Migrations/`. Key points:
   running tests on an older LocalDB, you may need:  
   `ALTER TABLE __MigrationHistory ADD CreatedOn DATETIME NOT NULL DEFAULT GETUTCDATE()`
 
-### Recent Migrations (newest first)
-| ID | Name | Notes |
-|----|------|-------|
-| `202605201510051` | RemovePowerAppTypesAndFlowRecurrenceTypes | Drops dead lookup tables |
-| `202605141410030` | PowerPlatformAuditLogging | Adds all Power Platform tables |
-| `202512011404129` | CopilotExtendedDataAgentType | Adds `is_custom_agent` to copilot_agents |
+### Finding the latest migration
+
+The migrations are in `Common/Entities/Migrations/`. Their ids start with a timestamp
+(`yyyyMMddHHmmssf`), so the latest is the one with the highest id. A new migration's id must sort
+after it, and `UrlFullUrlMigrationPipelineTests.LatestId` must be updated to match. The
+AnalyticsEngine [copilot instructions](../../.github/copilot-instructions.md) list everything else
+a new migration needs, including its `<migrationid>.manual.sql`.
 
 ---
 
@@ -370,19 +374,20 @@ Located in `Common/Entities/Migrations/`. Key points:
 
 ## Build & Test
 
-```bash
-# Build (VS 2022/18 MSBuild)
-"C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe" ^
-  Tests.UnitTests\Tests.UnitTests.csproj /t:Restore /v:minimal
-"C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\MSBuild.exe" ^
-  Tests.UnitTests\Tests.UnitTests.csproj /t:Build /v:minimal /p:Configuration=Debug
+From a Developer PowerShell for Visual Studio, in `src/AnalyticsEngine`:
+
+```powershell
+# Build
+msbuild Tests.UnitTests\Tests.UnitTests.csproj /restore /v:minimal /p:Configuration=Debug
 
 # Run tests (vstest.console)
-"C:\Program Files\Microsoft Visual Studio\18\Enterprise\Common7\IDE\Extensions\TestPlatform\vstest.console.exe" ^
-  Tests.UnitTests\bin\Debug\Tests.UnitTests.dll ^
+vstest.console.exe Tests.UnitTests\bin\Debug\Tests.UnitTests.dll `
   /TestCaseFilter:"FullyQualifiedName~PowerPlatformAuditEventManagerTests|FullyQualifiedName~OrgURLsFilter"
 ```
 
-Tests require a LocalDB instance with database `UnitTestingAnalytics` (connection string in
-`Tests.UnitTests/App.config`). The test DB auto-migrates on first use (DEBUG build sets
-`autoUpdate: true`).
+The SQL tests use the LocalDB database `UnitTestingSPOInsights` on `(localdb)\MSSQLLocalDB`. Its
+connection string comes from `Tests.UnitTests/App.Debug.config`, which you copy from
+`deploy/Debug Config Files/Unit tests/` before the first build: `App.config` is generated from
+`App.Template.config` at build time. The test DB auto-migrates on first use (the DEBUG build sets
+`autoUpdate: true`). [CONTRIBUTING](../../../../CONTRIBUTING.md#running-the-tests) covers the
+rest: Azurite, and which tests go Inconclusive without credentials.

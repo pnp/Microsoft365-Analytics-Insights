@@ -24,8 +24,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// </summary>
         /// <param name="rootMsgs">Root messages from the channel delta read, with their replies already loaded.</param>
         /// <param name="newSince">
-        /// When the delta token was last updated, or <c>null</c> for a full (first) read - in which case
-        /// everything is new.
+        /// The time of the channel's last committed checkpoint, or <c>null</c> when it has none (a first read) - in which
+        /// case everything is new. A full read made because Graph rejected the checkpoint's token still passes that time:
+        /// everything created before it was counted when the checkpoint was committed.
         /// </param>
         public static ChannelMessageScope SelectNewMessagesAndReactions(IEnumerable<ChatMessage> rootMsgs, DateTime? newSince)
         {

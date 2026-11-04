@@ -1,4 +1,5 @@
 using Common.Entities;
+using Common.Entities.Config;
 using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -35,9 +36,12 @@ namespace WebJob.Office365ActivityImporter.Engine.StatsUploader
             _adoptionStatsProvider = adoptionStatsProvider;
         }
 
+        /// <summary>
+        /// The configuration the installer saved last, which decides among other things whether usage reports may be sent.
+        /// </summary>
         public override async Task<BaseSolutionInstallConfig> GetLastAppliedSolutionConfig()
         {
-            var latestConfig = await _db.ConfigStates.OrderByDescending(s => s.DateApplied).Take(1).ToListAsync();
+            var latestConfig = await _db.ConfigStates.LatestSavedFirst().Take(1).ToListAsync();
             if (latestConfig.Count == 1 && !string.IsNullOrEmpty(latestConfig[0].ConfigJson))
             {
                 try

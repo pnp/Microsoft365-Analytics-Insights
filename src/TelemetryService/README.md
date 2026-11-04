@@ -19,7 +19,8 @@ installations (the AnalyticsEngine importer in
 
 - Receives `TelemetryPayload` POSTs from instances of
   [`WebApiStatsUploader`](../AnalyticsEngine/WebJob.Office365ActivityImporter.Engine/StatsUploader/WebApiStatsUploader.cs).
-- Validates the BCrypt-signed payload against a shared `TelemetrySecret`.
+- Validates the BCrypt-signed payload against a shared `TelemetrySecret`, within
+  [size and rate limits](#upload-limits) for the anonymous upload endpoint.
 - Upserts the latest report into a Cosmos DB "current" container and appends
   a per-update row to a "history" container (see
   [`CosmosTelemetrySaveAdaptor`](Web.Server/Storage/CosmosTelemetrySaveAdaptor.cs)).
@@ -38,7 +39,7 @@ installations (the AnalyticsEngine importer in
 
 | Method | Path | Purpose | Auth |
 | --- | --- | --- | --- |
-| `POST` | `/api/Telemetry` | Receive a `TelemetryPayload` from an importer instance. | BCrypt signature against `TelemetrySecret` (see [`AnonUsageStatsModel.IsValidSecretForThisObject`](../AnalyticsEngine/Common/UsageReporting/AnonUsageStatsModel.cs)). |
+| `POST` | `/api/Telemetry` | Receive a `TelemetryPayload` from an importer instance. | BCrypt signature against `TelemetrySecret` (see [`AnonUsageStatsModel.IsValidSecretForThisObject`](../AnalyticsEngine/Common/UsageReporting/AnonUsageStatsModel.cs)). Anonymous, so [size and rate limited](#upload-limits). |
 | `GET`  | `/api/auth/config` | Public MSAL configuration (authority, client ID and API scope; no secrets). | Anonymous. |
 | `GET`  | `/api/Telemetry/stats` | Aggregated headline figures (client count, total rows / size, last update, per-table totals, per-schema totals, build adoption, import-feature adoption, reporting freshness and deployment-size distribution). | Entra token with `Telemetry.Read` scope and `Telemetry.Dashboard.Read` role. |
 | `GET`  | `/api/Telemetry/clients` | Per-client summary rows for the dashboard table. | Entra token with `Telemetry.Read` scope and `Telemetry.Dashboard.Read` role. |
@@ -49,6 +50,15 @@ installations (the AnalyticsEngine importer in
   signature: the importer hashes `<TelemetrySecret> + StatsModel.Generated.Ticks`
   and the receiver re-verifies it. Both sides must hold the same secret
   (`TelemetrySecret` here, `StatsApiSecret` on the importer).
+
+  Treat this endpoint as **public**. The secret is substituted into every
+  importer release package, so anyone can read it: a valid signature shows that
+  a payload was built by importer code, not which install sent it or that its
+  figures are genuine, and it covers only the timestamp, not the body. The
+  service therefore limits what an anonymous caller can cost — see
+  [Upload limits](#upload-limits). Proving where an upload came from would need
+  a per-install credential, which a public package cannot hold; that is a
+  protocol change, not something these limits attempt.
 - **Dashboard reads** require a delegated Entra access token. The API checks
   both the `Telemetry.Read` scope and the `Telemetry.Dashboard.Read` app role,
   so only explicitly assigned users or groups can view the reports. The SPA
@@ -116,6 +126,56 @@ installations (the AnalyticsEngine importer in
   config APIs report the new value while requests are still rejected using the
   old one, which makes the fix look like it did not work.
 
+### Upload limits
+
+The upload endpoint has to stay anonymous (importers have no Entra identity),
+and the signing secret is public (see the auth model above), so these limits
+are what bound the cost of a request. All three are in
+[`UploadLimits`](Web.Server/Startup/UploadLimits.cs) and
+[`UploadSignature`](Web.Server/Auth/UploadSignature.cs).
+
+| Limit | Value | What a caller over it gets |
+| --- | --- | --- |
+| Signature shape | Exactly what importers send: `$2a$04$` followed by 53 characters of bcrypt salt and hash (60 in all). Checked **before** BCrypt runs. | `401`, and a warning in the log that names the expected shape (never the value). |
+| Request body | 1 MiB (`UploadLimits.MaxRequestBodyBytes`). | `413`. |
+| Requests per IP address | 30 an hour (fixed window), configurable with `MaxUploadsPerAddressPerHour`. Every request counts, accepted or not. IPv6 addresses are counted per `/64`. | `429` with `Retry-After`. |
+
+- **Why the signature shape is checked first.** A bcrypt hash names its own
+  cost factor, and verifying it means hashing again at that cost: 2^cost
+  rounds, for any cost up to 31. Without the check, one anonymous request
+  could make the server spend minutes or hours of CPU before anything was
+  authenticated. A rate limit cannot help there, because it acts before a
+  request, not during one. Importers sign with
+  `StringUtils.GetHashedStringWithSalt`, which has always used cost 4 (about a
+  millisecond to verify), so a signature of any other shape cannot be genuine.
+  A malformed signature used to make BCrypt throw, which surfaced as a `500`;
+  it is now a `401`. `SignatureFromTheImporterCode_HasTheShapeTheServerAccepts`
+  fails if the client's signing ever changes, and the workflow runs it on pull
+  requests that touch `Common/DataUtils`, where that code lives, so a change
+  that would get every importer of the new build refused is caught before it
+  ships.
+- **Why 1 MiB.** An importer sends one report a day: a row for each table in
+  its database (a couple of hundred rows at about 100 bytes) plus, when
+  adoption metrics are on, roughly 500 bytes per licence SKU — about 40 KB for
+  200 tables and 15 SKUs. A test builds a report with 1,000 tables and 100
+  SKUs, far beyond any real deployment (about 180 KB), and fails if it ever
+  reaches a quarter of the limit. The limit also keeps every stored document
+  well inside Cosmos DB's 2 MB item size. Before it, ASP.NET Core's default of
+  about 30 MB applied.
+- **Why 30 an hour.** An importer uploads at most once a day after a successful
+  upload, and on its next import cycle after a failed one, so even several
+  installs sharing one outbound address stay far below it. A refused importer
+  logs the `429` as a failed upload and sends a fresh report on a later cycle;
+  nothing is lost.
+  Requests are counted against `HttpContext.Connection.RemoteIpAddress`, as
+  the host reports it. If `429`s from genuine importers ever show up in the
+  requests telemetry — for example because the host reports a shared
+  front-end address rather than the caller's — raise
+  `MaxUploadsPerAddressPerHour`.
+- **What the limits do not do.** They bound cost; they cannot tell a forged
+  report from a real one. Each accepted upload still adds a document to the
+  history container, which has no retention policy.
+
 ### Application Insights
 
 Telemetry is emitted **in-process** by
@@ -170,7 +230,10 @@ populate them. Two derived values are worth knowing about:
 
 The server tests cover the dashboard aggregation (freshness bucketing, build and feature
 adoption, schema/table keying, medians), the settings-string parser, the upload endpoint's
-signature checks, the save/merge behaviour and configuration binding. `Aggregate` takes an
+signature checks and [limits](#upload-limits), the save/merge behaviour, configuration binding,
+and that the deployment template provisions every Cosmos container the service uses with the
+partition key the code expects (`InfrastructureTemplateTests.cs`, which reads
+`infra/TelemetryService/azuredeploy.json`). `Aggregate` takes an
 injectable `nowUtc` so the freshness buckets are deterministic rather than dependent on when
 the suite runs, and the internal helpers are exposed to the test project via `InternalsVisibleTo`.
 
@@ -187,8 +250,12 @@ graph are exercised as they run in Azure. The Cosmos adaptors are replaced with 
 no Azure resources and no real tokens; they run in the ordinary `dotnet test` pass.
 
 They assert that `/health` and `/api/auth/config` stay anonymous, that the dashboard endpoints
-return `401` unauthenticated and `403` for a token missing either the role or the scope, and that
-the signed upload endpoint accepts a correct signature and rejects a wrong one.
+return `401` unauthenticated and `403` for a token missing either the role or the scope, that
+the signed upload endpoint accepts a correct signature and rejects a wrong one, and that it
+refuses an over-cost or malformed signature, an oversized body and an address over its hourly
+budget (`UploadProtectionTests.cs`). TestServer has no network connection, so a test chooses the
+caller's IP address with the `X-Test-Remote-Address` header, which a test-only startup filter
+copies into `HttpContext.Connection.RemoteIpAddress`.
 
 Configuration is supplied through **environment variables** rather than
 `ConfigureAppConfiguration`. `Program.cs` reads `builder.Configuration` while registering services,
@@ -251,12 +318,14 @@ which runs a read-only `az deployment group what-if` and deploys nothing. See
 | `WEBSITE_AAD_ENABLE_MISE` | Azure deployment | Makes App Service Authentication validate tokens with MISE. On its own this is MISE v1. The Bicep deployment sets this to `true`. |
 | `WEBSITE_LOAD_FIRST_PARTY_AUTH` | Azure deployment | Loads App Service Authentication's first-party modules, which use MISE v2 — the version the MISE compliance KPI requires. Only accepted on a subscription App Service has enabled for first-party authentication. The Bicep deployment sets this to `true` unless `loadFirstPartyAuth` is `false` (`deploy.ps1 -SkipFirstPartyAuth`). |
 | `CosmosDb:AccountEndpoint` | yes | Cosmos account URL, e.g. `https://myaccount.documents.azure.com:443/`. The account uses AAD (key auth disabled) — `DefaultAzureCredential` is used. |
-| `CosmosDb:DatabaseName` | yes | Cosmos database to use (created on startup if missing). |
-| `CosmosDb:ContainerNameCurrent` | yes | Container for the latest record per client. |
-| `CosmosDb:ContainerNameHistory` | yes | Container for the append-only history. |
+| `CosmosDb:DatabaseName` | yes | Cosmos database to use. Must already exist: see the note below. |
+| `CosmosDb:ContainerNameCurrent` | yes | Container for the latest record per client (partition key `/AnonClientId`). |
+| `CosmosDb:ContainerNameHistory` | yes | Container for the append-only history (partition key `/AnonClientId`). |
+| `CosmosDb:ContainerNameAnnotations` | optional | Container for maintainer annotations (partition key `/id`). Defaults to `annotations`. Must not be the current container, whose documents every upload replaces. |
 | `AZURE_TENANT_ID` | optional | Set when your default Azure tenant differs from the Cosmos account's home tenant. |
 | `MaxDashboardItems` | optional | Cap on the number of client records the dashboard endpoints will pull in one request. Defaults to `5000`. |
 | `DashboardCacheSeconds` | optional | How long the dashboard endpoints cache the Cosmos read for. Defaults to `60`. Set to `0` to disable caching (useful for local debugging). |
+| `MaxUploadsPerAddressPerHour` | optional | How many uploads one IP address may send in an hour — see [Upload limits](#upload-limits). Defaults to `30`; zero, negative or unreadable values also mean `30`, so the limit cannot be switched off by mistake. |
 
 ### Entra app registration
 
@@ -288,9 +357,29 @@ dotnet user-secrets set "CosmosDb:ContainerNameCurrent" "Current" --project Web.
 dotnet user-secrets set "CosmosDb:ContainerNameHistory" "History" --project Web.Server
 ```
 
-> The service calls `CreateDatabaseIfNotExistsAsync` + `CreateContainerIfNotExistsAsync`
-> on startup, so the configured database / containers are created automatically
-> the first time the app runs against a fresh Cosmos account.
+> **The service does not create its database or containers.** It authenticates
+> to Cosmos DB with Microsoft Entra ID, and Entra data-plane roles cannot create
+> databases or containers: the SDK's `CreateDatabaseIfNotExistsAsync` /
+> `CreateContainerIfNotExistsAsync` fail with `403`, substatus `5300`, for one
+> that is missing
+> ([Microsoft Learn](https://learn.microsoft.com/azure/cosmos-db/troubleshoot-forbidden#nondata-operations-arent-allowed)).
+> The service used to call them on startup anyway, which only worked because
+> the containers already existed; on a fresh deployment the annotations
+> container, which the template did not provision, was never created. The
+> Bicep template now provisions all three containers. On startup the service
+> only **checks** them (reading container metadata is allowed) and logs an
+> error naming any container that is missing or partitioned on the wrong key.
+>
+> For a development Cosmos account, create them through Azure Resource Manager
+> — the portal, or the Azure CLI with an identity that has control-plane rights
+> on the account:
+>
+> ```pwsh
+> az cosmosdb sql database create -g <resource-group> -a <account> -n Telemetry
+> az cosmosdb sql container create -g <resource-group> -a <account> -d Telemetry -n Current -p /AnonClientId --partition-key-version 2
+> az cosmosdb sql container create -g <resource-group> -a <account> -d Telemetry -n History -p /AnonClientId --partition-key-version 2
+> az cosmosdb sql container create -g <resource-group> -a <account> -d Telemetry -n annotations -p /id --partition-key-version 2
+> ```
 
 ## Deploying to Azure
 
@@ -672,7 +761,8 @@ From the CLI:
 dotnet run
 ```
 
-Without a reachable Cosmos account the app will fail at startup (the
-adaptor's `Init()` is awaited before the host starts). That's intentional —
-the dashboard is only meaningful when backed by real data — so configure
-user-secrets pointing at a dev Cosmos account before trying to run.
+Without a reachable Cosmos account the site still starts — the startup
+container check runs as a hosted service, logs that it could not verify the
+containers and carries on — but every telemetry read and write fails, so the
+dashboard is only meaningful once user-secrets point at a dev Cosmos account
+that has the database and containers described above.

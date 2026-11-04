@@ -11,6 +11,11 @@ export type TeamsQueryInfo = {
   sql: string;
   /** Present when the section failed. The section renders this instead of a chart. */
   error: string | null;
+  /**
+   * A stable code when the server itself decided the section could not run (`error` is then only its English
+   * fallback); absent for a failed query, whose `error` is the database's own message.
+   */
+  errorCode?: string | null;
   elapsedMs: number;
 };
 
@@ -124,6 +129,33 @@ export type TeamsOverview = TeamsSection & {
   trend: TeamsTrendPoint[];
   segmentMix: TeamsSegmentSlice[];
   judgements: TeamsJudgement[];
+  /** Whether the engagement mix's Dormant share could be measured. Absent from an older API. */
+  dormancy?: TeamsDormancy;
+};
+
+/** Why a licensed person with no Teams activity can or cannot be called dormant (mirrors TeamsDormancy). */
+export type TeamsDormancyReason =
+  | 'incompleteImport'
+  | 'groupFiltered'
+  | 'namesConcealed'
+  | 'noTeamsLicences'
+  | 'notChecked';
+
+/**
+ * Whether the usage reports can prove somebody did nothing in Teams in the window. They list only the people
+ * active on each day, so a licensed person with no activity is dormant only when every day was imported, the
+ * import covers everyone and the reports carry real names. When not, such people are left out of the Dormant
+ * segment and list and counted in `unmeasuredUsers`.
+ */
+export type TeamsDormancy = {
+  known: boolean;
+  /** A stable key, null when `known`; the page writes the sentence. */
+  reason: TeamsDormancyReason | string | null;
+  expectedDays: number;
+  importedDays: number;
+  teamsLicensedUsers: number;
+  /** Licensed people with no activity left out of the engagement mix because dormancy is not known. */
+  unmeasuredUsers: number;
 };
 
 export type TeamsAdoptionRhythm = {
@@ -141,7 +173,10 @@ export type TeamsSegmentTrendPoint = {
 };
 
 export type TeamsDemographicRow = {
-  name: string;
+  /** Tenant data, never translated. Null for the combined `other` row. */
+  name: string | null;
+  /** True for the single row a reader without See PII gets in place of every group too small to name. */
+  other?: boolean;
   knownUsers: number;
   activeUsers: number;
   reachPct: number;
@@ -172,6 +207,18 @@ export type TeamsAdoption = TeamsSection & {
   breakdown: TeamsDemographicRow[];
   devices: TeamsDeviceRow[];
   lifecycle: TeamsLifecycle;
+  /** Whether the segment mix's Dormant share could be measured. Absent from an older API. */
+  dormancy?: TeamsDormancy;
+  /**
+   * For a reader without See PII, the fewest people - and active people - a breakdown row describes. Null or
+   * absent when every group is shown.
+   */
+  minimumGroupSize?: number | null;
+  /**
+   * How many groups were combined into the `other` row - or, when even all of them together are too few people,
+   * left out of the breakdown. 0 or absent when none were.
+   */
+  otherGroups?: number;
 };
 
 export type TeamsCallKpis = {
@@ -320,7 +367,24 @@ export type TeamsPeople = TeamsSection & {
   namesObfuscated: boolean;
   champions: TeamsPersonRow[];
   dormant: TeamsPersonRow[];
-  championsByDepartment: TeamsNamedCount[];
+  championsByDepartment: TeamsDepartmentCount[];
+  /** Whether `dormant` can include licensed people with no Teams activity at all. Absent from an older API. */
+  dormancy?: TeamsDormancy;
+  /**
+   * For a reader without See PII, the fewest power users a department row counts. Null or absent when every
+   * department is shown.
+   */
+  minimumGroupSize?: number | null;
+  /** How many departments were combined into the `other` row - or left out when too few even together. */
+  otherChampionDepartments?: number;
+};
+
+/** Power users in one department. `other` marks the combined row a reader without See PII gets; its name is null. */
+export type TeamsDepartmentCount = {
+  name: string | null;
+  count: number;
+  sharePct: number | null;
+  other?: boolean;
 };
 
 /** Exportable sections, matching `TeamsExplorerExports.Sections`. */

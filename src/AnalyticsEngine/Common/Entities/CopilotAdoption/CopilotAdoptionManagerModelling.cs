@@ -23,8 +23,11 @@ namespace Common.Entities.CopilotAdoption
     /// <para><b>Aggregates only.</b> No manager is named, and nothing here is attached to a person's row
     /// or to the accountability roll-up. A group too small to hide an individual in is published blank:
     /// every figure that depends on a manager's own use needs at least
-    /// <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> people managers whose use is known, and
-    /// each rate needs at least that many reports behind it.</para>
+    /// <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> people managers whose use is known, each
+    /// rate needs at least that many reports behind it, and the split by the manager's use - and the split
+    /// of that by seat - is published only when every group in it holds that many managers or none, because
+    /// a group of one manager would give away that manager's own use, and the groups add up to totals that
+    /// are always published.</para>
     /// <para><b>An association, not a cause.</b> Teams whose manager uses Copilot may differ in function,
     /// seniority or seat coverage. The split by whether the manager holds a seat exists because a manager
     /// with a seat is more likely both to use Copilot and to lead a team that was given seats, which on
@@ -517,6 +520,7 @@ namespace Common.Entities.CopilotAdoption
             private readonly int[,] _reports = new int[2, 2];
             private readonly int[,] _activeReports = new int[2, 2];
             private readonly int[,] _habitualReports = new int[2, 2];
+            private readonly int[,] _managersInCell = new int[2, 2];
             private int _managersActive;
             private int _managersInactive;
             private int _managersUnknown;
@@ -527,7 +531,8 @@ namespace Common.Entities.CopilotAdoption
             {
                 _reportsWithManager++;
 
-                if (_managers.Add(manager.ManagerId))
+                var firstSeen = _managers.Add(manager.ManagerId);
+                if (firstSeen)
                 {
                     switch (manager.Status)
                     {
@@ -546,6 +551,7 @@ namespace Common.Entities.CopilotAdoption
                 var status = manager.Status == ManagerCopilotStatus.Active ? ActiveManager : InactiveManager;
                 var seat = manager.HoldsSeat ? Licensed : Unlicensed;
 
+                if (firstSeen) _managersInCell[status, seat]++;
                 _reports[status, seat]++;
                 if (report.Band > AdoptionBand.Dormant) _activeReports[status, seat]++;
                 if (CopilotAdoptionScoring.IsHabitual(report.Band)) _habitualReports[status, seat]++;
@@ -568,6 +574,13 @@ namespace Common.Entities.CopilotAdoption
                 figures.ManagersActive = _managersActive;
                 figures.ManagersActivePct = CopilotAdoptionScoring.Percentage(_managersActive, known);
 
+                // Every figure below describes the managers in one group and their teams. A group of one to four
+                // managers is a handful of identifiable people - the one manager without a seat, say - whose own
+                // use its report count gives away to anyone who knows their team. The groups also add up to the
+                // reports with a known manager, which is always published, so one group can only be hidden by
+                // hiding its sibling too: the split is published whole or not at all.
+                if (!IsPublishable(_managersActive, min) || !IsPublishable(_managersInactive, min)) return;
+
                 figures.ReportsManagerActive = Sum(_reports, ActiveManager);
                 figures.ReportsActiveRatePctManagerActive = Rate(Sum(_activeReports, ActiveManager), Sum(_reports, ActiveManager), min);
                 figures.ReportsHabitRatePctManagerActive = Rate(Sum(_habitualReports, ActiveManager), Sum(_reports, ActiveManager), min);
@@ -575,6 +588,15 @@ namespace Common.Entities.CopilotAdoption
                 figures.ReportsManagerInactive = Sum(_reports, InactiveManager);
                 figures.ReportsActiveRatePctManagerInactive = Rate(Sum(_activeReports, InactiveManager), Sum(_reports, InactiveManager), min);
                 figures.ReportsHabitRatePctManagerInactive = Rate(Sum(_habitualReports, InactiveManager), Sum(_reports, InactiveManager), min);
+
+                // The same rule for the split by seat: its four cells add up to the two groups above.
+                for (var status = ActiveManager; status <= InactiveManager; status++)
+                {
+                    for (var seat = Licensed; seat <= Unlicensed; seat++)
+                    {
+                        if (!IsPublishable(_managersInCell[status, seat], min)) return;
+                    }
+                }
 
                 figures.ReportsManagerActiveLicensed = _reports[ActiveManager, Licensed];
                 figures.ReportsActiveRatePctManagerActiveLicensed = Rate(_activeReports[ActiveManager, Licensed], _reports[ActiveManager, Licensed], min);
@@ -596,6 +618,12 @@ namespace Common.Entities.CopilotAdoption
             private static int Sum(int[,] counts, int status)
             {
                 return counts[status, Licensed] + counts[status, Unlicensed];
+            }
+
+            /// <summary>An empty group says nothing about anyone; otherwise it needs <paramref name="min"/> managers.</summary>
+            private static bool IsPublishable(int managers, int min)
+            {
+                return managers == 0 || managers >= min;
             }
         }
     }

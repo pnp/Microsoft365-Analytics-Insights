@@ -78,7 +78,13 @@ namespace Common.Entities.LicenceActivity
             "Activity levels describe how many of the period's weeks someone was active in: "
             + "No activity = none, Low = under a quarter, Moderate = a quarter to under three quarters, "
             + "High = three quarters or more. A week is only counted when every one of its days was "
-            + "imported; where a week could not be measured in full the level is Unknown, not zero.";
+            + "imported; where a week could not be measured in full the level is Unknown, not zero. "
+            + "Copilot is measured from Microsoft's 7-day Copilot report, read at the end of each Monday-to-Sunday "
+            + "week, so it needs dates that run from a Monday to a Sunday, as the 7- and 28-day presets do. Where those "
+            + "readings don't cover the dates, 28 days that exactly match Microsoft's 28-day Copilot report are measured "
+            + "from that report instead: it counts days rather than weeks, so its levels compare the days Copilot was "
+            + "used with the period's working days (20 in 28). Other dates, including the 90- and 180-day presets, leave "
+            + "Copilot Unknown.";
 
         public const string AssignmentCaveat =
             "Past activity is shown against who holds each licence today, not who held it at the time. "
@@ -109,10 +115,10 @@ namespace Common.Entities.LicenceActivity
         /// is a measure of use, never of value.
         /// </summary>
         public const string AdoptionScore =
-            "The adoption score is the share of measured weeks in which the people holding a licence were active, "
-            + "taken across every service that could be measured for them: 100 means every holder used every measured "
-            + "service in every week of the period, 0 means no recorded activity at all. A service that could not be "
-            + "measured for someone is left out of their score rather than counted as unused.";
+            "The adoption score is the average share of measured weeks in which the people holding a licence were active, "
+            + "taken across every service that could be measured for them, with each service counting equally: 100 means "
+            + "every holder used every measured service in every week of the period, 0 means no recorded activity at all. "
+            + "A service that could not be measured for someone is left out of their score rather than counted as unused.";
 
         /// <summary>
         /// The adoption score for a set of people: active weeks over measured weeks, as a percentage to one
@@ -122,6 +128,18 @@ namespace Common.Entities.LicenceActivity
         {
             if (measuredWeeks <= 0 || activeWeeks < 0) return null;
             return Math.Round(100d * Math.Min(activeWeeks, measuredWeeks) / measuredWeeks, 1, MidpointRounding.AwayFromZero);
+        }
+
+        /// <summary>
+        /// The adoption score from per-service shares: <paramref name="activeShares"/> is the sum, over every
+        /// measured (person, service) pair, of the share of that service's measured weeks the person was active
+        /// in, and <paramref name="measuredServices"/> is how many pairs there were. Each service therefore
+        /// carries the same weight whatever its unit. Null when nothing could be measured.
+        /// </summary>
+        public static double? Score(double activeShares, long measuredServices)
+        {
+            if (measuredServices <= 0 || activeShares < 0 || double.IsNaN(activeShares)) return null;
+            return Math.Round(100d * Math.Min(activeShares, measuredServices) / measuredServices, 1, MidpointRounding.AwayFromZero);
         }
 
         /// <summary>

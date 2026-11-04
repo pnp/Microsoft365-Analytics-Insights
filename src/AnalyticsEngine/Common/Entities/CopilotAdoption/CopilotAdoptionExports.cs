@@ -19,7 +19,7 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>
         /// Restrict to these recommended-action codes; empty means all. Separate from
-        /// <see cref="Bands"/> because an action is not a band: "Add a second app" spans two bands,
+        /// <see cref="Bands"/> because an action is not a band: "Add another app" spans two bands,
         /// and it is the action that an enablement programme is actually organised around, so the
         /// aggregate plan on the overview has to be able to drill through to exactly the people it
         /// counted rather than to an approximation of them.

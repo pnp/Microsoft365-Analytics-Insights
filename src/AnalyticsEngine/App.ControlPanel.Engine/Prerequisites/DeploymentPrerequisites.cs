@@ -190,7 +190,7 @@ namespace App.ControlPanel.Engine.Prerequisites
             text.AppendLine("- Application permissions belong to the runtime app registration and require administrator consent. They are not Azure RBAC or user directory roles.");
             text.AppendLine("- Delegated connections also require a signed-in reader with access to the source. Consent does not grant that reader a new role.");
             text.AppendLine("- Keep the deployment account separate from the runtime app and managed identities. Do not assign Owner or Global Administrator to the runtime app.");
-            text.AppendLine("- The current installer grants several Azure roles at resource-group scope and Service Bus Data Owner when enabled. Those are current installer behavior, not a claim of absolute least privilege; narrower manual alternatives are identified below.");
+            text.AppendLine("- The current installer grants Reader on the deployment resource group (control-plane read only), and each data-plane role on the one resource the runtime uses: the storage account, the Teams calls queue (Service Bus Data Owner, when enabled), and the Azure AI accounts. Earlier installers granted the data-plane roles on the whole resource group; a re-run reports any such assignment for an administrator to remove, and never removes it itself.");
             text.AppendLine("- This report does not grant permissions, create resources or change configuration. Review optional services and broad scopes before approving.");
             foreach (PrerequisiteCategory category in Enum.GetValues(typeof(PrerequisiteCategory)))
             {
@@ -502,12 +502,12 @@ namespace App.ControlPanel.Engine.Prerequisites
             b.Access("reader", "Reader", "Runtime app - Azure RBAC", "Deployment resource group",
                 "Current installer grants control-plane Reader across the deployment group, including Application Insights discovery.",
                 "No Contributor/Owner needed by the runtime. If maintaining resources manually, evaluate resource-scoped read/query access; running this installer still adds its resource-group Reader assignment.");
-            b.Access("blob", "Storage Blob Data Contributor", "Runtime app - Azure RBAC", "Deployment resource group (current installer)",
+            b.Access("blob", "Storage Blob Data Contributor", "Runtime app - Azure RBAC", "Solution storage account",
                 "Blob checkpoint/tracing writes and fallback when shared-key credentials are refused.",
-                "For a hand-managed deployment, scope to the solution storage account rather than unrelated accounts. The current installer applies this role to the group.");
-            b.Access("table", "Storage Table Data Contributor", "Runtime app - Azure RBAC", "Deployment resource group (current installer)",
+                "The installer assigns this role on the solution storage account only. An assignment of it on the whole resource group, from an earlier installer, is reported during deployment and can be removed.");
+            b.Access("table", "Storage Table Data Contributor", "Runtime app - Azure RBAC", "Solution storage account",
                 "Durable AnalyticsState reads/writes; required for delegated connections and RBAC fallback when keys are disabled, invalid or rotated.",
-                "For a hand-managed deployment, scope to the solution storage account. Blob roles do not grant Table access; keep the Table endpoint reachable.");
+                "The installer assigns this role on the solution storage account only. Blob roles do not grant Table access; keep the Table endpoint reachable.");
             b.Access("vault-runtime", "Key Vault Secrets User + Key Vault Certificate User", "Runtime app AND App Service managed identity",
                 "Solution Key Vault only",
                 "The installer grants runtime secret Get/List and certificate Get, and managed-identity secret/certificate Get. RBAC vaults use these built-in roles; access-policy vaults use the corresponding permissions.",
@@ -554,25 +554,25 @@ namespace App.ControlPanel.Engine.Prerequisites
                         ? "Selected in Database & storage. Required by Calls; otherwise optional and removable. Register Microsoft.ServiceBus; VNet/private endpoints require Premium."
                         : "Required by the selected Calls workload, but Service Bus is disabled. Enable it before deployment. Register Microsoft.ServiceBus; private endpoints require Premium.",
                     config.ServiceBusEnabled ? null : "Not currently scheduled: the operator must enable Service Bus first. The installer then creates or reuses the namespace/queue; it will not do so while this option is off.");
-                b.Access("service-bus", "Azure Service Bus Data Owner", "Runtime app - Azure RBAC", "Deployment resource group (current installer)",
-                    "Webhook sends and importer receives. This is the current installer's broader built-in grant, not the theoretical minimum for those two actions.",
-                    "For a manually managed solution, review Data Sender + Data Receiver scoped to the queue. The current installer assigns Data Owner whenever Service Bus is enabled; it does not apply the narrower pair.");
+                b.Access("service-bus", "Azure Service Bus Data Owner", "Runtime app - Azure RBAC", "Teams calls queue (graphcalls) only",
+                    "Webhook sends, importer receives, and the portal Health page reads the queue's message counts, which needs the Manage right that only Data Owner carries.",
+                    "The installer assigns Data Owner on the graphcalls queue only, not on the namespace or resource group. Data Sender + Data Receiver alone would break the Health page's queue check.");
             }
             if (config.CognitiveServicesEnabled)
             {
                 b.Resource("language", "Azure AI Language (Text Analytics)", "Optional sentiment and key-phrase enrichment",
                     "Selected in Azure AI; not a prerequisite for raw audit, usage reports or page-hit ingestion. Register Microsoft.CognitiveServices. Adds billable calls; disable if unnecessary.");
-                b.Access("language", "Cognitive Services User", "Runtime app - Azure RBAC", "Deployment resource group (current installer)",
+                b.Access("language", "Cognitive Services User", "Runtime app - Azure RBAC", "Language resource only",
                     "Language data-plane fallback when local-key authentication is unavailable.",
-                    "A hand-managed deployment can scope this to the Language resource. The current installer grants at resource-group scope.");
+                    "The installer assigns this role on the Language resource only, not on the resource group.");
             }
             if (config.FoundryPromptEnabled)
             {
                 b.Resource("openai", "Azure OpenAI account + model deployment", "Optional prompt categorisation",
                     "Selected in Azure AI. Register Microsoft.CognitiveServices; requires model availability, supported deployment type, region and quota. Provisioning does not itself enable prompt-category processing.");
-                b.Access("openai", "Cognitive Services OpenAI User", "Runtime app - Azure RBAC", "Deployment resource group (current installer)",
+                b.Access("openai", "Cognitive Services OpenAI User", "Runtime app - Azure RBAC", "OpenAI resource only",
                     "Inference using the runtime service principal when no API key is configured.",
-                    "A hand-managed deployment can scope this to the OpenAI resource. No resource-management role is needed for inference.");
+                    "The installer assigns this role on the OpenAI resource only. No resource-management role is needed for inference.");
             }
             if (settings.GraphUsageReports)
             {
@@ -713,7 +713,7 @@ namespace App.ControlPanel.Engine.Prerequisites
                 "A role grant does not override Azure Policy denies. The installer can reuse resources, but cannot bypass a policy that prohibits a requested setting.",
                 "Before deployment, check the selected resource types, allowed locations/SKUs, required tags and role-assignment conditions. "
                 + (privateOnly ? "The selected data services disable public access, but Application Insights/Log Analytics remain public unless AMPLS is configured separately. " : "Public service access is selected; confirm that the relevant publicNetworkAccess settings are permitted. ")
-                + "The Windows App Service needs Always On. The current content-deployment path enables SCM basic publishing credentials for ZIP deployment and disables FTP publishing; a policy forbidding SCM basic publishing needs an approved compatible deployment approach, not a wider runtime role. "
+                + "The Windows App Service needs Always On. Content is deployed through the SCM (Kudu) site with the deployment app's Microsoft Entra token, so the installer works when SCM basic publishing is forbidden and never turns it back on; it falls back to SCM basic publishing credentials only when Kudu refuses the token and basic publishing is still allowed. FTP publishing is disabled. "
                 + "Confirm that the chosen Key Vault RBAC/access-policy model and the required runtime role assignments are allowed. The installer supports credential-free Table/Blob access when shared keys are disabled. Resolve any incompatible policy through its owner before the run; do not request blanket policy exemptions.",
                 "https://learn.microsoft.com/azure/governance/policy/overview");
             var production = config.EnvironmentType == Models.EnvironmentTypeEnum.Production;

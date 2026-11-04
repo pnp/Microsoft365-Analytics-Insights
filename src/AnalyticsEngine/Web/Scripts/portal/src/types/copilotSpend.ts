@@ -44,6 +44,8 @@ export interface SpendStudio {
   /** False when the ledger is off with no history, or unreadable: every Studio figure is then null, never zero. */
   available: boolean;
   credits: number | null;
+  /** For a reader without See PII: `credits` is null because fewer than the minimum number of people in view were billed. */
+  creditsWithheld?: boolean;
   people: number | null;
   /** Of `credits`, charges never matched to a person. Null in a filtered view. */
   unmatchedCredits: number | null;
@@ -68,6 +70,8 @@ export interface SpendDay {
   status: SpendDayStatus;
   credits: number | null;
   people: number | null;
+  /** For a reader without See PII: a recorded day whose credits are null because they could single out too few people. */
+  withheld?: boolean;
 }
 
 export interface SpendEnvironment {
@@ -106,6 +110,8 @@ export interface SpendBalances {
   oldestFreshness: string | null;
   newestFreshness: string | null;
   credits: number | null;
+  /** For a reader without See PII: `credits` is null because fewer than the minimum number of people in view hold a reading. */
+  creditsWithheld?: boolean;
   observedPeople: number;
   consumingPeople: number;
   partialPeople: number;
@@ -203,8 +209,14 @@ export interface SpendGroupRow {
   folded: number;
   /** A combined row with fewer people than the smallest group shown: its figures are null. */
   withheld: boolean;
+  /**
+   * For a reader without See PII: the Copilot Studio figures are null because they could single out fewer than the minimum
+   * number of people, though the row itself is shown. `balancesWithheld` is the same for the consumed-credit figures.
+   */
+  studioWithheld: boolean;
+  balancesWithheld: boolean;
   people: number;
-  /** Null when the source is not available, or the row is withheld: not zero. */
+  /** Null when the source is not available, or the row or its source is withheld: not zero. */
   studioPeople: number | null;
   studioCredits: number | null;
   shareOfStudio: number | null;

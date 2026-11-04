@@ -423,6 +423,37 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AdoptionScore_WeighsEveryMeasuredServiceEqually_WhateverItsUnit()
+        {
+            // Copilot measured from Microsoft's 28-day report counts days used against the period's 20 working
+            // days; the Microsoft 365 services count weeks. Each of these two people fully used two of their
+            // five measured services and nothing else, so each must score 40 - however many samples a service
+            // happens to be counted in.
+            var coverage = AvailableCoverage();
+            var copilot = coverage.Single(item => item.Workload == "copilot");
+            copilot.Granularity = "singleRollingWindow";
+            copilot.ReportPeriodDays = 28;
+            copilot.ExpectedSamples = 20;
+            copilot.ObservedSamples = 20;
+            var model = Model(
+                new[] { Sku(1, "Contoso E5"), Sku(2, "Contoso E3") },
+                Users(1, 2),
+                new[] { Member(1, 1), Member(2, 2) },
+                coverage,
+                Scores(
+                    ("teams", 1, Score(4, 4)), ("copilot", 1, Score(20, 20)),
+                    ("teams", 2, Score(4, 4)), ("outlook", 2, Score(4, 4)), ("copilot", 2, Score(0, 20))));
+
+            var overview = model.BuildOverview(Query(), CancellationToken.None);
+
+            Assert.AreEqual(40.0, overview.Licences.Single(sku => sku.LicenceTypeId == 1).AdoptionScore,
+                "Teams and Copilot fully used: 2 of 5 services. Adding raw samples gave (4 + 20) / (16 + 20) = 66.7.");
+            Assert.AreEqual(40.0, overview.Licences.Single(sku => sku.LicenceTypeId == 2).AdoptionScore,
+                "Teams and Outlook fully used, Copilot not at all: still 2 of 5. Adding raw samples gave 8 / 36 = 22.2.");
+            Assert.AreEqual(40.0, overview.AllLicences.AdoptionScore);
+        }
+
+        [TestMethod]
         public void AdoptionScore_AndEveryoneFollowTheDemographicFilter()
         {
             var model = ScoredModel();
@@ -494,6 +525,185 @@ namespace Tests.UnitTests
                 StringAssert.Contains(xml, "Adoption score");
                 StringAssert.Contains(xml, "31.3");
             }
+        }
+
+        // --- A reader without See PII (#661, #680): no figure about fewer than five people -------------------------
+
+        [TestMethod]
+        public void WithoutSeePii_GroupsOfOneToFourAreFoldedOrWithheld_AndAGroupOfFiveIsShown()
+        {
+            var overview = SmallGroupsModel(Query()).BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+
+            Assert.IsFalse(overview.Suppressed, "Twenty people hold a licence.");
+            Assert.AreEqual(20, overview.DistinctAssignedUsers);
+            Assert.AreEqual(5, overview.Query.MinimumGroupSize);
+
+            foreach (var (groups, otherGroups, suffix) in new[]
+            {
+                (overview.Departments, overview.OtherDepartments, "Team"),
+                (overview.Countries, overview.OtherCountries, "Land"),
+            })
+            {
+                CollectionAssert.AreEqual(
+                    new[] { "Contoso Ten " + suffix, "Contoso Five " + suffix, null },
+                    groups.Select(group => group.Name).ToArray(),
+                    "The five-person group keeps its name; the one- and four-person groups do not.");
+                var other = groups.Last();
+                Assert.IsTrue(other.Other);
+                Assert.AreEqual(LicenceActivityDemographic.OtherId, other.Id);
+                Assert.AreEqual(5, other.AssignedUsers, "1 + 4 people.");
+                Assert.AreEqual(2, otherGroups);
+                var teams = other.Workloads.Single(item => item.Workload == "teams");
+                Assert.AreEqual(1, teams.High, "The one person's own activity is only ever one of five.");
+                Assert.AreEqual(5, teams.High + teams.Moderate + teams.Low + teams.Zero + teams.Unknown);
+                Assert.IsTrue(groups.Where(group => !group.Other).All(group => group.AssignedUsers >= 5));
+            }
+
+            var one = overview.Licences.Single(sku => sku.LicenceTypeId == 2);
+            var four = overview.Licences.Single(sku => sku.LicenceTypeId == 3);
+            var five = overview.Licences.Single(sku => sku.LicenceTypeId == 4);
+            foreach (var withheld in new[] { one, four })
+            {
+                Assert.IsTrue(withheld.Withheld, withheld.Name);
+                Assert.AreEqual(0, withheld.Workloads.Count, withheld.Name);
+                Assert.IsNull(withheld.AdoptionScore, withheld.Name);
+            }
+            Assert.AreEqual(1, one.AssignedUsers, "How many hold a licence is not anybody's activity.");
+            Assert.AreEqual(4, four.AssignedUsers);
+            Assert.IsFalse(five.Withheld);
+            Assert.AreEqual(5, five.Workloads.Count);
+            Assert.IsNotNull(five.AdoptionScore);
+            Assert.AreEqual(5, overview.AllLicences.Workloads.Count, "Everyone holding a licence is twenty people.");
+
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(overview);
+            foreach (var hidden in new[] { "Contoso One Team", "Contoso Four Team", "Contoso One Land", "Contoso Four Land" })
+                Assert.IsFalse(json.Contains(hidden), hidden + " must not reach a reader without See PII.");
+        }
+
+        [TestMethod]
+        public void WithSeePii_EveryGroupIsShownAsBefore()
+        {
+            var overview = SmallGroupsModel(Query()).BuildOverview(Query(), CancellationToken.None);
+
+            Assert.IsNull(overview.Query.MinimumGroupSize);
+            Assert.IsFalse(overview.Suppressed);
+            CollectionAssert.AreEqual(
+                new[] { "Contoso Ten Team", "Contoso Five Team", "Contoso Four Team", "Contoso One Team" },
+                overview.Departments.Select(group => group.Name).ToArray());
+            CollectionAssert.AreEqual(new[] { 10, 5, 4, 1 }, overview.Countries.Select(group => group.AssignedUsers).ToArray());
+            Assert.IsFalse(overview.Departments.Concat(overview.Countries).Any(group => group.Other));
+            Assert.AreEqual(0, overview.OtherDepartments);
+            Assert.AreEqual(0, overview.OtherCountries);
+            Assert.AreEqual(1, overview.Departments.Single(group => group.Name == "Contoso One Team")
+                .Workloads.Single(item => item.Workload == "teams").High);
+            var one = overview.Licences.Single(sku => sku.LicenceTypeId == 2);
+            Assert.IsFalse(one.Withheld);
+            Assert.AreEqual(5, one.Workloads.Count);
+            Assert.AreEqual(100.0 * 4 / 16, one.AdoptionScore, "Four of the one holder's sixteen measured weeks were active.");
+        }
+
+        [TestMethod]
+        public void WithoutSeePii_WhenTheSmallGroupsComeToFewerThanFive_TheSmallestNamedGroupIsFoldedToo()
+        {
+            // Otherwise the folded row - and everyone less the named rows - would be just those two people.
+            var users = Enumerable.Range(1, 17).Select(id => User(
+                id,
+                departmentId: id <= 2 ? 1 : id <= 7 ? 2 : 3,
+                department: id <= 2 ? "Contoso Pair" : id <= 7 ? "Contoso Five" : "Contoso Ten")).ToArray();
+            var model = Model(new[] { Sku(1, "Contoso Suite") }, users,
+                users.Select(user => Member(user.UserId, 1)).ToArray(), AvailableCoverage(), Scores());
+
+            var overview = model.BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+
+            CollectionAssert.AreEqual(new[] { "Contoso Ten", null }, overview.Departments.Select(group => group.Name).ToArray());
+            Assert.AreEqual(7, overview.Departments.Last().AssignedUsers);
+            Assert.AreEqual(2, overview.OtherDepartments);
+        }
+
+        [TestMethod]
+        public void WithoutSeePii_FewerThanFivePeopleWithALicence_WithholdsEveryFigure_ButFiveDoNot()
+        {
+            foreach (var people in new[] { 1, 4 })
+            {
+                var model = Model(new[] { Sku(1, "Contoso Suite") }, Users(Enumerable.Range(1, people).ToArray()),
+                    Enumerable.Range(1, people).Select(id => Member(id, 1)).ToArray(), AvailableCoverage(),
+                    Scores(("teams", 1, Score(4, 4))));
+
+                var overview = model.BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+
+                Assert.IsTrue(overview.Suppressed, people + " people");
+                Assert.AreEqual(people, overview.DistinctAssignedUsers, "The count stays.");
+                Assert.AreEqual(people, overview.AllLicences.AssignedUsers);
+                Assert.IsNull(overview.AllLicences.AdoptionScore);
+                Assert.AreEqual(0, overview.AllLicences.Workloads.Count);
+                Assert.IsTrue(overview.Licences.Single().Withheld);
+                Assert.AreEqual(people, overview.Licences.Single().AssignedUsers);
+                Assert.AreEqual(0, overview.Departments.Count);
+                Assert.AreEqual(0, overview.Countries.Count);
+
+                var withSeePii = model.BuildOverview(Query(), CancellationToken.None);
+                Assert.IsFalse(withSeePii.Suppressed, "A See PII reader sees the few people's figures.");
+                Assert.AreEqual(5, withSeePii.AllLicences.Workloads.Count);
+                Assert.AreEqual(1, withSeePii.Departments.Count);
+            }
+
+            var five = Model(new[] { Sku(1, "Contoso Suite") }, Users(1, 2, 3, 4, 5),
+                Enumerable.Range(1, 5).Select(id => Member(id, 1)).ToArray(), AvailableCoverage(), Scores())
+                .BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+            Assert.IsFalse(five.Suppressed);
+            Assert.IsFalse(five.Licences.Single().Withheld);
+            Assert.AreEqual(5, five.Departments.Single().AssignedUsers);
+        }
+
+        [TestMethod]
+        public void WithoutSeePii_TheWorkbookIsTheSameFoldedFigures()
+        {
+            var overview = SmallGroupsModel(Query()).BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+            overview.SnapshotId = "synthetic-overview";
+
+            var xml = WorksheetXml(LicenceActivityWorkbook.Build(overview));
+
+            StringAssert.Contains(xml, "Smaller groups combined (2 groups of fewer than 5 people)");
+            StringAssert.Contains(xml, "Not shown: fewer than 5 people hold this licence");
+            StringAssert.Contains(xml, "Contoso Five Team");
+            foreach (var hidden in new[] { "Contoso One Team", "Contoso Four Team", "Contoso One Land", "Contoso Four Land" })
+                Assert.IsFalse(xml.Contains(hidden), hidden);
+
+            var full = SmallGroupsModel(Query()).BuildOverview(Query(), CancellationToken.None);
+            full.SnapshotId = "synthetic-overview";
+            var fullXml = WorksheetXml(LicenceActivityWorkbook.Build(full));
+            StringAssert.Contains(fullXml, "Contoso One Team");
+            Assert.IsFalse(fullXml.Contains("Not shown"));
+        }
+
+        private static string WorksheetXml(byte[] workbook)
+        {
+            using (var archive = new System.IO.Compression.ZipArchive(new System.IO.MemoryStream(workbook)))
+                return string.Join("\n", archive.Entries
+                    .Where(e => e.FullName.StartsWith("xl/", StringComparison.Ordinal) && e.FullName.EndsWith(".xml", StringComparison.Ordinal))
+                    .Select(e => new System.IO.StreamReader(e.Open()).ReadToEnd()));
+        }
+
+        /// <summary>
+        /// Twenty people in departments - each its own country - of 1, 4, 5 and 10. Everyone holds the suite; the one
+        /// person in the smallest department also holds licence 2, four people licence 3 and five licence 4. The
+        /// one person is the only one with any Teams activity.
+        /// </summary>
+        internal static LicenceActivityReadModel SmallGroupsModel(LicenceActivityQuery range)
+        {
+            var users = new List<LicenceActivityDirectoryUser>();
+            foreach (var (id, size, name) in new[] { (1, 1, "One"), (2, 4, "Four"), (3, 5, "Five"), (4, 10, "Ten") })
+                for (var member = 0; member < size; member++)
+                    users.Add(User(users.Count + 1, departmentId: id, department: "Contoso " + name + " Team",
+                        countryId: id, country: "Contoso " + name + " Land"));
+            var memberships = users.Select(user => Member(user.UserId, 1)).ToList();
+            memberships.Add(Member(1, 2));
+            memberships.AddRange(new[] { 2, 3, 4, 5 }.Select(id => Member(id, 3)));
+            memberships.AddRange(new[] { 6, 7, 8, 9, 10 }.Select(id => Member(id, 4)));
+            return new LicenceActivityReadModel(
+                range,
+                new[] { Sku(1, "Contoso Suite"), Sku(2, "Contoso Add-on A"), Sku(3, "Contoso Add-on B"), Sku(4, "Contoso Add-on C") },
+                users, memberships, AvailableCoverage(), Scores(("teams", 1, Score(4, 4))));
         }
 
         private static LicenceActivityReadModel Model(

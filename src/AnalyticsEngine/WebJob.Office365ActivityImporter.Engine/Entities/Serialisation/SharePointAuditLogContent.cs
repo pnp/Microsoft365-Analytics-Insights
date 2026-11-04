@@ -24,14 +24,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             // Is there a site/web for this event (SP file events only)?
             if (!string.IsNullOrEmpty(this.SiteUrl))
             {
-                await AssignWeb(saveBatch, this.SiteUrl, true, logger);     // Create site if not existing already
+                await AssignWeb(saveBatch, this.SiteUrl, true, logger);     // The web's own address: that web, created if new
                 return true;
             }
             else
             {
                 if (StringUtils.IsValidAbsoluteUrl(StringUtils.ConvertSharePointUrl(this.ObjectId)))
                 {
-                    await AssignWeb(saveBatch, this.ObjectId, false, logger);   // Do not create site if we can't find already
+                    await AssignWeb(saveBatch, this.ObjectId, false, logger);   // An item's address: the known web it is in, if any. Nothing is created
                     return true;
                 }
                 else

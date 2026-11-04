@@ -1514,15 +1514,70 @@ BEGIN
           AND weeks.copilot_d7_to <= @settled
     );
 
+    -- A 7-day reading covers one Monday-to-Sunday week, so dates that start part-way through a week (the
+    -- 90- and 180-day presets do) open with days no reading inside them can cover. That stays partial - the
+    -- requested range is never quietly replaced by a shorter one - but the message says why, rather than
+    -- blaming a reading that is not missing.
+    DECLARE @copilotD7FirstWholeWeek date =
+        CASE WHEN @firstWeek = @from THEN @from ELSE DATEADD(DAY, 7, @firstWeek) END;
+    DECLARE @copilotD7Available bit =
+        CASE WHEN @copilotD7Observed > 0
+               AND @copilotD7Expected = @copilotD7Observed
+               AND @copilotD7Expected = @copilotD7Complete
+               AND @copilotD7EffectiveFrom = @from
+               AND @copilotD7EffectiveTo = @to
+             THEN 1 ELSE 0 END;
+    DECLARE @copilotD7OnlyPartWeekUnread bit =
+        CASE WHEN @copilotD7Available = 0
+               AND @copilotD7Observed > 0
+               AND @copilotD7Expected = @copilotD7Observed
+               AND @copilotD7Expected = @copilotD7Complete
+               AND @copilotD7FirstWholeWeek > @from
+               AND @copilotD7EffectiveFrom = @copilotD7FirstWholeWeek
+               AND @copilotD7EffectiveTo = @to
+             THEN 1 ELSE 0 END;
+
+    -- Stored periods are read from the (date, user, report_period_days) key. A longer rolling
+    -- window is never repeated or summed: at most one fully-contained snapshot is exposed,
+    -- with its exact effective range.
+    DECLARE @copilotLongPeriod int = NULL;
+    DECLARE @copilotLongDate date = NULL;
+
+    SELECT TOP (1)
+           @copilotLongPeriod = report.report_period_days,
+           @copilotLongDate = CAST(report.[date] AS date)
+    FROM dbo.copilot_usage_user_activity_log AS report
+    WHERE report.report_period_days IN (28, 90, 180)
+      AND report.[date] < DATEADD(DAY, 1, @settled)
+      AND report.[date] < DATEADD(DAY, 1, @to)
+      AND DATEADD(DAY, 1 - report.report_period_days, CAST(report.[date] AS date)) >= @from
+    GROUP BY report.report_period_days, CAST(report.[date] AS date)
+    ORDER BY CASE
+                 WHEN CAST(report.[date] AS date) = @to
+                  AND DATEADD(DAY, 1 - report.report_period_days, CAST(report.[date] AS date)) = @from
+                 THEN 0 ELSE 1
+             END,
+             report.report_period_days DESC,
+             CAST(report.[date] AS date) DESC
+    OPTION (RECOMPILE);
+
+    -- Weekly readings come first, but while they don't yet cover the range (the first weeks after they
+    -- started being collected, or a week whose reading was missed) a rolling report that matches the
+    -- range exactly measures it better than leaving Copilot Unknown.
+    IF @copilotD7Available = 0
+       AND @copilotLongPeriod IS NOT NULL
+       AND @copilotLongDate = @to
+       AND DATEADD(DAY, 1 - @copilotLongPeriod, @copilotLongDate) = @from
+    BEGIN
+        DELETE #Samples WHERE workload = 5;
+        SET @copilotD7Observed = 0;
+    END;
+
     IF @copilotD7Observed > 0
     BEGIN
         SET @copilotNeedsFallback = 0;
         SET @copilotPreferredStatus =
-            CASE WHEN @copilotD7Expected = @copilotD7Observed
-                       AND @copilotD7Expected = @copilotD7Complete
-                       AND @copilotD7EffectiveFrom = @from
-                       AND @copilotD7EffectiveTo = @to
-                 THEN 'available' ELSE 'partial' END;
+            CASE WHEN @copilotD7Available = 1 THEN 'available' ELSE 'partial' END;
 
         INSERT #Coverage
         (
@@ -1535,6 +1590,8 @@ BEGIN
                'weeklySampleOfRolling7DayReport',
                CASE WHEN @copilotPreferredStatus = 'available'
                     THEN N'Microsoft''s most recent 7-day Copilot report was read once per week; where those reports overlap the counts are averaged, never added up. People Microsoft did not list, and older reports that predate the current counters, stay Unknown. Microsoft only reports on people who hold a Copilot licence.'
+                    WHEN @copilotD7OnlyPartWeekUnread = 1
+                    THEN N'Every whole week has its Copilot reading, but the dates you selected start part-way through a week. Each of Microsoft''s 7-day Copilot reports covers a whole Monday-to-Sunday week, so the days before the first Monday can''t be measured. The readings are still shown as evidence, but activity levels stay Unknown and nobody is listed as least active for Copilot. Dates that start on a Monday can be measured in full.'
                     ELSE N'At least one week in the period has no Copilot reading on its end date. Earlier readings are still shown as evidence, but activity levels stay Unknown and nobody is listed as least active for Copilot.'
                END,
                CAST(@copilotD7EffectiveFrom AS datetime),
@@ -1601,30 +1658,6 @@ BEGIN
     END
     ELSE
     BEGIN
-        -- Stored periods are read from the (date, user, report_period_days) key. A longer rolling
-        -- window is never repeated or summed: at most one fully-contained snapshot is exposed,
-        -- with its exact effective range.
-        DECLARE @copilotLongPeriod int = NULL;
-        DECLARE @copilotLongDate date = NULL;
-
-        SELECT TOP (1)
-               @copilotLongPeriod = report.report_period_days,
-               @copilotLongDate = CAST(report.[date] AS date)
-        FROM dbo.copilot_usage_user_activity_log AS report
-        WHERE report.report_period_days IN (28, 90, 180)
-          AND report.[date] < DATEADD(DAY, 1, @settled)
-          AND report.[date] < DATEADD(DAY, 1, @to)
-          AND DATEADD(DAY, 1 - report.report_period_days, CAST(report.[date] AS date)) >= @from
-        GROUP BY report.report_period_days, CAST(report.[date] AS date)
-        ORDER BY CASE
-                     WHEN CAST(report.[date] AS date) = @to
-                      AND DATEADD(DAY, 1 - report.report_period_days, CAST(report.[date] AS date)) = @from
-                     THEN 0 ELSE 1
-                 END,
-                 report.report_period_days DESC,
-                 CAST(report.[date] AS date) DESC
-        OPTION (RECOMPILE);
-
         IF @copilotLongPeriod IS NOT NULL
         BEGIN
             SET @copilotNeedsFallback = 0;
@@ -1632,6 +1665,12 @@ BEGIN
                 CASE WHEN @copilotLongDate = @to
                        AND DATEADD(DAY, 1 - @copilotLongPeriod, @copilotLongDate) = @from
                      THEN 'available' ELSE 'missingCoverage' END;
+
+            -- This report counts DAYS used, not weeks: activity is measured against the window's working
+            -- days (5 in 7, so 20 in 28), and anyone with more is counted as using it on all of them. That
+            -- keeps an every-working-day user High, and keeps the adoption score's share comparable with
+            -- the weekly services (see LicenceActivityReadModel.AddScore).
+            DECLARE @copilotLongWorkingDays int = (@copilotLongPeriod * 5) / 7;
 
             INSERT #Samples (workload, sample_date) VALUES (5, @copilotLongDate);
 
@@ -1647,14 +1686,14 @@ BEGIN
                 N'Copilot prompts and days used, from one rolling report',
                 'singleRollingWindow',
                 CASE WHEN @copilotPreferredStatus = 'available'
-                     THEN N'The dates you selected match one of Microsoft''s rolling Copilot reports exactly. People Microsoft did not list, and reports that do not record days used, stay Unknown. Microsoft only reports on people who hold a Copilot licence.'
+                     THEN N'The dates you selected match one of Microsoft''s rolling Copilot reports exactly. That report counts the days Copilot was used, not the weeks, so activity levels compare those days with the working days in the period (20 in 28 days, with any more counted as 20). People Microsoft did not list, and reports that do not record days used, stay Unknown. Microsoft only reports on people who hold a Copilot licence.'
                      ELSE N'Microsoft only published a longer rolling report inside the dates you selected. It is shown here with the dates it really covers, but activity levels stay Unknown for your custom range.'
                 END,
                 DATEADD(DAY, 1 - @copilotLongPeriod, CAST(@copilotLongDate AS datetime)),
                 CAST(@copilotLongDate AS datetime),
                 @copilotLogImported,
                 DATEDIFF(DAY, @copilotLongDate, @now),
-                @copilotLongPeriod, @copilotLongPeriod, @copilotLongPeriod, 0
+                @copilotLongPeriod, @copilotLongWorkingDays, @copilotLongWorkingDays, 0
             );
 
             IF @copilotIncludeScores = 1
@@ -1664,7 +1703,8 @@ BEGIN
                    report.user_id,
                    CASE
                        WHEN report.active_usage_days BETWEEN 0 AND @copilotLongPeriod
-                           THEN report.active_usage_days
+                           THEN CASE WHEN report.active_usage_days > @copilotLongWorkingDays
+                                     THEN @copilotLongWorkingDays ELSE report.active_usage_days END
                        WHEN report.prompts_all_apps > 0
                          OR (report.last_activity_date >= DATEADD(DAY, 1 - @copilotLongPeriod, @copilotLongDate)
                              AND report.last_activity_date < DATEADD(DAY, 1, @copilotLongDate))
@@ -1673,7 +1713,7 @@ BEGIN
                    CASE
                        WHEN report.active_usage_days BETWEEN 0 AND @copilotLongPeriod
                         AND (report.prompts_all_apps IS NULL OR report.prompts_all_apps >= 0)
-                           THEN @copilotLongPeriod ELSE 0
+                           THEN @copilotLongWorkingDays ELSE 0
                    END,
                    CAST(CASE
                        WHEN report.active_usage_days BETWEEN 0 AND @copilotLongPeriod
@@ -2804,6 +2844,8 @@ OPTION (RECOMPILE);
         private static readonly string CopilotLongUsers = @"
 DECLARE @copilotSnapshot date =
     (SELECT MAX(sample_date) FROM #Samples WHERE workload = 5);
+-- Days used are measured against the window's working days, as in the overview's single-window scores.
+DECLARE @copilotWorkingDays int = (@period5 * 5) / 7;
 
 INSERT #Scores
     (workload, user_id, active_samples, observed_samples, frequency_known, average_actions, last_activity_utc)
@@ -2811,7 +2853,8 @@ SELECT 5,
        report.user_id,
        CASE
            WHEN report.active_usage_days BETWEEN 0 AND @period5
-               THEN report.active_usage_days
+               THEN CASE WHEN report.active_usage_days > @copilotWorkingDays
+                         THEN @copilotWorkingDays ELSE report.active_usage_days END
            WHEN report.prompts_all_apps > 0
              OR (report.last_activity_date >= DATEADD(DAY, 1 - @period5, @copilotSnapshot)
                  AND report.last_activity_date < DATEADD(DAY, 1, @copilotSnapshot))
@@ -2820,7 +2863,7 @@ SELECT 5,
        CASE
            WHEN report.active_usage_days BETWEEN 0 AND @period5
             AND (report.prompts_all_apps IS NULL OR report.prompts_all_apps >= 0)
-               THEN @period5 ELSE 0
+               THEN @copilotWorkingDays ELSE 0
        END,
        CAST(CASE
            WHEN report.active_usage_days BETWEEN 0 AND @period5

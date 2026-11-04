@@ -77,8 +77,8 @@ function summary(overrides: Partial<CopilotSpendSummary> = {}): CopilotSpendSumm
     organisation: {
       dimension: 'department', dimensionName: null, minGroupSize: 5, foldedGroups: 2, moreGroups: 0, unavailableCode: null, hidden: false,
       groups: [
-        { label: `Ventas \u2013 ${GREEK}`, emptyKey: null, folded: 0, withheld: false, people: 30, studioPeople: 25, studioCredits: 900, shareOfStudio: 0.75, balancePeople: 20, balanceCredits: 6000, shareOfBalances: 0.62, unknownAmountPeople: 2 },
-        { label: null, emptyKey: 'otherSmallGroups', folded: 2, withheld: false, people: 7, studioPeople: 5, studioCredits: 300, shareOfStudio: 0.25, balancePeople: 4, balanceCredits: 3680, shareOfBalances: 0.38, unknownAmountPeople: 2 },
+        { label: `Ventas \u2013 ${GREEK}`, emptyKey: null, folded: 0, withheld: false, studioWithheld: false, balancesWithheld: false, people: 30, studioPeople: 25, studioCredits: 900, shareOfStudio: 0.75, balancePeople: 20, balanceCredits: 6000, shareOfBalances: 0.62, unknownAmountPeople: 2 },
+        { label: null, emptyKey: 'otherSmallGroups', folded: 2, withheld: false, studioWithheld: false, balancesWithheld: false, people: 7, studioPeople: 5, studioCredits: 300, shareOfStudio: 0.25, balancePeople: 4, balanceCredits: 3680, shareOfBalances: 0.38, unknownAmountPeople: 2 },
       ],
     },
     peopleCount: 120,
@@ -559,6 +559,65 @@ describe('CopilotSpendPage', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Copilot Studio billed usage' }));
     expect((await screen.findAllByText(/Not available: the Copilot Studio ledger has not been imported or could not be read/)).length).toBe(2);
+  });
+
+  it('says a source withheld from a reader without See PII is withheld, not unavailable, and keeps the other source', async () => {
+    const groups = summary().organisation.groups;
+    vi.mocked(fetchSpendSummary).mockResolvedValue(
+      summary({
+        organisation: {
+          ...summary().organisation,
+          groups: [{ ...groups[0], studioWithheld: true, studioPeople: null, studioCredits: null, shareOfStudio: null }, groups[1]],
+        },
+      }),
+    );
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    const table = await screen.findByRole('table', { name: 'Organisation' });
+    expect(within(table).getAllByRole('img', { name: 'Not shown: it could single out fewer than 5 people' })).toHaveLength(2);
+    expect(within(table).queryByRole('img', { name: 'Not available' })).not.toBeInTheDocument();
+    expect(within(table).queryByRole('img', { name: 'Fewer than 5 people: figures not shown' })).not.toBeInTheDocument();
+    expect(within(table).getByText('6,000')).toBeInTheDocument();
+  });
+
+  it('says a category withheld from a reader without See PII is withheld, never zero', async () => {
+    const balances = summary().balances;
+    vi.mocked(fetchSpendSummary).mockResolvedValue(
+      summary({ balances: { ...balances, services: [{ ...balances.services[0], consumers: 3, quantity: 0, withheld: true }] } }),
+    );
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Copilot credits consumed (readings)' }));
+    const table = await screen.findByRole('table', { name: 'By category' });
+    expect(within(table).getByRole('img', { name: 'Not shown: it could single out fewer than 5 people' })).toBeInTheDocument();
+    expect(within(table).queryByText('0')).not.toBeInTheDocument();
+  });
+
+  it('says a day or a reading withheld from a reader without See PII is withheld, never zero or an unstated amount', async () => {
+    const studio = summary().studio;
+    vi.mocked(fetchSpendSummary).mockResolvedValue(
+      summary({
+        studio: {
+          ...studio,
+          credits: null,
+          creditsWithheld: true,
+          days: studio.days.map((d) => (d.status === 'recorded' ? { ...d, credits: null, withheld: true } : d)),
+        },
+      }),
+    );
+    vi.mocked(fetchSpendTrend).mockResolvedValue({
+      points: [{ date: '2026-10-26', observedUsers: 3, consumingUsers: 2, credits: null, limitExhaustedUsers: 0, withheld: true }],
+      snapshotDate: '2026-10-26',
+      failureCode: null,
+      minPeople: 5,
+    });
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    expect(await screen.findByRole('listitem', { name: '25 Oct 2026: credits not shown, they could single out fewer than 5 people' })).toBeInTheDocument();
+    expect(await screen.findByRole('listitem', { name: '26 Oct 2026: credits not shown, they could single out fewer than 5 people' })).toBeInTheDocument();
+    expect(screen.queryByRole('listitem', { name: /amount not stated/ })).not.toBeInTheDocument();
+    expect(screen.getByTitle('Not shown: it could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.queryByText('1,250')).not.toBeInTheDocument();
   });
 
   it('gives the right reason for a missing agent ledger and a grouping that cannot be made', async () => {

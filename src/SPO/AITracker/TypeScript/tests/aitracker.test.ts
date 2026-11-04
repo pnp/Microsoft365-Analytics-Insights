@@ -10,6 +10,7 @@ import Cookies from 'js-cookie';
 import { AI_TRACKER_VER } from '../src/AiTrackerConstants';
 
 const mockAiInstances: any[] = [];
+let mockSecondsOnPage = 12;         // TimeMe's running total of active seconds on page
 
 jest.mock('@microsoft/applicationinsights-web', () => ({
     ApplicationInsights: jest.fn().mockImplementation((settings: any) => {
@@ -30,7 +31,7 @@ jest.mock('@microsoft/applicationinsights-web', () => ({
 
 jest.mock('timeme.js', () => ({
     __esModule: true,
-    default: { initialize: jest.fn(), getTimeOnCurrentPageInSeconds: jest.fn(() => 12) },
+    default: { initialize: jest.fn(), getTimeOnCurrentPageInSeconds: jest.fn(() => mockSecondsOnPage) },
 }));
 
 jest.mock('../src/Config/ConfigHandler', () => ({
@@ -42,9 +43,17 @@ jest.mock('../src/Config/ConfigHandler', () => ({
 const PAGE_URL = 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx';
 const CONNECTION_STRING_HASH = btoa('InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://example.invalid/');
 
+// On modern pages the SPFx extension of each tracked site collection registers it in the page (window._o365AnalyticsInfo)
+const SITE_URL = 'https://contoso.sharepoint.com/sites/test';
+const OTHER_SITE_URL = 'https://contoso.sharepoint.com/sites/other';
+const OTHER_PAGE_URL = OTHER_SITE_URL + '/SitePages/News.aspx';
+const UNTRACKED_SITE_URL = 'https://contoso.sharepoint.com/sites/untracked';
+const UNTRACKED_PAGE_URL = UNTRACKED_SITE_URL + '/SitePages/Private.aspx';
+
 let readyState: DocumentReadyState = 'complete';
 let navigationEntries: any[] = [];
 let listeners: { target: EventTarget, type: string, listener: any }[] = [];
+let intervals: Function[] = [];
 
 Object.defineProperty(document, 'readyState', { configurable: true, get: () => readyState });
 Object.defineProperty(window.performance, 'getEntriesByType', {
@@ -65,13 +74,27 @@ async function settle(): Promise<void> {
     await new Promise(r => setTimeout(r, 0));
 }
 
-function mousedownOnLink(text: string): void {
+function mousedownOnLink(text: string, href: string = 'https://contoso.sharepoint.com/sites/test/SitePages/Other.aspx'): void {
     const a = document.createElement('a');
-    a.href = 'https://contoso.sharepoint.com/sites/test/SitePages/Other.aspx';
+    a.href = href;
     a.textContent = text;
     document.body.appendChild(a);
     a.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
 }
+
+function sitesTrackedInPage(...siteUrls: string[]): void {
+    (window as any)._o365AnalyticsInfo = { siteUrls: siteUrls, lastUrlTracked: undefined };
+}
+
+// SharePoint navigates to a site collection the extension isn't enabled on, without reloading the page. It disposes of the
+// extension, which unregisters its site, and there is no extension for the site navigated to.
+function navigateToUntrackedSite(): void {
+    setUrl(UNTRACKED_PAGE_URL);
+    sitesTrackedInPage();
+}
+
+// The tracker's regular check that the browser is still on a tracked site
+const checkSite = () => intervals.forEach(check => check());
 
 const eventsNamed = (instance: any, name: string) => instance.trackEvent.mock.calls.map((c: any[]) => c[0]).filter((e: any) => e.name === name);
 const pageRequestIdOf = (instance: any, pageView: number) => instance.trackPageView.mock.calls[pageView][0].properties.pageRequestId;
@@ -90,10 +113,13 @@ describe('AITracker page bootstrap', () => {
         }
         jest.spyOn(console, 'debug').mockImplementation();
         jest.spyOn(console, 'log').mockImplementation();
+        intervals = [];
+        jest.spyOn(window, 'setInterval').mockImplementation(((check: Function) => intervals.push(check)) as any);
 
         const w = window as any;
         delete w.spoInsightsAITrackerVersion;
         delete w.modernPageNav;
+        delete w._o365AnalyticsInfo;
         w.onbeforeunload = null;
         w.appInsightsConnectionStringHash = CONNECTION_STRING_HASH;
         w.insightsWebRootUrlHash = btoa('https://contoso-analytics.example.invalid');
@@ -103,6 +129,7 @@ describe('AITracker page bootstrap', () => {
         };
 
         mockAiInstances.length = 0;
+        mockSecondsOnPage = 12;
         Object.keys(Cookies.get()).forEach(name => Cookies.remove(name));
         document.body.innerHTML = '';
         readyState = 'complete';
@@ -335,5 +362,190 @@ describe('AITracker page bootstrap', () => {
         loadTrackerCopy();
         await settle();
         expect(mockAiInstances.length).toBe(1);
+    });
+
+    // SharePoint navigates between site collections without reloading the page, so the tracker keeps running when it navigates to
+    // one the installer didn't set up for tracking. Nothing on such a page may be collected.
+    describe('only on tracked sites', () => {
+
+        const sentAnything = (ai: any) => JSON.stringify([ai.trackPageView.mock.calls, ai.trackEvent.mock.calls]);
+        const savedExit = () => JSON.parse(Cookies.get('SPOInsightsLastPageStats')!);
+
+        test('tracked site, then one that isn\'t: its clicks aren\'t sent, and the time saved as the browser leaves is the tracked page\'s', async () => {
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+
+            mockSecondsOnPage = 30;
+            mousedownOnLink('Tracked link');
+            expect(eventsNamed(ai, 'LinkClick').length).toBe(1);
+
+            navigateToUntrackedSite();
+            mockSecondsOnPage = 90;
+            mousedownOnLink('Untracked link', UNTRACKED_SITE_URL + '/Shared Documents/Plan.docx');
+            document.querySelectorAll('a')[1].dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            window.dispatchEvent(new Event('pagehide'));
+
+            expect(eventsNamed(ai, 'LinkClick').length).toBe(1);
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+            expect(sentAnything(ai)).not.toContain('untracked');
+            expect(savedExit().pageRequestId).toBe(pageRequestIdOf(ai, 0));
+            expect(decodeURI(savedExit().url)).toBe(PAGE_URL);
+            expect(savedExit().secondsOnPage).toBe(30);        // Until it was last seen on the tracked site
+        });
+
+        test('back on a tracked site, tracking resumes, and the time away from the tracked sites counts for no page', async () => {
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+
+            mockSecondsOnPage = 30;
+            mousedownOnLink('To a site that is not tracked', UNTRACKED_PAGE_URL);
+            navigateToUntrackedSite();
+            mockSecondsOnPage = 31;
+            checkSite();
+            mockSecondsOnPage = 100;
+
+            // SharePoint navigates on to another tracked site, whose extension registers it, then reports its page
+            setUrl(OTHER_PAGE_URL);
+            sitesTrackedInPage(OTHER_SITE_URL);
+            (window as any).modernPageNav(OTHER_SITE_URL, 'Other', OTHER_SITE_URL);
+
+            expect(ai.trackPageView).toHaveBeenCalledTimes(2);
+            expect(ai.trackPageView.mock.calls[1][0].uri).toBe(OTHER_PAGE_URL);
+            const exits = eventsNamed(ai, 'PAGE_EXIT');
+            expect(exits.length).toBe(1);
+            expect(exits[0].properties.pageRequestId).toBe(pageRequestIdOf(ai, 0));
+            expect(exits[0].properties.url).toBe(PAGE_URL);
+            expect(exits[0].properties.activeTime).toBe(30);
+
+            mousedownOnLink('Link on the tracked site', OTHER_SITE_URL + '/SitePages/Events.aspx');
+            const clicks = eventsNamed(ai, 'LinkClick');
+            expect(clicks.length).toBe(2);
+            expect(clicks[1].properties.pageRequestId).toBe(pageRequestIdOf(ai, 1));
+        });
+
+        test('back on the page it left, which the extension has already reported: clicks are sent for it, and its time leaves out the time away', async () => {
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+
+            mockSecondsOnPage = 30;
+            checkSite();
+            navigateToUntrackedSite();
+            mockSecondsOnPage = 31;
+            checkSite();
+            mockSecondsOnPage = 95;
+
+            setUrl(PAGE_URL);
+            sitesTrackedInPage(SITE_URL);
+            mousedownOnLink('Link');
+            mockSecondsOnPage = 105;
+            window.dispatchEvent(new Event('pagehide'));
+
+            const clicks = eventsNamed(ai, 'LinkClick');
+            expect(clicks.length).toBe(1);
+            expect(clicks[0].properties.pageRequestId).toBe(pageRequestIdOf(ai, 0));
+            expect(savedExit().pageRequestId).toBe(pageRequestIdOf(ai, 0));
+            expect(savedExit().secondsOnPage).toBe(40);        // 30 before it left, and 10 since it came back
+        });
+
+        test('a navigation the extension reports after SharePoint has moved on to a site that isn\'t tracked isn\'t tracked', async () => {
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+
+            // The extension reports a navigation a couple of seconds after it. By then SharePoint can have disposed of it, and
+            // its page context can describe either site
+            navigateToUntrackedSite();
+            (window as any).modernPageNav(SITE_URL, 'Test', SITE_URL);
+            (window as any).modernPageNav(UNTRACKED_SITE_URL, 'Untracked', UNTRACKED_SITE_URL);
+
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+            expect(eventsNamed(ai, 'PAGE_EXIT').length).toBe(0);
+            expect(sentAnything(ai)).not.toContain('untracked');
+        });
+
+        test('a navigation reported for a site SharePoint has since left isn\'t tracked: the next site\'s extension reports its own page', async () => {
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+
+            setUrl(OTHER_PAGE_URL);
+            sitesTrackedInPage(OTHER_SITE_URL);
+            (window as any).modernPageNav(SITE_URL, 'Test', SITE_URL);
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+
+            (window as any).modernPageNav(OTHER_SITE_URL, 'Other', OTHER_SITE_URL);
+            expect(ai.trackPageView).toHaveBeenCalledTimes(2);
+            expect(ai.trackPageView.mock.calls[1][0].properties.webUrl).toBe(OTHER_SITE_URL);
+        });
+
+        test('loaded after SharePoint moved on to a site that isn\'t tracked: tracks nothing there, then the next tracked page', async () => {
+            const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+            sitesTrackedInPage(SITE_URL);
+            setUrl(UNTRACKED_PAGE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+
+            expect(ai.trackPageView).not.toHaveBeenCalled();
+            expect(typeof (window as any).modernPageNav).toBe('function');
+            mousedownOnLink('Untracked link', UNTRACKED_SITE_URL + '/SitePages/Other.aspx');
+            window.dispatchEvent(new Event('pagehide'));
+            expect(ai.trackEvent).not.toHaveBeenCalled();
+            expect(Cookies.get('SPOInsightsLastPageStats')).toBeUndefined();
+
+            setUrl(OTHER_PAGE_URL);
+            sitesTrackedInPage(OTHER_SITE_URL);
+            (window as any).modernPageNav(OTHER_SITE_URL, 'Other', OTHER_SITE_URL);
+
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+            expect(ai.trackPageView.mock.calls[0][0].uri).toBe(OTHER_PAGE_URL);
+            expect(ai.trackPageView.mock.calls[0][0].properties.pageLoad).toBe(0);
+            expect(errorSpy).not.toHaveBeenCalled();
+        });
+
+        test('classic pages have no SPFx extension: every page is tracked, as before', async () => {
+            const url = 'https://contoso.sharepoint.com/sites/test/_layouts/15/settings.aspx';
+            setUrl(url);
+            navigationEntries = [{ name: url, startTime: 0, loadEventEnd: 700 }];
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+
+            mousedownOnLink('People and groups', 'https://contoso.sharepoint.com/sites/test/_layouts/15/user.aspx');
+            window.dispatchEvent(new Event('pagehide'));
+
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+            expect(eventsNamed(ai, 'LinkClick').length).toBe(1);
+            expect(decodeURI(savedExit().url)).toBe(url);
+            expect(savedExit().secondsOnPage).toBe(12);
+            expect(window.setInterval).not.toHaveBeenCalled();
+        });
+
+        test('a second copy, loaded by the next tracked site\'s extension, still leaves tracking to the first', async () => {
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const listenersAddedByFirstCopy = listeners.length;
+            expect(intervals.length).toBe(1);
+
+            setUrl(OTHER_PAGE_URL);
+            sitesTrackedInPage(OTHER_SITE_URL);
+            loadTrackerCopy();
+            await settle();
+
+            expect(mockAiInstances.length).toBe(1);
+            expect(listeners.length).toBe(listenersAddedByFirstCopy);
+            expect(intervals.length).toBe(1);
+            mousedownOnLink('Link', OTHER_SITE_URL + '/SitePages/Events.aspx');
+            expect(eventsNamed(mockAiInstances[0], 'LinkClick').length).toBe(1);
+        });
     });
 });

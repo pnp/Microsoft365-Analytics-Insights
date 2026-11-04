@@ -36,11 +36,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         /// <summary>
         /// Load message & replies for a channel. Uses cached delta code if found for message loading
         /// </summary>
+        /// <remarks>
+        /// The stored checkpoint does two jobs: its token makes the read incremental, and its <see cref="TeamChannelDeltaTokenInfo.LastUpdated"/>
+        /// marks how far the channel's messages and reactions have been counted. When Graph rejects the token the channel is read in
+        /// full, but only the token is dead: content created before the checkpoint's time was counted when it was committed, so it is
+        /// not counted - or sent to Azure AI Language - again. The checkpoint is left in the store until the full read's new token
+        /// replaces it, after SQL has saved the read; a save that fails, or a read whose token is withheld at a paging cap, keeps the
+        /// old time as the next attempt's starting point instead of re-counting the channel's whole history.
+        /// </remarks>
         public async Task<TeamChannelDeltaTokenInfo> LoadTeamMessagesAndReplies(ChannelWithReactions channel, string teamId)
         {
             if (string.IsNullOrEmpty(teamId)) throw new ArgumentException($"'{nameof(teamId)}' cannot be null or empty", nameof(teamId));
 
             var channelDeltaInfo = await _deltaTokenStore.GetDeltaToken(teamId, channel.Id);
+
+            // Null only when the channel has no checkpoint at all: a first read, in which everything is new.
+            var countedUpTo = channelDeltaInfo?.LastUpdated;
 
             var rootMsgs = new List<ChatMessage>();
             TeamChannelDeltaTokenInfo newDelta = null;
@@ -54,14 +65,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             catch (Exception ex) when (channelDeltaInfo != null && ChannelReadFailureRules.IsInvalidDeltaToken(ex, requestCarriedToken: true))
             {
                 // Graph refused the stored token: expired, the channel's sync state reset, or - Graph's persistent bare 400 - a
-                // token it won't take. Read the channel in full, once. The stored token is dropped only when that read works, so a
-                // channel that fails for some other reason keeps its checkpoint; and if this read fails too, that failure is the
-                // channel's, classified like any other.
-                _logger.LogWarning("TeamsChannelDeltaTokenRejected: stage=channelMessages; {Failure}. Reading the channel in full instead; messages already counted may be counted again.",
+                // token it won't take. Read the channel in full, once; if this read fails too, that failure is the channel's,
+                // classified like any other. The stored checkpoint stays put either way: see the remarks above.
+                _logger.LogWarning("TeamsChannelDeltaTokenRejected: stage=channelMessages; {Failure}. Reading the channel in full instead; only messages and reactions created since the channel's last checkpoint are counted.",
                     FailureClassification.Describe(ex));
                 rootMessagesResult = await _pageReader.LoadRootMessages(teamId, channel.Id, null);
-                await _deltaTokenStore.RemoveDeltaToken(teamId, channel.Id);
-                channelDeltaInfo = null;
                 channel.DeltaTokenWasReset = true;
             }
 
@@ -106,7 +114,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 newDelta = null;
             }
 
-            if (channelDeltaInfo != null)
+            if (channel.DeltaTokenWasReset)
+            {
+                _logger.LogInformation($"Loaded channel messages (all, after a rejected delta token) for channel '{channel.DisplayName}' on Team '{teamId}'...");
+            }
+            else if (channelDeltaInfo != null)
             {
                 _logger.LogInformation($"Loaded channel messages with last delta token for channel '{channel.DisplayName}' on Team '{teamId}'...");
             }
@@ -116,7 +128,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             }
 
             // Set new msg & reaction data on channel
-            channel.CalculateAndSetNewMessagesAndReactions(rootMsgs, channelDeltaInfo?.LastUpdated, _logger);
+            channel.CalculateAndSetNewMessagesAndReactions(rootMsgs, countedUpTo, _logger);
 
             return newDelta;
         }

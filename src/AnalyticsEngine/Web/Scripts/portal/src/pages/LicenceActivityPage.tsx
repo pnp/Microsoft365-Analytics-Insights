@@ -14,6 +14,7 @@ import {
   Tooltip,
   MessageBar,
   MessageBarBody,
+  MessageBarTitle,
   type SelectTabEventHandler,
 } from '@fluentui/react-components';
 import { ArrowDownload16Regular } from '@fluentui/react-icons';
@@ -128,6 +129,10 @@ const useStyles = makeStyles({
   muted: {
     color: tokens.colorNeutralForeground3,
   },
+  filterNote: {
+    maxWidth: '360px',
+    alignSelf: 'center',
+  },
   scopeCard: {
     padding: '10px 14px',
   },
@@ -173,8 +178,12 @@ export default function LicenceActivityPage() {
   // The reporting window lives here, so it is preserved across demographic-filter and licence
   // changes - only the date control (or a preset click) ever changes it. Defaults to 28 days.
   const [range, setRange] = useState<DateRange>(() => presetRange(28));
-  const [departmentId, setDepartmentId] = useState<number | null>(null);
-  const [countryId, setCountryId] = useState<number | null>(null);
+  const [chosenDepartmentId, setDepartmentId] = useState<number | null>(null);
+  const [chosenCountryId, setCountryId] = useState<number | null>(null);
+  // Narrowing to a department or a country needs See PII - the server refuses it - because one department in one
+  // country can be a single person. Without it the report always covers everyone.
+  const departmentId = canSeePii ? chosenDepartmentId : null;
+  const countryId = canSeePii ? chosenCountryId : null;
 
   const [overviewResult, setOverviewResult] = useState<{
     key: string;
@@ -282,14 +291,17 @@ export default function LicenceActivityPage() {
   // authoritative unfiltered catalogue, and which id to pin so the user can switch away from it.
   useEffect(() => {
     if (!overview) return;
+    // The combined row a reader without See PII gets is never a filter option.
+    const options = (rows: LicenceActivityOverview['departments']) =>
+      rows.filter((row) => !row.other).map((row) => ({ id: row.id, name: row.name ?? '' }));
     setDepartmentOptions((prev) =>
-      mergeDemographicOptions(prev, overview.departments, {
+      mergeDemographicOptions(prev, options(overview.departments), {
         unfilteredForDimension: departmentId == null,
         selectedId: departmentId,
       }),
     );
     setCountryOptions((prev) =>
-      mergeDemographicOptions(prev, overview.countries, {
+      mergeDemographicOptions(prev, options(overview.countries), {
         unfilteredForDimension: countryId == null,
         selectedId: countryId,
       }),
@@ -407,53 +419,61 @@ export default function LicenceActivityPage() {
                 />
               </div>
 
-              <div className={styles.field}>
-                <Text size={200} className={styles.fieldLabel}>
-                  {t('licenceActivity.common.department')}
-                </Text>
-                <Select
-                  value={departmentId == null ? '' : String(departmentId)}
-                  aria-label={t('licenceActivity.page.filterByDepartment')}
-                  disabled={departmentOptions.options.length === 0}
-                  onChange={(_e: unknown, d: { value: string }) => setDepartmentId(d.value === '' ? null : Number(d.value))}
-                >
-                  <option value="">{t('licenceActivity.page.allDepartments')}</option>
-                  {departmentOptions.options.map((dept) => (
-                    <option key={dept.id} value={dept.id}>
-                      {demographicName(t, dept)}
-                    </option>
-                  ))}
-                </Select>
-                {departmentOptions.truncated && (
-                  <Text size={100} className={styles.muted}>
-                    {t('licenceActivity.page.recentOptionsHidden', { count: formatCount(DEMOGRAPHIC_OPTION_CAP) })}
-                  </Text>
-                )}
-              </div>
+              {canSeePii ? (
+                <>
+                  <div className={styles.field}>
+                    <Text size={200} className={styles.fieldLabel}>
+                      {t('licenceActivity.common.department')}
+                    </Text>
+                    <Select
+                      value={departmentId == null ? '' : String(departmentId)}
+                      aria-label={t('licenceActivity.page.filterByDepartment')}
+                      disabled={departmentOptions.options.length === 0}
+                      onChange={(_e: unknown, d: { value: string }) => setDepartmentId(d.value === '' ? null : Number(d.value))}
+                    >
+                      <option value="">{t('licenceActivity.page.allDepartments')}</option>
+                      {departmentOptions.options.map((dept) => (
+                        <option key={dept.id} value={dept.id}>
+                          {demographicName(t, dept)}
+                        </option>
+                      ))}
+                    </Select>
+                    {departmentOptions.truncated && (
+                      <Text size={100} className={styles.muted}>
+                        {t('licenceActivity.page.recentOptionsHidden', { count: formatCount(DEMOGRAPHIC_OPTION_CAP) })}
+                      </Text>
+                    )}
+                  </div>
 
-              <div className={styles.field}>
-                <Text size={200} className={styles.fieldLabel}>
-                  {t('licenceActivity.common.country')}
+                  <div className={styles.field}>
+                    <Text size={200} className={styles.fieldLabel}>
+                      {t('licenceActivity.common.country')}
+                    </Text>
+                    <Select
+                      value={countryId == null ? '' : String(countryId)}
+                      aria-label={t('licenceActivity.page.filterByCountry')}
+                      disabled={countryOptions.options.length === 0}
+                      onChange={(_e: unknown, d: { value: string }) => setCountryId(d.value === '' ? null : Number(d.value))}
+                    >
+                      <option value="">{t('licenceActivity.page.allCountries')}</option>
+                      {countryOptions.options.map((country) => (
+                        <option key={country.id} value={country.id}>
+                          {demographicName(t, country)}
+                        </option>
+                      ))}
+                    </Select>
+                    {countryOptions.truncated && (
+                      <Text size={100} className={styles.muted}>
+                        {t('licenceActivity.page.recentOptionsHidden', { count: formatCount(DEMOGRAPHIC_OPTION_CAP) })}
+                      </Text>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <Text role="note" size={200} className={`${styles.muted} ${styles.filterNote}`}>
+                  {t('licenceActivity.page.demographicFilterNeedsSeePii', { role: access.roles.seePii })}
                 </Text>
-                <Select
-                  value={countryId == null ? '' : String(countryId)}
-                  aria-label={t('licenceActivity.page.filterByCountry')}
-                  disabled={countryOptions.options.length === 0}
-                  onChange={(_e: unknown, d: { value: string }) => setCountryId(d.value === '' ? null : Number(d.value))}
-                >
-                  <option value="">{t('licenceActivity.page.allCountries')}</option>
-                  {countryOptions.options.map((country) => (
-                    <option key={country.id} value={country.id}>
-                      {demographicName(t, country)}
-                    </option>
-                  ))}
-                </Select>
-                {countryOptions.truncated && (
-                  <Text size={100} className={styles.muted}>
-                    {t('licenceActivity.page.recentOptionsHidden', { count: formatCount(DEMOGRAPHIC_OPTION_CAP) })}
-                  </Text>
-                )}
-              </div>
+              )}
 
               <div style={{ flexGrow: 1 }} />
 
@@ -512,7 +532,24 @@ export default function LicenceActivityPage() {
             </div>
           )}
 
-          {overview && (
+          {overview?.suppressed && (
+            // A reader without See PII, and so few people holding a licence that every figure would be theirs.
+            <div className={styles.stack}>
+              <DataSourceSummary
+                coverage={overview.coverage}
+                generatedUtc={overview.generatedUtc}
+                expiresUtc={overview.expiresUtc}
+              />
+              <MessageBar intent="warning" layout="multiline">
+                <MessageBarBody>
+                  <MessageBarTitle>{t('licenceActivity.suppressed.title')}</MessageBarTitle>
+                  {t('licenceActivity.suppressed.body')}
+                </MessageBarBody>
+              </MessageBar>
+            </div>
+          )}
+
+          {overview && !overview.suppressed && (
             <div className={styles.stack}>
               <DataSourceSummary
                 coverage={overview.coverage}
@@ -555,6 +592,7 @@ export default function LicenceActivityPage() {
                     allLicences={overview.allLicences ?? null}
                     selected={scope}
                     onSelect={setScope}
+                    minimumGroupSize={overview.query.minimumGroupSize ?? null}
                   />
                   <div className={styles.sectionHead}>
                     <Text weight="semibold" size={500}>
@@ -649,12 +687,16 @@ export default function LicenceActivityPage() {
                         segmentLabel={t('licenceActivity.common.department')}
                         rows={overview.departments}
                         truncated={overview.demographicsTruncated}
+                        otherGroups={overview.otherDepartments ?? 0}
+                        minimumGroupSize={overview.query.minimumGroupSize ?? null}
                       />
                       <DemographicBreakdown
                         title={t('licenceActivity.page.byCountry')}
                         segmentLabel={t('licenceActivity.common.country')}
                         rows={overview.countries}
                         truncated={overview.demographicsTruncated}
+                        otherGroups={overview.otherCountries ?? 0}
+                        minimumGroupSize={overview.query.minimumGroupSize ?? null}
                       />
                     </div>
                   ) : (

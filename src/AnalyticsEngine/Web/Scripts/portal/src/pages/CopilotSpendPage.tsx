@@ -393,7 +393,7 @@ function OverviewPanel({ summary, customDimensions, onOpenTab, trend, trendError
           />
           <StudioStatus summary={summary} />
           <div className={styles.kpiRow}>
-            <span className={styles.kpi} title={studio.credits === null ? t('copilotSpend.studio.notAvailable') : undefined}>
+            <span className={styles.kpi} title={missingCredits(t, studio.credits, studio.creditsWithheld, studio.distribution?.minPeople)}>
               {formatCredits(studio.credits)}
             </span>
             <Text>{t('copilotSpend.overview.studioCredits')}</Text>
@@ -417,7 +417,7 @@ function OverviewPanel({ summary, customDimensions, onOpenTab, trend, trendError
           />
           <BalanceStatus summary={summary} />
           <div className={styles.kpiRow}>
-            <span className={styles.kpi} title={balances.credits === null ? t('copilotSpend.studio.notAvailable') : undefined}>
+            <span className={styles.kpi} title={missingCredits(t, balances.credits, balances.creditsWithheld, balances.distribution?.minPeople)}>
               {formatCredits(balances.credits)}
             </span>
             <Text>{t('copilotSpend.overview.balanceCredits')}</Text>
@@ -540,9 +540,25 @@ function BalanceStatus({ summary }: { summary: CopilotSpendSummary }) {
   );
 }
 
+/**
+ * Why a credit figure is missing, for its tooltip: withheld from a reader without See PII because it could single out too
+ * few people (the server sends the floor with each source's distribution), or not available from its source.
+ */
+function missingCredits(t: TFunction, credits: number | null, withheld: boolean | undefined, minPeople: number | undefined): string | undefined {
+  if (withheld) return t('copilotSpend.figureWithheld', { count: formatNumber(minPeople ?? WITHHELD_FLOOR) });
+  return credits === null ? t('copilotSpend.studio.notAvailable') : undefined;
+}
+
+/** The server's floor for a reader without See PII (`ReportScopeResolver.MinimumPeopleWithoutSeePii`), when a response does not carry it. */
+const WITHHELD_FLOOR = 5;
+
 /** One calendar day of the Studio ledger as a chart point: a day with no charges is zero, a day not reported yet is a gap. */
-function studioDayPoint(t: TFunction, day: SpendDay): SpendLinePoint {
+function studioDayPoint(t: TFunction, day: SpendDay, minPeople: number | undefined): SpendLinePoint {
   const date = formatShortDate(day.date);
+  if (day.status === 'recorded' && day.withheld) {
+    // Withheld from a reader without See PII: a gap with its reason, never a zero.
+    return { date: day.date, values: [null], label: t('copilotSpend.studio.dayWithheld', { date, count: formatNumber(minPeople ?? WITHHELD_FLOOR) }) };
+  }
   if (day.status === 'recorded') {
     return {
       date: day.date,
@@ -576,7 +592,7 @@ function StudioDaysChart({ summary, height = 200 }: { summary: CopilotSpendSumma
         {t('copilotSpend.studio.daysTitle')}
       </Text>
       <SpendLineChart
-        points={studio.days.map((d) => studioDayPoint(t, d))}
+        points={studio.days.map((d) => studioDayPoint(t, d, studio.distribution?.minPeople))}
         series={[{ label: t('copilotSpend.studio.daysSeries'), colorIndex: 0 }]}
         ariaLabel={t('copilotSpend.studio.daysAria')}
         listLabel={t('copilotSpend.studio.daysList')}
@@ -623,8 +639,9 @@ function ReadingsTrendChart({ trend, error, height = 200 }: { trend: SpendTrend 
         date: p.date,
         values: [p.credits],
         details,
-        label:
-          p.credits === null
+        label: p.withheld
+          ? t('copilotSpend.balances.trendPointWithheld', { date, count: formatNumber(trend.minPeople ?? WITHHELD_FLOOR) })
+          : p.credits === null
             ? t('copilotSpend.balances.trendPointUnknown', { date })
             : t(plural(p.consumingUsers, 'copilotSpend.balances.trendPoint.one', 'copilotSpend.balances.trendPoint.other'), {
                 date,
@@ -766,7 +783,9 @@ function StudioPanel({ summary }: { summary: CopilotSpendSummary }) {
         <StudioStatus summary={summary} />
         <div className={styles.facts}>
           <Text size={200}>{t('copilotSpend.overview.studioCredits')}</Text>
-          <Text weight="semibold">{formatCredits(studio.credits)}</Text>
+          <Text weight="semibold" title={missingCredits(t, studio.credits, studio.creditsWithheld, studio.distribution?.minPeople)}>
+            {formatCredits(studio.credits)}
+          </Text>
           <Text size={200}>{t('copilotSpend.studio.peopleLabel')}</Text>
           <Text weight="semibold">{studio.people === null ? '\u2014' : formatNumber(studio.people)}</Text>
           {studio.unmatchedCredits !== null && (
@@ -899,7 +918,9 @@ function BalancesPanel({ summary, trend, trendError }: { summary: CopilotSpendSu
         <BalanceStatus summary={summary} />
         <div className={styles.facts}>
           <Text size={200}>{t('copilotSpend.balances.facts.credits')}</Text>
-          <Text weight="semibold">{balances.hasData ? formatCredits(balances.credits) : '\u2014'}</Text>
+          <Text weight="semibold" title={missingCredits(t, balances.credits, balances.creditsWithheld, balances.distribution?.minPeople)}>
+            {balances.hasData ? formatCredits(balances.credits) : '\u2014'}
+          </Text>
           <Text size={200}>{t('copilotSpend.balances.facts.snapshot')}</Text>
           <Text weight="semibold">{balances.snapshotDate ? formatShortDate(balances.snapshotDate) : '\u2014'}</Text>
           <Text size={200}>{t('copilotSpend.balances.facts.period')}</Text>
@@ -984,7 +1005,15 @@ function BalancesPanel({ summary, trend, trendError }: { summary: CopilotSpendSu
                         : t('copilotInvestment.services.unitMissing')}
                   </TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.consumers)}</TableCell>
-                  <TableCell className={styles.num}>{formatCredits(s.quantity)}</TableCell>
+                  <TableCell className={styles.num}>
+                    {s.withheld ? (
+                      <span title={missingCredits(t, null, true, balances.distribution?.minPeople)} aria-label={missingCredits(t, null, true, balances.distribution?.minPeople)} role="img">
+                        {'\u2014'}
+                      </span>
+                    ) : (
+                      formatCredits(s.quantity)
+                    )}
+                  </TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.limitExhaustedUsers + s.notEntitledUsers)}</TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.unevaluatedUsers)}</TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.unknownAmountUsers)}</TableCell>
@@ -1049,6 +1078,7 @@ function GroupTable({ summary, groups, customDimensions }: { summary: CopilotSpe
   const t = useT();
   const source = { dimensions: customDimensions, names: { [summary.organisation.dimension]: summary.organisation.dimensionName ?? '' } };
   const withheld = t('copilotSpend.org.withheld', { count: formatNumber(summary.organisation.minGroupSize) });
+  const figureWithheld = t('copilotSpend.figureWithheld', { count: formatNumber(summary.organisation.minGroupSize) });
   const notAvailable = t('copilotSpend.studio.notAvailable');
   // A figure the source did not provide, or a combined row too small to show, reads as a dash with its reason - never 0.
   const cell = (text: string, missing: boolean, reason: string) =>
@@ -1074,7 +1104,9 @@ function GroupTable({ summary, groups, customDimensions }: { summary: CopilotSpe
       </TableHeader>
       <TableBody>
         {groups.map((g) => {
-          const reason = g.withheld ? withheld : notAvailable;
+          // A whole row too small to show, one source's figures withheld from a reader without See PII, or a source not available.
+          const studioReason = g.withheld ? withheld : g.studioWithheld ? figureWithheld : notAvailable;
+          const balanceReason = g.withheld ? withheld : g.balancesWithheld ? figureWithheld : notAvailable;
           return (
             <TableRow key={g.label ?? g.emptyKey ?? '-'}>
               <TableCell>
@@ -1091,16 +1123,16 @@ function GroupTable({ summary, groups, customDimensions }: { summary: CopilotSpe
                 )}
               </TableCell>
               <TableCell className={styles.num}>{formatNumber(g.people)}</TableCell>
-              <TableCell className={styles.num}>{cell(formatCredits(g.studioCredits), g.studioCredits === null, reason)}</TableCell>
+              <TableCell className={styles.num}>{cell(formatCredits(g.studioCredits), g.studioCredits === null, studioReason)}</TableCell>
               <TableCell className={styles.num}>
-                {g.studioCredits === null ? cell('', true, reason) : <ShareCell share={g.shareOfStudio} text={formatShareAboveZero(g.shareOfStudio)} />}
+                {g.studioCredits === null ? cell('', true, studioReason) : <ShareCell share={g.shareOfStudio} text={formatShareAboveZero(g.shareOfStudio)} />}
               </TableCell>
-              <TableCell className={styles.num}>{cell(formatCredits(g.balanceCredits), g.balanceCredits === null, reason)}</TableCell>
+              <TableCell className={styles.num}>{cell(formatCredits(g.balanceCredits), g.balanceCredits === null, balanceReason)}</TableCell>
               <TableCell className={styles.num}>
-                {g.balanceCredits === null ? cell('', true, reason) : <ShareCell share={g.shareOfBalances} text={formatShareAboveZero(g.shareOfBalances)} />}
+                {g.balanceCredits === null ? cell('', true, balanceReason) : <ShareCell share={g.shareOfBalances} text={formatShareAboveZero(g.shareOfBalances)} />}
               </TableCell>
               <TableCell className={styles.num}>
-                {cell(g.unknownAmountPeople === null ? '' : formatNumber(g.unknownAmountPeople), g.unknownAmountPeople === null, reason)}
+                {cell(g.unknownAmountPeople === null ? '' : formatNumber(g.unknownAmountPeople), g.unknownAmountPeople === null, balanceReason)}
               </TableCell>
             </TableRow>
           );

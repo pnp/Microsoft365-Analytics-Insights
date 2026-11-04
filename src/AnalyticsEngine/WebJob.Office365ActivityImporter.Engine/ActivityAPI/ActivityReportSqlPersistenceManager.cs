@@ -125,7 +125,8 @@ namespace WebJob.Office365ActivityImporter.Engine
             _stagingWriter = stagingWriter ?? new SqlActivityStagingWriter(logger);
             _copilotPrewarmer = new CopilotMetadataPrewarmer(
                 copilotMetadataLoaderFactory ?? new GraphCopilotMetadataLoaderFactory(logger, appConfig), logger);
-            _saveSessionFactory = saveSessionFactory ?? new SaveSessionFactory(logger, appConfig);
+            // One read of the SharePoint webs and site collections for the whole cycle, not one per batch.
+            _saveSessionFactory = saveSessionFactory ?? new SaveSessionFactory(logger, appConfig, new SharePointWebIndex());
         }
 
         /// <summary>

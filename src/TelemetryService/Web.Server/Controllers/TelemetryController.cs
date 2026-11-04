@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using UsageReporting;
 using Web.Auth;
 using Web.Config;
 using Web.Dashboard;
+using Web.Startup;
 
 namespace Web
 {
@@ -31,9 +33,12 @@ namespace Web
             _logger = logger;
         }
 
-        // Uploaders authenticate the payload itself with the shared signature.
+        // Uploaders authenticate the payload itself with the shared signature. The endpoint is anonymous, so
+        // UploadLimits caps what one request may cost: its size, and how many one address may send.
         [HttpPost]
         [AllowAnonymous]
+        [EnableRateLimiting(UploadLimits.RateLimitPolicy)]
+        [RequestSizeLimit(UploadLimits.MaxRequestBodyBytes)]
         public async Task<IActionResult> Post(TelemetryPayload payload)
         {
             if (string.IsNullOrEmpty(_configuration.TelemetrySecret))
@@ -45,6 +50,18 @@ namespace Web
             if (payload?.StatsModel == null || !payload.StatsModel.IsValid)
             {
                 return BadRequest();
+            }
+
+            // A bcrypt hash names its own cost, so the caller's would decide how long verifying it takes. Only the
+            // exact shape importers send goes on to BCrypt - see UploadSignature.
+            if (!UploadSignature.IsWellFormed(payload.Secret))
+            {
+                // Logs the shape only, never the value. Seeing this for real importers would mean the client's
+                // signing (StringUtils.GetHashedStringWithSalt) has changed.
+                _logger.LogWarning(
+                    "Upload refused: its signature is not a cost-{WorkFactor} bcrypt hash of the form {Prefix}...",
+                    UploadSignature.WorkFactor, UploadSignature.Prefix);
+                return Unauthorized();
             }
 
             // Verify hash

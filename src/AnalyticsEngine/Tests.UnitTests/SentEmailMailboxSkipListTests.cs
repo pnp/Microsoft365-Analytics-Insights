@@ -824,5 +824,31 @@ namespace Tests.UnitTests
         }
 
         #endregion
+
+        #region Which mailboxes are read
+
+        /// <summary>
+        /// Contract: a mailbox is read because its user has a mail address, not because their account can sign in. A shared
+        /// mailbox's account is disabled by design, and a leaver's kept mailbox is too, yet both still send mail. Filtering on
+        /// <c>account_enabled</c> would silently stop importing them; a mailbox that no longer exists is kept out by the
+        /// no-mailbox skip list instead (above).
+        /// </summary>
+        [TestMethod]
+        public void UsersWithAMailbox_IncludesAccountsThatCannotSignIn_AndNotUsersWithoutAMailAddress()
+        {
+            var users = new List<Common.Entities.User>
+            {
+                new Common.Entities.User { ID = 1, UserPrincipalName = "member@contoso.com", Mail = "member@contoso.com", AccountEnabled = true },
+                new Common.Entities.User { ID = 2, UserPrincipalName = "shared@contoso.com", Mail = "shared@contoso.com", AccountEnabled = false },
+                new Common.Entities.User { ID = 3, UserPrincipalName = "leaver@contoso.com", Mail = "leaver@contoso.com", AccountEnabled = false },
+                new Common.Entities.User { ID = 4, UserPrincipalName = "unknown@contoso.com", Mail = "unknown@contoso.com", AccountEnabled = null },
+                new Common.Entities.User { ID = 5, UserPrincipalName = "no-mail@contoso.com", Mail = null, AccountEnabled = true },
+                new Common.Entities.User { ID = 6, UserPrincipalName = "blank-mail@contoso.com", Mail = "", AccountEnabled = true },
+            };
+
+            CollectionAssert.AreEqual(new[] { 1, 2, 3, 4 }, SentEmailImporter.UsersWithAMailbox(users.AsQueryable()).Select(u => u.ID).ToArray());
+        }
+
+        #endregion
     }
 }

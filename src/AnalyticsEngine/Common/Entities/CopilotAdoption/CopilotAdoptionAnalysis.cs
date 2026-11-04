@@ -36,6 +36,17 @@ namespace Common.Entities.CopilotAdoption
         public List<AgentUsageRow> Agents { get; set; } = new List<AgentUsageRow>();
 
         /// <summary>
+        /// Agent use inside a past reporting period, read with the inventory's own query over that period.
+        /// </summary>
+        /// <remarks>
+        /// The inventory (<see cref="Agents"/>) reads up to now even for a past range, so its window figures
+        /// describe the latest weeks; dividing them by the period's agent users mixed two periods. Null for a
+        /// period ending now (the inventory's window is the period), and when the period could not be read:
+        /// the audit log holds nothing for it, or the query failed. Never replaced by the inventory's figures.
+        /// </remarks>
+        internal AgentPeriodUsage AgentPeriodUsage { get; set; }
+
+        /// <summary>
         /// The people who used Copilot agents in the period, heaviest first, up to
         /// <see cref="CopilotAdoptionOptions.MaxAgentUsersScored"/>.
         /// </summary>

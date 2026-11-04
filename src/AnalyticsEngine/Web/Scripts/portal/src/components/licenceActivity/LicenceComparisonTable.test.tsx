@@ -41,6 +41,31 @@ function shownOrder(): string[] {
 }
 
 describe('LicenceComparisonTable', () => {
+  it('says a licence held by too few people is hidden, instead of showing those people\'s activity', () => {
+    const withheld: LicenceActivitySku = {
+      licenceTypeId: 30, name: 'Contoso Add-on', skuId: 'CONTOSO_ADDON', assignedUsers: 2, withheld: true, workloads: [],
+    };
+    renderWithProvider(
+      <LicenceComparisonTable
+        licences={[...licences, withheld]}
+        allLicences={everyone}
+        selected="all"
+        onSelect={vi.fn()}
+        minimumGroupSize={5}
+      />,
+    );
+
+    const row = screen.getAllByRole('row').find((r) => within(r).queryByText('Contoso Add-on'))!;
+    expect(within(row).getByText('2')).toBeInTheDocument();
+    expect(within(row).getByText('Hidden: fewer than 5 people hold this licence')).toBeInTheDocument();
+    // One cell spans the score and every service, so nothing reads as "not measured" or "no activity".
+    expect(within(row).getAllByRole('cell')).toHaveLength(3);
+    expect(within(row).queryByText('\u2014')).not.toBeInTheDocument();
+
+    const e5 = screen.getAllByRole('row').find((r) => within(r).queryByText('E5'))!;
+    expect(within(e5).queryByText(/Hidden/)).not.toBeInTheDocument();
+  });
+
   it('leads with everyone holding a licence, then each licence with its people, score and service shares', () => {
     renderWithProvider(<LicenceComparisonTable licences={licences} allLicences={everyone} selected="all" onSelect={vi.fn()} />);
 

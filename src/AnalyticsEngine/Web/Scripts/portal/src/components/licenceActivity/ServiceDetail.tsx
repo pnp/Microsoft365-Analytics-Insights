@@ -112,6 +112,10 @@ function ServiceDetail({ overview, scope, onScopeChange, onShowPeople }: Service
   const everyoneScore = overview.allLicences?.adoptionScore ?? null;
   const rank = licence ? scoreRank(overview.licences, licence.licenceTypeId) : null;
   const workloads = scopeWorkloads(overview, scope);
+  // A reader without See PII, and a licence so few people hold that its figures would be theirs.
+  const withheldNote = licence?.withheld
+    ? t('licenceActivity.withheld.detail', { count: formatCount(overview.query.minimumGroupSize ?? 0) })
+    : null;
 
   return (
     <Card className={styles.card}>
@@ -154,27 +158,35 @@ function ServiceDetail({ overview, scope, onScopeChange, onShowPeople }: Service
             {licence ? t('licenceActivity.detail.holdThisLicence') : t('licenceActivity.detail.holdAnyLicence')}
           </Text>
         </div>
-        <div className={styles.figure}>
-          <span className={styles.figureLabel}>
-            <Text size={200} weight="semibold">
-              {t('licenceActivity.compare.adoptionScore')}
+        {!withheldNote && (
+          <div className={styles.figure}>
+            <span className={styles.figureLabel}>
+              <Text size={200} weight="semibold">
+                {t('licenceActivity.compare.adoptionScore')}
+              </Text>
+              <AdoptionScoreInfo />
+            </span>
+            <AdoptionScoreBar score={score} baseline={licence ? everyoneScore : null} large />
+            <Text size={200} className={styles.muted}>
+              {licence && everyoneScore != null
+                ? t('licenceActivity.detail.scoreAgainstEveryone', { score: formatScore(everyoneScore) })
+                : t('licenceActivity.detail.scoreOutOf100')}
+              {rank ? ` \u00b7 ${t('licenceActivity.detail.scoreRank', { rank: formatCount(rank.rank), of: formatCount(rank.of) })}` : ''}
             </Text>
-            <AdoptionScoreInfo />
-          </span>
-          <AdoptionScoreBar score={score} baseline={licence ? everyoneScore : null} large />
-          <Text size={200} className={styles.muted}>
-            {licence && everyoneScore != null
-              ? t('licenceActivity.detail.scoreAgainstEveryone', { score: formatScore(everyoneScore) })
-              : t('licenceActivity.detail.scoreOutOf100')}
-            {rank ? ` \u00b7 ${t('licenceActivity.detail.scoreRank', { rank: formatCount(rank.rank), of: formatCount(rank.of) })}` : ''}
-          </Text>
-        </div>
+          </div>
+        )}
       </div>
 
       <Text size={300} weight="semibold">
         {t('licenceActivity.detail.servicesFor', { name })}
       </Text>
-      <WorkloadDistributions workloads={workloads} comparison={comparison} ranks={ranks} />
+      {withheldNote ? (
+        <Text size={300} className={styles.muted}>
+          {withheldNote}
+        </Text>
+      ) : (
+        <WorkloadDistributions workloads={workloads} comparison={comparison} ranks={ranks} />
+      )}
     </Card>
   );
 }

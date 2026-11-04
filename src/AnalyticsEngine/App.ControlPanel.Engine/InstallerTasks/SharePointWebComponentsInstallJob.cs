@@ -61,11 +61,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 // Install into sites. Hard-code library name "SPOInsights" for now
                 var siteInstaller = new SpoSiteListInstaller(authenticator, _logger);
                 siteInstaller.CancellationToken = CancellationToken;
-                await siteInstaller.InstallToSites(sharePointInstallConfig.TargetSites, aiTrackerTempFile, appInsightsConnectionString,
+                var result = await siteInstaller.InstallToSites(sharePointInstallConfig.TargetSites, aiTrackerTempFile, appInsightsConnectionString,
                     "SPOInsights", "https://" + _defaultHostName);
-            }
 
-            _logger.LogInformation("Installed AITracker to target SharePoint sites via CSOM.");
+                // A partial install has already been reported as an error, naming the sites that were missed
+                if (result.AllSucceeded)
+                {
+                    _logger.LogInformation($"Installed AITracker on {result.SucceededSites.Count} target SharePoint site collection(s).");
+                }
+            }
         }
 
         private async Task UploadApp(SharePointInstallConfig sharePointInstallConfig, string packagePath, ISpoAuthenticator authenticator)

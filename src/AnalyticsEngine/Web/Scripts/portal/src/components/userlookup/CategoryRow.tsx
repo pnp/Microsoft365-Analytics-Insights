@@ -26,7 +26,7 @@ import toast from '../toast';
 import type { UserDataCategory, UserDataDetailRow } from '../../types/userData';
 import { fetchUserDetail } from '../../api/userLookupApi';
 import Spinner from '../Spinner';
-import { formatDateParts, formatNumber, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
+import { formatDateParts, formatNumber, parseApiDate, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
 
 const useStyles = makeStyles({
   row: {
@@ -161,9 +161,19 @@ export function detailTitle(t: TFunction, categoryKey: string, title: string | n
 
 function formatDetailDate(iso: string | null | undefined): string | null {
   if (!iso) return null;
-  const date = new Date(iso);
+  const date = parseApiDate(iso);
   if (Number.isNaN(date.getTime())) return null;
   return formatDateParts(date, { dateStyle: 'short', timeZone: 'UTC' });
+}
+
+/**
+ * When a raw detail row happened, shown in UTC and labelled as such. The rows come straight from SQL, where the
+ * importers store every time in UTC, and the usage-report rows are UTC calendar days that the reader's own zone
+ * would move to the previous day west of UTC.
+ */
+export function formatDetailTimestamp(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  return formatDateParts(parseApiDate(iso), { dateStyle: 'short', timeStyle: 'long', timeZone: 'UTC' });
 }
 
 export function detailText(t: TFunction, categoryKey: string, row: UserDataDetailRow): string | null {
@@ -334,14 +344,7 @@ export default function CategoryRow({ upn, category }: CategoryRowProps) {
                   <TableBody>
                     {rows.map((r, i) => (
                       <TableRow key={i}>
-                        <TableCell>
-                          {r.timestamp
-                            ? formatDateParts(new Date(r.timestamp), {
-                                dateStyle: 'short',
-                                timeStyle: 'medium',
-                              })
-                            : '—'}
-                        </TableCell>
+                        <TableCell>{formatDetailTimestamp(r.timestamp)}</TableCell>
                         <TableCell>
                           {detailTitle(t, category.key, r.title) ? <strong>{detailTitle(t, category.key, r.title)}</strong> : null}
                           {detailTitle(t, category.key, r.title) && detailText(t, category.key, r) ? ' — ' : ''}

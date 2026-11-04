@@ -1,6 +1,6 @@
 import { makeStyles, mergeClasses, tokens, Text } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
-import { formatDateParts, formatNumber, type TFunction, type TranslationKey } from '../../i18n';
+import { formatDateParts, formatNumber, parseApiDate, type TFunction, type TranslationKey } from '../../i18n';
 import type { InvestmentAction, InvestmentFinding, InvestmentTrustReason } from '../../types/copilotInvestment';
 
 /**
@@ -96,19 +96,27 @@ export function formatMinutes(t: TFunction, value: number | null | undefined): s
   return t('copilotInvestment.format.minutes', { value: formatNumber(value, { maximumFractionDigits: 1 }) });
 }
 
-/** A UTC date or instant as a short date in the reader's language. */
 /**
- * A server date as a moment in UTC. The API sends the dates it reads from SQL without an offset ("2026-10-26T00:00:00"),
- * which a browser would otherwise read as its own local midnight: a day early anywhere east of UTC. Every date these
- * reports send is UTC, so one without an offset is read as UTC too.
+ * The fewest people a figure may describe to a reader without See PII: the page's own group minimum, never below the
+ * portal's five (the server's `ReportScopeResolver.MinimumPeopleWithoutSeePii`).
  */
-export function parseUtcDate(iso: string): Date {
-  return new Date(/T[^Zz+-]*$/.test(iso) ? `${iso}Z` : iso);
+export function withheldMinimum(summary: { organisation?: { minGroupSize: number } | null }): number {
+  return Math.max(summary.organisation?.minGroupSize ?? 0, 5);
 }
 
+/** A figure withheld from a reader without See PII: a dash whose name says why - never a zero, a blank or "not available". */
+export function WithheldMark({ reason }: { reason: string }) {
+  return (
+    <span role="img" aria-label={reason} title={reason}>
+      {'\u2014'}
+    </span>
+  );
+}
+
+/** A UTC date or instant as a short date in the reader's language; a date with no offset is UTC (see parseApiDate). */
 export function formatShortDate(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
-  return formatDateParts(parseUtcDate(iso), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  return formatDateParts(parseApiDate(iso), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
 
 export const SIGNAL_LABEL_KEYS: Record<string, TranslationKey> = {
@@ -349,8 +357,11 @@ function n(values: Record<string, number | null>, name: string): number | null {
 
 const count = (value: number | null): string => formatNumber(Math.round(value ?? 0));
 
-/** One finding as a sentence, written from its values. Null for a code this build does not know. */
-export function findingText(t: TFunction, finding: InvestmentFinding, currency: string | null): string | null {
+/**
+ * One finding as a sentence, written from its values. Null for a code this build does not know. `minPeople` is the floor a
+ * reader without See PII is held to, for a sentence that says a figure is withheld.
+ */
+export function findingText(t: TFunction, finding: InvestmentFinding, currency: string | null, minPeople = 5): string | null {
   const v = finding.values ?? {};
   const money = (name: string): string => formatMoney(n(v, name), currency);
   switch (finding.code) {
@@ -412,6 +423,12 @@ export function findingText(t: TFunction, finding: InvestmentFinding, currency: 
         consumers: count(n(v, 'consumers')),
       });
     case 'highSpendThinEvidence':
+      if (n(v, 'credits') === null) {
+        // Withheld from a reader without See PII: one to four people's balances.
+        return n(v, 'people') === 1
+          ? t('copilotInvestment.finding.highSpendThinEvidenceOneWithheld', { count: formatNumber(minPeople) })
+          : t('copilotInvestment.finding.highSpendThinEvidenceWithheld', { people: count(n(v, 'people')), count: formatNumber(minPeople) });
+      }
       return n(v, 'people') === 1
         ? t('copilotInvestment.finding.highSpendThinEvidenceOne', { credits: formatCredits(n(v, 'credits')) })
         : t('copilotInvestment.finding.highSpendThinEvidence', { people: count(n(v, 'people')), credits: formatCredits(n(v, 'credits')) });
@@ -462,10 +479,14 @@ export function findingText(t: TFunction, finding: InvestmentFinding, currency: 
   }
 }
 
-/** One action's title and body. Null for a code this build does not know. */
-export function actionText(t: TFunction, action: InvestmentAction): { title: string; body: string } | null {
+/**
+ * One action's title and body. Null for a code this build does not know. `minPeople` is the floor a reader without See PII
+ * is held to, for a body that says its figure is withheld.
+ */
+export function actionText(t: TFunction, action: InvestmentAction, minPeople = 5): { title: string; body: string } | null {
   const people = count(action.people);
   const one = action.people === 1;
+  const floor = formatNumber(minPeople);
   switch (action.code) {
     case 'reclaimIdle':
       return { title: t('copilotInvestment.action.reclaimIdle.title'), body: one ? t('copilotInvestment.action.reclaimIdle.bodyOne') : t('copilotInvestment.action.reclaimIdle.body', { people }) };
@@ -474,9 +495,13 @@ export function actionText(t: TFunction, action: InvestmentAction): { title: str
     case 'enableBelowBreakEven':
       return {
         title: t('copilotInvestment.action.enableBelowBreakEven.title'),
-        body: one
-          ? t('copilotInvestment.action.enableBelowBreakEven.bodyOne', { days: formatDecimal(action.metric) })
-          : t('copilotInvestment.action.enableBelowBreakEven.body', { people, days: formatDecimal(action.metric) }),
+        body: action.metricWithheld
+          ? one
+            ? t('copilotInvestment.action.enableBelowBreakEven.bodyOneWithheld', { count: floor })
+            : t('copilotInvestment.action.enableBelowBreakEven.bodyWithheld', { people, count: floor })
+          : one
+            ? t('copilotInvestment.action.enableBelowBreakEven.bodyOne', { days: formatDecimal(action.metric) })
+            : t('copilotInvestment.action.enableBelowBreakEven.body', { people, days: formatDecimal(action.metric) }),
       };
     case 'enableLightEvidence':
       return { title: t('copilotInvestment.action.enableLightEvidence.title'), body: one ? t('copilotInvestment.action.enableLightEvidence.bodyOne') : t('copilotInvestment.action.enableLightEvidence.body', { people }) };
@@ -492,16 +517,24 @@ export function actionText(t: TFunction, action: InvestmentAction): { title: str
     case 'reviewHighSpendThinEvidence':
       return {
         title: t('copilotInvestment.action.reviewHighSpendThinEvidence.title'),
-        body: one
-          ? t('copilotInvestment.action.reviewHighSpendThinEvidence.bodyOne', { credits: formatCredits(action.credits) })
-          : t('copilotInvestment.action.reviewHighSpendThinEvidence.body', { people, credits: formatCredits(action.credits) }),
+        body: action.creditsWithheld
+          ? one
+            ? t('copilotInvestment.action.reviewHighSpendThinEvidence.bodyOneWithheld', { count: floor })
+            : t('copilotInvestment.action.reviewHighSpendThinEvidence.bodyWithheld', { people, count: floor })
+          : one
+            ? t('copilotInvestment.action.reviewHighSpendThinEvidence.bodyOne', { credits: formatCredits(action.credits) })
+            : t('copilotInvestment.action.reviewHighSpendThinEvidence.body', { people, credits: formatCredits(action.credits) }),
       };
     case 'raiseLimitEvidenced':
       return {
         title: t('copilotInvestment.action.raiseLimitEvidenced.title'),
-        body: one
-          ? t('copilotInvestment.action.raiseLimitEvidenced.bodyOne', { credits: formatCredits(action.credits) })
-          : t('copilotInvestment.action.raiseLimitEvidenced.body', { people, credits: formatCredits(action.credits) }),
+        body: action.creditsWithheld
+          ? one
+            ? t('copilotInvestment.action.raiseLimitEvidenced.bodyOneWithheld', { count: floor })
+            : t('copilotInvestment.action.raiseLimitEvidenced.bodyWithheld', { people, count: floor })
+          : one
+            ? t('copilotInvestment.action.raiseLimitEvidenced.bodyOne', { credits: formatCredits(action.credits) })
+            : t('copilotInvestment.action.raiseLimitEvidenced.body', { people, credits: formatCredits(action.credits) }),
       };
     case 'licenceMeteredHeavy':
       return { title: t('copilotInvestment.action.licenceMeteredHeavy.title'), body: one ? t('copilotInvestment.action.licenceMeteredHeavy.bodyOne') : t('copilotInvestment.action.licenceMeteredHeavy.body', { people }) };

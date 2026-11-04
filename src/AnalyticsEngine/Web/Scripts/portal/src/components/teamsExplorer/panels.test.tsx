@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { screen } from '@testing-library/react';
 import { renderWithProvider } from '../../test/renderWithProvider';
+import AdoptionPanel from './AdoptionPanel';
 import ConversationsPanel from './ConversationsPanel';
 import PeoplePanel from './PeoplePanel';
 import type {
+  TeamsAdoption,
   TeamsConversations,
   TeamsPeople,
   TeamsWindow,
@@ -56,6 +58,65 @@ const people = (over: Partial<TeamsPeople> = {}): TeamsPeople => ({
 });
 
 const noop = () => undefined;
+
+const adoption = (over: Partial<TeamsAdoption> = {}): TeamsAdoption => ({
+  window: window28,
+  queries: [],
+  groupBy: 'jobTitle',
+  rhythm: { meanDailyActiveUsers: 10, weeklyActiveUsers: 20, monthlyActiveUsers: 30, stickinessPct: 33 },
+  segmentMix: [],
+  segmentTrend: [],
+  breakdown: [
+    { name: 'Contoso Analysts', knownUsers: 12, activeUsers: 10, reachPct: 83.3, messagesPerActiveUser: 40, meetingsPerActiveUser: 2 },
+    { name: null, other: true, knownUsers: 35, activeUsers: 7, reachPct: 20, messagesPerActiveUser: 150, meetingsPerActiveUser: 1 },
+  ],
+  devices: [],
+  lifecycle: { newUsers: 1, returningUsers: 2, lapsedUsers: 3 },
+  minimumGroupSize: 5,
+  otherGroups: 3,
+  ...over,
+});
+
+describe('AdoptionPanel', () => {
+  it('names the row a reader without See PII gets in place of the smaller groups, and says why', () => {
+    renderWithProvider(<AdoptionPanel data={adoption()} groupBy="jobTitle" onGroupByChange={noop} demographicsAvailable />);
+
+    expect(screen.getAllByText('Contoso Analysts').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('3 smaller groups, combined').length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(
+        'Groups of fewer than 5 people, or with fewer than 5 active people, are combined into one row so that nobody can be singled out.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('explains an empty breakdown when every group is too small to show', () => {
+    renderWithProvider(
+      <AdoptionPanel data={adoption({ breakdown: [], otherGroups: 4 })} groupBy="jobTitle" onGroupByChange={noop} demographicsAvailable />,
+    );
+
+    expect(
+      screen.getByText(
+        'Every group has fewer than 5 people, or fewer than 5 active people, so this breakdown is hidden to protect their privacy.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('No users could be grouped for this period.')).not.toBeInTheDocument();
+  });
+
+  it('says nothing about combined groups to a reader who sees every group', () => {
+    renderWithProvider(
+      <AdoptionPanel
+        data={adoption({ breakdown: adoption().breakdown.slice(0, 1), otherGroups: 0, minimumGroupSize: null })}
+        groupBy="jobTitle"
+        onGroupByChange={noop}
+        demographicsAvailable
+      />,
+    );
+
+    expect(screen.queryByText(/combined into one row/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/smaller group/)).not.toBeInTheDocument();
+  });
+});
 
 describe('ConversationsPanel', () => {
   it('explains the missing cognitive configuration instead of rendering empty charts', () => {
@@ -120,6 +181,49 @@ describe('PeoplePanel', () => {
     expect(screen.getByText(/not for performance management/)).toBeInTheDocument();
   });
 
+  it('says why nobody is listed as dormant when the period was not imported in full', () => {
+    renderWithProvider(
+      <PeoplePanel
+        data={people({
+          dormancy: {
+            known: false,
+            reason: 'incompleteImport',
+            expectedDays: 28,
+            importedDays: 26,
+            teamsLicensedUsers: 40,
+            unmeasuredUsers: 0,
+          },
+        })}
+        usageReportsAvailable
+        onExportChampions={noop}
+        onExportDormant={noop}
+        exporting={false}
+        showPii
+      />,
+    );
+
+    expect(screen.getByText(/were imported for 26 of its 28 days/)).toBeInTheDocument();
+    expect(screen.queryByText('Everyone licensed for Teams did something in Teams this period.')).not.toBeInTheDocument();
+  });
+
+  it('keeps the plain empty message when dormancy was measured in full', () => {
+    renderWithProvider(
+      <PeoplePanel
+        data={people({
+          dormancy: { known: true, reason: null, expectedDays: 28, importedDays: 28, teamsLicensedUsers: 40, unmeasuredUsers: 0 },
+        })}
+        usageReportsAvailable
+        onExportChampions={noop}
+        onExportDormant={noop}
+        exporting={false}
+        showPii
+      />,
+    );
+
+    expect(screen.getByText('Everyone licensed for Teams did something in Teams this period.')).toBeInTheDocument();
+    expect(screen.queryByText(/Dormant people cannot be identified/)).not.toBeInTheDocument();
+  });
+
   it('explains anonymised usage reports as a tenant setting, not a product fault', () => {
     renderWithProvider(
       <PeoplePanel
@@ -134,5 +238,47 @@ describe('PeoplePanel', () => {
 
     expect(screen.getByText(/anonymised user names/)).toBeInTheDocument();
     expect(screen.getByText(/admin centre/)).toBeInTheDocument();
+  });
+
+  it('names the row of departments combined for a reader without See PII, and says why', () => {
+    renderWithProvider(
+      <PeoplePanel
+        data={people({
+          champions: [],
+          championsByDepartment: [
+            { name: 'Engineering', count: 9, sharePct: 64.3 },
+            { name: null, other: true, count: 5, sharePct: 35.7 },
+          ],
+          minimumGroupSize: 5,
+          otherChampionDepartments: 2,
+        })}
+        usageReportsAvailable
+        onExportChampions={noop}
+        onExportDormant={noop}
+        exporting={false}
+        showPii={false}
+      />,
+    );
+
+    expect(screen.getAllByText('Engineering').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('2 smaller departments, combined').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Departments with fewer than 5 power users are combined into one row/)).toBeInTheDocument();
+  });
+
+  it('explains an empty chart when every department has too few power users to show', () => {
+    renderWithProvider(
+      <PeoplePanel
+        data={people({ champions: [], championsByDepartment: [], minimumGroupSize: 5, otherChampionDepartments: 3 })}
+        usageReportsAvailable
+        onExportChampions={noop}
+        onExportDormant={noop}
+        exporting={false}
+        showPii={false}
+      />,
+    );
+
+    expect(
+      screen.getByText('Every department has fewer than 5 power users, so this chart is hidden to protect their privacy.'),
+    ).toBeInTheDocument();
   });
 });

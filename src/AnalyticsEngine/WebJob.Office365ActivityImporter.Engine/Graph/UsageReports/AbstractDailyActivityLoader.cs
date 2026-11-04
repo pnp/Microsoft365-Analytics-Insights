@@ -61,7 +61,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         public int RefreshableRecentDays { get; set; } = 3;
 
         /// <summary>
-        /// Number of rows actually inserted/updated in SQL by the last <see cref="SaveLoadedReportsToSql"/> call.
+        /// Number of rows actually inserted/updated in SQL by the last <see cref="SaveLoadedReportsToSql"/> or
+        /// <see cref="LoadAndSaveEachDateAsync"/> call.
         /// Unchanged rows are dirty-checked and skipped, so this is 0 when nothing changed. Exposed for tests and
         /// diagnostics.
         /// </summary>
@@ -181,24 +182,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
             LoadedReportPages.Clear();
             var sawIdentifiableRow = false;
+            var nowUtc = Clock.UtcNow;
 
             for (int daysBackIdx = 0; daysBackIdx < daysBackMax; daysBackIdx++)
             {
-                // Go back one extra day always. Otherwise we risk asking for data too soon...
-                // Example: Message: {"error":{"code":"InvalidArgument","message":"Invalid date value specified: $DateTime.Now. Only support data for the past 28 days."}}
-                var daysBack = (daysBackIdx + 1) * -1;
-                // Graph Usage Reports API operates in UTC; DateTime.Now on a non-UTC server
-                // produces the wrong date bucket near midnight. Read per iteration, as before.
-                var dt = Clock.UtcNow.AddDays(daysBack);
-
-                // Finalized days we already hold don't change in Graph - skip the (often slow) paged download entirely.
-                if (datesToSkip != null && datesToSkip.Contains(dt.Date))
+                var date = DateToLoad(nowUtc, daysBackIdx, datesToSkip);
+                if (date == null)
                 {
-                    Telemetry.LogInformation($"Skipping {this.GetType().Name} for date {dt.ToString("dd-MM-yyyy")} - already stored and finalized (no longer changes in Graph).");
                     continue;
                 }
-
-                Telemetry.LogInformation($"Loading {this.GetType().Name} for date {dt.ToString("dd-MM-yyyy")}");
+                var dt = date.Value;
 
                 var dayReports = await LoadReportPageForDateFromGraph(dt);
 
@@ -305,32 +298,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// <summary>
         /// Save to SQL. Needs a shared ConcurrentLookupDbIdsCache if running in parallel with other imports.
         /// </summary>
+        /// <remarks>
+        /// Saves every date <see cref="PopulateLoadedReportPagesFromGraph"/> downloaded. The import itself uses
+        /// <see cref="LoadAndSaveEachDateAsync"/>, which saves each date as it is downloaded and holds no more than one.
+        /// </remarks>
         public async Task SaveLoadedReportsToSql(ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache)
         {
-            int i = 0; int dbWrites = 0; var enUS = new System.Globalization.CultureInfo("en-US");
-            var db = lookupCache.DB;
-            var instrumentation = SaveInstrumentation ?? NullUsageReportSaveInstrumentation.Instance;
-            var instrumentationEnabled = instrumentation.IsEnabled;
-            var loaderType = this.GetType().Name;
-            var reportTable = instrumentationEnabled ? (UsageReportTableName.TryResolve(typeof(TReportDbType)) ?? typeof(TReportDbType).Name) : null;
-            var saveWatch = instrumentationEnabled ? Stopwatch.StartNew() : null;
-            var totals = instrumentationEnabled ? new SaveLoopMetrics() : null;
+            var run = new SaveRun(this, lookupCache.DB);
 
-            Telemetry.LogInformation($"Saving {loaderType} for {LoadedReportPages.Keys.Count} dates");
+            Telemetry.LogInformation($"Saving {run.LoaderType} for {LoadedReportPages.Keys.Count} dates");
 
             // Compute total once. The previous "LoadedReportPages.SelectMany(r => r.Value).Count()"
             // call ran on every 1000-row progress print, making progress O(n^2).
-            var totalReports = LoadedReportPages.Sum(kv => kv.Value.Count);
-            if (instrumentationEnabled)
-            {
-                TrackSaveStage(instrumentation, UsageReportSaveStageIds.SaveStarted, loaderType, reportTable, "Started", m =>
-                {
-                    m["DateCount"] = LoadedReportPages.Keys.Count;
-                    m["InputRowCount"] = totalReports;
-                    m["SaveBatchSize"] = SaveBatchSize;
-                    UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
-                });
-            }
+            run.InputRows = LoadedReportPages.Sum(kv => kv.Value.Count);
+            TrackSaveStarted(run, LoadedReportPages.Keys.Count);
 
             // Persist one day at a time, committing in fixed-size batches. Previously every row across every date
             // was added to a single context and committed in ONE SaveChangesAsync, and every existing row across
@@ -340,7 +321,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             // bounded; auto change-detection is turned off so adding a day's rows stays O(n) instead of O(n^2).
             // AssociatedLookupId is [NotMapped] (it maps to UserID / YammerGroupID per subclass), so existing
             // rows can only be filtered in SQL by the mapped Date column - we key them by lookup id in memory.
-            var store = StoreFor(db);
             try
             {
                 // Concealed identities are dealt with before anything is resolved or written, so a pseudonym never
@@ -348,313 +328,546 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // identifiable row concealed means the tenant conceals identities: refuse the whole report rather
                 // than invent one placeholder user per row. Some concealed: skip those, save the rest.
                 CountIdentities(LoadedReportPages.Values.SelectMany(page => page), out var concealedRowCount, out var identifiableRowCount);
-                if (concealedRowCount > 0 && identifiableRowCount == 0)
-                {
-                    throw new ConcealedUsageReportException(loaderType, concealedRowCount);
-                }
-                if (concealedRowCount > 0)
-                {
-                    Telemetry.LogWarning($"{loaderType}: skipping {concealedRowCount:N0} of {concealedRowCount + identifiableRowCount:N0} row(s) whose identity " +
-                        "Graph returned concealed (hashed); they cannot be linked to a real user or group. The other rows are saved normally.");
-                }
+                RefuseOrReportConcealedRows(run.LoaderType, concealedRowCount, identifiableRowCount);
 
-                // Resolve every user (or group) this report names that already exists in SQL in set-based batches,
-                // BEFORE the row loop, instead of one query per user, per report, inside it (#705). The row loop
-                // below is unchanged: pre-resolved values are cache hits, and anything left - a user not yet in
-                // SQL, or a lookup type with no batch query - takes the per-row get-or-create path as before.
-                var preResolveWatch = Stopwatch.StartNew();
-                var preResolved = await PreResolveLookupIdsAsync(userEmailToDbIdCache, lookupCache);
-                preResolveWatch.Stop();
-                if (preResolved.Batches > 0)
-                {
-                    Telemetry.LogInformation($"{loaderType}: resolved {preResolved.KeysResolved:N0} of {preResolved.DistinctKeys:N0} distinct lookups " +
-                        $"in {preResolved.Batches:N0} batched quer{(preResolved.Batches == 1 ? "y" : "ies")} ({preResolveWatch.ElapsedMilliseconds:N0} ms) before saving.");
-                }
-                totals?.Add(preResolved, preResolveWatch.ElapsedTicks);
+                await PreResolveAsync(run, LoadedReportPages.Values, userEmailToDbIdCache, lookupCache);
 
-                using (store.BeginBulkWrite())
+                using (run.Store.BeginBulkWrite())
                 {
-                    var dateIndex = 0;
                     foreach (var dateTime in LoadedReportPages.Keys)
                     {
-                        var existingLoadWatch = instrumentationEnabled ? Stopwatch.StartNew() : null;
-                        var existingRows = await store.GetRowsForDateAsync(dateTime.Date);
-                        existingLoadWatch?.Stop();
-
-                        var existingByLookupId = new Dictionary<int, TReportDbType>();
-                        // Graph returns one row per lookup per date; last wins if the DB somehow has duplicates.
-                        foreach (var existingRow in existingRows)
-                        {
-                            existingByLookupId[existingRow.AssociatedLookupId] = existingRow;
-                        }
-
-                        // Lookups seen on this date, and lookups whose row is queued for an INSERT or UPDATE in the
-                        // current, not-yet-flushed batch. Graph is meant to send one row per lookup per date, but
-                        // does not always (OneDrive is keyed by owner UPN alone, so a re-hired owner can appear twice).
-                        var seenLookupIds = new HashSet<int>();
-                        var queuedLookupIds = new HashSet<int>();
-                        var duplicateRows = 0;
-                        var outOfScopeRows = 0;
-                        var missingLookupRows = 0;
-
-                        if (instrumentationEnabled)
-                        {
-                            totals.ExistingRowLoadTicks += existingLoadWatch.ElapsedTicks;
-                            TrackSaveStage(instrumentation, UsageReportSaveStageIds.ExistingRowsLoaded, loaderType, reportTable, "Completed", m =>
-                            {
-                                m["DateIndex"] = dateIndex;
-                                m["DurationMs"] = existingLoadWatch.ElapsedMilliseconds;
-                                m["ExistingRowCount"] = existingRows.Count;
-                                m["MaterializedLookupCount"] = existingByLookupId.Count;
-                                m["TrackedEntityCount"] = store.TrackedEntityCount;
-                            });
-                        }
-
-                        var pendingChanges = 0;
-                        var pendingBatchRows = 0;
-                        var dateMetrics = instrumentationEnabled ? new SaveLoopMetrics() : null;
-                        foreach (var reportPage in LoadedReportPages[dateTime])
-                        {
-                            dateMetrics?.RecordInputRow();
-                            totals?.RecordInputRow();
-
-                            // A usage-report row with no user/group identifier (e.g. a Graph row with a null
-                            // userPrincipalName when report anonymisation is enabled on the tenant) can't be matched
-                            // to a DB lookup. Skip it rather than NRE / ArgumentNullException deeper in the loop.
-                            // Counted here and reported once for the date, below.
-                            if (string.IsNullOrWhiteSpace(reportPage.LookupFieldValue))
-                            {
-                                dateMetrics?.RecordMissingLookupValue();
-                                totals?.RecordMissingLookupValue();
-                                missingLookupRows++;
-                                continue;
-                            }
-
-                            // Counted and reported once for the whole report above.
-                            if (IsConcealed(reportPage))
-                            {
-                                dateMetrics?.RecordConcealedIdentity();
-                                totals?.RecordConcealedIdentity();
-                                continue;
-                            }
-
-                            // Usually an Entra ID group-membership check for a group filter.
-                            var scopeTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
-                            var inScope = await IdInScope(reportPage.LookupFieldValue);
-                            if (instrumentationEnabled)
-                            {
-                                var elapsed = ElapsedTicksSince(scopeTicks);
-                                dateMetrics.ScopeFilterTicks += elapsed;
-                                totals.ScopeFilterTicks += elapsed;
-                            }
-                            if (!inScope)
-                            {
-                                dateMetrics?.RecordOutOfScope();
-                                totals?.RecordOutOfScope();
-                                outOfScopeRows++;
-                                continue;
-                            }
-
-                            var lookupStats = instrumentationEnabled ? new LookupResolutionStats() : null;
-                            var lookupTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
-                            var lookupId = await ResolveLookupIdAsync(reportPage, userEmailToDbIdCache, lookupCache, lookupStats);
-                            if (instrumentationEnabled)
-                            {
-                                var elapsed = ElapsedTicksSince(lookupTicks);
-                                dateMetrics.LookupResolveTicks += elapsed;
-                                totals.LookupResolveTicks += elapsed;
-                                dateMetrics.Add(lookupStats);
-                                totals.Add(lookupStats);
-                            }
-
-                            if (i > 0 && i % 1000 == 0)
-                            {
-                                Console.WriteLine($"{loaderType}: Saved {i} / {totalReports}");
-                            }
-
-                            if (!seenLookupIds.Add(lookupId))
-                            {
-                                duplicateRows++;
-                                dateMetrics?.RecordDuplicateLookup();
-                                totals?.RecordDuplicateLookup();
-                            }
-
-                            var isNewLog = !existingByLookupId.TryGetValue(lookupId, out var dateRequestedLog);
-                            if (isNewLog)
-                            {
-                                dateRequestedLog = new TReportDbType() { AssociatedLookupId = lookupId };
-                                existingByLookupId[lookupId] = dateRequestedLog;
-                            }
-
-                            dateRequestedLog.Date = dateTime.Date;
-
-                            var parseTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
-                            var activityDate = DateTime.MinValue;
-                            if (!string.IsNullOrEmpty(reportPage.LastActivityDateString))
-                            {
-                                if (DateTime.TryParseExact(reportPage.LastActivityDateString, "yyyy-MM-dd", enUS, System.Globalization.DateTimeStyles.None, out activityDate))
-                                {
-                                    dateRequestedLog.LastActivityDate = activityDate;
-                                }
-                                else
-                                {
-                                    Telemetry.LogInformation($"Invalid LastActivity value: '{reportPage.LastActivityDateString}'");
-                                    dateRequestedLog.LastActivityDate = null;
-                                }
-                            }
-                            if (instrumentationEnabled)
-                            {
-                                var elapsed = ElapsedTicksSince(parseTicks);
-                                dateMetrics.DateParseTicks += elapsed;
-                                totals.DateParseTicks += elapsed;
-                            }
-
-                            var projectionTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
-                            PopulateReportSpecificMetadata(dateRequestedLog, reportPage);
-                            if (instrumentationEnabled)
-                            {
-                                var elapsed = ElapsedTicksSince(projectionTicks);
-                                dateMetrics.ProjectionTicks += elapsed;
-                                totals.ProjectionTicks += elapsed;
-                            }
-
-                            // Auto-detect is off, so state the change explicitly. Only write when something actually
-                            // changed: existing rows for finalized days re-fetched by the recent-window rule are almost
-                            // always identical to what's stored, so dirty-checking skips the vast majority of UPDATEs -
-                            // the dominant cost of this import at large-tenant scale.
-                            bool willWrite;
-                            var dirtyTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
-                            if (isNewLog)
-                            {
-                                store.AddRow(dateRequestedLog);
-                                willWrite = true;
-                                dateMetrics?.RecordAdded();
-                                totals?.RecordAdded();
-                            }
-                            else if (queuedLookupIds.Contains(lookupId))
-                            {
-                                // A further row for a lookup whose row is already queued in this batch. The projection
-                                // above has just overwritten that queued entity in place, so the pending INSERT or UPDATE
-                                // already carries this row's values - the last row wins - and there is nothing more to
-                                // queue. Asking the store would also be wrong: EF6 cannot read OriginalValues for an
-                                // entity still in the Added state, and that exception used to fail the whole report on
-                                // every cycle.
-                                willWrite = false;
-                            }
-                            else
-                            {
-                                willWrite = store.MarkUpdatedIfChanged(dateRequestedLog);
-                                if (willWrite)
-                                {
-                                    dateMetrics?.RecordChanged();
-                                    totals?.RecordChanged();
-                                }
-                                else
-                                {
-                                    dateMetrics?.RecordUnchanged();
-                                    totals?.RecordUnchanged();
-                                }
-                            }
-                            if (instrumentationEnabled)
-                            {
-                                var elapsed = ElapsedTicksSince(dirtyTicks);
-                                dateMetrics.DirtyCheckTicks += elapsed;
-                                totals.DirtyCheckTicks += elapsed;
-                            }
-
-                            i++;
-                            if (willWrite)
-                            {
-                                queuedLookupIds.Add(lookupId);
-                                dbWrites++;
-                                pendingChanges++;
-                                pendingBatchRows++;
-                                if (pendingChanges >= SaveBatchSize)
-                                {
-                                    await SavePendingBatchAsync(store, instrumentation, loaderType, reportTable, pendingBatchRows);
-                                    pendingChanges = 0;
-                                    pendingBatchRows = 0;
-                                    // Flushed rows are tracked as unchanged from here on, so a later duplicate is
-                                    // dirty-checked against what was just written.
-                                    queuedLookupIds.Clear();
-                                }
-                            }
-                        }
-
-                        if (pendingChanges > 0)
-                        {
-                            await SavePendingBatchAsync(store, instrumentation, loaderType, reportTable, pendingBatchRows);
-                        }
-
-                        if (duplicateRows > 0)
-                        {
-                            Telemetry.LogWarning($"{loaderType}: Graph returned {duplicateRows:N0} extra row(s) for a user or group it had already " +
-                                $"reported for {dateTime:yyyy-MM-dd}. Kept the last row for each; the report is otherwise unaffected.");
-                        }
-
-                        // One line per date for each kind of skipped row, never one per row, and never the identifier itself.
-                        if (missingLookupRows > 0)
-                        {
-                            Telemetry.LogWarning($"{loaderType}: skipped {missingLookupRows:N0} row(s) for {dateTime:yyyy-MM-dd} with no user or group identifier " +
-                                "(null or empty); they cannot be linked to anyone.");
-                        }
-                        if (outOfScopeRows > 0)
-                        {
-                            Telemetry.LogInformation($"{loaderType}: skipped {outOfScopeRows:N0} of {LoadedReportPages[dateTime].Count:N0} row(s) for {dateTime:yyyy-MM-dd} " +
-                                "as outside the configured user scope (UserGroupsFilter).");
-                        }
-
-                        if (instrumentationEnabled)
-                        {
-                            TrackSaveStage(instrumentation, UsageReportSaveStageIds.RowsProcessed, loaderType, reportTable,
-                                "Completed", m => dateMetrics.WriteTo(m, dateIndex), reportDateUtc: dateTime.Date);
-                        }
-
-                        var releaseTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
-                        var trackedBeforeRelease = instrumentationEnabled ? store.TrackedEntityCount : 0;
-                        store.ReleaseSavedRows();
-                        if (instrumentationEnabled)
-                        {
-                            TrackSaveStage(instrumentation, UsageReportSaveStageIds.RowsReleased, loaderType, reportTable, "Completed", m =>
-                            {
-                                m["DateIndex"] = dateIndex;
-                                m["DurationMs"] = TicksToMilliseconds(ElapsedTicksSince(releaseTicks));
-                                m["TrackedEntityCountBeforeRelease"] = trackedBeforeRelease;
-                                m["TrackedEntityCountAfterRelease"] = store.TrackedEntityCount;
-                            });
-                        }
-                        dateIndex++;
+                        await SaveDateAsync(run, dateTime, LoadedReportPages[dateTime], userEmailToDbIdCache, lookupCache);
                     }
                 }
 
-                LastSaveDbWriteCount = dbWrites;
-                if (instrumentationEnabled)
+                CompleteSave(run);
+            }
+            catch (Exception ex)
+            {
+                FailSave(run, ex);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Rows read from Graph by the last <see cref="LoadAndSaveEachDateAsync"/>, across every date it downloaded.
+        /// </summary>
+        public int LastLoadedRowCount { get; private set; }
+
+        /// <summary>Dates the last <see cref="LoadAndSaveEachDateAsync"/> downloaded.</summary>
+        public int LastLoadedDateCount { get; private set; }
+
+        /// <summary>
+        /// Downloads the report from Graph and saves it one date at a time, so no more than one date's rows are held: not
+        /// the whole window, which at the 200,000-user baseline is up to 28 x 200,000 rows for each of the reports the
+        /// phase runs at once.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Dates are downloaded in the same order, with the same skip list, strict paging and early stop for concealed
+        /// identities as <see cref="PopulateLoadedReportPagesFromGraph"/>, and each is saved exactly as
+        /// <see cref="SaveLoadedReportsToSql"/> saves it, so the rows written are the same. A report refused for concealed
+        /// identities is refused at the first date that shows it, before any of its rows is written, as before.
+        /// </para>
+        /// <para>
+        /// What changes is that a date is written before the next is downloaded. <paramref name="beforeFirstWrite"/> -
+        /// which clears the report's completion stamp - therefore runs as soon as the first date has downloaded, before
+        /// anything is written. A download that fails after that leaves the dates already saved and no stamp, so the next
+        /// cycle downloads the whole window again rather than trusting a stamp for a window only partly written; one that
+        /// fails on the first date has written nothing and leaves the stamp alone.
+        /// </para>
+        /// </remarks>
+        public async Task LoadAndSaveEachDateAsync(int daysBackMax, ISet<DateTime> datesToSkip, Func<Task> beforeFirstWrite,
+            ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache)
+        {
+            daysBackMax = ClampDaysBack(daysBackMax);
+            LoadedReportPages.Clear();
+            LastLoadedRowCount = 0;
+            LastLoadedDateCount = 0;
+
+            var datesLoaded = new HashSet<DateTime>();
+            var sawIdentifiableRow = false;
+            int concealedRowCount = 0, identifiableRowCount = 0;
+            SaveRun run = null;
+            IDisposable bulkWrite = null;
+            var nowUtc = Clock.UtcNow;
+            try
+            {
+                for (int daysBackIdx = 0; daysBackIdx < daysBackMax; daysBackIdx++)
                 {
-                    saveWatch.Stop();
-                    TrackSaveStage(instrumentation, UsageReportSaveStageIds.SaveCompleted, loaderType, reportTable, "Completed", m =>
+                    var dt = DateToLoad(nowUtc, daysBackIdx, datesToSkip);
+                    if (dt == null)
                     {
-                        totals.WriteTo(m, null);
-                        m["DurationMs"] = saveWatch.ElapsedMilliseconds;
-                        m["InputRowCount"] = totalReports;
-                        m["DbWriteCount"] = dbWrites;
-                        UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
-                    });
+                        continue;
+                    }
+
+                    var dayReports = await LoadReportPageForDateFromGraph(dt.Value) ?? new List<TUserActivityUserDetail>();
+                    if (!datesLoaded.Add(dt.Value.Date))
+                    {
+                        Telemetry.LogWarning($"Duplicate date {dt.Value.ToString("dd-MM-yyyy")}");
+                        continue;
+                    }
+                    Telemetry.LogInformation($"Finished loading {this.GetType().Name} for date {dt.Value.ToString("dd-MM-yyyy")}");
+
+                    if (run == null)
+                    {
+                        if (beforeFirstWrite != null)
+                        {
+                            await beforeFirstWrite();
+                        }
+                        run = new SaveRun(this, lookupCache.DB);
+                        TrackSaveStarted(run, 0);
+                        bulkWrite = run.Store.BeginBulkWrite();
+                    }
+
+                    LastLoadedDateCount++;
+                    LastLoadedRowCount += dayReports.Count;
+                    run.InputRows += dayReports.Count;
+
+                    // A tenant that conceals identities conceals every row of every date. The first date with any identity
+                    // decides: all of them concealed refuses the report, before anything of it is written; any real one
+                    // means the report is saved, without the concealed rows.
+                    CountIdentities(dayReports, out var concealedRows, out var identifiableRows);
+                    concealedRowCount += concealedRows;
+                    identifiableRowCount += identifiableRows;
+                    if (!sawIdentifiableRow)
+                    {
+                        if (identifiableRows > 0)
+                        {
+                            sawIdentifiableRow = true;
+                        }
+                        else if (concealedRows > 0)
+                        {
+                            Telemetry.LogWarning($"{this.GetType().Name}: every identity Graph returned for {dt.Value.ToString("dd-MM-yyyy")} is concealed (hashed), " +
+                                "so the report cannot be imported; not downloading its remaining dates.");
+                            RefuseOrReportConcealedRows(run.LoaderType, concealedRowCount, identifiableRowCount);
+                        }
+                    }
+
+                    await PreResolveAsync(run, new[] { dayReports }, userEmailToDbIdCache, lookupCache);
+                    await SaveDateAsync(run, dt.Value, dayReports, userEmailToDbIdCache, lookupCache);
+                }
+
+                bulkWrite?.Dispose();
+                bulkWrite = null;
+                if (run != null)
+                {
+                    RefuseOrReportConcealedRows(run.LoaderType, concealedRowCount, identifiableRowCount);
+                    CompleteSave(run);
                 }
             }
             catch (Exception ex)
             {
-                if (instrumentationEnabled)
+                bulkWrite?.Dispose();
+                bulkWrite = null;
+                if (run != null)
                 {
-                    saveWatch.Stop();
-                    TrackSaveStage(instrumentation, UsageReportSaveStageIds.SaveFailed, loaderType, reportTable, "Failed", m =>
-                    {
-                        m["DurationMs"] = saveWatch.ElapsedMilliseconds;
-                        m["InputRowCount"] = totalReports;
-                        m["DbWriteCount"] = dbWrites;
-                        UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
-                    }, ex.GetType().Name);
+                    FailSave(run, ex);
                 }
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// The date <paramref name="daysBackIdx"/> days before the day before <paramref name="nowUtc"/>, or null when the skip
+        /// list says it is stored and finalized. Says which in the log.
+        /// </summary>
+        /// <param name="nowUtc">
+        /// Read once per download, not per date: a download that runs past midnight UTC - hours, at 200,000 users - would
+        /// otherwise request one date twice and never reach the window's oldest.
+        /// </param>
+        private DateTime? DateToLoad(DateTime nowUtc, int daysBackIdx, ISet<DateTime> datesToSkip)
+        {
+            // Go back one extra day always. Otherwise we risk asking for data too soon...
+            // Example: Message: {"error":{"code":"InvalidArgument","message":"Invalid date value specified: $DateTime.Now. Only support data for the past 28 days."}}
+            var daysBack = (daysBackIdx + 1) * -1;
+            // Graph Usage Reports API operates in UTC; DateTime.Now on a non-UTC server
+            // produces the wrong date bucket near midnight.
+            var dt = nowUtc.AddDays(daysBack);
+
+            // Finalized days we already hold don't change in Graph - skip the (often slow) paged download entirely.
+            if (datesToSkip != null && datesToSkip.Contains(dt.Date))
+            {
+                Telemetry.LogInformation($"Skipping {this.GetType().Name} for date {dt.ToString("dd-MM-yyyy")} - already stored and finalized (no longer changes in Graph).");
+                return null;
+            }
+
+            Telemetry.LogInformation($"Loading {this.GetType().Name} for date {dt.ToString("dd-MM-yyyy")}");
+            return dt;
+        }
+
+        /// <summary>One report's save, across the dates it is given.</summary>
+        private sealed class SaveRun
+        {
+            public SaveRun(AbstractDailyActivityLoader<TReportDbType, TUserActivityUserDetail, TLookupType, CACHETYPE> loader, AnalyticsEntitiesContext db)
+            {
+                Instrumentation = loader.SaveInstrumentation ?? NullUsageReportSaveInstrumentation.Instance;
+                InstrumentationEnabled = Instrumentation.IsEnabled;
+                LoaderType = loader.GetType().Name;
+                ReportTable = InstrumentationEnabled ? (UsageReportTableName.TryResolve(typeof(TReportDbType)) ?? typeof(TReportDbType).Name) : null;
+                SaveWatch = InstrumentationEnabled ? Stopwatch.StartNew() : null;
+                Totals = InstrumentationEnabled ? new SaveLoopMetrics() : null;
+                Store = loader.StoreFor(db);
+            }
+
+            public IUsageReportSaveInstrumentation Instrumentation { get; }
+            public bool InstrumentationEnabled { get; }
+            public string LoaderType { get; }
+            public string ReportTable { get; }
+            public Stopwatch SaveWatch { get; }
+            public SaveLoopMetrics Totals { get; }
+            public IUsageReportStore<TReportDbType> Store { get; }
+
+            /// <summary>Rows given to the save so far: every row, when they are all given at once.</summary>
+            public int InputRows { get; set; }
+            public int RowIndex { get; set; }
+            public int DbWrites { get; set; }
+            public int DateIndex { get; set; }
+        }
+
+        private void TrackSaveStarted(SaveRun run, int dateCount)
+        {
+            if (run.InstrumentationEnabled)
+            {
+                TrackSaveStage(run.Instrumentation, UsageReportSaveStageIds.SaveStarted, run.LoaderType, run.ReportTable, "Started", m =>
+                {
+                    m["DateCount"] = dateCount;
+                    m["InputRowCount"] = run.InputRows;
+                    m["SaveBatchSize"] = SaveBatchSize;
+                    UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                });
+            }
+        }
+
+        /// <summary>
+        /// Refuses a report whose every identifiable row is concealed (<see cref="ConcealedUsageReportException"/>), and
+        /// otherwise says how many concealed rows are skipped.
+        /// </summary>
+        private void RefuseOrReportConcealedRows(string loaderType, int concealedRowCount, int identifiableRowCount)
+        {
+            if (concealedRowCount > 0 && identifiableRowCount == 0)
+            {
+                throw new ConcealedUsageReportException(loaderType, concealedRowCount);
+            }
+            if (concealedRowCount > 0)
+            {
+                Telemetry.LogWarning($"{loaderType}: skipping {concealedRowCount:N0} of {concealedRowCount + identifiableRowCount:N0} row(s) whose identity " +
+                    "Graph returned concealed (hashed); they cannot be linked to a real user or group. The other rows are saved normally.");
+            }
+        }
+
+        /// <summary>
+        /// Resolves every user (or group) these rows name that already exists in SQL in set-based batches, BEFORE the row
+        /// loop, instead of one query per user, per report, inside it (#705). The row loop is unchanged: pre-resolved values
+        /// are cache hits, and anything left - a user not yet in SQL, or a lookup type with no batch query - takes the
+        /// per-row get-or-create path as before.
+        /// </summary>
+        private async Task PreResolveAsync(SaveRun run, IEnumerable<List<TUserActivityUserDetail>> pages,
+            ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache)
+        {
+            var preResolveWatch = Stopwatch.StartNew();
+            var preResolved = await PreResolveLookupIdsAsync(pages, userEmailToDbIdCache, lookupCache);
+            preResolveWatch.Stop();
+            if (preResolved.Batches > 0)
+            {
+                Telemetry.LogInformation($"{run.LoaderType}: resolved {preResolved.KeysResolved:N0} of {preResolved.DistinctKeys:N0} distinct lookups " +
+                    $"in {preResolved.Batches:N0} batched quer{(preResolved.Batches == 1 ? "y" : "ies")} ({preResolveWatch.ElapsedMilliseconds:N0} ms) before saving.");
+            }
+            run.Totals?.Add(preResolved, preResolveWatch.ElapsedTicks);
+        }
+
+        private static readonly System.Globalization.CultureInfo EnUs = new System.Globalization.CultureInfo("en-US");
+
+        /// <summary>Upserts one date's rows, flushing every <see cref="SaveBatchSize"/> writes, then releases them.</summary>
+        private async Task SaveDateAsync(SaveRun run, DateTime dateTime, List<TUserActivityUserDetail> rows,
+            ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache)
+        {
+            var store = run.Store;
+            var instrumentation = run.Instrumentation;
+            var instrumentationEnabled = run.InstrumentationEnabled;
+            var loaderType = run.LoaderType;
+            var reportTable = run.ReportTable;
+            var totals = run.Totals;
+            var dateIndex = run.DateIndex;
+
+            var existingLoadWatch = instrumentationEnabled ? Stopwatch.StartNew() : null;
+            var existingRows = await store.GetRowsForDateAsync(dateTime.Date);
+            existingLoadWatch?.Stop();
+
+            var existingByLookupId = new Dictionary<int, TReportDbType>();
+            // Graph returns one row per lookup per date; last wins if the DB somehow has duplicates.
+            foreach (var existingRow in existingRows)
+            {
+                existingByLookupId[existingRow.AssociatedLookupId] = existingRow;
+            }
+
+            // Lookups seen on this date, and lookups whose row is queued for an INSERT or UPDATE in the
+            // current, not-yet-flushed batch. Graph is meant to send one row per lookup per date, but
+            // does not always (OneDrive is keyed by owner UPN alone, so a re-hired owner can appear twice).
+            var seenLookupIds = new HashSet<int>();
+            var queuedLookupIds = new HashSet<int>();
+            var duplicateRows = 0;
+            var outOfScopeRows = 0;
+            var missingLookupRows = 0;
+
+            if (instrumentationEnabled)
+            {
+                totals.ExistingRowLoadTicks += existingLoadWatch.ElapsedTicks;
+                TrackSaveStage(instrumentation, UsageReportSaveStageIds.ExistingRowsLoaded, loaderType, reportTable, "Completed", m =>
+                {
+                    m["DateIndex"] = dateIndex;
+                    m["DurationMs"] = existingLoadWatch.ElapsedMilliseconds;
+                    m["ExistingRowCount"] = existingRows.Count;
+                    m["MaterializedLookupCount"] = existingByLookupId.Count;
+                    m["TrackedEntityCount"] = store.TrackedEntityCount;
+                });
+            }
+
+            var pendingChanges = 0;
+            var pendingBatchRows = 0;
+            var dateMetrics = instrumentationEnabled ? new SaveLoopMetrics() : null;
+            foreach (var reportPage in rows)
+            {
+                dateMetrics?.RecordInputRow();
+                totals?.RecordInputRow();
+
+                // A usage-report row with no user/group identifier (e.g. a Graph row with a null
+                // userPrincipalName when report anonymisation is enabled on the tenant) can't be matched
+                // to a DB lookup. Skip it rather than NRE / ArgumentNullException deeper in the loop.
+                // Counted here and reported once for the date, below.
+                if (string.IsNullOrWhiteSpace(reportPage.LookupFieldValue))
+                {
+                    dateMetrics?.RecordMissingLookupValue();
+                    totals?.RecordMissingLookupValue();
+                    missingLookupRows++;
+                    continue;
+                }
+
+                // Counted and reported once for the whole report.
+                if (IsConcealed(reportPage))
+                {
+                    dateMetrics?.RecordConcealedIdentity();
+                    totals?.RecordConcealedIdentity();
+                    continue;
+                }
+
+                // Usually an Entra ID group-membership check for a group filter.
+                var scopeTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+                var inScope = await IdInScope(reportPage.LookupFieldValue);
+                if (instrumentationEnabled)
+                {
+                    var elapsed = ElapsedTicksSince(scopeTicks);
+                    dateMetrics.ScopeFilterTicks += elapsed;
+                    totals.ScopeFilterTicks += elapsed;
+                }
+                if (!inScope)
+                {
+                    dateMetrics?.RecordOutOfScope();
+                    totals?.RecordOutOfScope();
+                    outOfScopeRows++;
+                    continue;
+                }
+
+                var lookupStats = instrumentationEnabled ? new LookupResolutionStats() : null;
+                var lookupTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+                var lookupId = await ResolveLookupIdAsync(reportPage, userEmailToDbIdCache, lookupCache, lookupStats);
+                if (instrumentationEnabled)
+                {
+                    var elapsed = ElapsedTicksSince(lookupTicks);
+                    dateMetrics.LookupResolveTicks += elapsed;
+                    totals.LookupResolveTicks += elapsed;
+                    dateMetrics.Add(lookupStats);
+                    totals.Add(lookupStats);
+                }
+
+                if (run.RowIndex > 0 && run.RowIndex % 1000 == 0)
+                {
+                    Console.WriteLine($"{loaderType}: Saved {run.RowIndex} / {run.InputRows}");
+                }
+
+                if (!seenLookupIds.Add(lookupId))
+                {
+                    duplicateRows++;
+                    dateMetrics?.RecordDuplicateLookup();
+                    totals?.RecordDuplicateLookup();
+                }
+
+                var isNewLog = !existingByLookupId.TryGetValue(lookupId, out var dateRequestedLog);
+                if (isNewLog)
+                {
+                    dateRequestedLog = new TReportDbType() { AssociatedLookupId = lookupId };
+                    existingByLookupId[lookupId] = dateRequestedLog;
+                }
+
+                dateRequestedLog.Date = dateTime.Date;
+
+                var parseTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+                var activityDate = DateTime.MinValue;
+                if (!string.IsNullOrEmpty(reportPage.LastActivityDateString))
+                {
+                    if (DateTime.TryParseExact(reportPage.LastActivityDateString, "yyyy-MM-dd", EnUs, System.Globalization.DateTimeStyles.None, out activityDate))
+                    {
+                        dateRequestedLog.LastActivityDate = activityDate;
+                    }
+                    else
+                    {
+                        Telemetry.LogInformation($"Invalid LastActivity value: '{reportPage.LastActivityDateString}'");
+                        dateRequestedLog.LastActivityDate = null;
+                    }
+                }
+                if (instrumentationEnabled)
+                {
+                    var elapsed = ElapsedTicksSince(parseTicks);
+                    dateMetrics.DateParseTicks += elapsed;
+                    totals.DateParseTicks += elapsed;
+                }
+
+                var projectionTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+                PopulateReportSpecificMetadata(dateRequestedLog, reportPage);
+                if (instrumentationEnabled)
+                {
+                    var elapsed = ElapsedTicksSince(projectionTicks);
+                    dateMetrics.ProjectionTicks += elapsed;
+                    totals.ProjectionTicks += elapsed;
+                }
+
+                // Auto-detect is off, so state the change explicitly. Only write when something actually
+                // changed: existing rows for finalized days re-fetched by the recent-window rule are almost
+                // always identical to what's stored, so dirty-checking skips the vast majority of UPDATEs -
+                // the dominant cost of this import at large-tenant scale.
+                bool willWrite;
+                var dirtyTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+                if (isNewLog)
+                {
+                    store.AddRow(dateRequestedLog);
+                    willWrite = true;
+                    dateMetrics?.RecordAdded();
+                    totals?.RecordAdded();
+                }
+                else if (queuedLookupIds.Contains(lookupId))
+                {
+                    // A further row for a lookup whose row is already queued in this batch. The projection
+                    // above has just overwritten that queued entity in place, so the pending INSERT or UPDATE
+                    // already carries this row's values - the last row wins - and there is nothing more to
+                    // queue. Asking the store would also be wrong: EF6 cannot read OriginalValues for an
+                    // entity still in the Added state, and that exception used to fail the whole report on
+                    // every cycle.
+                    willWrite = false;
+                }
+                else
+                {
+                    willWrite = store.MarkUpdatedIfChanged(dateRequestedLog);
+                    if (willWrite)
+                    {
+                        dateMetrics?.RecordChanged();
+                        totals?.RecordChanged();
+                    }
+                    else
+                    {
+                        dateMetrics?.RecordUnchanged();
+                        totals?.RecordUnchanged();
+                    }
+                }
+                if (instrumentationEnabled)
+                {
+                    var elapsed = ElapsedTicksSince(dirtyTicks);
+                    dateMetrics.DirtyCheckTicks += elapsed;
+                    totals.DirtyCheckTicks += elapsed;
+                }
+
+                run.RowIndex++;
+                if (willWrite)
+                {
+                    queuedLookupIds.Add(lookupId);
+                    run.DbWrites++;
+                    pendingChanges++;
+                    pendingBatchRows++;
+                    if (pendingChanges >= SaveBatchSize)
+                    {
+                        await SavePendingBatchAsync(store, instrumentation, loaderType, reportTable, pendingBatchRows);
+                        pendingChanges = 0;
+                        pendingBatchRows = 0;
+                        // Flushed rows are tracked as unchanged from here on, so a later duplicate is
+                        // dirty-checked against what was just written.
+                        queuedLookupIds.Clear();
+                    }
+                }
+            }
+
+            if (pendingChanges > 0)
+            {
+                await SavePendingBatchAsync(store, instrumentation, loaderType, reportTable, pendingBatchRows);
+            }
+
+            if (duplicateRows > 0)
+            {
+                Telemetry.LogWarning($"{loaderType}: Graph returned {duplicateRows:N0} extra row(s) for a user or group it had already " +
+                    $"reported for {dateTime:yyyy-MM-dd}. Kept the last row for each; the report is otherwise unaffected.");
+            }
+
+            // One line per date for each kind of skipped row, never one per row, and never the identifier itself.
+            if (missingLookupRows > 0)
+            {
+                Telemetry.LogWarning($"{loaderType}: skipped {missingLookupRows:N0} row(s) for {dateTime:yyyy-MM-dd} with no user or group identifier " +
+                    "(null or empty); they cannot be linked to anyone.");
+            }
+            if (outOfScopeRows > 0)
+            {
+                Telemetry.LogInformation($"{loaderType}: skipped {outOfScopeRows:N0} of {rows.Count:N0} row(s) for {dateTime:yyyy-MM-dd} " +
+                    "as outside the configured user scope (UserGroupsFilter).");
+            }
+
+            if (instrumentationEnabled)
+            {
+                TrackSaveStage(instrumentation, UsageReportSaveStageIds.RowsProcessed, loaderType, reportTable,
+                    "Completed", m => dateMetrics.WriteTo(m, dateIndex), reportDateUtc: dateTime.Date);
+            }
+
+            var releaseTicks = instrumentationEnabled ? Stopwatch.GetTimestamp() : 0;
+            var trackedBeforeRelease = instrumentationEnabled ? store.TrackedEntityCount : 0;
+            store.ReleaseSavedRows();
+            if (instrumentationEnabled)
+            {
+                TrackSaveStage(instrumentation, UsageReportSaveStageIds.RowsReleased, loaderType, reportTable, "Completed", m =>
+                {
+                    m["DateIndex"] = dateIndex;
+                    m["DurationMs"] = TicksToMilliseconds(ElapsedTicksSince(releaseTicks));
+                    m["TrackedEntityCountBeforeRelease"] = trackedBeforeRelease;
+                    m["TrackedEntityCountAfterRelease"] = store.TrackedEntityCount;
+                });
+            }
+            run.DateIndex++;
+        }
+
+        private void CompleteSave(SaveRun run)
+        {
+            LastSaveDbWriteCount = run.DbWrites;
+            if (run.InstrumentationEnabled)
+            {
+                run.SaveWatch.Stop();
+                TrackSaveStage(run.Instrumentation, UsageReportSaveStageIds.SaveCompleted, run.LoaderType, run.ReportTable, "Completed", m =>
+                {
+                    run.Totals.WriteTo(m, null);
+                    m["DurationMs"] = run.SaveWatch.ElapsedMilliseconds;
+                    m["InputRowCount"] = run.InputRows;
+                    m["DbWriteCount"] = run.DbWrites;
+                    UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                });
+            }
+        }
+
+        private void FailSave(SaveRun run, Exception ex)
+        {
+            if (run.InstrumentationEnabled)
+            {
+                run.SaveWatch.Stop();
+                TrackSaveStage(run.Instrumentation, UsageReportSaveStageIds.SaveFailed, run.LoaderType, run.ReportTable, "Failed", m =>
+                {
+                    m["DurationMs"] = run.SaveWatch.ElapsedMilliseconds;
+                    m["InputRowCount"] = run.InputRows;
+                    m["DbWriteCount"] = run.DbWrites;
+                    UsageReportSaveInstrumentationRuntime.AddRuntimeMetrics(m);
+                }, ex.GetType().Name);
             }
         }
 
@@ -803,7 +1016,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// was matched (0 added), so both paths resolved every user to the same id.
         /// </para>
         /// </remarks>
-        private async Task<LookupPreResolution> PreResolveLookupIdsAsync(ConcurrentLookupDbIdsCache cache, CACHETYPE lookupCache)
+        private async Task<LookupPreResolution> PreResolveLookupIdsAsync(IEnumerable<List<TUserActivityUserDetail>> pages,
+            ConcurrentLookupDbIdsCache cache, CACHETYPE lookupCache)
         {
             var result = new LookupPreResolution();
 
@@ -811,7 +1025,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             // map to it - the shared cache is keyed by the raw value, as the per-row path keys it.
             var valuesByKey = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             var seenValues = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var page in LoadedReportPages.Values)
+            foreach (var page in pages)
             {
                 foreach (var row in page)
                 {
@@ -1050,7 +1264,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 metrics["LookupDatabaseCallMs"] = TicksToMilliseconds(LookupDatabaseCallTicks);
                 if (!dateIndex.HasValue)
                 {
-                    // Pre-resolution runs once per save, before the per-date loop, so only the save totals carry it.
+                    // Pre-resolution is not part of a date's row loop, so only the save totals carry it.
                     metrics["LookupBatchCount"] = LookupBatchCount;
                     metrics["LookupBatchMs"] = TicksToMilliseconds(LookupBatchTicks);
                     metrics["LookupBatchKeyCount"] = LookupBatchKeyCount;

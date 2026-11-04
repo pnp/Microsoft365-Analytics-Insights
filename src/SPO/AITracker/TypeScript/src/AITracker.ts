@@ -17,8 +17,12 @@ import { AITrackerConfig } from './Models';
 import { LocalStorageUtils } from './LocalStorageUtils';
 import { ConfigHandler } from './Config/ConfigHandler';
 import { ApiConfigLoader } from './Config/ApiConfigLoader';
+import { isOnTrackedSite, isUrlInSite, SitesTrackedByExtension } from './TrackedSites';
 
 export { };
+
+// How often to check, on modern pages, that the browser is still on a tracked site
+const TRACKED_SITE_CHECK_MS = 1000;
 
 var ai: AppInsightsWrapper | null = null;
 var pageTracker: PageViewTracker | null = null;
@@ -33,7 +37,8 @@ declare global {
         appInsightsConnectionStringHash: string | undefined,
         insightsWebRootUrlHash: string | undefined,
         modernPageNav: Function,
-        spoInsightsAITrackerVersion: string | undefined     // Set by the copy of this script that is tracking the page
+        spoInsightsAITrackerVersion: string | undefined,    // Set by the copy of this script that is tracking the page
+        _o365AnalyticsInfo: SitesTrackedByExtension | undefined     // Set by the SPFx extension, so on modern pages only
     }
 }
 
@@ -57,11 +62,38 @@ function initPageControls() {
 
     // Save time on page for the next page load to send. Not window.onbeforeunload: SharePoint assigns that too, so
     // whichever was set last silently replaced the other - losing either this or SharePoint's own handler.
-    window.addEventListener('pagehide', () => pageTracker?.savePageExitToCookie());
+    window.addEventListener('pagehide', () => {
+        checkStillOnTrackedSite();
+        pageTracker?.savePageExitToCookie();
+    });
+
+    // SharePoint can navigate to a site collection that isn't tracked without reloading the page, and back. Note when it does, so
+    // the time spent there is no tracked page's time on page. Classic pages have no such navigations: every one loads a new page.
+    if (window._o365AnalyticsInfo) {
+        window.setInterval(checkStillOnTrackedSite, TRACKED_SITE_CHECK_MS);
+    }
+}
+
+// Whether the browser is on a page of a tracked site, noting when it leaves them and comes back. Nothing is collected on any other
+// page: SharePoint navigates between site collections without reloading the page, so this script keeps running on one the
+// installer didn't set up for tracking.
+function checkStillOnTrackedSite(): boolean {
+    const onTrackedSite = isOnTrackedSite(document.URL, window._o365AnalyticsInfo);
+    if (onTrackedSite) {
+        pageTracker?.seenOnTrackedSite();
+    }
+    else {
+        pageTracker?.seenOffTrackedSites();
+    }
+    return onTrackedSite;
 }
 
 // Handle page click events
 function interceptClickEvent(e: MouseEvent) {
+    if (!checkStillOnTrackedSite()) {
+        return;
+    }
+
     const target = (e.target || e.srcElement) as Element;
     if (target) {
 
@@ -172,10 +204,18 @@ function trackPageWhenLoaded(): void {
 function trackLoadedPage(): void {
     if (!pageTracker) return;
 
-    // A document loaded for another URL means SharePoint navigated here without loading a page, so the browser's
-    // load timings belong to the earlier page. Report a load time of 0, as for any other page navigation.
-    const pageLoadDuration = documentWasLoadedForCurrentUrl() ? undefined : 0;
-    pageTracker.trackCurrentPageViewAndLastPageExit(document.URL, window._spPageContextInfo.listTitle, window._spPageContextInfo.pageItemId, pageLoadDuration);
+    if (checkStillOnTrackedSite()) {
+        // A document loaded for another URL means SharePoint navigated here without loading a page, so the browser's
+        // load timings belong to the earlier page. Report a load time of 0, as for any other page navigation.
+        const pageLoadDuration = documentWasLoadedForCurrentUrl() ? undefined : 0;
+        pageTracker.trackCurrentPageViewAndLastPageExit(document.URL, window._spPageContextInfo.listTitle, window._spPageContextInfo.pageItemId, pageLoadDuration);
+    }
+    else {
+        // SharePoint navigated on, to a site collection that isn't tracked, while this script loaded. The SPFx extension of a
+        // tracked site reports its page when SharePoint shows one again
+        debug("Not tracking this page: it isn't on a tracked site");
+        pageTracker.trackLastPageExit();
+    }
 
     // Only now: the SPFx extension's calls are page navigations, which need the current page to have been tracked first
     window.modernPageNav = modernPageNav;
@@ -193,11 +233,22 @@ function documentWasLoadedForCurrentUrl(): boolean {
 // Called by the SPFx extension when SharePoint navigates to another page without reloading
 const modernPageNav = function (webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void {
 
-    if (pageTracker) {
-        // The extension has already updated window._spPageContextInfo for the new page
-        pageTracker.updatePageContext(window._spPageContextInfo);
-        pageTracker.handleModernPageNav(webUrl, webTitle, siteUrl, document.URL, listTitle, listItemId);
+    if (!pageTracker) return;
+
+    // The extension reports a page a couple of seconds after SharePoint shows it, and SharePoint can have moved on since: to a site
+    // collection that isn't tracked, or to another tracked one, whose own extension reports that page
+    if (!checkStillOnTrackedSite()) {
+        debug("Not tracking a navigation to a page that isn't on a tracked site");
+        return;
     }
+    if (siteUrl && !isUrlInSite(document.URL, siteUrl)) {
+        debug("Not tracking a navigation reported for another site: SharePoint has moved on since");
+        return;
+    }
+
+    // The extension has already updated window._spPageContextInfo for the new page
+    pageTracker.updatePageContext(window._spPageContextInfo);
+    pageTracker.handleModernPageNav(webUrl, webTitle, siteUrl, document.URL, listTitle, listItemId);
 }
 
 // Used to see if this is a new browsing session, with our own cookie
