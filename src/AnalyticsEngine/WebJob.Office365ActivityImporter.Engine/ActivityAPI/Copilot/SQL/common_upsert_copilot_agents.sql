@@ -951,9 +951,12 @@ BEGIN
 -- the two rows are not equivalent anyway: the pre-upgrade row asserts is_prompt = 0, which is the very
 -- mis-statement the nullability change exists to stop. Recorded so it is not rediscovered as a new defect.
 ;WITH parsed_messages AS (
+    -- message_id is LEFT()-trimmed to copilot_event_messages.message_id's 500 characters. The importer stages a longer
+    -- Id in a shortened form that still tells it apart (AuditStagingText.FitIdentifier); this is only the backstop that
+    -- stops one longer value failing the whole merge.
     SELECT
         imports.event_id,
-        JSON_VALUE(msg.value, '$.Id') AS message_id,
+        LEFT(JSON_VALUE(msg.value, '$.Id'), 500) AS message_id,
         TRY_CONVERT(bigint, JSON_VALUE(msg.value, '$.Size')) AS [size],
         CASE JSON_VALUE(msg.value, '$.isPrompt') WHEN 'true' THEN CAST(1 AS bit) WHEN 'false' THEN CAST(0 AS bit) ELSE NULL END AS is_prompt,
         CONVERT(bit, MAX(CASE JSON_VALUE(msg.value, '$.JailbreakDetected') WHEN 'true' THEN 1 WHEN 'false' THEN 0 ELSE NULL END)) AS jailbreak_detected
@@ -962,7 +965,7 @@ BEGIN
     WHERE imports.messages_json IS NOT NULL
     GROUP BY
         imports.event_id,
-        JSON_VALUE(msg.value, '$.Id'),
+        LEFT(JSON_VALUE(msg.value, '$.Id'), 500),
         TRY_CONVERT(bigint, JSON_VALUE(msg.value, '$.Size')),
         CASE JSON_VALUE(msg.value, '$.isPrompt') WHEN 'true' THEN CAST(1 AS bit) WHEN 'false' THEN CAST(0 AS bit) ELSE NULL END
 ),
@@ -1013,9 +1016,12 @@ BEGIN
 -- additive so no UPDATE pass over it is needed. Rows imported before this change keep NULL
 -- provider/version and are matched by payloads that omit them (the INTERSECT below treats NULLs as
 -- equal, so they are reused rather than duplicated).
+-- The name is LEFT()-trimmed to copilot_ai_models.name's 100 characters like the provider and version: the importer
+-- trims it when staging, without splitting a surrogate pair, and this is the backstop. One longer name used to fail
+-- this whole merge, and with it every interaction in the batch, on every retry.
 SELECT DISTINCT
     imports.event_id,
-    JSON_VALUE(models.value, '$.ModelName') AS model_name,
+    LEFT(JSON_VALUE(models.value, '$.ModelName'), 100) AS model_name,
     LEFT(JSON_VALUE(models.value, '$.ModelProviderName'), 100) AS provider_name,
     LEFT(JSON_VALUE(models.value, '$.ModelVersion'), 100) AS model_version
 INTO #parsed_ai_models

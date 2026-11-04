@@ -504,7 +504,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                         refs = new HashSet<string>(StringComparer.Ordinal);
                         refsByUser[userId] = refs;
                     }
-                    refs.Add(Truncate(s.SessionRef, 450));
+                    refs.Add(StoredSessionRef(s.SessionRef));
                 }
             }
 
@@ -551,7 +551,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                     var s = result.Stats[i];
 
                     if (!string.IsNullOrEmpty(s.SessionRef)
-                        && sessionIdByUserAndRef.TryGetValue(SessionKey(userId, Truncate(s.SessionRef, 450)), out var sessionId)
+                        && sessionIdByUserAndRef.TryGetValue(SessionKey(userId, StoredSessionRef(s.SessionRef)), out var sessionId)
                         && existing.Contains(InteractionKey(sessionId, s.GraphInteractionId)))
                     {
                         continue;
@@ -729,7 +729,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                 {
                     foreach (var s in result.Stats)
                     {
-                        if (!sessionIds.TryGetValue(SessionKey(result.State.User.ID, s.SessionRef), out var sessionId))
+                        if (!sessionIds.TryGetValue(SessionKey(result.State.User.ID, StoredSessionRef(s.SessionRef)), out var sessionId))
                             continue;
 
                         // The watermark overlap intentionally re-fetches a few seconds of interactions, so
@@ -795,10 +795,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                         TaxonomyVersion = pair.Value.PromptTaxonomyVersion, HumanMode = pair.Value.PromptHumanMode
                     }).ToList());
                 }
-                catch
+                catch (Exception ex)
                 {
                     _promptClassifier.Run.Reason = "storage-failure";
-                    _logger.LogWarning("Prompt classification facts could not be saved. Interaction statistics are retained.");
+                    _logger.LogWarning($"Prompt classification facts could not be saved ({DescribeStorageFailure(ex)}). Interaction statistics are retained.");
                 }
             }
 
@@ -833,7 +833,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
             {
                 foreach (var s in result.Stats)
                 {
-                    var sessionRef = Truncate(s.SessionRef, 450);
+                    var sessionRef = StoredSessionRef(s.SessionRef);
                     if (string.IsNullOrEmpty(sessionRef))
                         continue;
 
@@ -1214,7 +1214,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
                     using (var timeout = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15)))
                         await _promptRunStore.AppendAsync(runLog.RunStartedUtc, _promptClassifier.Run, timeout.Token);
                 }
-                catch { _logger.LogWarning("Prompt classification counters could not be saved."); }
+                catch (Exception ex) { _logger.LogWarning($"Prompt classification counters could not be saved ({DescribeStorageFailure(ex)})."); }
                 _promptClassifier.Dispose();
                 _promptClassifier = null;
             }
@@ -1233,6 +1233,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHisto
         #region Helpers
 
         private static string SessionKey(int userId, string sessionRef) => userId + "|" + sessionRef;
+
+        /// <summary>Width of <c>copilot_interaction_sessions.session_ref</c>.</summary>
+        private const int SessionRefMaxLength = 450;
+
+        /// <summary>
+        /// A session ref as it is stored, and so as every lookup must use it: sessions are created under the ref trimmed to
+        /// its column. Saving used to look an interaction's session up by the untrimmed ref, so an interaction whose Graph
+        /// session id was longer than the column found no session and was dropped without a word.
+        /// </summary>
+        private static string StoredSessionRef(string sessionRef) => Truncate(sessionRef, SessionRefMaxLength);
+
+        /// <summary>
+        /// What a failed storage step can say about its failure without quoting it: the exception type, and the SQL error
+        /// number when there is one. The message itself can carry values derived from prompts, so it is never logged here.
+        /// </summary>
+        internal static string DescribeStorageFailure(Exception ex)
+        {
+            for (var e = ex; e != null; e = e.InnerException)
+            {
+                if (e is Microsoft.Data.SqlClient.SqlException sql)
+                    return $"{ex.GetType().Name}, SQL error {sql.Number}";
+            }
+            return ex?.GetType().Name ?? "unknown";
+        }
 
         private static string InteractionKey(int sessionId, string graphInteractionId) => sessionId + "|" + graphInteractionId;
 

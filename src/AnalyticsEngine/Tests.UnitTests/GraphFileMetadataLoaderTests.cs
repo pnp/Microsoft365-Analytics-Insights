@@ -552,6 +552,81 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, fake.GetDriveItemByUrlCalls, "An unresolvable context is cached for the run.");
         }
 
+        /// <summary>
+        /// R1-2: the user lookup a meeting interaction needs inside the save lock went through the unbounded path, and a
+        /// user Graph no longer knows was asked for again (with a Warning) for every one of their meeting interactions.
+        /// </summary>
+        [TestMethod]
+        public async Task GetUserIdFromUpnSingleAttempt_UserGraphDoesNotKnow_IsAskedForOncePerRun()
+        {
+            var fake = new FakeSpoGraphClient { OnGetUser = upn => throw NotFoundError() };
+            var log = new CapturingLogger();
+            var loader = new GraphFileMetadataLoader(fake, log);
+
+            Assert.IsNull(await loader.GetUserIdFromUpnSingleAttempt("former.employee@contoso.com"));
+            Assert.IsNull(await loader.GetUserIdFromUpnSingleAttempt("Former.Employee@contoso.com"));
+
+            Assert.AreEqual(1, fake.GetUserCalls, "A user Graph doesn't know is remembered for the run, whatever the case of the UPN.");
+            var stats = loader.InLockStats;
+            Assert.AreEqual(2, stats.Lookups, "Both lookups count as in-lock lookups.");
+            Assert.AreEqual(2, stats.Unresolvable);
+            Assert.AreEqual(1, stats.GraphCalls);
+
+            var warnings = log.Entries.FindAll(e => e.Level == LogLevel.Warning);
+            Assert.AreEqual(1, warnings.Count, "One warning per run.");
+            Assert.IsNull(warnings[0].Exception);
+            Assert.IsFalse(log.Entries.Exists(e => e.Message.IndexOf("former.employee", StringComparison.OrdinalIgnoreCase) >= 0), "The UPN is never logged.");
+        }
+
+        [TestMethod]
+        public async Task GetUserIdFromUpnSingleAttempt_Throttled_IsTransientAndRememberedOnlyBriefly()
+        {
+            var fake = new FakeSpoGraphClient { OnGetUser = upn => throw ApiErrorWithoutABody(429) };
+            var loader = NewLoader(fake);
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            loader.UtcNow = () => now;
+
+            for (var i = 0; i < 2; i++)
+            {
+                await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(
+                    () => loader.GetUserIdFromUpnSingleAttempt("alice@contoso.com"));
+            }
+            Assert.AreEqual(1, fake.GetUserCalls, "Inside the lock, a recent transient outcome is remembered.");
+            Assert.AreEqual(2, loader.InLockStats.Transient);
+
+            now += GraphFileMetadataLoader.TransientOutcomeMemoTtl;
+            await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(
+                () => loader.GetUserIdFromUpnSingleAttempt("alice@contoso.com"));
+            Assert.AreEqual(2, fake.GetUserCalls, "Remembered only briefly - never cached as unresolvable.");
+        }
+
+        [TestMethod]
+        public async Task GetUserIdFromUpnSingleAttempt_KnownUser_IsResolvedOnceAndThenCached()
+        {
+            var fake = new FakeSpoGraphClient { OnGetUser = upn => new User { Id = "00000000-0000-0000-0000-000000000001" } };
+            var loader = NewLoader(fake);
+
+            Assert.AreEqual("00000000-0000-0000-0000-000000000001", await loader.GetUserIdFromUpnSingleAttempt("alice@contoso.com"));
+            Assert.AreEqual("00000000-0000-0000-0000-000000000001", await loader.GetUserIdFromUpnSingleAttempt("alice@contoso.com"));
+
+            Assert.AreEqual(1, fake.GetUserCalls);
+            Assert.AreEqual(1, loader.InLockStats.Resolved);
+            Assert.AreEqual(1, loader.InLockStats.CacheHits);
+        }
+
+        /// <summary>R1-2, through the real Graph SDK pipeline: inside the save lock a throttled user lookup goes out once.</summary>
+        [TestMethod]
+        public async Task GetUserIdFromUpnSingleAttempt_RealGraphPipeline_MakesNoSdkRetries()
+        {
+            var handler = new CountingThrottledHandler();
+            var client = WebJob.Office365ActivityImporter.Engine.Graph.GraphServiceClientFactory.CreateWithTimeout(
+                new Microsoft.Kiota.Abstractions.Authentication.AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(30), handler);
+            var loader = new GraphFileMetadataLoader(client, AnalyticsLogger.ConsoleOnlyTracer());
+
+            await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(() => loader.GetUserIdFromUpnSingleAttempt("alice@contoso.com"));
+            Assert.AreEqual(1, handler.Requests, "One HTTP request inside the lock: no SDK retries.");
+        }
+
         [TestMethod]
         public async Task GetMeetingInfo_GraphErrorWithoutABody_IsClassifiedByItsStatusCode()
         {
