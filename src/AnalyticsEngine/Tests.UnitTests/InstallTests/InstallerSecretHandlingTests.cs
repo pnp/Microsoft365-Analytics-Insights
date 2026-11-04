@@ -240,6 +240,19 @@ namespace Tests.UnitTests.InstallTests
             var inline = InstallerChildPayloadFile.ReadInitDbArgument(info.ToBase64() + " ");
             Assert.AreEqual(info.ConnectionString, inline.ConnectionString);
             CollectionAssert.AreEqual(info.OrgURLs, inline.OrgURLs);
+
+            // A file that does not hold a payload is reported as such, not taken for a connection string, and kept.
+            var notAPayload = Path.Combine(Path.GetTempPath(), "contoso-notes-" + Guid.NewGuid().ToString("N") + ".txt");
+            File.WriteAllText(notAPayload, "Synthetic notes, not an upgrade payload.");
+            try
+            {
+                Assert.ThrowsException<IOException>(() => InstallerChildPayloadFile.ReadInitDbArgument(notAPayload.Base64Encode()));
+                Assert.IsTrue(File.Exists(notAPayload), "Only a file that held a payload may be deleted.");
+            }
+            finally
+            {
+                File.Delete(notAPayload);
+            }
         }
 
         [TestMethod]

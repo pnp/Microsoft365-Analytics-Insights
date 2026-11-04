@@ -69,9 +69,10 @@ namespace App.ControlPanel.Engine
         /// <summary>
         /// Reads the value that follows <c>--initdb</c> on the command line: base64 of a payload file's path from this
         /// build's installer on, or base64 of the payload itself from earlier installers, which the child still accepts.
-        /// A payload file is deleted once read.
+        /// A payload file is deleted once read; a file that does not hold a payload is left alone.
         /// </summary>
         /// <exception cref="FormatException">The value is not base64.</exception>
+        /// <exception cref="IOException">The payload file can't be read, or does not hold a payload.</exception>
         public static DatabaseUpgradeInfo ReadInitDbArgument(string argument)
         {
             var decoded = argument.Base64Decode().Trim();
@@ -80,8 +81,17 @@ namespace App.ControlPanel.Engine
                 return JsonConvert.DeserializeObject<DatabaseUpgradeInfo>(decoded);
             }
 
-            var payload = File.ReadAllText(decoded);
-            var info = DatabaseUpgradeInfo.GetFromBase64String(payload);
+            DatabaseUpgradeInfo info;
+            try
+            {
+                info = DatabaseUpgradeInfo.GetFromBase64String(File.ReadAllText(decoded));
+            }
+            catch (Exception ex) when (ex is FormatException || ex is JsonException || ex is ArgumentException || ex is NotSupportedException)
+            {
+                // Not "the value is not base64": that would send the caller down the clear-text connection string path.
+                throw new IOException($"'{decoded}' does not hold the database upgrade details.", ex);
+            }
+
             Delete(decoded);
             return info;
         }
