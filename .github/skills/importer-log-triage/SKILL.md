@@ -384,6 +384,7 @@ Healthy: `read {n} row(s)` lines at the configured interval, no `NOT been record
 | `... was refused, and retrying cannot fix that` | Permission or configuration (401/403 class); an admin must act, waiting will not help |
 | `failed on every attempt since {u}` | Persistent failure for days; read the first Error after `{u}` |
 | `matched no rows` | Query returned nothing (scope, filters, period); not a failure by itself |
+| `Azure cost import failed ...` with `HTTP 200 ... and an empty body` or `a query result without its 'columns'/'rows'` | Cost Management answered without its rows. Nothing was stored or removed for that scope and a closed month is not marked final; retried next cycle |
 | `no delegated administrator connection` | Feature not authorised; expected until an admin connects |
 | `skipping ... backing off` repeating | Failure back-off in effect; find the original failure line |
 
