@@ -12,7 +12,7 @@
     "eject-webpack": "heft eject-webpack"
   },
   "dependencies": {
-    "tslib": "2.3.1",
+    "tslib": "2.9.1",
     "@microsoft/sp-core-library": "1.22.2",
     "@microsoft/decorators": "1.22.2",
     "@microsoft/sp-dialog": "1.22.2",
