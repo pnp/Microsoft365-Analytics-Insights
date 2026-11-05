@@ -28,7 +28,7 @@
     "webpack-cli": "^5.0.0"
   },
   "dependencies": {
-    "@microsoft/applicationinsights-web": "^2.8.9",
+    "@microsoft/applicationinsights-web": "^3.4.5",
     "js-cookie": "^3.0.8",
     "timeme.js": "^2.1.0",
     "uuid": "^11.1.1"
