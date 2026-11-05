@@ -70,7 +70,9 @@ namespace App.ControlPanel.Engine
     /// guess has to be checked against one value anyway.
     /// </para>
     /// <para>
-    /// An installer older than this format cannot open a value it writes, and reports it as a wrong password.
+    /// An installer older than this format cannot open a value it writes, and reports it as a wrong password. So before a
+    /// file holding version 1 values is first overwritten, <see cref="Version1ConfigBackup"/> keeps a copy of it that such an
+    /// installer can still open.
     /// </para>
     /// </remarks>
     public static class StringCipher
@@ -154,6 +156,13 @@ namespace App.ControlPanel.Engine
         /// <summary>Whether <paramref name="cipherText"/> is already in the current format.</summary>
         public static bool IsCurrentFormat(string cipherText) =>
             cipherText != null && cipherText.StartsWith(CurrentFormatPrefix, StringComparison.Ordinal);
+
+        /// <summary>
+        /// Whether <paramref name="cipherText"/> is a version 1 value: what an installer from before version 2 decrypts, and
+        /// the only format it can. <see cref="Decrypt"/> makes the same distinction, so it is drawn the same way: no marker.
+        /// </summary>
+        internal static bool IsVersion1Format(string cipherText) =>
+            !string.IsNullOrEmpty(cipherText) && cipherText.IndexOf(':') < 0;
 
         /// <summary>Forgets every derived key and salt, as a new process would. For tests.</summary>
         internal static void ResetKeyCache()

@@ -158,8 +158,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
             "upgrade was not run and nothing was changed in the database. Deploy a release at least as new as this " +
             "installer (with a local release override, use the ControlPanelApp.zip from this installer's release), or " +
             "deploy the older release with the installer from that release. An older installer can't read the secrets in a " +
-            "configuration file this installer has saved, and says the password is wrong: enter the secrets again there " +
-            "before you save the file, or saving it will store them empty.";
+            "configuration file this installer has saved, and says the password is wrong. If this installer kept a copy next to " +
+            "the file when it first saved it (<name>.v1-backup.json), open that instead; otherwise enter the secrets again " +
+            "before you save, or saving stores them empty.";
 
         internal const string DownloadedBuildLacksEntraSqlAuth =
             "This database uses Microsoft Entra ID authentication, but the control-panel app downloaded for this " +
