@@ -9,6 +9,12 @@ namespace Web.AnalyticsWeb.Controllers
     /// Get the import config for the client-side AITracker.
     /// Protected by CORs and a GUID in the AppInsights connection string.
     /// </summary>
+    /// <remarks>
+    /// net10: routed explicitly, as every other API controller here is. The Web API build reaches it through the
+    /// <c>api/{controller}</c> convention, which this host does not have, so without the route the tracker's POST
+    /// never reached it.
+    /// </remarks>
+    [Route("api/ImportConfig")]
     public class ImportConfigController  : ControllerBase
     {
         // Get App Insights import config

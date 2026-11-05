@@ -3,12 +3,15 @@ extern alias AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb;
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Security;
+using Common.Entities.Config;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json.Linq;
 using System;
 using System.IO;
 using System.Linq;
@@ -213,6 +216,41 @@ namespace Tests.UnitTests
                     Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
                     Assert.AreEqual(token, await response.Content.ReadAsStringAsync());
                 }
+            }
+        }
+
+        [TestMethod]
+        public async Task TheTrackersImportConfigPost_IsRouted_AndTakesCrossSiteCalls()
+        {
+            // net10: the other exempt endpoint, through the real pipeline. The AITracker POSTs here from SharePoint pages -
+            // another origin, with neither the portal's header nor its cookie - and the port had left it without a route.
+            const string connectionString = "InstrumentationKey=11111111-1111-1111-1111-111111111111;IngestionEndpoint=https://contoso.example/";
+            var names = new[] { "AppInsightsConnectionString", "APPSETTING_AppInsightsConnectionString" };
+            var original = names.ToDictionary(name => name, Environment.GetEnvironmentVariable);
+            try
+            {
+                foreach (var name in names) Environment.SetEnvironmentVariable(name, null);
+                Environment.SetEnvironmentVariable("AppInsightsConnectionString", connectionString);
+                AnalyticsConfig.UseForTesting(AnalyticsConfig.BuildForTesting().AsEnumerable());
+
+                using (var host = new PortalTestHost(new[] { typeof(ImportConfigController) }, PortalTestHost.Anonymous(),
+                    PortalAccessPolicy.Enforcing, crossSiteDefence: true))
+                {
+                    var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(connectionString));
+                    var request = Request(HttpMethod.Post, "api/ImportConfig?appInsightsStringEncoded=" + Uri.EscapeDataString(encoded),
+                        portalHeader: false, fetchSite: "cross-site");
+                    using (var response = await host.Client.SendAsync(request))
+                    {
+                        var body = await response.Content.ReadAsStringAsync();
+                        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode, body);
+                        Assert.IsNotNull(JObject.Parse(body)["metadataRefreshMinutes"], body);
+                    }
+                }
+            }
+            finally
+            {
+                foreach (var setting in original) Environment.SetEnvironmentVariable(setting.Key, setting.Value);
+                AnalyticsConfig.ResetForTesting();
             }
         }
 
