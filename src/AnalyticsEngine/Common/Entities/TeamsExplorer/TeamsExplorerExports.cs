@@ -25,9 +25,14 @@ namespace Common.Entities.TeamsExplorer
         /// <remarks>
         /// An allow-list of the aggregate sections rather than a list of the personal ones, so a section
         /// added later - and the champions list the export switch falls back to - is treated as personal
-        /// until someone decides otherwise.
+        /// until someone decides otherwise. The adoption breakdown is exported to a reader without See PII as
+        /// the page shows it to them: with the groups too small to name folded together
+        /// (<see cref="TeamsAdoption.WithoutSmallGroups"/>).
         /// </remarks>
         public static readonly string[] AggregateSections = { "teams", "channels", "adoption" };
+
+        /// <summary>The name column of the adoption breakdown's folded row, in the export's (English) wording.</summary>
+        public const string OtherGroupsLabel = "Smaller groups combined";
 
         /// <summary>True when the export <paramref name="section"/> lists individual people.</summary>
         public static bool NamesPeople(string section)
@@ -122,7 +127,7 @@ namespace Common.Entities.TeamsExplorer
 
             return new List<CsvColumn<TeamsDemographicRow>>
             {
-                new CsvColumn<TeamsDemographicRow>(heading, r => r.Name),
+                new CsvColumn<TeamsDemographicRow>(heading, r => r.Other ? OtherGroupsLabel : r.Name),
                 new CsvColumn<TeamsDemographicRow>("Known users", r => r.KnownUsers),
                 new CsvColumn<TeamsDemographicRow>("Active users", r => r.ActiveUsers),
                 new CsvColumn<TeamsDemographicRow>("Reach (%)", r => r.ReachPct),

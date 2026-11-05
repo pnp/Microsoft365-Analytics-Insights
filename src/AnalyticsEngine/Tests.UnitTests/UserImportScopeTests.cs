@@ -1,7 +1,10 @@
 using Common.Entities.Config;
 using Common.Entities.UserScope;
+using DataUtils.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -15,7 +18,8 @@ namespace Tests.UnitTests
 {
     /// <summary>
     /// The shared <c>UserGroupsFilter</c> scope: who it matches, how the filter is resolved group-first, and how the
-    /// process-lifetime provider caches, falls back and fails open. No Graph and no SQL.
+    /// process-lifetime provider caches, falls back and fails open. No Graph and no SQL: the Graph reader is fed canned
+    /// responses.
     /// </summary>
     [TestClass]
     public class UserImportScopeTests
@@ -228,6 +232,164 @@ namespace Tests.UnitTests
                 Assert.AreEqual(UserImportScopeStatus.Unfiltered, resolution.Status, $"'{filter}' narrows nothing.");
             }
             Assert.AreEqual(0, reader.Calls, "Expanding '*' would page the whole directory to conclude 'everyone' (issue #297).");
+        }
+
+        #endregion
+
+        #region The Graph reader: a success response that is not a page
+
+        private const string PilotMembersPath = "/v1.0/groups/" + PilotGroupId + "/members/microsoft.graph.user";
+
+        private static readonly object PilotGroup = new { id = PilotGroupId, displayName = "Copilot Pilot" };
+
+        /// <summary>
+        /// Graph as the real reader meets it: the pilot group - found by object id, by name or by listing - with its direct
+        /// members on two pages. The second page's body is the test's.
+        /// </summary>
+        private static FakeGraphDirectoryHandler PilotGroupOverGraph(string secondMemberPage)
+        {
+            return new FakeGraphDirectoryHandler()
+                .On("/v1.0/groups/" + PilotGroupId + "?", JsonConvert.SerializeObject(PilotGroup))
+                .On("/v1.0/groups?$filter", FakeGraphDirectoryHandler.Page(null, PilotGroup))
+                .On("/v1.0/groups?$select", FakeGraphDirectoryHandler.Page(null, PilotGroup))
+                .On(PilotMembersPath + "?$select", FakeGraphDirectoryHandler.Page(
+                    "https://graph.microsoft.com" + PilotMembersPath + "?$skiptoken=page-2",
+                    new { id = AliceId, userPrincipalName = "alice@contoso.com", mail = "alice@contoso.com", accountEnabled = true },
+                    new { id = BobId, userPrincipalName = "bob@contoso.com", mail = "bob@contoso.com", accountEnabled = true }))
+                .On(PilotMembersPath + "?$skiptoken=page-2", secondMemberPage);
+        }
+
+        private static async Task<UserImportScopeResolution> ResolveOverGraph(FakeGraphDirectoryHandler graph, string filter)
+        {
+            using (var http = new AutoThrottleHttpClient(graph, NullLogger.Instance))
+            {
+                return await Resolver(new GraphGroupDirectoryReader(http, NullLogger.Instance)).ResolveAsync(new UserGroupsFilterModel(filter));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("")]
+        [DataRow("null")]
+        [DataRow("{}")]
+        [DataRow("[]")]
+        [DataRow("{\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/groups?$skiptoken=page-3\"}")]
+        [DataRow("{\"value\":null}")]
+        [DataRow("{\"value\":{}}")]
+        [DataRow("<html>Service temporarily unavailable</html>")]
+        public async Task DirectoryReader_ASuccessThatIsNotAPage_FailsTheRead_ForEveryPagedRead(string body)
+        {
+            var graph = new FakeGraphDirectoryHandler()
+                .On("/v1.0/groups?$filter", body)
+                .On("/v1.0/groups?$select", body)
+                .On(PilotMembersPath + "?$select", body);
+
+            using (var http = new AutoThrottleHttpClient(graph, NullLogger.Instance))
+            {
+                var reader = new GraphGroupDirectoryReader(http, NullLogger.Instance);
+                foreach (var read in new Func<Task>[]
+                {
+                    () => reader.ListUserMembersAsync(PilotGroupId, null),
+                    () => reader.ListGroupsAsync(null),
+                    () => reader.FindGroupsByDisplayNameAsync("Copilot Pilot"),
+                })
+                {
+                    var failure = await Assert.ThrowsExceptionAsync<IncompleteDirectoryResponseException>(read,
+                        "A page whose members are unknown is a failed read, never an empty or last page.");
+                    Assert.IsFalse(failure.Message.Contains(PilotGroupId), "The endpoint's shape is reported, not its URL.");
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task DirectoryReader_AnExplicitlyEmptyPage_IsARealPage()
+        {
+            // A group named like a timestamp keeps its name: pages are read as text, not re-parsed as dates.
+            const string dateLikeName = "2026-09-01T00:00:00Z";
+            var graph = new FakeGraphDirectoryHandler()
+                .On("/v1.0/groups?$filter", "{\"value\":[]}")
+                .On("/v1.0/groups?$select", FakeGraphDirectoryHandler.Page(null, new { id = PilotGroupId, displayName = dateLikeName }))
+                .On(PilotMembersPath + "?$select", "{\"value\":[]}");
+
+            using (var http = new AutoThrottleHttpClient(graph, NullLogger.Instance))
+            {
+                var reader = new GraphGroupDirectoryReader(http, NullLogger.Instance);
+
+                var members = await reader.ListUserMembersAsync(PilotGroupId, null);
+                Assert.AreEqual(0, members.Items.Count, "\"value\": [] is a page with nobody on it.");
+                Assert.IsNull(members.NextLink);
+                Assert.AreEqual(0, (await reader.FindGroupsByDisplayNameAsync("Copilot Pilot")).Count, "No group has that name: an answer.");
+                Assert.AreEqual(dateLikeName, (await reader.ListGroupsAsync(null)).Items.Single().DisplayName);
+            }
+        }
+
+        [TestMethod]
+        public async Task DirectoryReader_GroupLookup_OnlyA404MeansNoSuchGroup()
+        {
+            var lookup = "/v1.0/groups/" + PilotGroupId + "?";
+            var graph = new FakeGraphDirectoryHandler().On(lookup, "{\"error\":{\"code\":\"Request_ResourceNotFound\"}}", HttpStatusCode.NotFound);
+
+            using (var http = new AutoThrottleHttpClient(graph, NullLogger.Instance))
+            {
+                var reader = new GraphGroupDirectoryReader(http, NullLogger.Instance);
+                Assert.IsNull(await reader.GetGroupByIdAsync(new Guid(PilotGroupId)), "404: there is no such group.");
+
+                foreach (var body in new[] { "", "null", "{}", "{\"displayName\":\"Copilot Pilot\"}" })
+                {
+                    graph.On(lookup, body);
+                    await Assert.ThrowsExceptionAsync<IncompleteDirectoryResponseException>(() => reader.GetGroupByIdAsync(new Guid(PilotGroupId)),
+                        $"'{body}' is not a group, so it cannot mean that the group does not exist.");
+                }
+
+                graph.On(lookup, JsonConvert.SerializeObject(new { id = PilotGroupId, displayName = "Ομάδα Πωλήσεων Αθήνα" }));
+                Assert.AreEqual("Ομάδα Πωλήσεων Αθήνα", (await reader.GetGroupByIdAsync(new Guid(PilotGroupId))).DisplayName);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("")]
+        [DataRow("{}")]
+        [DataRow("{\"value\":null}")]
+        public async Task Resolver_OverGraph_AMemberPageWithoutItsMembers_IsUnavailable_NotAShorterScope(string secondPage)
+        {
+            // Read as an empty last page, this resolved the group to page 1's two members - Resolved, so a purge would
+            // have counted everyone after them as outside the scope.
+            foreach (var filter in new[] { PilotGroupId, "Copilot Pilot", "Copilot*" })
+            {
+                var resolution = await ResolveOverGraph(PilotGroupOverGraph(secondPage), filter);
+
+                Assert.AreEqual(UserImportScopeStatus.Unavailable, resolution.Status, $"'{filter}': the members after page 1 are unknown.");
+                Assert.AreEqual(UserImportScopeFailureKind.DirectoryRead, resolution.FailureKind);
+                Assert.IsNull(resolution.FailureHttpStatus, "Graph answered 200, so there is no failing status to report.");
+                StringAssert.Contains(resolution.Reason, "Copilot Pilot");
+                StringAssert.Contains(resolution.Reason, nameof(IncompleteDirectoryResponseException));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("{\"value\":[]}", 2)]
+        [DataRow("{\"value\":[{\"id\":\"" + CarolId + "\",\"userPrincipalName\":\"carol@contoso.com\"}]}", 3)]
+        public async Task Resolver_OverGraph_AGenuineLastPage_EndsTheMembership(string secondPage, int members)
+        {
+            var resolution = await ResolveOverGraph(PilotGroupOverGraph(secondPage), PilotGroupId);
+
+            Assert.AreEqual(UserImportScopeStatus.Resolved, resolution.Status);
+            Assert.AreEqual(members, resolution.Members.Count);
+        }
+
+        [DataTestMethod]
+        [DataRow(PilotGroupId, "/v1.0/groups/" + PilotGroupId + "?")]
+        [DataRow("Copilot Pilot", "/v1.0/groups?$filter")]
+        [DataRow("Copilot*", "/v1.0/groups?$select")]
+        public async Task Resolver_OverGraph_AGroupLookupThatIsNotAnAnswer_IsUnavailable_NotNoSuchGroup(string filter, string lookup)
+        {
+            // Read as "no such group", this resolved the filter to nobody - or, beside other groups, left this one's members out.
+            foreach (var body in new[] { "", "{}" })
+            {
+                var resolution = await ResolveOverGraph(PilotGroupOverGraph("{\"value\":[]}").On(lookup, body), filter);
+
+                Assert.AreEqual(UserImportScopeStatus.Unavailable, resolution.Status, $"'{body}' for '{filter}' is not an answer.");
+                StringAssert.Contains(resolution.Reason, nameof(IncompleteDirectoryResponseException));
+            }
         }
 
         #endregion

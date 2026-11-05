@@ -41,6 +41,7 @@ namespace Tests.UnitTests
             var testPrefix = $"perfsku{DateTime.Now.Ticks}";
 
             var graphUsers = GenerateGraphUsers(USER_COUNT, testPrefix);
+            var objectIds = graphUsers.ToDictionary(u => u.UserPrincipalName, u => u.Id);
 
             // Use non-null (empty) SKUs so the bulk update path is exercised
             var fakeSkus = new List<SubscribedSku>();
@@ -69,6 +70,7 @@ namespace Tests.UnitTests
                 var updatedGraphUsers = GenerateGraphUsers(USER_COUNT, testPrefix);
                 for (int i = 0; i < updatedGraphUsers.Count; i++)
                 {
+                    updatedGraphUsers[i].Id = objectIds[updatedGraphUsers[i].UserPrincipalName];
                     updatedGraphUsers[i].Department = Departments[(i + 1) % Departments.Length];
                     updatedGraphUsers[i].JobTitle = JobTitles[(i + 1) % JobTitles.Length];
                     updatedGraphUsers[i].PostalCode = $"{20000 + i}";
@@ -95,6 +97,8 @@ namespace Tests.UnitTests
                         .ToListAsync();
 
                     Assert.AreEqual(USER_COUNT, updatedUsers.Count, "User count should not change");
+                    Assert.IsTrue(updatedUsers.All(u => u.AzureAdId == objectIds[u.UserPrincipalName]),
+                        "A metadata refresh must preserve every user's Entra identity.");
 
                     var firstUser = updatedUsers.First(u => u.UserPrincipalName == $"{testPrefix}_user0@test.com");
                     Assert.AreEqual(Departments[1], firstUser.Department?.Name, "Department should be updated");
@@ -128,6 +132,7 @@ namespace Tests.UnitTests
             var testPrefix = $"perfnosku{DateTime.Now.Ticks}";
 
             var graphUsers = GenerateGraphUsers(USER_COUNT, testPrefix);
+            var objectIds = graphUsers.ToDictionary(u => u.UserPrincipalName, u => u.Id);
 
             // Null SKUs → per-user processing (original EF path)
             try
@@ -146,6 +151,7 @@ namespace Tests.UnitTests
                 var updatedGraphUsers = GenerateGraphUsers(USER_COUNT, testPrefix);
                 for (int i = 0; i < updatedGraphUsers.Count; i++)
                 {
+                    updatedGraphUsers[i].Id = objectIds[updatedGraphUsers[i].UserPrincipalName];
                     updatedGraphUsers[i].Department = Departments[(i + 1) % Departments.Length];
                     updatedGraphUsers[i].JobTitle = JobTitles[(i + 1) % JobTitles.Length];
                     updatedGraphUsers[i].PostalCode = $"{20000 + i}";
@@ -170,6 +176,8 @@ namespace Tests.UnitTests
                         .ToListAsync();
 
                     Assert.AreEqual(USER_COUNT, updatedUsers.Count);
+                    Assert.IsTrue(updatedUsers.All(u => u.AzureAdId == objectIds[u.UserPrincipalName]),
+                        "A metadata refresh must preserve every user's Entra identity.");
 
                     var firstUser = updatedUsers.First(u => u.UserPrincipalName == $"{testPrefix}_user0@test.com");
                     Assert.AreEqual(Departments[1], firstUser.Department?.Name);

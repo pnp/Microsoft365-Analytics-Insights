@@ -117,11 +117,20 @@ export interface InvestmentSeats {
 
 export interface InvestmentStudioSpend {
   users: number;
-  credits: number;
-  /** Null unless the ledger covers the whole previous period, so a comparison is like for like. */
+  /** Null when `creditsWithheld`. */
+  credits: number | null;
+  /**
+   * For a reader without See PII: `credits` and `windowValue` are null because they could single out fewer than five
+   * people. Optional: a build that predates it never sends it.
+   */
+  creditsWithheld?: boolean;
+  /** Null unless the ledger covers the whole previous period, so a comparison is like for like, or when `priorCreditsWithheld`. */
   priorCredits: number | null;
+  priorCreditsWithheld?: boolean;
   priorUsers: number | null;
-  holderCredits: number;
+  /** Null when `holderCreditsWithheld`. */
+  holderCredits: number | null;
+  holderCreditsWithheld?: boolean;
   windowValue: number | null;
   holderWindowValue: number | null;
 }
@@ -129,9 +138,13 @@ export interface InvestmentStudioSpend {
 export interface InvestmentCreditBalances {
   observedUsers: number;
   consumingUsers: number;
-  credits: number;
-  holderCredits: number;
-  nonHolderCredits: number;
+  /** Null when `creditsWithheld` (with `balanceValue`): a reader without See PII, and fewer than five people behind it. */
+  credits: number | null;
+  creditsWithheld?: boolean;
+  holderCredits: number | null;
+  holderCreditsWithheld?: boolean;
+  nonHolderCredits: number | null;
+  nonHolderCreditsWithheld?: boolean;
   balanceValue: number | null;
   periodStatus: 'verified' | 'unverified' | 'mixed' | null;
   otherUnitUsers: number;
@@ -151,6 +164,11 @@ export interface InvestmentSpend {
   /** The two parts of `modelledMonthlyCost`: the analysed holders' seats and their own billed Studio credits. */
   monthlySeatCost: number | null;
   monthlyStudioCost: number | null;
+  /**
+   * For a reader without See PII: `monthlyStudioCost` would be one to four people's charges, so it is null, and so are the
+   * modelled cost and everything computed from it - every return, net figure, break-even minute and the path's gap.
+   */
+  studioCostWithheld?: boolean;
 }
 
 /** Seat holders by active days a month. The seat-only break-even is itself an edge, so each bucket is wholly on one side. */
@@ -181,7 +199,9 @@ export interface InvestmentEvidence {
   coworkHolders: number;
   bands: { band: string; holders: number }[];
   unlicensedActiveUsers: number;
-  unlicensedActiveDays: number;
+  /** Null when `unlicensedActiveDaysWithheld`. */
+  unlicensedActiveDays: number | null;
+  unlicensedActiveDaysWithheld?: boolean;
   recommendedCandidates: number;
   distribution: InvestmentDistributionBucket[];
 }
@@ -263,14 +283,26 @@ export interface InvestmentCohort {
   band: string;
   holders: number;
   medianActiveDays: number | null;
-  activeDays: number;
+  /** Null when `withheld`. */
+  activeDays: number | null;
   shareOfHolders: number | null;
   shareOfActiveDays: number | null;
   cost: number | null;
   valueBase: number | null;
   roiBase: number | null;
-  credits: number;
-  studioCredits: number;
+  /** Null when `creditsWithheld`. */
+  credits: number | null;
+  /** Null when `studioWithheld`. */
+  studioCredits: number | null;
+  /**
+   * For a reader without See PII, which of the band's figures could single out fewer than five people and are null:
+   * its activity (active days, their median and share, value, cost and return), its cost and return, its balances,
+   * its Copilot Studio credits. The holders stay: they are a count.
+   */
+  withheld?: boolean;
+  costWithheld?: boolean;
+  creditsWithheld?: boolean;
+  studioWithheld?: boolean;
 }
 
 export interface InvestmentGroupRow {
@@ -313,7 +345,7 @@ export interface InvestmentConcentration {
   activeDays: InvestmentDistribution | null;
   credits: InvestmentDistribution | null;
   /** Split at the median balance and at `quadrantDaysPerMonth` active days a month - not the high-spend flag's thresholds. */
-  quadrants: { key: string; people: number; credits: number }[];
+  quadrants: { key: string; people: number; credits: number; withheld?: boolean }[];
   quadrantMedianCredits: number | null;
   quadrantDaysPerMonth: number;
 }
@@ -321,13 +353,19 @@ export interface InvestmentConcentration {
 export interface InvestmentMetered {
   people: number;
   activeUsers: number;
-  activeDays: number;
+  /** Null when `activeDaysWithheld`. */
+  activeDays: number | null;
+  activeDaysWithheld?: boolean;
   studioUsers: number;
-  studioCredits: number;
+  /** Null when `studioWithheld` (with `studioWindowValue`). */
+  studioCredits: number | null;
   studioWindowValue: number | null;
+  studioWithheld?: boolean;
   creditUsers: number;
-  credits: number;
+  /** Null when `creditsWithheld` (with `creditBalanceValue`). */
+  credits: number | null;
   creditBalanceValue: number | null;
+  creditsWithheld?: boolean;
   studioAboveSeatPrice: number | null;
   balanceAboveSeatPriceIfMonthly: number | null;
   evidencedCandidates: number | null;
@@ -338,7 +376,10 @@ export interface InvestmentServiceRow {
   category: string;
   unit: string | null;
   consumers: number;
+  /** 0 when `withheld`, which is never shown as a zero. */
   quantity: number;
+  /** For a reader without See PII: the quantity could single out fewer than the minimum number of people and is not given. */
+  withheld?: boolean;
   unknownAmountUsers: number;
   limitExhaustedUsers: number;
   notEntitledUsers: number;
@@ -387,6 +428,12 @@ export interface InvestmentAction {
   /** What `monthlyAmount` is - amounts of different kinds are never ranked against each other. */
   effect: string | null;
   assumesMonthlyBalances: boolean;
+  /** For a reader without See PII: `monthlyAmount` is null because it could single out fewer than five people. */
+  monthlyAmountWithheld?: boolean;
+  /** For a reader without See PII: `credits` is null - the balances of one to four people. */
+  creditsWithheld?: boolean;
+  /** For a reader without See PII: `metric` is null - the days one to four people need would be one of theirs. */
+  metricWithheld?: boolean;
 }
 
 export interface InvestmentFinding {
@@ -544,12 +591,16 @@ export interface InvestmentTrendPoint {
   consumingUsers: number;
   credits: number | null;
   limitExhaustedUsers: number;
+  /** For a reader without See PII: `credits` is null because they could single out fewer than the minimum number of people. */
+  withheld?: boolean;
 }
 
 export interface InvestmentTrend {
   points: InvestmentTrendPoint[];
   snapshotDate: string | null;
   failureCode: string | null;
+  /** The fewest people a point's credits may describe to a reader without See PII. */
+  minPeople?: number;
 }
 
 export interface CopilotInvestmentAvailability {

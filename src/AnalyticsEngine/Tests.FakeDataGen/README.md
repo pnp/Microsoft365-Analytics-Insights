@@ -52,7 +52,7 @@ per-person view of the Copilot spend report has something to say:
 
 A database generated in v5 or earlier has none of this. Generate a new one.
 
-The operator guide lives in the wiki: [Synthetic demo data](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Synthetic-demo-data).
+The operator guide lives in the wiki: [Copilot Adoption demo data](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Copilot-Adoption-Demo-Data).
 
 ### Rebuilding a demo database: `--recreate`
 
@@ -145,14 +145,12 @@ data. Use a full new demo for a self-contained profiled database.
 Tests.FakeDataGen/
 ├── Program.cs                # menu + dispatcher
 ├── App.config                # EF + Azure binding redirects
-├── Copilot/                  # realistic Copilot data generators
+├── Copilot/                  # Copilot audit, chat, resource and adoption-scenario generators
 │   └── SQL/                  # refusal-only compatibility stub for the retired shaper
-├── Demo/                     # safe single-command + menu generator, calendar, plan and bounded SQL sink
-├── Generation/               # shared synthetic activity helpers
+├── Dlp/                      # DLP activity generator
 ├── Office365/                # O365 audit activity generator
-├── Seeding/                  # shared user / license / lookup seed data
-│   ├── SeedDataCatalogue.cs
-│   └── UserMetadataSeeder.cs
+├── Seeding/
+│   └── UserMetadataSeeder.cs # user / license / lookup seeding for the legacy generators
 └── StressTests/
     ├── BaseStressTest.cs
     ├── StressTestResult.cs
@@ -162,10 +160,22 @@ Tests.FakeDataGen/
     ├── PowerPlatformStressTest.cs
     ├── UserActivityStressTest.cs
     └── FakeLoaders/          # fakes only used by stress tests
+
+Tests.FakeDataGen.Shared/     # library used by this console and by Tests.UnitTests
+├── Copilot/                  # adoption personas, interaction history, Copilot users and licences
+├── Demo/                     # safe single-command + menu generator, calendar, plan and bounded SQL sink
+├── Generation/               # shared synthetic activity helpers
+└── Seeding/
+    └── SeedDataCatalogue.cs  # shared user / license / lookup seed data
 ```
 
-`Seeding` is intentionally shared: legacy generators and stress tests call
-`UserMetadataSeeder`; the new `demo` command uses the same `SeedDataCatalogue`
+The demo generator and the data it shares with the legacy generators live in
+`Tests.FakeDataGen.Shared`, which this console and `Tests.UnitTests` both reference, so each of
+those types is compiled into one assembly. They keep their `Tests.FakeDataGen.*` namespaces, and
+the library makes its internals visible to both projects.
+
+`SeedDataCatalogue` is intentionally shared: legacy generators and stress tests call
+`UserMetadataSeeder`, which seeds from it; the new `demo` command uses the same `SeedDataCatalogue`
 through its new-target bounded sink or additive, identity-remapping existing-target sink. Users are made as
 realistic as a live tenant: `SeedDataCatalogue` assigns each user a coherent geo
 locale (country / state / city / office / usage location / postal code all agree,
@@ -472,6 +482,7 @@ public class MyNewStressTest : BaseStressTest
 ## Dependencies
 
 - `WebJob.Office365ActivityImporter.Engine` - the system under test.
+- `Tests.FakeDataGen.Shared` - the demo generator, Copilot personas and history, and seed data.
 - `Tests.UnitTests` - reused fake entities and fake loader base classes.
 - `Common.Entities` - entity models.
 - `Common.DataUtils` - logging + batch helpers.

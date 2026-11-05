@@ -51,6 +51,7 @@ export const MESSAGE_LABELS: Record<string, TranslationKey> = {
   'm365.missingCoverage': 'licenceActivity.coverageMessage.m365.missingCoverage',
   'copilotReport.available': 'licenceActivity.coverageMessage.copilotReport.available',
   'copilotReport.partial': 'licenceActivity.coverageMessage.copilotReport.partial',
+  'copilotReport.partialWeekStart': 'licenceActivity.coverageMessage.copilotReport.partialWeekStart',
   'copilotReport.singleWindowAvailable': 'licenceActivity.coverageMessage.copilotReport.singleWindowAvailable',
   'copilotReport.singleWindowLonger': 'licenceActivity.coverageMessage.copilotReport.singleWindowLonger',
   'copilotReport.unmatchableIdentity': 'licenceActivity.coverageMessage.copilotReport.unmatchableIdentity',

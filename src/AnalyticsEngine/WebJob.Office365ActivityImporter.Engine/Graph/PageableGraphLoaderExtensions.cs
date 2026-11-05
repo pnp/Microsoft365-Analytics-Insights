@@ -80,32 +80,28 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     pageSuccess = false;
 
-                    // Transient error?
-                    if (ex.Message != null && ex.Message.ToLower().Contains("gateway timeout"))
-                    {
-                        logger.LogInformation($"Got gateway timeout on page {pageCount}. Will retry page.");
-                        await Task.Delay(1000);
-                    }
-                    else
-                    {
-                        // Strict callers must not mistake a failed download for an empty result set. Rethrow
-                        // with the page number so the import log says which page died, not just that one did.
-                        if (throwOnHttpError)
-                        {
-                            logger.LogWarning($"Unexpected HTTP error on page {pageCount} of {typeof(T).Name}: {ex.Message}. " +
-                                "Failing the load rather than returning a partial result.");
-                            throw;
-                        }
+                    // No page-level retry: AutoThrottleHttpClient has already retried a 429, 502, 503 or 504 within its
+                    // bounded budget before this reached the pager. A page-level retry (there was one, for "gateway
+                    // timeout") restarted that budget every round, so a page that kept timing out held its caller for
+                    // ever and hid the failure from strict callers and onPageFailed alike.
 
-                        // ManualGraphCallClient has already logged this at error level, with the URL and the
-                        // response body - which is strictly more useful than anything we can add here. Log
-                        // only the paging consequence, at warning, so a single failed call produces a single
-                        // Application Insights exception record instead of three.
-                        logger.LogWarning($"Unexpected HTTP error on page {pageCount}: {ex.Message}. " +
-                            "Will not retry page & returning results upto current page.");
-                        onPageFailed?.Invoke(ex, pageCount);
-                        nextUrl = null;
+                    // Strict callers must not mistake a failed download for an empty result set. Rethrow
+                    // with the page number so the import log says which page died, not just that one did.
+                    if (throwOnHttpError)
+                    {
+                        logger.LogWarning($"Unexpected HTTP error on page {pageCount} of {typeof(T).Name}: {ex.Message}. " +
+                            "Failing the load rather than returning a partial result.");
+                        throw;
                     }
+
+                    // ManualGraphCallClient has already logged this at error level, with the URL and the
+                    // response body - which is strictly more useful than anything we can add here. Log
+                    // only the paging consequence, at warning, so a single failed call produces a single
+                    // Application Insights exception record instead of three.
+                    logger.LogWarning($"Unexpected HTTP error on page {pageCount}: {ex.Message}. " +
+                        "Will not retry page & returning results upto current page.");
+                    onPageFailed?.Invoke(ex, pageCount);
+                    nextUrl = null;
                 }
 
                 // A 200 without a value collection is not an empty page: its rows are unknown. Stepping over it to the

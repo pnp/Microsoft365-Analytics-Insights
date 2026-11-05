@@ -194,7 +194,6 @@ describe('AgentsPanel with the growth series', () => {
         estate={estate(windows())}
         agents={[]}
         options={OPTIONS}
-        windowDays={28}
         sql={{ agentGrowth: 'SELECT 1', agentGrowthBilling: 'SELECT 2' }}
       />,
     );
@@ -212,7 +211,6 @@ describe('AgentsPanel with the growth series', () => {
         })}
         agents={[]}
         options={OPTIONS}
-        windowDays={28}
         sql={null}
       />,
     );
@@ -228,7 +226,7 @@ describe('AgentsPanel with the growth series', () => {
       activeAgents: null, agentUsers: null, agentInteractions: null, interactionsPerAgentUser: null,
     }])));
     renderWithProvider(
-      <AgentsPanel estate={estate(blank, { knownAgents: 0 })} agents={[]} options={OPTIONS} windowDays={28} sql={null} />,
+      <AgentsPanel estate={estate(blank, { knownAgents: 0 })} agents={[]} options={OPTIONS} sql={null} />,
     );
 
     expect(screen.getByText('No Copilot agents found')).toBeInTheDocument();

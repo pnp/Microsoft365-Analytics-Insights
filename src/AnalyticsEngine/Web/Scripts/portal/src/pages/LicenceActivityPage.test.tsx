@@ -300,6 +300,50 @@ describe('LicenceActivityPage - who sees the people', () => {
     expect(screen.queryByText('ada@contoso.com')).not.toBeInTheDocument();
   });
 
+  it('offers a reader without See PII no department or country filter, and says why', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    renderWithProvider(<LicenceActivityPage />, { access: { administration: false, seePii: false } });
+
+    expect(await screen.findByText('Compare licences')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Filter by department')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Filter by country')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Filtering by department or country needs the Portal.SeePII app role, because a filter can narrow the figures down to a single person.',
+      ),
+    ).toBeInTheDocument();
+    // The server refuses the narrowing; the page never asks for it.
+    for (const [params] of mockOverview.mock.calls) {
+      expect(params.departmentId ?? null).toBeNull();
+      expect(params.countryId ?? null).toBeNull();
+    }
+  });
+
+  it('tells a reader without See PII the figures are hidden when so few people hold a licence', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    mockOverview.mockResolvedValue(
+      overview({
+        query: { ...echo, minimumGroupSize: 5 },
+        suppressed: true,
+        distinctAssignedUsers: 3,
+        allLicences: { assignedUsers: 3, adoptionScore: null, workloads: [] },
+        licences: [{ licenceTypeId: 10, name: 'E5', skuId: 'ENTERPRISEPREMIUM', assignedUsers: 3, withheld: true, workloads: [] }],
+        departments: [],
+        countries: [],
+      }),
+    );
+    renderWithProvider(<LicenceActivityPage />, { access: { administration: false, seePii: false } });
+
+    expect(await screen.findByText('Figures hidden')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'So few people hold a licence in this selection that every figure would describe individuals, so the figures are hidden to protect their privacy.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Compare licences')).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Licences' })).not.toBeInTheDocument();
+  });
+
   it('keeps the people list on screen through a transient users failure', async () => {
     mockAvailability.mockResolvedValue(availability());
     mockUsers.mockResolvedValueOnce(usersResponse()).mockRejectedValueOnce(

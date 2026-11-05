@@ -111,7 +111,7 @@ namespace Tests.UnitTests.InstallTests
                 {
                     using (var command = master.CreateCommand())
                     {
-                        command.CommandText = "CREATE DATABASE [" + catalog + "];";
+                        command.CommandText = ScratchDatabase.CreateDatabaseSql(catalog);
                         await command.ExecuteNonQueryAsync();
                         created = true;
                         // LocalDB/Express inherits AUTO_CLOSE ON. A catalog flag read from master

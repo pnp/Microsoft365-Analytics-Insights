@@ -125,22 +125,17 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddAuthorization();
 builder.Services.AddCopilotCostConnection();
 
-// CORS for the org URLs the tracker is deployed to, replacing AllowCorsForOrgUrlsAttribute.
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy(OrgUrlCorsPolicy.PolicyName, policy => policy
-        .SetIsOriginAllowed(OrgUrlCorsPolicy.IsOriginAllowed)
-        .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowCredentials());
-});
+// CORS for the org URLs the tracker is deployed to, replacing AllowCorsForOrgUrlsAttribute. Never with
+// credentials, as on the Web API build: see OrgUrlCorsPolicy.Configure.
+builder.Services.AddCors(options => options.AddPolicy(OrgUrlCorsPolicy.PolicyName, OrgUrlCorsPolicy.Configure));
 
 builder.Services.AddExceptionHandler<AnalyticsWebExceptionHandler>();
 
 // JSON exactly as the Web API 2 build on dev/main writes it - Newtonsoft, names as declared or as
 // [JsonProperty] gives them, [JsonIgnore] honoured. The default System.Text.Json formatter ignores
 // those attributes and renamed or leaked fields the shared portal reads; see WebApiCompatibleJson.
-builder.Services.AddControllersWithViews().AddWebApiCompatibleJson();
+// Every state-changing API call must come from the portal's own scripts: see SameOriginStateChangeFilter.
+builder.Services.AddControllersWithViews(options => options.AddCrossSiteRequestDefence()).AddWebApiCompatibleJson();
 
 var app = builder.Build();
 

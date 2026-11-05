@@ -10,6 +10,7 @@ import { formatNumber, useT, type TFunction, type TranslationKey } from '../../i
 import {
   SectionCard,
   WindowNote,
+  dormancyText,
   formatCount,
   formatDecimal,
   formatHours,
@@ -315,6 +316,16 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
     value: slice.users,
   }));
   const measuredUsers = data.segmentMix.reduce((sum, slice) => sum + slice.users, 0);
+  // Licensed people with no recorded activity are dormant only when the server could prove it; otherwise they are
+  // left out of the mix, and the card says why and how many.
+  const dormancyNote = dormancyText(t, data.dormancy);
+  const unmeasuredUsers = data.dormancy?.unmeasuredUsers ?? 0;
+  const mixNote = dormancyNote
+    ? [
+        dormancyNote,
+        unmeasuredUsers > 0 ? t('teamsExplorer.dormancy.unmeasured', { count: formatCount(unmeasuredUsers) }) : null,
+      ].filter(Boolean).join(' ')
+    : undefined;
 
   return (
     <div>
@@ -370,6 +381,7 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
           query={segmentQuery}
           isEmpty={measuredUsers === 0}
           emptyMessage={t('teamsExplorer.overview.engagementMix.empty')}
+          note={mixNote}
         >
           <DonutChart
             categories={segmentCategories}

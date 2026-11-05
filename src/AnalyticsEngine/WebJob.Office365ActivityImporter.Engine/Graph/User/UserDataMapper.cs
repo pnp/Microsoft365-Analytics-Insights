@@ -118,6 +118,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>Copies the fields that live directly on the users row (no lookup table involved).</summary>
         private static Common.Entities.User ApplyDirectFields(Common.Entities.User dbUser, UserMetadataChangePlan plan)
         {
+            UserIdentityRules.EnsureSameObject(dbUser, plan.AzureAdId);
             dbUser.AccountEnabled = plan.AccountEnabled;
             dbUser.PostalCode = plan.PostalCode;
             dbUser.AzureAdId = plan.AzureAdId;

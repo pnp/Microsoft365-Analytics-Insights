@@ -17,15 +17,15 @@ import { ArrowDownload16Regular } from '@fluentui/react-icons';
 import CategoryBarChart from '../charts/CategoryBarChart';
 import PiiHiddenNote from '../shared/PiiHiddenNote';
 import type { TeamsPeople, TeamsPersonRow } from '../../types/teamsExplorer';
-import { useT, useTNode, type TFunction } from '../../i18n';
+import { plural, useT, useTNode, type TFunction } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
+  dormancyText,
   formatCount,
   formatDate,
   queryFor,
   segmentLabel,
-  toCategories,
   useTeamsStyles,
 } from './teamsShared';
 
@@ -85,6 +85,39 @@ export default function PeoplePanel({
   const shared = useTeamsStyles();
   const t = useT();
   const tNode = useTNode();
+
+  // Without See PII, departments with too few power users to name come back combined into one row.
+  const otherDepartments = data.otherChampionDepartments ?? 0;
+  const minimumGroupSize = data.minimumGroupSize ?? null;
+  const departmentCategories = data.championsByDepartment.map((row) => ({
+    label: row.other
+      ? t(
+          plural(
+            otherDepartments,
+            'teamsExplorer.people.championDepartments.other.one',
+            'teamsExplorer.people.championDepartments.other.other',
+          ),
+          { count: formatCount(otherDepartments) },
+        )
+      : row.name ?? '',
+    value: row.count,
+  }));
+  const departmentsNote =
+    otherDepartments > 0 && minimumGroupSize != null && data.championsByDepartment.length > 0
+      ? t('teamsExplorer.people.championDepartments.otherNote', { count: formatCount(minimumGroupSize) })
+      : undefined;
+  const allDepartmentsSmall =
+    otherDepartments > 0 && minimumGroupSize != null && data.championsByDepartment.length === 0
+      ? t('teamsExplorer.people.championDepartments.allSmall', { count: formatCount(minimumGroupSize) })
+      : undefined;
+
+  // The usage reports list only the people active each day, so a licensed person with no activity is listed as
+  // dormant only when the server could prove it. Otherwise the card says why they are not.
+  const dormancyNote = dormancyText(t, data.dormancy);
+  const dormantEmptyMessage = dormancyNote ?? t('teamsExplorer.people.dormant.empty');
+  const dormantNote = dormancyNote && data.dormant.length > 0
+    ? `${t('teamsExplorer.people.dormant.note')} ${dormancyNote}`
+    : t('teamsExplorer.people.dormant.note');
 
   if (!usageReportsAvailable) {
     return (
@@ -150,10 +183,8 @@ export default function PeoplePanel({
               description={t('teamsExplorer.people.dormant.description')}
               query={queryFor(data.queries, 'people-dormant')}
               isEmpty={data.dormant.length === 0}
-              emptyMessage={t('teamsExplorer.people.dormant.empty')}
-              note={
-                t('teamsExplorer.people.dormant.note')
-              }
+              emptyMessage={dormantEmptyMessage}
+              note={dormantNote}
             >
               <div className={styles.exportRow}>
                 <Button
@@ -176,12 +207,11 @@ export default function PeoplePanel({
           description={t('teamsExplorer.people.championDepartments.description')}
           query={queryFor(data.queries, 'people-departments')}
           isEmpty={data.championsByDepartment.length === 0}
-          note={
-            t('teamsExplorer.people.championDepartments.note')
-          }
+          emptyMessage={allDepartmentsSmall}
+          note={[t('teamsExplorer.people.championDepartments.note'), departmentsNote].filter(Boolean).join(' ')}
         >
           <CategoryBarChart
-            categories={toCategories(data.championsByDepartment)}
+            categories={departmentCategories}
             valueLabel={t('teamsExplorer.people.valueLabel.powerUsers')}
           />
         </SectionCard>

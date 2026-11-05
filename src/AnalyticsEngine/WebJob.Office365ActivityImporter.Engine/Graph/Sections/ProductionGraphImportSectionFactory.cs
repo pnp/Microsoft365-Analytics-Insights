@@ -49,6 +49,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         public const string GraphCopilotUsageReportUserCountTrendLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountTrend";
         public const string GraphCopilotUsageReportUserCountSummaryLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UserCountSummary";
         public const string GraphCopilotUsageReportUsageUserDetailLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UsageUserDetail";
+        public const string GraphCopilotUsageReportWeeklyUsageUserDetailLastImportedKey = GraphCopilotUsageReportsLastImportedKey + ":UsageUserDetailWeekly";
         public const string CopilotInteractionHistoryLastImportedKey = Common.Entities.State.ImportScheduleKeys.CopilotInteractionHistory;
 
         private readonly AnalyticsLogger _logger;
@@ -299,9 +300,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         }
 
         /// <summary>
-        /// Imports the three Graph Microsoft 365 Copilot usage reports. Each report has its own cadence
+        /// Imports the three Graph Microsoft 365 Copilot usage reports - the per-user one as its 28-day report
+        /// and, once a week, its 7-day report. Each has its own cadence
         /// stamp behind the section-level gate: if one report fails, the failed report retries on
         /// the next cycle while reports that already succeeded are skipped until their interval elapses.
+        /// The weekly 7-day reading is stamped only when it found a reading due and asked Graph for it.
         ///
         /// Order is deliberate: the two tenant-aggregate reports go first because they are cheap (a few
         /// thousand rows whatever the tenant size), need no per-user joins, and are unaffected by the tenant's
@@ -325,6 +328,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                 _clock,
                 _settings.GraphCopilotUsageReportsIntervalHours,
                 _settings.ForceGraphMetadataImport);
+            var weeklyReadingAttempted = false;
 
             return await reportGate.RunAsync(new[]
             {
@@ -364,6 +368,28 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     () => RunCopilotReport("Copilot per-user usage detail", db =>
                         new CopilotUsageUserDetailLoader(reportSource, _logger, userScope)
                             .LoadAndSaveAsync(db, CopilotReportRequest.DefaultRefreshPeriod))),
+
+                // Licence activity measures Copilot by the week, from one 7-day reading per Monday-to-Sunday week.
+                // After the 28-day import above, so its refresh date decides whether this week's reading is due;
+                // on every other day this makes no Graph call. The 28-day import stays: Copilot Adoption reads it.
+                //
+                // Stamped only when a reading was due and asked for. The reading can only be taken while Microsoft's
+                // newest report is dated that Sunday, so a stamp written by a run that found nothing due (say, because
+                // the 28-day import had just failed) held the reading back for a whole interval after the 28-day import
+                // recovered - by when Graph had moved on to Monday and that week was lost. A reading that was asked for
+                // (stored, or discarded because Graph had already moved on) is stamped as before, so it isn't asked for
+                // again every cycle while some other report keeps the section retrying.
+                new CopilotUsageReportCadenceRunner.Report(
+                    "Copilot per-user weekly reading",
+                    GraphCopilotUsageReportWeeklyUsageUserDetailLastImportedKey,
+                    () => RunCopilotReport("Copilot per-user weekly reading", async db =>
+                    {
+                        var loader = new CopilotUsageUserDetailLoader(reportSource, _logger, userScope);
+                        var rows = await loader.LoadAndSaveWeeklySnapshotAsync(db);
+                        weeklyReadingAttempted = loader.WeeklySnapshotAttempted;
+                        return rows;
+                    }),
+                    attempted: () => weeklyReadingAttempted),
 
                 // There is deliberately no Cowork report here. Stable builds 1833 to 1846 requested a Graph
                 // function (the name kept as CopilotUsageReportNames.RetiredCoworkUsageUserDetail) that does
@@ -473,7 +499,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     var succeeded = await report.Import();
                     allDueReportsSucceeded &= succeeded;
 
-                    if (_intervalHours > 0 && succeeded)
+                    // A report that decides for itself whether anything is due is stamped only when it tried: a stamp
+                    // from a run that found nothing to do would hold back the run that next finds something.
+                    if (_intervalHours > 0 && succeeded && (report.Attempted == null || report.Attempted()))
                     {
                         await _lastRunStore.SetLastRunUtc(report.CadenceKey, _clock.UtcNow);
                     }
@@ -484,18 +512,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
 
             public class Report
             {
-                public Report(string description, string cadenceKey, Func<Task<bool>> import)
+                /// <param name="attempted">
+                /// For a report that decides for itself, cheaply and without a Graph call, whether anything is due: after a
+                /// successful run, whether it found something due and asked Graph for it. Only then is it stamped. Null
+                /// stamps every successful run. See the weekly reading.
+                /// </param>
+                public Report(string description, string cadenceKey, Func<Task<bool>> import, Func<bool> attempted = null)
                 {
                     if (string.IsNullOrWhiteSpace(description)) throw new ArgumentException($"'{nameof(description)}' is required.", nameof(description));
                     if (string.IsNullOrWhiteSpace(cadenceKey)) throw new ArgumentException($"'{nameof(cadenceKey)}' is required.", nameof(cadenceKey));
                     Description = description;
                     CadenceKey = cadenceKey;
                     Import = import ?? throw new ArgumentNullException(nameof(import));
+                    Attempted = attempted;
                 }
 
                 public string Description { get; }
                 public string CadenceKey { get; }
                 public Func<Task<bool>> Import { get; }
+                public Func<bool> Attempted { get; }
             }
         }
     }

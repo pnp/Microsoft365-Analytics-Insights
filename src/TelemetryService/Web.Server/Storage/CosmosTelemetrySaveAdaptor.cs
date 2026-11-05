@@ -21,7 +21,9 @@ namespace Web.Storage
     /// </remarks>
     public class CosmosTelemetrySaveAdaptor : ITelemetrySaveAdaptor, ITelemetryQueryAdaptor
     {
-        private static string PARTITION_KEY = "/" + nameof(AnonUsageStatsModel.AnonClientId);
+        /// <summary>Partition key of both telemetry containers. <c>infra/TelemetryService</c> provisions them with it.</summary>
+        internal const string PartitionKeyPath = "/" + nameof(AnonUsageStatsModel.AnonClientId);
+
         private readonly Container _historyStatsContainer;
         private readonly Container _currentStatsContainer;
         private readonly CosmosClient _cosmosClient;
@@ -93,12 +95,21 @@ namespace Web.Storage
         }
 
 
-        public async Task Init()
+        /// <summary>
+        /// Checks the history and current containers exist with <see cref="PartitionKeyPath"/>, and returns what
+        /// is wrong. Never creates them - see <see cref="CosmosSchema"/>.
+        /// </summary>
+        public async Task<IReadOnlyList<string>> VerifySchemaAsync(CancellationToken cancellationToken)
         {
-            await _cosmosClient.CreateDatabaseIfNotExistsAsync(_webAppConfig.DatabaseName);
-            var db = _cosmosClient.GetDatabase(_webAppConfig.DatabaseName);
-            await db.CreateContainerIfNotExistsAsync(id: _webAppConfig.ContainerNameHistory, partitionKeyPath: PARTITION_KEY);
-            await db.CreateContainerIfNotExistsAsync(id: _webAppConfig.ContainerNameCurrent, partitionKeyPath: PARTITION_KEY);
+            var problems = new List<string>();
+            foreach (var containerName in new[] { _webAppConfig.ContainerNameHistory, _webAppConfig.ContainerNameCurrent })
+            {
+                var problem = await CosmosSchema.CheckContainerAsync(
+                    _cosmosClient, _webAppConfig.DatabaseName, containerName, PartitionKeyPath, cancellationToken);
+                if (problem != null) problems.Add(problem);
+            }
+
+            return problems;
         }
     }
 }

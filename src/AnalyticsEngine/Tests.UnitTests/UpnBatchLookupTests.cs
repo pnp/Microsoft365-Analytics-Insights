@@ -180,7 +180,7 @@ SELECT TOP(3000) 'duplicate@contoso.com', 1 FROM digits a CROSS JOIN digits b CR
                 using (var connection = new SqlConnection(master))
                 {
                     await connection.OpenAsync();
-                    using (var command = new SqlCommand("CREATE DATABASE [" + catalog + "] COLLATE SQL_Latin1_General_CP1_CI_AS", connection))
+                    using (var command = new SqlCommand(ScratchDatabase.CreateDatabaseSql(catalog, "SQL_Latin1_General_CP1_CI_AS"), connection))
                         await command.ExecuteNonQueryAsync();
                 }
                 builder.InitialCatalog = catalog;

@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The synthetic-data generators shared by Tests.UnitTests and the Tests.FakeDataGen console, compiled once. -->
+  <PropertyGroup>
+    <!-- net10.0-windows, not plain net10.0: this references App.ControlPanel.Engine, which is
+         windows-flavoured. A build with -p:AnalyticsTargetOS=linux (the Container Apps demo image)
+         retargets both to net10.0; see Directory.Build.props. -->
+    <TargetFramework>$(AnalyticsWindowsTargetFramework)</TargetFramework>
+    <RootNamespace>Tests.FakeDataGen</RootNamespace>
+    <AssemblyName>Tests.FakeDataGen.Shared</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <!-- Unlike its siblings this project checks in no Properties\AssemblyInfo.cs, so the SDK generates
+         one: that is what emits the InternalsVisibleTo attributes below. -->
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <NoWarn>$(NoWarn);SYSLIB0011;SYSLIB0021;SYSLIB0022;SYSLIB0023;SYSLIB0060;CA1416;NU1510</NoWarn>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!--
+    DemoTables is one partial class split across three files, and C# runs a partial class's static
+    field initialisers part by part in compile order. For an SDK-style project that order is whatever
+    the file glob returns: alphabetical on Windows, arbitrary on Linux. DemoTables.All does not rely on
+    it - each part opens with Block(n) and All sorts by block - so any order is correct.
+
+    The order is still pinned here, so that it is the same on Windows and Linux, and it is deliberately
+    the order Windows used to glob (DemoTables.cs LAST, so the core tables register after the tables
+    whose foreign keys point at them). That keeps the block sort doing real work in every build, which is
+    what DemoCollaborationTests.Tables_FlushInDeclaringFileOrderWhateverTheCompileOrder proves. With the
+    core file first the sort would be a no-op, so a regression in it - which would break every demo with
+    web activity on its first flush as soon as a fourth part or a reordering came along - would pass
+    every test.
+  -->
+  <ItemGroup>
+    <Compile Remove="Demo\DemoTables.cs;Demo\DemoCollaborationTables.cs;Demo\DemoPowerPlatformTables.cs" />
+    <Compile Include="Demo\DemoCollaborationTables.cs" />
+    <Compile Include="Demo\DemoPowerPlatformTables.cs" />
+    <Compile Include="Demo\DemoTables.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Tests.UnitTests" />
+    <InternalsVisibleTo Include="Tests.FakeDataGen" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\App.ControlPanel.Engine\App.ControlPanel.Engine.csproj" />
+    <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj" />
+    <ProjectReference Include="..\Common\Entities\Entities.csproj" />
+    <ProjectReference Include="..\WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="EntityFramework" Version="6.5.2" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.4" />
+    <PackageReference Include="Microsoft.EntityFramework.SqlServer" Version="6.5.2" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+
+</Project>

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { contractProblems, jobs, triggers } from './workflow-contract.mjs';
+import { broadlyScopedSecrets, contractProblems, jobs, triggers } from './workflow-contract.mjs';
 
 const read = relative => readFileSync(new URL(relative, import.meta.url), 'utf8');
 const real = () => ({
@@ -90,4 +90,24 @@ test('the aggregate check cannot be skipped into a pass, and waits for every job
   onlyProblem(drifted('tests.yml', 'if: always() && needs.setup_tests.result', 'if: needs.setup_tests.result'), /no always\(\) in its condition/);
   onlyProblem(drifted('tests.yml', ', test_portal]', ']'), /job "test_portal" is not in the needs of "test_dotnet \(Release\)"/);
   onlyProblem(drifted('tests.yml', /^ {2}test_aitracker:/m, '  test_spfx:\n    runs-on: ubuntu-latest\n    steps: []\n\n  test_aitracker:'), /job "test_spfx" is not in the needs/);
+});
+
+test('no workflow hands a secret to every step of the workflow or of a job', () => {
+  for (const name of readdirSync(new URL('../workflows/', import.meta.url)).filter(file => file.endsWith('.yml'))) {
+    assert.deepEqual(broadlyScopedSecrets(read(`../workflows/${name}`)), [], name);
+  }
+});
+
+test('a secret in workflow-level or job-level env is reported, and one in a step env is not', () => {
+  const packages = read('../workflows/build-packages.yml');
+  assert.match(packages, /^ {10}StatsApiSecret: \$\{\{ secrets\.STATSAPISECRET \}\}/m, 'The fixture needs a step-level secret.');
+  const changed = (from, to) => {
+    const text = packages.replace(from, to);
+    assert.notEqual(text, packages, 'The fixture no longer matches build-packages.yml.');
+    return text;
+  };
+  assert.deepEqual(broadlyScopedSecrets(changed(/^jobs:/m, 'env:\n  Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}\n\njobs:')),
+    ['Storage: ${{ secrets.CONNECTIONSTRINGS_STORAGE }}']);
+  assert.deepEqual(broadlyScopedSecrets(changed(/^( {4}runs-on: windows-2022\r?\n)/m, '$1    env:\n      ClientSecret: ${{ secrets.APP_CLIENTSECRET }}\n')),
+    ['ClientSecret: ${{ secrets.APP_CLIENTSECRET }}']);
 });

@@ -8,6 +8,25 @@ afterEach(() => {
   setActiveLanguage('en');
 });
 
+describe('apiFetch request marking', () => {
+  it('marks every call as the portal\'s own, whatever the method and headers, as the server\'s cross-site request check requires', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    for (const method of ['GET', 'POST', 'PUT', 'DELETE']) {
+      await apiFetch('/api/TeamsAuthAPI', { method, headers: { 'Content-Type': 'application/json' }, body: method === 'GET' ? undefined : '{}' });
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    for (const [, init] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+      const headers = init.headers as Record<string, string>;
+      expect(headers['X-Requested-With']).toBe('XMLHttpRequest');
+      expect(headers['Content-Type']).toBe('application/json');
+      expect(init.credentials).toBe('same-origin');
+    }
+  });
+});
+
 describe('apiFetch portal permission errors', () => {
   it('throws a translated PortalPermissionError for the portal permission 403 body', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({

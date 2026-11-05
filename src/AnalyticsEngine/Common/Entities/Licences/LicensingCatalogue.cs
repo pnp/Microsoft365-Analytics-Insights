@@ -60,6 +60,9 @@ namespace Common.Entities.Licences
         /// <summary>How many distinct SKU part numbers the file lists.</summary>
         public int SkuCount => _byPartNumber.Count;
 
+        /// <summary>Every SKU the file lists, once each, in no particular order.</summary>
+        public IEnumerable<CatalogueSku> Skus => _byPartNumber.Values;
+
         /// <summary>Opens the embedded CSV. The caller disposes the stream.</summary>
         public static Stream OpenEmbeddedCsv()
         {

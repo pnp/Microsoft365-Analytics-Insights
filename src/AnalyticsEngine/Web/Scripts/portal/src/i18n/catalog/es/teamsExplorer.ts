@@ -35,6 +35,7 @@ const teamsExplorer: Record<keyof typeof en, string> = {
 
   'teamsExplorer.shared.sqlBehind': 'SQL detrás de "{title}"',
   'teamsExplorer.shared.sectionLoadError': 'No se pudo cargar esta sección: {error}',
+  'teamsExplorer.shared.queryQueueTimeout': 'El servidor ya estaba ejecutando todas las consultas de informes que admite y esta no obtuvo turno en un minuto. Pruebe con un periodo de informe más corto o vuelva a intentarlo cuando la base de datos esté menos ocupada.',
   'teamsExplorer.shared.noData': 'No hay datos para este periodo.',
   'teamsExplorer.shared.callDataCovers': 'Los datos de llamadas cubren {range}.',
   'teamsExplorer.shared.usageReportFiguresCover': 'Las cifras de informes de uso cubren {range} \u2013 Microsoft las publica con unos días de retraso, por lo que la ventana se desplaza hacia atrás en lugar de quedar medio vacía.',
@@ -132,6 +133,13 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.overview.engagementMix.description': 'Con qué hábito usan Teams las personas durante los días laborables del periodo.',
   'teamsExplorer.overview.engagementMix.empty': 'No apareció ningún usuario en los informes de uso de Teams para este periodo.',
   'teamsExplorer.overview.engagementMix.centreLabel': 'usuarios medidos',
+  // Por qué las personas con licencia sin actividad en Teams no se consideran inactivas (TeamsDormancy.Reason).
+  'teamsExplorer.dormancy.incompleteImport': 'No se pueden identificar las personas inactivas en este periodo. Se importaron informes de uso de Teams de {imported} de sus {expected} días, y solo incluyen a las personas activas cada día, así que alguien sin actividad registrada pudo estar activo un día que falta.',
+  'teamsExplorer.dormancy.groupFiltered': 'No se pueden identificar las personas inactivas. La importación de uso se limita a los miembros de determinados grupos, así que alguien sin actividad registrada puede no haberse importado nunca.',
+  'teamsExplorer.dormancy.namesConcealed': 'No se pueden identificar las personas inactivas. Los informes de uso ocultan los nombres, así que la actividad de nadie puede asociarse a su cuenta del directorio.',
+  'teamsExplorer.dormancy.noTeamsLicences': 'No se pueden identificar las personas inactivas. Según las licencias importadas, nadie aquí tiene una licencia que incluya Teams. Compruebe que la importación de usuarios está activada.',
+  'teamsExplorer.dormancy.notChecked': 'No se pueden identificar las personas inactivas, porque no se completó la comprobación de que se importaron todos los días de este periodo.',
+  'teamsExplorer.dormancy.unmeasured': 'Personas con licencia de Teams sin actividad registrada que quedan fuera de esta combinación: {count}.',
   'teamsExplorer.overview.weeklyActiveUsers.title': 'Usuarios activos semanales',
   'teamsExplorer.overview.weeklyActiveUsers.description': 'Personas distintas que hicieron algo en Teams cada semana.',
   'teamsExplorer.overview.valueLabel.users': 'Usuarios',
@@ -247,6 +255,14 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.adoption.reachBy.emptyNoGroups': 'No se pudo agrupar ningún usuario para este periodo.',
   'teamsExplorer.adoption.reachBy.emptyMetadataUnavailable': 'Los metadatos de usuario no se están importando, por lo que no hay nada por lo que agrupar. Active la importación de metadatos de usuario de Graph.',
   'teamsExplorer.adoption.reachBy.metadataUnavailableNote': 'Los metadatos de usuario no se están importando, por lo que cada grupo mostrará "(sin establecer)".',
+  'teamsExplorer.adoption.reachBy.otherNote':
+    'Los grupos de menos de {count} personas, o con menos de {count} personas activas, se combinan en una sola fila para que no se pueda identificar a nadie.',
+  'teamsExplorer.adoption.reachBy.leftOutNote':
+    'Los grupos de menos de {count} personas, o con menos de {count} personas activas, se omiten: incluso juntos son demasiado pocos para mostrarlos sin identificar a alguien.',
+  'teamsExplorer.adoption.reachBy.allGroupsSmall':
+    'Todos los grupos tienen menos de {count} personas, o menos de {count} personas activas, así que este desglose se oculta para proteger su privacidad.',
+  'teamsExplorer.adoption.otherGroups.one': '1 grupo más pequeño, combinado',
+  'teamsExplorer.adoption.otherGroups.other': '{count} grupos más pequeños, combinados',
   'teamsExplorer.adoption.groupBy': 'Agrupar por',
   'teamsExplorer.adoption.groupByAria': 'Agrupar el desglose de adopción por',
   'teamsExplorer.adoption.valueLabel.reachPct': '% de alcance',
@@ -411,12 +427,18 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.people.champions.title': 'Promotores de Teams',
   'teamsExplorer.people.champions.description': 'Las personas que más aprovechan Teams: sus mejores candidatos para impulsar la capacitación.',
   'teamsExplorer.people.dormant.title': 'Usuarios inactivos',
-  'teamsExplorer.people.dormant.description': 'Personas cubiertas por los informes de uso que no hicieron nada en Teams.',
-  'teamsExplorer.people.dormant.empty': 'Todas las personas cubiertas por los informes de uso hicieron algo en Teams este periodo.',
+  'teamsExplorer.people.dormant.description': 'Personas habilitadas con licencia de Teams que no hicieron nada en Teams este periodo.',
+  'teamsExplorer.people.dormant.empty': 'Todas las personas con licencia de Teams hicieron algo en Teams este periodo.',
   'teamsExplorer.people.dormant.note': 'Ordenado por cuánto tiempo hace que se les vio por última vez, para que las personas que más se han alejado aparezcan primero.',
   'teamsExplorer.people.championDepartments.title': 'Dónde están los promotores',
   'teamsExplorer.people.championDepartments.description': 'Departamentos con más usuarios avanzados.',
   'teamsExplorer.people.championDepartments.note': 'Un usuario avanzado está activo en más del 60% de los días laborables del periodo. Los departamentos con muchos son donde un programa de promotores ya tiene base.',
+  'teamsExplorer.people.championDepartments.otherNote':
+    'Los departamentos con menos de {count} usuarios avanzados se combinan en una sola fila para que no se pueda identificar a nadie.',
+  'teamsExplorer.people.championDepartments.allSmall':
+    'Todos los departamentos tienen menos de {count} usuarios avanzados, así que este gráfico se oculta para proteger su privacidad.',
+  'teamsExplorer.people.championDepartments.other.one': '1 departamento más pequeño, combinado',
+  'teamsExplorer.people.championDepartments.other.other': '{count} departamentos más pequeños, combinados',
   'teamsExplorer.people.valueLabel.powerUsers': 'usuarios avanzados',
   'teamsExplorer.people.table.aria': 'Usuarios de Teams',
 };

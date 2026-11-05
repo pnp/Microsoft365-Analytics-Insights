@@ -1,6 +1,7 @@
 ﻿using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.State;
+using Common.Entities.UserOrgs;
 using DataUtils;
 using Microsoft.ApplicationInsights;
 using Microsoft.ApplicationInsights.Channel;
@@ -286,6 +287,397 @@ namespace Tests.UnitTests
 
         #region Through the whole import
 
+        [DataTestMethod]
+        [DataRow(false, false)]
+        [DataRow(true, false)]
+        [DataRow(false, true)]
+        [DataRow(true, true)]
+        public async Task ReusedName_EnabledStaleDestination_RecoversFromQuarantineDuringEmptyDelta_WithoutMovingHistory(bool bulkMetadata, bool missingSource)
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var oldId = Guid.NewGuid().ToString();
+            var newId = Guid.NewGuid().ToString();
+            var desired = "reused-" + suffix + "@contoso.com";
+            var prior = "reused-" + suffix + "@contoso.onmicrosoft.com";
+            int oldRow, newRow, historyRow;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var old = new User { UserPrincipalName = desired, AzureAdId = oldId, AccountEnabled = true, Mail = desired };
+                var current = new User { UserPrincipalName = prior, AzureAdId = newId, AccountEnabled = true, Mail = desired };
+                var history = new User { UserPrincipalName = "history-" + suffix + "@contoso.com", Manager = old };
+                db.users.AddRange(missingSource ? new[] { old, history } : new[] { old, current, history });
+                await db.SaveChangesAsync();
+                oldRow = old.ID; newRow = current.ID; historyRow = history.ID;
+            }
+            var owner = Graph(newId, desired);
+            owner.Department = "Contoso Sales";
+            owner.CreatedDateTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var loader = new FakeUserMetadataLoader(new List<GraphUser>(), bulkMetadata ? new List<Microsoft.Graph.Models.SubscribedSku>() : null);
+            await loader.DeltaValueProvider.SetDeltaToken("synthetic-existing-delta");
+            loader.DeltaUsersOverride = new List<GraphUser> { owner };
+            var store = new UserIdentityQuarantineStore(new InMemoryKeyValueStore(), Guid.Empty);
+            UserMetadataUpdater Updater() => new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader) { IdentityQuarantineStore = store };
+
+            Assert.IsTrue(await Updater().InsertAndUpdateDatabaseFromExternalUsers());
+            Assert.AreEqual(1, (await store.LoadAsync()).Count);
+            loader.DeltaUsersOverride = new List<GraphUser>();
+            var calls = 0;
+            loader.ReusedUpnVerification = (fresh, previous) =>
+            {
+                calls++;
+                Assert.AreEqual(oldId, previous);
+                Assert.AreEqual(newId, fresh.Id);
+                return Task.FromResult(true); // Simulates the bounded fresh directory verification, not delta absence.
+            };
+            Assert.IsTrue(await Updater().InsertAndUpdateDatabaseFromExternalUsers());
+            Assert.AreEqual(1, calls, "Only the conflicting pair is verified.");
+            Assert.AreEqual(0, (await store.LoadAsync()).Count);
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var current = await db.users.Include(u => u.Department).SingleAsync(u => u.AzureAdId == newId);
+                var old = await db.users.SingleAsync(u => u.ID == oldRow);
+                if (missingSource)
+                {
+                    Assert.AreNotEqual(oldRow, current.ID, "A new canonical row is created, never the history row.");
+                    Assert.AreEqual(owner.CreatedDateTime, await db.Database.SqlQuery<DateTime?>(
+                        "SELECT created_utc FROM dbo.users WHERE id = @p0", current.ID).SingleAsync());
+                }
+                else
+                    Assert.AreEqual(newRow, current.ID, "The existing canonical PK is preserved.");
+                Assert.AreEqual(desired, current.UserPrincipalName);
+                Assert.AreEqual(newId, current.AzureAdId);
+                Assert.AreEqual("Contoso Sales", current.Department?.Name);
+                Assert.AreEqual(oldId, old.AzureAdId);
+                Assert.AreEqual(false, old.AccountEnabled);
+                Assert.AreEqual(UserRenameProcessor.HistoricalName(oldRow, Guid.Parse(oldId)), old.UserPrincipalName);
+                Assert.AreEqual(oldRow, (await db.users.SingleAsync(u => u.ID == historyRow)).ManagerId, "Existing FK history is untouched.");
+            }
+            Assert.IsTrue(await Updater().InsertAndUpdateDatabaseFromExternalUsers(), "Idempotent after release.");
+            Assert.AreEqual(1, calls);
+        }
+
+        [DataTestMethod]
+        [DataRow(false, false, false)]
+        [DataRow(true, false, false)]
+        [DataRow(false, true, false)]
+        [DataRow(false, false, true)]
+        public async Task ReusedName_WithoutSource_WithoutFreshEvidence_NeverOverwritesOldObject(bool disabledOld, bool incompleteRead, bool filtered)
+        {
+            var name = "blocked-" + Guid.NewGuid().ToString("N") + "@contoso.com";
+            var oldId = Guid.NewGuid().ToString();
+            var newId = Guid.NewGuid().ToString();
+            int oldRow;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var old = new User { UserPrincipalName = name, AzureAdId = oldId, AccountEnabled = !disabledOld, PostalCode = "12345" };
+                db.users.Add(old);
+                // Keep one active row so a test of a delta does not trigger the empty-database full-read reset.
+                db.users.Add(new User { UserPrincipalName = "control-" + Guid.NewGuid().ToString("N") + "@contoso.com", AccountEnabled = true });
+                await db.SaveChangesAsync(); oldRow = old.ID;
+            }
+            var loader = new FakeUserMetadataLoader(new List<GraphUser>()) { SimulateIncompleteDeltaRead = incompleteRead };
+            await loader.DeltaValueProvider.SetDeltaToken("synthetic-delta");
+            loader.DeltaUsersOverride = new List<GraphUser> { Graph(newId, name) };
+            var calls = 0;
+            loader.ReusedUpnVerification = (current, previous) => { calls++; return Task.FromResult(filtered); };
+            var updater = new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader);
+            if (filtered)
+                updater.WithUserScope(TestUserScopes.Provider(TestUserScopes.OfMembers((newId, name, name))), lastRunStore: null);
+            Assert.AreEqual(!incompleteRead, await updater.InsertAndUpdateDatabaseFromExternalUsers());
+            Assert.AreEqual(incompleteRead || filtered ? 0 : 1, calls);
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var old = await db.users.SingleAsync(u => u.ID == oldRow);
+                Assert.AreEqual(oldId, old.AzureAdId);
+                Assert.AreEqual(name, old.UserPrincipalName);
+                Assert.AreEqual("12345", old.PostalCode);
+                Assert.IsFalse(await db.users.AnyAsync(u => u.AzureAdId == newId));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task NewcomerInRenameChain_IsReleasedForInsertOnlyIfPredecessorActuallyRenamed(bool changedDuringRename)
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var heldName = "chain-held-" + suffix + "@contoso.com";
+            var freeName = "chain-free-" + suffix + "@contoso.com";
+            var old = new User { UserPrincipalName = heldName, AzureAdId = Guid.NewGuid().ToString() };
+            var newcomer = Graph(Guid.NewGuid().ToString(), heldName);
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.users.Add(old);
+                await db.SaveChangesAsync();
+                var result = await UserRenameProcessor.ReconcileAsync(db.Database.Connection.ConnectionString,
+                    new[] { newcomer, Graph(old.AzureAdId, freeName) }, new List<User> { old },
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, async () =>
+                    {
+                        if (changedDuringRename)
+                            await db.Database.ExecuteSqlCommandAsync("UPDATE dbo.users SET azure_ad_id = @p0 WHERE id = @p1", Guid.NewGuid().ToString(), old.ID);
+                    });
+                Assert.AreEqual(changedDuringRename, result.Conflicts.ContainsKey(newcomer.Id));
+                Assert.AreEqual(changedDuringRename ? heldName : freeName,
+                    (await db.users.AsNoTracking().SingleAsync(u => u.ID == old.ID)).UserPrincipalName);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task Release_ConcurrentMutationOfEitherRow_LeavesBothNamesUnchanged(bool mutateSource)
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var desired = "atomic-" + suffix + "@contoso.com";
+            var owner = Graph(Guid.NewGuid().ToString(), desired);
+            var source = new User { UserPrincipalName = "atomic-old-" + suffix + "@contoso.com", AzureAdId = owner.Id, AccountEnabled = true };
+            var destination = new User { UserPrincipalName = desired, AzureAdId = Guid.NewGuid().ToString(), AccountEnabled = true };
+            string connectionString;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.users.AddRange(new[] { source, destination });
+                await db.SaveChangesAsync();
+                connectionString = db.Database.Connection.ConnectionString;
+            }
+            var historical = UserRenameProcessor.HistoricalName(destination.ID, Guid.Parse(destination.AzureAdId));
+            using (var competing = new Microsoft.Data.SqlClient.SqlConnection(connectionString))
+            {
+                await competing.OpenAsync();
+                using (var transaction = competing.BeginTransaction())
+                {
+                    using (var update = competing.CreateCommand())
+                    {
+                        update.Transaction = transaction;
+                        update.CommandText = "UPDATE dbo.users SET last_updated = GETUTCDATE() WHERE id = @id";
+                        update.Parameters.AddWithValue("@id", mutateSource ? source.ID : destination.ID);
+                        await update.ExecuteNonQueryAsync();
+                    }
+                    var release = UserRenameProcessor.ReleaseAndAssignAsync(connectionString, source, destination, owner, historical);
+                    Assert.AreNotSame(release, await Task.WhenAny(release, Task.Delay(200)), "The reconciliation must wait for the other writer.");
+                    transaction.Commit();
+                    Assert.IsNull(await release, "The changed snapshot must be rejected after the writer commits.");
+                }
+            }
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                Assert.AreEqual(desired, (await db.users.SingleAsync(u => u.ID == destination.ID)).UserPrincipalName);
+                Assert.AreEqual(source.UserPrincipalName, (await db.users.SingleAsync(u => u.ID == source.ID)).UserPrincipalName);
+                Assert.IsFalse(await db.users.AnyAsync(u => u.UserPrincipalName == historical));
+            }
+        }
+
+        [TestMethod]
+        public async Task Release_AssignmentFailsAfterRetirement_TransactionRollsBackRetirement()
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var owner = Graph(Guid.NewGuid().ToString(), "rollback-" + suffix + "@contoso.com");
+            var old = new User { UserPrincipalName = owner.UserPrincipalName, AzureAdId = Guid.NewGuid().ToString(), AccountEnabled = true };
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.users.Add(old);
+                await db.SaveChangesAsync();
+                var historical = UserRenameProcessor.HistoricalName(old.ID, Guid.Parse(old.AzureAdId));
+                var trigger = "reused_upn_test_" + suffix;
+                await db.Database.ExecuteSqlCommandAsync("CREATE TRIGGER dbo.[" + trigger + @"] ON dbo.users AFTER INSERT AS
+BEGIN
+IF EXISTS (SELECT 1 FROM inserted WHERE azure_ad_id = '" + owner.Id + @"')
+    THROW 51000, 'Synthetic assignment failure', 1;
+END");
+                try
+                {
+                    await Assert.ThrowsExceptionAsync<Microsoft.Data.SqlClient.SqlException>(() =>
+                        UserRenameProcessor.ReleaseAndAssignAsync(db.Database.Connection.ConnectionString, null, old, owner, historical));
+                    var actual = await db.users.AsNoTracking().SingleAsync(u => u.ID == old.ID);
+                    Assert.AreEqual(owner.UserPrincipalName, actual.UserPrincipalName);
+                    Assert.AreEqual(true, actual.AccountEnabled);
+                    Assert.AreEqual(old.AzureAdId, actual.AzureAdId);
+                    Assert.IsFalse(await db.users.AnyAsync(u => u.AzureAdId == owner.Id));
+                }
+                finally { await db.Database.ExecuteSqlCommandAsync("DROP TRIGGER dbo.[" + trigger + "]"); }
+            }
+        }
+
+        [TestMethod]
+        public async Task Release_ConcurrentPlaceholderCannotTakeNameBetweenRetirementAndAssignment()
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var owner = Graph(Guid.NewGuid().ToString(), "placeholder-race-" + suffix + "@contoso.com");
+            var old = new User { UserPrincipalName = owner.UserPrincipalName, AzureAdId = Guid.NewGuid().ToString(), AccountEnabled = true };
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.users.Add(old);
+                await db.SaveChangesAsync();
+                var trigger = "reused_upn_pause_" + suffix;
+                var signal = "reused-upn-test-" + suffix;
+                await db.Database.ExecuteSqlCommandAsync("CREATE TRIGGER dbo.[" + trigger + @"] ON dbo.users AFTER UPDATE AS
+BEGIN
+IF EXISTS (SELECT 1 FROM inserted WHERE id = " + old.ID + @" AND user_name LIKE 'retired:%')
+BEGIN
+    EXEC sp_getapplock @Resource = '" + signal + @"', @LockMode = 'Exclusive', @LockOwner = 'Transaction';
+    WAITFOR DELAY '00:00:02';
+END
+END");
+                try
+                {
+                    var release = UserRenameProcessor.ReleaseAndAssignAsync(db.Database.Connection.ConnectionString, null, old, owner,
+                        UserRenameProcessor.HistoricalName(old.ID, Guid.Parse(old.AzureAdId)));
+                    var sawRetirement = false;
+                    for (var attempt = 0; attempt < 100; attempt++)
+                    {
+                        if (await db.Database.SqlQuery<int>("SELECT APPLOCK_TEST('public', @p0, 'Exclusive', 'Session')", signal).SingleAsync() == 0)
+                        {
+                            sawRetirement = true;
+                            break;
+                        }
+                        await Task.Delay(20);
+                    }
+                    Assert.IsTrue(sawRetirement, "The transaction is paused after retirement, before assignment.");
+                    using (var competitor = new Microsoft.Data.SqlClient.SqlConnection(db.Database.Connection.ConnectionString))
+                    {
+                        await competitor.OpenAsync();
+                        using (var insert = competitor.CreateCommand())
+                        {
+                            insert.CommandText = "INSERT dbo.users (user_name) VALUES (@name)";
+                            insert.Parameters.AddWithValue("@name", owner.UserPrincipalName);
+                            var placeholder = insert.ExecuteNonQueryAsync();
+                            Assert.AreNotSame(placeholder, await Task.WhenAny(placeholder, Task.Delay(100)),
+                                "The unique-name range remains locked during the apparent release.");
+                            Assert.IsNotNull(await release);
+                            var error = await Assert.ThrowsExceptionAsync<Microsoft.Data.SqlClient.SqlException>(async () => await placeholder);
+                            Assert.IsTrue(error.Number == 2601 || error.Number == 2627);
+                        }
+                    }
+                    Assert.AreEqual(owner.Id, (await db.users.AsNoTracking().SingleAsync(u => u.UserPrincipalName == owner.UserPrincipalName)).AzureAdId);
+                }
+                finally { await db.Database.ExecuteSqlCommandAsync("DROP TRIGGER dbo.[" + trigger + "]"); }
+            }
+        }
+
+        [TestMethod]
+        public async Task Release_HistoricalNameAlreadyOccupied_DoesNotOverwriteEitherIdentity()
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var owner = Graph(Guid.NewGuid().ToString(), "collision-" + suffix + "@contoso.com");
+            var source = new User { UserPrincipalName = "prior-" + suffix + "@contoso.com", AzureAdId = owner.Id };
+            var old = new User { UserPrincipalName = owner.UserPrincipalName, AzureAdId = Guid.NewGuid().ToString(), AccountEnabled = true };
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.users.AddRange(new[] { old, source });
+                await db.SaveChangesAsync();
+                var historical = UserRenameProcessor.HistoricalName(old.ID, Guid.Parse(old.AzureAdId));
+                var occupied = new User { UserPrincipalName = historical, AzureAdId = Guid.NewGuid().ToString() };
+                db.users.Add(occupied);
+                await db.SaveChangesAsync();
+                Assert.IsNull(await UserRenameProcessor.ReleaseAndAssignAsync(db.Database.Connection.ConnectionString, source, old, owner, historical));
+                Assert.AreEqual(owner.UserPrincipalName, (await db.users.AsNoTracking().SingleAsync(u => u.ID == old.ID)).UserPrincipalName);
+                Assert.AreEqual(occupied.AzureAdId, (await db.users.AsNoTracking().SingleAsync(u => u.ID == occupied.ID)).AzureAdId);
+                Assert.AreEqual(source.UserPrincipalName, (await db.users.AsNoTracking().SingleAsync(u => u.ID == source.ID)).UserPrincipalName);
+            }
+        }
+
+        [TestMethod]
+        public async Task BulkMetadata_PlaceholderAcquiredAnotherObjectAfterSnapshot_DoesNotOverwriteItsIdentityOrMetadata()
+        {
+            var name = "bulk-guard-" + Guid.NewGuid().ToString("N") + "@contoso.com";
+            var owner = Graph(Guid.NewGuid().ToString(), name);
+            owner.PostalCode = "54321";
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var row = new User { UserPrincipalName = name, PostalCode = "12345" };
+                db.users.Add(row);
+                await db.SaveChangesAsync();
+                var table = UserBulkUpdateRules.BuildUpdateTable(new List<GraphUser> { owner }, new LookupEntityMaps(),
+                    new Dictionary<string, User>(), new Dictionary<string, User> { [name] = row },
+                    new Dictionary<string, GraphUser>(), DateTime.UtcNow);
+                var otherId = Guid.NewGuid().ToString();
+                await db.Database.ExecuteSqlCommandAsync("UPDATE dbo.users SET azure_ad_id = @p0 WHERE id = @p1", otherId, row.ID);
+                await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                    new SqlUserBulkUpdateWriter(db.Database.Connection.ConnectionString).ExecuteAsync(table));
+                var actual = await db.users.AsNoTracking().SingleAsync(u => u.ID == row.ID);
+                Assert.AreEqual(otherId, actual.AzureAdId);
+                Assert.AreEqual("12345", actual.PostalCode);
+            }
+        }
+
+        [TestMethod]
+        public async Task BulkMetadata_IdentityChangesAfterSnapshot_AbortsBeforeLicencesOrOrgsAndWithholdsCheckpoint()
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var name = "bulk-checkpoint-" + suffix + "@contoso.com";
+            var controlName = "bulk-control-" + suffix + "@contoso.com";
+            var owner = Graph(Guid.NewGuid().ToString(), name);
+            owner.PostalCode = "54321";
+            owner.AdditionalProperties["employeeType"] = "Contoso New";
+            var control = Graph(Guid.NewGuid().ToString(), controlName);
+            control.PostalCode = "54321";
+            var otherId = Guid.NewGuid().ToString();
+            var skuId = Guid.NewGuid();
+            int rowId, controlId, existingLicenceId;
+            string connectionString;
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                var row = new User { UserPrincipalName = name, PostalCode = "12345", AccountEnabled = true };
+                var normal = new User { UserPrincipalName = controlName, AzureAdId = control.Id, PostalCode = "12345", AccountEnabled = true };
+                var licence = new LicenseType { Name = "Contoso Prior " + suffix, SKUID = Guid.NewGuid().ToString() };
+                db.users.AddRange(new[] { row, normal });
+                db.LicenseTypes.Add(licence);
+                await db.SaveChangesAsync();
+                db.UserLicenseTypeLookups.Add(new UserLicenseTypeLookup { UserId = row.ID, LicenseTypeId = licence.ID });
+                await db.SaveChangesAsync();
+                rowId = row.ID; controlId = normal.ID; existingLicenceId = licence.ID;
+                connectionString = db.Database.Connection.ConnectionString;
+            }
+            var types = UserOrgStores.CreateTypeStore(connectionString);
+            var assignments = UserOrgStores.CreateAssignmentStore(connectionString);
+            var typeId = await types.CreateAsync(new UserOrgType
+            {
+                Name = "Contoso Guard " + suffix, SourceKind = UserOrgSourceKind.EntraAttribute,
+                EntraAttributeName = "employeeType", IsEnabled = true,
+            });
+            try
+            {
+                await assignments.MergeAsync(new[] { new UserOrgAssignmentUpdate(rowId, typeId, "Contoso Prior") });
+                var loader = new FakeUserMetadataLoader(new List<GraphUser> { owner, control },
+                    new List<Microsoft.Graph.Models.SubscribedSku>
+                    {
+                        new Microsoft.Graph.Models.SubscribedSku { SkuId = skuId, SkuPartNumber = "CONTOSO_NEW" },
+                    },
+                    new Dictionary<Guid, List<Microsoft.Graph.Models.User>>
+                    {
+                        [skuId] = new List<Microsoft.Graph.Models.User> { new Microsoft.Graph.Models.User { Id = owner.Id, UserPrincipalName = name } },
+                    });
+                loader.SetOrgSelection(GraphUserOrgSelection.FromTypes(await types.GetEnabledEntraTypesAsync()));
+                await loader.DeltaValueProvider.SetDeltaToken("synthetic-original-checkpoint");
+                var licenceReads = 0;
+                loader.OnLoadUsersBySku = _ => { licenceReads++; return Task.CompletedTask; };
+                var mutations = 0;
+                var factory = new BeforeSaveContextFactory(async () =>
+                {
+                    mutations++;
+                    using (var competing = new AnalyticsEntitiesContext())
+                        await competing.Database.ExecuteSqlCommandAsync("UPDATE dbo.users SET azure_ad_id = @p0 WHERE id = @p1", otherId, rowId);
+                });
+                var updater = new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader,
+                    factory, orgTypeStore: types, orgAssignmentStore: assignments);
+                await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => updater.InsertAndUpdateDatabaseFromExternalUsers());
+                Assert.AreEqual(1, mutations, "The competing identity is stamped after the snapshot, during lookup-cache save.");
+                Assert.AreEqual("synthetic-original-checkpoint", await loader.DeltaValueProvider.GetDeltaToken());
+                Assert.AreEqual(0, licenceReads, "The stale mapping must never reach the licence refresh.");
+                Assert.AreEqual("Contoso Prior", (await assignments.GetForUserAsync(rowId)).Single(v => v.OrgTypeId == typeId).Value);
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var actual = await db.users.SingleAsync(u => u.ID == rowId);
+                    Assert.AreEqual(otherId, actual.AzureAdId);
+                    Assert.AreEqual("12345", actual.PostalCode);
+                    Assert.AreEqual("12345", (await db.users.SingleAsync(u => u.ID == controlId)).PostalCode,
+                        "A matching row in the same batch is rolled back, not half committed.");
+                    CollectionAssert.AreEqual(new[] { existingLicenceId },
+                        (await db.UserLicenseTypeLookups.Where(l => l.UserId == rowId).Select(l => l.LicenseTypeId).ToListAsync()).ToArray());
+                }
+            }
+            finally { await types.DeleteAsync(typeId); }
+        }
+
         /// <summary>
         /// C-1: a quarantined user is retried every cycle from the stored profile - even when Graph reports nothing new -
         /// and resolved once the other account's row moves out of the way, here by that account's own rename. Their
@@ -451,6 +843,33 @@ namespace Tests.UnitTests
         #endregion
 
         #region Helpers
+
+        private sealed class BeforeSaveContextFactory : IAnalyticsDbContextFactory
+        {
+            private readonly Func<Task> _beforeSave;
+            public BeforeSaveContextFactory(Func<Task> beforeSave) { _beforeSave = beforeSave; }
+            public AnalyticsEntitiesContext Create() => new BeforeSaveContext(_beforeSave);
+        }
+
+        private sealed class BeforeSaveContext : AnalyticsEntitiesContext
+        {
+            private Func<Task> _beforeSave;
+            public BeforeSaveContext(Func<Task> beforeSave)
+            {
+                Database.SetInitializer<BeforeSaveContext>(null);
+                _beforeSave = beforeSave;
+            }
+            public override async Task<int> SaveChangesAsync()
+            {
+                if (_beforeSave != null)
+                {
+                    var callback = _beforeSave;
+                    _beforeSave = null;
+                    await callback();
+                }
+                return await base.SaveChangesAsync();
+            }
+        }
 
         private static GraphUser Graph(string id, string upn) => new GraphUser { Id = id, UserPrincipalName = upn, AccountEnabled = true };
 

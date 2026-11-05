@@ -436,10 +436,10 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// The flush order must not depend on the order DemoTables' partial files are compiled in. This
-        /// project links DemoTables.cs after the other two parts - the order Tests.FakeDataGen's own glob
-        /// compiles them on Windows - so the core tables register LAST, and only the block ordering puts
-        /// the parents back in front of their children.
+        /// The flush order must not depend on the order DemoTables' partial files are compiled in.
+        /// Tests.FakeDataGen.Shared compiles DemoTables.cs after the other two parts - the order Windows
+        /// globbed them in, pinned in its project file - so the core tables register LAST, and only the
+        /// block ordering puts the parents back in front of their children.
         /// </summary>
         [TestMethod]
         public void Tables_FlushInDeclaringFileOrderWhateverTheCompileOrder()

@@ -317,6 +317,20 @@ jobs:
             --filter "FullyQualifiedName~CopilotInvestment|FullyQualifiedName~CopilotSpend|FullyQualifiedName~DemoContainerAppsTests|FullyQualifiedName~DeploymentPrerequisitesTests|FullyQualifiedName~AzureResourceProviderPreflightTests|FullyQualifiedName~InstallerCancellationTests"
           exit $LASTEXITCODE
 
+      # The stable 1859 semantic ports: the ASP.NET Core CSRF filter and CORS policy (#825), the installer's
+      # secret handling and fake-ARM tests on .NET's synchronous HTTP, and the shared demo generator (#822).
+      - name: Check stable build 1859 CSRF, installer and demo-generator ports
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
+            -c Release --no-build --nologo `
+            --logger "trx;LogFileName=net10-stable-1859.trx" `
+            --results-directory "$env:RUNNER_TEMP\testresults\stable-1859" `
+            --blame-hang --blame-hang-timeout 8m --blame-hang-dump-type none `
+            --filter "FullyQualifiedName~SameOriginStateChangeFilterTests|FullyQualifiedName~InstallerSecretHandlingTests|FullyQualifiedName~StringCipherCompatibilityTests|FullyQualifiedName~HybridWorkerExtensionPolicyTests|FullyQualifiedName~InstallerOperatorSettingsTests|FullyQualifiedName~DemoCollaborationTests|FullyQualifiedName~TeamsExplorerConcurrencyTests|FullyQualifiedName~ReportQueryFailureTests"
+          exit $LASTEXITCODE
+
       - name: Check stable credit collector SQL invariants
         shell: pwsh
         run: |

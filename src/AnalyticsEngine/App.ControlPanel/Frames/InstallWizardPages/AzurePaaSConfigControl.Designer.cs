@@ -60,7 +60,8 @@ namespace App.ControlPanel.Frames.InstallWizard
             ServicePageLayout.AddRow(insights, lnkHealthDetails);
             ServicePageLayout.AddRow(insights, ServicePageLayout.Text(resources.GetString("HealthMonitoring.Notice")));
             var hosting = ServicePageLayout.AddService(layout, "hostingService", "App Service & hosting plan",
-                "The web app hosts the portal and importers. Its plan supplies compute capacity and determines hosting cost.",
+                "The web app hosts the portal and importers. Its plan supplies compute capacity and determines hosting cost. " +
+                "The plan name is used when the installer creates the web app; an existing web app stays on the plan it already runs on.",
                 global::App.ControlPanel.Properties.Resources.AppService);
             ServicePageLayout.AddFields(hosting, "Web app name:", txtAppServiceWebAppName, "Plan name:", txtAppServicePlanName);
             ServicePageLayout.AddRow(hosting, lblAppServiceWebAppName);

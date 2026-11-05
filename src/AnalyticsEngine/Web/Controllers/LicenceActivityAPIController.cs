@@ -23,6 +23,13 @@ namespace Web.AnalyticsWeb.Controllers
     /// reader; the people holding a licence, and a workbook that includes them, need the portal's See PII
     /// permission (#661).
     /// </summary>
+    /// <remarks>
+    /// A reader without See PII cannot single anybody out (#680): narrowing the overview to a department or a
+    /// country is refused, as every reader-chosen narrowing is on Activity analysis, and their overview - on screen
+    /// and in the workbook - shows no figure about fewer than <see cref="ReportScopeResolver.MinimumPeopleWithoutSeePii"/>
+    /// people (see <see cref="LicenceActivityQuery.MinimumGroupSize"/>). Their overview is built and cached
+    /// separately from a See PII reader's, so neither is ever served the other's.
+    /// </remarks>
     [Authorize]
     [Route("api/LicenceActivity")]
     [ApiReplyExceptionFilter]
@@ -74,8 +81,16 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken)) =>
             ExecuteAsync(async () =>
             {
+                // Narrowing by department or country is See PII's, as every narrowing the reader chooses is on
+                // Activity analysis: two overviews that differ by one condition differ by the people it excludes,
+                // so a department and country can leave exactly one person - whose licences and activity the
+                // figures then are. Refused before anything is read.
+                if ((departmentId.HasValue || countryId.HasValue) && !PortalAccess.Evaluate(Request, User).SeePii)
+                    return PortalPermissionDenied.Result(Request, PortalPermission.SeePii);
+
                 var context = _context();
-                var query = LicenceActivityQuery.Create(from, to, context.Sources.NowUtc, departmentId, countryId);
+                var query = LicenceActivityQuery.Create(from, to, context.Sources.NowUtc, departmentId, countryId)
+                    .WithMinimumGroupSize(MinimumGroupSizeFor());
                 if (!context.Sources.UserMetadata) return MissingMetadata();
 
                 // The administrator's global filter narrows every figure - and is part of the cache key, so
@@ -162,8 +177,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>
         /// Refuses figures held for a different people scope from the one that applies to this request now -
         /// prepared for a reader the global filter treats differently, or before the filter or the directory
-        /// changed who it admits. Answered as expired figures, which the page already handles by refreshing the
-        /// report. Returns the scope that applies now.
+        /// changed who it admits - and figures that show groups this reader may not see: prepared for a reader with
+        /// See PII, or before the permission was withdrawn. Answered as expired figures, which the page already
+        /// handles by refreshing the report. Returns the scope that applies now.
         /// </summary>
         private async Task<ReportScope> RequireSamePeopleScopeAsync(LicenceActivityOverview overview, CancellationToken cancellationToken)
         {
@@ -171,8 +187,18 @@ namespace Web.AnalyticsWeb.Controllers
             var current = scope.IsRestricted ? scope.Sql.Key : null;
             if (!string.Equals(overview?.Query?.PeopleScopeKey, current, StringComparison.Ordinal))
                 throw new LicenceActivityExpiredException();
+            var minimum = MinimumGroupSizeFor();
+            if (minimum.HasValue && (overview?.Query?.MinimumGroupSize ?? 0) < minimum.Value)
+                throw new LicenceActivityExpiredException();
             return scope;
         }
+
+        /// <summary>
+        /// The fewest people a figure may describe for this reader: <see cref="ReportScopeResolver.MinimumPeopleWithoutSeePii"/>
+        /// without See PII, and no minimum with it.
+        /// </summary>
+        private int? MinimumGroupSizeFor() =>
+            PortalAccess.Evaluate(Request, User).SeePii ? (int?)null : ReportScopeResolver.MinimumPeopleWithoutSeePii;
 
         private async Task<IActionResult> ExecuteAsync(Func<Task<IActionResult>> action)
         {

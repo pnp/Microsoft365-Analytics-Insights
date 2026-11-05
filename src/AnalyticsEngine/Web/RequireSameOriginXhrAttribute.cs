@@ -9,8 +9,9 @@ using System.Net.Http;
 namespace Web.AnalyticsWeb
 {
     /// <summary>
-    /// Refuses an API call unless it came from the portal's own scripts on this origin. Put it on every action that
-    /// changes something: it is the site's cross-site request forgery (CSRF) protection.
+    /// Refuses an API call unless it came from the portal's own scripts on this origin. This is the test behind the
+    /// site's cross-site request forgery (CSRF) protection, which <see cref="SameOriginStateChangeFilter"/> applies to
+    /// every state-changing Web API action; the attribute on an action states the same requirement explicitly.
     /// </summary>
     /// <remarks>
     /// The API authenticates with the site's auth cookie, and a browser attaches that cookie to a request whichever

@@ -90,6 +90,12 @@ export interface AdoptionSegmentRow {
   neverUsedUsers: number;
   adoptionRatePct: number;
   averageAdoptionScore: number;
+  /**
+   * The department's unlicensed people recommended for a licence, over every candidate. Department rows only;
+   * null when withheld (fewer than minSeatsPerSegment) or unknown - never a substitute zero. Optional only so
+   * fixtures written before it still type-check.
+   */
+  recommendedCandidates?: number | null;
 }
 
 /**
@@ -319,7 +325,8 @@ export interface AgentUsageRow {
 /** The agent estate at a glance. */
 export interface AgentEstateSummary {
   historyDays: number;
-  activeAgents: number;
+  /** Agents used in the reporting period. Null for a past period that could not be measured - never the inventory's count. */
+  activeAgents: number | null;
   knownAgents: number;
   /** Customer-built agents only. */
   customAgents: number;
@@ -327,8 +334,9 @@ export interface AgentEstateSummary {
   unknownOriginAgents: number;
   agentUsers: number;
   licensedAgentUsers: number;
-  agentInteractions: number;
-  interactionsPerAgentUser: number;
+  /** Agent interactions in the reporting period; null when activeAgents is. */
+  agentInteractions: number | null;
+  interactionsPerAgentUser: number | null;
   mostPopularAgent: string | null;
   mostVersatileAgent: string | null;
   healthBreakdown: ReportCategory[];
@@ -422,13 +430,19 @@ export interface AdoptionConcentrationBand {
 /** Licensed and unlicensed Copilot use for one department, side by side. */
 export interface AdoptionCombinedSegmentRow {
   segment: string;
-  licensedUsers: number;
-  licensedActiveUsers: number;
-  interactionsPerLicensedUser: number;
-  licensedAgentUserPct: number;
-  unlicensedActiveUsers: number;
-  interactionsPerUnlicensedUser: number;
-  unlicensedAgentUserPct: number;
+  /**
+   * Each side's figures are null when fewer than `minSeatsPerSegment` people are on that side: withheld so
+   * that no one can be singled out, never a measured zero.
+   */
+  licensedUsers: number | null;
+  licensedActiveUsers: number | null;
+  interactionsPerLicensedUser: number | null;
+  licensedAgentUserPct: number | null;
+  unlicensedActiveUsers: number | null;
+  interactionsPerUnlicensedUser: number | null;
+  unlicensedAgentUserPct: number | null;
+  /** True when the agent figures below are null because too few people are behind them, not because they were not measured. */
+  agentFiguresWithheld?: boolean;
   /**
    * Agent breadth and depth (#646) over the department's active Copilot users seen in the audit log, and its
    * Copilot Studio builders (#647). Each is null when it could not be measured, and absent from a server
@@ -672,6 +686,12 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
   globalFilter?: GlobalFilterEcho | null;
   /** The tenant-wide Copilot seat count, sent only when the summary is narrowed. */
   unscopedLicensedUsers?: number | null;
+  /**
+   * The sections left out because the administrator's report filter applies - the same names as
+   * `unscopedSections`, which they describe the whole organisation for. Show each as not available under
+   * the filter, never as empty. Absent from a server that predates it.
+   */
+  withheldSections?: string[];
   accountabilityDimension: string | null;
   accountabilityDimensionLabel: string | null;
   accountabilityRollup: AccountabilityRollupRow[];
@@ -784,6 +804,11 @@ export interface LicensedUserAdoptionRow {
   frequencyScore: number;
   depthScore: number;
   breadthScore: number;
+  /**
+   * True when the person's Copilot use is confined to at most half the configured breadth target's apps - what
+   * makes the server advise adding another app. Optional only so fixtures written before it still type-check.
+   */
+  needsBroadening?: boolean;
   band: AdoptionBand;
   bandName: string;
   signalSource: string;

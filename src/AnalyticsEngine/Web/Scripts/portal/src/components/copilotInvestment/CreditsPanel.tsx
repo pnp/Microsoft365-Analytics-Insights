@@ -33,6 +33,7 @@ const useStyles = makeStyles({
   chart: { display: 'flex', alignItems: 'flex-end', gap: '6px', height: '160px', paddingTop: '8px', borderBottom: `1px solid ${tokens.colorNeutralStroke1}` },
   column: { flex: '1 1 0', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-end', height: '100%', minWidth: '18px' },
   bar: { width: '100%', maxWidth: '36px', backgroundColor: tokens.colorBrandBackground, borderRadius: '4px 4px 0 0', minHeight: '2px' },
+  withheldMark: { color: tokens.colorNeutralForeground3, lineHeight: 1, paddingBottom: '2px' },
   axis: { display: 'flex', gap: '6px' },
   axisLabel: { flex: '1 1 0', textAlign: 'center', minWidth: '18px', fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, overflow: 'hidden' },
   facts: { display: 'grid', gridTemplateColumns: 'minmax(200px, 1fr) auto', gap: '6px 16px', alignItems: 'baseline' },
@@ -66,7 +67,11 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
   const credits = sources.credits;
   const metered = summary.metered;
   const points = trend?.points ?? [];
+  const trendFailed = !!trend?.failureCode;
   const maxCredits = Math.max(1, ...points.map((p) => p.credits ?? 0));
+  // A reading withheld from a reader without See PII is a dash with its reason, never a zero.
+  const withheld = t('copilotInvestment.trend.withheld', { count: formatNumber(trend?.minPeople ?? 5) });
+  const serviceWithheld = t('copilotInvestment.trend.withheld', { count: formatNumber(Math.max(summary.organisation.minGroupSize, 5)) });
 
   return (
     <div className={styles.stack}>
@@ -141,19 +146,34 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
         />
         {trendLoading && <Spinner size="small" label={t('copilotInvestment.trend.loading')} />}
         {trendError && <Text>{trendError}</Text>}
-        {!trendLoading && !trendError && points.length === 0 && <Text size={200}>{t('copilotInvestment.trend.empty')}</Text>}
+        {/* A failed read of the readings is said as such: "no readings" would read as confirmed absence. */}
+        {!trendLoading && !trendError && trendFailed && <Text size={200}>{t('copilotInvestment.sources.credits.failed')}</Text>}
+        {!trendLoading && !trendError && !trendFailed && points.length === 0 && <Text size={200}>{t('copilotInvestment.trend.empty')}</Text>}
         {points.length > 0 && (
           <>
             <div className={styles.chart} role="list" aria-label={t('copilotInvestment.trend.title')}>
               {points.map((p) => {
-                const label = t('copilotInvestment.trend.point', {
-                  date: formatShortDate(p.date),
-                  credits: formatCredits(p.credits ?? 0),
-                  consumers: formatNumber(p.consumingUsers),
-                });
+                const label = p.withheld
+                  ? t('copilotInvestment.trend.pointWithheld', {
+                      date: formatShortDate(p.date),
+                      count: formatNumber(trend?.minPeople ?? 5),
+                      consumers: formatNumber(p.consumingUsers),
+                    })
+                  : t('copilotInvestment.trend.point', {
+                      date: formatShortDate(p.date),
+                      credits: formatCredits(p.credits ?? 0),
+                      consumers: formatNumber(p.consumingUsers),
+                    });
                 return (
                   <div key={p.date} className={styles.column} role="listitem" aria-label={label} title={label}>
-                    <div className={styles.bar} style={{ height: `${((p.credits ?? 0) / maxCredits) * 100}%` }} />
+                    {/* A withheld day is the table's dash, not a bar: a zero-height bar is what a day with no credits looks like. */}
+                    {p.withheld ? (
+                      <span className={styles.withheldMark} aria-hidden="true" data-withheld="true">
+                        {'\u2014'}
+                      </span>
+                    ) : (
+                      <div className={styles.bar} style={{ height: `${((p.credits ?? 0) / maxCredits) * 100}%` }} />
+                    )}
                   </div>
                 );
               })}
@@ -177,7 +197,15 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
                 {points.map((p) => (
                   <TableRow key={p.date}>
                     <TableCell>{formatShortDate(p.date)}</TableCell>
-                    <TableCell className={styles.num}>{formatCredits(p.credits ?? 0)}</TableCell>
+                    <TableCell className={styles.num}>
+                      {p.withheld ? (
+                        <span title={withheld} aria-label={withheld} role="img">
+                          {'\u2014'}
+                        </span>
+                      ) : (
+                        formatCredits(p.credits ?? 0)
+                      )}
+                    </TableCell>
                     <TableCell className={styles.num}>{formatNumber(p.consumingUsers)}</TableCell>
                   </TableRow>
                 ))}
@@ -218,7 +246,15 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
                         : t('copilotInvestment.services.unitMissing')}
                   </TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.consumers)}</TableCell>
-                  <TableCell className={styles.num}>{formatCredits(s.quantity)}</TableCell>
+                  <TableCell className={styles.num}>
+                    {s.withheld ? (
+                      <span title={serviceWithheld} aria-label={serviceWithheld} role="img">
+                        {'\u2014'}
+                      </span>
+                    ) : (
+                      formatCredits(s.quantity)
+                    )}
+                  </TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.limitExhaustedUsers + s.notEntitledUsers)}</TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.unevaluatedUsers)}</TableCell>
                   <TableCell className={styles.num}>{formatNumber(s.unknownAmountUsers)}</TableCell>
@@ -239,13 +275,13 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
           <Figure label={t('copilotInvestment.metered.active')} value={formatNumber(metered.activeUsers)} />
           <Figure
             label={t('copilotInvestment.metered.studio')}
-            value={formatCredits(metered.studioCredits)}
-            note={metered.studioWindowValue !== null ? formatMoney(metered.studioWindowValue, currency) : undefined}
+            value={metered.studioWithheld ? '\u2014' : formatCredits(metered.studioCredits)}
+            note={metered.studioWithheld ? serviceWithheld : metered.studioWindowValue !== null ? formatMoney(metered.studioWindowValue, currency) : undefined}
           />
           <Figure
             label={t('copilotInvestment.metered.balances')}
-            value={formatCredits(metered.credits)}
-            note={metered.creditBalanceValue !== null ? formatMoney(metered.creditBalanceValue, currency) : undefined}
+            value={metered.creditsWithheld ? '\u2014' : formatCredits(metered.credits)}
+            note={metered.creditsWithheld ? serviceWithheld : metered.creditBalanceValue !== null ? formatMoney(metered.creditBalanceValue, currency) : undefined}
           />
           {metered.evidencedCandidates !== null && (
             <Figure label={t('copilotInvestment.metered.evidenced')} value={formatNumber(metered.evidencedCandidates)} />

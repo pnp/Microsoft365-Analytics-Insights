@@ -1,4 +1,5 @@
 ﻿using Common.Entities;
+using Common.Entities.Installer;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
@@ -42,14 +43,31 @@ namespace Web.AnalyticsWeb.Controllers
                     })
                     .ToListAsync();
 
-                // The newest applied configuration is the current one.
-                if (rows.Count > 0)
-                {
-                    rows[0].IsCurrent = true;
-                }
-
-                return Ok(rows);
+                return Ok(PrepareForDisplay(rows));
             }
+        }
+
+        /// <summary>
+        /// Removes every secret from the configuration snapshots, and marks the newest entry as the current one.
+        /// </summary>
+        /// <remarks>
+        /// Done here, on the way out, because installers before this build recorded the encrypted SQL administrator
+        /// password and both app registration secrets in every snapshot, and those rows stay in the table. Administration
+        /// does not grant those credentials. A snapshot that is not valid JSON is withheld whole rather than shown raw.
+        /// </remarks>
+        internal static List<InstallLogEntryModel> PrepareForDisplay(List<InstallLogEntryModel> rows)
+        {
+            foreach (var row in rows)
+            {
+                row.ConfigJson = InstallConfigSnapshotRedactor.Redact(row.ConfigJson);
+            }
+
+            if (rows.Count > 0)
+            {
+                rows[0].IsCurrent = true;
+            }
+
+            return rows;
         }
     }
 }

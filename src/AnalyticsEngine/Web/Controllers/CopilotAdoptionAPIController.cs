@@ -50,10 +50,10 @@ namespace Web.AnalyticsWeb.Controllers
     ///   match the summary it was exported from.</item>
     ///   <item>Concurrent first-hits share one execution (the cache holds the <see cref="Task{T}"/>),
     ///   so a page refresh during a slow analysis cannot start a second full scan of the audit history.</item>
-    ///   <item>Per-person lists, their CSV exports and any population-narrowing filter need the portal's
-    ///   See PII permission. The tenant-wide summary and workbook are served to everyone, without the
-    ///   parts that name a person for a reader who lacks it (#661). The shared cached analysis is never
-    ///   edited for one reader.</item>
+    ///   <item>Per-person lists, their CSV exports and any population-narrowing parameter - an email domain,
+    ///   a user filter or a seat-licence override - need the portal's See PII permission. The tenant-wide
+    ///   summary and workbook are served to everyone, without the parts that name a person for a reader
+    ///   who lacks it (#661). The shared cached analysis is never edited for one reader.</item>
     /// </list>
     /// </summary>
     [Authorize]
@@ -257,7 +257,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// The heavy SQL stays cached tenant-wide and shared - narrowing re-scores the loaded rows in
         /// memory instead of re-querying per domain or per filter, which would multiply the load on a
         /// database the importer is already sharing. Sections that cannot be narrowed are carried across
-        /// and named in <see cref="CopilotAdoptionSummary.UnscopedSections"/> so the page can label them.
+        /// and named in <see cref="CopilotAdoptionSummary.UnscopedSections"/> so the page can label them -
+        /// or, under the administrator's global filter, left out and named in
+        /// <see cref="CopilotAdoptionSummary.WithheldSections"/>.
         /// </remarks>
         private async Task<CopilotAdoptionAnalysis> TryGetScopedSummaryAsync(
             int windowDays, string from, string to, string seatLicenceTypeIds, string emailDomain, UserFilterExpression userFilter,
@@ -557,7 +559,7 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
-            var permissionDenied = ScopePermissionDenied(emailDomain, filter);
+            var permissionDenied = ScopePermissionDenied(emailDomain, filter, seatLicenceTypeIds);
             if (permissionDenied != null) return permissionDenied;
 
             var (analysis, narrowed) = await TryGetScopedAnalysisAsync(
@@ -581,21 +583,37 @@ namespace Web.AnalyticsWeb.Controllers
         /// response names nobody, a filter that selects one known person turns every aggregate into that
         /// person's licence and activity record.
         /// </summary>
-        private IActionResult ScopePermissionDenied(string emailDomain, UserFilterExpression userFilter)
+        /// <remarks>
+        /// A seat-licence override narrows as well: it replaces the population every licensed-user figure
+        /// describes with the holders of the licence types the caller chose, from every type in the tenant,
+        /// so a type held by one known person makes the whole licensed side that person's record. Refused
+        /// before the analysis is started, so a reader who may not use it cannot start a run with it either.
+        /// </remarks>
+        private IActionResult ScopePermissionDenied(
+            string emailDomain, UserFilterExpression userFilter, string seatLicenceTypeIds)
         {
             var narrowed = CopilotAdoptionEmailDomain.Normalise(emailDomain) != null
-                || (userFilter != null && !userFilter.IsEmpty);
+                || (userFilter != null && !userFilter.IsEmpty)
+                || OverridesSeatLicenceTypes(seatLicenceTypeIds);
             return narrowed && !CanSeeIndividuals()
                 ? PortalPermissionDenied.Result(Request, PortalPermission.SeePii)
                 : null;
         }
 
         /// <summary>
+        /// Whether the request replaces the automatic Copilot seat classification with licence types of the
+        /// caller's choosing. Anything <see cref="ParseIds"/> discards overrides nothing.
+        /// </summary>
+        internal static bool OverridesSeatLicenceTypes(string seatLicenceTypeIds) => ParseIds(seatLicenceTypeIds).Count > 0;
+
+        /// <summary>
         /// Every licence type in the tenant and whether it was counted as a Copilot seat.
         ///
         /// Exposed deliberately: Microsoft ships new Copilot SKUs faster than any shipped classification
         /// list can track, so an admin has to be able to see what the tool decided - and override it -
-        /// rather than discover from a wrong headline number that a SKU was missed.
+        /// rather than discover from a wrong headline number that a SKU was missed. Overriding it with
+        /// <c>seatLicenceTypeIds</c> chooses the population the report describes, so like every other
+        /// population-narrowing parameter it needs See PII; the automatic classification is for everyone.
         ///
         /// Under the administrator's global filter only the Copilot seat types are listed, with the narrowed
         /// assigned and idle counts the summary shows: a reader limited to one department must not be able to
@@ -611,6 +629,9 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            var permissionDenied = ScopePermissionDenied(null, UserFilterExpression.Empty, seatLicenceTypeIds);
+            if (permissionDenied != null) return permissionDenied;
+
             var analysis = await TryGetScopedSummaryAsync(
                 windowDays, from, to, seatLicenceTypeIds, null, UserFilterExpression.Empty, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
@@ -628,6 +649,9 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            var permissionDenied = ScopePermissionDenied(null, UserFilterExpression.Empty, seatLicenceTypeIds);
+            if (permissionDenied != null) return permissionDenied;
+
             var analysis = await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
             return Ok(analysis.Sql);
@@ -654,6 +678,9 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            var permissionDenied = ScopePermissionDenied(null, UserFilterExpression.Empty, seatLicenceTypeIds);
+            if (permissionDenied != null) return permissionDenied;
+
             var analysis = await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
 
@@ -1100,7 +1127,7 @@ namespace Web.AnalyticsWeb.Controllers
             CancellationToken cancellationToken = default(CancellationToken))
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilterResponse(filterError);
-            var permissionDenied = ScopePermissionDenied(emailDomain, filter);
+            var permissionDenied = ScopePermissionDenied(emailDomain, filter, seatLicenceTypeIds);
             if (permissionDenied != null) return permissionDenied;
 
             // Exports are <a href> downloads, not fetch() calls: a browser will not retry a 202, it

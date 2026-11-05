@@ -298,6 +298,141 @@ UPDATE dbo.teams_user_activity_log SET last_activity_date=NULL WHERE user_id=1;"
             }
         }
 
+        [DataTestMethod]
+        [DataRow(28)]
+        [DataRow(90)]
+        public async Task CopilotWeeklyReadings_MeasureThe28DayPresetByTheWeek_AndEveryServiceWeighsTheSame(int presetDays)
+        {
+            // The presets end on a settled Sunday. 28 days is four whole weeks. 90 days opens with a six-day
+            // part-week (Tuesday to Sunday) that no 7-day reading inside the range can cover, so its Copilot
+            // evidence stays partial - the range is never quietly shortened - and Copilot is left out of the score.
+            var to = new DateTime(2000, 6, 25);
+            var from = to.AddDays(1 - presetDays);
+            var firstWholeWeek = presetDays == 28 ? from : new DateTime(2000, 4, 3);
+            using (var fixture = LicenceActivitySqlFixture.Create("LicenceCopilotPresets"))
+            {
+                LicenceActivitySqlTests.SeedDirectory(fixture);
+                LicenceActivitySqlTests.SeedOneUsageTable(fixture, "teams_user_activity_log",
+                    WeekEnds(from.AddDays(6 - (((int)from.DayOfWeek + 6) % 7)), to));
+                foreach (var sunday in WeekEnds(firstWholeWeek.AddDays(6), to))
+                    SeedCopilotReading(fixture, 7, sunday, (1, 3, 9), (4, 1, 2), (2, 0, 0));
+                // A 28-day report for the same people is stored too, as the importer keeps both; the complete
+                // weekly readings take precedence over it.
+                SeedCopilotReading(fixture, 28, "2000-06-25", (1, 20, 100), (4, 0, 0), (2, 0, 0));
+                SeedCopilotImportLog(fixture);
+
+                var query = LicenceActivityQuery.Create(from.ToString("yyyy-MM-dd"), to.ToString("yyyy-MM-dd"), Now);
+                var sources = Sources(usageReports: true, copilotReports: true);
+                var sql = fixture.Store();
+                var model = await sql.LoadReadModelAsync(query, sources, null, CancellationToken.None);
+                var overview = model.BuildOverview(query, CancellationToken.None);
+
+                var copilot = overview.Coverage.Single(c => c.Workload == "copilot");
+                Assert.AreEqual(presetDays == 28 ? "available" : "partial", copilot.Status, copilot.Message);
+                Assert.AreEqual(presetDays == 28 ? "copilotReport.available" : "copilotReport.partialWeekStart", copilot.MessageKey);
+                Assert.AreEqual(7, copilot.ReportPeriodDays);
+                Assert.AreEqual("weeklySampleOfRolling7DayReport", copilot.Granularity);
+                Assert.AreEqual(presetDays == 28 ? 4 : 12, copilot.ExpectedSamples);
+                Assert.AreEqual(firstWholeWeek, copilot.EffectiveFromUtc,
+                    "The effective range says which days the readings cover.");
+                Assert.AreEqual(to, copilot.EffectiveToUtc);
+                Assert.AreEqual(presetDays == 28 ? 4 : 13, overview.Coverage.Single(c => c.Workload == "teams").ExpectedSamples);
+
+                // Users 1 and 4 hold the add-on. User 1 used Teams and Copilot every week; user 4 used only
+                // Copilot, every week. Over 28 days that is three of their four measured services, each counting
+                // once. Over 90 days Copilot can't be measured, so it is left out rather than counted as unused:
+                // one of their two measured services.
+                var addOn = overview.Licences.Single(l => l.SkuId == "CONTOSO_ADDON");
+                var addOnCopilot = addOn.Workloads.Single(w => w.Workload == "copilot");
+                Assert.AreEqual(presetDays == 28 ? 2 : 0, addOnCopilot.High);
+                Assert.AreEqual(presetDays == 28 ? 0 : 2, addOnCopilot.Unknown);
+                Assert.AreEqual(presetDays == 28 ? 75.0 : 50.0, addOn.AdoptionScore);
+
+                await Compare(sql, model, query, sources);
+            }
+        }
+
+        [TestMethod]
+        public async Task CopilotTwentyEightDayReport_IsBandedOnWorkingDays_UntilWeeklyReadingsCoverThePeriod()
+        {
+            var query = LicenceActivityQuery.Create("2000-05-29", "2000-06-25", Now);
+            using (var fixture = LicenceActivitySqlFixture.Create("LicenceCopilotWorkingDays"))
+            {
+                LicenceActivitySqlTests.SeedDirectory(fixture);
+                LicenceActivitySqlTests.SeedOneUsageTable(fixture, "teams_user_activity_log",
+                    new[] { "2000-06-04", "2000-06-11", "2000-06-18", "2000-06-25" });
+                // Weekly readings started two weeks ago, so they don't cover the period yet.
+                foreach (var sunday in new[] { "2000-06-18", "2000-06-25" })
+                    SeedCopilotReading(fixture, 7, sunday, (1, 5, 20), (4, 1, 2), (2, 0, 0));
+                // User 1 used Copilot on every working day, user 4 on four days.
+                SeedCopilotReading(fixture, 28, "2000-06-25", (1, 20, 100), (4, 4, 8), (2, 0, 0));
+                SeedCopilotImportLog(fixture);
+                var sources = Sources(usageReports: true, copilotReports: true);
+                var sql = fixture.Store();
+
+                var model = await sql.LoadReadModelAsync(query, sources, null, CancellationToken.None);
+                var overview = model.BuildOverview(query, CancellationToken.None);
+                var copilot = overview.Coverage.Single(c => c.Workload == "copilot");
+                Assert.AreEqual("available", copilot.Status, copilot.Message);
+                Assert.AreEqual(28, copilot.ReportPeriodDays);
+                Assert.AreEqual("singleRollingWindow", copilot.Granularity);
+                Assert.AreEqual(20, copilot.ExpectedSamples, "Measured against the 20 working days in 28.");
+                Assert.AreEqual("copilotReport.singleWindowAvailable", copilot.MessageKey);
+
+                var users = model.BuildUsers(overview,
+                    query.ForUsers(1, "copilot", null, "upn", "asc", 10, 1, 100, Now), CancellationToken.None);
+                Assert.AreEqual("high", Band(users, 1), "Every working day is High, not Moderate.");
+                Assert.AreEqual("low", Band(users, 4));
+                Assert.AreEqual("zero", Band(users, 2));
+                // User 1: Teams every week and Copilot every working day = 2; user 4: no Teams, Copilot on four
+                // of twenty working days = 0.2. Copilot counts as one service, not as 20 samples against 4.
+                Assert.AreEqual(55.0, overview.Licences.Single(l => l.SkuId == "CONTOSO_ADDON").AdoptionScore);
+                await Compare(sql, model, query, sources);
+
+                // Once the weekly readings cover the period, they take over.
+                foreach (var sunday in new[] { "2000-06-04", "2000-06-11" })
+                    SeedCopilotReading(fixture, 7, sunday, (1, 5, 20), (4, 1, 2), (2, 0, 0));
+                model = await sql.LoadReadModelAsync(query, sources, null, CancellationToken.None);
+                copilot = model.BuildOverview(query, CancellationToken.None).Coverage.Single(c => c.Workload == "copilot");
+                Assert.AreEqual("available", copilot.Status);
+                Assert.AreEqual(7, copilot.ReportPeriodDays);
+                Assert.AreEqual(4, copilot.ExpectedSamples);
+            }
+        }
+
+        private static string[] WeekEnds(DateTime firstSunday, DateTime lastSunday)
+        {
+            var result = new List<string>();
+            for (var sunday = firstSunday; sunday <= lastSunday; sunday = sunday.AddDays(7))
+                result.Add(sunday.ToString("yyyy-MM-dd"));
+            return result.ToArray();
+        }
+
+        private static void SeedCopilotReading(LicenceActivitySqlFixture fixture, int period, string date,
+            params (int UserId, int ActiveDays, int Prompts)[] rows)
+        {
+            fixture.Execute(@"
+INSERT dbo.copilot_usage_user_activity_log
+ (report_period_days, prompts_all_apps, active_usage_days, is_upn_obfuscated, user_id, [date], last_activity_date)
+VALUES " + string.Join(",", rows.Select(row =>
+                $"({period}, {row.Prompts}, {row.ActiveDays}, 0, {row.UserId}, '{date}', " +
+                (row.ActiveDays > 0 ? $"'{date}'" : "NULL") + ")")) + ";");
+        }
+
+        private static void SeedCopilotImportLog(LicenceActivitySqlFixture fixture)
+        {
+            fixture.Execute(@"
+INSERT dbo.copilot_usage_report_import_log
+ (report_name, report_refresh_date, report_version, report_period, imported_utc,
+  rows_read, rows_saved, is_upn_obfuscated, error)
+VALUES
+ (N'getMicrosoft365CopilotUsageUserDetail', '2000-06-25', N'v2', N'D28', '2000-06-27T01:00:00', 3, 3, 0, NULL),
+ (N'getMicrosoft365CopilotUsageUserDetail', '2000-06-25', N'v2', N'D7', '2000-06-27T01:05:00', 3, 3, 0, NULL);");
+        }
+
+        private static string Band(LicenceActivityUsers users, int userId) =>
+            users.Users.Single(u => u.UserId == userId).Workloads.Single(w => w.Workload == "copilot").Band;
+
         private static async Task Compare(
             SqlLicenceActivityStore sql, LicenceActivityReadModel model,
             LicenceActivityQuery query, LicenceActivitySources sources)

@@ -127,7 +127,7 @@ namespace Tests.UnitTests
                 var ldf = Path.Combine(_folder, "CopilotCostPreview_log.ldf").Replace("'", "''");
                 using (var cmd = new SqlCommand(
                     $"CREATE DATABASE CopilotCostPreview ON (NAME=CopilotCostPreview,FILENAME=N'{mdf}') " +
-                    $"LOG ON (NAME=CopilotCostPreview_log,FILENAME=N'{ldf}');", db))
+                    $"LOG ON (NAME=CopilotCostPreview_log,FILENAME=N'{ldf}'); " + ScratchDatabase.AutoCloseOffSql("CopilotCostPreview"), db))
                     cmd.ExecuteNonQuery();
             }
             _connection = $@"Server=(localdb)\{_instance};Database=CopilotCostPreview;Integrated Security=true;TrustServerCertificate=true";
@@ -528,7 +528,9 @@ INSERT dbo.__MigrationHistory VALUES('202610221500003_UniqueOnlineMeetingIds','S
             await documents.WriteAsync("connection", CostConnectionEncoding.Serialize(new CostConnectionState
             { AccountId = "synthetic-reader", Cache = Convert.ToBase64String(new byte[] { 1 }), Status = "connected" }), null, Ct);
             var connection = new CostConnectionService(documents, new Identity(), tenant, client,
-                "https://contoso.example/copilot-cost/callback", publicationFence: _store);
+                "https://contoso.example/copilot-cost/callback",
+                _ => Task.FromResult(new Common.Entities.State.AgentCostTokenProtection("synthetic-runtime-credential", null, CostTokenCacheProtection.Purpose)),
+                publicationFence: _store);
             var failSecond = true;
             var userReads = 0;
             using (var http = new HttpClient(new CopilotCostCollectorTests.Handler(request =>

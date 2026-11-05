@@ -54,9 +54,9 @@ namespace Tests.UnitTests
             };
         }
 
-        private static List<JObject> UserDetailReport(string upn, int periodDays, int prompts, int activeDays)
+        private static List<JObject> UserDetailReport(string upn, int periodDays, int prompts, int activeDays, DateTime? refreshDate = null)
         {
-            var date = ReportDate.ToString("yyyy-MM-dd");
+            var date = (refreshDate ?? ReportDate).ToString("yyyy-MM-dd");
             return new List<JObject>
             {
                 new JObject
@@ -348,6 +348,112 @@ namespace Tests.UnitTests
             Assert.IsNull(CopilotUsageReportPolicy.DomainOf("@contoso.com"));
             Assert.IsNull(CopilotUsageReportPolicy.DomainOf("ada@"));
             Assert.IsNull(CopilotUsageReportPolicy.DomainOf(null));
+        }
+
+        // ---- The weekly 7-day reading Licence activity measures Copilot from ---------------------------
+
+        /// <summary>A Sunday: the last day of a Monday-to-Sunday reporting week.</summary>
+        private static readonly DateTime WeekEnd = new DateTime(2031, 3, 23);
+
+        /// <summary>Answers each request with the report built for its period, and records what was asked for.</summary>
+        private sealed class RecordingReportSource : ICopilotReportSource
+        {
+            private readonly Func<CopilotReportRequest, List<JObject>> _respond;
+            public RecordingReportSource(Func<CopilotReportRequest, List<JObject>> respond) { _respond = respond; }
+            public List<CopilotReportRequest> Requests { get; } = new List<CopilotReportRequest>();
+
+            public Task<List<JObject>> LoadReportAsync(CopilotReportRequest request)
+            {
+                Requests.Add(request);
+                return Task.FromResult(_respond(request));
+            }
+        }
+
+        private static CopilotUsageReportImportLog DetailLog(string period, DateTime refreshDate,
+            string error = null, bool concealed = false) => new CopilotUsageReportImportLog
+        {
+            ReportName = CopilotReportNames.UsageUserDetail,
+            ReportPeriod = period,
+            ReportRefreshDate = refreshDate,
+            ImportedUtc = DateTime.UtcNow,
+            RowsRead = 5,
+            Error = error,
+            IsUpnObfuscated = concealed,
+        };
+
+        [TestMethod]
+        public void WeeklyReading_IsDueOnlyWhileTheNewestPerUserReportIsDatedAnUnreadSunday()
+        {
+            Assert.AreEqual(DayOfWeek.Sunday, WeekEnd.DayOfWeek);
+            var monday = WeekEnd.AddDays(1);
+
+            Assert.AreEqual(WeekEnd, CopilotUsageReportPolicy.WeeklySnapshotDue(new[] { DetailLog("D28", WeekEnd) }));
+            Assert.IsNull(CopilotUsageReportPolicy.WeeklySnapshotDue(new[] { DetailLog("D28", WeekEnd), DetailLog("D28", monday) }),
+                "Once Microsoft's report has moved past the Sunday, a 7-day report no longer covers that week.");
+            Assert.IsNull(CopilotUsageReportPolicy.WeeklySnapshotDue(new[] { DetailLog("D28", WeekEnd), DetailLog("D7", WeekEnd) }),
+                "That week's reading has already been taken.");
+            Assert.IsNull(CopilotUsageReportPolicy.WeeklySnapshotDue(new[] { DetailLog("D28", WeekEnd), DetailLog("D7", WeekEnd, concealed: true) }),
+                "A concealed tenant must not be downloaded from again every day.");
+            Assert.AreEqual(WeekEnd, CopilotUsageReportPolicy.WeeklySnapshotDue(new[] { DetailLog("D28", WeekEnd), DetailLog("D7", WeekEnd, error: "HTTP 503") }),
+                "A failed weekly reading is retried while the report is still dated that Sunday.");
+            Assert.IsNull(CopilotUsageReportPolicy.WeeklySnapshotDue(new[] { DetailLog("D28", WeekEnd, concealed: true) }),
+                "Only an import that matched identities says what Microsoft's newest usable report is.");
+            Assert.IsNull(CopilotUsageReportPolicy.WeeklySnapshotDue(new CopilotUsageReportImportLog[0]));
+        }
+
+        [TestMethod]
+        public async Task WeeklyReading_StoresOneSevenDayReadingForTheWeekEnd_AndOtherwiseMakesNoGraphCall()
+        {
+            const string upn = "ada@contoso.onmicrosoft.com";
+            var store = new InMemoryCopilotUsagePersistenceManager();
+            store.SeedUser(upn);
+            await DetailLoader(UserDetailReport(upn, 28, 140, 20, WeekEnd), store).LoadAndSaveAsync(DetailRequest("D28"));
+
+            var source = new RecordingReportSource(request => UserDetailReport(upn, request.PeriodDays.Value, 30, 5, WeekEnd));
+            var weekly = new CopilotUsageUserDetailLoader(source, NullLogger.Instance, null, store);
+
+            Assert.AreEqual(1, await weekly.LoadAndSaveWeeklySnapshotAsync());
+            Assert.IsTrue(weekly.WeeklySnapshotAttempted, "A reading was due and asked for.");
+            Assert.AreEqual(CopilotReportRequest.WeeklyPeriod, source.Requests.Single().Period);
+            var reading = store.UserDetail.Values.Single(r => r.ReportPeriodDays == 7);
+            Assert.AreEqual(WeekEnd, reading.Date);
+            Assert.AreEqual(5, reading.ActiveUsageDays);
+            Assert.AreEqual(20, store.UserDetail.Values.Single(r => r.ReportPeriodDays == 28).ActiveUsageDays,
+                "The 28-day reading Copilot Adoption reads is kept beside the weekly one.");
+
+            Assert.AreEqual(0, await weekly.LoadAndSaveWeeklySnapshotAsync());
+            Assert.IsFalse(weekly.WeeklySnapshotAttempted, "Nothing was due, so nothing was attempted: the cadence gate must not stamp this run.");
+            Assert.AreEqual(1, source.Requests.Count, "One reading per week: the second run has nothing to collect.");
+        }
+
+        [TestMethod]
+        public async Task WeeklyReading_IsNotTakenOnAnotherDay_NorStoredWhenNotDatedTheWeekEnd()
+        {
+            const string upn = "ada@contoso.onmicrosoft.com";
+            var monday = WeekEnd.AddDays(1);
+
+            var midWeek = new InMemoryCopilotUsagePersistenceManager();
+            midWeek.SeedUser(upn);
+            await DetailLoader(UserDetailReport(upn, 28, 140, 20, monday), midWeek).LoadAndSaveAsync(DetailRequest("D28"));
+            var unused = new RecordingReportSource(request => UserDetailReport(upn, 7, 30, 5, monday));
+            var notDue = new CopilotUsageUserDetailLoader(unused, NullLogger.Instance, null, midWeek);
+            Assert.AreEqual(0, await notDue.LoadAndSaveWeeklySnapshotAsync());
+            Assert.IsFalse(notDue.WeeklySnapshotAttempted);
+            Assert.AreEqual(0, unused.Requests.Count, "On any day but a week end there is no 7-day download at all.");
+
+            var store = new InMemoryCopilotUsagePersistenceManager();
+            store.SeedUser(upn);
+            await DetailLoader(UserDetailReport(upn, 28, 140, 20, WeekEnd), store).LoadAndSaveAsync(DetailRequest("D28"));
+            var movedOn = new RecordingReportSource(request => UserDetailReport(upn, 7, 30, 5, monday));
+
+            var discarded = new CopilotUsageUserDetailLoader(movedOn, NullLogger.Instance, null, store);
+            Assert.AreEqual(0, await discarded.LoadAndSaveWeeklySnapshotAsync());
+            Assert.IsTrue(discarded.WeeklySnapshotAttempted, "Asked for, then discarded: still an attempt, so it is stamped and not asked for again every cycle.");
+            Assert.AreEqual(1, movedOn.Requests.Count);
+            Assert.IsFalse(store.UserDetail.Values.Any(r => r.ReportPeriodDays == 7),
+                "A 7-day report ending on Monday covers no Monday-to-Sunday week, so it must not be stored as one.");
+            Assert.IsFalse(store.ImportLogs.Any(l => l.ReportPeriod == CopilotReportRequest.WeeklyPeriod),
+                "Nor logged as that week's reading.");
         }
     }
 }

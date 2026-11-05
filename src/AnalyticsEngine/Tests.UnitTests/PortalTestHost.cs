@@ -48,7 +48,8 @@ namespace Tests.UnitTests
             IPrincipal principal,
             PortalAccessPolicy policy,
             Func<Type, ControllerBase> create = null,
-            bool productionExceptionHandler = false)
+            bool productionExceptionHandler = false,
+            bool crossSiteDefence = false)
         {
             var selected = controllers.ToList();
             _principal = new PrincipalAccessor(principal);
@@ -60,7 +61,11 @@ namespace Tests.UnitTests
                     web.ConfigureServices(services =>
                     {
                         services
-                            .AddControllers()
+                            .AddControllers(options =>
+                            {
+                                // What Program registers: every state-changing call must come from the portal's own scripts.
+                                if (crossSiteDefence) options.AddCrossSiteRequestDefence();
+                            })
                             .AddWebApiCompatibleJson()
                             .ConfigureApplicationPartManager(parts =>
                             {

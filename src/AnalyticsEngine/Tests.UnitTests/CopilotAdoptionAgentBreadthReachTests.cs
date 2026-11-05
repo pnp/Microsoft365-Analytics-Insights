@@ -416,13 +416,19 @@ namespace Tests.UnitTests
             Assert.AreEqual(4d, legal.InteractionsPerActiveAgent);
 
             var sales = analysis.Summary.CombinedByDepartment.Single(r => r.Segment == "Sales");
-            Assert.AreEqual(2, sales.AgentActiveUsers, "Only the two seat holders who used Copilot are active.");
-            Assert.AreEqual(0, sales.AgentUsers, "The pair for someone outside the population is not Sales' agent use.");
-            Assert.AreEqual(0d, sales.AgentUserPct);
-            Assert.AreEqual(0, sales.DistinctAgents);
-            Assert.AreEqual(0d, sales.AgentsPer100ActiveUsers);
-            Assert.AreEqual(0L, sales.AgentInteractions);
-            Assert.IsNull(sales.InteractionsPerActiveAgent, "No agents: a per-agent figure has no denominator.");
+            Assert.AreEqual(5, sales.LicensedUsers, "Five seats: the licensed side is shown.");
+            Assert.AreEqual(2, sales.LicensedActiveUsers);
+            Assert.IsTrue(sales.AgentFiguresWithheld,
+                "Only two of Sales' seat holders are active, too few to say whether they used an agent.");
+            Assert.IsNull(sales.AgentActiveUsers);
+            Assert.IsNull(sales.AgentUsers);
+            Assert.IsNull(sales.AgentUserPct);
+            Assert.IsNull(sales.DistinctAgents);
+            Assert.IsNull(sales.AgentsPer100ActiveUsers);
+            Assert.IsNull(sales.AgentInteractions);
+            Assert.IsNull(sales.InteractionsPerActiveAgent);
+            Assert.IsFalse(finance.AgentFiguresWithheld);
+            Assert.IsFalse(legal.AgentFiguresWithheld);
         }
 
         [TestMethod]

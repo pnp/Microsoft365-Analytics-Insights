@@ -262,6 +262,47 @@ namespace Tests.UnitTests
             Assert.IsNull(await loader.GetLastUploadDt(), "RegisterLastUploadDt must not run when no upload happened — otherwise opt-out would silently throttle the next opt-in.");
         }
 
+        /// <summary>
+        /// The configuration saved last decides whether usage reports are sent, even when it was saved from a machine in a
+        /// time zone further west, whose installer stamps it with an earlier local time than the configuration it replaced.
+        /// </summary>
+        [TestMethod]
+        public async Task SqlUsageStatsBuilder_TheConfigSavedLast_Decides_WhateverItsLocalTimestamp()
+        {
+            using (var scratch = ScratchDatabase.Create("ConfigOrder"))
+            {
+                // sys_configs as the v1-0-9 migration creates it. It must exist before the context first opens the
+                // database, or EF's initializer takes the empty database for one to create.
+                scratch.Execute(
+                    "CREATE TABLE dbo.sys_configs (id int IDENTITY(1,1) NOT NULL PRIMARY KEY, config_json nvarchar(max) NULL, " +
+                    "date_applied datetime NOT NULL, installed_by_username nvarchar(max) NULL, messages nvarchar(max) NULL);");
+
+                // 11:30 UTC, saved from a machine on UTC+5:30: usage reports on. 14:00 UTC, saved from a machine on UTC-5:
+                // the admin opts out.
+                SaveConfig(scratch, allowTelemetry: true, localTime: new DateTime(2026, 3, 2, 17, 0, 0));
+                SaveConfig(scratch, allowTelemetry: false, localTime: new DateTime(2026, 3, 2, 9, 0, 0));
+
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                using (var db = new AnalyticsEntitiesContext(scratch.ConnectionString, true, false))
+                {
+                    var builder = new SqlUsageStatsBuilder(db, logger, Guid.Empty);
+                    Assert.IsFalse((await builder.GetLastAppliedSolutionConfig()).AllowTelemetry,
+                        "The opt-out was saved last, so it wins over a configuration with a later local time.");
+
+                    // Opting back in later, from anywhere, takes effect too.
+                    SaveConfig(scratch, allowTelemetry: true, localTime: new DateTime(2026, 3, 3, 9, 0, 0));
+                    Assert.IsTrue((await builder.GetLastAppliedSolutionConfig()).AllowTelemetry);
+                }
+            }
+        }
+
+        private static void SaveConfig(ScratchDatabase scratch, bool allowTelemetry, DateTime localTime)
+        {
+            var json = JsonConvert.SerializeObject(new BaseSolutionInstallConfig { AllowTelemetry = allowTelemetry, SolutionConfig = new TargetSolutionConfig() });
+            scratch.Execute(
+                $"INSERT INTO dbo.sys_configs (config_json, date_applied) VALUES (N'{json.Replace("'", "''")}', '{localTime:yyyy-MM-ddTHH:mm:ss}');");
+        }
+
         [TestMethod]
         public async Task WebApiStatsUploader_BlankConfig_ThrowsInvalidOperationException()
         {

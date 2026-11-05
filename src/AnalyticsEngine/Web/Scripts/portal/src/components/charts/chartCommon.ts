@@ -1,7 +1,7 @@
 // Shared helpers for the lightweight SVG report charts. Kept dependency-free (no charting library)
 // so the portal stays small and there is nothing extra to deploy.
 
-import { formatDateParts, formatNumber } from '../../i18n';
+import { formatDateParts, formatNumber, parseApiDate } from '../../i18n';
 
 /**
  * Categorical palette for chart series / bars. Saturated Fluent-family colours that read well on
@@ -111,14 +111,16 @@ export function formatValue(n: number): string {
 
 /** Week-start ISO date -> short label like "14 Apr". */
 export function formatWeek(iso: string): string {
-  // The week starts are UTC date-only values (Kind=Utc, serialised with a trailing Z), so format
-  // them in UTC - otherwise a Monday renders as the previous Sunday for viewers west of UTC.
-  return formatDateParts(new Date(iso), { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  // Week starts are UTC calendar dates, so they are formatted in UTC - otherwise a Monday renders
+  // as the previous Sunday for viewers west of UTC. Not every endpoint stamps them with a `Z`
+  // (Teams Explorer's come straight from SQL), and `new Date` would read those as local midnight -
+  // the previous Sunday east of UTC instead - so they are read with parseApiDate.
+  return formatDateParts(parseApiDate(iso), { day: 'numeric', month: 'short', timeZone: 'UTC' });
 }
 
 /** Week-start ISO date -> longer label like "Mon 14 Apr 2026" (tooltip header). */
 export function formatWeekLong(iso: string): string {
-  return formatDateParts(new Date(iso), {
+  return formatDateParts(parseApiDate(iso), {
     weekday: 'short',
     day: 'numeric',
     month: 'short',

@@ -445,8 +445,8 @@
             this.lnkInteractionHistoryHelp.Size = new System.Drawing.Size(69, 13);
             this.lnkInteractionHistoryHelp.TabIndex = 31;
             this.lnkInteractionHistoryHelp.TabStop = true;
-            this.lnkInteractionHistoryHelp.Tag = "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Copilot#three-prerequi" +
-                "sites-all-required";
+            this.lnkInteractionHistoryHelp.Tag = "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Copilot-Reports-and-Pr" +
+                "ompt-History#three-prerequisites-all-required";
             this.lnkInteractionHistoryHelp.Text = "needs setup";
             this.toolTipTargets.SetToolTip(this.lnkInteractionHistoryHelp, "Open the wiki: the three prerequisites for Copilot AI interaction history.");
             this.lnkInteractionHistoryHelp.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.HelpLink_LinkClicked);
@@ -459,8 +459,8 @@
             this.lnkDlpHelp.Size = new System.Drawing.Size(69, 13);
             this.lnkDlpHelp.TabIndex = 32;
             this.lnkDlpHelp.TabStop = true;
-            this.lnkDlpHelp.Tag = "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Copilot#the-optional-t" +
-                "enant-wide-half";
+            this.lnkDlpHelp.Tag = "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Copilot-DLP-and-Govern" +
+                "ance#the-optional-tenant-wide-half";
             this.lnkDlpHelp.Text = "needs setup";
             this.toolTipTargets.SetToolTip(this.lnkDlpHelp, "Open the wiki: what the DLP import adds, and the permission it needs.");
             this.lnkDlpHelp.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.HelpLink_LinkClicked);
@@ -487,8 +487,8 @@
             this.lnkAzureCostsHelp.Size = new System.Drawing.Size(69, 13);
             this.lnkAzureCostsHelp.TabIndex = 34;
             this.lnkAzureCostsHelp.TabStop = true;
-            this.lnkAzureCostsHelp.Tag = "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Agent-Costs#configurin" +
-                "g-azure-cost-management-access";
+            this.lnkAzureCostsHelp.Tag = "https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Agent-Costs-Import-Con" +
+                "figuration#configuring-azure-cost-management-access";
             this.lnkAzureCostsHelp.Text = "needs setup";
             this.toolTipTargets.SetToolTip(this.lnkAzureCostsHelp, "Open the wiki: the AzureCostScopes setting and the Cost Management Reader role.");
             this.lnkAzureCostsHelp.LinkClicked += new System.Windows.Forms.LinkLabelLinkClickedEventHandler(this.HelpLink_LinkClicked);

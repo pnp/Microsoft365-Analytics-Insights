@@ -703,9 +703,10 @@ namespace Web.AnalyticsWeb.Controllers
         /// Refuses a mutating call that did not come from the portal's own fetch helper.
         /// </summary>
         /// <remarks>
-        /// See the class remarks. A browser will not attach this header cross-origin without a CORS
-        /// preflight this site does not answer for its own API, so requiring it prevents a third-party
-        /// page forging a call with the signed-in admin's cookie.
+        /// A second line behind <see cref="SameOriginStateChangeFilter"/>, which refuses a cross-site call to any
+        /// state-changing action before it gets here. This one answers a request without the header with a 400 the page
+        /// can word. A third-party page can only add the header after a CORS preflight; the site answers preflights for
+        /// the <c>org_urls</c> origins, but never allows credentials, so such a request can't carry the admin's cookie.
         /// </remarks>
         private IActionResult RejectIfNotXhr()
         {

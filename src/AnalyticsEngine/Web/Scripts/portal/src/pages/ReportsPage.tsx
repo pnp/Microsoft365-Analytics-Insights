@@ -19,6 +19,7 @@ import { fetchReportArea } from '../api/reportsApi';
 import type { ReportAreaData, ReportAreaKey, ReportChart, ReportMatrix, ReportSeries, ReportSeriesWarning } from '../types/reports';
 import Spinner from '../components/Spinner';
 import SqlPopover from '../components/SqlPopover';
+import { reportQueryFailureText } from '../components/shared/reportQueryFailure';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
 import MatrixChart from '../components/charts/MatrixChart';
@@ -27,7 +28,7 @@ import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 import PromptCategoryReport from '../components/PromptCategoryReport';
 import ReportAreasProvider, { useReportAreas } from '../components/ReportAreasProvider';
 import { REPORT_PAGES, PROMPT_CHART_KEYS, reportImportLabelKey, reportMonths, reportPageEnabled, reportPath, type ReportPageDefinition } from '../reportNavigation';
-import { EN_CATALOG, formatDateParts, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
+import { EN_CATALOG, formatDateParts, formatNumber, parseApiDate, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 
 const MONTH_OPTIONS = [
   { value: 1, labelKey: 'reports.period.lastMonth' },
@@ -376,8 +377,9 @@ export function reportChartWarningText(t: TFunction, chart: ReportChart): string
 function seriesWarningText(t: TFunction, warning: ReportSeriesWarning): string {
   const values = {
     series: warning.series,
-    error: warning.error ?? '',
-    week: warning.week ? formatDateParts(new Date(warning.week), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '',
+    error: reportQueryFailureText(t, warning.errorReason, warning.errorReference, warning.error ?? ''),
+    week: warning.week ? formatDateParts(parseApiDate(warning.week), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '',
+    count: formatNumber(warning.count ?? 0),
   };
 
   switch (warning.reason) {
@@ -389,6 +391,8 @@ function seriesWarningText(t: TFunction, warning: ReportSeriesWarning): string {
       return t('reports.chart.warning.series.noSettledData', values);
     case 'noSettledDataForWeek':
       return t('reports.chart.warning.series.noSettledDataForWeek', values);
+    case 'incompleteWeeks':
+      return t('reports.chart.warning.series.incompleteWeeks', values);
     default:
       return warning.error ? `${warning.series}: ${warning.error}` : warning.series;
   }
@@ -406,6 +410,12 @@ function chartErrorText(t: TFunction, chart: ReportChart): string {
 
   if (chart.errorKey === 'noCompletedUsageWeeksWithData') {
     return t('reports.chart.error.noCompletedUsageWeeksWithData');
+  }
+
+  if (chart.errorKey === 'queryFailed') {
+    return t('reports.chart.error.queryFailed', {
+      error: reportQueryFailureText(t, chart.errorReason, chart.errorReference, chart.error ?? ''),
+    });
   }
 
   return chart.error ?? '';
@@ -536,7 +546,7 @@ function ReportAreaView({
 
   if (!data) return null;
 
-  const fromLabel = formatDateParts(new Date(data.fromWeek), {
+  const fromLabel = formatDateParts(parseApiDate(data.fromWeek), {
     day: 'numeric',
     month: 'short',
     year: 'numeric',

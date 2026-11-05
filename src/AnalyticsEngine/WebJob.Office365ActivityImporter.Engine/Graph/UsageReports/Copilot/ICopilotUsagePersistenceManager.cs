@@ -1,4 +1,5 @@
 using Common.Entities.Entities.UsageReports;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -16,6 +17,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         public int Inserted { get; set; }
         public int Updated { get; set; }
         public int Unchanged { get; set; }
+
+        /// <summary>
+        /// Further rows for a key whose row was already queued for writing in the same save batch. Their values
+        /// replaced the queued row's - the last row wins - so they are not counted again in <see cref="Inserted"/>
+        /// or <see cref="Updated"/>.
+        /// </summary>
+        public int DuplicateRows { get; set; }
 
         /// <summary>Rows actually written to SQL. This is what the loaders return and log.</summary>
         public int Written => Inserted + Updated;
@@ -80,5 +88,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
         /// state, so reusing it would lose the very diagnostic the operator needs.
         /// </summary>
         Task RecordReportLoadAfterFailureAsync(CopilotUsageReportImportLog importLog);
+
+        /// <summary>
+        /// The per-user report's import-log rows recorded since <paramref name="sinceUtc"/>, whatever their
+        /// period or outcome. A handful of rows a day.
+        /// </summary>
+        Task<IReadOnlyList<CopilotUsageReportImportLog>> GetRecentUserDetailImportsAsync(DateTime sinceUtc);
     }
 }

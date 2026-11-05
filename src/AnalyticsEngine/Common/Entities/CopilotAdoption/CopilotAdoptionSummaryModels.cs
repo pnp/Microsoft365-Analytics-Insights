@@ -311,6 +311,20 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("averageAdoptionScore")]
         public double AverageAdoptionScore { get; set; }
+
+        /// <summary>
+        /// The segment's unlicensed people recommended for a Copilot licence, counted over every recommended
+        /// candidate rather than read from the capped <see cref="CopilotAdoptionSummary.OpportunityByDepartment"/>
+        /// chart. Set on the department breakdowns only.
+        /// </summary>
+        /// <remarks>
+        /// Null - shown as a dash, never as 0 - when the count is withheld or unknown: between one and
+        /// <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> - 1 candidates, the same small-group floor as
+        /// every department breakdown, or none found in a candidate list that stopped at its row cap, where
+        /// the people past the cap were never scored. Zero is a measured zero.
+        /// </remarks>
+        [JsonProperty("recommendedCandidates")]
+        public int? RecommendedCandidates { get; set; }
     }
 
     /// <summary>
@@ -1184,7 +1198,8 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>
         /// The tenant-wide Copilot seat count, set only when this summary is narrowed, so a page can say
-        /// how much of the tenant the narrowed figures cover.
+        /// how much of the tenant the narrowed figures cover. Never set under the administrator's global
+        /// filter, whose reader may not learn the size of the population outside it.
         /// </summary>
         [JsonProperty("unscopedLicensedUsers")]
         public int? UnscopedLicensedUsers { get; set; }
@@ -1202,6 +1217,15 @@ namespace Common.Entities.CopilotAdoption
         /// </remarks>
         [JsonProperty("unscopedSections")]
         public List<string> UnscopedSections { get; set; } = new List<string>();
+
+        /// <summary>
+        /// The same sections when the administrator's global filter applies: left out, because that filter
+        /// decides whose figures this reader may see and these describe everyone, rather than carried across
+        /// tenant-wide. Empty otherwise. Values are the <see cref="CopilotAdoptionUnscopedSections"/> constants,
+        /// so the page can say which are missing and why instead of showing them as empty.
+        /// </summary>
+        [JsonProperty("withheldSections")]
+        public List<string> WithheldSections { get; set; } = new List<string>();
 
         /// <summary>The configured accountability dimension used for <see cref="AccountabilityRollup"/>.</summary>
         [JsonProperty("accountabilityDimension")]
@@ -1645,6 +1669,7 @@ namespace Common.Entities.CopilotAdoption
         public const string PastRangeNamedListsHidden = "pastRangeNamedListsHidden";
         public const string CurrentOrgDataForPastRange = "currentOrgDataForPastRange";
         public const string AgentInventoryAsOfNow = "agentInventoryAsOfNow";
+        public const string AgentPeriodFiguresUnavailable = "agentPeriodFiguresUnavailable";
         public const string CoworkEligibilityUnknown = "coworkEligibilityUnknown";
         public const string PurchasedSeatsUnknown = "purchasedSeatsUnknown";
         public const string SkuSeatMismatch = "skuSeatMismatch";
@@ -1684,7 +1709,8 @@ namespace Common.Entities.CopilotAdoption
             { CopilotAdoptionWarningKeys.LicenceHistoryPartialForRange, "Licence assignment history starts on {historyStart}. Seat holders before that date are reconstructed from seeded rows held at the first history refresh, so people whose seat was removed earlier are missing, and people first licensed after the selected period may be included from the range start." },
             { CopilotAdoptionWarningKeys.PastRangeNamedListsHidden, "This period does not end today, so named reclaim and recommendation lists and their exports are hidden. Counts remain visible; named action lists are only shown for periods ending today." },
             { CopilotAdoptionWarningKeys.CurrentOrgDataForPastRange, "Department, manager, country, office, company, account status and reclaim exclusions are today's values, not historical values for the selected period." },
-            { CopilotAdoptionWarningKeys.AgentInventoryAsOfNow, "The agent inventory remains an as-of-now view even when the reporting period is historical." },
+            { CopilotAdoptionWarningKeys.AgentInventoryAsOfNow, "The agent inventory - the agents listed, their health verdicts and agent use by department - remains an as-of-now view even when the reporting period is historical. Active agents, agent users and interactions per agent user describe the selected period." },
+            { CopilotAdoptionWarningKeys.AgentPeriodFiguresUnavailable, "The Copilot audit log holds nothing for this period, so its active agents, agent interactions and interactions per agent user are left blank rather than taken from the agent inventory, which describes the latest weeks and not this period." },
             { CopilotAdoptionWarningKeys.CoworkEligibilityUnknown, "Cowork use is shown as a number of people, not as a percentage. Working out a percentage needs the number of people allowed to use Cowork. That is decided by your spending policies that include Cowork, not by the number of Copilot licences, and this tool can't read those policies. The Cowork entry in the Microsoft 365 admin centre (Agents > All Agents) no longer controls access, so it isn't used as a substitute. This is expected and needs no action." },
             { CopilotAdoptionWarningKeys.PurchasedSeatsUnknown, "Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits has not been imported. Grant Organization.Read.All and rerun the user metadata import; the report deliberately does not show zero for unassigned seats when the purchase inventory is missing." },
             { CopilotAdoptionWarningKeys.SkuSeatMismatch, "Purchased and assigned Copilot seats disagree for {skuName}: Graph reports {purchased} purchased but {assigned} assigned, so unassigned seats are shown as Unknown rather than zero." },

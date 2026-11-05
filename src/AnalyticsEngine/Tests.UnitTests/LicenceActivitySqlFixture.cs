@@ -177,7 +177,7 @@ namespace Tests.UnitTests
             var master = LocalDbConnectionBuilder("master");
             var retainedConnection = LocalDbConnectionBuilder(database);
 
-            ExecuteOn(master.ConnectionString, $"CREATE DATABASE [{database}];");
+            ExecuteOn(master.ConnectionString, ScratchDatabase.CreateDatabaseSql(database));
             var fixture = new LicenceActivitySqlFixture(retainedConnection.ConnectionString, retained: true);
             try
             {

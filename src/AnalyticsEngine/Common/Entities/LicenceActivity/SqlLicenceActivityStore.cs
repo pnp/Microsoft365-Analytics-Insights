@@ -41,12 +41,15 @@ namespace Common.Entities.LicenceActivity
         /// <summary>
         /// This direct SQL path cannot apply a people scope - it is narrowed in the read model instead
         /// (<see cref="CachedLicenceActivityStore"/>, the path the portal uses). Refused rather than ignored,
-        /// so a scoped query can never come back with figures for people outside its scope.
+        /// so a scoped query can never come back with figures for people outside its scope. The same goes for a
+        /// minimum group size: only the read model withholds the groups too small for a reader without See PII.
         /// </summary>
         private static void RefusePeopleScope(LicenceActivityQuery query)
         {
             if (query.PeopleScope != null)
                 throw new NotSupportedException("A people-scoped licence activity query must be answered from the read model.");
+            if (query.MinimumGroupSize.HasValue)
+                throw new NotSupportedException("A licence activity query with a minimum group size must be answered from the read model.");
         }
 
         public async Task<LicenceActivityOverview> LoadOverviewAsync(

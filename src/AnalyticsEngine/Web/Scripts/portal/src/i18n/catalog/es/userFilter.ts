@@ -13,6 +13,9 @@ const userFilter: Record<keyof typeof en, string> = {
   'userFilter.bar.dimensionsError': 'No se pudieron cargar los atributos para filtrar. Las condiciones ya aplicadas siguen vigentes.',
   'userFilter.bar.retry': 'Reintentar',
   'userFilter.bar.loadingDimensions': 'Cargando atributos…',
+  'userFilter.linkNotApplied.title': 'No se ha aplicado el filtro de este vínculo',
+  'userFilter.linkNotApplied.body': 'Filtrar por personas necesita el permiso Ver PII (el rol de aplicación {role}), que usted no tiene. Las cifras siguientes son de todas las personas que abarca este informe, no solo de las personas a las que se filtró el vínculo.',
+  'userFilter.linkNotApplied.bodyWithinGlobal': 'Filtrar por personas necesita el permiso Ver PII (el rol de aplicación {role}), que usted no tiene. Las cifras siguientes son de todas las personas dentro del filtro de informes del administrador, no solo de las personas a las que se filtró el vínculo.',
 
   'userFilter.join.and': 'Y',
   'userFilter.join.or': 'O',

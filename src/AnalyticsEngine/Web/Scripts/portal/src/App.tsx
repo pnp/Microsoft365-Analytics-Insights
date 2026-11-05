@@ -43,6 +43,7 @@ import { LanguageSwitcher, useT } from './i18n';
 import { roleForPermission, usePortalAccess, type PortalPermission } from './access';
 import { useGlobalFilter } from './components/globalFilter/GlobalFilterProvider';
 import ReportAreasProvider, { useReportAreas } from './components/ReportAreasProvider';
+import RouteErrorBoundary from './components/RouteErrorBoundary';
 import { reportMonths, reportPageEnabled, reportPageForPath, reportPath } from './reportNavigation';
 
 const useStyles = makeStyles({
@@ -238,6 +239,7 @@ function AppShell() {
   }, [location.pathname, location.search]);
 
   const currentArea = areaForPath(location.pathname);
+  const routesKey = currentArea === 'insights' ? `insights-${viewKey}` : 'admin';
   const areas = visibleAreas(access);
   // A bookmarked address in an area this user cannot see still needs a way out, so the navigation
   // falls back to the first area they can see while the page itself explains what is missing.
@@ -433,26 +435,31 @@ function AppShell() {
                         <Button onClick={reportAvailability.retry}>{t('common.action.refresh')}</Button>
                       </MessageBar>
                     )}
-                    <Suspense
-                      fallback={
-                        <div style={{ textAlign: 'center', padding: '32px' }}>
-                          <Spinner size={80} label={t('common.state.loading')} />
-                        </div>
-                      }
-                    >
-                      {/* Keyed on the global filter's view in Insights, so switching it off or on - or an
-                          administrator replacing it - remounts the report and every figure is fetched
-                          again, rather than old figures sitting under a bar describing the new filter.
-                          Administration pages are never remounted by it: an editor there would lose its
-                          draft. */}
-                      <Routes key={currentArea === 'insights' ? `insights-${viewKey}` : 'admin'}>
-                        <Route path="/" element={<Navigate to={DEFAULT_PATH} replace />} />
-                        {ROUTES.map((route) => (
-                          <Route key={route.path} path={route.path} element={<RouteElement route={route} />} />
-                        ))}
-                        <Route path="*" element={<Navigate to={DEFAULT_PATH} replace />} />
-                      </Routes>
-                    </Suspense>
+                    {/* A page that throws, or whose code chunk still cannot be loaded after the automatic
+                        reload, is caught here, inside the shell, so the header and navigation stay usable
+                        and the failure is said on screen rather than as a blank portal. */}
+                    <RouteErrorBoundary resetKey={`${location.pathname}|${routesKey}`}>
+                      <Suspense
+                        fallback={
+                          <div style={{ textAlign: 'center', padding: '32px' }}>
+                            <Spinner size={80} label={t('common.state.loading')} />
+                          </div>
+                        }
+                      >
+                        {/* Keyed on the global filter's view in Insights, so switching it off or on - or an
+                            administrator replacing it - remounts the report and every figure is fetched
+                            again, rather than old figures sitting under a bar describing the new filter.
+                            Administration pages are never remounted by it: an editor there would lose its
+                            draft. */}
+                        <Routes key={routesKey}>
+                          <Route path="/" element={<Navigate to={DEFAULT_PATH} replace />} />
+                          {ROUTES.map((route) => (
+                            <Route key={route.path} path={route.path} element={<RouteElement route={route} />} />
+                          ))}
+                          <Route path="*" element={<Navigate to={DEFAULT_PATH} replace />} />
+                        </Routes>
+                      </Suspense>
+                    </RouteErrorBoundary>
                   </div>
                 </main>
               </div>

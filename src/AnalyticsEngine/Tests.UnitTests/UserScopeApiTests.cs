@@ -202,7 +202,7 @@ namespace Tests.UnitTests
             CollectionAssert.AreEquivalent(new[]
             {
                 "snapshot", "auditEvents", "webActivity", "calls", "pageComments", "sentEmails", "teams", "usageReports",
-                "copilotInteractions", "licencesAndCredits", "sharedWith", "managers", "users", "done",
+                "copilotInteractions", "licencesAndCredits", "copilotCostPreview", "retiredFeatures", "sharedWith", "managers", "users", "done",
             }, ConstantValues(typeof(UserScopePurgePhases)));
             CollectionAssert.IsSubsetOf(UserScopePurgePlan.Steps.Select(s => s.Phase).Distinct().ToList(), ConstantValues(typeof(UserScopePurgePhases)),
                 "Every phase a step reports is one the portal has a label for.");

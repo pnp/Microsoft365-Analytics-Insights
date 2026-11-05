@@ -103,7 +103,14 @@ namespace Common.Entities.CopilotAdoption
             FailureKind = failureKind;
             SqlErrorNumber = sqlErrorNumber;
             Win32ErrorCode = win32ErrorCode;
+            ErrorId = Guid.NewGuid().ToString("D");
         }
+
+        /// <summary>
+        /// The reference a reader is shown in place of the exception (<see cref="ReportQueryFailure"/>), and the
+        /// <c>ErrorId</c> of the lifecycle event that records this failure. New for each failure.
+        /// </summary>
+        public string ErrorId { get; }
 
         /// <summary>
         /// The innermost exception's type name - the value the <c>ExceptionType</c> dimension has always
@@ -377,6 +384,7 @@ namespace Common.Entities.CopilotAdoption
         public const string CoworkCreditCapacity = "CoworkCreditCapacity";
         public const string CoworkCreditProbe = "CoworkCreditProbe";
         public const string AgentUsage = "AgentUsage";
+        public const string AgentPeriodUsage = "AgentPeriodUsage";
         public const string AgentUsageByDepartment = "AgentUsageByDepartment";
         public const string AgentUsers = "AgentUsers";
         public const string AgentReach = "AgentReach";

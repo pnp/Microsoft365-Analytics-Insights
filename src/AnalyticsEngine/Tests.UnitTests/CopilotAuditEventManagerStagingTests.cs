@@ -17,6 +17,7 @@ using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Persistence;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
+using CostEstimate = WebJob.Office365ActivityImporter.Engine.ActivityAPI.Copilot.CostEstimate;
 
 namespace Tests.UnitTests
 {
@@ -387,6 +388,58 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, manager.UnenrichedAfterTransientFailureCount);
         }
 
+        /// <summary>
+        /// R1-2. Through the real Graph loader: the user lookup a meeting interaction needs is bounded and counted like the
+        /// meeting lookup. A user Graph no longer knows is asked for once in the run, not once per interaction, and each
+        /// interaction is saved chat-only without a Warning of its own.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManager_InTheSaveLock_AMeetingUserGraphDoesNotKnow_IsLookedUpOnce()
+        {
+            var graph = new Tests.UnitTests.FakeLoaderClasses.FakeSpoGraphClient
+            {
+                OnGetUser = upn => throw new ODataError { ResponseStatusCode = 404, Error = new MainError { Code = "Request_ResourceNotFound", Message = "Synthetic Graph error" } }
+            };
+            var loader = new GraphFileMetadataLoader(graph, NullLogger.Instance);
+            var writer = new InMemoryCopilotStagingWriter();
+            var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
+            var manager = NewManagerWith(writer, loader, logger);
+            const int events = 3;
+
+            for (var i = 0; i < events; i++)
+            {
+                await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(Meeting()), NewEvent());
+            }
+
+            Assert.AreEqual(1, graph.GetUserCalls, "Once per run, not once per meeting interaction.");
+            Assert.AreEqual(0, graph.GetOnlineMeetingCalls, "No meeting id can be built without the user's object id.");
+            Assert.AreEqual(events, writer.ChatOnlyRows.Count, "Every interaction is still saved.");
+            Assert.AreEqual(0, manager.UnenrichedAfterTransientFailureCount, "A user Graph doesn't know is not a transient failure.");
+            Assert.AreEqual(0, logger.Entries.Count(e => e.Level == LogLevel.Warning && e.Message.StartsWith("Failed to resolve optional meeting metadata")),
+                "No Warning per interaction.");
+
+            await manager.CommitAllChanges();
+            var stats = logger.Entries.Single(e => e.Message.StartsWith("Copilot enrichment in-lock lookups:"));
+            StringAssert.Contains(stats.Message, $"{events} lookup(s)", "The user lookups are counted with the other in-lock lookups.");
+            StringAssert.Contains(stats.Message, "1 Graph call(s)");
+        }
+
+        [TestMethod]
+        public async Task CopilotEventManager_InTheSaveLock_AThrottledMeetingUserLookup_IsTriedOnceAndQueued()
+        {
+            var graph = new Tests.UnitTests.FakeLoaderClasses.FakeSpoGraphClient { OnGetUser = upn => throw new ODataError { ResponseStatusCode = 429, Error = new MainError { Code = "TooManyRequests", Message = "Synthetic Graph error" } } };
+            var loader = new GraphFileMetadataLoader(graph, NullLogger.Instance);
+            var writer = new InMemoryCopilotStagingWriter();
+            var manager = NewManagerWith(writer, loader);
+
+            await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(Meeting()), NewEvent());
+            await manager.SaveSingleCopilotEventToSqlStaging(ContentWith(Meeting()), NewEvent());
+
+            Assert.AreEqual(1, graph.GetUserCalls, "The second interaction finds the transient outcome remembered.");
+            Assert.AreEqual(2, writer.ChatOnlyRows.Count, "Both interactions are saved.");
+            Assert.AreEqual(2, manager.UnenrichedAfterTransientFailureCount, "Both are counted, and queued for durable re-enrichment.");
+        }
+
         [TestMethod]
         public async Task CopilotEventManager_PersistentTransientFileLookupFailure_IsTriedOnceCountedAndReported()
         {
@@ -612,6 +665,74 @@ namespace Tests.UnitTests
             await NewManagerWith(writer, loader).SaveSingleCopilotEventToSqlStaging(ContentWith(Meeting()), NewEvent());
 
             Assert.AreEqual(new string('Κ', 99), writer.TeamsRows.Single().MeetingName);
+        }
+
+        /// <summary>
+        /// X1-N3. The merge reads each message's Id out of the staged JSON into copilot_event_messages.message_id
+        /// (nvarchar(500)); one longer Id failed the shared merge for the whole batch, on every retry. A longer Id is now
+        /// staged in a form that fits, stays distinct from another long Id with the same start, and is the same every time.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotEventManager_MessageIdLongerThanItsColumn_IsStagedInAFormThatFitsAndStaysDistinct()
+        {
+            var longA = new string('x', 520) + "-A";
+            var longB = new string('x', 520) + "-B";
+            var content = ContentWith();
+            content.ParsedAuditEvent = new CostEstimate.CopilotAuditEvent
+            {
+                Messages = new List<CostEstimate.Message>
+                {
+                    new CostEstimate.Message { Id = longA, IsPrompt = true },
+                    new CostEstimate.Message { Id = longB, IsPrompt = false },
+                    new CostEstimate.Message { Id = "short-1", IsPrompt = false },
+                },
+            };
+            var writer = new InMemoryCopilotStagingWriter();
+            var logger = new Tests.UnitTests.FakeLoaderClasses.RecordingLogger();
+            var manager = NewManagerWith(writer, new FakeCopilotMetadataLoader(), logger);
+
+            await manager.SaveSingleCopilotEventToSqlStaging(content, NewEvent());
+            await manager.SaveSingleCopilotEventToSqlStaging(content, NewEvent());
+
+            var first = Newtonsoft.Json.Linq.JArray.Parse(writer.ChatOnlyRows[0].MessagesJson).Select(m => (string)m["Id"]).ToList();
+            var second = Newtonsoft.Json.Linq.JArray.Parse(writer.ChatOnlyRows[1].MessagesJson).Select(m => (string)m["Id"]).ToList();
+            Assert.IsTrue(first.All(id => id.Length <= AuditStagingText.CopilotMessageIdMaxLength), "Every staged Id fits the column.");
+            Assert.AreEqual(3, first.Distinct().Count(), "Two long Ids with the same start stay two messages.");
+            Assert.AreEqual("short-1", first[2], "An Id that fits is staged as it is.");
+            CollectionAssert.AreEqual(first, second, "The same Id always gets the same form, so a retry matches what was stored.");
+            Assert.AreEqual(longA, content.ParsedAuditEvent.Messages[0].Id, "The parsed event, which credit estimation reads, is not changed.");
+
+            await manager.CommitAllChanges();
+            var warning = logger.Entries.Single(e => e.Level == LogLevel.Warning && e.Message.StartsWith("Copilot metadata:"));
+            StringAssert.Contains(warning.Message, "4 message id(s)");
+            StringAssert.Contains(warning.Message, "longest 522");
+            Assert.IsFalse(warning.Message.Contains("xxxx"), "Lengths only, never the value.");
+        }
+
+        /// <summary>X1-N3: a model name longer than copilot_ai_models.name (nvarchar(100)) is trimmed to it, like its provider and version.</summary>
+        [TestMethod]
+        public async Task CopilotEventManager_ModelNameLongerThanItsColumn_IsStagedTrimmed()
+        {
+            var longName = "Contoso-Καλημέρα-" + new string('m', 120);
+            var content = ContentWith();
+            content.ParsedAuditEvent = new CostEstimate.CopilotAuditEvent
+            {
+                ModelTransparencyDetails = new List<CostEstimate.ModelTransparencyDetail>
+                {
+                    new CostEstimate.ModelTransparencyDetail { ModelName = longName, ModelProviderName = "Contoso", ModelVersion = "1" },
+                    new CostEstimate.ModelTransparencyDetail { ModelName = "DEEP_LEO", ModelProviderName = "Contoso", ModelVersion = "2" },
+                },
+            };
+            var writer = new InMemoryCopilotStagingWriter();
+
+            await NewManager(writer).SaveSingleCopilotEventToSqlStaging(content, NewEvent());
+
+            var staged = Newtonsoft.Json.Linq.JArray.Parse(writer.ChatOnlyRows.Single().ModelTransparencyDetailsJson);
+            Assert.AreEqual(longName.Substring(0, AuditStagingText.CopilotAiModelNameMaxLength), (string)staged[0]["ModelName"]);
+            Assert.AreEqual("Contoso", (string)staged[0]["ModelProviderName"]);
+            Assert.AreEqual("1", (string)staged[0]["ModelVersion"]);
+            Assert.AreEqual("DEEP_LEO", (string)staged[1]["ModelName"], "A name that fits is staged as it is.");
+            Assert.AreEqual(longName, content.ParsedAuditEvent.ModelTransparencyDetails[0].ModelName, "The parsed event is not changed.");
         }
 
         #endregion

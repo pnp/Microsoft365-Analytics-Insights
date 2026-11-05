@@ -63,10 +63,12 @@ namespace Common.Entities.CopilotSpend
         public List<CopilotSpendPersonRow> People { get; set; } = new List<CopilotSpendPersonRow>();
 
         /// <summary>
-        /// A copy for a reader without See PII: no people, no grouping that names a person, no environment small enough
-        /// to stand for one (its name and amount are combined with the other small ones), and distributions without the
-        /// named lists or any figure that describes fewer people than the smallest group shown. Summaries are cached and
-        /// shared between readers, so the cached object is never edited.
+        /// A copy for a reader without See PII: no people, no grouping that names a person, no source's figures in a group
+        /// that describe fewer people than the smallest group shown, no environment small enough to stand for one (its name and
+        /// amount are combined with the other small ones), no section total or day of the ledger that describes fewer people
+        /// than that, and distributions without the named lists or any figure that describes fewer people than the smallest
+        /// group shown. A figure withheld for its own sake also takes with it enough others that a total less what is shown
+        /// cannot give it back. Summaries are cached and shared between readers, so the cached object is never edited.
         /// </summary>
         public CopilotSpendSummary WithoutIndividualData()
         {
@@ -81,15 +83,27 @@ namespace Common.Entities.CopilotSpend
                 organisation.Hidden = true;
                 copy.Organisation = organisation;
             }
+            else if (Organisation != null)
+            {
+                // The page's own floor, never below the portal's: in practice both are five.
+                copy.Organisation = Organisation.WithoutSmallContributorPopulations(Math.Max(Organisation.MinGroupSize, CopilotSpendCalculator.DefaultMinGroupSize));
+            }
             if (Studio != null)
             {
-                copy.Studio = Studio.WithSmallEnvironmentsCombined(CopilotSpendCalculator.DefaultMinGroupSize);
+                copy.Studio = Studio.WithoutSmallPopulations(CopilotSpendCalculator.DefaultMinGroupSize);
                 copy.Studio.Distribution = Studio.Distribution?.Anonymised(CopilotSpendCalculator.DefaultMinGroupSize);
             }
             if (Balances != null)
             {
                 copy.Balances = Balances.Copy();
                 copy.Balances.Distribution = Balances.Distribution?.Anonymised(CopilotSpendCalculator.DefaultMinGroupSize);
+                copy.Balances.Services = CopilotInvestmentServiceRow.WithoutSmallPopulations(Balances.Services, CopilotSpendCalculator.DefaultMinGroupSize);
+                // In a filtered view the total is the people's own; unfiltered, it less the unmatched accounts' credits is.
+                if (SmallPopulations.IsSmall(Balances.Contributors, CopilotSpendCalculator.DefaultMinGroupSize))
+                {
+                    copy.Balances.Credits = null;
+                    copy.Balances.CreditsWithheld = true;
+                }
             }
             return copy;
         }
@@ -151,6 +165,13 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("credits")]
         public double? Credits { get; set; }
 
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Credits"/> is null because fewer than the minimum number of
+        /// people in view were billed: it would be their own charges (with the unmatched ones, which are stated beside it).
+        /// </summary>
+        [JsonProperty("creditsWithheld")]
+        public bool CreditsWithheld { get; set; }
+
         /// <summary>People in view with billed credits in the window. Null when not available.</summary>
         [JsonProperty("people")]
         public int? People { get; set; }
@@ -199,14 +220,21 @@ namespace Common.Entities.CopilotSpend
         /// person's charges under a name that identifies them.
         /// <para>The row is always withheld because nothing here can show the combination is large enough. Each
         /// environment's count is its own distinct people, so someone who used two of them is in both counts: adding them
-        /// overstates the combination, and the ledger query keeps no distinct count of it. Every environment folded here
-        /// is below <paramref name="minPeople"/> on its own, so the largest of them proves nothing either. The count is
+        /// overstates the combination, and the ledger query keeps no distinct count of it. Every environment folded for being
+        /// small is below <paramref name="minPeople"/> on its own, so the largest of them proves nothing either. The count is
         /// stated only when one environment is folded, where it is exact.</para>
+        /// <para>The environments add up to the period's total, so that total less the ones shown would be the combined
+        /// row's credits: the smallest environment used by at least <paramref name="minPeople"/> people is combined with
+        /// small ones that hold anyone, so whatever that difference gives holds at least that many people
+        /// (<see cref="SmallPopulations.WithholdOverlappingComplement"/>).</para>
         /// </summary>
         public CopilotSpendStudio WithSmallEnvironmentsCombined(int minPeople)
         {
             var copy = (CopilotSpendStudio)MemberwiseClone();
-            var small = Environments.Where(e => e.EmptyKey == null && e.People < minPeople).ToList();
+            var named = Environments.Where(e => e.EmptyKey == null).ToList();
+            var fold = named.Select(e => e.People < minPeople).ToArray();
+            SmallPopulations.WithholdOverlappingComplement(named.Select(e => e.People ?? 0).ToList(), fold, minPeople);
+            var small = named.Where((e, i) => fold[i]).ToList();
             if (small.Count == 0) return copy;
             copy.Environments = Environments.Except(small).ToList();
             copy.Environments.Add(new CopilotSpendEnvironment
@@ -216,6 +244,25 @@ namespace Common.Entities.CopilotSpend
                 People = small.Count == 1 ? small[0].People : (int?)null,
                 Withheld = true,
             });
+            return copy;
+        }
+
+        /// <summary>
+        /// A copy for a reader without See PII: small environments combined (<see cref="WithSmallEnvironmentsCombined"/>);
+        /// each day's credits withheld when fewer than <paramref name="minPeople"/> people were billed on it, with the
+        /// smallest day of at least that many withheld too, so that the period's total less the days shown holds at least
+        /// that many people (<see cref="CopilotSpendDay.WithoutSmallPopulations"/>); and the period's total withheld when
+        /// fewer than that many people in view were billed in it at all. Never edits this object.
+        /// </summary>
+        internal CopilotSpendStudio WithoutSmallPopulations(int minPeople)
+        {
+            var copy = WithSmallEnvironmentsCombined(minPeople);
+            if (SmallPopulations.IsSmall(People ?? 0, minPeople))
+            {
+                copy.Credits = null;
+                copy.CreditsWithheld = true;
+            }
+            copy.Days = CopilotSpendDay.WithoutSmallPopulations(Days, minPeople);
             return copy;
         }
     }
@@ -242,12 +289,36 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("status")]
         public string Status { get; set; } = CopilotSpendDayStatus.Recorded;
 
-        /// <summary>Billed credits; null unless <see cref="Status"/> is <c>recorded</c>.</summary>
+        /// <summary>Billed credits; null unless <see cref="Status"/> is <c>recorded</c>, or when <see cref="Withheld"/>.</summary>
         [JsonProperty("credits")]
         public double? Credits { get; set; }
 
         [JsonProperty("people")]
         public int? People { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, a recorded day's <see cref="Credits"/> are null: fewer than the minimum
+        /// number of people were billed on it, or it is the day withheld with such days so that they cannot be given back.
+        /// </summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
+
+        /// <summary>
+        /// Copies of the days for a reader without See PII. A day's credits are withheld when one to
+        /// <paramref name="minPeople"/> - 1 people were billed on it. The days add up to the period's total, which the reader is
+        /// given, and one person can be billed on several days, so no sum of the withheld days' counts shows how many different
+        /// people they hold: the smallest day billed to at least <paramref name="minPeople"/> people is withheld with them,
+        /// so whatever the total less the days shown gives holds at least that many (<see cref="SmallPopulations.WithholdOverlappingComplement"/>).
+        /// The people count of a withheld day stays: it is a count, not anyone's charges. Days are copied, never edited.
+        /// </summary>
+        internal static List<CopilotSpendDay> WithoutSmallPopulations(List<CopilotSpendDay> days, int minPeople)
+        {
+            if (days == null) return null;
+            var people = days.Select(d => d.Credits.HasValue ? d.People ?? 0 : 0).ToList();
+            var withheld = people.Select(p => SmallPopulations.IsSmall(p, minPeople)).ToArray();
+            SmallPopulations.WithholdOverlappingComplement(people, withheld, minPeople);
+            return days.Select((d, i) => withheld[i] ? new CopilotSpendDay { Date = d.Date, Status = d.Status, People = d.People, Withheld = true } : d).ToList();
+        }
     }
 
     public sealed class CopilotSpendEnvironment
@@ -349,6 +420,17 @@ namespace Common.Entities.CopilotSpend
         /// <summary>Latest balances, in credits, of the people in view; unfiltered, also the accounts no user matched. Null when not available.</summary>
         [JsonProperty("credits")]
         public double? Credits { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Credits"/> is null because fewer than the minimum number of
+        /// people in view have a reading other than zero: it would be their own (with the unmatched accounts', stated beside it).
+        /// </summary>
+        [JsonProperty("creditsWithheld")]
+        public bool CreditsWithheld { get; set; }
+
+        /// <summary>People in view whose latest reading is other than zero, adjustments below zero included: who <see cref="Credits"/> describes.</summary>
+        [JsonIgnore]
+        internal int Contributors { get; set; }
 
         /// <summary>People in view with a latest reading at all, zero or not.</summary>
         [JsonProperty("observedPeople")]
@@ -455,6 +537,69 @@ namespace Common.Entities.CopilotSpend
         public List<CopilotSpendGroupRow> AllGroups { get; set; } = new List<CopilotSpendGroupRow>();
 
         internal object MemberwiseCopy() => MemberwiseClone();
+
+        /// <summary>
+        /// A copy for a reader without See PII in which no source's figures in a row describe between one and
+        /// <paramref name="minPeople"/> - 1 people. A group can have enough people while only one or two of them were billed
+        /// for Copilot Studio, or hold a consumed-credit reading: that source's people, credits and share in the row would then
+        /// be theirs (#791 did the same for the investment report). Each source is judged on its own, so a department with
+        /// many readings and one Studio maker still shows its readings: the Studio figures are withheld (<see
+        /// cref="CopilotSpendGroupRow.StudioWithheld"/>), the readings are not. Rows are copied, never edited: the cached
+        /// organisation is the one a reader with See PII is given.
+        /// </summary>
+        /// <remarks>
+        /// Decisions are made once per group, on the export's list (<see cref="AllGroups"/>), so the page and the workbook
+        /// withhold the same groups. Every person is in exactly one group and the groups add up to totals the reader is given
+        /// (through each row's share, if nothing else), so withholding one group alone would not hide it: the total less the
+        /// groups shown is that group. Each source's figures are therefore withheld in further groups, the fewest such people
+        /// first, until the withheld groups together hold no one or at least <paramref name="minPeople"/> of the people
+        /// behind that source's figures (<see cref="SmallPopulations.WithholdComplements"/>). The page's combined row of the
+        /// groups beyond its top ones (<c>moreGroups</c>) is the sum of rows the export lists one by one, so a source withheld
+        /// in any of them is withheld in it too: otherwise the combined row less the ones shown would give the withheld one back.
+        /// </remarks>
+        internal CopilotSpendOrganisation WithoutSmallContributorPopulations(int minPeople)
+        {
+            var copy = (CopilotSpendOrganisation)MemberwiseClone();
+            var studio = AllGroups.Select(g => g.Withheld || SmallPopulations.IsSmall(g.StudioContributors, minPeople)).ToArray();
+            var balances = AllGroups.Select(g => g.Withheld || SmallPopulations.IsSmall(g.BalanceContributors, minPeople)
+                || SmallPopulations.IsSmall(g.UnknownAmountContributors, minPeople)).ToArray();
+            SmallPopulations.WithholdComplements(AllGroups.Select(g => new[] { g.StudioContributors }).ToList(), studio, minPeople);
+            SmallPopulations.WithholdComplements(AllGroups.Select(g => new[] { g.BalanceContributors, g.UnknownAmountContributors }).ToList(), balances, minPeople);
+
+            var trimmed = new Dictionary<CopilotSpendGroupRow, CopilotSpendGroupRow>();
+            for (var i = 0; i < AllGroups.Count; i++) trimmed[AllGroups[i]] = Withhold(AllGroups[i], studio[i], balances[i]);
+            copy.AllGroups = AllGroups.Select(g => trimmed[g]).ToList();
+
+            var onPage = new HashSet<CopilotSpendGroupRow>(Groups);
+            var beyondPage = Enumerable.Range(0, AllGroups.Count).Where(i => !onPage.Contains(AllGroups[i])).ToList();
+            var moreStudio = beyondPage.Any(i => studio[i]);
+            var moreBalances = beyondPage.Any(i => balances[i]);
+            copy.Groups = Groups.Select(g => trimmed.TryGetValue(g, out var row) ? row : Withhold(g, moreStudio, moreBalances)).ToList();
+            return copy;
+        }
+
+        private static CopilotSpendGroupRow Withhold(CopilotSpendGroupRow row, bool studio, bool balances)
+        {
+            // A row withheld whole already carries no figures; one with nothing to withhold is shared as it is.
+            if (row.Withheld || (!studio && !balances)) return row;
+            var copy = row.Copy();
+            if (studio)
+            {
+                copy.StudioWithheld = true;
+                copy.StudioPeople = null;
+                copy.StudioCredits = null;
+                copy.ShareOfStudio = null;
+            }
+            if (balances)
+            {
+                copy.BalancesWithheld = true;
+                copy.BalancePeople = null;
+                copy.BalanceCredits = null;
+                copy.ShareOfBalances = null;
+                copy.UnknownAmountPeople = null;
+            }
+            return copy;
+        }
     }
 
     /// <summary>
@@ -502,6 +647,31 @@ namespace Common.Entities.CopilotSpend
 
         [JsonProperty("unknownAmountPeople")]
         public int? UnknownAmountPeople { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, the row's Copilot Studio figures are null because they could single out
+        /// fewer than the minimum number of people (see <see cref="CopilotSpendOrganisation.WithoutSmallContributorPopulations"/>).
+        /// </summary>
+        [JsonProperty("studioWithheld")]
+        public bool StudioWithheld { get; set; }
+
+        /// <summary>As <see cref="StudioWithheld"/>, for the consumed-credit figures and the count of unknown amounts.</summary>
+        [JsonProperty("balancesWithheld")]
+        public bool BalancesWithheld { get; set; }
+
+        /// <summary>People in the row with a Studio amount other than zero: who its Studio figures describe. Kept on a withheld row too.</summary>
+        [JsonIgnore]
+        internal int StudioContributors { get; set; }
+
+        /// <summary>People in the row with a consumed-credit amount other than zero, adjustments below zero included.</summary>
+        [JsonIgnore]
+        internal int BalanceContributors { get; set; }
+
+        /// <summary>People in the row with an amount the source did not state: who <see cref="UnknownAmountPeople"/> counts.</summary>
+        [JsonIgnore]
+        internal int UnknownAmountContributors { get; set; }
+
+        internal CopilotSpendGroupRow Copy() => (CopilotSpendGroupRow)MemberwiseClone();
     }
 
     /// <summary>Why the people cannot be grouped.</summary>

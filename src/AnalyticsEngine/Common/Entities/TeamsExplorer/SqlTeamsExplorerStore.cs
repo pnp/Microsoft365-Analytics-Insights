@@ -7,6 +7,7 @@ using System.Data;
 using System.Data.Entity;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using static Common.Entities.TeamsExplorer.TeamsExplorerRows;
 
@@ -37,7 +38,8 @@ namespace Common.Entities.TeamsExplorer
     /// <remarks>
     /// <para>
     /// Every section of a tab runs as its own command, on its own connection, in parallel, with its
-    /// own short timeout. A failure is captured as a <see cref="TeamsExplorerQueryInfo.Error"/> rather
+    /// own short timeout - at most <see cref="MaxConcurrentQueries"/> of them at once across the
+    /// process. A failure is captured as a <see cref="TeamsExplorerQueryInfo.Error"/> rather
     /// than thrown, so one slow leaderboard degrades to a message beside nine working charts instead
     /// of taking the whole tab down. This is the same trade
     /// <c>ReportsAPIController</c> makes per chart, and it matters more here because several of these
@@ -56,9 +58,43 @@ namespace Common.Entities.TeamsExplorer
     /// </remarks>
     public sealed class SqlTeamsExplorerStore : ITeamsExplorerStore
     {
+        /// <summary>
+        /// Database queries this store runs at once, across every request in the process.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// Every section is its own command on its own connection, so one slow leaderboard fails alone - but the Meetings tab
+        /// has eleven of them, and unbounded, ten admins opening it on a cold cache would want 110 connections from an
+        /// ADO.NET pool of 100 that every other portal page shares. Acquiring a connection then times out, which surfaces
+        /// as an unexplained failure rather than as a slow query. The same bound as <c>SqlWebActivityStore</c>'s, for the
+        /// same reason.
+        /// </para>
+        /// <para>
+        /// Six against the 25-second command timeout: the largest tab is two waves, at most about 50 seconds even if every
+        /// query times out, well inside the ~230-second App Service request limit.
+        /// </para>
+        /// </remarks>
+        internal const int MaxConcurrentQueries = 6;
+
+        /// <summary>
+        /// How long a query waits for one of the <see cref="MaxConcurrentQueries"/> slots before its section reports
+        /// <see cref="QueueTimeoutErrorCode"/>, so a queue cannot push a request past the App Service limit.
+        /// </summary>
+        internal const int QueueTimeoutSeconds = 60;
+
+        /// <summary>The <see cref="TeamsExplorerQueryInfo.ErrorCode"/> of a query that did not get a slot in time.</summary>
+        internal const string QueueTimeoutErrorCode = "queryQueueTimeout";
+
+        /// <summary>Its English fallback; the page shows its own wording for <see cref="QueueTimeoutErrorCode"/>.</summary>
+        internal const string QueueTimeoutMessage = "The server was already running as many report queries as it allows, and this one did not get a turn within a minute. Try a shorter reporting period, or try again when the database is less busy.";
+
+        private static readonly SemaphoreSlim ProcessQuerySlots = new SemaphoreSlim(MaxConcurrentQueries, MaxConcurrentQueries);
+
         private readonly IAnalyticsDbContextFactory _contextFactory;
         private readonly int _commandTimeoutSeconds;
         private readonly ILogger _logger;
+        private readonly SemaphoreSlim _querySlots;
+        private readonly TimeSpan _queueTimeout;
 
         public SqlTeamsExplorerStore(IAnalyticsDbContextFactory contextFactory)
             : this(contextFactory, TeamsExplorerSql.CommandTimeoutSeconds)
@@ -71,11 +107,25 @@ namespace Common.Entities.TeamsExplorer
         }
 
         public SqlTeamsExplorerStore(IAnalyticsDbContextFactory contextFactory, int commandTimeoutSeconds, ILogger logger = null)
+            : this(contextFactory, commandTimeoutSeconds, logger, ProcessQuerySlots, TimeSpan.FromSeconds(QueueTimeoutSeconds))
+        {
+        }
+
+        /// <param name="querySlots">The slots every query waits for; the process-wide ones except in tests.</param>
+        internal SqlTeamsExplorerStore(IAnalyticsDbContextFactory contextFactory, int commandTimeoutSeconds, ILogger logger,
+            SemaphoreSlim querySlots, TimeSpan queueTimeout)
         {
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
             _commandTimeoutSeconds = commandTimeoutSeconds;
             _logger = logger;
+            _querySlots = querySlots ?? throw new ArgumentNullException(nameof(querySlots));
+            _queueTimeout = queueTimeout;
         }
+
+        /// <summary>The process-wide slots, for tests that check a store shares them.</summary>
+        internal static SemaphoreSlim SharedQuerySlots => ProcessQuerySlots;
+
+        internal SemaphoreSlim QuerySlots => _querySlots;
 
         #region Availability
 
@@ -121,9 +171,10 @@ namespace Common.Entities.TeamsExplorer
             var trendTask = RunAsync<UsageTrendRow>("overview-trend", TeamsExplorerSql.OverviewTrend(), query, championDays);
             var callTrendTask = RunAsync<WeekCallCountRow>("overview-call-trend", TeamsExplorerSql.OverviewCallTrend(), query, championDays);
             var segmentTask = RunAsync<ActiveDayHistogramRow>("overview-segments", TeamsExplorerSql.SegmentHistogram, query, championDays);
+            var coverageTask = RunAsync<UsageCoverageRow>("overview-coverage", TeamsExplorerSql.UsageCoverage, query, championDays);
             var organiserTask = RunAsync<OrganiserVolumeRow>("overview-organisers", TeamsExplorerSql.CallOrganiserVolumes, query, championDays);
 
-            await Task.WhenAll(usageTask, callsTask, teamsTask, trendTask, callTrendTask, segmentTask, organiserTask)
+            await Task.WhenAll(usageTask, callsTask, teamsTask, trendTask, callTrendTask, segmentTask, coverageTask, organiserTask)
                 .ConfigureAwait(false);
 
             var usage = usageTask.Result;
@@ -134,7 +185,7 @@ namespace Common.Entities.TeamsExplorer
             model.Queries.AddRange(new[]
             {
                 usage.Info, calls.Info, teams.Info, trendTask.Result.Info,
-                callTrendTask.Result.Info, segmentTask.Result.Info, organiserTask.Result.Info,
+                callTrendTask.Result.Info, segmentTask.Result.Info, coverageTask.Result.Info, organiserTask.Result.Info,
             });
 
             var usageRow = usage.Rows.FirstOrDefault() ?? new OverviewUsageRow();
@@ -155,7 +206,7 @@ namespace Common.Entities.TeamsExplorer
                 MeetingsAttended = usageRow.MeetingsAttended,
                 MeetingsOrganised = usageRow.MeetingsOrganised,
                 MeetingsPerActiveUser = usageRow.ActiveUsers > 0
-                    ? (double)usageRow.MeetingsAttended / usageRow.ActiveUsers
+                    ? (double)usageRow.ActiveUserMeetingsAttended / usageRow.ActiveUsers
                     : 0,
                 AudioHours = audioHours,
                 VideoSharePct = TeamsExplorerScoring.Percentage(usageRow.VideoSeconds, usageRow.AudioSeconds),
@@ -168,7 +219,8 @@ namespace Common.Entities.TeamsExplorer
             };
 
             model.Trend = MergeTrend(trendTask.Result.Rows, callTrendTask.Result.Rows);
-            model.SegmentMix = BuildSegmentMix(segmentTask.Result.Rows, window.WorkingDays, usageRow.MeasuredUsers);
+            model.Dormancy = Dormancy(coverageTask.Result);
+            model.SegmentMix = BuildSegmentMix(segmentTask.Result.Rows, window.WorkingDays, model.Dormancy);
 
             model.Judgements = TeamsExplorerScoring.Judgements(new TeamsJudgementInputs
             {
@@ -230,11 +282,20 @@ namespace Common.Entities.TeamsExplorer
             return byWeek.Values.ToList();
         }
 
-        /// <summary>Turns the raw active-day histogram into the four named segments.</summary>
-        private static List<TeamsSegmentSlice> BuildSegmentMix(
+        /// <summary>
+        /// Turns the raw active-day histogram into the four named segments.
+        /// </summary>
+        /// <remarks>
+        /// The denominator is the population the histogram covers - enabled people with a usage row or a Teams
+        /// licence - not the whole directory: someone with no Teams licence and no activity is not a dormant
+        /// Teams user, they are not a Teams user. A licensed person with no row at all is counted as Dormant only
+        /// when <paramref name="dormancy"/> says the window was measured in full. Otherwise they are left out of
+        /// every share, and counted in <see cref="TeamsDormancy.UnmeasuredUsers"/> so the page can say how many.
+        /// </remarks>
+        internal static List<TeamsSegmentSlice> BuildSegmentMix(
             List<ActiveDayHistogramRow> histogram,
             int workingDays,
-            int measuredUsers)
+            TeamsDormancy dormancy)
         {
             var counts = new Dictionary<TeamsUserSegment, int>
             {
@@ -244,15 +305,22 @@ namespace Common.Entities.TeamsExplorer
                 { TeamsUserSegment.Dormant, 0 },
             };
 
+            var unmeasured = 0;
             foreach (var row in histogram)
             {
+                if (!row.Reported && (dormancy == null || !dormancy.Known))
+                {
+                    unmeasured += (int)row.Users;
+                    continue;
+                }
+
                 var segment = TeamsExplorerScoring.Segment(row.ActiveDays, workingDays);
                 counts[segment] += (int)row.Users;
             }
 
-            // The denominator is the users the usage report actually covered, not the whole directory:
-            // someone with no licence is not a dormant Teams user, they are an unmeasured one.
-            var total = measuredUsers > 0 ? measuredUsers : counts.Values.Sum();
+            if (dormancy != null) dormancy.UnmeasuredUsers = unmeasured;
+
+            var total = counts.Values.Sum();
 
             return counts
                 .OrderByDescending(pair => (int)pair.Key)
@@ -265,6 +333,12 @@ namespace Common.Entities.TeamsExplorer
                     SharePct = TeamsExplorerScoring.Percentage(pair.Value, total),
                 })
                 .ToList();
+        }
+
+        /// <summary>The dormancy answer from the coverage query - "not checked" when that query failed.</summary>
+        private static TeamsDormancy Dormancy(QueryResult<UsageCoverageRow> coverage)
+        {
+            return TeamsDormancy.From(coverage.Info.Error == null ? coverage.Rows.FirstOrDefault() : null);
         }
 
         #endregion
@@ -282,9 +356,9 @@ namespace Common.Entities.TeamsExplorer
             var breakdownTask = RunAsync<BreakdownRow>("adoption-breakdown", TeamsExplorerSql.AdoptionBreakdown(query.GroupBy), query, championDays);
             var devicesTask = RunAsync<DevicesRow>("adoption-devices", TeamsExplorerSql.AdoptionDevices, query, championDays);
             var lifecycleTask = RunAsync<LifecycleRow>("adoption-lifecycle", TeamsExplorerSql.AdoptionLifecycle, query, championDays);
-            var measuredTask = RunAsync<OverviewUsageRow>("adoption-usage", TeamsExplorerSql.OverviewUsage, query, championDays);
+            var coverageTask = RunAsync<UsageCoverageRow>("adoption-coverage", TeamsExplorerSql.UsageCoverage, query, championDays);
 
-            await Task.WhenAll(rhythmTask, segmentTask, segmentTrendTask, breakdownTask, devicesTask, lifecycleTask, measuredTask)
+            await Task.WhenAll(rhythmTask, segmentTask, segmentTrendTask, breakdownTask, devicesTask, lifecycleTask, coverageTask)
                 .ConfigureAwait(false);
 
             var model = new TeamsAdoption { Window = window, GroupBy = query.GroupBy };
@@ -292,7 +366,7 @@ namespace Common.Entities.TeamsExplorer
             {
                 rhythmTask.Result.Info, segmentTask.Result.Info, segmentTrendTask.Result.Info,
                 breakdownTask.Result.Info, devicesTask.Result.Info, lifecycleTask.Result.Info,
-                measuredTask.Result.Info,
+                coverageTask.Result.Info,
             });
 
             var rhythm = rhythmTask.Result.Rows.FirstOrDefault() ?? new RhythmRow();
@@ -304,8 +378,8 @@ namespace Common.Entities.TeamsExplorer
                 StickinessPct = TeamsExplorerScoring.Percentage(rhythm.MeanDailyActiveUsers, rhythm.MonthlyActiveUsers),
             };
 
-            var measured = measuredTask.Result.Rows.FirstOrDefault() ?? new OverviewUsageRow();
-            model.SegmentMix = BuildSegmentMix(segmentTask.Result.Rows, window.WorkingDays, measured.MeasuredUsers);
+            model.Dormancy = Dormancy(coverageTask.Result);
+            model.SegmentMix = BuildSegmentMix(segmentTask.Result.Rows, window.WorkingDays, model.Dormancy);
             model.SegmentTrend = BuildSegmentTrend(segmentTrendTask.Result.Rows, query);
 
             model.Breakdown = breakdownTask.Result.Rows
@@ -795,15 +869,18 @@ namespace Common.Entities.TeamsExplorer
             var dormantTask = RunAsync<PersonRow>("people-dormant", TeamsExplorerSql.DormantUsers, query, championDays);
             var departmentTask = RunAsync<NameCountRow>("people-departments", TeamsExplorerSql.ChampionsByDepartment, query, championDays);
             var obfuscationTask = RunAsync<ObfuscationProbeRow>("people-obfuscation", TeamsExplorerSql.ObfuscationProbe, query, championDays);
+            var coverageTask = RunAsync<UsageCoverageRow>("people-coverage", TeamsExplorerSql.UsageCoverage, query, championDays);
 
-            await Task.WhenAll(championTask, dormantTask, departmentTask, obfuscationTask).ConfigureAwait(false);
+            await Task.WhenAll(championTask, dormantTask, departmentTask, obfuscationTask, coverageTask).ConfigureAwait(false);
 
             var model = new TeamsPeople { Window = window };
             model.Queries.AddRange(new[]
             {
                 championTask.Result.Info, dormantTask.Result.Info,
-                departmentTask.Result.Info, obfuscationTask.Result.Info,
+                departmentTask.Result.Info, obfuscationTask.Result.Info, coverageTask.Result.Info,
             });
+
+            model.Dormancy = Dormancy(coverageTask.Result);
 
             model.Champions = championTask.Result.Rows
                 .Select(r => ToPerson(r, window.WorkingDays))
@@ -887,6 +964,18 @@ namespace Common.Entities.TeamsExplorer
             info.Sql = TeamsExplorerSql.Describe(scopedSql, query, championDays);
             var watch = Stopwatch.StartNew();
 
+            // Bounded, so a queue degrades one section to a message rather than holding the whole request past the App
+            // Service limit: the command timeout below only starts once a slot is held.
+            if (!await _querySlots.WaitAsync(_queueTimeout).ConfigureAwait(false))
+            {
+                watch.Stop();
+                info.ElapsedMs = watch.ElapsedMilliseconds;
+                info.Error = QueueTimeoutMessage;
+                info.ErrorCode = QueueTimeoutErrorCode;
+                LogQueueTimeout(key, watch.ElapsedMilliseconds);
+                return result;
+            }
+
             try
             {
                 using (var db = _contextFactory.Create())
@@ -900,12 +989,18 @@ namespace Common.Entities.TeamsExplorer
             }
             catch (Exception ex)
             {
-                info.Error = InnermostMessage(ex);
+                // Every reader of the page sees the section's error: the reason and an error reference, never
+                // SqlClient's text, which names servers, databases, logins and objects.
+                var failure = ReportQueryFailure.From(ex);
+                info.Error = failure.EnglishText;
+                info.ErrorReason = failure.Reason;
+                info.ErrorReference = failure.Reference;
                 watch.Stop();
-                LogQueryFailure(key, watch.ElapsedMilliseconds, ex);
+                LogQueryFailure(key, watch.ElapsedMilliseconds, ex, failure.Reference);
             }
             finally
             {
+                _querySlots.Release();
                 watch.Stop();
                 info.ElapsedMs = watch.ElapsedMilliseconds;
             }
@@ -913,12 +1008,27 @@ namespace Common.Entities.TeamsExplorer
             return result;
         }
 
+        private void LogQueueTimeout(string key, long elapsedMs)
+        {
+            if (_logger == null) return;
+
+            try
+            {
+                var message = $"TeamsExplorer query not run: key={key} elapsedMs={elapsedMs} reason={QueueTimeoutErrorCode} slots={MaxConcurrentQueries}";
+                _logger.Log(LogLevel.Warning, 0, message, null, (state, _) => state);
+            }
+            catch (Exception)
+            {
+                // Logging must not turn a degraded section into a failed page.
+            }
+        }
+
         /// <summary>
         /// One Warning per failed statement: the section degrades to a message and the page carries on, so nothing else
-        /// records it server-side. Exception type, SQL error number and timeout flag only - never the message, which can
-        /// carry SQL text or object names.
+        /// records it server-side. Exception type, SQL error number, timeout flag and the error reference the reader was
+        /// shown - never the message, which can carry SQL text or object names.
         /// </summary>
-        private void LogQueryFailure(string key, long elapsedMs, Exception ex)
+        private void LogQueryFailure(string key, long elapsedMs, Exception ex, string errorReference)
         {
             if (_logger == null) return;
 
@@ -934,7 +1044,7 @@ namespace Common.Entities.TeamsExplorer
 
                 var timedOut = (sql != null && sql.Number == -2) || ex is TimeoutException || root is TimeoutException;
                 var sqlNumber = sql != null ? sql.Number.ToString() : "none";
-                var message = $"TeamsExplorer query failed: key={key} elapsedMs={elapsedMs} exceptionType={root.GetType().Name} sqlError={sqlNumber} timedOut={timedOut.ToString().ToLowerInvariant()}";
+                var message = $"TeamsExplorer query failed: key={key} elapsedMs={elapsedMs} exceptionType={root.GetType().Name} sqlError={sqlNumber} timedOut={timedOut.ToString().ToLowerInvariant()} errorReference={errorReference}";
                 _logger.Log(LogLevel.Warning, 0, message, null, (state, _) => state);
             }
             catch (Exception)
@@ -967,6 +1077,7 @@ namespace Common.Entities.TeamsExplorer
                 IntParameter("workStart", TeamsExplorerScoring.WorkingDayStartHour),
                 IntParameter("workEnd", TeamsExplorerScoring.WorkingDayEndHour),
                 IntParameter("championDays", championDays),
+                new SqlParameter("groupFiltered", SqlDbType.Bit) { Value = query.UsageReportsGroupFiltered },
             };
         }
 
@@ -982,18 +1093,6 @@ namespace Common.Entities.TeamsExplorer
         private static SqlParameter IntParameter(string name, int value)
         {
             return new SqlParameter(name, SqlDbType.Int) { Value = value };
-        }
-
-        /// <summary>EF wraps SQL errors; the innermost message (the SqlException) is the useful one.</summary>
-        private static string InnermostMessage(Exception ex)
-        {
-            var current = ex;
-            while (current.InnerException != null)
-            {
-                current = current.InnerException;
-            }
-
-            return current.Message;
         }
 
         #endregion

@@ -1,6 +1,7 @@
 ﻿using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Models;
 using Common.Entities;
+using Common.Entities.Installer;
 using DataUtils;
 using System;
 using System.IO;
@@ -51,16 +52,23 @@ namespace App.ControlPanel
                 // What special operation are we trying to do? 
                 if (args.Contains(InstallerConstants.PARAM_INITDB))
                 {
-                    // Assume we've been passed the Base64 json for DatabaseUpgradeInfo (connection string)
+                    // Base64 of a file holding the DatabaseUpgradeInfo, or from installers before that, base64 of the
+                    // DatabaseUpgradeInfo json itself (connection string). Both are accepted.
                     DatabaseUpgradeInfo initInfo = null;
                     try
                     {
-                        initInfo = DatabaseUpgradeInfo.GetFromBase64String(secondArgfullArgsString);
+                        initInfo = InstallerChildPayloadFile.ReadInitDbArgument(secondArgfullArgsString);
                     }
                     catch (FormatException)
                     {
                         InstallerLogs.AddToWindowsEventLog("Couldn't convert init param from base64; assuming the connection-string was sent in clear-text.");
                         initInfo = new DatabaseUpgradeInfo() { ConnectionString = secondArgfullArgsString };
+                    }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                    {
+                        InstallerLogs.AddToWindowsEventLog($"Couldn't read the database upgrade details the installer passed in a file: {ex.Message}", true);
+                        Environment.ExitCode = 1;
+                        return;
                     }
 
                     // Attempt to upgrade/verify the DB is on the correct migration. Every log line is
@@ -184,15 +192,32 @@ namespace App.ControlPanel
                 using (var db = new AnalyticsEntitiesContext(initInfo.ConnectionString, true, false))
                 {
                     // If we're here, EF has successfully updated/verified the DB. Now register the config and events involved in the install.
+                    // The snapshot is redacted here too, because an installer older than this build sends it with the
+                    // encrypted SQL administrator password and app registration secrets in it.
                     db.ConfigStates.Add(new Common.Entities.Config.ConfigState
                     {
                         InstalledByUser = initInfo.SetupUserName,
                         DateApplied = DateTime.Now,
                         Messages = initInfo.Events.ToSingleString(),
-                        ConfigJson = initInfo.ConfigurationJSon
+                        ConfigJson = InstallConfigSnapshotRedactor.Redact(initInfo.ConfigurationJSon)
                     });
 
                     db.SaveChanges();
+
+                    // Snapshots recorded by earlier installers still hold those secrets. Removing them is housekeeping, so
+                    // a failure is reported without failing the registration.
+                    try
+                    {
+                        var scrubbed = InstallConfigSnapshotRedactor.ScrubStoredSnapshots(db.Database);
+                        if (scrubbed > 0)
+                        {
+                            InstallerLogs.AddToWindowsEventLog($"Removed the encrypted secrets from {scrubbed} earlier configuration snapshot(s).");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        InstallerLogs.AddToWindowsEventLog($"Could not remove the encrypted secrets from earlier configuration snapshots: {ex.Message}", true);
+                    }
                 }
             }
             catch (Exception ex)

@@ -139,7 +139,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
                     // Replace, not upsert: the query answer is a complete snapshot of this scope and window,
                     // so rows it no longer returns are no longer true. Called even when the result is empty,
-                    // because "the filter now matches nothing" has to clear what was there before.
+                    // because "the filter now matches nothing" has to clear what was there before. Only a documented
+                    // empty answer (204 No Content, or an empty 'rows' array) gets here: the source throws for a blank
+                    // or row-less success, so a broken read can never clear the window - or finalise a closed month.
                     log.RowsSaved += await _store.ReplaceAzureCostsAsync(mapped, scope, from, today);
 
                     _logger.LogInformation($"Azure costs for scope '{scope}': read {rows.Count:N0} row(s) for "

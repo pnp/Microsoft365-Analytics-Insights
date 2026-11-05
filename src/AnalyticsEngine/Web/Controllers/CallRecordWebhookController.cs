@@ -41,6 +41,7 @@ namespace Web.AnalyticsWeb.Controllers
         // use (CallSubscriptionRules.CurrentNotificationUrl). The extra parameter needs no binding: Graph appends its
         // validation token as "&validationToken=", which binds below either way.
         [HttpPost]
+        [AllowCrossSiteRequests("Microsoft Graph posts call-record notifications here; no browser session is involved.")]
         public async Task<IActionResult> Post(
             [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] GraphChangeNotificationList changeMsg,
             [FromQuery] string validationToken = "")

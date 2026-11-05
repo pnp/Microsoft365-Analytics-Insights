@@ -19,7 +19,7 @@
          keeps the framework move readable rather than hiding anything new. -->
     <NoWarn>$(NoWarn);SYSLIB0011;SYSLIB0021;SYSLIB0022;SYSLIB0023;SYSLIB0060;CA1416;NU1510</NoWarn>
     <IsPackable>false</IsPackable>
-    <!-- A linked Tests.FakeDataGen file carries its own Main; MSTest would add a second. -->
+    <!-- Program.cs carries its own Main; MSTest would add a second. -->
     <GenerateProgramFile>false</GenerateProgramFile>
   </PropertyGroup>
 
@@ -64,6 +64,9 @@
     <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj" />
     <ProjectReference Include="..\Common\Entities\Entities.csproj" />
     <ProjectReference Include="..\Common\UsageReporting\UsageReporting.csproj" />
+    <!-- The demo generators, compiled once and shared with the Tests.FakeDataGen console. A reference to
+         the console itself is not possible: it references this project. -->
+    <ProjectReference Include="..\Tests.FakeDataGen.Shared\Tests.FakeDataGen.Shared.csproj" />
     <ProjectReference Include="..\WebJob.AppInsightsImporter.Engine\WebJob.AppInsightsImporter.Engine.csproj" />
     <ProjectReference Include="..\WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj" />
     <ProjectReference Include="..\Web\Web.csproj">
@@ -83,55 +86,15 @@
     <EmbeddedResource Include="..\Benchmarks\PromptCategoryEvaluation\synthetic-v1.json" LogicalName="PromptCategoryEvaluation.synthetic-v1.json" />
   </ItemGroup>
 
-  <!-- Source linked from Tests.FakeDataGen. A ProjectReference is not possible: FakeDataGen
-       references this project, so linking the files is how the cycle is avoided. -->
-  <ItemGroup>
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoAgentCosts.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoAreas.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCalendar.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCommand.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCopilotCredits.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCopilotPersonas.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoGenerator.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoInteractive.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoOptions.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoPopulation.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoPortalReadiness.cs" />
-    <!-- The three DemoTables parts are deliberately linked in the order Tests.FakeDataGen's own file
-         glob compiles them on Windows (alphabetical: DemoTables.cs LAST). The parts' static
-         initialisers run in compile order, and a hand-picked order here once hid a flush-order bug that
-         broke every demo with web activity; see the comment on DemoTables.All. -->
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCollaborationTables.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoCollaborationGenerator.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoPowerPlatformTables.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoPowerPlatformGenerator.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoTables.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoTimeline.cs" />
-    <!-- Added by the dev forward-port: demo user organisations (#610). Linked explicitly, like its siblings. -->
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoUserOrganisations.cs" />
-    <!-- Added by the stable build 1835 forward-port: SharePoint web activity demo data (#597).
-         These sit outside this project directory, so the SDK glob cannot see them and they must be
-         linked explicitly, exactly like their siblings above. -->
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoWebCatalogue.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\DemoWebActivityGenerator.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\SqlDemoDatabase.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Demo\SqlExistingDemoDatabase.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotAdoptionPersonas.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotInteractionHistoryGenerator.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotLicenseManager.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotUserManager.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Copilot\CopilotActivityGeneratorConfig.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Generation\ActivityTimestampGenerator.cs" />
-    <Compile Include="..\Tests.FakeDataGen\Seeding\SeedDataCatalogue.cs" />
-  </ItemGroup>
-
   <!-- Configuration comes from appsettings.json plus environment variables (and user secrets
        in Development); see AnalyticsConfig. Copied next to the binary because that is where
        AnalyticsConfig sets its base path. -->
   <ItemGroup>
     <Compile Remove="Generated\**" />
-    <!-- Native workspace tests cannot run or compile in the Linux demo graph. -->
-    <Compile Remove="InstallTests\InstallerLayoutTests.cs;InstallTests\InstallerWorkspaceTests.cs;InstallTests\DeploymentPrerequisitesTests.cs;InstallTests\AzureAIConfigControlTests.cs;InstallTests\OpenAIModelCatalogTests.cs" Condition="'$(AnalyticsTargetOS)' == 'linux'" />
+    <!-- Native workspace tests cannot run or compile in the Linux demo graph, which has no
+         App.ControlPanel.WinForms: nor can the installer secret-handling tests, or the
+         StringCipher test that saves through the installer's MainForm. -->
+    <Compile Remove="InstallTests\InstallerLayoutTests.cs;InstallTests\InstallerWorkspaceTests.cs;InstallTests\DeploymentPrerequisitesTests.cs;InstallTests\AzureAIConfigControlTests.cs;InstallTests\OpenAIModelCatalogTests.cs;InstallTests\InstallerSecretHandlingTests.cs;StringCipherCompatibilityTests.cs" Condition="'$(AnalyticsTargetOS)' == 'linux'" />
     <Content Include="Generated\**" />
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

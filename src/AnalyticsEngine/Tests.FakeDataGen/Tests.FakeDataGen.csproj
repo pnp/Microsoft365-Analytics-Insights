@@ -31,6 +31,9 @@
     <ProjectReference Include="..\App.ControlPanel.Engine\App.ControlPanel.Engine.csproj" />
     <ProjectReference Include="..\Common\DataUtils\DataUtils.csproj" />
     <ProjectReference Include="..\Common\Entities\Entities.csproj" />
+    <!-- The demo generators (Demo\, Copilot\, Generation\, Seeding\) live in the shared project so that
+         this console and Tests.UnitTests run the same compilation of them. -->
+    <ProjectReference Include="..\Tests.FakeDataGen.Shared\Tests.FakeDataGen.Shared.csproj" />
     <ProjectReference Include="..\Tests.UnitTests\Tests.UnitTests.csproj" />
     <ProjectReference Include="..\WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj" />
     <ProjectReference Include="..\WebJob.AppInsightsImporter.Engine\WebJob.AppInsightsImporter.Engine.csproj" />

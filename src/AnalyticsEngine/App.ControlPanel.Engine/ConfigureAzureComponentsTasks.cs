@@ -116,7 +116,9 @@ namespace App.ControlPanel.Engine
                 // Recovery must finish even when the operation was cancelled after stopping the site.
                 async () => { await webApp.StartAsync(); },
                 () => sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLogEvents),
-                () => InstallSolutionContent(solutionSources, subscription, automationAccount), _logger, CancellationToken);
+                () => InstallSolutionContent(solutionSources, subscription, automationAccount), _logger, CancellationToken,
+                () => sqlInstallerTasks.SchemaUpgradeDeferred,
+                () => sqlInstallerTasks.CheckDownloadedBuildBeforeUpgradeAsync());
 
             CancellationToken.ThrowIfCancellationRequested();
             if (this.Config.SolutionConfig.ImportTaskSettings.WebTraffic)
@@ -139,9 +141,28 @@ namespace App.ControlPanel.Engine
 
         internal static async Task RunUpgradeDeploymentAsync(bool installContent, bool upgradeSchema,
             Func<Task> pauseWebJobs, Func<Task> resumeWebJobs, Func<Task> stopSite, Func<Task> startSite,
-            Func<Task> upgradeDatabase, Func<Task> deployContent, ILogger logger, CancellationToken cancellationToken = default(CancellationToken))
+            Func<Task> upgradeDatabase, Func<Task> deployContent, ILogger logger, CancellationToken cancellationToken = default(CancellationToken),
+            Func<bool> schemaUpgradeDeferred = null, Func<Task> preflight = null)
         {
             var elapsed = Stopwatch.StartNew();
+            if (preflight != null)
+            {
+                // Checks that can refuse the upgrade, such as a downloaded build too old to take the database credentials
+                // from a file, run before anything is paused or stopped: a refusal then leaves the WebJobs and the site as
+                // they were, instead of leaving WEBJOBS_STOPPED=1 and the imports stopped until a later run succeeds.
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    await preflight();
+                }
+                catch (Exception ex) when (!(ex is OperationCanceledException))
+                {
+                    logger.LogError("UpgradeDeployment: stage=preflight outcome=Refused exceptionType={ExceptionType}; nothing was paused or stopped, so the WebJobs and the site are as they were.",
+                        ex.GetType().Name);
+                    throw;
+                }
+            }
+
             var stage = "pause";
             var stopAttempted = false;
             Exception upgradeFailure = null;
@@ -202,6 +223,17 @@ namespace App.ControlPanel.Engine
                     stage = "content";
                     await deployContent();
                     cancellationToken.ThrowIfCancellationRequested();
+                }
+                if (schemaUpgradeDeferred?.Invoke() == true)
+                {
+                    logger.LogWarning("UpgradeDeployment: stage=complete outcome=Deferred elapsedMs={ElapsedMs} contentSelected={ContentSelected}; the schema upgrade did not run. " +
+                        "WEBJOBS_STOPPED=1 is retained. Complete the matching release's database upgrade manually or from an approved machine, " +
+                        "then re-run the installer with content deployment enabled to restore the previous WebJobs state. Continuing remaining installation tasks.",
+                        elapsed.ElapsedMilliseconds, installContent);
+                    return;
+                }
+                if (installContent)
+                {
                     stage = "resume";
                     await resumeWebJobs();
                     cancellationToken.ThrowIfCancellationRequested();

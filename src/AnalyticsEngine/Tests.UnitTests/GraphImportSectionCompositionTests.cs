@@ -358,6 +358,46 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CopilotUsageReportCadence_WeeklyReading_IsStampedOnlyWhenItAskedForAReading()
+        {
+            // The weekly 7-day reading can only be taken while Microsoft's newest per-user report is dated that Sunday.
+            // Cycle 1: the 28-day import fails, so the weekly check finds nothing due. Cycle 2, minutes later: the 28-day
+            // import recovers and records Sunday. The weekly check must run in cycle 2; a stamp from the no-op in cycle 1
+            // held it back a whole interval, by when Graph had moved on to Monday and the week was lost.
+            var clock = new FixedClock(new DateTime(2026, 9, 27, 12, 0, 0, DateTimeKind.Utc));
+            var store = new RecordingImportLastRunStore();
+            var runner = new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner(
+                AnalyticsLogger.ConsoleOnlyTracer(), store, clock, intervalHours: 24, force: false);
+
+            var userDetailSucceeds = false;
+            var weeklyDue = false;
+            var weeklyAttempted = false;
+            var userDetailRuns = 0;
+            var weeklyRuns = 0;
+            var reports = new[]
+            {
+                new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner.Report("Copilot per-user usage detail", "copilot-user-detail",
+                    () => { userDetailRuns++; weeklyDue = userDetailSucceeds; return Task.FromResult(userDetailSucceeds); }),
+                new ProductionGraphImportSectionFactory.CopilotUsageReportCadenceRunner.Report("Copilot per-user weekly reading", "copilot-weekly",
+                    () => { weeklyRuns++; weeklyAttempted = weeklyDue; return Task.FromResult(true); }, attempted: () => weeklyAttempted),
+            };
+
+            Assert.IsFalse(await runner.RunAsync(reports), "Cycle 1: the 28-day import failed.");
+            Assert.IsFalse(store.Writes.Any(w => w.Key == "copilot-weekly"), "A weekly check that found nothing due is not stamped.");
+
+            userDetailSucceeds = true;
+            Assert.IsTrue(await runner.RunAsync(reports), "Cycle 2: the 28-day import recovered.");
+            Assert.AreEqual(2, weeklyRuns, "The weekly check ran in the recovered cycle, so it could take the reading.");
+            Assert.IsTrue(store.Writes.Any(w => w.Key == "copilot-weekly"), "A weekly check that asked for a reading is stamped.");
+
+            // Cycle 3, minutes later, as when another report keeps the section retrying: the reading that was asked for is
+            // not asked for again until the interval has passed, whether it was stored or discarded.
+            Assert.IsTrue(await runner.RunAsync(reports));
+            Assert.AreEqual(2, weeklyRuns, "Gated by its stamp after an attempt.");
+            Assert.AreEqual(2, userDetailRuns, "The 28-day import is gated once it has succeeded.");
+        }
+
+        [TestMethod]
         public void TeamTokenManager_HoldsNoProcessWideState()
         {
             // TeamTokenManager used to keep a static Lazy<Dictionary<O365Team, RefreshOAuthToken>> keyed by

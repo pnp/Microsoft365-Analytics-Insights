@@ -8,18 +8,27 @@ using System.Text;
 namespace Common.Entities.State
 {
     /// <summary>Authenticated encryption shared by the portal and importer, not tied to one Windows machine.</summary>
+    /// <remarks>
+    /// The purpose separates the stores that use it: each derives its own keys and authenticates its own
+    /// envelopes, so a value cannot be moved from one store to another. The default purpose is the
+    /// Copilot Studio billing connection's, whose stored caches depend on it.
+    /// </remarks>
     public sealed class AgentCostTokenProtection
     {
-        private const string Purpose = "AnalyticsState.AgentCostDelegatedAuth.v1";
+        public const string DefaultPurpose = "AnalyticsState.AgentCostDelegatedAuth.v1";
+        private readonly string _purpose;
         private readonly string _secret;
         private readonly X509Certificate2 _certificate;
 
-        public AgentCostTokenProtection(string secret, X509Certificate2 certificate = null)
+        public AgentCostTokenProtection(string secret, X509Certificate2 certificate = null, string purpose = DefaultPurpose)
         {
             if (certificate == null && string.IsNullOrWhiteSpace(secret))
                 throw new ArgumentException("A runtime credential is required for token protection.");
+            if (string.IsNullOrWhiteSpace(purpose))
+                throw new ArgumentException("A purpose is required for token protection.", nameof(purpose));
             _secret = secret;
             _certificate = certificate;
+            _purpose = purpose;
         }
 
         public string Protect(byte[] plaintext)
@@ -80,7 +89,7 @@ namespace Common.Entities.State
                 return keys;
             }
             using (var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(_secret)))
-                return hmac.ComputeHash(Encoding.UTF8.GetBytes(Purpose));
+                return hmac.ComputeHash(Encoding.UTF8.GetBytes(_purpose));
         }
 
         private string Wrap(byte[] keys)
@@ -95,8 +104,8 @@ namespace Common.Entities.State
                 return rsa.Decrypt(Convert.FromBase64String(keys), RSAEncryptionPadding.OaepSHA1);
         }
 
-        private static byte[] AuthenticatedBytes(Envelope envelope) =>
-            Encoding.UTF8.GetBytes(Purpose + "|" + envelope.WrappedKey + "|" + envelope.IV + "|" + envelope.Ciphertext);
+        private byte[] AuthenticatedBytes(Envelope envelope) =>
+            Encoding.UTF8.GetBytes(_purpose + "|" + envelope.WrappedKey + "|" + envelope.IV + "|" + envelope.Ciphertext);
 
         private sealed class Envelope
         {

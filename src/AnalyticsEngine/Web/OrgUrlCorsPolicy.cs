@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Cors.Infrastructure;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -25,6 +26,25 @@ namespace Web.AnalyticsWeb
         private static List<string> _cached;
         private static bool _allowAny;
         private static readonly object _gate = new object();
+
+        /// <summary>
+        /// The policy <c>Program</c> registers under <see cref="PolicyName"/>. It never allows credentials: a page on an
+        /// org URL may call the API after a preflight, but its browser will not send the signed-in admin's cookie with
+        /// the request, which is what <see cref="SameOriginStateChangeFilter"/> and
+        /// <see cref="RequireSameOriginXhrAttribute"/> rest on.
+        /// </summary>
+        /// <remarks>
+        /// net10: the ASP.NET Core port first registered this policy with <c>AllowCredentials()</c>, which the Web API
+        /// build never did - its policy leaves <c>SupportsCredentials</c> false. The AITracker, the only caller from
+        /// another origin, sends no credentials.
+        /// </remarks>
+        public static void Configure(CorsPolicyBuilder policy)
+        {
+            policy
+                .SetIsOriginAllowed(IsOriginAllowed)
+                .AllowAnyHeader()
+                .AllowAnyMethod();
+        }
 
         /// <summary>
         /// True when the request's Origin header matches an org URL, or when the table asks for any origin.

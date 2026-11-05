@@ -5,7 +5,7 @@ import CategoryBarChart from '../charts/CategoryBarChart';
 import StackedAreaChart from '../charts/StackedAreaChart';
 import TreemapChart from '../charts/TreemapChart';
 import type { TeamsAdoption, TeamsGrouping } from '../../types/teamsExplorer';
-import { useT, type TranslationKey } from '../../i18n';
+import { plural, useT, type TranslationKey } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
@@ -164,13 +164,35 @@ export default function AdoptionPanel({
     },
   ];
 
+  const otherGroups = data.otherGroups ?? 0;
+  const minimumGroupSize = data.minimumGroupSize ?? null;
+  // The combined row a reader without See PII gets in place of every group too small to name. It is left out when even
+  // all those groups together are too few people, so the note says which of the two happened.
+  const hasOtherRow = data.breakdown.some((row) => row.other);
+  const rowLabel = (row: TeamsAdoption['breakdown'][number]): string =>
+    row.other
+      ? t(plural(otherGroups, 'teamsExplorer.adoption.otherGroups.one', 'teamsExplorer.adoption.otherGroups.other'), {
+          count: formatCount(otherGroups),
+        })
+      : row.name ?? '';
+  const otherNote =
+    otherGroups > 0 && minimumGroupSize != null && data.breakdown.length > 0
+      ? t(hasOtherRow ? 'teamsExplorer.adoption.reachBy.otherNote' : 'teamsExplorer.adoption.reachBy.leftOutNote', {
+          count: formatCount(minimumGroupSize),
+        })
+      : undefined;
+  const allGroupsSmall =
+    otherGroups > 0 && minimumGroupSize != null && data.breakdown.length === 0
+      ? t('teamsExplorer.adoption.reachBy.allGroupsSmall', { count: formatCount(minimumGroupSize) })
+      : undefined;
+
   const reachCategories = data.breakdown.map((row) => ({
-    label: row.name,
+    label: rowLabel(row),
     value: Math.round(row.reachPct * 10) / 10,
   }));
 
   const volumeCategories = data.breakdown.map((row) => ({
-    label: row.name,
+    label: rowLabel(row),
     value: row.activeUsers,
   }));
 
@@ -208,13 +230,14 @@ export default function AdoptionPanel({
           query={queryFor(data.queries, 'adoption-breakdown')}
           isEmpty={data.breakdown.length === 0}
           emptyMessage={
-            demographicsAvailable
+            allGroupsSmall ??
+            (demographicsAvailable
               ? t('teamsExplorer.adoption.reachBy.emptyNoGroups')
-              : t('teamsExplorer.adoption.reachBy.emptyMetadataUnavailable')
+              : t('teamsExplorer.adoption.reachBy.emptyMetadataUnavailable'))
           }
           note={
             demographicsAvailable
-              ? undefined
+              ? otherNote
               : t('teamsExplorer.adoption.reachBy.metadataUnavailableNote')
           }
         >

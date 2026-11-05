@@ -86,9 +86,26 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// The whole usage-report phase, end to end against the configured tenant's Graph. Opt-in: set
+        /// <c>RUN_LIVE_USAGE_REPORT_IMPORT=1</c>.
+        /// </summary>
+        /// <remarks>
+        /// Not run in CI. It downloads every daily report in the import window from the shared test tenant, which
+        /// took between 2 and 18 minutes in CI, and it waits on Graph with the importer's production limits: an
+        /// hour per request, retried within an hour of back-off. So a single stalled or throttled request can outlast
+        /// the core shard's 45-minute timeout, and once did. And it only shows that the phase ends: the phase's result
+        /// is not asserted, and a failing report is logged, not thrown. The phase's decisions are covered offline by
+        /// <c>ReportCompletionStoreTests</c>, and the loaders by the fake-loader tests in this class.
+        /// </remarks>
         [TestMethod]
         public async Task AllO365ActivityTests()
         {
+            if (Environment.GetEnvironmentVariable("RUN_LIVE_USAGE_REPORT_IMPORT") != "1")
+            {
+                Assert.Inconclusive("Live usage-report import against the configured tenant; set RUN_LIVE_USAGE_REPORT_IMPORT=1 to run it.");
+            }
+
             // Run all activity imports for test
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var authConfig = new AppConfig();

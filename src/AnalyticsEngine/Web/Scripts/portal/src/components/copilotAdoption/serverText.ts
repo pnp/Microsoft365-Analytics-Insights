@@ -11,8 +11,9 @@ import type {
 } from '../../types/copilotAdoption';
 import { AdoptionBand, AgentHealth } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
+import { reportQueryFailureText } from '../shared/reportQueryFailure';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
-import { activeLocale, EN_CATALOG, formatDateParts, formatNumber, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
+import { activeLocale, EN_CATALOG, formatDateParts, formatNumber, parseApiDate, plural, type TFunction, type TranslationKey, type TranslationValues } from '../../i18n';
 
 function catalogText(t: TFunction, key: TranslationKey, fallback: string, values?: TranslationValues): string {
   if (activeLocale().startsWith('en')) return fallback;
@@ -45,6 +46,7 @@ export const COPILOT_ADOPTION_WARNING_KEYS = {
   PastRangeNamedListsHidden: 'pastRangeNamedListsHidden',
   CurrentOrgDataForPastRange: 'currentOrgDataForPastRange',
   AgentInventoryAsOfNow: 'agentInventoryAsOfNow',
+  AgentPeriodFiguresUnavailable: 'agentPeriodFiguresUnavailable',
   CoworkEligibilityUnknown: 'coworkEligibilityUnknown',
   PurchasedSeatsUnknown: 'purchasedSeatsUnknown',
   SkuSeatMismatch: 'skuSeatMismatch',
@@ -92,7 +94,7 @@ function warningValues(values?: CopilotAdoptionWarningDetail['values']): Transla
   const mapped: TranslationValues = {};
   Object.entries(values ?? {}).forEach(([key, value]) => {
     if (key === 'historyStart') {
-      const date = new Date(String(value ?? ''));
+      const date = parseApiDate(String(value ?? ''));
       mapped[key] = Number.isNaN(date.getTime())
         ? String(value ?? '')
         : formatDateParts(date, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
@@ -125,6 +127,15 @@ export function copilotAdoptionWarningText(
       t,
       String(detail.values?.query ?? ''),
       String(detail.values?.description ?? ''),
+    );
+    // The server sends a stable reason and an error reference, never the exception's text.
+    const failure = detail.values?.failure;
+    const reference = detail.values?.reference;
+    values.message = reportQueryFailureText(
+      t,
+      failure == null ? null : String(failure),
+      reference == null ? null : String(reference),
+      String(detail.values?.message ?? ''),
     );
   }
   const key = detail.key === COPILOT_ADOPTION_WARNING_KEYS.UsageReportSourcedUsers
@@ -289,6 +300,7 @@ export function actionDescription(t: TFunction, code: string, fallback: string, 
     developingScore: options.developingScore,
     establishedScore: options.establishedScore,
     championScore: options.championScore,
+    breadthTargetApps: options.breadthTargetApps,
   });
   return translated === key ? fallback : translated;
 }
@@ -410,16 +422,18 @@ export function recommendedActionText(t: TFunction, row: LicensedUserAdoptionRow
       });
     case AdoptionBand.Trialling:
       return t('copilotAdoptionUsers.server.recommendedAction.trialling');
+    // Whether someone needs another app depends on the configured breadth target, so it is the server's fact
+    // (needsBroadening) rather than a breadth-score threshold that only held at the default target.
     case AdoptionBand.Developing:
-      return row.breadthScore < 34
+      return row.needsBroadening
         ? t('copilotAdoptionUsers.server.recommendedAction.developing.broaden', { apps: appsPhrase(t, row.appsUsed) })
         : t('copilotAdoptionUsers.server.recommendedAction.developing.grow');
     case AdoptionBand.Established:
-      return row.breadthScore < 50
+      return row.needsBroadening
         ? t('copilotAdoptionUsers.server.recommendedAction.established.broaden', { apps: appsPhrase(t, row.appsUsed) })
         : t('copilotAdoptionUsers.server.recommendedAction.established.sustain');
     case AdoptionBand.Champion:
-      return row.breadthScore < 50
+      return row.needsBroadening
         ? t('copilotAdoptionUsers.server.recommendedAction.champion.broaden', { apps: appsPhrase(t, row.appsUsed) })
         : t('copilotAdoptionUsers.server.recommendedAction.champion.advocate');
     default:

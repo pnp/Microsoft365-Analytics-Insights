@@ -635,7 +635,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task UserMetadataUpdater_ManagerAadIdMismatch_NoDuplicateKeyError()
+        public async Task UserMetadataUpdater_ManagerAadIdMismatch_QuarantinesManagerRatherThanInheritingAnotherObjectsRow()
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var config = new AppConfig();
@@ -665,8 +665,11 @@ namespace Tests.UnitTests
             using (var finalVerifyDb = new AnalyticsEntitiesContext())
             {
                 var allTestUsers = await finalVerifyDb.users.Include(u => u.Manager).Where(u => u.UserPrincipalName == managerUpn || u.UserPrincipalName == employeeUpn).ToListAsync();
-                Assert.AreEqual(2, allTestUsers.Count, "The manager should NOT be duplicated despite AAD ID mismatch");
-                Assert.AreEqual(managerUpn, allTestUsers.First(u => u.UserPrincipalName == employeeUpn).Manager.UserPrincipalName);
+                Assert.AreEqual(2, allTestUsers.Count);
+                Assert.AreEqual(managerOldAadId, allTestUsers.Single(u => u.UserPrincipalName == managerUpn).AzureAdId,
+                    "Without fresh ownership/deletion evidence the old manager's identity and history are untouched.");
+                Assert.IsNull(allTestUsers.Single(u => u.UserPrincipalName == employeeUpn).Manager,
+                    "The quarantined new manager must not resolve to a different Entra object's row just because its UPN matches.");
             }
         }
 
