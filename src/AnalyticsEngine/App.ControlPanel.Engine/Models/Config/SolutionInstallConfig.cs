@@ -3,6 +3,7 @@ using App.ControlPanel.Engine.Models;
 using Azure.Core;
 using Common.Entities.Installer;
 using DataUtils;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -234,25 +235,57 @@ namespace App.ControlPanel.Engine
             return plainText;
         }
 
-        public void Save(string fileName, string password)
+        /// <summary>Writes the configuration, with its secrets encrypted with <paramref name="password"/>, to <paramref name="fileName"/>.</summary>
+        /// <remarks>
+        /// A file whose secrets are in the format older installers read is copied first (<see cref="Version1ConfigBackup"/>), and
+        /// is not overwritten when the copy can't be written.
+        /// </remarks>
+        /// <param name="retryAfterError">
+        /// Told why the file could not be written; returns true to try again. When null, a message box asks.
+        /// </param>
+        /// <param name="notice">
+        /// Told what the operator needs to know about the file once it is saved: where the copy for older installers is. When
+        /// null, a message box tells them.
+        /// </param>
+        /// <returns>Whether the file was written. When it wasn't, it is unchanged on disk.</returns>
+        public bool Save(string fileName, string password, Func<string, bool> retryAfterError = null, Action<string> notice = null)
         {
             var jSon = ToJson(password, includePrivateNetworking: true);
+            retryAfterError = retryAfterError ?? AskToRetrySave;
+            notice = notice ?? ShowSaveNotice;
 
-            var tryAgain = true;
-            while (tryAgain)
+            Version1BackupResult backup = null;
+            while (true)
                 try
                 {
+                    // Before every attempt: a retry after the copy was written finds it, and leaves it alone.
+                    var attempt = Version1ConfigBackup.BeforeOverwriting(fileName);
+                    if (backup?.Outcome != Version1BackupOutcome.Written) backup = attempt;
+
                     File.WriteAllText(fileName, jSon);
                     SavedConfigFileName = Path.GetFullPath(fileName);
-                    tryAgain = false;
+                    break;
                 }
-                catch (IOException ex)
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
                 {
-                    var result = MessageBox.Show($"Error saving config file '{fileName}'.\n\n{ex.Message}",
-                        "IO Error", MessageBoxButtons.RetryCancel, MessageBoxIcon.Error);
-                    tryAgain = (result == DialogResult.Retry);
+                    var message = $"Error saving config file '{fileName}'.\n\n{ex.Message}";
+                    if (ex is Version1ConfigBackupException)
+                    {
+                        message += "\n\nRetry once that folder can be written to, or Cancel and use File > Save Configuration As to " +
+                            "save to a new file, which leaves this one as it is.";
+                    }
+                    if (!retryAfterError(message)) return false;
                 }
+
+            if (backup?.Notice != null) notice(backup.Notice);
+            return true;
         }
+
+        static bool AskToRetrySave(string message) =>
+            MessageBox.Show(message, "IO Error", MessageBoxButtons.RetryCancel, MessageBoxIcon.Error) == DialogResult.Retry;
+
+        static void ShowSaveNotice(string message) =>
+            MessageBox.Show(message, "Save Configuration", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
         public string ToJson(string password, bool includePrivateNetworking = false)
         {
@@ -301,11 +334,32 @@ namespace App.ControlPanel.Engine
             return json;
         }
 
-        internal void CheckpointPrivateNetworking(string password)
+        /// <summary>
+        /// Saves the configuration over the file it was opened from or last saved to, while an installation changes private
+        /// networking, so the creator provenance it records is durable before Azure changes.
+        /// </summary>
+        /// <param name="logger">Told where the copy kept for older installers is, when this save keeps one.</param>
+        /// <exception cref="CloudInstallEngine.Models.InstallException">
+        /// There is no saved file, or the copy for older installers could not be written first: nothing was saved.
+        /// </exception>
+        internal void CheckpointPrivateNetworking(string password, ILogger logger = null)
         {
             if (string.IsNullOrWhiteSpace(SavedConfigFileName))
                 throw new CloudInstallEngine.Models.InstallException(
                     "Save the installer configuration to disk before changing private networking. Creator provenance must be durable before Azure changes.");
+
+            Version1BackupResult backup;
+            try
+            {
+                // Normally the save before the installation has already done this, and there is nothing to do.
+                backup = Version1ConfigBackup.BeforeOverwriting(SavedConfigFileName);
+            }
+            catch (Version1ConfigBackupException ex)
+            {
+                throw new CloudInstallEngine.Models.InstallException(
+                    "Private networking was not changed, because the installer configuration has to be saved first. " + ex.Message +
+                    " Make that folder writable, then run the installation again.");
+            }
 
             var checkpoint = SavedConfigFileName + ".network-checkpoint-new";
             try
@@ -317,6 +371,8 @@ namespace App.ControlPanel.Engine
             {
                 if (File.Exists(checkpoint)) File.Delete(checkpoint);
             }
+
+            if (backup.Notice != null) logger?.LogWarning(backup.Notice);
         }
 
         public void PreservePrivateNetworkingStateFrom(SolutionInstallConfig previous)

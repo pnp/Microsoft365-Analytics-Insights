@@ -52,7 +52,12 @@ namespace Common.Entities.Installer
         //          3.4.0 -> 3.5.0 added ImportTaskSettings.CopilotCostManagement (opt-in PREVIEW Copilot
         //          credit history via a delegated reader; mirrored to the CopilotCostConnectionEnabled
         //          app setting). Additive: older configs load with it off. See issue #769.
-        const string CONFIG_VERSION = "3.5.0";
+        //          3.5.0 -> 3.6.0 no property change: the saved secrets (SQLServerAdminPasswordHash and both
+        //          accounts' SecretHash) are now written in StringCipher version 2 ("v2:"), which installers
+        //          before this build can't read (they say the password is wrong). The first save over a file
+        //          with version 1 secrets writes a byte-for-byte <name>.v1-backup.json next to it first
+        //          (Version1ConfigBackup).
+        const string CONFIG_VERSION = "3.6.0";
 
         public BaseSolutionInstallConfig()
         {

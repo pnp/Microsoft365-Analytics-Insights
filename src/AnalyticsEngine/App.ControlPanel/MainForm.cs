@@ -13,6 +13,10 @@ namespace App.ControlPanel
         public MainForm()
         {
             InitializeComponent();
+            RetryFailedSave = message => MessageBox.Show(this, message, "Save Configuration",
+                MessageBoxButtons.RetryCancel, MessageBoxIcon.Error) == DialogResult.Retry;
+            ShowSaveNotice = message => MessageBox.Show(this, message, "Save Configuration",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
             installSPOSitesControl.OpenConfigurationRequested += mnuOpenConfig_Click;
             installSPOSitesControl.NewConfigurationRequested += (sender, args) =>
             {
@@ -49,6 +53,15 @@ namespace App.ControlPanel
         public string LastConfigFilePath { get; set; }
 
         public InstallerPreferences SavedPreferences { get; set; }
+
+        /// <summary>Shown why a configuration file could not be saved; returns true to try again. Asks with a message box.</summary>
+        public Func<string, bool> RetryFailedSave { get; set; }
+
+        /// <summary>
+        /// Shown what the operator needs to know about a configuration file just saved: where the copy kept for older installers is.
+        /// Shows a message box.
+        /// </summary>
+        public Action<string> ShowSaveNotice { get; set; }
 
         #endregion
 
@@ -326,12 +339,15 @@ namespace App.ControlPanel
         }
 
 
+        /// <summary>
+        /// Saves to the file Save writes to, or asks for one. Installing calls it first, and doesn't start when it returns false.
+        /// </summary>
+        /// <returns>Whether the configuration was saved.</returns>
         public bool SaveLastSettings()
         {
             if (this.HaveSavedConfig)
             {
-                SaveCurrentSettings(this.LastConfigFilePath, this.LastPassword);
-                return true;
+                return SaveCurrentSettings(this.LastConfigFilePath, this.LastPassword);
             }
             else
             {
@@ -346,24 +362,27 @@ namespace App.ControlPanel
                 var passwordForm = (new EnterPasswordForm());
                 if (passwordForm.ShowDialog() == DialogResult.OK)
                 {
-                    SaveCurrentSettings(saveFileDialog.FileName, passwordForm.Password);
-                    return true;
+                    return SaveCurrentSettings(saveFileDialog.FileName, passwordForm.Password);
                 }
             }
             return false;
         }
 
-        public void SaveCurrentSettings(string fileName, string password)
+        /// <returns>
+        /// Whether the file was saved. When it wasn't, it is unchanged, and Save still writes to the file it wrote to before.
+        /// </returns>
+        public bool SaveCurrentSettings(string fileName, string password)
         {
 
             // Get latest config from current UI
             this.LoadedConfig = this.SelectedUI.GetConfigurationState();
 
             // Save to disk
-            this.LoadedConfig.Save(fileName, password);
+            if (!this.LoadedConfig.Save(fileName, password, RetryFailedSave, ShowSaveNotice)) return false;
 
             // Remember state
             SetCurrentSaveContext(fileName, password);
+            return true;
         }
 
 

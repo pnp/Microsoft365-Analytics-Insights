@@ -1,5 +1,7 @@
 ﻿using App.ControlPanel.Engine;
+using Common.Entities.Installer;
 using DataUtils;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -537,6 +539,315 @@ namespace Tests.UnitTests
                 "rather than silently loading garbage or an empty secret.");
             Assert.AreNotEqual(GoldenAsciiPlain, result.Config.SQLServerAdminPassword,
                 "The wrong password recovered the real SQL admin password.");
+        }
+
+        #endregion
+
+        #region The copy older installers can open, kept by the first save over a version 1 file
+
+        /// <summary>
+        /// A configuration file as an installer from before version 2 left it, with every secret in version 1. Indented and with
+        /// a byte order mark, unlike anything this build writes, so only a byte-for-byte copy can match it.
+        /// </summary>
+        static byte[] Version1ConfigFile(string resourceGroupName = "contoso-analytics")
+        {
+            var config = SolutionInstallConfig.NewConfig();
+            config.ResourceGroupName = resourceGroupName;
+            config.Tags.Add(new AzTag("Purpose", "Καλημέρα κόσμε"));
+            config.SQLServerAdminPasswordHash = GoldenAsciiCipher;
+            config.InstallerAccount.SecretHash = GoldenSpecialCipher;
+            config.ActivityAccount.SecretHash = GoldenGreekCipher;
+            config.ConfigSchemaVersion = new Version(3, 5, 0);
+            var text = JsonConvert.SerializeObject(config, Formatting.Indented) + "\r\n";
+            return new UTF8Encoding(true).GetPreamble().Concat(Encoding.UTF8.GetBytes(text)).ToArray();
+        }
+
+        static string[] SavedSecrets(string path)
+        {
+            var saved = JObject.Parse(File.ReadAllText(path));
+            return new[]
+            {
+                (string)saved["SQLServerAdminPasswordHash"],
+                (string)saved.SelectToken("InstallerAccount.SecretHash"),
+                (string)saved.SelectToken("ActivityAccount.SecretHash"),
+            };
+        }
+
+        static bool FailOnSaveError(string error)
+        {
+            Assert.Fail("The save failed: " + error);
+            return false;
+        }
+
+        static void InScratchDirectory(Action<string> test)
+        {
+            var directory = Path.Combine(Environment.CurrentDirectory, "contoso-v1-backup-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                test(directory);
+            }
+            finally
+            {
+                foreach (var file in Directory.GetFiles(directory)) File.SetAttributes(file, FileAttributes.Normal);
+                Directory.Delete(directory, true);
+            }
+        }
+
+        [TestMethod]
+        public void TheFirstSaveOverAVersion1File_KeepsAByteForByteCopyFirst()
+        {
+            InScratchDirectory(directory =>
+            {
+                var path = Path.Combine(directory, "Contoso.json");
+                var original = Version1ConfigFile();
+                File.WriteAllBytes(path, original);
+                var opened = SolutionInstallConfig.LoadFromFile(path, PassPhrase);
+                Assert.IsTrue(opened.CanBecomeSaveTarget, "Fixture: the file should open completely.");
+                var notices = new List<string>();
+
+                Assert.IsTrue(opened.Config.Save(path, PassPhrase, FailOnSaveError, notices.Add));
+
+                var backup = Path.Combine(directory, "Contoso.v1-backup.json");
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(backup), "The copy must be the file exactly as it was on disk.");
+                CollectionAssert.AreEqual(new[] { GoldenAsciiCipher, GoldenSpecialCipher, GoldenGreekCipher }, SavedSecrets(backup),
+                    "The copy keeps the version 1 values, which installers from before version 2 decrypt.");
+                Assert.IsTrue(SavedSecrets(path).All(StringCipher.IsCurrentFormat), "The file itself is saved in the current format.");
+
+                var reopened = SolutionInstallConfig.LoadFromFile(path, PassPhrase);
+                Assert.IsTrue(reopened.DecryptedOk);
+                Assert.AreEqual(GoldenAsciiPlain, reopened.Config.SQLServerAdminPassword);
+                Assert.AreEqual(GoldenSpecialPlain, reopened.Config.InstallerAccount.Secret);
+                Assert.AreEqual(GoldenGreekPlain, reopened.Config.ActivityAccount.Secret);
+                Assert.AreEqual("Καλημέρα κόσμε", reopened.Config.Tags.Single().Value);
+
+                Assert.AreEqual(1, notices.Count, "The operator must be told about the copy.");
+                StringAssert.Contains(notices[0], backup);
+                StringAssert.Contains(notices[0], "older installers can open");
+                StringAssert.Contains(notices[0], "older, weaker encryption");
+                StringAssert.Contains(notices[0], "delete it");
+            });
+        }
+
+        [TestMethod]
+        public void SavingAgain_LeavesTheCopyAlone()
+        {
+            InScratchDirectory(directory =>
+            {
+                var path = Path.Combine(directory, "Contoso.json");
+                var original = Version1ConfigFile();
+                File.WriteAllBytes(path, original);
+                var config = SolutionInstallConfig.LoadFromFile(path, PassPhrase).Config;
+                var notices = new List<string>();
+                Assert.IsTrue(config.Save(path, PassPhrase, FailOnSaveError, notices.Add));
+                var backup = Version1ConfigBackup.PathFor(path);
+                var copiedAt = File.GetLastWriteTimeUtc(backup);
+
+                config.ResourceGroupName = "contoso-analytics-renamed";
+                Assert.IsTrue(config.Save(path, PassPhrase, FailOnSaveError, notices.Add));
+
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(backup));
+                Assert.AreEqual(copiedAt, File.GetLastWriteTimeUtc(backup), "The copy was written again.");
+                Assert.AreEqual(1, notices.Count, "Only the save that changed the format has anything to tell.");
+                Assert.AreEqual("contoso-analytics-renamed", (string)JObject.Parse(File.ReadAllText(path))["ResourceGroupName"]);
+                CollectionAssert.AreEquivalent(new[] { path, backup }, Directory.GetFiles(directory), "One copy, and no other file.");
+            });
+        }
+
+        [TestMethod]
+        public void AnExistingCopy_IsNeverReplaced()
+        {
+            InScratchDirectory(directory =>
+            {
+                var path = Path.Combine(directory, "Contoso.json");
+                var backup = Path.Combine(directory, "Contoso.v1-backup.json");
+                // Kept the first time round, before the operator went back to an older installer and saved from it.
+                var firstCopy = Version1ConfigFile("contoso-analytics-first");
+                File.WriteAllBytes(backup, firstCopy);
+                File.WriteAllBytes(path, Version1ConfigFile());
+                var config = SolutionInstallConfig.LoadFromFile(path, PassPhrase).Config;
+                var notices = new List<string>();
+
+                Assert.IsTrue(config.Save(path, PassPhrase, FailOnSaveError, notices.Add));
+
+                CollectionAssert.AreEqual(firstCopy, File.ReadAllBytes(backup), "An existing copy may be the only one an older installer can open.");
+                Assert.IsTrue(SavedSecrets(path).All(StringCipher.IsCurrentFormat));
+                Assert.AreEqual(1, notices.Count);
+                StringAssert.Contains(notices[0], backup);
+                StringAssert.Contains(notices[0], "already existed");
+            });
+        }
+
+        [DataTestMethod]
+        [DataRow("new", DisplayName = "A new file")]
+        [DataRow("version 2", DisplayName = "A file this installer saved")]
+        [DataRow("no secret", DisplayName = "An older file with no secret saved")]
+        public void AFileWithNoVersion1Secret_GetsNoCopy(string onDisk)
+        {
+            InScratchDirectory(directory =>
+            {
+                var path = Path.Combine(directory, "Contoso.json");
+                var config = SolutionInstallConfig.NewConfig();
+                config.SQLServerAdminPassword = GoldenAsciiPlain;
+                config.InstallerAccount.Secret = GoldenSpecialPlain;
+                if (onDisk == "version 2") Assert.IsTrue(config.Save(path, PassPhrase, FailOnSaveError, notice => Assert.Fail(notice)));
+                if (onDisk == "no secret") File.WriteAllText(path, JsonConvert.SerializeObject(SolutionInstallConfig.NewConfig()));
+                var notices = new List<string>();
+
+                Assert.IsTrue(config.Save(path, PassPhrase, FailOnSaveError, notices.Add));
+
+                CollectionAssert.AreEqual(new[] { path }, Directory.GetFiles(directory), "An older installer loses nothing, so there is nothing to copy.");
+                Assert.AreEqual(0, notices.Count);
+                Assert.IsTrue(SavedSecrets(path).Where(secret => secret.Length > 0).All(StringCipher.IsCurrentFormat));
+            });
+        }
+
+        [TestMethod]
+        public void TheNetworkingCheckpoint_KeepsTheCopyToo()
+        {
+            InScratchDirectory(directory =>
+            {
+                var path = Path.Combine(directory, "Contoso.json");
+                var original = Version1ConfigFile();
+                File.WriteAllBytes(path, original);
+                // An installation run from a file that was opened but not saved again: its first checkpoint is the first save.
+                var config = SolutionInstallConfig.LoadFromFile(path, PassPhrase).Config;
+                var log = new CapturingLogger();
+
+                config.CheckpointPrivateNetworking(PassPhrase, log);
+                config.CheckpointPrivateNetworking(PassPhrase, log);
+
+                var backup = Version1ConfigBackup.PathFor(path);
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(backup));
+                Assert.IsTrue(SavedSecrets(path).All(StringCipher.IsCurrentFormat));
+                Assert.IsNotNull(JObject.Parse(File.ReadAllText(path))["PrivateNetworking"], "The checkpoint still saves what it is for.");
+                StringAssert.Contains(log.Single(LogLevel.Warning), backup, "Logged once, by the checkpoint that kept the copy.");
+                Assert.IsFalse(File.Exists(path + ".network-checkpoint-new"));
+            });
+        }
+
+        [TestMethod]
+        public void WhenTheCopyCannotBeWritten_SaveLeavesTheFileUnchanged_UntilItCanBe()
+        {
+            InScratchDirectory(directory =>
+            {
+                var path = Path.Combine(directory, "Contoso.json");
+                var original = Version1ConfigFile();
+                File.WriteAllBytes(path, original);
+                var config = SolutionInstallConfig.LoadFromFile(path, PassPhrase).Config;
+                var backup = Version1ConfigBackup.PathFor(path);
+                // A folder by that name: creating the copy fails, as it does in a folder the operator can't add files to.
+                Directory.CreateDirectory(backup);
+                var errors = new List<string>();
+                var notices = new List<string>();
+
+                Assert.IsFalse(config.Save(path, PassPhrase, error => { errors.Add(error); return false; }, notices.Add));
+
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(path), "The file older installers can open was overwritten with no copy.");
+                Assert.AreEqual(1, errors.Count);
+                StringAssert.Contains(errors[0], "was not saved, and is unchanged");
+                StringAssert.Contains(errors[0], backup);
+                StringAssert.Contains(errors[0], "Save Configuration As");
+                Assert.AreEqual(0, notices.Count);
+
+                // Retried once the copy can be written, the save goes ahead, copy first.
+                Assert.IsTrue(config.Save(path, PassPhrase, error => { Directory.Delete(backup); return true; }, notices.Add));
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(backup));
+                Assert.IsTrue(SavedSecrets(path).All(StringCipher.IsCurrentFormat));
+                Assert.AreEqual(1, notices.Count);
+            });
+        }
+
+        /// <summary>
+        /// The copy is written, then the file itself can't be: the copy stays, and the save that does write the file says where
+        /// it is as a copy of the file as it was, not as one that "already existed".
+        /// </summary>
+        [TestMethod]
+        public void WhenOnlyTheFileCannotBeWritten_TheCopyStays_AndTheSaveThatWritesItReportsIt()
+        {
+            InScratchDirectory(directory =>
+            {
+                var path = Path.Combine(directory, "Contoso.json");
+                var original = Version1ConfigFile();
+                File.WriteAllBytes(path, original);
+                var config = SolutionInstallConfig.LoadFromFile(path, PassPhrase).Config;
+                File.SetAttributes(path, FileAttributes.ReadOnly);
+                var errors = new List<string>();
+                var notices = new List<string>();
+
+                Assert.IsFalse(config.Save(path, PassPhrase, error => { errors.Add(error); return false; }, notices.Add));
+
+                Assert.AreEqual(1, errors.Count, "A file that can't be written is reported, and the save can be retried.");
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(path));
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(Version1ConfigBackup.PathFor(path)));
+                Assert.AreEqual(0, notices.Count, "Nothing was saved.");
+
+                File.SetAttributes(path, FileAttributes.Normal);
+                Assert.IsTrue(config.Save(path, PassPhrase, FailOnSaveError, notices.Add));
+                Assert.AreEqual(1, notices.Count);
+                StringAssert.Contains(notices[0], "kept a copy of the file as it was");
+                Assert.IsTrue(SavedSecrets(path).All(StringCipher.IsCurrentFormat));
+            });
+        }
+
+        [TestMethod]
+        public void WhenTheCopyCannotBeWritten_TheNetworkingCheckpointStopsTheInstallation()
+        {
+            InScratchDirectory(directory =>
+            {
+                var path = Path.Combine(directory, "Contoso.json");
+                var original = Version1ConfigFile();
+                File.WriteAllBytes(path, original);
+                var config = SolutionInstallConfig.LoadFromFile(path, PassPhrase).Config;
+                var backup = Version1ConfigBackup.PathFor(path);
+                Directory.CreateDirectory(backup);
+
+                var refused = Assert.ThrowsException<CloudInstallEngine.Models.InstallException>(
+                    () => config.CheckpointPrivateNetworking(PassPhrase, new CapturingLogger()));
+
+                StringAssert.Contains(refused.Message, "Private networking was not changed");
+                StringAssert.Contains(refused.Message, backup);
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(path), "The file older installers can open was overwritten with no copy.");
+                Assert.IsFalse(File.Exists(path + ".network-checkpoint-new"));
+            });
+        }
+
+        /// <summary>Installing saves first, and must not start when that save could not keep the copy.</summary>
+        [TestMethod]
+        public void Installing_DoesNotStart_WhileTheSaveBeforeItCannotKeepTheCopy()
+        {
+            InScratchDirectory(directory =>
+            {
+                var path = Path.Combine(directory, "Contoso.json");
+                var original = Version1ConfigFile();
+                File.WriteAllBytes(path, original);
+                var backup = Version1ConfigBackup.PathFor(path);
+                Directory.CreateDirectory(backup);
+                var notices = new List<string>();
+
+                InstallTests.InstallerWorkspaceTests.RunSta(() =>
+                {
+                    using (var form = new App.ControlPanel.MainForm())
+                    {
+                        form.SelectedUI = form;
+                        form.RetryFailedSave = error => false;
+                        form.ShowSaveNotice = notices.Add;
+                        form.OpenConfigFile(path, () => PassPhrase, _ => System.Windows.Forms.DialogResult.Cancel, error => Assert.Fail(error));
+
+                        // What the Install button calls before it starts anything.
+                        Assert.IsFalse(form.SaveLastSettings(), "The installation would start with the configuration unsaved.");
+                        CollectionAssert.AreEqual(original, File.ReadAllBytes(path));
+                        Assert.AreEqual(path, form.LastConfigFilePath, "Save still writes where it did.");
+
+                        Directory.Delete(backup);
+                        Assert.IsTrue(form.SaveLastSettings());
+                    }
+                });
+
+                CollectionAssert.AreEqual(original, File.ReadAllBytes(backup));
+                Assert.IsTrue(SavedSecrets(path).All(StringCipher.IsCurrentFormat));
+                Assert.AreEqual(1, notices.Count);
+            });
         }
 
         #endregion

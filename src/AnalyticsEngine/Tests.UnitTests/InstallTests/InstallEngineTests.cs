@@ -127,10 +127,10 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void NewConfigSchemaVersionIncludesCopilotCreditHistoryPreview()
+        public void NewConfigSchemaVersionMarksVersion2Secrets()
         {
-            Assert.AreEqual(new Version(3, 5, 0), new SolutionInstallConfig().ConfigSchemaVersion);
-            Assert.AreEqual(new Version(3, 5, 0), BaseSolutionInstallConfig.CurrentConfigSchemaVersion);
+            Assert.AreEqual(new Version(3, 6, 0), new SolutionInstallConfig().ConfigSchemaVersion);
+            Assert.AreEqual(new Version(3, 6, 0), BaseSolutionInstallConfig.CurrentConfigSchemaVersion);
         }
 
         [TestMethod]
