@@ -2,6 +2,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Common.Entities.TeamsExplorer
 {
@@ -24,8 +25,25 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>The SQL that produced the section, with its parameters declared, ready to paste into SSMS.</summary>
         public string Sql { get; set; }
 
-        /// <summary>The innermost error message when the section failed; null when it succeeded.</summary>
+        /// <summary>
+        /// When the section failed, what its reader is told in English: for a query that ran and failed, the reason and
+        /// an error reference, never the exception's text (<see cref="ReportQueryFailure"/>); for a section the server
+        /// did not run, the English fallback for <see cref="ErrorCode"/>. Null when it succeeded.
+        /// </summary>
         public string Error { get; set; }
+
+        /// <summary>
+        /// A stable code for a failure the server itself decided on, so the page can word it in the reader's language;
+        /// null for a query that ran and failed, which carries <see cref="ErrorReason"/> and <see cref="ErrorReference"/>
+        /// instead. <see cref="Error"/> carries an English fallback whenever this is set.
+        /// </summary>
+        public string ErrorCode { get; set; }
+
+        /// <summary>The failure's stable reason (<see cref="ReportQueryFailure.Reason"/>), which the portal words.</summary>
+        public string ErrorReason { get; set; }
+
+        /// <summary>The error reference the server log carries for this failure.</summary>
+        public string ErrorReference { get; set; }
 
         /// <summary>How long the query took, for spotting the section that needs an index.</summary>
         public long ElapsedMs { get; set; }
@@ -84,11 +102,19 @@ namespace Common.Entities.TeamsExplorer
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class TeamsNamedCountRow
     {
+        /// <summary>The value's name; <c>null</c> for the folded <see cref="Other"/> row.</summary>
         public string Name { get; set; }
         public long Count { get; set; }
 
         /// <summary>Share of the section's total, 0-100. Null where a share is meaningless.</summary>
         public double? SharePct { get; set; }
+
+        /// <summary>
+        /// True for the single row a reader without See PII gets in place of every count too small to show by name
+        /// (see <see cref="TeamsPeople.WithoutIndividualData"/>). Sent only when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Other { get; set; }
     }
 
     /// <summary>One bucket of a distribution (meeting size, duration, period of day, rating...).</summary>
@@ -111,7 +137,11 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>Directory users the reach percentage is measured against.</summary>
         public int KnownUsers { get; set; }
 
-        /// <summary>Distinct users with any Teams activity in the usage-report window.</summary>
+        /// <summary>
+        /// Enabled (or unknown) directory users with any Teams activity in the usage-report window - the same
+        /// population as <see cref="KnownUsers"/>, so reach can never count a since-disabled account on one side
+        /// only.
+        /// </summary>
         public int ActiveUsers { get; set; }
 
         public double ReachPct { get; set; }
@@ -181,6 +211,82 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsTrendPoint> Trend { get; set; } = new List<TeamsTrendPoint>();
         public List<TeamsSegmentSlice> SegmentMix { get; set; } = new List<TeamsSegmentSlice>();
         public List<TeamsJudgement> Judgements { get; set; } = new List<TeamsJudgement>();
+
+        /// <summary>Whether the engagement mix's Dormant share could be measured, and why not.</summary>
+        public TeamsDormancy Dormancy { get; set; } = new TeamsDormancy();
+    }
+
+    /// <summary>
+    /// Whether the usage reports can prove that somebody did nothing in Teams in the window, and the facts behind
+    /// the answer, so the page can say why when they cannot.
+    /// </summary>
+    /// <remarks>
+    /// The importer reads Graph's Teams user-activity report one date at a time, and Microsoft documents that form
+    /// as listing the users who performed activity on that date. A licensed person with no row is therefore dormant
+    /// only when every day of the window was imported, the import covers everyone, and the reports carry real
+    /// names (see <see cref="TeamsExplorerSql.UsageCoverageDeclarations"/>). When any of those fails, such people
+    /// are left out of the Dormant segment and list - and counted in <see cref="UnmeasuredUsers"/> - rather than
+    /// called dormant on evidence that cannot show it.
+    /// </remarks>
+    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
+    public sealed class TeamsDormancy
+    {
+        /// <summary><see cref="Reason"/> when a day of the window has no usage report imported.</summary>
+        public const string IncompleteImport = "incompleteImport";
+
+        /// <summary><see cref="Reason"/> when the usage import is narrowed to members of some groups.</summary>
+        public const string GroupFiltered = "groupFiltered";
+
+        /// <summary><see cref="Reason"/> when the usage reports carry concealed names.</summary>
+        public const string NamesConcealed = "namesConcealed";
+
+        /// <summary><see cref="Reason"/> when nobody in scope holds a licence that includes Teams, as far as the directory shows.</summary>
+        public const string NoTeamsLicences = "noTeamsLicences";
+
+        /// <summary><see cref="Reason"/> when the check itself failed, so nothing can be said.</summary>
+        public const string NotChecked = "notChecked";
+
+        /// <summary>True when a licensed person with no Teams activity can be called dormant.</summary>
+        public bool Known { get; set; }
+
+        /// <summary>A stable key for why <see cref="Known"/> is false (the page writes the sentence); null when it is true.</summary>
+        public string Reason { get; set; }
+
+        /// <summary>Days in the usage window.</summary>
+        public int ExpectedDays { get; set; }
+
+        /// <summary>Days in the usage window with a Teams usage report imported - any row at all, from anyone.</summary>
+        public int ImportedDays { get; set; }
+
+        /// <summary>Enabled people in scope holding a licence that includes Teams.</summary>
+        public int TeamsLicensedUsers { get; set; }
+
+        /// <summary>
+        /// Licensed people with no usage row in the window, left out of the engagement mix because
+        /// <see cref="Known"/> is false. Always 0 when it is true, and on the People tab.
+        /// </summary>
+        public int UnmeasuredUsers { get; set; }
+
+        /// <summary>The answer for the facts <see cref="TeamsExplorerSql.UsageCoverage"/> returned; null when it failed.</summary>
+        public static TeamsDormancy From(TeamsExplorerRows.UsageCoverageRow row)
+        {
+            if (row == null) return new TeamsDormancy { Known = false, Reason = NotChecked };
+
+            string reason = null;
+            if (row.ImportedDays < row.ExpectedDays) reason = IncompleteImport;
+            else if (row.GroupFiltered) reason = GroupFiltered;
+            else if (row.NamesConcealed) reason = NamesConcealed;
+            else if (row.TeamsLicensedUsers == 0) reason = NoTeamsLicences;
+
+            return new TeamsDormancy
+            {
+                Known = reason == null,
+                Reason = reason,
+                ExpectedDays = row.ExpectedDays,
+                ImportedDays = row.ImportedDays,
+                TeamsLicensedUsers = row.TeamsLicensedUsers,
+            };
+        }
     }
 
     #endregion
@@ -221,7 +327,15 @@ namespace Common.Entities.TeamsExplorer
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class TeamsDemographicRow
     {
+        /// <summary>Tenant data, never translated. <c>null</c> for the folded <see cref="Other"/> row.</summary>
         public string Name { get; set; }
+
+        /// <summary>
+        /// True for the single row a reader without See PII gets in place of every group too small to show by name
+        /// (see <see cref="TeamsAdoption.WithoutSmallGroups"/>).
+        /// </summary>
+        public bool Other { get; set; }
+
         public int KnownUsers { get; set; }
         public int ActiveUsers { get; set; }
         public double ReachPct { get; set; }
@@ -266,6 +380,108 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsDemographicRow> Breakdown { get; set; } = new List<TeamsDemographicRow>();
         public List<TeamsDeviceRow> Devices { get; set; } = new List<TeamsDeviceRow>();
         public TeamsLifecycle Lifecycle { get; set; } = new TeamsLifecycle();
+
+        /// <summary>Whether the segment mix's Dormant share could be measured, and why not.</summary>
+        public TeamsDormancy Dormancy { get; set; } = new TeamsDormancy();
+
+        /// <summary>
+        /// The fewest people a breakdown row describes, for a reader without See PII; <c>null</c> when every group is
+        /// shown. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>
+        /// How many groups were folded into the <see cref="TeamsDemographicRow.Other"/> row - or, when even all of
+        /// them together are too few people, left out of <see cref="Breakdown"/> altogether. 0 when nothing was.
+        /// </summary>
+        public int OtherGroups { get; set; }
+
+        /// <summary>
+        /// This section for a reader who does not hold the portal's See PII permission (#661, #680): no breakdown row
+        /// describes fewer than <paramref name="minimumPeople"/> people. A group is too small when it has fewer people,
+        /// or when fewer than that - but some - of them were active, since its messages and meetings per active user
+        /// are then those few people's own. Small groups are folded into one unnamed row; when that row is itself too
+        /// small, the smallest shown group goes into it too, so that it cannot be worked out as the difference
+        /// either. A shallow copy: the section is cached and shared between readers.
+        /// </summary>
+        public TeamsAdoption WithoutSmallGroups(int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var shown = new List<TeamsDemographicRow>();
+            var folded = new List<TeamsDemographicRow>();
+            foreach (var row in Breakdown ?? new List<TeamsDemographicRow>())
+            {
+                if (IsSmall(row, minimumPeople)) folded.Add(row);
+                else shown.Add(row);
+            }
+
+            var other = Combine(folded);
+            while (folded.Count > 0 && IsSmall(other, minimumPeople))
+            {
+                // A shown group has the minimum or more people, and none or the minimum or more of them active. So
+                // when the folded row is short of active people, only a group with active people can make it up.
+                var candidates = other.ActiveUsers > 0 ? shown.Where(r => r.ActiveUsers > 0) : shown;
+                var smallest = candidates
+                    .OrderBy(r => r.KnownUsers)
+                    .ThenBy(r => r.ActiveUsers)
+                    .ThenBy(r => r.Name, StringComparer.Ordinal)
+                    .FirstOrDefault();
+                if (smallest == null) break;
+                shown.Remove(smallest);
+                folded.Add(smallest);
+                other = Combine(folded);
+            }
+
+            // Still too few people when everything that could be folded has been: the row is left out.
+            if (folded.Count > 0 && !IsSmall(other, minimumPeople)) shown.Add(other);
+
+            var copy = (TeamsAdoption)MemberwiseClone();
+            copy.Breakdown = shown;
+            copy.MinimumGroupSize = minimumPeople;
+            copy.OtherGroups = folded.Count;
+            return copy;
+        }
+
+        private static bool IsSmall(TeamsDemographicRow row, int minimumPeople) =>
+            row.KnownUsers < minimumPeople || (row.ActiveUsers > 0 && row.ActiveUsers < minimumPeople);
+
+        /// <summary>
+        /// This section with its breakdown cut to the first <paramref name="top"/> named groups, keeping the combined row.
+        /// For a reader without See PII, <see cref="WithoutSmallGroups"/> runs over every group (the query is read with
+        /// <see cref="TeamsExplorerQuery.WithEveryRow"/>) and this then cuts the result to the rows the page asked for. When
+        /// the fold ran over only the rows a reader-chosen <c>top</c> had returned, two requests one row apart folded
+        /// different groups, and subtracting one combined row from the other recovered a small group. Cutting after the
+        /// fold means nothing the reader can vary changes what was folded. A shallow copy, like WithoutSmallGroups.
+        /// </summary>
+        public TeamsAdoption WithFirstGroups(int top)
+        {
+            if (top < 1) throw new ArgumentOutOfRangeException(nameof(top));
+
+            var rows = Breakdown ?? new List<TeamsDemographicRow>();
+            var copy = (TeamsAdoption)MemberwiseClone();
+            copy.Breakdown = rows.Where(r => !r.Other).Take(top).Concat(rows.Where(r => r.Other)).ToList();
+            return copy;
+        }
+
+        private static TeamsDemographicRow Combine(List<TeamsDemographicRow> rows)
+        {
+            var known = rows.Sum(r => r.KnownUsers);
+            var active = rows.Sum(r => r.ActiveUsers);
+            // Each row's averages are over its own active users, so its totals are the average times those users.
+            var messages = rows.Sum(r => r.MessagesPerActiveUser * r.ActiveUsers);
+            var meetings = rows.Sum(r => r.MeetingsPerActiveUser * r.ActiveUsers);
+            return new TeamsDemographicRow
+            {
+                Name = null,
+                Other = true,
+                KnownUsers = known,
+                ActiveUsers = active,
+                ReachPct = TeamsExplorerScoring.Percentage(active, known),
+                MessagesPerActiveUser = active > 0 ? messages / active : 0,
+                MeetingsPerActiveUser = active > 0 ? meetings / active : 0,
+            };
+        }
     }
 
     #endregion
@@ -549,15 +765,81 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsNamedCountRow> ChampionsByDepartment { get; set; } = new List<TeamsNamedCountRow>();
 
         /// <summary>
-        /// This section without the two lists that name people, for a reader who does not hold the portal's
-        /// See PII permission (#661). The power users per department stay: they are a count, and every
-        /// reader sees aggregates. A shallow copy, because the section is cached and shared between readers.
+        /// Whether <see cref="Dormant"/> can include licensed people with no Teams activity at all, and why not.
+        /// An aggregate, so it stays for a reader without See PII.
         /// </summary>
-        public TeamsPeople WithoutIndividualData()
+        public TeamsDormancy Dormancy { get; set; } = new TeamsDormancy();
+
+        /// <summary>
+        /// The fewest power users a <see cref="ChampionsByDepartment"/> row counts, for a reader without See PII;
+        /// <c>null</c> when every department is shown. See <see cref="WithoutIndividualData"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>
+        /// How many departments were folded into the <see cref="TeamsNamedCountRow.Other"/> row of
+        /// <see cref="ChampionsByDepartment"/> - or, when even all of them together are too few people, left out. 0 when
+        /// none were.
+        /// </summary>
+        public int OtherChampionDepartments { get; set; }
+
+        /// <summary>
+        /// This section without the two lists that name people, for a reader who does not hold the portal's
+        /// See PII permission (#661). The power users per department stay - they are a count, and every reader sees
+        /// aggregates - except that a department with fewer than <paramref name="minimumPeople"/> of them is folded
+        /// into one unnamed row (#680): in a small department, a count of power users says who they are. When that row
+        /// is itself too few people, the smallest named department goes into it too, so that it cannot be worked
+        /// out as the difference either. A shallow copy, because the section is cached and shared between readers.
+        /// </summary>
+        public TeamsPeople WithoutIndividualData(int minimumPeople)
         {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var rows = ChampionsByDepartment ?? new List<TeamsNamedCountRow>();
+            var total = rows.Sum(r => r.Count);
+            var shown = rows.Where(r => r.Count >= minimumPeople).ToList();
+            var folded = rows.Where(r => r.Count < minimumPeople).ToList();
+            // A named row counts the minimum or more, so one is always enough.
+            if (folded.Count > 0 && folded.Sum(r => r.Count) < minimumPeople && shown.Count > 0)
+            {
+                var smallest = shown.OrderBy(r => r.Count).ThenBy(r => r.Name, StringComparer.Ordinal).First();
+                shown.Remove(smallest);
+                folded.Add(smallest);
+            }
+
+            var otherCount = folded.Sum(r => r.Count);
+            if (folded.Count > 0 && otherCount >= minimumPeople)
+            {
+                shown.Add(new TeamsNamedCountRow
+                {
+                    Name = null,
+                    Other = true,
+                    Count = otherCount,
+                    SharePct = total > 0 ? TeamsExplorerScoring.Percentage(otherCount, total) : (double?)null,
+                });
+            }
+
             var copy = (TeamsPeople)MemberwiseClone();
             copy.Champions = new List<TeamsPersonRow>();
             copy.Dormant = new List<TeamsPersonRow>();
+            copy.ChampionsByDepartment = shown;
+            copy.MinimumGroupSize = minimumPeople;
+            copy.OtherChampionDepartments = folded.Count;
+            return copy;
+        }
+
+        /// <summary>
+        /// This section with its departments cut to the first <paramref name="top"/> named ones, keeping the combined row.
+        /// Applied after <see cref="WithoutIndividualData"/> has folded every department the query can return, for the
+        /// reason <see cref="TeamsAdoption.WithFirstGroups"/> gives. A shallow copy.
+        /// </summary>
+        public TeamsPeople WithFirstDepartments(int top)
+        {
+            if (top < 1) throw new ArgumentOutOfRangeException(nameof(top));
+
+            var rows = ChampionsByDepartment ?? new List<TeamsNamedCountRow>();
+            var copy = (TeamsPeople)MemberwiseClone();
+            copy.ChampionsByDepartment = rows.Where(r => !r.Other).Take(top).Concat(rows.Where(r => r.Other)).ToList();
             return copy;
         }
     }

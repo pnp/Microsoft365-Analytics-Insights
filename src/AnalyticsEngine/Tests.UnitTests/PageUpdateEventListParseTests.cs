@@ -1,4 +1,11 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using WebJob.AppInsightsImporter.Engine;
+using WebJob.AppInsightsImporter.Engine.ApiImporter;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 
 namespace Tests.UnitTests
@@ -39,6 +46,42 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, props.TaxonomyProps.Count);
         }
 
+        /// <summary>
+        /// A page-update event as AITracker sends it from 1.6.5, read the way the importer reads it from App Insights.
+        /// The SDK sends each property holding an object as its JSON, so the taxonomy fields arrive as a string:
+        /// <c>TrackerTaxonomyJson</c> is the string AITracker's models.test.ts asserts the tracker produces. The raw
+        /// value of the same field also arrives with the other properties.
+        /// </summary>
+        [TestMethod]
+        public void TaxonomyProps_AsTheTrackerSendsThem_AreParsed()
+        {
+            const string TrackerTaxonomyJson = "[{\"id\":\"f5b7ced7-2039-47f9-a22d-32c66d2eec65\",\"label\":\"Contoso Finance\",\"propName\":\"Department\"}]";
+            const string RawValue = "2;#Contoso Finance|f5b7ced7-2039-47f9-a22d-32c66d2eec65";
+            var filed = new DateTime(2026, 11, 2, 9, 0, 0, DateTimeKind.Utc);
+            var customDimensions = JsonConvert.SerializeObject(new Dictionary<string, string>
+            {
+                ["url"] = "https://contoso.sharepoint.com/sites/finance/SitePages/Home.aspx",
+                ["props"] = JsonConvert.SerializeObject(new Dictionary<string, string> { ["Title"] = "Home", ["Department"] = RawValue }),
+                ["pageComments"] = "[]",
+                ["pageLikes"] = "[]",
+                ["taxonomyProps"] = TrackerTaxonomyJson,
+            });
+            var table = new AppInsightsTable
+            {
+                Columns = new[] { "timestamp", "customDimensions", "user_AuthenticatedId", "name" }.Select(n => new Column { Name = n }).ToList(),
+                Rows = new List<List<object>> { new List<object> { filed, customDimensions, "user@contoso.com", AppInsightsImporterConstants.EVENT_NAME_PAGE_UPDATE } }
+            };
+
+            var update = (PageUpdateEventAppInsightsQueryResult)new CustomEventsResultCollection(table, filed.Date, NullLogger.Instance).Rows.Single();
+
+            var term = update.CustomProperties.TaxonomyProps.Single();
+            Assert.IsTrue(term.IsValid);
+            Assert.AreEqual(new Guid("f5b7ced7-2039-47f9-a22d-32c66d2eec65"), term.Id);
+            Assert.AreEqual("Contoso Finance", term.Label);
+            Assert.AreEqual("Department", term.PropName);
+            Assert.AreEqual(RawValue, update.CustomProperties.SimplePropsDic["Department"]);
+        }
+
         [TestMethod]
         public void PageComments_EmptyOrNullString_ReturnsEmptyList()
         {
@@ -52,6 +95,30 @@ namespace Tests.UnitTests
             var props = new PageUpdateEventCustomProps { Url = "u", CommentsString = "{not-an-array}" };
             Assert.IsNotNull(props.PageComments);
             Assert.AreEqual(0, props.PageComments.Count);
+        }
+
+        [TestMethod]
+        [DoNotParallelize]
+        public void PageComments_MalformedJson_PrintsTheFieldButNotTheComments()
+        {
+            const string commentText = "Contoso private comment";
+            var original = System.Console.Out;
+            var captured = new System.IO.StringWriter();
+            System.Console.SetOut(captured);
+            try
+            {
+                // Cut off mid-way, as a truncated payload would be: valid entries before an invalid ending.
+                var props = new PageUpdateEventCustomProps { Url = "u", CommentsString = "[{\"comment\":\"" + commentText + "\"}, {\"comment\":" };
+                Assert.AreEqual(0, props.PageComments.Count);
+            }
+            finally
+            {
+                System.Console.SetOut(original);
+            }
+
+            var output = captured.ToString();
+            StringAssert.Contains(output, nameof(PageUpdateEventCustomProps.CommentsString));
+            Assert.IsFalse(output.Contains(commentText), "The comments were printed: " + output);
         }
 
         [TestMethod]

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button, Card, Field, MessageBar, MessageBarActions, MessageBarBody, MessageBarTitle, Select, Subtitle2, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ArrowClockwise16Regular } from '@fluentui/react-icons';
 import { fetchPromptCategoryReport, type PromptCategoryReport as Report } from '../api/promptCategoriesApi';
-import { EN_CATALOG, formatDateParts, formatNumber, useT, type TranslationKey } from '../i18n';
+import { EN_CATALOG, formatDateParts, formatNumber, parseApiDate, useT, type TranslationKey } from '../i18n';
 import PromptCategoryBreakdown from './PromptCategoryBreakdown';
 import TimeSeriesChart from './charts/TimeSeriesChart';
 import Spinner from './Spinner';
@@ -96,7 +96,7 @@ export default function PromptCategoryReport({ months }: { months: number }) {
           <details>
             <summary>{t('promptCategories.weeklyValues')}</summary>
             <ul>{report.trend.map(row => <li key={`${row.weekStart}:${row.categoryId}`}><Text>
-              {formatDateParts(new Date(row.weekStart), { dateStyle: 'medium', timeZone: 'UTC' })} · {label(row.categoryId)}: {formatNumber(row.prompts)}
+              {formatDateParts(parseApiDate(row.weekStart), { dateStyle: 'medium', timeZone: 'UTC' })} · {label(row.categoryId)}: {formatNumber(row.prompts)}
             </Text></li>)}</ul>
           </details>
         </div>

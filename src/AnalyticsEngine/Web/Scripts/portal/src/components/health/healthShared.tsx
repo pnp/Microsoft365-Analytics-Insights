@@ -10,7 +10,7 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import Spinner from '../Spinner';
-import { formatDateParts, formatList, formatNumber, translateActive, useT, type TFunction } from '../../i18n';
+import { formatDateParts, formatList, formatNumber, parseApiDate, translateActive, useT, type TFunction } from '../../i18n';
 import { health as enHealth } from '../../i18n/catalog/en/health';
 import type { TranslationKey } from '../../i18n';
 import type { ComponentHealthRow, DataOverviewSection, HealthSectionBase, HealthStatusName, HourCount } from '../../types/health';
@@ -177,7 +177,7 @@ export function translateHealthComponentName(component: string | null | undefine
 
 export function minutesAgo(iso: string | null): number | null {
   if (!iso) return null;
-  const t = new Date(iso).getTime();
+  const t = parseApiDate(iso).getTime();
   if (Number.isNaN(t)) return null;
   return (Date.now() - t) / 60000;
 }
@@ -235,7 +235,7 @@ export function overallColor(status: string | null): BadgeColor {
 
 export function formatUtc(iso: string | null): string {
   if (!iso) return '-';
-  const d = new Date(iso);
+  const d = parseApiDate(iso);
   if (Number.isNaN(d.getTime())) return '-';
   return `${formatDateParts(d, {
     year: 'numeric',
@@ -490,7 +490,7 @@ export function buildHourBuckets(perHour: HourCount[]): { hourUtc: string; count
   const byHour = new Map<number, number>();
   for (const h of perHour) {
     if (!h.hourUtc) continue;
-    const t = new Date(h.hourUtc);
+    const t = parseApiDate(h.hourUtc);
     if (Number.isNaN(t.getTime())) continue;
     t.setUTCMinutes(0, 0, 0);
     byHour.set(t.getTime(), (byHour.get(t.getTime()) ?? 0) + h.count);

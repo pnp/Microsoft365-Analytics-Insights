@@ -39,13 +39,22 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
         /// (original behaviour).
         /// </summary>
         public SaveSession(ILogger logger, AnalyticsEntitiesContext db, AppConfig appConfig, ICopilotMetadataLoader copilotLoader)
+            : this(logger, db, appConfig, copilotLoader, null)
+        {
+        }
+
+        /// <param name="webIndex">
+        /// The SharePoint webs and site collections in SQL, shared by every batch of the import cycle so each batch does not
+        /// read them all again. Null gives this session an index of its own.
+        /// </param>
+        public SaveSession(ILogger logger, AnalyticsEntitiesContext db, AppConfig appConfig, ICopilotMetadataLoader copilotLoader, SharePointWebIndex webIndex)
         {
             _logger = logger;
             this.Database = db;
             _appConfig = appConfig;
             this.Database.Configuration.AutoDetectChangesEnabled = false;
 
-            this.SharePointLookupManager = new SharePointLookupManager(Database);
+            this.SharePointLookupManager = new SharePointLookupManager(Database, webIndex);
             _injectedCopilotLoader = copilotLoader;
             if (copilotLoader == null)
             {
@@ -145,6 +154,7 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             }
 
             System.Diagnostics.Stopwatch swEf = null;
+            var failuresBeforeEf = failures.Count;
             await RunCommitStep("SharePoint and general", () =>
             {
                 Database.ChangeTracker.DetectChanges();
@@ -153,6 +163,12 @@ namespace WebJob.Office365ActivityImporter.Engine.ActivityAPI
             }, failures);
             swEf?.Stop();
             LastEfSaveChangesMs = swEf?.Elapsed.TotalMilliseconds ?? 0;
+            if (failures.Count > failuresBeforeEf)
+            {
+                // A web or site this batch created may already exist, written since the shared index last read; its retry
+                // must see it.
+                SharePointLookupManager?.ForgetWebIndexAfterFailedSave();
+            }
 
             CommitFailures.Rethrow(failures, "metadata commits");
         }

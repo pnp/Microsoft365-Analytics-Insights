@@ -9,6 +9,7 @@ import type { agentCosts as en } from '../en/agentCosts';
 const agentCosts: Record<keyof typeof en, string> = {
   // Estados y unidades compartidos
   'agentCosts.state.notReported': 'No informado',
+  'agentCosts.state.loadFailed': 'No se han podido cargar estas cifras, así que no se muestra ninguna. Actualice para volver a intentarlo.',
   'agentCosts.unit.credits': 'créditos',
 
   // Valores de arnés
@@ -37,6 +38,7 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.title': 'Costes de agentes',
   'agentCosts.intro': 'Lo que Microsoft cobró por los agentes de Copilot Studio, desglosado hasta donde permiten los datos de facturación: por agente, entorno, arnés y característica de facturación, además del gasto de Azure de las suscripciones que se importan. Los desgloses solo aparecen cuando Microsoft informa realmente de la dimensión correspondiente.',
   'agentCosts.loading': 'Cargando costes de agentes...',
+  'agentCosts.window.ariaLabel': 'Periodo de informe',
   'agentCosts.window.last7Days': 'Últimos 7 días',
   'agentCosts.window.last30Days': 'Últimos 30 días',
   'agentCosts.window.last60Days': 'Últimos 60 días',
@@ -99,6 +101,7 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.capacity.payAsYouGo': 'Créditos de pago por uso',
   'agentCosts.capacity.payAsYouGo.hint': 'Facturados además de la capacidad comprada previamente',
   'agentCosts.azureSpend.title': 'Gasto de Azure',
+  'agentCosts.azureSpend.dimension.ariaLabel': 'Desglosar el gasto de Azure por',
   'agentCosts.azureSpend.meteredUnitsBilled': '{quantity} unidades medidas facturadas',
   'agentCosts.azureSpend.includesEstimates': 'Incluye estimaciones que aún pueden cambiar',
 

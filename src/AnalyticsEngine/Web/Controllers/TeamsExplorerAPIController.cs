@@ -44,8 +44,11 @@ namespace Web.AnalyticsWeb.Controllers
     /// <para>
     /// People are behind the portal's See PII permission (#661): without it the People tab keeps its
     /// power users per department but loses the champion and dormant lists, their exports are refused,
-    /// and the meetings section is served without its named leaderboards. The cached section is the
-    /// complete one; a reader without the permission gets a trimmed copy of it.
+    /// and the meetings section is served without its named leaderboards. The adoption breakdown - and its
+    /// export - and the power users per department fold every group of fewer than
+    /// <see cref="ReportScopeResolver.MinimumPeopleWithoutSeePii"/> people into one row for such a reader (#680), so a
+    /// one-person job title, office or department is not that person's activity. The cached section is the complete
+    /// one; a reader without the permission gets a trimmed copy of it.
     /// </para>
     /// </remarks>
     [Authorize]
@@ -58,10 +61,17 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         private const int CacheSeconds = 60;
 
+        /// <summary>
+        /// How much longer than its ttl a build in progress stays shared (see <see cref="SharedBuild"/>): more than App
+        /// Service's 230-second request limit, so no request still waiting can outlive it.
+        /// </summary>
+        internal static readonly TimeSpan InFlightBuildAllowance = TimeSpan.FromMinutes(5);
+
         private readonly ITeamsExplorerStore _store;
         private readonly Func<TeamsExplorerSources> _sourcesFactory;
         private readonly ReportScopeResolver _scopes;
         private readonly ILogger _logger;
+        private readonly ObjectCache _cache;
 
         private static readonly Lazy<AnalyticsLogger> ProductionLogger = new Lazy<AnalyticsLogger>(
             () => new AnalyticsLogger(new AppConfig().AppInsightsConnectionString, "TeamsExplorer"));
@@ -81,13 +91,16 @@ namespace Web.AnalyticsWeb.Controllers
         /// migrated database rather than trusting that this compiles. No global filter unless
         /// <paramref name="scopes"/> supplies one.
         /// </summary>
+        /// <param name="cache">Where sections are cached and shared; the process-wide default cache unless a test supplies one.</param>
         internal TeamsExplorerAPIController(
-            ITeamsExplorerStore store, Func<TeamsExplorerSources> sourcesFactory, ReportScopeResolver scopes = null, ILogger logger = null)
+            ITeamsExplorerStore store, Func<TeamsExplorerSources> sourcesFactory, ReportScopeResolver scopes = null, ILogger logger = null,
+            ObjectCache cache = null)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _sourcesFactory = sourcesFactory ?? throw new ArgumentNullException(nameof(sourcesFactory));
             _scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, CachedUserDirectorySource.Default);
             _logger = logger;
+            _cache = cache ?? MemoryCache.Default;
         }
 
         // GET: api/TeamsExplorer/availability
@@ -121,8 +134,18 @@ namespace Web.AnalyticsWeb.Controllers
             string groupBy = TeamsExplorerQuery.DefaultGrouping,
             int top = TeamsExplorerQuery.DefaultTop)
         {
+            var seePii = PortalAccess.Evaluate(Request, User).SeePii;
+            // Without See PII, small groups are folded over every group, whatever top was asked for, and only then cut to
+            // it: see TeamsAdoption.WithFirstGroups and TeamsExplorerQuery.WithEveryRow.
             var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
-            return await CachedAsync("adoption", query, () => _store.GetAdoptionAsync(query)).ConfigureAwait(false);
+            if (!seePii) query = query.WithEveryRow();
+            Func<TeamsAdoption, TeamsAdoption> forReader = null;
+            if (!seePii)
+            {
+                var shown = TeamsExplorerQuery.NormaliseTop(top);
+                forReader = a => a.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii).WithFirstGroups(shown);
+            }
+            return await CachedAsync("adoption", query, () => _store.GetAdoptionAsync(query), forReader).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/meetings?days=28
@@ -168,9 +191,16 @@ namespace Web.AnalyticsWeb.Controllers
             int days = TeamsExplorerQuery.DefaultWindowDays,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
+            var seePii = PortalAccess.Evaluate(Request, User).SeePii;
+            // As for adoption, departments are folded before the cut to top (TeamsPeople.WithFirstDepartments), over the
+            // first MaximumTop departments: this section also lists people, so it is never read with every row.
+            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, seePii ? top : TeamsExplorerQuery.MaximumTop).ConfigureAwait(false);
             Func<TeamsPeople, TeamsPeople> forReader = null;
-            if (!PortalAccess.Evaluate(Request, User).SeePii) forReader = p => p.WithoutIndividualData();
+            if (!seePii)
+            {
+                var shown = TeamsExplorerQuery.NormaliseTop(top);
+                forReader = p => p.WithoutIndividualData(ReportScopeResolver.MinimumPeopleWithoutSeePii).WithFirstDepartments(shown);
+            }
             return await CachedAsync("people", query, () => _store.GetPeopleAsync(query), forReader).ConfigureAwait(false);
         }
 
@@ -215,8 +245,12 @@ namespace Web.AnalyticsWeb.Controllers
                 return PortalPermissionDenied.Response(Request, PortalPermission.SeePii);
             }
 
-            var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
             var normalised = section.ToLowerInvariant();
+            var seePii = PortalAccess.Evaluate(Request, User).SeePii;
+            // The adoption breakdown is folded over every group for a reader without See PII, as on the page.
+            var foldsGroups = normalised == "adoption" && !seePii;
+            var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
+            if (foldsGroups) query = query.WithEveryRow();
             byte[] csv;
             string failedQuery;
             TeamsExplorerQueryInfo failedInfo;
@@ -250,6 +284,10 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     var adoption = await _store.GetAdoptionAsync(query).ConfigureAwait(false);
                     failedQuery = FailedQuery(adoption, "adoption-breakdown", out failedInfo);
+                    // Never less redacted than the page: the same groups are folded for a reader without See PII.
+                    if (foldsGroups)
+                        adoption = adoption.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii)
+                            .WithFirstGroups(TeamsExplorerQuery.NormaliseTop(top));
                     csv = CsvSerialiser.ToBytes(
                         adoption.Breakdown,
                         TeamsExplorerExports.DemographicColumns(query.GroupBy));
@@ -339,7 +377,8 @@ namespace Web.AnalyticsWeb.Controllers
             string groupBy = TeamsExplorerQuery.DefaultGrouping,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = TeamsExplorerQuery.Create(days, DateTime.UtcNow, groupBy, top);
+            var query = TeamsExplorerQuery.Create(days, DateTime.UtcNow, groupBy, top)
+                .WithUsageReportsGroupFiltered(ReadSources().UsageReportsGroupFiltered);
             var scope = await _scopes.ResolveAsync(Request, User, null, CancellationToken.None).ConfigureAwait(false);
             return scope.IsRestricted ? query.WithUserScope(scope.Sql) : query;
         }
@@ -350,6 +389,11 @@ namespace Web.AnalyticsWeb.Controllers
         /// section, and <paramref name="forReader"/> returns a trimmed copy for a reader who may not see
         /// all of it. Null sends the section as it is.
         /// </param>
+        /// <remarks>
+        /// Single-flight: requests that miss the same key while it is being built - a burst of page loads on a cold cache -
+        /// share that one build instead of each running every query of the tab. The key carries the reader's scope, so
+        /// readers only share a build that answers the same question.
+        /// </remarks>
         private async Task<IHttpActionResult> CachedAsync<T>(
             string section,
             TeamsExplorerQuery query,
@@ -357,20 +401,51 @@ namespace Web.AnalyticsWeb.Controllers
             Func<T, T> forReader = null)
             where T : class
         {
-            var key = query.CacheKey(section);
+            var model = await SharedBuild(_cache, query.CacheKey(section), build, TimeSpan.FromSeconds(CacheSeconds)).ConfigureAwait(false);
+            return Ok(forReader == null ? model : forReader(model));
+        }
 
-            if (MemoryCache.Default.Get(key) is T cached)
+        /// <summary>
+        /// The section under <paramref name="key"/>: the cached one, the one being built, or a new build that every request
+        /// arriving meanwhile shares - the pattern <c>CopilotInvestmentReportService.BuildAsync</c> uses.
+        /// </summary>
+        /// <remarks>
+        /// The entry is the build's task. Once built it is cached for <paramref name="ttl"/> from when it was ready, even when
+        /// individual sections errored: the per-section error is itself the diagnostic, and re-running a query that just timed
+        /// out on every reload only makes a struggling database worse. A build that throws is not kept: the entry goes, so the
+        /// next request builds again, and the requests already waiting are given the failure.
+        /// </remarks>
+        internal static async Task<T> SharedBuild<T>(ObjectCache cache, string key, Func<Task<T>> build, TimeSpan ttl)
+            where T : class
+        {
+            var building = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            // The build in progress is kept for as long as a build can take, not for the result's ttl: a build may queue for
+            // a query slot and then run every query of the tab, and an entry that expired while it ran would let the next
+            // request start a second build of the same section - when the database is already slow. The ttl starts once the
+            // build is done (cache.Set below), and a build that throws removes its entry at once.
+            if (cache.AddOrGetExisting(key, building.Task, DateTimeOffset.UtcNow.Add(ttl).Add(InFlightBuildAllowance)) is Task<T> shared)
             {
-                return Ok(forReader == null ? cached : forReader(cached));
+                return await shared.ConfigureAwait(false);
             }
 
-            var model = await build().ConfigureAwait(false);
-
-            // Cached even when individual sections errored. The per-section error is itself the
-            // diagnostic, and re-running a query that just timed out on every reload only makes a
-            // struggling database worse.
-            MemoryCache.Default.Set(key, model, DateTimeOffset.UtcNow.AddSeconds(CacheSeconds));
-            return Ok(forReader == null ? model : forReader(model));
+            try
+            {
+                var model = await build().ConfigureAwait(false);
+                building.SetResult(model);
+                cache.Set(key, building.Task, DateTimeOffset.UtcNow.Add(ttl));
+                return model;
+            }
+            catch (Exception ex)
+            {
+                if (ReferenceEquals(cache.Get(key), building.Task))
+                {
+                    cache.Remove(key);
+                }
+                building.TrySetException(ex);
+                // Observed here, so a failure nobody was waiting for is never an unobserved task exception.
+                var ignored = building.Task.Exception;
+                throw;
+            }
         }
 
         private static HttpResponseMessage CsvResponse(byte[] csv, string fileName)

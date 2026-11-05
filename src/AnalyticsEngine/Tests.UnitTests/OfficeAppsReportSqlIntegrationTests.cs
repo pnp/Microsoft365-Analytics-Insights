@@ -3,6 +3,7 @@ extern alias AnalyticsWeb;
 using Common.Entities;
 using Common.Entities.Entities.Teams;
 using Common.Entities.Entities.UsageReports;
+using Common.Entities.UserFilters;
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -65,7 +66,7 @@ namespace Tests.UnitTests
             _connectionString =
                 $@"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog={_database};Integrated Security=true;MultipleActiveResultSets=True;TrustServerCertificate=True";
 
-            Execute(MasterConnection, $"CREATE DATABASE [{_database}];");
+            Execute(MasterConnection, ScratchDatabase.CreateDatabaseSql(_database));
 
             // The full migration chain, so the queries run against the schema customers actually get.
             var migrationConfig = new Configuration
@@ -324,6 +325,75 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// A disabled account is not one of the department's people, on either side of the rate.
+        /// </summary>
+        /// <remarks>
+        /// The user import keeps leavers and shared mailboxes as disabled accounts that still carry their
+        /// department. Counted in the denominator they make the department look less adopted than it is.
+        /// Someone disabled during the window can still have activity in it, and that has to leave with
+        /// them: counting them as active while not counting them as one of the department's people
+        /// would mix two populations in one rate. The rows are added here, and removed again, so the
+        /// shared seed every other test counts on is unchanged.
+        /// </remarks>
+        [TestMethod]
+        public void DepartmentAdoptionRateLeavesDisabledAccountsOutOfBothSides()
+        {
+            const string leaver = "finance-leaver@contoso.com";
+            const string departed = "eng-departed@fabrikam.example";
+            const string newcomer = "eng-newcomer@fabrikam.example";
+
+            try
+            {
+                var engineeringIds = new List<int>();
+                using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+                {
+                    var finance = db.UserDepartments.Single(d => d.Name == "Finance");
+                    var engineering = db.UserDepartments.Single(d => d.Name == "Engineering");
+
+                    // Never used an app, and is still filed under Finance.
+                    NewUser(db, leaver, finance).AccountEnabled = false;
+
+                    // Used Outlook early in the window, then was disabled.
+                    var departedUser = NewUser(db, departed, engineering);
+                    departedUser.AccountEnabled = false;
+
+                    // Explicitly enabled and quiet: one of Engineering's people like any other.
+                    NewUser(db, newcomer, engineering).AccountEnabled = true;
+                    db.SaveChanges();
+
+                    db.AppPlatformUserUsageLog.Add(new AppPlatformUserActivityLog
+                    {
+                        User = departedUser, Date = WeekA.AddDays(1),
+                        Outlook = true, Windows = true, OutlookWindows = true,
+                    });
+                    db.SaveChanges();
+
+                    engineeringIds.AddRange(db.users.Where(u => u.DepartmentId == engineering.ID).Select(u => u.ID));
+                }
+
+                var rows = RunCategory(ReportsAPIController.DepartmentAdoptionRateQuery());
+
+                Assert.AreEqual(40d, rows["Finance"], "Still 2 of 5: the disabled leaver is not one of Finance's people.");
+                Assert.AreEqual(16.7d, rows["Engineering"],
+                    "1 of 6: the enabled newcomer counts, and the disabled account's Outlook use leaves with it. "
+                    + "Counting every account gives 2 of 7; dropping it from the denominator only, 2 of 6.");
+
+                // Narrowed to Engineering, the scope still applies alongside the enabled-accounts filter.
+                var scoped = RunCategory(ReportsAPIController.DepartmentAdoptionRateQuery(),
+                    scope: ReportUserScope.ForUsers(engineeringIds));
+                CollectionAssert.AreEquivalent(new[] { "Engineering" }, scoped.Keys.ToArray());
+                Assert.AreEqual(16.7d, scoped["Engineering"]);
+            }
+            finally
+            {
+                Execute(_connectionString,
+                    "DELETE a FROM dbo.platform_user_activity_log AS a INNER JOIN dbo.users AS u ON u.id = a.user_id\r\n"
+                    + $"WHERE u.user_name IN ('{leaver}', '{departed}', '{newcomer}');\r\n"
+                    + $"DELETE FROM dbo.users WHERE user_name IN ('{leaver}', '{departed}', '{newcomer}');");
+            }
+        }
+
+        /// <summary>
         /// Copilot take-up is measured against everyone using the app, including people with no
         /// Copilot record at all.
         /// </summary>
@@ -452,17 +522,17 @@ namespace Tests.UnitTests
 
         #region Plumbing
 
-        private static Dictionary<string, double> RunCategory(string sql, DateTime? from = null)
+        private static Dictionary<string, double> RunCategory(string sql, DateTime? from = null, ReportUserScope scope = null)
         {
-            return RunCategoryOrdered(sql, from).ToDictionary(r => r.Key, r => r.Value);
+            return RunCategoryOrdered(sql, from, scope).ToDictionary(r => r.Key, r => r.Value);
         }
 
-        private static List<KeyValuePair<string, double>> RunCategoryOrdered(string sql, DateTime? from = null)
+        private static List<KeyValuePair<string, double>> RunCategoryOrdered(string sql, DateTime? from = null, ReportUserScope scope = null)
         {
             var rows = new List<KeyValuePair<string, double>>();
             Read(sql, reader => rows.Add(new KeyValuePair<string, double>(
                 reader.GetString(reader.GetOrdinal("Label")),
-                Convert.ToDouble(reader["Value"]))), from);
+                Convert.ToDouble(reader["Value"]))), from, scope);
             return rows;
         }
 
@@ -501,15 +571,21 @@ namespace Tests.UnitTests
             return cells.TryGetValue(row + "\u0000" + column, out var value) ? value : 0d;
         }
 
-        private static void Read(string sql, Action<SqlDataReader> onRow, DateTime? from = null)
+        /// <summary>
+        /// Runs <paramref name="sql"/>, narrowed to <paramref name="scope"/> when one is given. Without one
+        /// the scope markers are SQL comments, so the statement runs exactly as written.
+        /// </summary>
+        private static void Read(string sql, Action<SqlDataReader> onRow, DateTime? from = null, ReportUserScope scope = null)
         {
             using (var connection = new SqlConnection(_connectionString))
             using (var command = connection.CreateCommand())
             {
                 connection.Open();
-                command.CommandText = sql;
+                command.CommandText = scope == null ? sql : ReportScopeSql.Apply(sql, scope);
                 command.CommandTimeout = 120;
                 command.Parameters.AddWithValue("@from", from ?? From);
+                var scopeParameter = scope == null ? null : ReportScopeSql.CreateParameter(scope);
+                if (scopeParameter != null) command.Parameters.Add(scopeParameter);
                 using (var reader = command.ExecuteReader())
                 {
                     while (reader.Read()) onRow(reader);

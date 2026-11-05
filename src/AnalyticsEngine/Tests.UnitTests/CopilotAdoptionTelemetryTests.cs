@@ -57,6 +57,8 @@ namespace Tests.UnitTests
                 "ExceptionChain",
                 "SqlErrorNumber",
                 "Win32ErrorCode",
+                // The error reference a reader is shown for a failed query, so an administrator can find this event.
+                "ErrorId",
                 "ActiveOperations",
                 "ShutdownReason",
             };
@@ -797,6 +799,8 @@ namespace Tests.UnitTests
             var sink = new RecordingSink();
             var telemetry = NewTelemetry(sink, new ManualHeartbeatFactory());
             var query = telemetry.QueryStarted(CopilotAdoptionSteps.LicensedUsers, CopilotAdoptionQueries.LicensedUserDetail);
+            var classified = CopilotAdoptionFailure.From(
+                new InvalidOperationException("sensitive-value", new System.ComponentModel.Win32Exception(258)));
 
             telemetry.QueryCompleted(
                 query,
@@ -804,8 +808,7 @@ namespace Tests.UnitTests
                 CopilotAdoptionQueries.LicensedUserDetail,
                 90012,
                 true,
-                CopilotAdoptionFailure.From(
-                    new InvalidOperationException("sensitive-value", new System.ComponentModel.Win32Exception(258))));
+                classified);
             telemetry.Dispose();
 
             var failed = sink.Events.Single(item => item.Stage == CopilotAdoptionTelemetryStages.QueryFailed);
@@ -815,6 +818,7 @@ namespace Tests.UnitTests
             Assert.AreEqual("258", dimensions["Win32ErrorCode"]);
             Assert.AreEqual("InvalidOperationException>Win32Exception", dimensions["ExceptionChain"]);
             Assert.AreEqual("Win32Exception", dimensions["ExceptionType"]);
+            Assert.AreEqual(classified.ErrorId, dimensions["ErrorId"], "The reference a reader is shown must find this event.");
             Assert.IsFalse(dimensions.ContainsKey("SqlErrorNumber"), "Absent codes are omitted, not written as blanks.");
             Assert.IsFalse(string.Join("|", dimensions.Values).Contains("sensitive-value"),
                 "Exception messages can quote data values and must never reach telemetry.");
@@ -840,6 +844,40 @@ namespace Tests.UnitTests
             Assert.IsNotNull(licenceTypes.Failure, "the classification must be passed through, not dropped");
             Assert.AreEqual(CopilotAdoptionFailureKinds.Timeout, licenceTypes.Failure.FailureKind);
             Assert.AreEqual(258, licenceTypes.Failure.Win32ErrorCode);
+        }
+
+        [TestMethod]
+        public async Task Service_AFailedQuery_ShowsReadersAReasonAndAReference_NeverTheExceptionText()
+        {
+            // The summary's warnings reach every signed-in reader, every CSV row's "Figure warnings" and the workbook.
+            // They used to carry the innermost exception message, which SqlClient fills with server, database, login
+            // and object names. Synthetic text here, in the innermost exception, where the old code read it from.
+            const string sensitive = "contoso-sql-01.database.windows.net";
+            var recorder = new RecordingRunTelemetry();
+            var service = new CopilotAdoptionService(
+                CopilotAdoptionOptions.Default,
+                new global::UnitTests.FakeLoaderClasses.ThrowingAnalyticsDbContextFactory(
+                    () => new InvalidOperationException("wrapper", new TimeoutException($"Execution Timeout Expired on server '{sensitive}'."))),
+                telemetry: recorder);
+
+            var analysis = await service.AnalyseAsync();
+
+            var detail = analysis.Summary.WarningDetails.First(w => w.Key == CopilotAdoptionWarningKeys.CouldNotLoad
+                && Equals(w.Values["query"], CopilotAdoptionQueries.LicenceTypes));
+            Assert.AreEqual(CopilotAdoptionFailureKinds.Timeout, detail.Values["failure"]);
+            var reference = (string)detail.Values["reference"];
+            Assert.AreEqual(
+                recorder.FailedQueries.Single(item => item.Query == CopilotAdoptionQueries.LicenceTypes).Failure.ErrorId,
+                reference,
+                "The reference must find the QueryFailed lifecycle event, which carries the classification.");
+
+            // The reader is still told what could not be loaded, and why in general terms.
+            var english = analysis.Summary.Warnings.Single(w => w.Contains(reference));
+            StringAssert.StartsWith(english, "Could not load ");
+            StringAssert.Contains(english, "the query timed out (error reference " + reference + ")");
+
+            var everything = string.Join("|", analysis.Summary.Warnings) + "|" + Newtonsoft.Json.JsonConvert.SerializeObject(analysis.Summary.WarningDetails);
+            Assert.IsFalse(everything.Contains(sensitive), "Exception text reached the reader.");
         }
 
         [TestMethod]

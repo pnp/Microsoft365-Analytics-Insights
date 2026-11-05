@@ -1,6 +1,11 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Graph;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Common.Entities.Config;
+using DataUtils;
+using System.Data.Entity;
+using Tests.UnitTests.FakeLoaderClasses;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -28,6 +33,157 @@ namespace Tests.UnitTests
         private const string NextLink =
             "https://graph.microsoft.com/v1.0/users?$filter=assignedLicenses%2Fany(u%3Au%2FskuId+eq+00000000-0000-0000-0000-000000000000)" +
             "&$select=userPrincipalName&$top=999&$skiptoken=synthetic-page-2";
+
+        private const string CurrentId = "00000000-0000-0000-0000-000000000001";
+        private const string PreviousId = "00000000-0000-0000-0000-000000000002";
+        private const string CurrentJson = "{\"id\":\"" + CurrentId + "\",\"userPrincipalName\":\"reused@contoso.com\",\"accountEnabled\":true}";
+        private const string NotFoundJson = "{\"error\":{\"code\":\"Request_ResourceNotFound\",\"message\":\"synthetic missing object\"}}";
+
+        [TestMethod]
+        public async Task ReusedUpn_FreshOwnerAndCorroboratedAbsence_UsesOnlyTheConflictingPair()
+        {
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, CurrentJson)
+                .Then(HttpStatusCode.NotFound, NotFoundJson)
+                .Then(HttpStatusCode.OK, "{\"value\":[" + CurrentJson + "]}");
+            Assert.IsTrue(await NewLoader(handler).VerifyReusedUpnAsync(CurrentOwner(), PreviousId));
+            Assert.AreEqual(3, handler.Requests.Count);
+            Assert.AreEqual("/v1.0/users/" + CurrentId, handler.Requests[0].AbsolutePath);
+            Assert.AreEqual("/v1.0/users/" + PreviousId, handler.Requests[1].AbsolutePath);
+            var query = Uri.UnescapeDataString(handler.Requests[2].Query.Replace("+", "%20"));
+            StringAssert.Contains(query, "id eq '" + CurrentId + "'");
+            StringAssert.Contains(query, "id eq '" + PreviousId + "'");
+            StringAssert.Contains(query, "userPrincipalName eq 'reused@contoso.com'");
+            StringAssert.Contains(query, "$select=id,userPrincipalName,accountEnabled");
+        }
+
+        [DataTestMethod]
+        [DataRow("{\"value\":[]}")]
+        [DataRow("{}")]
+        [DataRow("{\"value\":[" + CurrentJson + "],\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/users?$skiptoken=synthetic\"}")]
+        [DataRow("{\"value\":[" + CurrentJson + ",{\"id\":\"" + PreviousId + "\",\"accountEnabled\":false}]}")]
+        [DataRow("{\"value\":[" + CurrentJson + ",{\"id\":\"00000000-0000-0000-0000-000000000003\",\"userPrincipalName\":\"reused@contoso.com\"}]}")]
+        public async Task ReusedUpn_User404Alone_PartialOrAmbiguousDirectoryAnswer_KeepsQuarantine(string directoryJson)
+        {
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, CurrentJson)
+                .Then(HttpStatusCode.NotFound, NotFoundJson)
+                .Then(HttpStatusCode.OK, directoryJson);
+            Assert.IsFalse(await NewLoader(handler).VerifyReusedUpnAsync(CurrentOwner(), PreviousId));
+        }
+
+        [DataTestMethod]
+        [DataRow(403)]
+        [DataRow(503)]
+        [DataRow(404)]
+        public async Task ReusedUpn_CurrentOwnerReadFails_KeepsQuarantine(int status)
+        {
+            var handler = new ScriptedGraphHandler().Then((HttpStatusCode)status, NotFoundJson);
+            Assert.IsFalse(await NewLoader(handler).VerifyReusedUpnAsync(CurrentOwner(), PreviousId));
+            Assert.AreEqual(1, handler.Requests.Count);
+        }
+
+        [DataTestMethod]
+        [DataRow(403)]
+        [DataRow(503)]
+        [DataRow(200)]
+        public async Task ReusedUpn_OldOwnerUnreadableOrStillLiveEvenDisabled_KeepsQuarantine(int status)
+        {
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, CurrentJson)
+                .Then((HttpStatusCode)status, status == 200 ? "{\"id\":\"" + PreviousId + "\",\"accountEnabled\":false}" : NotFoundJson);
+            Assert.IsFalse(await NewLoader(handler).VerifyReusedUpnAsync(CurrentOwner(), PreviousId));
+            Assert.AreEqual(2, handler.Requests.Count);
+        }
+
+        [TestMethod]
+        public async Task ReusedUpn_RequiresBothFreshObjectReadsAndSuccessfulDirectoryCorroboration()
+        {
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, CurrentJson)
+                .Then(HttpStatusCode.NotFound, NotFoundJson)
+                .Then(HttpStatusCode.Forbidden, NotFoundJson);
+            Assert.IsFalse(await NewLoader(handler).VerifyReusedUpnAsync(CurrentOwner(), PreviousId));
+            Assert.AreEqual(3, handler.Requests.Count);
+            var changed = new ScriptedGraphHandler().Then(HttpStatusCode.OK, CurrentJson.Replace("reused@", "changed@"));
+            Assert.IsFalse(await NewLoader(changed).VerifyReusedUpnAsync(CurrentOwner(), PreviousId));
+        }
+
+        private static GraphUser CurrentOwner() => new GraphUser { Id = CurrentId, UserPrincipalName = "reused@contoso.com", AccountEnabled = true };
+
+        [TestMethod]
+        public async Task ReusedUpn_PriorDeletionButOldObjectRestoredUnderAnotherName_DeclinesAndPreservesRows()
+        {
+            var suffix = Guid.NewGuid().ToString("N");
+            var owner = CurrentOwner();
+            owner.UserPrincipalName = "restored-" + suffix + "@contoso.com";
+            var sourceName = "restored-" + suffix + "@contoso.onmicrosoft.com";
+            int sourceId, previousId;
+            using (var db = new Common.Entities.AnalyticsEntitiesContext())
+            {
+                var source = new Common.Entities.User { UserPrincipalName = sourceName, AzureAdId = CurrentId, AccountEnabled = true };
+                var previous = new Common.Entities.User { UserPrincipalName = owner.UserPrincipalName, AzureAdId = PreviousId, AccountEnabled = false };
+                db.users.AddRange(new[] { source, previous });
+                await db.SaveChangesAsync();
+                sourceId = source.ID; previousId = previous.ID;
+            }
+            var handler = new RestoredOwnerHandler(owner.UserPrincipalName);
+            var graph = new GraphServiceClient(new HttpClient(handler), new BearerTokenAuthenticationProvider("test-token"));
+            var verifier = new GraphUserLoader(null, null, NullLogger.Instance, graph);
+            var loader = new FakeUserMetadataLoader(new List<GraphUser>(), new List<Microsoft.Graph.Models.SubscribedSku>());
+            await loader.DeltaValueProvider.SetDeltaToken("synthetic-checkpoint");
+            loader.DeltaUsersOverride = new List<GraphUser>
+            {
+                new GraphUser { Id = PreviousId, Removed = JObject.Parse("{\"reason\":\"deleted\"}") }, owner,
+            };
+            loader.ReusedUpnVerification = (current, previous) =>
+            {
+                Assert.IsTrue(loader.LastLoadDeactivations.RemovedObjectIds.Contains(previous),
+                    "The prior deletion event must not bypass a fresh old-object read.");
+                return verifier.VerifyReusedUpnAsync(current, previous);
+            };
+            Assert.IsTrue(await new UserMetadataUpdater(AnalyticsLogger.ConsoleOnlyTracer(), new AppConfig(), loader).InsertAndUpdateDatabaseFromExternalUsers());
+            Assert.IsTrue(handler.OldObjectRead);
+            Assert.IsFalse(handler.CollectionRead, "A live old object refuses retirement before the lagging collection can mislead it.");
+            using (var db = new Common.Entities.AnalyticsEntitiesContext())
+            {
+                Assert.AreEqual(sourceName, (await db.users.SingleAsync(u => u.ID == sourceId)).UserPrincipalName);
+                var previous = await db.users.SingleAsync(u => u.ID == previousId);
+                Assert.AreEqual(owner.UserPrincipalName, previous.UserPrincipalName);
+                Assert.AreEqual(PreviousId, previous.AzureAdId);
+            }
+        }
+
+        private sealed class RestoredOwnerHandler : HttpMessageHandler
+        {
+            private readonly string _currentName;
+            public RestoredOwnerHandler(string currentName) { _currentName = currentName; }
+            public bool OldObjectRead { get; private set; }
+            public bool CollectionRead { get; private set; }
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var current = CurrentJson.Replace("reused@contoso.com", _currentName);
+                string body;
+                if (request.RequestUri.AbsolutePath == "/v1.0/users/" + CurrentId)
+                    body = current;
+                else if (request.RequestUri.AbsolutePath == "/v1.0/users/" + PreviousId)
+                {
+                    OldObjectRead = true;
+                    body = "{\"id\":\"" + PreviousId + "\",\"userPrincipalName\":\"restored-old@contoso.com\",\"accountEnabled\":false}";
+                }
+                else if (request.RequestUri.AbsolutePath == "/v1.0/users")
+                {
+                    CollectionRead = true;
+                    body = "{\"value\":[" + current + "]}";
+                }
+                else
+                    throw new InvalidOperationException("Unexpected synthetic Graph request.");
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                });
+            }
+        }
 
         [TestMethod]
         public async Task LoadUsersBySku_RequestsTheMaximumPageSize_AndFollowsNextLinkToTheEnd()

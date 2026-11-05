@@ -33,6 +33,7 @@ export const teamsExplorer = {
 
   'teamsExplorer.shared.sqlBehind': 'SQL behind "{title}"',
   'teamsExplorer.shared.sectionLoadError': 'This section could not be loaded: {error}',
+  'teamsExplorer.shared.queryQueueTimeout': 'The server was already running as many report queries as it allows, and this one did not get a turn within a minute. Try a shorter reporting period, or try again when the database is less busy.',
   'teamsExplorer.shared.noData': 'No data for this period.',
   'teamsExplorer.shared.callDataCovers': 'Call data covers {range}.',
   'teamsExplorer.shared.usageReportFiguresCover': 'Usage-report figures cover {range} \u2013 Microsoft publishes them a few days in arrears, so the window is shifted back rather than left half-empty.',
@@ -130,6 +131,13 @@ export const teamsExplorer = {
   'teamsExplorer.overview.engagementMix.description': "How habitually people use Teams across the period's working days.",
   'teamsExplorer.overview.engagementMix.empty': 'No users appeared in the Teams usage reports for this period.',
   'teamsExplorer.overview.engagementMix.centreLabel': 'measured users',
+  // Why licensed people with no Teams activity are not called dormant (TeamsDormancy.Reason).
+  'teamsExplorer.dormancy.incompleteImport': 'Dormant people cannot be identified for this period. Teams usage reports were imported for {imported} of its {expected} days, and they list only the people active each day, so someone with no recorded activity may have been active on a day that is missing.',
+  'teamsExplorer.dormancy.groupFiltered': 'Dormant people cannot be identified. The usage import is limited to members of selected groups, so someone with no recorded activity may never have been imported at all.',
+  'teamsExplorer.dormancy.namesConcealed': "Dormant people cannot be identified. The usage reports carry concealed names, so no one's activity can be matched to their directory account.",
+  'teamsExplorer.dormancy.noTeamsLicences': 'Dormant people cannot be identified. As far as the imported licences show, no one here holds a licence that includes Teams. Check that the user import is switched on.',
+  'teamsExplorer.dormancy.notChecked': 'Dormant people cannot be identified, because the check that every day of this period was imported did not complete.',
+  'teamsExplorer.dormancy.unmeasured': 'People licensed for Teams with no recorded activity, left out of this mix: {count}.',
   'teamsExplorer.overview.weeklyActiveUsers.title': 'Weekly active users',
   'teamsExplorer.overview.weeklyActiveUsers.description': 'Distinct people who did anything in Teams each week.',
   'teamsExplorer.overview.valueLabel.users': 'Users',
@@ -245,6 +253,14 @@ export const teamsExplorer = {
   'teamsExplorer.adoption.reachBy.emptyNoGroups': 'No users could be grouped for this period.',
   'teamsExplorer.adoption.reachBy.emptyMetadataUnavailable': 'User metadata is not being imported, so there is nothing to group by. Switch on the Graph user metadata import.',
   'teamsExplorer.adoption.reachBy.metadataUnavailableNote': 'User metadata is not being imported, so every group will read "(not set)".',
+  'teamsExplorer.adoption.reachBy.otherNote':
+    'Groups of fewer than {count} people, or with fewer than {count} active people, are combined into one row so that nobody can be singled out.',
+  'teamsExplorer.adoption.reachBy.leftOutNote':
+    'Groups of fewer than {count} people, or with fewer than {count} active people, are left out: even together they are too few to show without singling someone out.',
+  'teamsExplorer.adoption.reachBy.allGroupsSmall':
+    'Every group has fewer than {count} people, or fewer than {count} active people, so this breakdown is hidden to protect their privacy.',
+  'teamsExplorer.adoption.otherGroups.one': '1 smaller group, combined',
+  'teamsExplorer.adoption.otherGroups.other': '{count} smaller groups, combined',
   'teamsExplorer.adoption.groupBy': 'Group by',
   'teamsExplorer.adoption.groupByAria': 'Group the adoption breakdown by',
   'teamsExplorer.adoption.valueLabel.reachPct': '% reach',
@@ -409,12 +425,18 @@ export const teamsExplorer = {
   'teamsExplorer.people.champions.title': 'Teams champions',
   'teamsExplorer.people.champions.description': 'The people getting the most out of Teams - your best enablement recruits.',
   'teamsExplorer.people.dormant.title': 'Dormant users',
-  'teamsExplorer.people.dormant.description': 'People the usage reports covered who did nothing in Teams at all.',
-  'teamsExplorer.people.dormant.empty': 'Everyone the usage reports covered did something in Teams this period.',
+  'teamsExplorer.people.dormant.description': 'Enabled people licensed for Teams who did nothing in Teams this period.',
+  'teamsExplorer.people.dormant.empty': 'Everyone licensed for Teams did something in Teams this period.',
   'teamsExplorer.people.dormant.note': 'Ordered by how long ago they were last seen, so the people who have drifted furthest come first.',
   'teamsExplorer.people.championDepartments.title': 'Where the champions are',
   'teamsExplorer.people.championDepartments.description': 'Departments with the most power users.',
   'teamsExplorer.people.championDepartments.note': 'A power user is active on more than 60% of the period\u2019s working days. Departments with many are where a champions programme already has a foothold.',
+  'teamsExplorer.people.championDepartments.otherNote':
+    'Departments with fewer than {count} power users are combined into one row so that nobody can be singled out.',
+  'teamsExplorer.people.championDepartments.allSmall':
+    'Every department has fewer than {count} power users, so this chart is hidden to protect their privacy.',
+  'teamsExplorer.people.championDepartments.other.one': '1 smaller department, combined',
+  'teamsExplorer.people.championDepartments.other.other': '{count} smaller departments, combined',
   'teamsExplorer.people.valueLabel.powerUsers': 'power users',
   'teamsExplorer.people.table.aria': 'Teams users',
 } as const;

@@ -253,8 +253,8 @@ namespace Web.AnalyticsWeb.Controllers
             var today = DateTime.UtcNow.Date;
             var firstMonday = MondayOf(today.AddMonths(-months));
             // Usage reports arrive a couple of days late, so the current week is always incomplete;
-            // plotting it would draw a sharp fall to zero. UsageCharts trims further from the end
-            // when the settled report for a week has not reached every workload yet.
+            // plotting it would draw a sharp fall to zero. UsageCharts also drops a week Graph has not
+            // settled every day of yet, and CompleteMultiTimeSeries trims trailing weeks no workload has.
             var lastMonday = area == "usage" || area == "office-apps"
                 ? MondayOf(today).AddDays(-7)
                 : MondayOf(today);
@@ -579,18 +579,20 @@ namespace Web.AnalyticsWeb.Controllers
             };
         }
 
-        // One line per workload. Each user activity-log table holds one row per user per report
-        // date, so a single report date is a complete snapshot of "who was active recently".
+        // One line per workload, each counting the distinct people active on ANY day of the week.
         //
-        // For each week we therefore read ONE snapshot rather than every daily snapshot in the week:
-        // the most recent report date that falls inside the week AND is old enough for Graph to have
-        // settled it (@settled). A user counts as active in that week when their last_activity_date
-        // falls inside the week.
+        // The importer asks Graph for each workload's user-detail report one date at a time
+        // ("(date=yyyy-MM-dd)", AbstractDailyActivityLoader), and Microsoft documents that form as
+        // returning the users who performed activity on that date. A report date is therefore
+        // POSITIVE-ONLY: it lists that day's active people and nobody else. Reading one date per week
+        // counted only that day's people as the week's - someone active on Monday alone vanished from
+        // a week charted from its Sunday - so every imported day of the week is read.
         //
-        // Picking the LATEST snapshot in the week (rather than requiring the week's final day) keeps
-        // the chart working when an individual daily import is missed - a week has seven chances to
-        // supply a snapshot instead of one. Weeks with no settled snapshot at all return no row, and
-        // are rendered as a gap rather than as zero.
+        // A day with no rows at all is a day whose report was not imported: it is a hole in the
+        // evidence for everyone, not a day nobody was active. Each week therefore carries how many of
+        // its seven days were imported. A week with none is omitted and drawn as a gap; a week with
+        // some is drawn from the days it has and flagged as incomplete, so a missed import never reads
+        // as a fall in activity.
         private static List<Task<ReportChart>> UsageCharts(DateTime from, List<DateTime> weekSpine)
         {
             var workloads = new[]
@@ -605,47 +607,93 @@ namespace Web.AnalyticsWeb.Controllers
             var series = workloads.Select(w => new SeriesQuery
             {
                 Name = w.Name,
-                Body =
-                    "WITH WeekStarts AS (\r\n" +
-                    "    SELECT @from AS WeekStart\r\n" +
-                    "    UNION ALL\r\n" +
-                    "    SELECT DATEADD(DAY, 7, WeekStart)\r\n" +
-                    "    FROM WeekStarts\r\n" +
-                    "    WHERE WeekStart < @through\r\n" +
-                    "),\r\n" +
-                    "-- The latest settled report date inside each week; NULL when that week never\r\n" +
-                    "-- got a usage report, in which case the week is omitted (drawn as a gap).\r\n" +
-                    "WeekSnapshots AS (\r\n" +
-                    "    SELECT weeks.WeekStart, snapshot.SnapshotDate\r\n" +
-                    "    FROM WeekStarts AS weeks\r\n" +
-                    "    CROSS APPLY (\r\n" +
-                    $"        SELECT MAX(available.[date]) AS SnapshotDate\r\n" +
-                    $"        FROM {w.Table} AS available\r\n" +
-                    "        WHERE available.[date] >= weeks.WeekStart\r\n" +
-                    "          AND available.[date] < DATEADD(DAY, 7, weeks.WeekStart)\r\n" +
-                    "          AND available.[date] <= @settled\r\n" +
-                    "    ) AS snapshot\r\n" +
-                    "    WHERE snapshot.SnapshotDate IS NOT NULL\r\n" +
-                    ")\r\n" +
-                    "SELECT weeks.WeekStart, CAST(COUNT(DISTINCT activity.user_id) AS float) AS Value\r\n" +
-                    "FROM WeekSnapshots AS weeks\r\n" +
-                    $"LEFT JOIN {w.Table} AS activity\r\n" +
-                    "    ON activity.[date] = weeks.SnapshotDate\r\n" +
-                    "   AND activity.last_activity_date >= weeks.WeekStart\r\n" +
-                    "   AND activity.last_activity_date < DATEADD(DAY, 7, weeks.WeekStart)" + UsageActivityScope + "\r\n" +
-                    "GROUP BY weeks.WeekStart\r\n" +
-                    "ORDER BY weeks.WeekStart\r\n" +
-                    // The recursion is bounded by the @through predicate above, so no arbitrary
-                    // depth cap is needed (a cap silently errors if the window is ever widened).
-                    "OPTION (MAXRECURSION 0);"
+                Body = UsageWeeklyActiveUsersQuery(w.Table),
             }).ToList();
+
+            // Only weeks whose every day Graph has settled: a week still inside the report lag would be
+            // short of days for a reason that is not a missed import, and read as one.
+            var settled = SettledThrough();
+            var settledWeeks = weekSpine.Where(week => week.AddDays(6) <= settled).ToList();
 
             return new List<Task<ReportChart>>
             {
                 RunMultiTimeSeriesAsync("usage-active-users", "Weekly active users by workload",
                     "Distinct users active in each completed week. Weeks with no usage report yet are left blank rather than shown as zero.",
-                    "Active users", series, from, weekSpine),
+                    "Active users", series, from, settledWeeks, settled),
             };
+        }
+
+        /// <summary>
+        /// One workload's weekly active users: the distinct people with a report row - and Microsoft's last
+        /// activity date inside the week - on ANY day of each week from <c>@from</c> to the week starting
+        /// <c>@through</c>, with how many of the week's seven days have a report imported at all.
+        /// </summary>
+        /// <remarks>
+        /// Shaped like Licence activity's weekly scoring (<c>LicenceActivitySql</c>): one pass over the window
+        /// collapses the rows to one per (week, person) and only then counts them, with the week derived from
+        /// each row's own date. A range join from a week list into the report table would rescan it once per
+        /// week, and a <c>COUNT(DISTINCT ...)</c> over the raw rows is the form Licence activity measured at
+        /// 141.6 s, against 7.9 s for one pinned day per week, at 300k users over 180 days. Every column read
+        /// is in <c>IX_date</c> (<c>[date], [last_activity_date]</c> INCLUDE <c>[user_id]</c>), so the activity
+        /// read is one index-only range seek. Import coverage is one <c>TOP (1)</c> seek per
+        /// day, deliberately NOT narrowed to the reader's scope: whether a day was imported is a fact about the
+        /// import, and a scope with nobody active that day must not make the day look missing.
+        /// </remarks>
+        internal static string UsageWeeklyActiveUsersQuery(string table)
+        {
+            var rowWeek = "DATEADD(DAY, -(DATEDIFF(DAY, 0, activity.[date]) % 7), CAST(activity.[date] AS date))";
+
+            return
+                "WITH WeekStarts AS (\r\n" +
+                "    SELECT @from AS WeekStart\r\n" +
+                "    UNION ALL\r\n" +
+                "    SELECT DATEADD(DAY, 7, WeekStart)\r\n" +
+                "    FROM WeekStarts\r\n" +
+                "    WHERE WeekStart < @through\r\n" +
+                "),\r\n" +
+                "-- How many of each week's days have a settled report imported at all, from anyone. Graph's\r\n" +
+                "-- per-date reports list only the people active that day, so a missing day is a hole in the\r\n" +
+                "-- evidence for everyone; a week with none is omitted (drawn as a gap).\r\n" +
+                "Coverage AS (\r\n" +
+                "    SELECT weeks.WeekStart, SUM(ISNULL(present.Imported, 0)) AS ImportedDays\r\n" +
+                "    FROM WeekStarts AS weeks\r\n" +
+                "    CROSS JOIN (VALUES (0), (1), (2), (3), (4), (5), (6)) AS week_days (n)\r\n" +
+                "    OUTER APPLY (\r\n" +
+                "        SELECT TOP (1) 1 AS Imported\r\n" +
+                $"        FROM {table} AS available\r\n" +
+                "        WHERE available.[date] >= DATEADD(DAY, week_days.n, weeks.WeekStart)\r\n" +
+                "          AND available.[date] < DATEADD(DAY, week_days.n + 1, weeks.WeekStart)\r\n" +
+                "          AND available.[date] <= @settled\r\n" +
+                "    ) AS present\r\n" +
+                "    GROUP BY weeks.WeekStart\r\n" +
+                "),\r\n" +
+                "-- Everyone active on any day of the week, once per week.\r\n" +
+                "PerUserWeek AS (\r\n" +
+                $"    SELECT {rowWeek} AS WeekStart, activity.user_id\r\n" +
+                $"    FROM {table} AS activity\r\n" +
+                "    WHERE activity.[date] >= @from\r\n" +
+                "      AND activity.[date] < DATEADD(DAY, 7, @through)\r\n" +
+                "      AND activity.[date] <= @settled\r\n" +
+                $"      AND activity.last_activity_date >= {rowWeek}\r\n" +
+                $"      AND activity.last_activity_date < DATEADD(DAY, 7, {rowWeek})" + UsageActivityScope + "\r\n" +
+                $"    GROUP BY {rowWeek}, activity.user_id\r\n" +
+                "),\r\n" +
+                "WeeklyActive AS (\r\n" +
+                "    SELECT WeekStart, COUNT_BIG(*) AS Users\r\n" +
+                "    FROM PerUserWeek\r\n" +
+                "    GROUP BY WeekStart\r\n" +
+                ")\r\n" +
+                "SELECT coverage.WeekStart,\r\n" +
+                "       CAST(ISNULL(active.Users, 0) AS float) AS Value,\r\n" +
+                "       coverage.ImportedDays,\r\n" +
+                "       7 AS ExpectedDays\r\n" +
+                "FROM Coverage AS coverage\r\n" +
+                "LEFT JOIN WeeklyActive AS active ON active.WeekStart = coverage.WeekStart\r\n" +
+                "WHERE coverage.ImportedDays > 0\r\n" +
+                "ORDER BY coverage.WeekStart\r\n" +
+                // The recursion is bounded by the @through predicate above, so no arbitrary
+                // depth cap is needed (a cap silently errors if the window is ever widened).
+                "OPTION (MAXRECURSION 0);";
         }
 
         // SharePoint / OneDrive audit events = audit_events joined to event_meta_sharepoint (which is
@@ -783,7 +831,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (Exception ex)
             {
-                chart.Error = InnermostMessage(ex);
+                MarkQueryFailed(chart, ex);
             }
 
             return chart;
@@ -791,7 +839,7 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>Runs one weekly query per series and combines them into a single multi-line chart.</summary>
         private static async Task<ReportChart> RunMultiTimeSeriesAsync(string key, string title, string description,
-            string valueLabel, List<SeriesQuery> series, DateTime from, List<DateTime> weekSpine)
+            string valueLabel, List<SeriesQuery> series, DateTime from, List<DateTime> weekSpine, DateTime settled)
         {
             var chart = new ReportChart
             {
@@ -809,36 +857,46 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             var lastWeek = weekSpine[weekSpine.Count - 1];
-            var settled = SettledThrough();
 
             // Show one representative query; each series uses the same shape against its own table.
             chart.Sql = "-- One query per workload (below is representative); the chart runs one per series.\r\n" +
                         DisplaySql(series.First().Body, from, lastWeek, settled);
 
             var rowsBySeries = new List<KeyValuePair<string, List<WeekValueRow>>>();
+            var incompleteWeeksBySeries = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
             var warnings = new List<string>();
             var warningFacts = new List<ReportSeriesWarning>();
 
             // Sequentially per series keeps a bounded number of concurrent contexts (the area itself
-            // already runs in parallel with other areas' charts); each performs indexed seeks into
-            // one snapshot per week.
+            // already runs in parallel with other areas' charts); each is one index-only range seek
+            // plus a seek per day for the import coverage.
             for (var i = 0; i < series.Count; i++)
             {
                 var sq = series[i];
                 try
                 {
-                    var rows = await QueryWeeksAsync(sq.Body, from, lastWeek, settled);
-                    rowsBySeries.Add(new KeyValuePair<string, List<WeekValueRow>>(sq.Name, rows));
+                    var rows = await QueryUsageWeeksAsync(sq.Body, from, lastWeek, settled);
+                    rowsBySeries.Add(new KeyValuePair<string, List<WeekValueRow>>(
+                        sq.Name,
+                        rows.Select(r => new WeekValueRow { WeekStart = r.WeekStart, Value = r.Value }).ToList()));
+                    incompleteWeeksBySeries[sq.Name] = rows
+                        .Where(r => r.ImportedDays < r.ExpectedDays)
+                        .Select(r => r.WeekStart.Date)
+                        .ToList();
                 }
                 catch (Exception ex)
                 {
-                    var message = InnermostMessage(ex);
-                    warnings.Add($"{sq.Name}: {message}");
+                    // Every reader sees this: the reason and an error reference, never SqlClient's text.
+                    var failure = ReportQueryFailure.From(ex);
+                    LogQueryFailure(failure, key + "/" + sq.Name);
+                    warnings.Add($"{sq.Name}: {failure.EnglishText}");
                     warningFacts.Add(new ReportSeriesWarning
                     {
                         Series = sq.Name,
                         Reason = "loadFailed",
-                        Error = message,
+                        Error = failure.EnglishText,
+                        ErrorReason = failure.Reason,
+                        ErrorReference = failure.Reference,
                     });
 
                     // Give up on the rest only once we already have something to draw. Bailing out on
@@ -862,7 +920,7 @@ namespace Web.AnalyticsWeb.Controllers
                 }
             }
 
-            return CompleteMultiTimeSeries(chart, rowsBySeries, warnings, weekSpine, warningFacts);
+            return CompleteMultiTimeSeries(chart, rowsBySeries, warnings, weekSpine, warningFacts, incompleteWeeksBySeries);
         }
 
         /// <summary>
@@ -883,11 +941,18 @@ namespace Web.AnalyticsWeb.Controllers
                 && rowsSoFar.Any(s => s.Value != null && s.Value.Count > 0);
         }
 
-        internal static ReportChart CompleteMultiTimeSeries(            ReportChart chart,
+        /// <param name="incompleteWeeksBySeries">
+        /// Per series, the weeks whose usage reports are missing at least one day. Those weeks are still drawn,
+        /// from the days that were imported, but flagged <see cref="ReportTimePoint.Incomplete"/> and reported as
+        /// an <c>incompleteWeeks</c> warning, so a missed import never reads as a fall in activity.
+        /// </param>
+        internal static ReportChart CompleteMultiTimeSeries(
+            ReportChart chart,
             List<KeyValuePair<string, List<WeekValueRow>>> rowsBySeries,
             List<string> warnings,
             List<DateTime> weekSpine,
-            List<ReportSeriesWarning> warningFacts = null)
+            List<ReportSeriesWarning> warningFacts = null,
+            IDictionary<string, List<DateTime>> incompleteWeeksBySeries = null)
         {
             warningFacts = warningFacts ?? new List<ReportSeriesWarning>();
             var populatedSeries = rowsBySeries
@@ -966,6 +1031,37 @@ namespace Web.AnalyticsWeb.Controllers
                 })
                 .ToList();
 
+            foreach (var series in chart.Series)
+            {
+                List<DateTime> weeks = null;
+                if (incompleteWeeksBySeries == null
+                    || !incompleteWeeksBySeries.TryGetValue(series.Name, out weeks)
+                    || weeks == null
+                    || weeks.Count == 0)
+                {
+                    continue;
+                }
+
+                var incomplete = new HashSet<DateTime>(weeks.Select(week => week.Date));
+                var flagged = series.Points
+                    .Where(point => point.Value.HasValue && incomplete.Contains(point.WeekStart.Date))
+                    .ToList();
+                if (flagged.Count == 0) continue;
+
+                foreach (var point in flagged) point.Incomplete = true;
+
+                var latest = flagged.Max(point => point.WeekStart);
+                warnings.Add($"{series.Name}: {flagged.Count} of the charted weeks are missing at least one day of usage reports " +
+                             $"(most recently the week of {latest:yyyy-MM-dd}), so those weeks count only the days that were imported");
+                warningFacts.Add(new ReportSeriesWarning
+                {
+                    Series = series.Name,
+                    Reason = "incompleteWeeks",
+                    Week = latest,
+                    Count = flagged.Count,
+                });
+            }
+
             if (warnings.Count > 0)
             {
                 chart.Warning = "Some workload series are unavailable: " + string.Join("; ", warnings) + ".";
@@ -1006,7 +1102,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (Exception ex)
             {
-                chart.Error = InnermostMessage(ex);
+                MarkQueryFailed(chart, ex);
             }
 
             return chart;
@@ -1041,7 +1137,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (Exception ex)
             {
-                chart.Error = InnermostMessage(ex);
+                MarkQueryFailed(chart, ex);
             }
 
             return chart;
@@ -1103,7 +1199,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
             catch (Exception ex)
             {
-                chart.Error = InnermostMessage(ex);
+                MarkQueryFailed(chart, ex);
             }
 
             return chart;
@@ -1121,8 +1217,8 @@ namespace Web.AnalyticsWeb.Controllers
             }
         }
 
-        /// <summary>Executes a bounded weekly query for the snapshot-based usage charts.</summary>
-        private static async Task<List<WeekValueRow>> QueryWeeksAsync(
+        /// <summary>Executes one workload's weekly active-user query (<see cref="UsageWeeklyActiveUsersQuery"/>).</summary>
+        private static async Task<List<UsageWeekRow>> QueryUsageWeeksAsync(
             string body,
             DateTime from,
             DateTime through,
@@ -1132,7 +1228,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 db.Database.CommandTimeout = QueryTimeoutSecs;
                 return await db.Database
-                    .SqlQuery<WeekValueRow>(
+                    .SqlQuery<UsageWeekRow>(
                         Scoped(body),
                         ScopedParameters(
                             DateParameter("@from", from),
@@ -1285,15 +1381,38 @@ namespace Web.AnalyticsWeb.Controllers
             return lines.Count == 0 ? string.Empty : string.Join("\r\n", lines) + "\r\n";
         }
 
-        /// <summary>EF wraps SQL errors; the innermost message (the SqlException) is the useful one.</summary>
-        private static string InnermostMessage(Exception ex)
+        /// <summary>The <see cref="ReportChart.ErrorKey"/> of a chart whose query failed.</summary>
+        internal const string QueryFailedErrorKey = "queryFailed";
+
+        /// <summary>Where a failed chart query's classification and error reference go.</summary>
+        private static readonly Lazy<DataUtils.AnalyticsLogger> FailureLogger = new Lazy<DataUtils.AnalyticsLogger>(
+            () => new DataUtils.AnalyticsLogger(new AppConfig().AppInsightsConnectionString, "Reports"));
+
+        /// <summary>
+        /// A chart whose query failed. Every signed-in reader sees the chart, so it carries the failure's reason and an
+        /// error reference (<see cref="ReportQueryFailure"/>), never the exception's text, which names servers,
+        /// databases, logins and objects. The reference is logged with the classification.
+        /// </summary>
+        internal static void MarkQueryFailed(ReportChart chart, Exception ex)
         {
-            var e = ex;
-            while (e.InnerException != null)
+            var failure = ReportQueryFailure.From(ex);
+            chart.Error = failure.EnglishText;
+            chart.ErrorKey = QueryFailedErrorKey;
+            chart.ErrorReason = failure.Reason;
+            chart.ErrorReference = failure.Reference;
+            LogQueryFailure(failure, chart.Key);
+        }
+
+        private static void LogQueryFailure(ReportQueryFailure failure, string key)
+        {
+            try
             {
-                e = e.InnerException;
+                failure.Log(FailureLogger.Value, "Reports", key);
             }
-            return e.Message;
+            catch (Exception)
+            {
+                // A logger that can't be built must not turn a degraded chart into a failed page.
+            }
         }
 
         internal static bool IsQueryTimeout(Exception ex)
@@ -1324,6 +1443,18 @@ namespace Web.AnalyticsWeb.Controllers
         {
             public DateTime WeekStart { get; set; }
             public double Value { get; set; }
+        }
+
+        /// <summary>
+        /// One week of a usage workload: its active users, and how many of its <see cref="ExpectedDays"/> days
+        /// have a usage report imported at all.
+        /// </summary>
+        internal sealed class UsageWeekRow
+        {
+            public DateTime WeekStart { get; set; }
+            public double Value { get; set; }
+            public int ImportedDays { get; set; }
+            public int ExpectedDays { get; set; }
         }
 
         /// <summary>Shape for a named weekly series raw SQL result.</summary>

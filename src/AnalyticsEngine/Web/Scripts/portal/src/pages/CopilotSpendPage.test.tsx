@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import { renderWithProvider } from '../test/renderWithProvider';
-import CopilotSpendPage from './CopilotSpendPage';
+import CopilotSpendPage, { SPEND_USER_FILTER_URL_PARAM } from './CopilotSpendPage';
+import { MemoryRouter } from 'react-router-dom';
+import { serializeUserFilter } from '../components/userFilter/userFilterModel';
 import { loadCatalog } from '../i18n';
 import { fetchSpendPeople, fetchSpendPerson, fetchSpendSummary, fetchSpendTrend, spendWorkbookUrl } from '../api/copilotSpendApi';
 import type {
@@ -77,8 +79,8 @@ function summary(overrides: Partial<CopilotSpendSummary> = {}): CopilotSpendSumm
     organisation: {
       dimension: 'department', dimensionName: null, minGroupSize: 5, foldedGroups: 2, moreGroups: 0, unavailableCode: null, hidden: false,
       groups: [
-        { label: `Ventas \u2013 ${GREEK}`, emptyKey: null, folded: 0, withheld: false, people: 30, studioPeople: 25, studioCredits: 900, shareOfStudio: 0.75, balancePeople: 20, balanceCredits: 6000, shareOfBalances: 0.62, unknownAmountPeople: 2 },
-        { label: null, emptyKey: 'otherSmallGroups', folded: 2, withheld: false, people: 7, studioPeople: 5, studioCredits: 300, shareOfStudio: 0.25, balancePeople: 4, balanceCredits: 3680, shareOfBalances: 0.38, unknownAmountPeople: 2 },
+        { label: `Ventas \u2013 ${GREEK}`, emptyKey: null, folded: 0, withheld: false, studioWithheld: false, balancesWithheld: false, people: 30, studioPeople: 25, studioCredits: 900, shareOfStudio: 0.75, balancePeople: 20, balanceCredits: 6000, shareOfBalances: 0.62, unknownAmountPeople: 2 },
+        { label: null, emptyKey: 'otherSmallGroups', folded: 2, withheld: false, studioWithheld: false, balancesWithheld: false, people: 7, studioPeople: 5, studioCredits: 300, shareOfStudio: 0.25, balancePeople: 4, balanceCredits: 3680, shareOfBalances: 0.38, unknownAmountPeople: 2 },
       ],
     },
     peopleCount: 120,
@@ -561,6 +563,88 @@ describe('CopilotSpendPage', () => {
     expect((await screen.findAllByText(/Not available: the Copilot Studio ledger has not been imported or could not be read/)).length).toBe(2);
   });
 
+  it('says a source withheld from a reader without See PII is withheld, not unavailable, and keeps the other source', async () => {
+    const groups = summary().organisation.groups;
+    vi.mocked(fetchSpendSummary).mockResolvedValue(
+      summary({
+        organisation: {
+          ...summary().organisation,
+          groups: [{ ...groups[0], studioWithheld: true, studioPeople: null, studioCredits: null, shareOfStudio: null }, groups[1]],
+        },
+      }),
+    );
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    const table = await screen.findByRole('table', { name: 'Organisation' });
+    expect(within(table).getAllByRole('img', { name: 'Not shown: it could single out fewer than 5 people' })).toHaveLength(2);
+    expect(within(table).queryByRole('img', { name: 'Not available' })).not.toBeInTheDocument();
+    expect(within(table).queryByRole('img', { name: 'Fewer than 5 people: figures not shown' })).not.toBeInTheDocument();
+    expect(within(table).getByText('6,000')).toBeInTheDocument();
+  });
+
+  it('gives no category a share of the consumed credits when another category is withheld, rather than a share of what is shown', async () => {
+    const balances = summary().balances;
+    const shown = { ...balances.services[0], category: 'copilotChatAgents', consumers: 40, quantity: 6000 };
+    const withheld = { ...balances.services[0], category: 'coworkAgent', consumers: 3, quantity: 0, withheld: true };
+    vi.mocked(fetchSpendSummary).mockResolvedValue(summary({ balances: { ...balances, services: [shown, withheld] } }));
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    expect(await screen.findByText('Consumed credits by category (latest reading)')).toBeInTheDocument();
+    expect(screen.getByText('6,000 credits (\u2014)')).toBeInTheDocument();
+    expect(screen.queryByText('6,000 credits (100%)')).not.toBeInTheDocument();
+  });
+
+  it('gives each category its share of the consumed credits when none is withheld', async () => {
+    const balances = summary().balances;
+    const first = { ...balances.services[0], category: 'copilotChatAgents', consumers: 40, quantity: 6000 };
+    const second = { ...balances.services[0], category: 'coworkAgent', consumers: 30, quantity: 2000 };
+    vi.mocked(fetchSpendSummary).mockResolvedValue(summary({ balances: { ...balances, services: [first, second] } }));
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: true } });
+
+    expect(await screen.findByText('6,000 credits (75%)')).toBeInTheDocument();
+    expect(screen.getByText('2,000 credits (25%)')).toBeInTheDocument();
+  });
+
+  it('says a category withheld from a reader without See PII is withheld, never zero', async () => {
+    const balances = summary().balances;
+    vi.mocked(fetchSpendSummary).mockResolvedValue(
+      summary({ balances: { ...balances, services: [{ ...balances.services[0], consumers: 3, quantity: 0, withheld: true }] } }),
+    );
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Copilot credits consumed (readings)' }));
+    const table = await screen.findByRole('table', { name: 'By category' });
+    expect(within(table).getByRole('img', { name: 'Not shown: it could single out fewer than 5 people' })).toBeInTheDocument();
+    expect(within(table).queryByText('0')).not.toBeInTheDocument();
+  });
+
+  it('says a day or a reading withheld from a reader without See PII is withheld, never zero or an unstated amount', async () => {
+    const studio = summary().studio;
+    vi.mocked(fetchSpendSummary).mockResolvedValue(
+      summary({
+        studio: {
+          ...studio,
+          credits: null,
+          creditsWithheld: true,
+          days: studio.days.map((d) => (d.status === 'recorded' ? { ...d, credits: null, withheld: true } : d)),
+        },
+      }),
+    );
+    vi.mocked(fetchSpendTrend).mockResolvedValue({
+      points: [{ date: '2026-10-26', observedUsers: 3, consumingUsers: 2, credits: null, limitExhaustedUsers: 0, withheld: true }],
+      snapshotDate: '2026-10-26',
+      failureCode: null,
+      minPeople: 5,
+    });
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    expect(await screen.findByRole('listitem', { name: '25 Oct 2026: credits not shown, they could single out fewer than 5 people' })).toBeInTheDocument();
+    expect(await screen.findByRole('listitem', { name: '26 Oct 2026: credits not shown, they could single out fewer than 5 people' })).toBeInTheDocument();
+    expect(screen.queryByRole('listitem', { name: /amount not stated/ })).not.toBeInTheDocument();
+    expect(screen.getByTitle('Not shown: it could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.queryByText('1,250')).not.toBeInTheDocument();
+  });
+
   it('gives the right reason for a missing agent ledger and a grouping that cannot be made', async () => {
     vi.mocked(fetchSpendSummary).mockResolvedValue(
       summary({
@@ -583,6 +667,49 @@ describe('CopilotSpendPage', () => {
     renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
 
     expect(await screen.findByText(/The newest reading is from 10 Oct 2026, before the selected period starts/)).toBeInTheDocument();
+  });
+
+  it('tells a reader without See PII that a shared link’s filter was not applied, and applies it for one with See PII', async () => {
+    const link = serializeUserFilter({ clauses: [{ join: 'and', dimension: 'department', operator: 'is', values: ['Contoso Sales'], includeNotSet: false }] })!;
+    const openLink = (seePii: boolean) =>
+      renderWithProvider(
+        <MemoryRouter initialEntries={[`/insights/copilot-spend?${SPEND_USER_FILTER_URL_PARAM}=${encodeURIComponent(link)}`]}>
+          <CopilotSpendPage />
+        </MemoryRouter>,
+        { access: { administration: false, seePii } },
+      );
+
+    const { unmount } = openLink(false);
+    expect(await screen.findByText('The filter in this link was not applied')).toBeInTheDocument();
+    await waitFor(() => expect(fetchSpendSummary).toHaveBeenCalled());
+    expect(vi.mocked(fetchSpendSummary).mock.calls[0][0].userFilter ?? null).toBeNull();
+    unmount();
+
+    vi.mocked(fetchSpendSummary).mockClear();
+    openLink(true);
+    await waitFor(() => expect(fetchSpendSummary).toHaveBeenCalled());
+    expect(vi.mocked(fetchSpendSummary).mock.calls[0][0].userFilter).toBe(link);
+    expect(screen.queryByText('The filter in this link was not applied')).not.toBeInTheDocument();
+  });
+
+  it('says the readings over time could not be read, not that there are none, when that read fails', async () => {
+    const failed = 'Copilot credits consumed could not be read just now.';
+    const none = 'There is no reading of Copilot credits consumed in this period.';
+    vi.mocked(fetchSpendTrend).mockResolvedValue({ points: [], snapshotDate: null, failureCode: 'creditsUnavailable', minPeople: 5 });
+    const { unmount } = renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Copilot credits consumed (readings)' }));
+    expect((await screen.findAllByText(failed)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(none)).not.toBeInTheDocument();
+    unmount();
+
+    // A read that worked and found nothing still says there is nothing.
+    vi.mocked(fetchSpendTrend).mockResolvedValue({ points: [], snapshotDate: null, failureCode: null, minPeople: 5 });
+    renderWithProvider(<CopilotSpendPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Copilot credits consumed (readings)' }));
+    expect((await screen.findAllByText(none)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(failed)).not.toBeInTheDocument();
   });
 
   it('shows how consumption is spread across people, one source at a time, and names the largest and smallest consumers to a reader with See PII', async () => {

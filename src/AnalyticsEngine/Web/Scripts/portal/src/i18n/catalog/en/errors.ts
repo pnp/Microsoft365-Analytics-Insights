@@ -208,6 +208,21 @@ export const errors = {
   'errors.webActivity.exportFlowsFailed': "Couldn't export flows ({status}).",
   'errors.webActivity.exportSearchTermsFailed': "Couldn't export search-terms ({status}).",
   'errors.webActivity.exportTechnologyFailed': "Couldn't export technology ({status}).",
+
+  // A report query that failed. The server sends a stable reason and an error reference, never the exception's
+  // text; these word them. The English mirrors ReportQueryFailure.EnglishReason in Common.Entities.
+  'errors.reportQuery.failed': '{reason} (error reference {reference})',
+  'errors.reportQuery.reason.Timeout': 'the query timed out',
+  'errors.reportQuery.reason.Deadlock': 'the query was stopped by a database deadlock',
+  'errors.reportQuery.reason.Throttled': 'the database was at its resource limit',
+  'errors.reportQuery.reason.Unavailable': 'the database was not available',
+  'errors.reportQuery.reason.Connection': 'the connection to the database failed',
+  'errors.reportQuery.reason.Permission': 'the database refused access',
+  'errors.reportQuery.reason.SchemaMismatch': 'the database has not been upgraded to this version',
+  'errors.reportQuery.reason.SqlError': 'the database returned an error',
+  'errors.reportQuery.reason.Cancelled': 'the query was cancelled',
+  'errors.reportQuery.reason.OutOfMemory': 'the web server ran out of memory',
+  'errors.reportQuery.reason.Other': 'the query failed',
 } as const;
 
 export default errors;

@@ -38,34 +38,50 @@ namespace Common.Entities.CopilotAdoption
     /// is not an adoption problem, it is a seat-allocation problem, and no single-population view
     /// makes that visible.
     /// </summary>
+    /// <remarks>
+    /// A department is listed when either population reaches <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/>.
+    /// The figures of a side smaller than that are null - published blank, never 0 - and so are the agent
+    /// figures, which mix both sides: a department with enough seats and one unlicensed Chat user must not
+    /// publish that one person's volume or agent use, directly or by subtraction.
+    /// </remarks>
     public class AdoptionCombinedSegmentRow
     {
         [JsonProperty("segment")]
         public string Segment { get; set; }
 
+        /// <summary>Seats held in the department. Null, with the rest of the licensed side, when too few to report on.</summary>
         [JsonProperty("licensedUsers")]
-        public int LicensedUsers { get; set; }
+        public int? LicensedUsers { get; set; }
 
         [JsonProperty("licensedActiveUsers")]
-        public int LicensedActiveUsers { get; set; }
+        public int? LicensedActiveUsers { get; set; }
 
         /// <summary>Interactions per licensed seat, normalised to a month - including idle seats.</summary>
         [JsonProperty("interactionsPerLicensedUser")]
-        public double InteractionsPerLicensedUser { get; set; }
+        public double? InteractionsPerLicensedUser { get; set; }
 
         /// <summary>Share of licensed users who used at least one agent.</summary>
         [JsonProperty("licensedAgentUserPct")]
-        public double LicensedAgentUserPct { get; set; }
+        public double? LicensedAgentUserPct { get; set; }
 
+        /// <summary>People using Copilot Chat without a seat. Null, with the rest of the unlicensed side, when too few to report on.</summary>
         [JsonProperty("unlicensedActiveUsers")]
-        public int UnlicensedActiveUsers { get; set; }
+        public int? UnlicensedActiveUsers { get; set; }
 
         /// <summary>Interactions per active unlicensed user, normalised to a month.</summary>
         [JsonProperty("interactionsPerUnlicensedUser")]
-        public double InteractionsPerUnlicensedUser { get; set; }
+        public double? InteractionsPerUnlicensedUser { get; set; }
 
         [JsonProperty("unlicensedAgentUserPct")]
-        public double UnlicensedAgentUserPct { get; set; }
+        public double? UnlicensedAgentUserPct { get; set; }
+
+        /// <summary>
+        /// True when the agent breadth and depth figures below are null because too few people are behind
+        /// them - or because either side above is withheld, which they would otherwise reveal - rather than
+        /// because they were not measured.
+        /// </summary>
+        [JsonProperty("agentFiguresWithheld")]
+        public bool AgentFiguresWithheld { get; set; }
 
         // ----- Agent breadth and depth (#646) and builders (#647) -----------------------------------
         // Counted over the department's active Copilot users SEEN IN THE AUDIT LOG: active seat holders

@@ -3,6 +3,7 @@ using App.ControlPanel.Engine.Models;
 using Azure.Core;
 using Common.Entities.Installer;
 using DataUtils;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -129,7 +130,7 @@ namespace App.ControlPanel.Engine
 
         public static SolutionInstallConfigLoadResult LoadFromFile(string fileName, string password)
         {
-            var jSon = string.Empty;
+            string jSon = null;
             var tryAgain = true;
             while (tryAgain)
                 try
@@ -144,10 +145,24 @@ namespace App.ControlPanel.Engine
                     tryAgain = (r == DialogResult.Retry);
                 }
 
-            var result = SolutionInstallConfig.LoadFromJson(jSon, password);
-            result.Config.SavedConfigFileName = Path.GetFullPath(fileName);
+            if (jSon == null)
+            {
+                return SolutionInstallConfigLoadResult.NotLoaded($"'{Path.GetFileName(fileName)}' could not be read, so nothing was loaded from it.");
+            }
 
-            Console.WriteLine($"Loaded config version '{result.Config.ConfigSchemaVersion}' from '{fileName}'.");
+            var result = SolutionInstallConfig.LoadFromJson(jSon, password);
+
+            // Only a file that opened completely may be saved back to: one whose secrets did not decrypt would be
+            // rewritten without them, and the private-networking checkpoint writes to this name as well.
+            if (result.CanBecomeSaveTarget)
+            {
+                result.Config.SavedConfigFileName = Path.GetFullPath(fileName);
+            }
+
+            if (result.Config != null)
+            {
+                Console.WriteLine($"Loaded config version '{result.Config.ConfigSchemaVersion}' from '{fileName}'.");
+            }
 
             return result;
         }
@@ -159,9 +174,14 @@ namespace App.ControlPanel.Engine
             {
                 config = JsonConvert.DeserializeObject<SolutionInstallConfig>(json);
             }
-            catch (JsonReaderException)
+            catch (JsonException)
             {
-                config = SolutionInstallConfig.NewConfig();
+                // Reported rather than replaced with a new configuration: the caller would otherwise treat a damaged
+                // file as an empty one and could save the empty one over it.
+            }
+            if (config == null)
+            {
+                return SolutionInstallConfigLoadResult.NotLoaded("This is not an installer configuration file, or it is damaged, so nothing was loaded from it.");
             }
 
             var result = new SolutionInstallConfigLoadResult() { Config = config, DecryptedOk = true };
@@ -169,20 +189,20 @@ namespace App.ControlPanel.Engine
             // Decrypt passwords
             try
             {
-                if (!string.IsNullOrEmpty(config.SQLServerAdminPasswordHash))
-                    config.SQLServerAdminPassword = StringCipher.Decrypt(config.SQLServerAdminPasswordHash, password);
-                else
-                    config.SQLServerAdminPassword = string.Empty;
-
+                config.SQLServerAdminPassword = DecryptLoadedSecret(config.SQLServerAdminPasswordHash, password);
                 config.RuntimeAccountOffice365.DecryptSecretFromLoadedHashProperty(password);
                 config.InstallerAccount.DecryptSecretFromLoadedHashProperty(password);
             }
             catch (System.Security.Cryptography.CryptographicException)
             {
-                // Reset hashes
+                // Reset hashes, and anything decrypted before the failure: a wrong password can get past the
+                // padding check on one value and fail on the next, and what it produced for the first is noise.
                 config.SQLServerAdminPasswordHash = string.Empty;
                 config.RuntimeAccountOffice365.SecretHash = string.Empty;
                 config.InstallerAccount.SecretHash = string.Empty;
+                config.SQLServerAdminPassword = string.Empty;
+                config.RuntimeAccountOffice365.Secret = string.Empty;
+                config.InstallerAccount.Secret = string.Empty;
                 result.DecryptedOk = false;
             }
 
@@ -192,25 +212,80 @@ namespace App.ControlPanel.Engine
             return result;
         }
 
-        public void Save(string fileName, string password)
+        /// <summary>
+        /// Decrypts a secret read from a config file, or returns an empty string when none was saved.
+        /// </summary>
+        /// <remarks>
+        /// A version 1 value (<see cref="StringCipher"/>) has no integrity check, so a wrong password is only caught by the
+        /// padding check, which random output passes about one time in 256. What comes out then is random bytes, not text.
+        /// Reject it too, or a mistyped password would look like a successful load and the next save would keep the noise.
+        /// A version 2 value is authenticated and never gets this far with the wrong password.
+        /// </remarks>
+        /// <exception cref="System.Security.Cryptography.CryptographicException">The password is wrong.</exception>
+        internal static string DecryptLoadedSecret(string cipherText, string password)
+        {
+            if (string.IsNullOrEmpty(cipherText)) return string.Empty;
+
+            var plainText = StringCipher.Decrypt(cipherText, password);
+            if (plainText.Any(c => c == '\uFFFD' || char.IsControl(c)))
+            {
+                throw new System.Security.Cryptography.CryptographicException(
+                    "The value did not decrypt to text. The password is probably incorrect.");
+            }
+            return plainText;
+        }
+
+        /// <summary>Writes the configuration, with its secrets encrypted with <paramref name="password"/>, to <paramref name="fileName"/>.</summary>
+        /// <remarks>
+        /// A file whose secrets are in the format older installers read is copied first (<see cref="Version1ConfigBackup"/>), and
+        /// is not overwritten when the copy can't be written.
+        /// </remarks>
+        /// <param name="retryAfterError">
+        /// Told why the file could not be written; returns true to try again. When null, a message box asks.
+        /// </param>
+        /// <param name="notice">
+        /// Told what the operator needs to know about the file once it is saved: where the copy for older installers is. When
+        /// null, a message box tells them.
+        /// </param>
+        /// <returns>Whether the file was written. When it wasn't, it is unchanged on disk.</returns>
+        public bool Save(string fileName, string password, Func<string, bool> retryAfterError = null, Action<string> notice = null)
         {
             var jSon = ToJson(password, includePrivateNetworking: true);
+            retryAfterError = retryAfterError ?? AskToRetrySave;
+            notice = notice ?? ShowSaveNotice;
 
-            var tryAgain = true;
-            while (tryAgain)
+            Version1BackupResult backup = null;
+            while (true)
                 try
                 {
+                    // Before every attempt: a retry after the copy was written finds it, and leaves it alone.
+                    var attempt = Version1ConfigBackup.BeforeOverwriting(fileName);
+                    if (backup?.Outcome != Version1BackupOutcome.Written) backup = attempt;
+
                     File.WriteAllText(fileName, jSon);
                     SavedConfigFileName = Path.GetFullPath(fileName);
-                    tryAgain = false;
+                    break;
                 }
-                catch (IOException ex)
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
                 {
-                    var result = MessageBox.Show($"Error saving config file '{fileName}'.\n\n{ex.Message}",
-                        "IO Error", MessageBoxButtons.RetryCancel, MessageBoxIcon.Error);
-                    tryAgain = (result == DialogResult.Retry);
+                    var message = $"Error saving config file '{fileName}'.\n\n{ex.Message}";
+                    if (ex is Version1ConfigBackupException)
+                    {
+                        message += "\n\nRetry once that folder can be written to, or Cancel and use File > Save Configuration As to " +
+                            "save to a new file, which leaves this one as it is.";
+                    }
+                    if (!retryAfterError(message)) return false;
                 }
+
+            if (backup?.Notice != null) notice(backup.Notice);
+            return true;
         }
+
+        static bool AskToRetrySave(string message) =>
+            MessageBox.Show(message, "IO Error", MessageBoxButtons.RetryCancel, MessageBoxIcon.Error) == DialogResult.Retry;
+
+        static void ShowSaveNotice(string message) =>
+            MessageBox.Show(message, "Save Configuration", MessageBoxButtons.OK, MessageBoxIcon.Information);
 
         public string ToJson(string password, bool includePrivateNetworking = false)
         {
@@ -226,23 +301,65 @@ namespace App.ControlPanel.Engine
             this.RuntimeAccountOffice365.EncryptSecretToHashProperty(password);
             this.InstallerAccount.EncryptSecretToHashProperty(password);
 
+            return ToJObject(includePrivateNetworking).ToString(Formatting.None);
+        }
+
+        /// <summary>
+        /// The snapshot of this configuration that the installer records in <c>sys_configs</c> with each install, and
+        /// that the portal's Install log shows to Portal.Administration holders.
+        /// </summary>
+        /// <remarks>
+        /// It carries no secret, not even an encrypted one: the encrypted values are protected only by the config-file
+        /// password, which anyone holding them could try to guess offline. The saved config file keeps them; the snapshot
+        /// is a record of what was configured. Needs no password for the same reason.
+        /// </remarks>
+        public string ToDatabaseSnapshotJson()
+        {
+            var json = ToJObject(includePrivateNetworking: false);
+            InstallConfigSnapshotRedactor.RemoveSecrets(json);
+            return json.ToString(Formatting.None);
+        }
+
+        Newtonsoft.Json.Linq.JObject ToJObject(bool includePrivateNetworking)
+        {
             // What is written is this build's schema, whichever version the config was loaded from: without this, a 2.x
             // file re-saved without its removed properties would still say 2.x - in the file and in the config_states
-            // row the installer records (SqlInstallerTasks.RegisterConfigAndStatus uses this too).
+            // row the installer records (ToDatabaseSnapshotJson).
             this.ConfigSchemaVersion = CurrentConfigSchemaVersion;
 
             var json = Newtonsoft.Json.Linq.JObject.FromObject(this);
             // Runtime/SQL config snapshots are not an ownership store. Only the saved installer file
             // carries the provenance journal; restoring an old SQL snapshot must not authorize deletes.
             if (!includePrivateNetworking) json.Remove(nameof(PrivateNetworking));
-            return json.ToString(Formatting.None);
+            return json;
         }
 
-        internal void CheckpointPrivateNetworking(string password)
+        /// <summary>
+        /// Saves the configuration over the file it was opened from or last saved to, while an installation changes private
+        /// networking, so the creator provenance it records is durable before Azure changes.
+        /// </summary>
+        /// <param name="logger">Told where the copy kept for older installers is, when this save keeps one.</param>
+        /// <exception cref="CloudInstallEngine.Models.InstallException">
+        /// There is no saved file, or the copy for older installers could not be written first: nothing was saved.
+        /// </exception>
+        internal void CheckpointPrivateNetworking(string password, ILogger logger = null)
         {
             if (string.IsNullOrWhiteSpace(SavedConfigFileName))
                 throw new CloudInstallEngine.Models.InstallException(
                     "Save the installer configuration to disk before changing private networking. Creator provenance must be durable before Azure changes.");
+
+            Version1BackupResult backup;
+            try
+            {
+                // Normally the save before the installation has already done this, and there is nothing to do.
+                backup = Version1ConfigBackup.BeforeOverwriting(SavedConfigFileName);
+            }
+            catch (Version1ConfigBackupException ex)
+            {
+                throw new CloudInstallEngine.Models.InstallException(
+                    "Private networking was not changed, because the installer configuration has to be saved first. " + ex.Message +
+                    " Make that folder writable, then run the installation again.");
+            }
 
             var checkpoint = SavedConfigFileName + ".network-checkpoint-new";
             try
@@ -254,6 +371,8 @@ namespace App.ControlPanel.Engine
             {
                 if (File.Exists(checkpoint)) File.Delete(checkpoint);
             }
+
+            if (backup.Notice != null) logger?.LogWarning(backup.Notice);
         }
 
         public void PreservePrivateNetworkingStateFrom(SolutionInstallConfig previous)
@@ -570,11 +689,32 @@ namespace App.ControlPanel.Engine
     }
 
     /// <summary>
-    /// For getting load results in case decryption fails due to bad password. Some config restored anyway.
+    /// What came of opening a config file.
     /// </summary>
     public class SolutionInstallConfigLoadResult
     {
+        /// <summary>The configuration read, or null when <see cref="LoadedOk"/> is false.</summary>
         public SolutionInstallConfig Config { get; set; }
+
+        /// <summary>
+        /// False when the secrets could not be decrypted, normally a wrong password. <see cref="Config"/> then holds the
+        /// other settings, with no secrets.
+        /// </summary>
         public bool DecryptedOk { get; set; }
+
+        /// <summary>False when the file could not be read or is not a configuration file.</summary>
+        public bool LoadedOk => Config != null;
+
+        /// <summary>Why nothing was loaded, when <see cref="LoadedOk"/> is false.</summary>
+        public string Error { get; set; }
+
+        /// <summary>
+        /// Whether the file may be saved back to. Not after a failed load: saving would write the configuration without
+        /// the secrets the file holds (or with a mistyped password) and lose them for good.
+        /// </summary>
+        public bool CanBecomeSaveTarget => LoadedOk && DecryptedOk;
+
+        internal static SolutionInstallConfigLoadResult NotLoaded(string error) =>
+            new SolutionInstallConfigLoadResult { Config = null, DecryptedOk = false, Error = error };
     }
 }

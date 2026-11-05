@@ -57,6 +57,7 @@ import {
   formatDay,
   formatMoney,
   formatQuantity,
+  formatShare,
   capacityConsumptionTypeLabel,
   capacityStatusLabel,
   harnessLabel,
@@ -76,6 +77,25 @@ const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
 ];
 
 const PAGE_SIZE = 50;
+
+/**
+ * A response and the scope it answers, or the failure of the request for that scope.
+ *
+ * Every figure on the page is held this way and shown only while its scope is the one on screen. A
+ * period or filter change whose request is still running, or failed, must never leave the previous
+ * scope's figures under the new selector, and a failed read must never be drawn as zero spend or as an
+ * import that is switched off.
+ */
+type Loaded<T> = { key: string; ok: true; value: T } | { key: string; ok: false };
+
+/** The result for `key`, or undefined while the request for it is still running. */
+function forKey<T>(state: Loaded<T> | null, key: string): Loaded<T> | undefined {
+  return state !== null && state.key === key ? state : undefined;
+}
+
+function settled<T>(key: string, result: PromiseSettledResult<T>): Loaded<T> {
+  return result.status === 'fulfilled' ? { key, ok: true, value: result.value } : { key, ok: false };
+}
 
 // Fixed messages, so an effect can recognise the error IT set and clear it once its own request succeeds.
 // Without that, a panel that failed and then recovered (for example paging after a timeout) keeps showing a
@@ -256,6 +276,24 @@ function labelFor(dimension: CreditDimension, value: string | null | undefined, 
   return value || t('agentCosts.state.notReported');
 }
 
+/**
+ * What a card shows when it has no figures for the scope on screen: a spinner while they load, and once
+ * the request has failed, a statement that they could not be loaded - never an empty table, which would
+ * read as "nothing happened in this period".
+ */
+function FiguresPending({ result }: { result: Loaded<unknown> | undefined }) {
+  const styles = useStyles();
+  const t = useT();
+  if (!result) {
+    return (
+      <div className={styles.body}>
+        <Spinner size={24} label={t('agentCosts.loading')} />
+      </div>
+    );
+  }
+  return <div className={styles.empty} role="status">{t('agentCosts.state.loadFailed')}</div>;
+}
+
 export default function AgentCostsPage() {
   const styles = useStyles();
   const t = useT();
@@ -264,14 +302,16 @@ export default function AgentCostsPage() {
   const canSeePii = access.seePii;
 
   const [days, setDays] = useState(30);
+  // Availability describes the imports, not the period. Null means it is not known - a failed read - and
+  // nothing on the page may then claim an import is switched off.
   const [availability, setAvailability] = useState<AgentCostAvailability | null>(null);
   const [options, setOptions] = useState<AgentCostFilterOptions | null>(null);
-  const [summary, setSummary] = useState<AgentCostSummary | null>(null);
-  const [trend, setTrend] = useState<AgentCostDailyPoint[]>([]);
-  const [breakdown, setBreakdown] = useState<AgentCostBreakdownRow[]>([]);
-  const [detail, setDetail] = useState<AgentCostDetailPage | null>(null);
-  const [azure, setAzure] = useState<AzureCostBreakdownRow[]>([]);
-  const [topUsers, setTopUsers] = useState<AgentCostUserRow[]>([]);
+  const [summaryState, setSummaryState] = useState<Loaded<AgentCostSummary> | null>(null);
+  const [trendState, setTrendState] = useState<Loaded<AgentCostDailyPoint[]> | null>(null);
+  const [breakdownState, setBreakdownState] = useState<Loaded<AgentCostBreakdownRow[]> | null>(null);
+  const [detailState, setDetailState] = useState<Loaded<AgentCostDetailPage> | null>(null);
+  const [azureState, setAzureState] = useState<Loaded<AzureCostBreakdownRow[]> | null>(null);
+  const [usersState, setUsersState] = useState<Loaded<AgentCostUserRow[]> | null>(null);
 
   const [dimension, setDimension] = useState<CreditDimension>('agent');
   const [azureDimension, setAzureDimension] = useState<AzureDimension>('meter');
@@ -332,34 +372,39 @@ export default function AgentCostsPage() {
   // must not re-run the summary, the trend, the pivot, the filter options and the Azure breakdown as well -
   // that turned a single "next page" click into seven queries against tables that grow by thousands of rows
   // a day.
+  //
+  // Each request settles on its own, so a failing filter list or trend does not take the spend figures
+  // down with it - and each failure is recorded against its scope, so it shows as a failure, not as zero.
+  const usersKey = `${filterSignature}|${canSeePii ? 'named' : 'hidden'}`;
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    const key = filterSignature;
+    const peopleKey = usersKey;
 
     (async () => {
       setLoading(true);
       setError(null);
-      try {
-        const [availabilityResult, optionsResult, summaryResult, trendResult, usersResult] = await Promise.all([
-          fetchAvailability(controller.signal),
-          fetchFilterOptions(filters, controller.signal),
-          fetchSummary(filters, controller.signal),
-          fetchTrend(filters, controller.signal),
-          canSeePii ? fetchTopUsers(filters, 20, controller.signal) : Promise.resolve([]),
-        ]);
+      const [availabilityResult, optionsResult, summaryResult, trendResult, usersResult] = await Promise.allSettled([
+        fetchAvailability(controller.signal),
+        fetchFilterOptions(filters, controller.signal),
+        fetchSummary(filters, controller.signal),
+        fetchTrend(filters, controller.signal),
+        canSeePii ? fetchTopUsers(filters, 20, controller.signal) : Promise.resolve([]),
+      ]);
+      if (cancelled || controller.signal.aborted) return;
 
-        if (cancelled) return;
-        setAvailability(availabilityResult);
-        setOptions(optionsResult);
-        setSummary(summaryResult);
-        setTrend(trendResult);
-        setTopUsers(usersResult);
-      } catch (ex) {
-        if (cancelled || controller.signal.aborted) return;
-        setError(ex instanceof Error ? ex.message : t('agentCosts.error.summary'));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      setAvailability(availabilityResult.status === 'fulfilled' ? availabilityResult.value : null);
+      // The filter lists are choices, not figures, so the last good ones stay offered after a failure.
+      if (optionsResult.status === 'fulfilled') setOptions(optionsResult.value);
+      setSummaryState(settled(key, summaryResult));
+      setTrendState(settled(key, trendResult));
+      setUsersState(settled(peopleKey, usersResult));
+
+      const failure = [availabilityResult, optionsResult, summaryResult, trendResult, usersResult]
+        .find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failure) setError(failure.reason instanceof Error ? failure.reason.message : t('agentCosts.error.summary'));
+      setLoading(false);
     })();
 
     return () => {
@@ -369,19 +414,22 @@ export default function AgentCostsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterSignature, reloadToken, canSeePii]);
 
+  const breakdownKey = `${filterSignature}|${dimension}`;
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    const key = breakdownKey;
 
     (async () => {
       try {
         const result = await fetchBreakdown(filters, dimension, 20, controller.signal);
         if (!cancelled) {
-          setBreakdown(result);
+          setBreakdownState({ key, ok: true, value: result });
           setError((e) => (e === t(BREAKDOWN_ERROR) ? null : e));
         }
       } catch (ex) {
         if (cancelled || controller.signal.aborted) return;
+        setBreakdownState({ key, ok: false });
         setError(t(BREAKDOWN_ERROR));
       }
     })();
@@ -393,9 +441,12 @@ export default function AgentCostsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterSignature, dimension, reloadToken]);
 
+  // Keyed on the filters alone: the next page or a new sort order of the same billed lines keeps the
+  // current page on screen until it arrives, but a new period or filter never shows the old lines.
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    const key = filterSignature;
 
     (async () => {
       setDetailLoading(true);
@@ -405,11 +456,12 @@ export default function AgentCostsPage() {
           controller.signal,
         );
         if (!cancelled) {
-          setDetail(result);
+          setDetailState({ key, ok: true, value: result });
           setError((e) => (e === t(DETAIL_ERROR) ? null : e));
         }
       } catch (ex) {
         if (cancelled || controller.signal.aborted) return;
+        setDetailState({ key, ok: false });
         setError(t(DETAIL_ERROR));
       } finally {
         if (!cancelled) setDetailLoading(false);
@@ -423,19 +475,22 @@ export default function AgentCostsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterSignature, page, sort, direction, reloadToken]);
 
+  const azureKey = `${filterSignature}|${azureDimension}`;
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    const key = azureKey;
 
     (async () => {
       try {
         const result = await fetchAzureBreakdown(filters, azureDimension, 20, controller.signal);
         if (!cancelled) {
-          setAzure(result);
+          setAzureState({ key, ok: true, value: result });
           setError((e) => (e === t(AZURE_ERROR) ? null : e));
         }
       } catch (ex) {
         if (cancelled || controller.signal.aborted) return;
+        setAzureState({ key, ok: false });
         setError(t(AZURE_ERROR));
       }
     })();
@@ -446,6 +501,20 @@ export default function AgentCostsPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterSignature, azureDimension, reloadToken]);
+
+  // Only the results for the scope on screen. Undefined is "still loading"; `ok: false` is "failed".
+  const summaryResult = forKey(summaryState, filterSignature);
+  const trendResult = forKey(trendState, filterSignature);
+  const usersResult = forKey(usersState, usersKey);
+  const breakdownResult = forKey(breakdownState, breakdownKey);
+  const detailResult = forKey(detailState, filterSignature);
+  const azureResult = forKey(azureState, azureKey);
+  const summary = summaryResult?.ok ? summaryResult.value : null;
+  const trend = trendResult?.ok ? trendResult.value : null;
+  const topUsers = usersResult?.ok ? usersResult.value : null;
+  const breakdown = breakdownResult?.ok ? breakdownResult.value : null;
+  const detail = detailResult?.ok ? detailResult.value : null;
+  const azure = azureResult?.ok ? azureResult.value : null;
 
   const toggleSort = useCallback(
     (column: DetailSort) => {
@@ -461,18 +530,19 @@ export default function AgentCostsPage() {
   );
 
   const categories = useMemo(
-    () => breakdown.map((r) => ({ label: labelFor(dimension, r.label ?? r.key, t), value: r.billedCredits })),
+    () => (breakdown ?? []).map((r) => ({ label: labelFor(dimension, r.label ?? r.key, t), value: r.billedCredits })),
     [breakdown, dimension, t],
   );
 
   // The share denominator is the TRUE window total from the summary, not the sum of the rows on screen.
   // The pivot is capped at the top 20, so dividing by the visible sum would make every row's share add up
-  // to 100% while omitting everything below the cut - overstating each one.
+  // to 100% while omitting everything below the cut - overstating each one. Both are for the scope on
+  // screen, so a breakdown is never divided by another period's total; without a summary there is no share.
   const shareTotal = summary?.billedCredits ?? 0;
-  const breakdownShown = useMemo(() => breakdown.reduce((sum, r) => sum + r.billedCredits, 0), [breakdown]);
+  const breakdownShown = useMemo(() => (breakdown ?? []).reduce((sum, r) => sum + r.billedCredits, 0), [breakdown]);
   const hasHiddenRows = shareTotal > 0 && breakdownShown < shareTotal - 0.0000005;
 
-  const trendMax = useMemo(() => Math.max(...trend.map((p) => p.billedCredits), 1), [trend]);
+  const trendMax = useMemo(() => Math.max(...(trend ?? []).map((p) => p.billedCredits), 1), [trend]);
 
   /**
    * Only the Azure dimensions that actually have data. Cost Management allows two group-by clauses per
@@ -508,7 +578,7 @@ export default function AgentCostsPage() {
   // The per-user total is the sum of the rows SHOWN, and the caption says so. Unlike the pivot there is no
   // uncapped total to divide by: the per-user endpoint is a separate report, so the summary's per-agent
   // total is not its denominator and using it would understate every share.
-  const userTotal = useMemo(() => topUsers.reduce((sum, u) => sum + u.billedCredits, 0), [topUsers]);
+  const userTotal = useMemo(() => (topUsers ?? []).reduce((sum, u) => sum + u.billedCredits, 0), [topUsers]);
 
   const totalPages = detail ? Math.max(1, Math.ceil(detail.totalRows / detail.pageSize)) : 1;
   const activeDimension = CREDIT_DIMENSIONS.find((d) => d.key === dimension);
@@ -555,7 +625,12 @@ export default function AgentCostsPage() {
           </Body1>
         </div>
         <div className={styles.controls}>
-          <Select value={String(days)} onChange={(_: unknown, d: { value: string }) => setDays(Number(d.value))} disabled={loading}>
+          <Select
+            value={String(days)}
+            onChange={(_: unknown, d: { value: string }) => setDays(Number(d.value))}
+            disabled={loading}
+            aria-label={t('agentCosts.window.ariaLabel')}
+          >
             {WINDOW_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
                 {t(o.labelKey)}
@@ -607,7 +682,9 @@ export default function AgentCostsPage() {
         </div>
       )}
 
-      {loading && !summary ? (
+      {/* Only the very first load replaces the cards. Afterwards each card says for itself what it is
+          waiting for, so the filters - and the search box being typed into - stay on screen. */}
+      {loading && summaryState === null ? (
         <div className={styles.body}>
           <Spinner size={32} label={t('agentCosts.loading')} />
         </div>
@@ -623,84 +700,90 @@ export default function AgentCostsPage() {
                 </Text>
               )}
             </div>
-            <div className={`${styles.kpiGrid} ${styles.body}`}>
-              <div className={styles.kpi}>
-                <span className={styles.kpiValue}>{formatCredits(summary?.billedCredits ?? 0)}</span>
-                <span className={styles.kpiLabel}>{t('agentCosts.kpi.creditsBilled')}</span>
-                <span className={styles.kpiHint}>{t('agentCosts.kpi.creditsBilled.hint')}</span>
-              </div>
-              <div className={styles.kpi}>
-                <span className={styles.kpiValue}>{formatCredits(summary?.nonBilledCredits ?? 0)}</span>
-                <span className={styles.kpiLabel}>{t('agentCosts.kpi.creditsNotCharged')}</span>
-                <span className={styles.kpiHint}>{t('agentCosts.kpi.creditsNotCharged.hint')}</span>
-              </div>
-              <div className={styles.kpi}>
-                <span className={styles.kpiValue}>{formatCount(summary?.distinctAgents ?? 0)}</span>
-                <span className={styles.kpiLabel}>{t('agentCosts.kpi.agentsWithSpend')}</span>
-              </div>
-              <div className={styles.kpi}>
-                <span className={styles.kpiValue}>{formatCount(summary?.distinctEnvironments ?? 0)}</span>
-                <span className={styles.kpiLabel}>{t('agentCosts.kpi.environments')}</span>
-              </div>
-              <div className={styles.kpi}>
-                <span className={styles.kpiValue}>{formatCount(summary?.peakDistinctUsersOnASlice)}</span>
-                <span className={styles.kpiLabel}>{t('agentCosts.kpi.busiestSlice')}</span>
-                <span className={styles.kpiHint}>{t('agentCosts.kpi.busiestSlice.hint')}</span>
-              </div>
-              {summary?.unclassifiedHarnessCredits ? (
-                <div className={styles.kpi}>
-                  <span className={styles.kpiValue}>{formatCredits(summary.unclassifiedHarnessCredits)}</span>
-                  <span className={styles.kpiLabel}>{t('agentCosts.kpi.unclassifiedHarness')}</span>
-                  <span className={styles.kpiHint}>{t('agentCosts.kpi.unclassifiedHarness.hint')}</span>
-                </div>
-              ) : null}
-            </div>
-
-            {summary?.capacity && (
-              <div className={`${styles.kpiGrid} ${styles.body}`}>
-                <div className={styles.kpi}>
-                  <span className={styles.kpiValue}>{formatCredits(summary.capacity.consumed)}</span>
-                  <span className={styles.kpiLabel}>{t('agentCosts.capacity.prepaidUsed')}</span>
-                  <span className={styles.kpiHint}>
-                    <CapacityUsedHint capacity={summary.capacity} />
-                  </span>
-                </div>
-                <div className={styles.kpi}>
-                  <span className={styles.kpiValue}>{formatCredits(summary.capacity.available)}</span>
-                  <span className={styles.kpiLabel}>{t('agentCosts.capacity.availableNow')}</span>
-                </div>
-                <div className={styles.kpi}>
-                  <span className={styles.kpiValue}>{capacityStatusLabel(summary.capacity.status, t)}</span>
-                  <span className={styles.kpiLabel}>{t('agentCosts.capacity.status')}</span>
-                  <span className={styles.kpiHint}>
-                    {t('agentCosts.capacity.asAt', { day: formatDay(summary.capacity.consumptionAsOf ?? summary.capacity.snapshotUtc) })}
-                  </span>
-                </div>
-                {summary.capacity.payAsYouGoConsumed != null && (
+            {!summary ? (
+              <FiguresPending result={summaryResult} />
+            ) : (
+              <>
+                <div className={`${styles.kpiGrid} ${styles.body}`}>
                   <div className={styles.kpi}>
-                    <span className={styles.kpiValue}>{formatCredits(summary.capacity.payAsYouGoConsumed)}</span>
-                    <span className={styles.kpiLabel}>{t('agentCosts.capacity.payAsYouGo')}</span>
-                    <span className={styles.kpiHint}>{t('agentCosts.capacity.payAsYouGo.hint')}</span>
+                    <span className={styles.kpiValue}>{formatCredits(summary.billedCredits)}</span>
+                    <span className={styles.kpiLabel}>{t('agentCosts.kpi.creditsBilled')}</span>
+                    <span className={styles.kpiHint}>{t('agentCosts.kpi.creditsBilled.hint')}</span>
+                  </div>
+                  <div className={styles.kpi}>
+                    <span className={styles.kpiValue}>{formatCredits(summary.nonBilledCredits)}</span>
+                    <span className={styles.kpiLabel}>{t('agentCosts.kpi.creditsNotCharged')}</span>
+                    <span className={styles.kpiHint}>{t('agentCosts.kpi.creditsNotCharged.hint')}</span>
+                  </div>
+                  <div className={styles.kpi}>
+                    <span className={styles.kpiValue}>{formatCount(summary.distinctAgents)}</span>
+                    <span className={styles.kpiLabel}>{t('agentCosts.kpi.agentsWithSpend')}</span>
+                  </div>
+                  <div className={styles.kpi}>
+                    <span className={styles.kpiValue}>{formatCount(summary.distinctEnvironments)}</span>
+                    <span className={styles.kpiLabel}>{t('agentCosts.kpi.environments')}</span>
+                  </div>
+                  <div className={styles.kpi}>
+                    <span className={styles.kpiValue}>{formatCount(summary.peakDistinctUsersOnASlice)}</span>
+                    <span className={styles.kpiLabel}>{t('agentCosts.kpi.busiestSlice')}</span>
+                    <span className={styles.kpiHint}>{t('agentCosts.kpi.busiestSlice.hint')}</span>
+                  </div>
+                  {summary.unclassifiedHarnessCredits ? (
+                    <div className={styles.kpi}>
+                      <span className={styles.kpiValue}>{formatCredits(summary.unclassifiedHarnessCredits)}</span>
+                      <span className={styles.kpiLabel}>{t('agentCosts.kpi.unclassifiedHarness')}</span>
+                      <span className={styles.kpiHint}>{t('agentCosts.kpi.unclassifiedHarness.hint')}</span>
+                    </div>
+                  ) : null}
+                </div>
+
+                {summary.capacity && (
+                  <div className={`${styles.kpiGrid} ${styles.body}`}>
+                    <div className={styles.kpi}>
+                      <span className={styles.kpiValue}>{formatCredits(summary.capacity.consumed)}</span>
+                      <span className={styles.kpiLabel}>{t('agentCosts.capacity.prepaidUsed')}</span>
+                      <span className={styles.kpiHint}>
+                        <CapacityUsedHint capacity={summary.capacity} />
+                      </span>
+                    </div>
+                    <div className={styles.kpi}>
+                      <span className={styles.kpiValue}>{formatCredits(summary.capacity.available)}</span>
+                      <span className={styles.kpiLabel}>{t('agentCosts.capacity.availableNow')}</span>
+                    </div>
+                    <div className={styles.kpi}>
+                      <span className={styles.kpiValue}>{capacityStatusLabel(summary.capacity.status, t)}</span>
+                      <span className={styles.kpiLabel}>{t('agentCosts.capacity.status')}</span>
+                      <span className={styles.kpiHint}>
+                        {t('agentCosts.capacity.asAt', { day: formatDay(summary.capacity.consumptionAsOf ?? summary.capacity.snapshotUtc) })}
+                      </span>
+                    </div>
+                    {summary.capacity.payAsYouGoConsumed != null && (
+                      <div className={styles.kpi}>
+                        <span className={styles.kpiValue}>{formatCredits(summary.capacity.payAsYouGoConsumed)}</span>
+                        <span className={styles.kpiLabel}>{t('agentCosts.capacity.payAsYouGo')}</span>
+                        <span className={styles.kpiHint}>{t('agentCosts.capacity.payAsYouGo.hint')}</span>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
 
-            {summary && summary.azureCost.length > 0 && (
-              <div className={`${styles.kpiGrid} ${styles.body}`}>
-                {summary.azureCost.map((c) => (
-                  <div className={styles.kpi} key={c.currency ?? 'unknown'}>
-                    <span className={styles.kpiValue}>{formatMoney(c.cost, c.currency)}</span>
-                    <span className={styles.kpiLabel}>{t('agentCosts.azureSpend.title')}</span>
-                    {c.quantity !== null && c.quantity !== undefined && (
-                      <span className={styles.kpiHint}>
-                        {t('agentCosts.azureSpend.meteredUnitsBilled', { quantity: formatCredits(c.quantity) })}
-                      </span>
-                    )}
-                    {c.includesEstimates && <span className={styles.kpiHint}>{t('agentCosts.azureSpend.includesEstimates')}</span>}
+                {summary.azureCost.length > 0 && (
+                  <div className={`${styles.kpiGrid} ${styles.body}`}>
+                    {summary.azureCost.map((c) => (
+                      <div className={styles.kpi} key={c.currency ?? 'unknown'}>
+                        <span className={styles.kpiValue}>{formatMoney(c.cost, c.currency)}</span>
+                        <span className={styles.kpiLabel}>{t('agentCosts.azureSpend.title')}</span>
+                        {c.quantity !== null && c.quantity !== undefined && (
+                          <span className={styles.kpiHint}>
+                            {t('agentCosts.azureSpend.meteredUnitsBilled', { quantity: formatCredits(c.quantity) })}
+                          </span>
+                        )}
+                        {c.includesEstimates && <span className={styles.kpiHint}>{t('agentCosts.azureSpend.includesEstimates')}</span>}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
           </Card>
 
@@ -708,7 +791,9 @@ export default function AgentCostsPage() {
               time-series chart is built around a weekly spine. */}
           <Card>
             <Text weight="semibold">{t('agentCosts.trend.title')}</Text>
-            {trend.length === 0 ? (
+            {!trend ? (
+              <FiguresPending result={trendResult} />
+            ) : trend.length === 0 ? (
               <div className={styles.empty}>{t('agentCosts.trend.empty')}</div>
             ) : (
               <>
@@ -813,47 +898,53 @@ export default function AgentCostsPage() {
               ))}
             </TabList>
 
-            <div className={styles.body}>
-              <CategoryBarChart categories={categories} valueLabel={t('agentCosts.unit.credits')} />
-            </div>
+            {!breakdown ? (
+              <FiguresPending result={breakdownResult} />
+            ) : (
+              <>
+                <div className={styles.body}>
+                  <CategoryBarChart categories={categories} valueLabel={t('agentCosts.unit.credits')} />
+                </div>
 
-            {breakdown.length > 0 && (
-              <div className={`${styles.wrap} ${styles.body}`}>
-                <table className={styles.table}>
-                  <thead>
-                    <tr>
-                      <th className={styles.th}>{activeDimension ? t(activeDimension.labelKey) : t('agentCosts.table.value')}</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.creditsBilled')}</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.share')}</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.notCharged')}</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.daysActive')}</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.busiestSlicePeople')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {breakdown.map((r) => (
-                      <tr key={r.key ?? NOT_REPORTED}>
-                        <td className={`${styles.td} ${r.key ? '' : styles.tdMuted}`}>{labelFor(dimension, r.label ?? r.key, t)}</td>
-                        <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.billedCredits)}</td>
-                        <td className={`${styles.td} ${styles.tdNumeric}`}>
-                          {shareTotal > 0 ? `${Math.round((r.billedCredits / shareTotal) * 1000) / 10}%` : DASH}
-                        </td>
-                        <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.nonBilledCredits)}</td>
-                        <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(r.activeDays)}</td>
-                        <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(r.peakDistinctUsers)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {hasHiddenRows && (
-                  <Text className={styles.muted} size={200}>
-                    {t('agentCosts.breakdown.hiddenRows', {
-                      count: formatCount(breakdown.length),
-                      credits: formatCredits(shareTotal),
-                    })}
-                  </Text>
+                {breakdown.length > 0 && (
+                  <div className={`${styles.wrap} ${styles.body}`}>
+                    <table className={styles.table}>
+                      <thead>
+                        <tr>
+                          <th className={styles.th}>{activeDimension ? t(activeDimension.labelKey) : t('agentCosts.table.value')}</th>
+                          <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.creditsBilled')}</th>
+                          <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.share')}</th>
+                          <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.notCharged')}</th>
+                          <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.daysActive')}</th>
+                          <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.busiestSlicePeople')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {breakdown.map((r) => (
+                          <tr key={r.key ?? NOT_REPORTED}>
+                            <td className={`${styles.td} ${r.key ? '' : styles.tdMuted}`}>{labelFor(dimension, r.label ?? r.key, t)}</td>
+                            <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.billedCredits)}</td>
+                            <td className={`${styles.td} ${styles.tdNumeric}`}>
+                              {shareTotal > 0 ? formatShare(r.billedCredits / shareTotal) : DASH}
+                            </td>
+                            <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.nonBilledCredits)}</td>
+                            <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(r.activeDays)}</td>
+                            <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(r.peakDistinctUsers)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {hasHiddenRows && (
+                      <Text className={styles.muted} size={200}>
+                        {t('agentCosts.breakdown.hiddenRows', {
+                          count: formatCount(breakdown.length),
+                          credits: formatCredits(shareTotal),
+                        })}
+                      </Text>
+                    )}
+                  </div>
                 )}
-              </div>
+              </>
             )}
           </Card>
 
@@ -888,7 +979,9 @@ export default function AgentCostsPage() {
               </div>
             </div>
 
-            {!detail || detail.rows.length === 0 ? (
+            {!detail ? (
+              <FiguresPending result={detailResult} />
+            ) : detail.rows.length === 0 ? (
               <div className={styles.empty}>{t('agentCosts.detail.empty')}</div>
             ) : (
               <>
@@ -984,11 +1077,14 @@ export default function AgentCostsPage() {
               </div>
             </div>
 
-            {topUsers.length === 0 ? (
+            {!topUsers ? (
+              <FiguresPending result={usersResult} />
+            ) : topUsers.length === 0 ? (
               <div className={styles.empty}>
-                {!availability?.copilotStudioCreditsEnabled
+                {/* Unknown availability is not "switched off": the list itself answered, and it is empty. */}
+                {availability && !availability.copilotStudioCreditsEnabled
                   ? t('agentCosts.users.empty.importOff')
-                  : availability?.hasPerUserCreditData
+                  : !availability || availability.hasPerUserCreditData
                     ? t('agentCosts.users.empty.noUsage')
                     : t('agentCosts.users.empty.noFigures')}
               </div>
@@ -1015,7 +1111,7 @@ export default function AgentCostsPage() {
                         </td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(u.billedCredits)}</td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>
-                          {userTotal > 0 ? `${Math.round((u.billedCredits / userTotal) * 1000) / 10}%` : DASH}
+                          {userTotal > 0 ? formatShare(u.billedCredits / userTotal) : DASH}
                         </td>
                         <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(u.activeDays)}</td>
                       </tr>
@@ -1048,6 +1144,7 @@ export default function AgentCostsPage() {
                 value={azureDimension}
                 onChange={(_: unknown, d: { value: string }) => setAzureDimension(d.value as AzureDimension)}
                 disabled={loading}
+                aria-label={t('agentCosts.azureSpend.dimension.ariaLabel')}
               >
                 {availableAzureDimensions.map((d) => (
                   <option key={d.key} value={d.key}>
@@ -1057,11 +1154,13 @@ export default function AgentCostsPage() {
               </Select>
             </div>
 
-            {azure.length === 0 ? (
+            {!azure ? (
+              <FiguresPending result={azureResult} />
+            ) : azure.length === 0 ? (
               <div className={styles.empty}>
-                {availability?.azureCostsEnabled
-                  ? t('agentCosts.azureSpend.empty.noCosts')
-                  : t('agentCosts.azureSpend.empty.importOff')}
+                {availability && !availability.azureCostsEnabled
+                  ? t('agentCosts.azureSpend.empty.importOff')
+                  : t('agentCosts.azureSpend.empty.noCosts')}
               </div>
             ) : (
               <div className={`${styles.wrap} ${styles.body}`}>

@@ -1,81 +1,52 @@
-# office-365-advanced-analytics-share-point-sp-fx-tracker
+# SharePoint tracker: modern-page extension (SPFx)
 
-## Summary
+This SharePoint Framework (SPFx 1.22.2) application customizer loads the SharePoint tracker, `AITracker.js`, on **modern** pages. It doesn't track anything itself. All the tracking logic lives in [`../AITracker/TypeScript`](../AITracker/TypeScript), which also runs on its own on classic pages, where there's no SPFx. The extension:
 
-Short summary on functionality and used technologies.
+- sets the tracker's settings from its properties (`appInsightsConnectionStringHash`, `insightsWebRootUrlHash`);
+- loads the site collection's own copy, `<site collection>/SPOInsights/AITracker.js?ver=<cacheToken>`, unless a tracker is already running in the page;
+- passes SharePoint's in-page navigations to the running tracker.
 
-[picture of the solution in action, if possible]
+Read the [SharePoint instructions](../.github/copilot-instructions.md) before changing either part. They explain how the two parts work together, how the package is deployed, the rules the tracker must keep, and how to validate a change on a development tenant.
 
-## Used SharePoint Framework Version
+## How it's deployed
 
-![version](https://img.shields.io/badge/version-1.22.2-green.svg)
+The installer deploys the package to the tenant app catalog, tenant-wide, which only makes the extension available. It then enables tracking site collection by site collection, by adding site custom actions that carry the extension's properties, and uploads each site's copy of `AITracker.js`. See [How it is deployed](../.github/copilot-instructions.md#how-it-is-deployed--the-intended-design).
 
-## Applies to
+## Build
 
-- [SharePoint Framework](https://aka.ms/spfx)
-- [Microsoft 365 tenant](https://docs.microsoft.com/sharepoint/dev/spfx/set-up-your-developer-tenant)
+SPFx doesn't support the repository's Node.js major (26), so this folder has its own `.nvmrc`: **Node 22**. Its `.npmrc` sets `engine-strict`, so `npm ci` refuses to run on any other major.
 
-> Get your own free development tenant by subscribing to [Microsoft 365 developer program](http://aka.ms/o365devprogram)
+```powershell
+cd src\SPO\ModernPagesAITrackerExtension
+nvm use          # Node 22, from this folder's .nvmrc
+npm ci
+npm run build    # runs the jest tests, then packages the solution
+```
 
-## Prerequisites
+`npm run build` writes the package to `sharepoint/solution/spoinsights-modern-ui-aitracker.sppkg`. Heft is a development dependency, so nothing needs installing globally. On a machine that other work shares, don't switch the global Node: put a portable Node 22 on this one process's `PATH` instead.
 
-> Any special pre-requisites?
+## Ship a change
 
-## Solution
+**CI doesn't build this project.** The release zips the package committed at `src/SPO/AITracker/spoinsights-modern-ui-aitracker.sppkg` into `AITrackerInstaller.zip`, and the installer deploys it as it is. So every change to the extension follows these steps, in this order:
 
-| Solution    | Author(s)                                               |
-| ----------- | ------------------------------------------------------- |
-| folder name | Author details (name, company, twitter alias with link) |
+1. **Bump the version, before you build.** Set `version` in `config/package-solution.json` and `AITRACKER_MODERN_VERSION` in `src/extensions/aiTrackerModern/AiTrackerModernApplicationCustomizer.ts` to the same new value. The extension logs it in the browser console, which is how anyone tells which version a page is running.
+2. **Build** with `npm ci` and `npm run build`, as above.
+3. **Copy** `sharepoint/solution/spoinsights-modern-ui-aitracker.sppkg` over `src/SPO/AITracker/spoinsights-modern-ui-aitracker.sppkg`.
+4. **Check** from the repository root:
 
-## Version history
+   ```powershell
+   ./.github/scripts/Test-SpfxPackage.ps1
+   ```
 
-| Version | Date             | Comments        |
-| ------- | ---------------- | --------------- |
-| 1.1     | March 10, 2021   | Update comment  |
-| 1.0     | January 29, 2021 | Initial release |
+   It fails unless `package-solution.json`, `AITRACKER_MODERN_VERSION`, the committed package's `AppManifest.xml` and the extension bundle inside that package all carry the same version.
+5. **Commit** the source change, both version stamps and the rebuilt package together.
 
-## Disclaimer
+The required `test_aitracker` check runs the same script whenever the extension, the package or the script changes. It can only tell that the package was rebuilt when the version changed: a change committed without a version bump passes CI, and the release ships the old package.
 
-**THIS CODE IS PROVIDED _AS IS_ WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING ANY IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.**
+A change to `AITracker.js` is separate: it bumps `AI_TRACKER_VER` in `../AITracker/TypeScript/src/AiTrackerConstants.ts`, and CI builds it.
 
----
+## Test it
 
-## Minimal Path to Awesome
+`npm run build` runs the extension's jest tests (`src/**/*.test.ts`). `npm start` serves the extension from your machine for SharePoint's debug mode, but the debug configurations in `config/serve.json` carry no properties, so the extension doesn't track anything until you add them locally. Don't commit them.
 
-- Clone this repository
-- Ensure that you are at the solution folder
-- **Switch to Node.js 22** — SPFx does not support the Node major the rest of
-  this repository is pinned to (see the `.nvmrc` in this folder, and the
-  *Node.js version* section of [`CONTRIBUTING.md`](../../../CONTRIBUTING.md)):
-  - `nvm use` (from this folder, not the repository root)
-- in the command-line run:
-  - `npm install -g @rushstack/heft`
-  - `npm install`
-  - `heft start`
-
-> Include any additional steps as needed.
-
-Other build commands can be listed using `heft --help`.
-
-## Features
-
-Description of the extension that expands upon high-level summary above.
-
-This extension illustrates the following concepts:
-
-- topic 1
-- topic 2
-- topic 3
-
-> Notice that better pictures and documentation will increase the sample usage and the value you are providing for others. Thanks for your submissions advance.
-
-> Share your web part with others through Microsoft 365 Patterns and Practices program to get visibility and exposure. More details on the community, open-source projects and other activities from http://aka.ms/m365pnp.
-
-## References
-
-- [Getting started with SharePoint Framework](https://docs.microsoft.com/sharepoint/dev/spfx/set-up-your-developer-tenant)
-- [Building for Microsoft teams](https://docs.microsoft.com/sharepoint/dev/spfx/build-for-teams-overview)
-- [Use Microsoft Graph in your solution](https://docs.microsoft.com/sharepoint/dev/spfx/web-parts/get-started/using-microsoft-graph-apis)
-- [Publish SharePoint Framework applications to the Marketplace](https://docs.microsoft.com/sharepoint/dev/spfx/publish-to-marketplace-overview)
-- [Microsoft 365 Patterns and Practices](https://aka.ms/m365pnp) - Guidance, tooling, samples and open-source controls for your Microsoft 365 development
-- [Heft Documentation](https://heft.rushstack.io/)
+Unit tests can't see how SharePoint navigates, so validate every change on a development tenant, as [Validate on a dev tenant with Playwright](../.github/copilot-instructions.md#validate-on-a-dev-tenant-with-playwright) describes.

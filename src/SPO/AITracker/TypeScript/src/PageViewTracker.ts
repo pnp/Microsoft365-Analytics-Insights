@@ -13,6 +13,11 @@ export class PageViewTracker {
     _context: spPageContextInfo;
     _pagePropLoader: PagePropertyManager;
 
+    // TimeMe's running total of seconds on page when the browser was last seen on a tracked site, and when it left the tracked
+    // sites if it's away from them now. Time spent away from them is no page's time on page.
+    _lastSeenOnTrackedSite: number = 0;
+    _leftTrackedSitesAt: number | null = null;
+
     constructor(ai: AppInsightsWrapper, context: spPageContextInfo, pagePropLoader: PagePropertyManager) {
         this._ai = ai;
         this._context = context;
@@ -36,6 +41,11 @@ export class PageViewTracker {
         this.trackCurrentPageView(pageLoadDuration, window._spPageContextInfo.webAbsoluteUrl,
             window._spPageContextInfo.siteAbsoluteUrl, window._spPageContextInfo.webTitle, url, listTitle, listItemId);
 
+        this.trackLastPageExit();
+    }
+
+    // Send the time on the page before the browser loaded this one, which was saved to a cookie as the browser left it
+    trackLastPageExit(): void {
 
         // Track page event from last hit
         const lastPageStats = GetLastPageStatsVal();
@@ -86,9 +96,30 @@ export class PageViewTracker {
         this.trackCurrentPageView(0, webUrl, siteUrl, webTitle, url, listTitle, listItemId);
     }
 
+    // The browser is on a page of a tracked site
+    seenOnTrackedSite(): void {
+        const now = TimeMe.getTimeOnCurrentPageInSeconds();
+        if (this._leftTrackedSitesAt !== null) {
+            // Back from sites that aren't tracked. The time spent on them doesn't count for the page tracked last
+            this._lastTimeTotalOnPages += now - this._leftTrackedSitesAt;
+            this._leftTrackedSitesAt = null;
+            log("On a tracked site again");
+        }
+        this._lastSeenOnTrackedSite = now;
+    }
+
+    // The browser is on a page that isn't on a tracked site: SharePoint navigated to one without reloading the page. Time on the
+    // page tracked last stops where the browser was last seen on a tracked site, as close to leaving it as this script can tell.
+    seenOffTrackedSites(): void {
+        if (this._leftTrackedSitesAt === null) {
+            this._leftTrackedSitesAt = Math.max(this._lastSeenOnTrackedSite, this._lastTimeTotalOnPages);
+            log("Not on a tracked site, so nothing is tracked until SharePoint shows a page of one");
+        }
+    }
+
     getTimeOnPageAndResetLastTotalTime(): number {
-        // How long was the user on this page?
-        const currentSecondsOnPage = TimeMe.getTimeOnCurrentPageInSeconds();
+        // How long was the user on this page? Away from the tracked sites, only until the browser left them
+        const currentSecondsOnPage = this._leftTrackedSitesAt ?? TimeMe.getTimeOnCurrentPageInSeconds();
 
         // As this method can be called a lot, subtract the time of the last "page exit"
         const timeOnPage = currentSecondsOnPage - this._lastTimeTotalOnPages;
@@ -144,13 +175,18 @@ export class PageViewTracker {
                 return;
             }
 
-            debug('Saving page exit stats with ' + secondsOnPage + ' seconds spent on ' + document.URL + ' to cookie SPOInsightsLastPageStats.');
+            // The page the time was spent on. Away from the tracked sites that's the page tracked last, not the one the browser is on,
+            // which isn't tracked
+            const url = this._leftTrackedSitesAt !== null && this._ai._lastTrackedUrl ? this._ai._lastTrackedUrl : document.URL;
+            debug('Saving page exit stats with ' + secondsOnPage + ' seconds spent on ' + url + ' to cookie SPOInsightsLastPageStats.');
 
             // Set cookie for next "page load" to pick-up & send, for 7 days. Can't send stats onpageunload due to time it would take to send.
             SetLastPageStatsVal({
-                'pageRequestId': this._ai._pageRequestId, 'secondsOnPage': secondsOnPage, 'url': encodeURI(document.URL)
+                'pageRequestId': this._ai._pageRequestId, 'secondsOnPage': secondsOnPage, 'url': encodeURI(url)
             });
         }
+        else if (this._leftTrackedSitesAt !== null)
+            debug("No page-exit to save: no page of a tracked site was tracked");
         else
             error("Can't save page-exit cookie: have no page-request ID");
     }

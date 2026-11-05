@@ -19,6 +19,11 @@ const app: Record<keyof typeof en, string> = {
   'app.nav.expand': 'Expandir la navegaci\u00f3n',
   'app.nav.ariaLabel': 'Navegaci\u00f3n de {area}',
 
+  'app.routeError.title': 'No se ha podido mostrar esta página',
+  'app.routeError.body': 'Algo ha fallado al abrirla. Vuelva a cargarla para intentarlo de nuevo o elija otra página en la navegación. Si sigue ocurriendo, facilite al administrador los detalles que aparecen a continuación.',
+  'app.routeError.detail': 'Detalles: {message}',
+  'app.routeError.reload': 'Volver a cargar',
+
   'app.language.label': 'Idioma',
   'app.language.choose': 'Cambiar idioma',
   'app.language.current': 'Idioma: {language}',

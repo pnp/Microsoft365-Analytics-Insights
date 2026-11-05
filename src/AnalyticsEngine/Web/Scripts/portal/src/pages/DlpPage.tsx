@@ -544,11 +544,19 @@ export default function DlpPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    // A new period, or a refresh, starts from nothing. If this read fails, the previous answer must not come
+    // back from under the spinner as though it were the figures for the period now selected.
+    setSummary(null);
     setGovernance(null);
     setGovernanceError(null);
     setGovernanceLoading(false);
 
     fetchDlpAvailability()
+      .catch((e: unknown) => {
+        // Which sources are switched on is unknown after a failed read, not what it was the last time.
+        if (!cancelled) setAvailability(null);
+        throw e;
+      })
       .then(async (a) => {
         if (cancelled) return;
         setAvailability(a);
@@ -573,8 +581,6 @@ export default function DlpPage() {
         if (a.available) {
           const s = await fetchDlpSummary(days);
           if (!cancelled) setSummary(s);
-        } else {
-          setSummary(null);
         }
       })
       .catch((e: any) => {

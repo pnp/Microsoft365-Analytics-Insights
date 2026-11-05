@@ -125,7 +125,8 @@ namespace WebJob.Office365ActivityImporter.Engine
             _stagingWriter = stagingWriter ?? new SqlActivityStagingWriter(logger);
             _copilotPrewarmer = new CopilotMetadataPrewarmer(
                 copilotMetadataLoaderFactory ?? new GraphCopilotMetadataLoaderFactory(logger, appConfig), logger);
-            _saveSessionFactory = saveSessionFactory ?? new SaveSessionFactory(logger, appConfig);
+            // One read of the SharePoint webs and site collections for the whole cycle, not one per batch.
+            _saveSessionFactory = saveSessionFactory ?? new SaveSessionFactory(logger, appConfig, new SharePointWebIndex());
         }
 
         /// <summary>
@@ -471,6 +472,12 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// <summary>Width of <c>dbo.online_meetings.name</c> (nvarchar(100), migration CopilotEvents).</summary>
         public const int MeetingNameMaxLength = 100;
 
+        /// <summary>Width of <c>dbo.copilot_event_messages.message_id</c> (nvarchar(500), migration CopilotExtendedData).</summary>
+        public const int CopilotMessageIdMaxLength = 500;
+
+        /// <summary>Width of <c>dbo.copilot_ai_models.name</c> (nvarchar(100), <c>AbstractEFEntityWithName</c>).</summary>
+        public const int CopilotAiModelNameMaxLength = 100;
+
         /// <summary>
         /// Trims <paramref name="value"/> to at most <paramref name="maxLength"/> UTF-16 code units - what an
         /// <c>nvarchar(n)</c> column counts - without splitting a surrogate pair. Shorter values (and null) are
@@ -489,6 +496,28 @@ namespace WebJob.Office365ActivityImporter.Engine
                 length--;
             }
             return value.Substring(0, length);
+        }
+
+        /// <summary>
+        /// Fits an identifier into <paramref name="maxLength"/> UTF-16 code units without losing what tells it apart: a
+        /// longer one becomes its first characters, <c>~</c> and the SHA-256 of the whole value. Two long identifiers that
+        /// share a prefix therefore stay two identifiers, and the same identifier always gets the same short form, so
+        /// re-importing it matches what was stored. Shorter values (and null) are returned unchanged.
+        /// </summary>
+        public static string FitIdentifier(string value, int maxLength)
+        {
+            if (value == null || value.Length <= maxLength)
+            {
+                return value;
+            }
+
+            string hash;
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                var digest = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(value));
+                hash = BitConverter.ToString(digest).Replace("-", string.Empty).ToLowerInvariant();
+            }
+            return TrimToLength(value, maxLength - hash.Length - 1) + "~" + hash;
         }
     }
 }

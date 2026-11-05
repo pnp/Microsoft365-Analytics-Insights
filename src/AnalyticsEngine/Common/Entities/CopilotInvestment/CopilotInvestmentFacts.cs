@@ -156,6 +156,37 @@ namespace Common.Entities.CopilotInvestment
 
         [JsonProperty("limitExhaustedUsers")]
         public long LimitExhaustedUsers { get; set; }
+
+        /// <summary>True when, for a reader without See PII, <see cref="Credits"/> is null (<see cref="WithoutSmallSamples"/>).</summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
+
+        /// <summary>
+        /// Copies of the points for a reader without See PII. A point's credits are withheld when they come from one to
+        /// <paramref name="minPeople"/> - 1 people with consumed credits, or from people its count of them does not show (a
+        /// total other than zero with nobody consuming: adjustments below zero). The report's own total is each person's
+        /// latest reading in the days from <paramref name="bandFrom"/> to <paramref name="snapshot"/>, so it less the points
+        /// on those days can give a withheld one back - the tail of a sweep that crossed midnight, say: when one point in
+        /// that band is withheld, every point in it is. Points before it are older readings and stay. The counts always stay.
+        /// The cached points are shared between readers, so they are copied, never edited.
+        /// </summary>
+        public static List<CreditTrendPoint> WithoutSmallSamples(IReadOnlyList<CreditTrendPoint> points, DateTime? bandFrom, DateTime? snapshot, int minPeople)
+        {
+            if (points == null) return null;
+            bool Small(CreditTrendPoint p) => (p.Credits ?? 0) != 0 && p.ConsumingUsers < minPeople;
+            bool InBand(CreditTrendPoint p) => snapshot.HasValue && p.Date.Date <= snapshot.Value.Date && p.Date.Date >= (bandFrom ?? snapshot).Value.Date;
+            var band = points.Any(p => InBand(p) && Small(p));
+            return points.Select(p => Small(p) || (band && InBand(p) && p.Credits.HasValue)
+                ? new CreditTrendPoint
+                {
+                    Date = p.Date,
+                    ObservedUsers = p.ObservedUsers,
+                    ConsumingUsers = p.ConsumingUsers,
+                    LimitExhaustedUsers = p.LimitExhaustedUsers,
+                    Withheld = true,
+                }
+                : p).ToList();
+        }
     }
 
     /// <summary>One person's evidence detail for the drill-down, read on demand by user id.</summary>

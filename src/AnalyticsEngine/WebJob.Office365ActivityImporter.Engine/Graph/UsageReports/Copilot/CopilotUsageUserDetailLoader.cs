@@ -93,12 +93,67 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
             return LoadAndSaveCoreAsync(_persistence, request);
         }
 
+        /// <summary>
+        /// Collects the weekly 7-day reading Licence activity measures Copilot from, when one is due: once per
+        /// Monday-to-Sunday week, while Microsoft's newest per-user report is dated that week's Sunday (see
+        /// <see cref="CopilotUsageReportPolicy.WeeklySnapshotDue"/>). Run it after the 28-day import, whose
+        /// refresh date decides whether a reading is due, so most days it makes no Graph call at all. A 7-day
+        /// report that turns out not to be dated that Sunday is discarded rather than stored, because it would
+        /// not cover a Monday-to-Sunday week. Returns rows written to SQL.
+        /// </summary>
+        public Task<int> LoadAndSaveWeeklySnapshotAsync(AnalyticsEntitiesContext db)
+        {
+            if (_persistence == null && db == null) throw new ArgumentNullException(nameof(db));
+            return LoadAndSaveWeeklySnapshotCoreAsync(PersistenceFor(db));
+        }
+
+        /// <summary>As above, using the <see cref="ICopilotUsagePersistenceManager"/> this loader was constructed with.</summary>
+        public Task<int> LoadAndSaveWeeklySnapshotAsync()
+        {
+            if (_persistence == null)
+            {
+                throw new InvalidOperationException(
+                    $"This overload needs an {nameof(ICopilotUsagePersistenceManager)}; construct the loader with one, or call the overload that takes a database context.");
+            }
+            return LoadAndSaveWeeklySnapshotCoreAsync(_persistence);
+        }
+
+        private async Task<int> LoadAndSaveWeeklySnapshotCoreAsync(ICopilotUsagePersistenceManager persistence)
+        {
+            WeeklySnapshotAttempted = false;
+            var recentImports = await persistence.GetRecentUserDetailImportsAsync(DateTime.UtcNow.AddDays(-WeeklySnapshotLookBackDays));
+            var weekEnd = CopilotUsageReportPolicy.WeeklySnapshotDue(recentImports);
+            if (!weekEnd.HasValue)
+            {
+                _logger.LogInformation("Copilot per-user weekly reading: none due. It is taken once a week, while Microsoft's newest per-user " +
+                    "Copilot report is dated a Sunday that has no 7-day reading yet.");
+                return 0;
+            }
+
+            _logger.LogInformation($"Copilot per-user weekly reading: Microsoft's newest per-user report is dated Sunday {weekEnd.Value:yyyy-MM-dd}; " +
+                $"collecting its {CopilotReportRequest.WeeklyPeriod} report for Licence activity.");
+            WeeklySnapshotAttempted = true;
+            return await LoadAndSaveCoreAsync(persistence,
+                new CopilotReportRequest(CopilotReportNames.UsageUserDetail, CopilotReportRequest.WeeklyPeriod), weekEnd.Value);
+        }
+
+        /// <summary>
+        /// Whether the last weekly call found a reading due and asked Graph for it, whatever came of that; false when none was
+        /// due. The importer's cadence gate stamps the weekly reading only after an attempt, so a run that found nothing to do
+        /// never holds back the one that next finds something.
+        /// </summary>
+        public bool WeeklySnapshotAttempted { get; private set; }
+
+        /// <summary>How far back the import log is read to decide whether a weekly reading is due.</summary>
+        internal const int WeeklySnapshotLookBackDays = 14;
+
         private ICopilotUsagePersistenceManager PersistenceFor(AnalyticsEntitiesContext db)
         {
             return _persistence ?? new SqlCopilotUsagePersistenceManager(db, _logger) { SaveBatchSize = SaveBatchSize };
         }
 
-        private async Task<int> LoadAndSaveCoreAsync(ICopilotUsagePersistenceManager persistence, CopilotReportRequest request)
+        private async Task<int> LoadAndSaveCoreAsync(ICopilotUsagePersistenceManager persistence, CopilotReportRequest request,
+            DateTime? requiredRefreshDate = null)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
             if (request.ReportName != CopilotReportNames.UsageUserDetail)
@@ -152,6 +207,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Copilot
 
             importLog.RowsRead = parsed.Count;
             importLog.ReportRefreshDate = parsed.Count > 0 ? parsed.Max(r => r.ReportRefreshDate) : (DateTime?)null;
+
+            // A weekly reading only counts when it covers exactly one Monday-to-Sunday week. Anything else is
+            // dropped before it is logged or stored, so the next week's due check isn't fooled by it either.
+            if (requiredRefreshDate.HasValue && parsed.Count > 0)
+            {
+                var offDate = parsed.FirstOrDefault(r => r.ReportRefreshDate.Date != requiredRefreshDate.Value.Date);
+                if (offDate != null)
+                {
+                    _logger.LogWarning($"Copilot per-user report {request} is dated {offDate.ReportRefreshDate:yyyy-MM-dd}, not Sunday " +
+                        $"{requiredRefreshDate.Value:yyyy-MM-dd}, so it doesn't cover a Monday-to-Sunday week and was not stored. " +
+                        $"Licence activity can't measure Copilot by the week for the week ending {requiredRefreshDate.Value:yyyy-MM-dd}.");
+                    return 0;
+                }
+            }
 
             if (parsed.Count == 0)
             {

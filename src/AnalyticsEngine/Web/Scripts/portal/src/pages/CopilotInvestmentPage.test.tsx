@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, configure, fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import { renderWithProvider } from '../test/renderWithProvider';
-import CopilotInvestmentPage from './CopilotInvestmentPage';
+import CopilotInvestmentPage, { USER_FILTER_URL_PARAM } from './CopilotInvestmentPage';
+import { MemoryRouter } from 'react-router-dom';
+import { serializeUserFilter } from '../components/userFilter/userFilterModel';
 import { loadCatalog } from '../i18n';
 import {
   fetchInvestmentAvailability,
@@ -243,6 +245,197 @@ async function reopenedDialog(): Promise<HTMLElement> {
 }
 
 describe('CopilotInvestmentPage', () => {
+  /**
+   * What a reader without See PII is given when one to four people are behind the Copilot Studio, balance, band and metered
+   * figures: those figures null with their flags, and the cost and everything worked out from it withheld with the Studio part.
+   */
+  function withheldSummary(): CopilotInvestmentSummary {
+    const base = summary();
+    return summary({
+      individualDataHidden: true,
+      investment: {
+        ...base.investment,
+        studio: {
+          ...base.investment.studio, credits: null, creditsWithheld: true, holderCredits: null, holderCreditsWithheld: true,
+          windowValue: null, holderWindowValue: null, priorCredits: null, priorCreditsWithheld: true,
+        },
+        credits: {
+          ...base.investment.credits, credits: null, creditsWithheld: true, holderCredits: null, holderCreditsWithheld: true,
+          nonHolderCredits: null, nonHolderCreditsWithheld: true, balanceValue: null,
+        },
+        modelledWindowCost: null,
+        modelledMonthlyCost: null,
+        monthlyStudioCost: null,
+        studioCostWithheld: true,
+      },
+      value: { ...base.value, scenarios: base.value.scenarios.map((s) => ({ ...s, roiMultiple: null, net: null })) },
+      breakEven: { ...base.breakEven, minutesPerActiveDay: null, marginOfSafety: null },
+      sensitivity: {
+        grid: base.sensitivity.grid.map((g) => ({ ...g, roiMultiple: null })),
+        roiBaseHourlyMinus20: null, roiBaseHourlyPlus20: null, roiBaseIfBalancesMonthly: null, roiBaseAfterReclaim: null,
+      },
+      path: { ...base.path, monthlyCost: null, monthlyGap: null, minutesNeeded: null, roiAfterReclaim: null },
+      cohorts: [
+        { band: 'Champion', holders: 3, medianActiveDays: null, activeDays: null, shareOfHolders: 0.01, shareOfActiveDays: null, cost: null, valueBase: null,
+          roiBase: null, credits: null, studioCredits: null, withheld: true, costWithheld: true, creditsWithheld: true, studioWithheld: true },
+        { band: 'Established', holders: 120, medianActiveDays: 9, activeDays: 1080, shareOfHolders: 0.5, shareOfActiveDays: 0.6, cost: null, valueBase: 6750,
+          roiBase: null, credits: 4100, studioCredits: null, costWithheld: true, studioWithheld: true },
+      ],
+      metered: {
+        ...base.metered, activeDays: null, activeDaysWithheld: true, studioCredits: null, studioWindowValue: null, studioWithheld: true,
+        credits: null, creditBalanceValue: null, creditsWithheld: true,
+      },
+      actions: [
+        { ...base.actions[0], roiBaseAfter: null },
+        { ...base.actions[1], credits: null, creditsWithheld: true, monthlyAmount: null, monthlyAmountWithheld: true },
+        { code: 'licenceMeteredHeavy', people: 2, monthlyAmount: null, monthlyAmountWithheld: true, credits: null, roiBaseAfter: null, metric: null, signal: null,
+          flag: 'meteredAboveSeat', effect: 'meteredSpend', assumesMonthlyBalances: false },
+      ],
+      findings: base.findings
+        .filter((f) => f.code !== 'valueRange')
+        .map((f) => (f.code === 'highSpendThinEvidence' ? { ...f, values: { ...f.values, credits: null } } : f)),
+    });
+  }
+
+  it('says a figure withheld from a reader without See PII is withheld, never "not available" or zero', async () => {
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(withheldSummary());
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    const fromCost = 'Not shown: it is worked out from a modelled cost whose Copilot Studio part could single out fewer than 5 people';
+    const withheld = 'Not shown: it could single out fewer than 5 people';
+    expect(await screen.findByText(/^The return is not shown: the modelled cost it is measured against includes Copilot Studio charges/)).toBeInTheDocument();
+    expect(screen.getByText('Not shown: its Copilot Studio part could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.getAllByText(fromCost)).toHaveLength(3);
+    expect(screen.getAllByText(withheld)).toHaveLength(2);
+    expect(screen.getAllByText('Amount not shown: it could single out fewer than 5 people')).toHaveLength(2);
+    expect(screen.getByText(/^4 people have consumed the most credits with little use of their own \(their credits are not shown: they could single out fewer than 5 people\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^4 people have consumed the most credits while showing little Copilot use of their own \(their credits are not shown/)).toBeInTheDocument();
+    expect(screen.queryByText(/4,200/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Reclaiming the 38 idle licences that are safe to reclaim frees €1,140 a month of licence cost\. A cash/)).toBeInTheDocument();
+    expect(screen.queryByText(/Not available/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/clears its modelled cost|more than their modelled cost/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Value & break-even' }));
+    const scenarios = await screen.findByRole('table', { name: 'Three scenarios' });
+    expect(within(scenarios).getAllByRole('img', { name: fromCost })).toHaveLength(6);
+    const bands = screen.getByRole('table', { name: 'By adoption band' });
+    expect(within(bands).getAllByRole('img', { name: withheld })).toHaveLength(10);
+    expect(within(bands).getByText('4,100')).toBeInTheDocument();
+    expect(screen.queryByText(/Not available/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Credits & sources' }));
+    expect(await screen.findAllByText(withheld)).toHaveLength(2);
+  });
+
+  it('says what is withheld in Spanish too', async () => {
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(withheldSummary());
+    renderWithProvider(<CopilotInvestmentPage />, { language: 'es', access: { administration: false, seePii: false } });
+
+    expect(await screen.findByText(/^No se muestra la rentabilidad: el coste modelado con el que se compara incluye cargos de Copilot Studio/)).toBeInTheDocument();
+    expect(screen.getByText('No se muestra: su parte de Copilot Studio podría identificar a menos de 5 personas')).toBeInTheDocument();
+    expect(screen.getAllByText('No se muestra: se calcula con un coste modelado cuya parte de Copilot Studio podría identificar a menos de 5 personas')).toHaveLength(3);
+    expect(screen.getAllByText('No se muestra: podría identificar a menos de 5 personas')).toHaveLength(2);
+    expect(screen.getAllByText('Importe no mostrado: podría identificar a menos de 5 personas')).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Valor y umbral de rentabilidad' }));
+    const bands = await screen.findByRole('table', { name: 'Por nivel de adopción' });
+    expect(within(bands).getAllByRole('img', { name: 'No se muestra: podría identificar a menos de 5 personas' })).toHaveLength(10);
+  });
+
+  it('shows a quadrant withheld from a reader without See PII by its count alone, never a zero', async () => {
+    const base = summary();
+    vi.mocked(fetchInvestmentSummary).mockResolvedValue(
+      summary({
+        concentration: {
+          ...base.concentration,
+          quadrants: [
+            { key: 'highSpendStrongEvidence', people: 6, credits: 0, withheld: true },
+            { key: 'highSpendThinEvidence', people: 2, credits: 0, withheld: true },
+            { key: 'lowSpendStrongEvidence', people: 45, credits: 1500 },
+            { key: 'lowSpendThinEvidence', people: 30, credits: 1000 },
+          ],
+        },
+      }),
+    );
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Organisation' }));
+    expect(await screen.findByText('2 people \u00b7 credits not shown, they could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.getByText('6 people \u00b7 credits not shown, they could single out fewer than 5 people')).toBeInTheDocument();
+    expect(screen.getByText('45 people \u00b7 1,500 credits')).toBeInTheDocument();
+    expect(screen.queryByText(/\u00b7 0 credits/)).not.toBeInTheDocument();
+  });
+
+  it('shows a reading withheld from a reader without See PII as withheld, never as zero', async () => {
+    vi.mocked(fetchInvestmentTrend).mockResolvedValue({
+      points: [
+        { date: '2026-10-19', observedUsers: 300, consumingUsers: 90, credits: 9800, limitExhaustedUsers: 0 },
+        { date: '2026-10-26', observedUsers: 3, consumingUsers: 2, credits: null, limitExhaustedUsers: 0, withheld: true },
+      ],
+      snapshotDate: '2026-10-26',
+      failureCode: null,
+      minPeople: 5,
+    });
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Credits & sources' }));
+    expect(await screen.findByRole('listitem', { name: '19 Oct 2026: 9,800 credits, 90 people' })).toBeInTheDocument();
+    const withheldDay = screen.getByRole('listitem', {
+      name: '26 Oct 2026: credits not shown, they could single out fewer than 5 people; 2 people',
+    });
+    expect(withheldDay).toBeInTheDocument();
+    // The chart draws the withheld day as the table's dash: a bar, even an empty one, reads as "no credits".
+    expect(withheldDay.querySelector('[data-withheld="true"]')).not.toBeNull();
+    expect(withheldDay.querySelectorAll('div')).toHaveLength(0);
+    const measuredDay = screen.getByRole('listitem', { name: '19 Oct 2026: 9,800 credits, 90 people' });
+    expect(measuredDay.querySelector('[data-withheld="true"]')).toBeNull();
+    expect(measuredDay.querySelectorAll('div')).toHaveLength(1);
+    const table = screen.getByRole('table', { name: 'Consumed-credit readings over time' });
+    expect(within(table).getByRole('img', { name: 'Not shown: it could single out fewer than 5 people' })).toBeInTheDocument();
+    expect(within(table).queryByText('0')).not.toBeInTheDocument();
+  });
+
+  it('says the consumption readings could not be read, not that there are none, when that read fails', async () => {
+    vi.mocked(fetchInvestmentTrend).mockResolvedValue({ points: [], snapshotDate: null, failureCode: 'creditsUnavailable', minPeople: 5 });
+    const { unmount } = renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Credits & sources' }));
+    expect(await screen.findByText('The credit history could not be read just now: readings are missing, not zero.')).toBeInTheDocument();
+    expect(screen.queryByText('No consumption readings in this period.')).not.toBeInTheDocument();
+    unmount();
+
+    // A read that worked and found nothing still says there is nothing.
+    vi.mocked(fetchInvestmentTrend).mockResolvedValue({ points: [], snapshotDate: null, failureCode: null, minPeople: 5 });
+    renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Credits & sources' }));
+    expect(await screen.findByText('No consumption readings in this period.')).toBeInTheDocument();
+    expect(screen.queryByText('The credit history could not be read just now: readings are missing, not zero.')).not.toBeInTheDocument();
+  });
+
+  it('tells a reader without See PII that a shared link’s filter was not applied, and applies it for one with See PII', async () => {
+    const link = serializeUserFilter({ clauses: [{ join: 'and', dimension: 'department', operator: 'is', values: ['Contoso Sales'], includeNotSet: false }] })!;
+    const openLink = (seePii: boolean) =>
+      renderWithProvider(
+        <MemoryRouter initialEntries={[`/insights/copilot-investment?${USER_FILTER_URL_PARAM}=${encodeURIComponent(link)}`]}>
+          <CopilotInvestmentPage />
+        </MemoryRouter>,
+        { access: { administration: false, seePii } },
+      );
+
+    const { unmount } = openLink(false);
+    expect(await screen.findByText('The filter in this link was not applied')).toBeInTheDocument();
+    await waitFor(() => expect(fetchInvestmentSummary).toHaveBeenCalled());
+    expect(vi.mocked(fetchInvestmentSummary).mock.calls[0][0].userFilter ?? null).toBeNull();
+    unmount();
+
+    vi.mocked(fetchInvestmentSummary).mockClear();
+    openLink(true);
+    await waitFor(() => expect(fetchInvestmentSummary).toHaveBeenCalled());
+    expect(vi.mocked(fetchInvestmentSummary).mock.calls[0][0].userFilter).toBe(link);
+    expect(screen.queryByText('The filter in this link was not applied')).not.toBeInTheDocument();
+  });
+
   it('leads with the answer and the modelled figures it rests on, each labelled as modelled', async () => {
     renderWithProvider(<CopilotInvestmentPage />, { access: { administration: false, seePii: false } });
 

@@ -81,7 +81,7 @@ namespace Web.AnalyticsWeb.Controllers
                 var range = request.Request.Range;
                 var credits = await Service.Facts.CreditsAsync(range.FromUtc.Date, CopilotInvestmentWindow.LastDay(range));
                 if (!credits.SnapshotDate.HasValue)
-                    return Ok(new { points = new List<CreditTrendPoint>(), snapshotDate = (DateTime?)null, failureCode = credits.FailureCode });
+                    return Ok(new { points = new List<CreditTrendPoint>(), snapshotDate = (DateTime?)null, failureCode = credits.FailureCode, minPeople = ReportScopeResolver.MinimumPeopleWithoutSeePii });
 
                 var dates = CopilotInvestmentSql.TrendDates(range.FromUtc.Date, credits.SnapshotDate.Value);
                 var scope = request.Request.Scope.Sql;
@@ -92,7 +92,10 @@ namespace Web.AnalyticsWeb.Controllers
                     points = await Service.Facts.Source.GetCreditTrendAsync(dates, scope, cancellationToken);
                     MemoryCache.Default.Set(key, points, DateTimeOffset.UtcNow.Add(CopilotInvestmentFactsCache.DefaultTtl));
                 }
-                return Ok(new { points, snapshotDate = credits.SnapshotDate, failureCode = (string)null });
+                // A reading date with too few people consuming credits would be their own: withheld, on a copy, without See PII.
+                var visible = CanSeeIndividuals() ? points
+                    : CreditTrendPoint.WithoutSmallSamples(points, credits.SnapshotBandFrom, credits.SnapshotDate, ReportScopeResolver.MinimumPeopleWithoutSeePii);
+                return Ok(new { points = visible, snapshotDate = credits.SnapshotDate, failureCode = (string)null, minPeople = ReportScopeResolver.MinimumPeopleWithoutSeePii });
             });
 
         [HttpGet, Route("people")]

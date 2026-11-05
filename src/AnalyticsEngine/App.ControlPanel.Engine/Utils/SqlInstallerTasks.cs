@@ -15,14 +15,18 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class SqlInstallerTasks
     {
         public CancellationToken CancellationToken { get; set; }
+        internal bool SchemaUpgradeDeferred { get; private set; }
         private readonly SolutionInstallConfig _config;
         private readonly FileInfo _exeFile;
         private readonly DatabasePaaSInfo _dbInfo;
         private readonly ILogger _logger;
         private readonly string _installedByUsername;
-        private readonly string _configPassword;
         private readonly Func<string, Task<bool>> _verifySqlCallback;
 
+        /// <param name="configPassword">
+        /// No longer used: the configuration snapshot registered in the database carries no secrets, so it is not
+        /// encrypted (<see cref="SolutionInstallConfig.ToDatabaseSnapshotJson"/>).
+        /// </param>
         public SqlInstallerTasks(SolutionInstallConfig config, FileInfo installerExeFileInfo, DatabasePaaSInfo dbInfo, ILogger logger, string installedByUsername, string configPassword,
             Func<string, Task<bool>> verifySqlCallback)
         {
@@ -31,7 +35,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _dbInfo = dbInfo;
             _logger = logger;
             _installedByUsername = installedByUsername;
-            _configPassword = configPassword;
             _verifySqlCallback = verifySqlCallback;
         }
 
@@ -52,7 +55,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             {
                 try
                 {
-                    await RegisterConfigAndStatus(installLogEvents, _configPassword);
+                    await RegisterConfigAndStatus(installLogEvents);
                 }
                 catch (UnexpectedInstallException ex)
                 {
@@ -85,11 +88,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 var capability = DownloadedBuildCapabilityProbe.SupportsEntraSqlAuth(_exeFile?.Directory);
                 if (capability == DownloadedBuildCapability.NotSupported)
                 {
-                    throw new UnexpectedInstallException(
-                        "This database uses Microsoft Entra ID authentication, but the control-panel app downloaded for this " +
-                        "release has no support for it, so it cannot sign in to the database at all. Nothing was changed in the " +
-                        "database. Either install from a local release override built from a version that supports Microsoft " +
-                        "Entra ID authentication for Azure SQL, or use a SQL server that has SQL authentication enabled.");
+                    throw new UnexpectedInstallException(DownloadedBuildLacksEntraSqlAuth);
                 }
 
                 if (capability == DownloadedBuildCapability.Supported)
@@ -108,9 +107,34 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 }
             }
 
+            // The upgrade's payload carries the SQL administrator password or the installer's client secret, so the
+            // downloaded app gets it in a file only this account can open (SendMsgToInstaller), never on its command line.
+            // A release older than this installer can only take it on the command line: stop rather than put it there.
+            var payloadFileSupport = DownloadedBuildCapabilityProbe.ReadsInitDbPayloadFile(_exeFile?.Directory);
+            if (payloadFileSupport == DownloadedBuildCapability.NotSupported)
+            {
+                throw new UnexpectedInstallException(DownloadedBuildTooOldForPayloadFile);
+            }
+            if (payloadFileSupport == DownloadedBuildCapability.Unknown)
+            {
+                _logger.LogInformation(
+                    "NOTE: could not confirm that the downloaded control-panel app reads the database credentials from a file. " +
+                    "If the database upgrade fails as soon as it starts, that release is older than this installer: deploy it " +
+                    "with the installer from the same release instead.");
+            }
+
             _logger.LogInformation($"Calling downloaded control-panel app to init/update database. This could take a while if the existing schema needs updating.");
 
             var result = await SendMsgToInstaller(InstallerConstants.PARAM_INITDB, upgradeInfo.ToBase64());
+            if (result.FailedToStart)
+            {
+                SchemaUpgradeDeferred = true;
+                _logger.LogError("Database initialisation did not run because Windows could not launch the downloaded installer. " +
+                    "Continuing the remaining installation tasks, but WebJobs will remain paused (WEBJOBS_STOPPED=1). " +
+                    "Apply the matching release's manual SQL upgrade scripts in migration-id order, or re-run the installer from an approved machine. " +
+                    "Verify the schema and matching binaries before restoring WebJobs.");
+                return;
+            }
             if (!result.Success)
             {
                 throw new UnexpectedInstallException(
@@ -125,6 +149,45 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 _logger.LogInformation($"Database initialisation completed (exit 0)" + (lastLine != null ? $": {lastLine}" : ".") +
                     $" Full details in Windows application log (event ID {InstallerConstants.EVENT_LOG_CATEGORY_ID}).");
             }
+        }
+
+        internal const string DownloadedBuildTooOldForPayloadFile =
+            "The control-panel app downloaded for this release is older than this installer, and can only receive the " +
+            "database credentials on its command line, where process auditing (for example Microsoft Defender for Endpoint, " +
+            "Sysmon or Security event 4688) records them. This installer no longer passes them that way, so the schema " +
+            "upgrade was not run and nothing was changed in the database. Deploy a release at least as new as this " +
+            "installer (with a local release override, use the ControlPanelApp.zip from this installer's release), or " +
+            "deploy the older release with the installer from that release. An older installer can't read the secrets in a " +
+            "configuration file this installer has saved, and says the password is wrong. If this installer kept a copy next to " +
+            "the file when it first saved it (<name>.v1-backup.json), open that instead; otherwise enter the secrets again " +
+            "before you save, or saving stores them empty.";
+
+        internal const string DownloadedBuildLacksEntraSqlAuth =
+            "This database uses Microsoft Entra ID authentication, but the control-panel app downloaded for this " +
+            "release has no support for it, so it cannot sign in to the database at all. Nothing was changed in the " +
+            "database. Either install from a local release override built from a version that supports Microsoft " +
+            "Entra ID authentication for Azure SQL, or use a SQL server that has SQL authentication enabled.";
+
+        /// <summary>
+        /// The refusals <see cref="InitDatabaseSchema"/> makes about the downloaded build, made before the upgrade pauses the
+        /// WebJobs and stops the site (<c>ConfigureAzureComponentsTasks.RunUpgradeDeploymentAsync</c>'s preflight), so that a
+        /// refusal leaves both as they were. InitDatabaseSchema still makes them too. Only a build the probe can positively
+        /// identify as lacking the support is refused; one it can't read proceeds, as it does there.
+        /// </summary>
+        internal Task CheckDownloadedBuildBeforeUpgradeAsync()
+        {
+            if (!_config.TasksConfig.UpgradeSchema || _exeFile == null) return Task.CompletedTask;
+
+            if (AzureSqlTokenAuth.NeedsAccessToken(_dbInfo?.ConnectionString)
+                && DownloadedBuildCapabilityProbe.SupportsEntraSqlAuth(_exeFile.Directory) == DownloadedBuildCapability.NotSupported)
+            {
+                throw new UnexpectedInstallException(DownloadedBuildLacksEntraSqlAuth);
+            }
+            if (DownloadedBuildCapabilityProbe.ReadsInitDbPayloadFile(_exeFile.Directory) == DownloadedBuildCapability.NotSupported)
+            {
+                throw new UnexpectedInstallException(DownloadedBuildTooOldForPayloadFile);
+            }
+            return Task.CompletedTask;
         }
 
         internal DatabaseUpgradeInfo CreateDatabaseUpgradeInfo(List<string> targetSites)
@@ -143,11 +206,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
             return upgradeInfo;
         }
 
-        internal async Task RegisterConfigAndStatus(List<InstallLogEventArgs> installLogEvents, string configPassword)
+        internal async Task RegisterConfigAndStatus(List<InstallLogEventArgs> installLogEvents)
         {
             var status = new InstallStatus
             {
-                ConfigurationJSon = _config.ToJson(configPassword),
+                ConfigurationJSon = _config.ToDatabaseSnapshotJson(),
                 Events = installLogEvents,
                 SetupUserName = _installedByUsername,
                 ConnectionString = _dbInfo.ConnectionString
@@ -162,20 +225,15 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 status.EntraClientSecret = _config.InstallerAccount?.Secret;
             }
 
-            // Write a temp file to pass to control-panel
-            var tempFileName = Path.GetTempFileName();
-            File.WriteAllText(tempFileName, status.ToBase64());
+            // The payload goes in a file whatever the build: --registerconfig has always taken one.
+            var result = await SendMsgToInstaller(InstallerConstants.PARAM_REGISTERCONFIG, status.ToBase64());
 
-            ChildResult result;
-            try
+            if (result.FailedToStart)
             {
-                result = await SendMsgToInstaller(InstallerConstants.PARAM_REGISTERCONFIG, tempFileName.Base64Encode());
+                _logger.LogWarning("Configuration and installation status were not registered because Windows could not launch the downloaded installer. " +
+                    "Continuing installation. Keep the saved installer configuration and local install log; re-run from an approved machine to register them.");
+                return;
             }
-            finally
-            {
-                File.Delete(tempFileName);
-            }
-
             if (!result.Success)
             {
                 throw new UnexpectedInstallException(
@@ -190,13 +248,37 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         private class ChildResult
         {
+            public bool FailedToStart { get; set; }
             public bool Success { get; set; }
             public int ExitCode { get; set; }
             public string StandardOutput { get; set; }
             public string StandardError { get; set; }
         }
 
-        async Task<ChildResult> SendMsgToInstaller(string param, string val)
+        /// <summary>
+        /// Runs one operation in the downloaded control-panel app, handing it <paramref name="payload"/> in a file only
+        /// this Windows account can open (<see cref="InstallerChildPayloadFile"/>). Its command line carries just that
+        /// file's name: the payload holds the SQL administrator password or the installer's client secret, and command
+        /// lines are recorded by process auditing. The file is deleted once the app has exited, however it ended.
+        /// </summary>
+        async Task<ChildResult> SendMsgToInstaller(string param, string payload)
+        {
+            var payloadFile = InstallerChildPayloadFile.Write(payload);
+            try
+            {
+                return await RunDownloadedInstaller(param, payloadFile.Base64Encode());
+            }
+            finally
+            {
+                if (!InstallerChildPayloadFile.Delete(payloadFile))
+                {
+                    _logger?.LogWarning("Could not delete '{PayloadFile}', which passed the database credentials to the downloaded " +
+                        "control-panel app. Only your Windows account can open it; delete it.", payloadFile);
+                }
+            }
+        }
+
+        async Task<ChildResult> RunDownloadedInstaller(string param, string val)
         {
             CancellationToken.ThrowIfCancellationRequested();
             // Test
@@ -240,7 +322,19 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     stderr.AppendLine(e.Data);
                     _logger.LogWarning($"  [child stderr] {e.Data}");
                 };
-                proc.Start();
+                try
+                {
+                    StartChildProcess(proc);
+                }
+                catch (Exception ex) when (ex is System.ComponentModel.Win32Exception ||
+                    ex is UnauthorizedAccessException || ex is System.Security.SecurityException)
+                {
+                    CancellationToken.ThrowIfCancellationRequested();
+                    _logger.LogWarning("Downloaded installer launch failed: operation={Operation} exceptionType={ExceptionType} nativeError={NativeError}. " +
+                        "The executable could not be started; check Windows application-control policy and file permissions. No command arguments are logged.",
+                        param, ex.GetType().Name, (ex as System.ComponentModel.Win32Exception)?.NativeErrorCode);
+                    return new ChildResult { FailedToStart = true };
+                }
                 proc.BeginOutputReadLine();
                 proc.BeginErrorReadLine();
 
@@ -255,6 +349,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 };
             }
         }
+
+        internal virtual void StartChildProcess(Process process) => process.Start();
 
         internal static async Task WaitForChildExitAsync(Process process, CancellationToken cancellationToken, ILogger logger)
         {

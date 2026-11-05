@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   makeStyles,
   tokens,
@@ -10,6 +10,8 @@ import {
   Select,
   Checkbox,
   Tooltip,
+  MessageBar,
+  MessageBarBody,
 } from '@fluentui/react-components';
 import { Dismiss16Regular, Search16Regular } from '@fluentui/react-icons';
 import type { AgentEstateSummary, AgentUsageRow, AgentUserRow, CopilotAdoptionOptions } from '../../types/copilotAdoption';
@@ -20,14 +22,16 @@ import DonutChart from '../charts/DonutChart';
 import SqlPopover from '../SqlPopover';
 import InfoTip from '../shared/InfoTip';
 import PiiHiddenNote from '../shared/PiiHiddenNote';
+import { usePrintAllRows } from '../shared/printPreparation';
 import { KpiGrid, formatCount, formatDate } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
-import { PrintedFilters, printedSearch, useAdoptionTableStyles } from './adoptionShared';
-import { useT, type TFunction } from '../../i18n';
+import { PartialPrintNote, PrintedFilters, printedSearch, useAdoptionTableStyles } from './adoptionShared';
+import { formatNumber, useT, type TFunction } from '../../i18n';
 import { agentHealthReason, agentOriginLabel } from './serverText';
 import { AgentReachCells, AgentReachHeaderCells } from './AgentReachColumns';
 import AgentGrowthLine from './AgentGrowthLine';
+import { explicitPeriodDates } from './AdoptionPeriodControl';
 
 /**
  * Health colours run from "delete this" to "this is working", matching the engagement-band palette
@@ -41,6 +45,7 @@ export const AGENT_HEALTH_COLOUR: Record<AgentHealth, string> = {
 };
 
 const HEALTH_ORDER = [AgentHealth.Retire, AgentHealth.Review, AgentHealth.New, AgentHealth.Keep];
+const PAGE_SIZE = 50;
 
 const useStyles = makeStyles({
   stack: {
@@ -83,6 +88,19 @@ const useStyles = makeStyles({
   },
   tableWrap: {
     overflowX: 'auto',
+  },
+  footer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    marginTop: '12px',
+    flexWrap: 'wrap',
+  },
+  pager: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
   },
   badge: {
     color: '#ffffff',
@@ -175,7 +193,6 @@ export default function AgentsPanel({
   estate,
   agents,
   options,
-  windowDays,
   sql,
   topUsers,
   topUsersCapped = false,
@@ -183,8 +200,8 @@ export default function AgentsPanel({
 }: {
   estate: AgentEstateSummary;
   agents: AgentUsageRow[];
+  /** The analysed period comes from here - its length, and its dates when it has them - never from the selector. */
   options: CopilotAdoptionOptions;
-  windowDays: number;
   sql: Record<string, string> | null;
   /** The heaviest agent users. Only ever sent to a reader with the See PII permission. */
   topUsers?: AgentUserRow[];
@@ -200,6 +217,7 @@ export default function AgentsPanel({
   const [health, setHealth] = useState<'' | string>('');
   const [customOnly, setCustomOnly] = useState(false);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(0);
 
   // Filtered in the browser rather than on the server: the whole inventory is already in memory,
   // so a name filter is instant and a round trip would only make it feel slower.
@@ -215,6 +233,18 @@ export default function AgentsPanel({
           (a.agentKey ?? '').toLowerCase().includes(needle)),
     );
   }, [agents, health, customOnly, needle]);
+
+  useEffect(() => setPage(0), [visible]);
+
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const pageRows = visible.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const printRows = usePrintAllRows<AgentUsageRow>({
+    enabled: estate.knownAgents > 0,
+    total: visible.length,
+    loadedRows: pageRows.length,
+    loadPage: (skip, take) => Promise.resolve({ rows: visible.slice(skip, skip + take) }),
+  });
+  const rows = printRows ?? pageRows;
 
   const legendStates = useMemo(() => {
     const present = new Set(visible.map((a) => a.health));
@@ -253,7 +283,10 @@ export default function AgentsPanel({
     );
   }
 
-  const kpis = buildAgentKpis(estate, options, windowDays, t);
+  const kpis = buildAgentKpis(estate, options, t);
+  // A period with explicit dates: the headline agent figures describe it, but the inventory and the department
+  // chart read the same number of days up to today (see BuildAgentEstateAsync), and named lists are not shown.
+  const pastRange = explicitPeriodDates(options) !== null;
 
   return (
     <div className={styles.stack}>
@@ -345,10 +378,15 @@ export default function AgentsPanel({
                 title={t('copilotAdoptionAgents.agents.department.title')}
                 content={{
                   what: t('copilotAdoptionAgents.agents.department.what'),
-                  how: t('copilotAdoptionAgents.agents.department.how', {
-                    windowDays,
-                    top: options.topSegments,
-                  }),
+                  how: pastRange
+                    ? t('copilotAdoptionAgents.agents.department.how.range', {
+                        windowDays: options.windowDays,
+                        top: options.topSegments,
+                      })
+                    : t('copilotAdoptionAgents.agents.department.how', {
+                        windowDays: options.windowDays,
+                        top: options.topSegments,
+                      }),
                   source:
                     t('copilotAdoptionAgents.agents.department.source'),
                 }}
@@ -364,18 +402,25 @@ export default function AgentsPanel({
         </Card>
       )}
 
-      {/* Named people: shown to a See PII reader only, and stated as hidden - never left empty - otherwise. */}
-      {canSeePii
-        ? (topUsers?.length ?? 0) > 0 && (
-            <TopAgentUsersCard
-              users={topUsers ?? []}
-              capped={topUsersCapped}
-              maxUsers={options.maxAgentUsersScored ?? 0}
-              windowDays={windowDays}
-              sql={sql?.agentUsers}
-            />
-          )
-        : estate.agentUsers > 0 && <PiiHiddenNote />}
+      {/* Named people: shown to a See PII reader only, and stated as hidden - never left empty - otherwise. A
+          period that does not end today names nobody, whoever reads it, and says so rather than leaving a gap. */}
+      {!canSeePii
+        ? estate.agentUsers > 0 && <PiiHiddenNote />
+        : pastRange
+          ? estate.agentUsers > 0 && (
+              <MessageBar intent="info">
+                <MessageBarBody>{t('copilotAdoptionAgents.agents.topUsers.pastRangeHidden')}</MessageBarBody>
+              </MessageBar>
+            )
+          : (topUsers?.length ?? 0) > 0 && (
+              <TopAgentUsersCard
+                users={topUsers ?? []}
+                capped={topUsersCapped}
+                maxUsers={options.maxAgentUsersScored ?? 0}
+                windowDays={options.windowDays}
+                sql={sql?.agentUsers}
+              />
+            )}
 
       <Card>
         <div className={styles.cardHead}>
@@ -477,6 +522,7 @@ export default function AgentsPanel({
             <div className={styles.empty}>{t('copilotAdoptionAgents.agents.inventory.noMatches')}</div>
           ) : (
             <>
+              <PartialPrintNote shownRows={rows.length} totalRows={visible.length} truncated={printRows !== null} />
               <div className={styles.tableWrap}>
                 <table className={table.table}>
                   <thead>
@@ -493,7 +539,7 @@ export default function AgentsPanel({
                     </tr>
                   </thead>
                   <tbody>
-                    {visible.map((agent) => (
+                    {rows.map((agent) => (
                       <tr key={agent.agentId}>
                         <td className={table.td}>
                           <span className={styles.agentName}>
@@ -537,6 +583,32 @@ export default function AgentsPanel({
                     ))}
                   </tbody>
                 </table>
+              </div>
+
+              <div className={styles.footer}>
+                <Text size={200} className={styles.muted} role="status">
+                  {t('copilotAdoptionAgents.agents.inventory.showingAgents', {
+                    start: formatCount(printRows ? 1 : page * PAGE_SIZE + 1),
+                    end: formatCount(printRows ? printRows.length : Math.min((page + 1) * PAGE_SIZE, visible.length)),
+                    total: formatCount(visible.length),
+                  })}
+                </Text>
+                {!printRows && (
+                  <div className={styles.pager} data-print="hide">
+                    <Button size="small" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+                      {t('copilotAdoptionAgents.agents.inventory.previous')}
+                    </Button>
+                    <Text size={200} className={styles.muted}>
+                      {t('copilotAdoptionAgents.agents.inventory.page', {
+                        page: formatCount(page + 1),
+                        totalPages: formatCount(totalPages),
+                      })}
+                    </Text>
+                    <Button size="small" disabled={page + 1 >= totalPages} onClick={() => setPage((p) => p + 1)}>
+                      {t('copilotAdoptionAgents.agents.inventory.next')}
+                    </Button>
+                  </div>
+                )}
               </div>
 
               <div className={styles.legend}>
@@ -735,26 +807,35 @@ function healthMeaning(health: AgentHealth, o: CopilotAdoptionOptions, t: TFunct
 function buildAgentKpis(
   estate: AgentEstateSummary,
   o: CopilotAdoptionOptions,
-  windowDays: number,
   t: TFunction,
 ): KpiDefinition[] {
+  // The headline agent figures describe the selected period, whether it is rolling or has dates of its own.
+  const period = explicitPeriodDates(o);
   const retire = estate.healthBreakdown.find((h) => h.label === 'Retire')?.value ?? 0;
+  // Null for a past period the audit log could not measure: a dash, never the inventory's figure.
+  const notMeasured = t('copilotAdoptionAgents.agents.kpi.notMeasuredForPeriod');
 
   return [
     {
       key: 'active',
       label: t('copilotAdoptionAgents.agents.kpi.active.label'),
-      value: formatCount(estate.activeAgents),
+      value: estate.activeAgents === null ? '\u2014' : formatCount(estate.activeAgents),
       hint: t('copilotAdoptionAgents.agents.kpi.active.hint', {
         known: formatCount(estate.knownAgents),
         custom: formatCount(estate.customAgents),
         unknown: formatCount(estate.unknownOriginAgents),
       }),
       info: {
-        what: t('copilotAdoptionAgents.agents.kpi.active.what', {
-          windowDays,
-          historyDays: estate.historyDays,
-        }),
+        what: period
+          ? t('copilotAdoptionAgents.agents.kpi.active.what.range', {
+              from: period.from,
+              to: period.to,
+              historyDays: estate.historyDays,
+            })
+          : t('copilotAdoptionAgents.agents.kpi.active.what', {
+              windowDays: o.windowDays,
+              historyDays: estate.historyDays,
+            }),
         how: t('copilotAdoptionAgents.agents.kpi.active.how'),
         source: t('copilotAdoptionAgents.agents.kpi.active.source'),
       },
@@ -765,7 +846,9 @@ function buildAgentKpis(
       value: formatCount(estate.agentUsers),
       hint: t('copilotAdoptionAgents.agents.kpi.users.hint', { licensed: formatCount(estate.licensedAgentUsers) }),
       info: {
-        what: t('copilotAdoptionAgents.agents.kpi.users.what', { windowDays }),
+        what: period
+          ? t('copilotAdoptionAgents.agents.kpi.users.what.range', { from: period.from, to: period.to })
+          : t('copilotAdoptionAgents.agents.kpi.users.what', { windowDays: o.windowDays }),
         how: t('copilotAdoptionAgents.agents.kpi.users.how'),
         source:
           t('copilotAdoptionAgents.agents.kpi.users.source'),
@@ -774,8 +857,12 @@ function buildAgentKpis(
     {
       key: 'intensity',
       label: t('copilotAdoptionAgents.agents.kpi.intensity.label'),
-      value: estate.interactionsPerAgentUser,
-      hint: t('copilotAdoptionAgents.agents.kpi.intensity.hint', { interactions: formatCount(estate.agentInteractions) }),
+      value: estate.interactionsPerAgentUser === null
+        ? '\u2014'
+        : formatNumber(estate.interactionsPerAgentUser, { maximumFractionDigits: 1 }),
+      hint: estate.agentInteractions === null
+        ? notMeasured
+        : t('copilotAdoptionAgents.agents.kpi.intensity.hint', { interactions: formatCount(estate.agentInteractions) }),
       info: {
         what: t('copilotAdoptionAgents.agents.kpi.intensity.what'),
         how: t('copilotAdoptionAgents.agents.kpi.intensity.how'),

@@ -33,7 +33,7 @@ import {
 } from '../components/globalFilter/globalFilterModel';
 import { useGlobalFilter } from '../components/globalFilter/GlobalFilterProvider';
 import { useUserFilterDimensions } from '../components/userFilter/useUserFilterDimensions';
-import { formatDateParts, formatNumber, useT, type TFunction } from '../i18n';
+import { formatDateParts, formatNumber, parseApiDate, useT, type TFunction } from '../i18n';
 import {
   EMPTY_GLOBAL_FILTER,
   type GlobalFilterAdmin,
@@ -83,7 +83,7 @@ function messageOf(error: unknown, fallback: string): string {
 
 function lastChanged(t: TFunction, admin: GlobalFilterAdmin): string {
   if (!admin.modifiedUtc) return t('globalFilter.admin.neverSet');
-  const when = formatDateParts(new Date(admin.modifiedUtc), { dateStyle: 'medium', timeStyle: 'short' });
+  const when = formatDateParts(parseApiDate(admin.modifiedUtc), { dateStyle: 'medium', timeStyle: 'short' });
   return admin.modifiedBy
     ? t('globalFilter.admin.lastChangedBy', { when, by: admin.modifiedBy })
     : t('globalFilter.admin.lastChanged', { when });

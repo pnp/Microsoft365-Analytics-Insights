@@ -37,6 +37,13 @@ namespace Common.Entities.LicenceActivity
                     report.AddRow("Adoption score, everyone holding a licence", overview.AllLicences.AdoptionScore,
                         XlsxCell.Wrapped(LicenceActivityRules.AdoptionScore + " Blank = nothing could be measured."));
                 report.AddRow("Department/country lists capped", overview.DemographicsTruncated, "TRUE means only the largest departments and countries are listed.");
+                var minimum = overview.Query.MinimumGroupSize;
+                if (minimum.HasValue)
+                    report.AddRow("Smallest group shown", minimum.Value, XlsxCell.Wrapped(
+                        "No activity figure here describes fewer people than this, so nobody can be singled out: a licence held by fewer people shows only how many hold it, and smaller departments and countries are combined into one row."));
+                if (overview.Suppressed)
+                    report.AddRow("Figures withheld", true, XlsxCell.Wrapped(
+                        "So few people hold a licence in this selection that every activity figure would describe individuals, so only the number of people is shown."));
                 report.AddRow("Who holds each licence", null, XlsxCell.Wrapped(LicenceActivityRules.AssignmentCaveat));
                 report.AddRow("How to read this", null, XlsxCell.Wrapped(LicenceActivityRules.InterpretationCaveat));
                 report.AddRow("Activity levels", null, XlsxCell.Wrapped(LicenceActivityRules.Method));
@@ -50,9 +57,17 @@ namespace Common.Entities.LicenceActivity
                             LicenceActivityRules.WorkloadLabel(distribution.Workload),
                             distribution.High, distribution.Moderate, distribution.Low, distribution.Zero, distribution.Unknown);
                 foreach (var sku in overview.Licences)
+                {
+                    if (sku.Withheld)
+                    {
+                        licences.AddRow(sku.Name, sku.SkuId, sku.AssignedUsers, null, WithheldLabel(minimum),
+                            null, null, null, null, null);
+                        continue;
+                    }
                     foreach (var distribution in sku.Workloads)
                         licences.AddRow(sku.Name, sku.SkuId, sku.AssignedUsers, sku.AdoptionScore, LicenceActivityRules.WorkloadLabel(distribution.Workload),
                             distribution.High, distribution.Moderate, distribution.Low, distribution.Zero, distribution.Unknown);
+                }
                 FormatTable(licences, 10);
                 report.AddRow("Licences sheet", null, "One row per licence and service, after the rows for everyone holding a licence. The \"People assigned\" and \"Adoption score\" figures repeat on each of that licence's rows, so do not add those columns up.");
 
@@ -70,8 +85,8 @@ namespace Common.Entities.LicenceActivity
                         XlsxCell.Wrapped(source.Message));
                 FormatTable(coverage, 15);
 
-                WriteDemographics(book, "Departments", overview.Departments);
-                WriteDemographics(book, "Countries", overview.Countries);
+                WriteDemographics(book, "Departments", overview.Departments, overview.OtherDepartments, minimum);
+                WriteDemographics(book, "Countries", overview.Countries, overview.OtherCountries, minimum);
                 if (users != null)
                 {
                     if (users.MostActive.Count > LicenceActivityQuery.MaximumRows
@@ -114,16 +129,28 @@ namespace Common.Entities.LicenceActivity
             }
         }
 
-        private static void WriteDemographics(XlsxWriter book, string name, IEnumerable<LicenceActivityDemographic> groups)
+        private static void WriteDemographics(
+            XlsxWriter book, string name, IEnumerable<LicenceActivityDemographic> groups, int otherGroups, int? minimum)
         {
             var sheet = book.AddSheet(name);
             sheet.AddHeaderRow("Group ID", "Group", "People assigned", "Service", "High", "Moderate", "Low", "No activity", "Unknown");
             foreach (var group in groups)
+            {
+                // The folded row has no ID or name of its own: say what it holds instead.
+                var id = group.Other ? (int?)null : group.Id;
+                var label = group.Other
+                    ? string.Format(CultureInfo.InvariantCulture, "Smaller groups combined ({0} groups of fewer than {1} people)", otherGroups, minimum)
+                    : group.Name;
                 foreach (var distribution in group.Workloads)
-                    sheet.AddRow(group.Id, group.Name, group.AssignedUsers, LicenceActivityRules.WorkloadLabel(distribution.Workload),
+                    sheet.AddRow(id, label, group.AssignedUsers, LicenceActivityRules.WorkloadLabel(distribution.Workload),
                         distribution.High, distribution.Moderate, distribution.Low, distribution.Zero, distribution.Unknown);
+            }
             FormatTable(sheet, 9);
         }
+
+        /// <summary>The Service column of a licence whose activity is withheld from a reader without See PII.</summary>
+        private static string WithheldLabel(int? minimum) =>
+            string.Format(CultureInfo.InvariantCulture, "Not shown: fewer than {0} people hold this licence", minimum);
 
         private static void WriteUsers(XlsxWriter book, string name, IEnumerable<LicenceActivityUser> users)
         {

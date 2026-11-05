@@ -771,7 +771,54 @@ VALUES
         }
 
         [TestMethod]
-        public async Task Copilot_D7LeadingGapMakesCustomRangePartialAndDisablesLeastActive()
+        public async Task Copilot_AFailedWeeklyAttemptDoesNotHideTheStoredReadings_ButAFailedD28StillMarksThemPartial()
+        {
+            // The weekly 7-day attempt runs just after the 28-day import and logs its own row. When it failed, its error
+            // row became the newest and every range read as "the last attempt failed", though the readings were stored.
+            using (var fixture = LicenceActivitySqlFixture.Create("LicenceCopilotFailedWeekly"))
+            {
+                SeedDirectory(fixture);
+                fixture.Execute(@"
+INSERT dbo.copilot_usage_report_import_log
+    (report_name, report_refresh_date, report_version, report_period, imported_utc,
+     rows_read, rows_saved, is_upn_obfuscated, error)
+VALUES
+    (N'getMicrosoft365CopilotUsageUserDetail', '2000-06-25', N'v2', N'D7',
+     '2000-07-01T01:00:00', 5, 5, 0, NULL),
+    (N'getMicrosoft365CopilotUsageUserDetail', NULL, N'v2', N'D7',
+     '2000-07-01T02:00:00', 0, 0, 0, N'Synthetic: Graph returned HTTP 503.');");
+                foreach (var date in CopilotD7Dates)
+                {
+                    fixture.Execute($@"
+INSERT dbo.copilot_usage_user_activity_log
+    (report_period_days, prompts_all_apps, active_usage_days, is_upn_obfuscated,
+     user_id, [date], last_activity_date)
+VALUES (7, 12, 1, 0, 1, '{date}', '{date}');");
+                }
+
+                var overview = await fixture.Store().LoadOverviewAsync(
+                    OverviewQuery(), Sources(usageReports: false, copilotReports: true),
+                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                Assert.AreEqual("available", overview.Coverage.Single(c => c.Workload == "copilot").Status,
+                    "A failed weekly attempt leaves the stored weekly readings usable.");
+
+                // A failed 28-day import is still the last word: its reading is what every range falls back on.
+                fixture.Execute(@"
+INSERT dbo.copilot_usage_report_import_log
+    (report_name, report_refresh_date, report_version, report_period, imported_utc,
+     rows_read, rows_saved, is_upn_obfuscated, error)
+VALUES
+    (N'getMicrosoft365CopilotUsageUserDetail', NULL, N'v2', N'D28',
+     '2000-07-01T03:00:00', 0, 0, 0, N'Synthetic: Graph returned HTTP 503.');");
+                var failed = await fixture.Store().LoadOverviewAsync(
+                    OverviewQuery(), Sources(usageReports: false, copilotReports: true),
+                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                Assert.AreEqual("partial", failed.Coverage.Single(c => c.Workload == "copilot").Status);
+            }
+        }
+
+        [TestMethod]
+        public async Task Copilot_D7LeadingPartWeekMakesCustomRangePartial_AndSaysWhy()
         {
             using (var fixture = LicenceActivitySqlFixture.Create("LicenceCopilotD7Gap"))
             {
@@ -792,6 +839,9 @@ INSERT dbo.copilot_usage_user_activity_log
 VALUES (7, 0, 0, 0, 1, '{date}', NULL);");
                 }
 
+                // Starting on a Tuesday, as the 90- and 180-day presets do: every whole week has its reading, but
+                // no 7-day reading inside the range covers its first six days, so the range stays partial and
+                // the message says that - not that a reading is missing.
                 var query = LicenceActivityQuery.Create(
                     "2000-05-02", "2000-06-25", LicenceActivitySqlFixture.NowUtc);
                 var sources = Sources(usageReports: false, copilotReports: true);
@@ -800,6 +850,7 @@ VALUES (7, 0, 0, 0, 1, '{date}', NULL);");
                     NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
                 var coverage = overview.Coverage.Single(c => c.Workload == "copilot");
                 Assert.AreEqual("partial", coverage.Status);
+                Assert.AreEqual("copilotReport.partialWeekStart", coverage.MessageKey);
                 Assert.AreEqual(new DateTime(2000, 5, 8), coverage.EffectiveFromUtc.Value);
                 Assert.AreEqual(new DateTime(2000, 6, 25), coverage.EffectiveToUtc.Value);
 
@@ -814,6 +865,16 @@ VALUES (7, 0, 0, 0, 1, '{date}', NULL);");
                 Assert.AreEqual(0, users.LeastActive.Count);
                 Assert.AreEqual("unknown", users.Users.Single(u => u.UserId == 1)
                     .Workloads.Single(w => w.Workload == "copilot").Band);
+
+                // Ending on a Wednesday is a different gap: the last week has no reading on its end date.
+                query = LicenceActivityQuery.Create(
+                    "2000-05-01", "2000-06-21", LicenceActivitySqlFixture.NowUtc);
+                overview = await fixture.Store().LoadOverviewAsync(
+                    query, sources,
+                    NullLicenceActivityDiagnostics.Instance, CancellationToken.None);
+                coverage = overview.Coverage.Single(c => c.Workload == "copilot");
+                Assert.AreEqual("partial", coverage.Status);
+                Assert.AreEqual("copilotReport.partial", coverage.MessageKey);
             }
         }
 

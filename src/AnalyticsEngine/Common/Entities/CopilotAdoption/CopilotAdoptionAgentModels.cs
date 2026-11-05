@@ -50,6 +50,36 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
+    /// The agents used in a past reporting period and their interactions in it: the inventory's query
+    /// (<see cref="CopilotAdoptionSql.AgentUsageSql"/>) read over the period, summed.
+    /// </summary>
+    internal sealed class AgentPeriodUsage
+    {
+        /// <summary>Agents with at least one interaction in the period.</summary>
+        public int ActiveAgents { get; set; }
+
+        /// <summary>Those agents' interactions in the period.</summary>
+        public long Interactions { get; set; }
+
+        /// <summary>Sums the period's per-agent rows.</summary>
+        public static AgentPeriodUsage From(IReadOnlyCollection<AgentUsageQueryRow> rows)
+        {
+            if (rows == null) return null;
+
+            long interactions = 0;
+            var activeAgents = 0;
+            foreach (var row in rows)
+            {
+                if (row.WindowInteractions <= 0) continue;
+                activeAgents++;
+                interactions += row.WindowInteractions;
+            }
+
+            return new AgentPeriodUsage { ActiveAgents = activeAgents, Interactions = interactions };
+        }
+    }
+
+    /// <summary>
     /// One Copilot agent with the figures an inventory review needs, plus the verdict on it.
     ///
     /// Agents are counted across the whole tenant, licensed and unlicensed: an agent's worth to the
@@ -287,9 +317,13 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("historyDays")]
         public int HistoryDays { get; set; }
 
-        /// <summary>Agents used at least once inside the reporting period.</summary>
+        /// <summary>
+        /// Agents used at least once inside the reporting period. For a past range it is read over that
+        /// period, not taken from the inventory, which reads up to now; null when the period could not be
+        /// measured - the audit log holds nothing for it, or the read failed - never the inventory's figure.
+        /// </summary>
         [JsonProperty("activeAgents")]
-        public int ActiveAgents { get; set; }
+        public int? ActiveAgents { get; set; }
 
         /// <summary>Agents seen in the longer history window, whether or not they were used in the period.</summary>
         [JsonProperty("knownAgents")]
@@ -317,11 +351,19 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("licensedAgentUsers")]
         public int LicensedAgentUsers { get; set; }
 
+        /// <summary>
+        /// Agent interactions inside the reporting period, over the same period as <see cref="AgentUsers"/>.
+        /// Null when <see cref="ActiveAgents"/> is.
+        /// </summary>
         [JsonProperty("agentInteractions")]
-        public long AgentInteractions { get; set; }
+        public long? AgentInteractions { get; set; }
 
+        /// <summary>
+        /// <see cref="AgentInteractions"/> divided by <see cref="AgentUsers"/>, both for the reporting period.
+        /// Null when the period's interactions are not known.
+        /// </summary>
         [JsonProperty("interactionsPerAgentUser")]
-        public double InteractionsPerAgentUser { get; set; }
+        public double? InteractionsPerAgentUser { get; set; }
 
         /// <summary>The agent the most people use - the one whose retirement would be felt.</summary>
         [JsonProperty("mostPopularAgent")]

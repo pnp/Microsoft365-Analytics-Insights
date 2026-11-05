@@ -1,8 +1,9 @@
 import { makeStyles, tokens, Text, Card, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import type { ReactNode } from 'react';
-import { formatDateParts, formatNumber, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
+import { formatDateParts, formatNumber, parseApiDate, plural, useT, type TFunction, type TranslationKey } from '../../i18n';
 import SqlPopover from '../SqlPopover';
 import type { KpiTone } from '../shared/KpiGrid';
+import { reportQueryFailureText } from '../shared/reportQueryFailure';
 import type { ReportCategory, ReportSeries } from '../../types/reports';
 import type {
   WebActivityBucket,
@@ -132,7 +133,7 @@ export function formatHour(hour: number | null | undefined): string {
 /** A UTC ISO date as a short local-format date, or a dash when absent. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
-  return formatDateParts(new Date(iso), {
+  return formatDateParts(parseApiDate(iso), {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -393,7 +394,7 @@ export function SectionCard({
       <div className={styles.body}>
         {query?.error ? (
           <MessageBar intent="error">
-            <MessageBarBody>{t('webActivity.shared.sectionLoadFailed', { error: query.error })}</MessageBarBody>
+            <MessageBarBody>{t('webActivity.shared.sectionLoadFailed', { error: reportQueryFailureText(t, query.errorReason, query.errorReference, query.error ?? '') })}</MessageBarBody>
           </MessageBar>
         ) : isEmpty ? (
           <Text size={200} className={styles.muted}>

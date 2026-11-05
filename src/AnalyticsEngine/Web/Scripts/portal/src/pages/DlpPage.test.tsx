@@ -158,6 +158,37 @@ describe('DlpPage', () => {
     expect(await screen.findByText('availability boom')).toBeInTheDocument();
   });
 
+  it('does not leave the previous period’s figures on screen when the new period fails to load', async () => {
+    renderWithProvider(<DlpPage />);
+    expect((await screen.findAllByText('Contoso HR Agent')).length).toBeGreaterThan(0);
+
+    mockSummary.mockRejectedValue(new Error('summary boom'));
+    fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value: '90' } });
+
+    expect(await screen.findByText('summary boom')).toBeInTheDocument();
+    expect(screen.queryAllByText('Contoso HR Agent')).toHaveLength(0);
+    expect(screen.queryByText('Who and what is affected')).not.toBeInTheDocument();
+    expect(mockSummary).toHaveBeenLastCalledWith(90);
+
+    // The same period read again successfully shows its figures: only the failed answer is withheld.
+    mockSummary.mockResolvedValue(summary({ topAgents: [{ ...summary().topAgents[0], name: 'Contoso Finance Agent' }] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect((await screen.findAllByText('Contoso Finance Agent')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('summary boom')).not.toBeInTheDocument();
+  });
+
+  it('does not bring back the figures a failed refresh could not confirm', async () => {
+    renderWithProvider(<DlpPage />);
+    expect((await screen.findAllByText('Contoso HR Agent')).length).toBeGreaterThan(0);
+
+    mockAvailability.mockRejectedValue(new Error('availability boom'));
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+    expect(await screen.findByText('availability boom')).toBeInTheDocument();
+    expect(screen.queryAllByText('Contoso HR Agent')).toHaveLength(0);
+  });
+
   it('reveals which policies affected a given agent when that agent is selected', async () => {
     renderWithProvider(<DlpPage />);
 

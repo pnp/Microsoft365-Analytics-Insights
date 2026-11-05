@@ -231,6 +231,7 @@
   <ItemGroup>
     <Compile Include="AllowCorsForOrgUrlsAttribute.cs" />
     <Compile Include="RequireSameOriginXhrAttribute.cs" />
+    <Compile Include="SameOriginStateChangeFilter.cs" />
     <Compile Include="App_Start\DelegatedGraphConsent.cs" />
     <Compile Include="App_Start\AgentCostConsent.cs" />
     <Compile Include="App_Start\DelegatedGraphTokenCapture.cs" />

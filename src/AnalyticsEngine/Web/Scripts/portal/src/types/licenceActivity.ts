@@ -44,6 +44,12 @@ export interface LicenceActivityQueryEcho {
   top: number;
   page: number;
   pageSize: number;
+  /**
+   * For a reader without See PII, the fewest people a figure describes: licences held by fewer have their activity
+   * withheld, smaller departments and countries are combined, and a smaller selection has every figure withheld.
+   * Null (or absent) for a reader with See PII, who sees every group.
+   */
+  minimumGroupSize?: number | null;
 }
 
 /**
@@ -72,6 +78,11 @@ export interface LicenceActivitySku {
    * nothing could be measured for any holder. Absent from older servers.
    */
   adoptionScore?: number | null;
+  /**
+   * True when fewer people hold this licence than a reader without See PII may see (`query.minimumGroupSize`):
+   * `assignedUsers` stays, but `workloads` is empty and `adoptionScore` null - those few people's activity is hidden.
+   */
+  withheld?: boolean;
   workloads: LicenceActivityDistribution[];
 }
 
@@ -84,8 +95,15 @@ export interface LicenceActivityAllLicences {
 
 /** A demographic slice (department or country): a filter option that also carries its distributions. */
 export interface LicenceActivityDemographic {
+  /** The directory id; 0 for "Unknown", and -1 for the combined `other` row. */
   id: number;
-  name: string;
+  /** Tenant data, never translated. Null for the combined `other` row. */
+  name: string | null;
+  /**
+   * True for the single row a reader without See PII gets in place of every group too small to name. Never a
+   * filter option.
+   */
+  other?: boolean;
   assignedUsers: number;
   workloads: LicenceActivityDistribution[];
 }
@@ -148,6 +166,15 @@ export interface LicenceActivityOverview extends SnapshotEnvelope {
   countries: LicenceActivityDemographic[];
   /** True when the department/country option lists were capped and are not exhaustive. */
   demographicsTruncated: boolean;
+  /**
+   * True when a reader without See PII asked about so few people that every figure would be a handful of
+   * individuals' records: the counts of people stay, every distribution, score and department or country row goes.
+   */
+  suppressed?: boolean;
+  /** How many departments were combined into the `other` row (0 when none). */
+  otherDepartments?: number;
+  /** How many countries were combined into the `other` row (0 when none). */
+  otherCountries?: number;
   messages: string[];
 }
 

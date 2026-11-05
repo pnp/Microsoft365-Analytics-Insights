@@ -81,8 +81,8 @@ namespace Web.AnalyticsWeb.Models
             SystemStatus status = null;
 
 
-            // Load config
-            var latestConfig = await db.ConfigStates.OrderByDescending(s => s.DateApplied).Take(1).ToListAsync();
+            // Load config: the one saved last, as the importer reads it
+            var latestConfig = await db.ConfigStates.LatestSavedFirst().Take(1).ToListAsync();
             if (latestConfig.Count == 1 && !string.IsNullOrEmpty(latestConfig[0].ConfigJson))
             {
                 try

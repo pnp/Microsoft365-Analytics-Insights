@@ -12,7 +12,9 @@ using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
+using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp;
 using WebJob.Office365ActivityImporter.Engine.Entities;
+using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 {
@@ -33,11 +35,66 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
     }
 
     /// <summary>
-    /// Advances an admin-requested Microsoft Graph Audit Search backfill by a bounded amount during a normal import cycle.
+    /// Says which of a commit's interactions are already saved completely, so the backfill drops only those.
     /// </summary>
     public interface ICopilotAuditBackfillExistingEventFilter
     {
-        Task<HashSet<Guid>> GetExistingIdsAsync(IEnumerable<Guid> ids);
+        /// <summary>
+        /// The ids of the <paramref name="interactions"/> that have their <c>copilot_chats</c> row AND at least one row of
+        /// every kind their payload makes the Copilot and DLP merges write beneath it (accessed resources, messages, AI
+        /// models, contexts, plugins, DLP matches). An interaction with its chat row but a missing kind is not complete -
+        /// a merge that failed partway leaves exactly that - and is committed again, which the idempotent merges turn into
+        /// writing just the missing rows.
+        /// </summary>
+        Task<HashSet<Guid>> GetCompletelySavedIdsAsync(IEnumerable<AbstractAuditLogContent> interactions);
+    }
+
+    /// <summary>
+    /// The kinds of row the Copilot and DLP merges write beneath an interaction, as far as its payload decides them.
+    /// The values are the bits <see cref="SqlCopilotAuditBackfillExistingEventFilter"/>'s query returns.
+    /// </summary>
+    [Flags]
+    public enum CopilotChildRows
+    {
+        None = 0,
+        AccessedResources = 1,
+        Messages = 2,
+        AiModels = 4,
+        Contexts = 8,
+        AiSystemPlugins = 16,
+        DlpMatches = 32,
+    }
+
+    public static class CopilotBackfillCompleteness
+    {
+        /// <summary>
+        /// The kinds of child row the merges write for <paramref name="interaction"/>: at least one row of each. Mirrors what
+        /// is staged (<c>CopilotAuditEventManager.PopulateCommonStagingFields</c>,
+        /// <c>DlpAuditEventManager.SaveCopilotDlpMatchesToSqlStaging</c>) and the merges' filters. File and meeting rows are
+        /// left out: whether one is written depends on what Graph resolves, not on the payload.
+        /// </summary>
+        public static CopilotChildRows Expected(AbstractAuditLogContent interaction)
+        {
+            var copilot = interaction as CopilotAuditLogContent;
+            if (copilot == null) return CopilotChildRows.None;
+
+            var expected = CopilotChildRows.None;
+            if (copilot.CopilotEventData?.AccessedResources?.Count > 0) expected |= CopilotChildRows.AccessedResources;
+            if (copilot.ParsedAuditEvent?.Messages?.Count > 0) expected |= CopilotChildRows.Messages;
+            if (copilot.ParsedAuditEvent?.ModelTransparencyDetails?.Any(m => m?.ModelName != null) == true) expected |= CopilotChildRows.AiModels;
+            if (copilot.CopilotEventData?.Contexts?.Count > 0) expected |= CopilotChildRows.Contexts;
+
+            var plugins = copilot.CopilotEventData?.AISystemPlugin;
+            if (plugins == null || plugins.Count == 0) plugins = copilot.ParsedAuditEvent?.AISystemPlugin;
+            if (plugins?.Any(p => p != null && (p.Id != null || p.Name != null)) == true) expected |= CopilotChildRows.AiSystemPlugins;
+
+            if (CopilotDlpRules.ExtractMatches(copilot).Any(m => !string.IsNullOrEmpty(m.PolicyId) || !string.IsNullOrEmpty(m.PolicyName)
+                || !string.IsNullOrEmpty(m.RuleId) || !string.IsNullOrEmpty(m.RuleName)))
+            {
+                expected |= CopilotChildRows.DlpMatches;
+            }
+            return expected;
+        }
     }
 
     public sealed class SqlCopilotAuditBackfillExistingEventFilter : ICopilotAuditBackfillExistingEventFilter
@@ -45,32 +102,109 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
         private const int ChunkSize = 1000;
         private readonly Func<AnalyticsEntitiesContext> _createContext;
 
+        // Each child table, the bit it answers for and the EXISTS that answers it. Every one seeks the table's
+        // copilot_chat_id index. A DLP match is also satisfied by the interaction's turn: the DLP merge stores a match
+        // once per turn, so one record of a paired turn can rightly have none (copilot_chat_duplicates, #699).
+        private static readonly (string Table, CopilotChildRows Kind, string Exists)[] ChildTables =
+        {
+            ("copilot_event_accessed_resources", CopilotChildRows.AccessedResources, "EXISTS (SELECT 1 FROM dbo.copilot_event_accessed_resources x WHERE x.copilot_chat_id = c.event_id)"),
+            ("copilot_event_messages", CopilotChildRows.Messages, "EXISTS (SELECT 1 FROM dbo.copilot_event_messages x WHERE x.copilot_chat_id = c.event_id)"),
+            ("copilot_event_ai_models", CopilotChildRows.AiModels, "EXISTS (SELECT 1 FROM dbo.copilot_event_ai_models x WHERE x.copilot_chat_id = c.event_id)"),
+            ("copilot_event_contexts", CopilotChildRows.Contexts, "EXISTS (SELECT 1 FROM dbo.copilot_event_contexts x WHERE x.copilot_chat_id = c.event_id)"),
+            ("copilot_event_ai_system_plugins", CopilotChildRows.AiSystemPlugins, "EXISTS (SELECT 1 FROM dbo.copilot_event_ai_system_plugins x WHERE x.copilot_chat_id = c.event_id)"),
+            ("copilot_dlp_events", CopilotChildRows.DlpMatches, "EXISTS (SELECT 1 FROM dbo.copilot_dlp_events x WHERE x.copilot_chat_id = c.event_id)"),
+        };
+
+        // A record of a paired turn with no DLP row of its own is complete only when one of its turn mates holds one: the
+        // record it is counted on, that record's other extra records, or its own extra records - the mates
+        // insert_copilot_dlp_events_from_staging_table.sql checks before it stores a match. Being paired proves nothing on
+        // its own. The Copilot merge records the pairing before the DLP merge runs, so a backfill commit that failed in
+        // between left both records paired with no DLP row on either; counting that as complete dropped the retry's matches.
+        private const string TurnMateDlpExists =
+            "EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates d " +
+                "INNER JOIN dbo.copilot_dlp_events x ON x.copilot_chat_id = d.counted_event_id WHERE d.event_id = c.event_id) " +
+            "OR EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates d " +
+                "INNER JOIN dbo.copilot_chat_duplicates other ON other.counted_event_id = d.counted_event_id AND other.event_id <> d.event_id " +
+                "INNER JOIN dbo.copilot_dlp_events x ON x.copilot_chat_id = other.event_id WHERE d.event_id = c.event_id) " +
+            "OR EXISTS (SELECT 1 FROM dbo.copilot_chat_duplicates d " +
+                "INNER JOIN dbo.copilot_dlp_events x ON x.copilot_chat_id = d.event_id WHERE d.counted_event_id = c.event_id)";
+
         public SqlCopilotAuditBackfillExistingEventFilter(Func<AnalyticsEntitiesContext> createContext = null)
         {
             _createContext = createContext ?? (() => new AnalyticsEntitiesContext());
         }
 
-        public async Task<HashSet<Guid>> GetExistingIdsAsync(IEnumerable<Guid> ids)
+        public async Task<HashSet<Guid>> GetCompletelySavedIdsAsync(IEnumerable<AbstractAuditLogContent> interactions)
         {
-            var existing = new HashSet<Guid>();
-            var list = (ids ?? Enumerable.Empty<Guid>()).Distinct().ToList();
-            if (list.Count == 0) return existing;
+            var complete = new HashSet<Guid>();
+            var expectedById = new Dictionary<Guid, CopilotChildRows>();
+            foreach (var interaction in interactions ?? Enumerable.Empty<AbstractAuditLogContent>())
+            {
+                if (interaction == null) continue;
+                expectedById.TryGetValue(interaction.Id, out var already);
+                expectedById[interaction.Id] = already | CopilotBackfillCompleteness.Expected(interaction);
+            }
+            if (expectedById.Count == 0) return complete;
 
+            var ids = expectedById.Keys.ToList();
             using (var db = _createContext())
             {
-                for (var i = 0; i < list.Count; i += ChunkSize)
+                var existingTables = new HashSet<string>(await db.Database.SqlQuery<string>(
+                    "SELECT name FROM sys.tables WHERE schema_id = SCHEMA_ID('dbo') AND name IN ('copilot_event_accessed_resources', " +
+                    "'copilot_event_messages', 'copilot_event_ai_models', 'copilot_event_contexts', 'copilot_event_ai_system_plugins', " +
+                    "'copilot_dlp_events', 'copilot_chat_duplicates')").ToListAsync().ConfigureAwait(false), StringComparer.OrdinalIgnoreCase);
+
+                for (var i = 0; i < ids.Count; i += ChunkSize)
                 {
-                    var chunk = list.GetRange(i, Math.Min(ChunkSize, list.Count - i));
-                    var found = await db.CopilotChats
-                        .Where(c => chunk.Contains(c.EventID))
-                        .Select(c => c.EventID)
-                        .ToListAsync()
-                        .ConfigureAwait(false);
-                    foreach (var id in found) existing.Add(id);
+                    var chunk = ids.GetRange(i, Math.Min(ChunkSize, ids.Count - i));
+                    var rows = await db.Database.SqlQuery<StoredChildRows>(BuildQuery(chunk.Count, existingTables), chunk.Cast<object>().ToArray())
+                        .ToListAsync().ConfigureAwait(false);
+                    foreach (var row in rows)
+                    {
+                        if ((expectedById[row.EventId] & ~(CopilotChildRows)row.Kinds) == CopilotChildRows.None)
+                        {
+                            complete.Add(row.EventId);
+                        }
+                    }
                 }
             }
 
-            return existing;
+            return complete;
+        }
+
+        /// <summary>
+        /// One row per id that has a <c>copilot_chats</c> row, with the bits of the child kinds stored beneath it. A kind
+        /// whose table this database doesn't have counts as stored: the merges can't write it either.
+        /// </summary>
+        internal static string BuildQuery(int idCount, ISet<string> existingTables)
+        {
+            var kinds = new List<string>();
+            foreach (var child in ChildTables)
+            {
+                var bit = ((int)child.Kind).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                if (!existingTables.Contains(child.Table))
+                {
+                    kinds.Add(bit);
+                    continue;
+                }
+
+                var exists = child.Exists;
+                if (child.Kind == CopilotChildRows.DlpMatches && existingTables.Contains("copilot_chat_duplicates"))
+                {
+                    exists += " OR " + TurnMateDlpExists;
+                }
+                kinds.Add($"CASE WHEN {exists} THEN {bit} ELSE 0 END");
+            }
+
+            var parameters = string.Join(", ", Enumerable.Range(0, idCount).Select(n => "@p" + n.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            return "SELECT c.event_id AS EventId, " + string.Join(" + ", kinds) + " AS Kinds " +
+                "FROM dbo.copilot_chats AS c WHERE c.event_id IN (" + parameters + ")";
+        }
+
+        private sealed class StoredChildRows
+        {
+            public Guid EventId { get; set; }
+            public int Kinds { get; set; }
         }
     }
 
@@ -634,7 +768,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 
         private async Task<CommitOutcome> CommitBatchAsync(WebActivityReportSet mapped)
         {
-            var existing = await _existingEvents.GetExistingIdsAsync(mapped.Select(a => a.Id)).ConfigureAwait(false);
+            // Only interactions saved completely are dropped. One whose chat row is there but whose child rows are not - left by
+            // a merge that failed partway, or a DLP commit that failed after it - is committed again, so a retried or re-read
+            // slice converges instead of skipping it for good.
+            var existing = await _existingEvents.GetCompletelySavedIdsAsync(mapped).ConfigureAwait(false);
             var toCommit = existing.Count == 0
                 ? mapped
                 : new WebActivityReportSet(mapped.Where(a => !existing.Contains(a.Id)));

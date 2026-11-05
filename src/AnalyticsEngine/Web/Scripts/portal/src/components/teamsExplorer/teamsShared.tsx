@@ -2,9 +2,11 @@ import { makeStyles, tokens, Text, Card, MessageBar, MessageBarBody } from '@flu
 import type { ReactNode } from 'react';
 import SqlPopover from '../SqlPopover';
 import type { KpiTone } from '../shared/KpiGrid';
-import { formatDateParts, formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
+import { reportQueryFailureText } from '../shared/reportQueryFailure';
+import { formatDateParts, formatNumber, parseApiDate, useT, type TFunction, type TranslationKey } from '../../i18n';
 import type {
   TeamsBucket,
+  TeamsDormancy,
   TeamsNamedCount,
   TeamsQueryInfo,
   TeamsWindow,
@@ -56,7 +58,7 @@ export function formatHours(value: number): string {
 /** A UTC ISO date as a short local-format date, or a dash when absent. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return '\u2014';
-  return formatDateParts(new Date(iso), {
+  return formatDateParts(parseApiDate(iso), {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -201,6 +203,52 @@ export function queryFor(queries: TeamsQueryInfo[], key: string): TeamsQueryInfo
   return queries.find((q) => q.key === key);
 }
 
+/**
+ * The failure codes the server sends with a section it decided not to run (`SqlTeamsExplorerStore`), each with its
+ * sentence. Any other failure is a query that ran and failed, worded from its reason and error reference.
+ */
+export const TEAMS_QUERY_ERROR_CODE_KEYS: Record<string, TranslationKey> = {
+  queryQueueTimeout: 'teamsExplorer.shared.queryQueueTimeout',
+};
+
+/**
+ * What a failed section says: the page's own sentence for a section the server did not run, otherwise the failed
+ * query's reason and error reference (`reportQueryFailureText`), never the exception's text. The English the server
+ * sent is shown only for a code or reason this build does not know.
+ */
+export function sectionErrorText(t: TFunction, query: TeamsQueryInfo): string {
+  const key = query.errorCode ? TEAMS_QUERY_ERROR_CODE_KEYS[query.errorCode] : undefined;
+  if (key) return t(key);
+  return t('teamsExplorer.shared.sectionLoadError', {
+    error: reportQueryFailureText(t, query.errorReason, query.errorReference, query.error ?? ''),
+  });
+}
+
+/**
+ * Why licensed people with no Teams activity are not called dormant, or undefined when they can be (or when an
+ * older API sent no answer). The usage reports list only the people active each day, so the server says when
+ * absence proves nothing and this writes the sentence.
+ */
+export function dormancyText(t: TFunction, dormancy: TeamsDormancy | undefined): string | undefined {
+  if (!dormancy || dormancy.known) return undefined;
+
+  switch (dormancy.reason) {
+    case 'incompleteImport':
+      return t('teamsExplorer.dormancy.incompleteImport', {
+        imported: formatCount(dormancy.importedDays),
+        expected: formatCount(dormancy.expectedDays),
+      });
+    case 'groupFiltered':
+      return t('teamsExplorer.dormancy.groupFiltered');
+    case 'namesConcealed':
+      return t('teamsExplorer.dormancy.namesConcealed');
+    case 'noTeamsLicences':
+      return t('teamsExplorer.dormancy.noTeamsLicences');
+    default:
+      return t('teamsExplorer.dormancy.notChecked');
+  }
+}
+
 const useStyles = makeStyles({
   card: {
     display: 'flex',
@@ -313,7 +361,7 @@ export function SectionCard({
       <div className={styles.body}>
         {query?.error ? (
           <MessageBar intent="error">
-            <MessageBarBody>{t('teamsExplorer.shared.sectionLoadError', { error: query.error })}</MessageBarBody>
+            <MessageBarBody>{sectionErrorText(t, query)}</MessageBarBody>
           </MessageBar>
         ) : isEmpty ? (
           <Text size={200} className={styles.muted}>

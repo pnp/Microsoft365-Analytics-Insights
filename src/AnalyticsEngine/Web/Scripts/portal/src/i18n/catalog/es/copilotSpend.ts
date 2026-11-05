@@ -66,7 +66,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.studio.noDays': 'Sin uso facturado en este periodo.',
   'copilotSpend.studio.environmentsTitle': 'Por entorno',
   'copilotSpend.studio.environmentsDescription':
-    'Créditos facturados por cada entorno de Power Platform en el periodo, para las personas de esta vista. Microsoft notifica el uso de cada persona por entorno, no por agente, así que suman el total anterior, salvo una fila combinada de entornos con muy pocas personas, que no muestra créditos y solo indica cuántas personas reúne cuando combina un único entorno.',
+    'Créditos facturados por cada entorno de Power Platform en el periodo, para las personas de esta vista. Microsoft notifica el uso de cada persona por entorno, no por agente, así que suman el total anterior, salvo una fila combinada, que no muestra créditos: reúne los entornos con muy pocas personas y, con ellos, el más pequeño de los demás, para que no puedan deducirse del total. Solo indica cuántas personas reúne cuando combina un único entorno.',
   'copilotSpend.studio.col.environment': 'Entorno',
   'copilotSpend.studio.unnamedEnvironment': 'Nombre del entorno no disponible',
   'copilotSpend.studio.otherEnvironments': 'Otros entornos ({count})',
@@ -228,6 +228,9 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.balances.trendPeople.other': '{people} personas con créditos consumidos de {observed} leídas',
   'copilotSpend.balances.trendAtLimit': '{people} en el límite de créditos',
   'copilotSpend.balances.trendPointUnknown': '{date}: importe no indicado',
+  'copilotSpend.balances.trendPointWithheld': '{date}: créditos no mostrados, podrían identificar a menos de {count} personas',
+  'copilotSpend.studio.dayWithheld': '{date}: créditos no mostrados, podrían identificar a menos de {count} personas',
+  'copilotSpend.figureWithheld': 'No se muestra: podría identificar a menos de {count} personas',
   'copilotSpend.distribution.title': 'Cómo se reparte el consumo entre las personas',
   'copilotSpend.distribution.description':
     'Si unas pocas personas concentran la mayor parte de los créditos o muchas consumen un poco cada una. Se muestra una fuente cada vez, porque las dos fuentes nunca se suman.',
@@ -528,6 +531,8 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.workbook.org.withheld': 'Menos de {count} personas: cifras no mostradas.',
   'copilotSpend.workbook.org.studioNotAvailable': 'Cifras de Copilot Studio no disponibles (no es cero).',
   'copilotSpend.workbook.org.balancesNotAvailable': 'Cifras de créditos consumidos no disponibles (no es cero).',
+  'copilotSpend.workbook.org.studioWithheld': 'Cifras de Copilot Studio no mostradas: podrían identificar a menos de {count} personas.',
+  'copilotSpend.workbook.org.balancesWithheld': 'Cifras de créditos consumidos no mostradas: podrían identificar a menos de {count} personas.',
   'copilotSpend.workbook.people.col.upn': 'Nombre principal de usuario',
   'copilotSpend.workbook.people.col.department': 'Departamento',
   'copilotSpend.workbook.people.col.jobTitle': 'Puesto',

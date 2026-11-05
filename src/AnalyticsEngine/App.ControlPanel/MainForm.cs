@@ -3,6 +3,7 @@ using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.Models;
 using DataUtils;
 using System;
+using System.IO;
 using System.Windows.Forms;
 
 namespace App.ControlPanel
@@ -12,6 +13,10 @@ namespace App.ControlPanel
         public MainForm()
         {
             InitializeComponent();
+            RetryFailedSave = message => MessageBox.Show(this, message, "Save Configuration",
+                MessageBoxButtons.RetryCancel, MessageBoxIcon.Error) == DialogResult.Retry;
+            ShowSaveNotice = message => MessageBox.Show(this, message, "Save Configuration",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
             installSPOSitesControl.OpenConfigurationRequested += mnuOpenConfig_Click;
             installSPOSitesControl.NewConfigurationRequested += (sender, args) =>
             {
@@ -48,6 +53,15 @@ namespace App.ControlPanel
         public string LastConfigFilePath { get; set; }
 
         public InstallerPreferences SavedPreferences { get; set; }
+
+        /// <summary>Shown why a configuration file could not be saved; returns true to try again. Asks with a message box.</summary>
+        public Func<string, bool> RetryFailedSave { get; set; }
+
+        /// <summary>
+        /// Shown what the operator needs to know about a configuration file just saved: where the copy kept for older installers is.
+        /// Shows a message box.
+        /// </summary>
+        public Action<string> ShowSaveNotice { get; set; }
 
         #endregion
 
@@ -224,27 +238,81 @@ namespace App.ControlPanel
         {
             if (openFileDialog.ShowDialog() == DialogResult.OK)
             {
-                var passwordForm = (new EnterPasswordForm());
-                if (passwordForm.ShowDialog() == DialogResult.OK)
-                {
-                    // Get config from file
-                    var loadedConfig = SolutionInstallConfig.LoadFromFile(openFileDialog.FileName, passwordForm.Password);
-
-                    if (!loadedConfig.DecryptedOk)
-                    {
-                        MessageBox.Show("Could not decrypt this file so some configuration is not loaded. Wrong password?", "Open File", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
-                    }
-
-                    // Set as most current
-                    this.LoadedConfig = loadedConfig.Config;
-
-                    // Refresh current UI with new config
-                    this.SelectedUI.ConfigureUI(loadedConfig.Config);
-
-                    // Remember state
-                    SetCurrentSaveContext(openFileDialog.FileName, passwordForm.Password);
-                }
+                OpenConfigFile(openFileDialog.FileName, AskForPassword, AskAfterFailedDecryption,
+                    error => MessageBox.Show(this, error, "Open File", MessageBoxButtons.OK, MessageBoxIcon.Error));
             }
+        }
+
+        /// <summary>
+        /// Opens a config file. One that did not open completely - a wrong password, or a damaged file - never becomes
+        /// the file that Save writes to: saving it back would replace the secrets it holds with blanks, and client
+        /// secrets can't be read back from Azure.
+        /// </summary>
+        /// <param name="askForPassword">Returns the password to try, or null to give up.</param>
+        /// <param name="askAfterFailedDecryption">
+        /// Yes to try another password, No to open the other settings without the secrets, anything else to give up.
+        /// </param>
+        /// <param name="showError">Says why a file could not be opened at all.</param>
+        public void OpenConfigFile(string fileName, Func<string> askForPassword,
+            Func<string, DialogResult> askAfterFailedDecryption, Action<string> showError)
+        {
+            while (true)
+            {
+                var password = askForPassword();
+                if (password == null) return;
+
+                // Get config from file
+                var loadedConfig = SolutionInstallConfig.LoadFromFile(fileName, password);
+                if (!loadedConfig.LoadedOk)
+                {
+                    // Nothing to show, so whatever was open stays open, with its own save target.
+                    showError(loadedConfig.Error);
+                    return;
+                }
+
+                if (!loadedConfig.DecryptedOk)
+                {
+                    var choice = askAfterFailedDecryption(fileName);
+                    if (choice == DialogResult.Yes) continue;
+                    if (choice != DialogResult.No) return;
+                }
+
+                // Set as most current
+                this.LoadedConfig = loadedConfig.Config;
+
+                // Refresh current UI with new config
+                this.SelectedUI.ConfigureUI(loadedConfig.Config);
+
+                // Remember state
+                if (loadedConfig.CanBecomeSaveTarget)
+                {
+                    SetCurrentSaveContext(fileName, password);
+                }
+                else
+                {
+                    ClearSaveContext($"Opened '{Path.GetFileName(fileName)}' without its secrets. Saving asks for a new file, so this one is not changed.");
+                }
+                return;
+            }
+        }
+
+        static string AskForPassword()
+        {
+            using (var passwordForm = new EnterPasswordForm())
+            {
+                return passwordForm.ShowDialog() == DialogResult.OK ? passwordForm.Password : null;
+            }
+        }
+
+        DialogResult AskAfterFailedDecryption(string fileName)
+        {
+            return MessageBox.Show(this,
+                $"Could not decrypt the secrets in '{Path.GetFileName(fileName)}' with that password.\r\n\r\n" +
+                "Yes: enter the password again.\r\n" +
+                "No: open the other settings without the SQL administrator password and the app registration secrets. " +
+                "The file is not changed: saving asks for a new file.\r\n" +
+                "Cancel: don't open the file.",
+                "Open File", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Exclamation, MessageBoxDefaultButton.Button1);
         }
 
 
@@ -271,12 +339,15 @@ namespace App.ControlPanel
         }
 
 
+        /// <summary>
+        /// Saves to the file Save writes to, or asks for one. Installing calls it first, and doesn't start when it returns false.
+        /// </summary>
+        /// <returns>Whether the configuration was saved.</returns>
         public bool SaveLastSettings()
         {
             if (this.HaveSavedConfig)
             {
-                SaveCurrentSettings(this.LastConfigFilePath, this.LastPassword);
-                return true;
+                return SaveCurrentSettings(this.LastConfigFilePath, this.LastPassword);
             }
             else
             {
@@ -291,24 +362,27 @@ namespace App.ControlPanel
                 var passwordForm = (new EnterPasswordForm());
                 if (passwordForm.ShowDialog() == DialogResult.OK)
                 {
-                    SaveCurrentSettings(saveFileDialog.FileName, passwordForm.Password);
-                    return true;
+                    return SaveCurrentSettings(saveFileDialog.FileName, passwordForm.Password);
                 }
             }
             return false;
         }
 
-        public void SaveCurrentSettings(string fileName, string password)
+        /// <returns>
+        /// Whether the file was saved. When it wasn't, it is unchanged, and Save still writes to the file it wrote to before.
+        /// </returns>
+        public bool SaveCurrentSettings(string fileName, string password)
         {
 
             // Get latest config from current UI
             this.LoadedConfig = this.SelectedUI.GetConfigurationState();
 
             // Save to disk
-            this.LoadedConfig.Save(fileName, password);
+            if (!this.LoadedConfig.Save(fileName, password, RetryFailedSave, ShowSaveNotice)) return false;
 
             // Remember state
             SetCurrentSaveContext(fileName, password);
+            return true;
         }
 
 
@@ -323,6 +397,18 @@ namespace App.ControlPanel
 
 
             txtConfigFile.Text = $"Loaded '{configFileInfo.Name}', modified: '{configFileInfo.LastWriteTime}'";
+        }
+
+        /// <summary>Forgets the file Save writes to, so the next save asks for one.</summary>
+        private void ClearSaveContext(string status)
+        {
+            mnuSaveConfig.Text = "Save Configuration";
+            this.LastConfigFilePath = null;
+            this.LastPassword = string.Empty;
+            this.HaveSavedConfig = false;
+            mnuSaveConfig.Enabled = false;
+
+            txtConfigFile.Text = status;
         }
 
 

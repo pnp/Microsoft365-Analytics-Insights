@@ -62,6 +62,10 @@ function formatOptionalCount(value: number | null | undefined): string {
   return value === null || value === undefined ? NOT_MEASURED : formatCount(value);
 }
 
+function formatOptionalPct(value: number | null | undefined): string {
+  return value === null || value === undefined ? NOT_MEASURED : formatPct(value);
+}
+
 /** Heaviest cohort darkest, so the shape of the power law reads left to right. */
 const COHORT_COLOUR = ['#0b3d6b', '#1f6cb0', '#5b9bd5', '#c7dbef'];
 
@@ -280,8 +284,10 @@ export function CombinedSegmentTable({
     );
   }
 
-  const maxLicensed = Math.max(...rows.map((r) => r.interactionsPerLicensedUser), 1);
-  const maxUnlicensed = Math.max(...rows.map((r) => r.interactionsPerUnlicensedUser), 1);
+  const maxLicensed = Math.max(...rows.map((r) => r.interactionsPerLicensedUser ?? 0), 1);
+  const maxUnlicensed = Math.max(...rows.map((r) => r.interactionsPerUnlicensedUser ?? 0), 1);
+  // A side with fewer than the minimum people behind it arrives null: withheld, not unmeasured.
+  const withheld = t('copilotAdoption.shared.segmentTable.withheld');
 
   // Conditional shading rather than a bar: this table is read by scanning for the outliers, and a
   // colour ramp finds them faster than eight columns of numbers.
@@ -295,8 +301,8 @@ export function CombinedSegmentTable({
   // white does not help - the flip point is itself the lowest-contrast spot on the whole ramp
   // (~3.9:1). Capping keeps one text colour, stays legible end to end, and still separates the
   // outliers plainly (contrast runs 13:1 at the pale end to ~4.9:1 at the strong end).
-  const shade = (value: number, max: number, hue: string) => {
-    if (value <= 0) return undefined;
+  const shade = (value: number | null, max: number, hue: string) => {
+    if (value === null || value <= 0) return undefined;
     const alpha = RAMP_MIN_ALPHA + (RAMP_MAX_ALPHA - RAMP_MIN_ALPHA) * (value / max);
     const [r, g, b] = blendOnWhite(hue, alpha);
     return {
@@ -328,55 +334,61 @@ export function CombinedSegmentTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.segment}>
-                <td className={table.td}>{serverPlaceholderText(t, r.segment)}</td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(r.licensedUsers)}</td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(r.licensedActiveUsers)}</td>
-                <td className={styles.heat}>
-                  <span
-                    style={{
-                      ...shade(r.interactionsPerLicensedUser, maxLicensed, '#0f6cbd'),
-                      padding: '2px 6px',
-                      borderRadius: '3px',
-                    }}
+            {rows.map((r) => {
+              const licensedTitle = r.licensedUsers === null ? withheld : undefined;
+              const unlicensedTitle = r.unlicensedActiveUsers === null ? withheld : undefined;
+              const agentTitle = r.agentFiguresWithheld ? withheld : undefined;
+              return (
+                <tr key={r.segment}>
+                  <td className={table.td}>{serverPlaceholderText(t, r.segment)}</td>
+                  <td className={`${table.td} ${table.tdNumeric}`} title={licensedTitle}>{formatOptionalCount(r.licensedUsers)}</td>
+                  <td className={`${table.td} ${table.tdNumeric}`} title={licensedTitle}>{formatOptionalCount(r.licensedActiveUsers)}</td>
+                  <td className={styles.heat} title={licensedTitle}>
+                    <span
+                      style={{
+                        ...shade(r.interactionsPerLicensedUser, maxLicensed, '#0f6cbd'),
+                        padding: '2px 6px',
+                        borderRadius: '3px',
+                      }}
+                    >
+                      {r.interactionsPerLicensedUser ?? NOT_MEASURED}
+                    </span>
+                  </td>
+                  <td className={`${table.td} ${table.tdNumeric}`} title={licensedTitle}>{formatOptionalPct(r.licensedAgentUserPct)}</td>
+                  <td className={`${table.td} ${table.tdNumeric}`} title={unlicensedTitle}>{formatOptionalCount(r.unlicensedActiveUsers)}</td>
+                  <td className={styles.heat} title={unlicensedTitle}>
+                    <span
+                      style={{
+                        ...shade(r.interactionsPerUnlicensedUser, maxUnlicensed, '#a4373a'),
+                        padding: '2px 6px',
+                        borderRadius: '3px',
+                      }}
+                    >
+                      {r.interactionsPerUnlicensedUser ?? NOT_MEASURED}
+                    </span>
+                  </td>
+                  <td className={`${table.td} ${table.tdNumeric}`} title={unlicensedTitle}>{formatOptionalPct(r.unlicensedAgentUserPct)}</td>
+                  <td
+                    className={`${table.td} ${table.tdNumeric}`}
+                    title={
+                      agentTitle ??
+                      (r.agentUsers === null || r.agentUsers === undefined || r.agentActiveUsers === null || r.agentActiveUsers === undefined
+                        ? t('copilotAdoption.combinedViews.segment.notMeasured')
+                        : t('copilotAdoption.combinedViews.segment.usingAgents.cell', {
+                            users: formatCount(r.agentUsers),
+                            active: formatCount(r.agentActiveUsers),
+                          }))
+                    }
                   >
-                    {r.interactionsPerLicensedUser}
-                  </span>
-                </td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatPct(r.licensedAgentUserPct)}</td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(r.unlicensedActiveUsers)}</td>
-                <td className={styles.heat}>
-                  <span
-                    style={{
-                      ...shade(r.interactionsPerUnlicensedUser, maxUnlicensed, '#a4373a'),
-                      padding: '2px 6px',
-                      borderRadius: '3px',
-                    }}
-                  >
-                    {r.interactionsPerUnlicensedUser}
-                  </span>
-                </td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatPct(r.unlicensedAgentUserPct)}</td>
-                <td
-                  className={`${table.td} ${table.tdNumeric}`}
-                  title={
-                    r.agentUsers === null || r.agentUsers === undefined || r.agentActiveUsers === null || r.agentActiveUsers === undefined
-                      ? t('copilotAdoption.combinedViews.segment.notMeasured')
-                      : t('copilotAdoption.combinedViews.segment.usingAgents.cell', {
-                          users: formatCount(r.agentUsers),
-                          active: formatCount(r.agentActiveUsers),
-                        })
-                  }
-                >
-                  {r.agentUserPct === null || r.agentUserPct === undefined ? NOT_MEASURED : formatPct(r.agentUserPct)}
-                </td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatOptionalCount(r.distinctAgents)}</td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatTenth(r.agentsPer100ActiveUsers)}</td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatTenth(r.interactionsPerActiveAgent)}</td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatOptionalCount(r.agentBuilders)}</td>
-              </tr>
-            ))}
+                    {r.agentUserPct === null || r.agentUserPct === undefined ? NOT_MEASURED : formatPct(r.agentUserPct)}
+                  </td>
+                  <td className={`${table.td} ${table.tdNumeric}`} title={agentTitle}>{formatOptionalCount(r.distinctAgents)}</td>
+                  <td className={`${table.td} ${table.tdNumeric}`} title={agentTitle}>{formatTenth(r.agentsPer100ActiveUsers)}</td>
+                  <td className={`${table.td} ${table.tdNumeric}`} title={agentTitle}>{formatTenth(r.interactionsPerActiveAgent)}</td>
+                  <td className={`${table.td} ${table.tdNumeric}`}>{formatOptionalCount(r.agentBuilders)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

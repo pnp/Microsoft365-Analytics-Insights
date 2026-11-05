@@ -122,6 +122,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Same mapping rule the EF path uses, so the two write paths cannot drift (#371).
                 var plan = UserMetadataMappingRules.BuildPlan(graphUser);
+                UserIdentityRules.EnsureSameObject(dbUser, plan.AzureAdId);
 
                 var row = dt.NewRow();
                 row["id"] = dbUser.ID;

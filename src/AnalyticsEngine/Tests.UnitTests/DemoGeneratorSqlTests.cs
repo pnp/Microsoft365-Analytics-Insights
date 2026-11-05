@@ -216,7 +216,7 @@ WHERE (i.interaction_type_id=1 AND c.interaction_id IS NULL)
                     connection.Open();
                     using (var command = connection.CreateCommand())
                     {
-                        command.CommandText = "CREATE DATABASE [" + name + "];";
+                        command.CommandText = ScratchDatabase.CreateDatabaseSql(name);
                         command.ExecuteNonQuery();
                     }
                 }

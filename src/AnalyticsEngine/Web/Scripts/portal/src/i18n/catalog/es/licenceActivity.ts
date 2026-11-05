@@ -36,7 +36,7 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.note.privacy': 'Las personas se identifican por su dirección de inicio de sesión. No se recopilan los nombres del personal, por lo que la búsqueda y las listas de usuarios muestran la dirección de inicio de sesión. El departamento y el país proceden del directorio.',
   'licenceActivity.note.assignmentCaveat': 'La actividad anterior se atribuye a quien tiene cada licencia hoy, no a quien la tenía en ese momento. Una persona puede tener varias licencias, por lo que sumar las cifras de asignación contará a algunas personas dos veces. Las licencias asignadas no son lo mismo que el número de licencias compradas.',
   'licenceActivity.note.interpretationCaveat': 'La actividad de alguien que tiene una licencia no demuestra que esa licencia sea lo que la habilitó. Estas cifras no miden productividad, retorno de la inversión ni cumplimiento, y por sí solas no bastan para justificar quitar la licencia a nadie.',
-  'licenceActivity.note.activityMethod': 'Los niveles de actividad describen en cuántas semanas del periodo alguien estuvo activo: Sin actividad = ninguna, Baja = menos de una cuarta parte, Moderada = entre una cuarta parte y menos de tres cuartas partes, Alta = tres cuartas partes o más. Una semana solo se cuenta cuando se importaron todos sus días; cuando una semana no pudo medirse completa, el nivel es «Desconocida», no cero.',
+  'licenceActivity.note.activityMethod': 'Los niveles de actividad describen en cuántas semanas del periodo alguien estuvo activo: Sin actividad = ninguna, Baja = menos de una cuarta parte, Moderada = entre una cuarta parte y menos de tres cuartas partes, Alta = tres cuartas partes o más. Una semana solo se cuenta cuando se importaron todos sus días; cuando una semana no pudo medirse completa, el nivel es «Desconocida», no cero. Copilot se mide con el informe de Copilot de 7 días de Microsoft, leído al final de cada semana de lunes a domingo, por lo que necesita fechas que vayan de un lunes a un domingo, como las de los intervalos predefinidos de 7 y 28 días. Cuando esas lecturas no cubren las fechas, 28 días que coincidan exactamente con el informe de Copilot de 28 días de Microsoft se miden con ese informe: cuenta días en lugar de semanas, por lo que sus niveles comparan los días en que se usó Copilot con los días laborables del periodo (20 de cada 28). Con otras fechas, incluidos los intervalos predefinidos de 90 y 180 días, Copilot queda como «Desconocida».',
   'licenceActivity.note.noLicences': 'Todavía no se ha importado ninguna licencia.',
   'licenceActivity.note.nobodyHoldsALicence': 'Se han importado licencias, pero actualmente nadie de esta selección tiene una.',
   'licenceActivity.note.noDisplayNames': 'Este producto no recopila los nombres del personal, por lo que las personas aparecen por su dirección de inicio de sesión. La búsqueda también comprueba su dirección de correo electrónico almacenada.',
@@ -61,7 +61,7 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.band.copilotCoverageNote':
     'El informe oficial de uso de Copilot solo cubre a usuarios con licencia de Copilot. Estos gráficos también pueden incluir personas con otras licencias, por lo que una persona sin licencia de Copilot puede aparecer como «Desconocida» en lugar de inactiva. El nivel «Desconocida» por sí solo no indica si una persona tiene licencia de Copilot.',
   'licenceActivity.band.method':
-    'Los niveles de actividad describen en cuántas semanas del periodo estuvo activa una persona: Alta = tres cuartas partes o más, Moderada = entre una cuarta parte y menos de tres cuartas partes, Baja = menos de una cuarta parte, Sin actividad = ninguna. Una semana solo cuenta cuando se importaron todos sus días; si una semana no se pudo medir por completo, el nivel es «Desconocida», no cero.',
+    'Los niveles de actividad describen en cuántas semanas del periodo estuvo activa una persona: Alta = tres cuartas partes o más, Moderada = entre una cuarta parte y menos de tres cuartas partes, Baja = menos de una cuarta parte, Sin actividad = ninguna. Una semana solo cuenta cuando se importaron todos sus días; si una semana no se pudo medir por completo, el nivel es «Desconocida», no cero. Copilot se lee del informe de 7 días de Microsoft al final de cada semana de lunes a domingo, por lo que necesita fechas que vayan de un lunes a un domingo; cuando solo su informe de 28 días coincide con las fechas, el nivel de Copilot compara los días en que se usó con los días laborables del periodo (20 de cada 28).',
   'licenceActivity.status.available.label': 'Disponible',
   'licenceActivity.status.available.explanation': 'Medido durante todo el periodo.',
   'licenceActivity.status.partial.label': 'Parcial',
@@ -105,7 +105,8 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.coverageMessage.m365.missingCoverage': 'Ninguna semana de las fechas seleccionadas se importó por completo.',
   'licenceActivity.coverageMessage.copilotReport.available': 'El informe de Copilot de 7 días más reciente de Microsoft se leyó una vez por semana; cuando esos informes se solapan, los recuentos se promedian, nunca se suman. Las personas que Microsoft no enumeró y los informes antiguos anteriores a los contadores actuales permanecen como «Desconocida». Microsoft solo informa sobre personas que tienen una licencia de Copilot.',
   'licenceActivity.coverageMessage.copilotReport.partial': 'Al menos una semana del periodo no tiene lectura de Copilot en su fecha de finalización. Las lecturas anteriores se siguen mostrando como evidencia, pero los niveles de actividad permanecen como «Desconocida» y nadie se lista como menos activo para Copilot.',
-  'licenceActivity.coverageMessage.copilotReport.singleWindowAvailable': 'Las fechas seleccionadas coinciden exactamente con uno de los informes móviles de Copilot de Microsoft. Las personas que Microsoft no enumeró y los informes que no registran los días de uso permanecen como «Desconocida». Microsoft solo informa sobre personas que tienen una licencia de Copilot.',
+  'licenceActivity.coverageMessage.copilotReport.partialWeekStart': 'Todas las semanas completas tienen su lectura de Copilot, pero las fechas seleccionadas empiezan a mitad de semana. Cada informe de Copilot de 7 días de Microsoft abarca una semana completa de lunes a domingo, por lo que los días anteriores al primer lunes no se pueden medir. Las lecturas se siguen mostrando como evidencia, pero los niveles de actividad permanecen como «Desconocida» y nadie se lista como menos activo para Copilot. Las fechas que empiezan en lunes se pueden medir por completo.',
+  'licenceActivity.coverageMessage.copilotReport.singleWindowAvailable': 'Las fechas seleccionadas coinciden exactamente con uno de los informes móviles de Copilot de Microsoft. Ese informe cuenta los días en que se usó Copilot, no las semanas, por lo que los niveles de actividad comparan esos días con los días laborables del periodo (20 de cada 28 días; si hay más, cuentan como 20). Las personas que Microsoft no enumeró y los informes que no registran los días de uso permanecen como «Desconocida». Microsoft solo informa sobre personas que tienen una licencia de Copilot.',
   'licenceActivity.coverageMessage.copilotReport.singleWindowLonger': 'Microsoft solo publicó un informe móvil más largo dentro de las fechas seleccionadas. Se muestra aquí con las fechas que abarca realmente, pero los niveles de actividad permanecen como «Desconocida» para su intervalo personalizado.',
   'licenceActivity.coverageMessage.copilotReport.unmatchableIdentity': "El informe de uso de Copilot de Microsoft ocultó la identidad de todas las personas, por lo que su actividad no puede vincularse a quienes tienen la licencia. Para corregirlo, desactive 'Display concealed user, group and site names in all reports' en el centro de administración de Microsoft 365 (Settings > Org settings > Reports).",
   'licenceActivity.coverageMessage.copilotReport.notImported': 'El informe de uso de Copilot por persona de Microsoft nunca se ha recopilado en esta implementación.',
@@ -178,6 +179,18 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.demographics.capped':
     'Se muestran solo los {count} grupos más grandes por número de personas asignadas; esta no es la lista completa.',
   'licenceActivity.demographics.unknownBucket': 'Desconocido',
+  'licenceActivity.demographics.otherRow.one': '1 grupo más pequeño, combinado',
+  'licenceActivity.demographics.otherRow.other': '{count} grupos más pequeños, combinados',
+  'licenceActivity.demographics.otherNote':
+    'Los grupos de menos de {count} personas se combinan en una sola fila para que no se pueda identificar a nadie.',
+
+  // Lo que ve un lector sin See PII en lugar de la actividad de unas pocas personas
+  'licenceActivity.withheld.cell': 'Oculto: menos de {count} personas tienen esta licencia',
+  'licenceActivity.withheld.detail':
+    'Menos de {count} personas tienen esta licencia, así que su uso de los servicios se oculta para proteger su privacidad.',
+  'licenceActivity.suppressed.title': 'Cifras ocultas',
+  'licenceActivity.suppressed.body':
+    'Tan pocas personas tienen una licencia en esta selección que cada cifra describiría a individuos, así que las cifras se ocultan para proteger su privacidad.',
 
   // Workload distributions
   'licenceActivity.distribution.activeOfMeasured': '{active} de {measured} activos ({rate})',
@@ -256,6 +269,8 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.page.recentOptionsHidden': 'Mostrando hasta {count} opciones recientes; algunas pueden estar ocultas.',
   'licenceActivity.page.filterByCountry': 'Filtrar por país',
   'licenceActivity.page.allCountries': 'Todos los países',
+  'licenceActivity.page.demographicFilterNeedsSeePii':
+    'Para filtrar por departamento o país se necesita el rol de aplicación {role}, porque un filtro puede reducir las cifras a una sola persona.',
   'licenceActivity.page.exportSummaryAndPeopleTooltip':
     'Una copia de Excel del resumen más las personas exactas que aparecen actualmente en la pestaña Personas. Se genera a partir de las cifras ya visibles en pantalla, por lo que coincide con lo que puede ver.',
   'licenceActivity.page.exportSummaryTooltip':
@@ -302,9 +317,9 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.compare.adoptionScoreWhat':
     'Cuánto usan sus servicios de Microsoft 365 las personas que tienen una licencia, de 0 a 100, para poder comparar entre sí licencias de tamaños muy distintos.',
   'licenceActivity.compare.adoptionScoreHow':
-    'La proporción de semanas medidas en las que los titulares tuvieron actividad, en todos los servicios que se pudieron medir para ellos. 100 significa que todos los titulares usaron todos los servicios medidos todas las semanas del periodo; 0 significa que no hay ninguna actividad registrada. Un servicio que no se pudo medir para alguien se deja fuera de su puntuación en lugar de contarse como no usado. Mide el uso, no el valor ni la productividad.',
+    'La proporción media de semanas medidas en las que los titulares tuvieron actividad, en todos los servicios que se pudieron medir para ellos, con el mismo peso para cada servicio. 100 significa que todos los titulares usaron todos los servicios medidos todas las semanas del periodo; 0 significa que no hay ninguna actividad registrada. Un servicio que no se pudo medir para alguien se deja fuera de su puntuación en lugar de contarse como no usado. Mide el uso, no el valor ni la productividad.',
   'licenceActivity.compare.adoptionScoreFormula':
-    'Puntuación de adopción = 100 \u00d7 semanas con actividad \u00f7 semanas medidas\n(sumadas para todos los titulares y todos los servicios que se pudieron medir)',
+    'Puntuación de adopción = 100 \u00d7 media de (semanas con actividad \u00f7 semanas medidas)\n(para todos los titulares y todos los servicios que se pudieron medir, contando cada servicio una vez)',
   'licenceActivity.compare.scoreAria': 'Puntuación de adopción de {score} sobre 100',
   'licenceActivity.compare.scoreWithBaselineAria':
     'Puntuación de adopción de {score} sobre 100; todas las personas con licencia obtienen {baseline}',

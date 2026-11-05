@@ -96,11 +96,40 @@ namespace Common.Entities.TeamsExplorer
         /// </summary>
         public ReportUserScope UserScope { get; private set; } = ReportUserScope.Everyone;
 
+        /// <summary>
+        /// True when the importers are narrowed to members of some groups (a configured user group filter), so the
+        /// usage reports are not imported for everyone in the directory. Somebody with no usage row may then never
+        /// have been looked at, so nobody can be called dormant on the strength of having none.
+        /// </summary>
+        public bool UsageReportsGroupFiltered { get; private set; }
+
         /// <summary>This window, narrowed to <paramref name="scope"/>. Null is everyone.</summary>
         public TeamsExplorerQuery WithUserScope(ReportUserScope scope)
         {
             var copy = (TeamsExplorerQuery)MemberwiseClone();
             copy.UserScope = scope ?? ReportUserScope.Everyone;
+            return copy;
+        }
+
+        /// <summary>This window, for a deployment whose usage import is (or is not) narrowed to a group.</summary>
+        public TeamsExplorerQuery WithUsageReportsGroupFiltered(bool groupFiltered)
+        {
+            var copy = (TeamsExplorerQuery)MemberwiseClone();
+            copy.UsageReportsGroupFiltered = groupFiltered;
+            return copy;
+        }
+
+        /// <summary>
+        /// This window reading every row, not the first <see cref="MaximumTop"/>: for the adoption breakdown a reader without
+        /// See PII is sent folded (<c>TeamsAdoption.WithoutSmallGroups</c>). A group the cut left out would be left out of the
+        /// fold too, and subtracting what is shown from the tab's tenant-wide totals would then recover it - one person, when
+        /// the groups beyond the cut hold one. Only for a query whose rows are groups: a list of people read this way could be
+        /// every person in the tenant.
+        /// </summary>
+        public TeamsExplorerQuery WithEveryRow()
+        {
+            var copy = (TeamsExplorerQuery)MemberwiseClone();
+            copy.Top = int.MaxValue;
             return copy;
         }
 
@@ -197,7 +226,8 @@ namespace Common.Entities.TeamsExplorer
                 Top,
                 NowUtc.Date);
 
-            return key + "::scope=" + (UserScope.IsRestricted ? UserScope.Key : "all");
+            return key + "::scope=" + (UserScope.IsRestricted ? UserScope.Key : "all")
+                + (UsageReportsGroupFiltered ? "::groupFiltered" : string.Empty);
         }
     }
 }
