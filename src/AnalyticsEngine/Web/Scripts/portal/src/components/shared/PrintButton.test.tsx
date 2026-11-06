@@ -27,6 +27,17 @@ describe('PrintButton', () => {
     expect(window.print).toHaveBeenCalledTimes(1);
   });
 
+  it('blocks both the button and Ctrl+P while the report is being replaced', () => {
+    renderWithProvider(<PrintButton tooltip="Prints this view" disabled />);
+    const button = screen.getByRole('button', { name: 'Print' });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    const event = new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(window.print).not.toHaveBeenCalled();
+  });
+
   it('routes Ctrl+P through the same path, so the keyboard prints what the button would', () => {
     // The browser's own Ctrl+P prints the page as it stands: the first page of every list.
     renderWithProvider(<PrintButton tooltip="Prints this view" />);
