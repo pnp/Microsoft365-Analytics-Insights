@@ -866,9 +866,10 @@ SET @t = SYSUTCDATETIME();
 -- event comes back through this merge whenever it is staged again: a batch retried after a transient SQL
 -- fault (ActivitySaveRetryState), a content blob whose earlier save did not finish (the durable Azure Table
 -- blob checkpoint, used whenever a Storage connection string is configured, keeps such a blob
--- recovery-pending - see ProcessedBlobStoreFactory), and the Copilot audit backfill recovering missing
--- Copilot metadata. Any of them can bring back an event imported before the upgrade. Those
--- duplicates would be permanent and would silently inflate every COUNT over this table.
+-- recovery-pending - see ProcessedBlobStoreFactory), the Copilot audit backfill recovering missing
+-- Copilot metadata, and the opt-in historical repair (CopilotHistoricalRepair). Any of them can bring back
+-- an event imported before the upgrade. Those duplicates would be permanent and would silently inflate
+-- every COUNT over this table.
 --
 -- So a stored row with NULL in both new columns is treated as matching on the five original columns.
 -- That deliberately declines to add a second action for an event imported pre-upgrade: under the old
