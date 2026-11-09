@@ -141,7 +141,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>
         /// The whole page in one call: KPIs, the ranked tables and the trend. The "top users" table names
         /// people, so a reader without the portal's See PII permission gets it empty (#661) - and the query
-        /// behind it is not run for them at all.
+        /// behind it is not run for them at all. Such a reader's summary is built under its own cache key and
+        /// also leaves out every agent, policy and label row of fewer than five people (#844,
+        /// <see cref="WithoutSmallGroups"/>).
         /// </summary>
         // GET: api/Dlp/summary?days=28
         [HttpGet]
