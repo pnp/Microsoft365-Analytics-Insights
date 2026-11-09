@@ -39,7 +39,9 @@
      FILLFACTOR = 80 however fragmented it was, then ran DBCC SHRINKDATABASE. A shrink moves pages to the
      front of the file and fragments the indexes again, undoing the rebuild, and the file grows back at
      the next import anyway. Indexes that script rebuilt still have fill factor 80, so they are about a
-     quarter larger than they need to be (sys.indexes.fill_factor). This script leaves that setting alone.
+     quarter larger than they need to be (sys.indexes.fill_factor). This script leaves that setting alone;
+     no index in the product sets a fill factor of its own, so to return one to the default, rebuild it
+     once with FILLFACTOR = 100.
 
    DRY RUN FIRST
      With @DryRun = 1, the default, nothing is changed: the script lists each index it would maintain, with
