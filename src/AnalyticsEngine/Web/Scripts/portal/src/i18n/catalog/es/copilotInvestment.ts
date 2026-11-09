@@ -801,7 +801,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.whatIf.required': 'Necesarias para modelar la rentabilidad',
   'copilotInvestment.whatIf.optional': 'Opcionales',
   'copilotInvestment.whatIf.optional.description': 'Cada una añade una fuente de coste; los importes se modelan sin ellas.',
-  'copilotInvestment.whatIf.guide.currency': 'Código ISO de tres letras, como EUR o USD. Todos los precios y el coste por hora van en esta moneda.',
+  'copilotInvestment.whatIf.guide.currency': 'Código ISO de tres letras, como EUR o USD. Todos los precios y el coste por hora van en esta moneda y ninguno se convierte: para usar otra moneda, indique también en ella cada cifra que haya definido la organización.',
   'copilotInvestment.whatIf.guide.seatPrice': 'Lo que le cuesta al mes una licencia de Microsoft 365 Copilot, según su contrato o factura.',
   'copilotInvestment.whatIf.guide.hourlyCost': 'Salario más cargas sociales de una hora de una persona típica, según finanzas.',
   'copilotInvestment.whatIf.guide.studioCreditPrice':

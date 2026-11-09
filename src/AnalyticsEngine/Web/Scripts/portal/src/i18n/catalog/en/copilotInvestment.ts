@@ -779,7 +779,7 @@ export const copilotInvestment = {
   'copilotInvestment.whatIf.required': 'Needed to model the return',
   'copilotInvestment.whatIf.optional': 'Optional',
   'copilotInvestment.whatIf.optional.description': 'Each adds a source of cost; money is modelled without them.',
-  'copilotInvestment.whatIf.guide.currency': 'Three-letter ISO code, such as EUR or USD. Every price and the hourly cost are in it.',
+  'copilotInvestment.whatIf.guide.currency': 'Three-letter ISO code, such as EUR or USD. Every price and the hourly cost are in it, and none is converted: to use another currency, give each figure the organisation has set in it too.',
   'copilotInvestment.whatIf.guide.seatPrice': 'What one Microsoft 365 Copilot licence costs you a month, from your agreement or invoice.',
   'copilotInvestment.whatIf.guide.hourlyCost': 'Salary plus on-costs for an hour of a typical person\u2019s time, from finance.',
   'copilotInvestment.whatIf.guide.studioCreditPrice':
