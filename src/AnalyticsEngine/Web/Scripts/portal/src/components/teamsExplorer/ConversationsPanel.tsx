@@ -68,6 +68,21 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
 
   const nothingScored = data.scoredChannelDays === 0;
 
+  // Without See PII, key phrases and languages come back withheld (nothing stored counts the people behind them), and the
+  // sentiment of teams of too few members is left out. Each card says so instead of reading as "nothing was said".
+  const minimumGroupSize = data.minimumGroupSize ?? null;
+  const minimumText = formatCount(minimumGroupSize ?? 5);
+  const keywordsWithheld = data.keywordsWithheld === true;
+  const languagesWithheld = data.languagesWithheld === true;
+  const sentimentByTeamNote =
+    minimumGroupSize != null
+      ? `${sentimentScaleNoteText} ${t('teamsExplorer.conversations.sentimentByTeam.withheldNote', { count: minimumText })}`
+      : sentimentScaleNoteText;
+  const sentimentByChannelNote =
+    minimumGroupSize != null
+      ? `${sentimentScaleNoteText} ${t('teamsExplorer.conversations.sentimentByChannel.withheldNote', { count: minimumText })}`
+      : sentimentScaleNoteText;
+
   const sentimentSeries = [
     {
       name: t('teamsExplorer.column.sentiment'),
@@ -92,8 +107,12 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
           title={t('teamsExplorer.conversations.keywords.title')}
           description={t('teamsExplorer.conversations.keywords.description')}
           query={queryFor(data.queries, 'conv-keywords')}
-          isEmpty={data.keywords.length === 0}
-          emptyMessage={t('teamsExplorer.conversations.keywords.empty')}
+          isEmpty={keywordsWithheld || data.keywords.length === 0}
+          emptyMessage={
+            keywordsWithheld
+              ? t('teamsExplorer.conversations.keywords.withheld')
+              : t('teamsExplorer.conversations.keywords.empty')
+          }
         >
           <WordCloud categories={toCategories(data.keywords)} valueLabel={t('teamsExplorer.valueLabel.mentions')} />
         </SectionCard>
@@ -115,7 +134,8 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
           title={t('teamsExplorer.conversations.languages.title')}
           description={t('teamsExplorer.conversations.languages.description')}
           query={queryFor(data.queries, 'conv-languages')}
-          isEmpty={data.languages.length === 0}
+          isEmpty={languagesWithheld || data.languages.length === 0}
+          emptyMessage={languagesWithheld ? t('teamsExplorer.conversations.languages.withheld') : undefined}
         >
           <CategoryBarChart categories={toCategories(data.languages)} valueLabel={t('teamsExplorer.valueLabel.channelDays')} showShare />
         </SectionCard>
@@ -125,7 +145,7 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
           description={t('teamsExplorer.conversations.sentimentByTeam.description')}
           query={queryFor(data.queries, 'conv-sentiment-team')}
           isEmpty={data.sentimentByTeam.length === 0}
-          note={sentimentScaleNoteText}
+          note={sentimentByTeamNote}
         >
           <div className={shared.tableWrap}>
             <Table size="small" aria-label={t('teamsExplorer.conversations.sentimentByTeam.aria')}>
@@ -154,7 +174,7 @@ export default function ConversationsPanel({ data }: { data: TeamsConversations 
           description={t('teamsExplorer.conversations.sentimentByChannel.description')}
           query={queryFor(data.queries, 'conv-sentiment-channel')}
           isEmpty={data.sentimentByChannel.length === 0}
-          note={sentimentScaleNoteText}
+          note={sentimentByChannelNote}
         >
           <div className={shared.tableWrap}>
             <Table size="small" aria-label={t('teamsExplorer.conversations.sentimentByChannel.aria')}>

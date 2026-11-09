@@ -33,6 +33,7 @@ const charts: Record<keyof typeof en, string> = {
 
   // Matrix chart
   'charts.matrix.cellTitle': '{row} / {column}: {value} {valueLabel}',
+  'charts.matrix.cellWithheld': '{row} / {column}: oculto - menos de {count} personas, así que no se muestra',
   'charts.matrix.legendShadedByRow': '{columnLabel} \u00b7 sombreado dentro de cada fila \u00b7 ninguno',
   'charts.matrix.legendShadedOverall': '{columnLabel} \u00b7 ninguno',
   'charts.matrix.most': 'máximo',

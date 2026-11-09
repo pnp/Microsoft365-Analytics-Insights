@@ -785,6 +785,46 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void UnmatchedBalancesAndStudioCharges_OfOneToFourAccounts_AreWithheldFromAReaderWithoutSeePii()
+        {
+            var input = Input(new List<CopilotInvestmentPerson> { Holder(1, 10, credit: Balance(1, 10)) }, Assumptions());
+            input.Credits.Users.Add(new CreditUserFact { ObjectId = Guid.NewGuid(), Credits = 99, Quality = 2, PeriodStatus = "unverified" });
+            input.Studio = new StudioFacts { HasData = true };
+            input.Studio.Users.Add(new StudioUserFact { UserId = null, Credits = 7, ActiveDays = 1 });
+            var summary = CopilotInvestmentCalculator.Calculate(input);
+            var reason = summary.Trust.Reasons.Single(r => r.Code == CopilotInvestmentTrustCodes.CreditsUnresolved);
+            Assert.AreEqual(99, reason.Values["credits"]);
+
+            var trimmed = summary.WithoutIndividualData();
+
+            Assert.IsNull(trimmed.Sources.Credits.UnresolvedCredits, "One unmatched account's balance is that account's.");
+            Assert.IsTrue(trimmed.Sources.Credits.UnresolvedCreditsWithheld);
+            Assert.AreEqual(1, trimmed.Sources.Credits.UnresolvedObjects, "The count stays: it is nobody's balance.");
+            Assert.IsNull(trimmed.Sources.Studio.UnresolvedCredits, "One unmatched maker's charges are theirs.");
+            Assert.IsTrue(trimmed.Sources.Studio.UnresolvedCreditsWithheld);
+            var trimmedReason = trimmed.Trust.Reasons.Single(r => r.Code == CopilotInvestmentTrustCodes.CreditsUnresolved);
+            Assert.IsNull(trimmedReason.Values["credits"], "The confidence reason keeps its wording without the figure.");
+            Assert.AreEqual(1, trimmedReason.Values["objects"]);
+
+            // The cached summary is never edited: a See PII reader is given the figures as before.
+            Assert.AreEqual(99, summary.Sources.Credits.UnresolvedCredits);
+            Assert.AreEqual(7, summary.Sources.Studio.UnresolvedCredits);
+            Assert.AreEqual(99, reason.Values["credits"]);
+            Assert.IsFalse(summary.Sources.Credits.UnresolvedCreditsWithheld || summary.Sources.Studio.UnresolvedCreditsWithheld);
+
+            // Five unmatched accounts with a balance, and five unmatched makers charged: nobody's in particular.
+            for (var i = 0; i < 4; i++)
+            {
+                input.Credits.Users.Add(new CreditUserFact { ObjectId = Guid.NewGuid(), Credits = 1, Quality = 2, PeriodStatus = "unverified" });
+                input.Studio.Users.Add(new StudioUserFact { UserId = null, Credits = 1, ActiveDays = 1 });
+            }
+            var five = CopilotInvestmentCalculator.Calculate(input).WithoutIndividualData();
+            Assert.AreEqual(103, five.Sources.Credits.UnresolvedCredits);
+            Assert.AreEqual(11, five.Sources.Studio.UnresolvedCredits);
+            Assert.IsFalse(five.Sources.Credits.UnresolvedCreditsWithheld || five.Sources.Studio.UnresolvedCreditsWithheld);
+        }
+
+        [TestMethod]
         public async Task Assumptions_StartEmpty_SaveWithHistory_AndRefuseAStaleOrInvalidWrite()
         {
             var clock = new DateTime(2026, 10, 27, 9, 0, 0, DateTimeKind.Utc);

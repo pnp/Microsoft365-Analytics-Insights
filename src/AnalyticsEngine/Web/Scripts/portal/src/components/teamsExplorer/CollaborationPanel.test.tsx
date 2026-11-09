@@ -157,6 +157,51 @@ describe('CollaborationPanel', () => {
     expect(screen.getByText(/An unauthorised team is unmeasured, not quiet/)).toBeInTheDocument();
   });
 
+  it('shows reactions withheld from a reader without See PII as a dash that says why, and says which rows are held back', () => {
+    renderWithProvider(
+      <CollaborationPanel
+        data={data({
+          minimumGroupSize: 5,
+          withheldTeams: 1,
+          withheldChannels: 1,
+          tabUsageWithheld: true,
+          teams: [{ ...data().teams[0], reactions: null, reactionsWithheld: true }],
+          channels: [
+            {
+              id: 7,
+              name: 'Ideas',
+              teamName: 'Contoso Engineering',
+              tabs: 0,
+              messages: 5,
+              reactions: null,
+              reactingUsers: null,
+              reactionsWithheld: true,
+              sentiment: 0.6,
+              activeDays: 2,
+            },
+          ],
+          reactionMix: [
+            { key: 'like', label: 'like', count: 100, sharePct: 68 },
+            { key: null, label: null, count: 46, sharePct: 32, other: true },
+          ],
+          otherReactions: 2,
+        })}
+        analyticsAvailable
+        authorisedTeams={2}
+        onExportTeams={noop}
+        onExportChannels={noop}
+        exporting={false}
+      />,
+    );
+
+    // The team's reactions, and the channel's reactions and reacting people: never a 0.
+    expect(screen.getAllByRole('img', { name: 'Withheld: fewer than 5 people reacted' })).toHaveLength(3);
+    expect(screen.getByText(/Teams with fewer than 5 members are not listed/)).toBeInTheDocument();
+    expect(screen.getByText(/Channels of teams with fewer than 5 members are not listed/)).toBeInTheDocument();
+    expect(screen.getByText(/a tab can be named anything a member typed/)).toBeInTheDocument();
+    expect(screen.getByText(/Reactions used by fewer than 5 people are combined into one bar/)).toBeInTheDocument();
+  });
+
   it('exports the leaderboard on request', () => {
     const onExportTeams = vi.fn();
 

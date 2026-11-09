@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.UserFilters;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -242,7 +243,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             if (MemoryCache.Default.Get(cacheKey) is ReportAreaData cached)
             {
-                return Ok(cached);
+                return Ok(ForReader(cached));
             }
 
             // Every chart task below inherits this, and every query runner reads it.
@@ -307,7 +308,19 @@ namespace Web.AnalyticsWeb.Controllers
             // Cache even when some charts errored so reloads are instant rather than re-running the
             // heavy scans; the per-chart error is itself the diagnostic.
             MemoryCache.Default.Set(cacheKey, model, DateTimeOffset.UtcNow.AddSeconds(60));
-            return Ok(model);
+            return Ok(ForReader(model));
+        }
+
+        /// <summary>
+        /// The area as this reader may see it. The cache holds it complete and shares it between readers; a reader without
+        /// the portal's See PII permission gets a copy in which no chart that counts the people behind its parts shows a
+        /// part of fewer than <see cref="ReportScopeResolver.MinimumPeopleWithoutSeePii"/> people (#844).
+        /// </summary>
+        private ReportAreaData ForReader(ReportAreaData model)
+        {
+            return PortalAccess.Evaluate(Request, User).SeePii
+                ? model
+                : model.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
         }
 
         #region Per-area chart definitions
@@ -441,21 +454,25 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 RunCategoryAsync("copilot-key-phrases", "Most common prompt phrases",
                     "Key phrases extracted from Copilot prompts by Azure AI Language, sized by how often they appear.",
-                    "Mentions", phrases, from, chartType: "wordcloud", emptyWarning: NoDataWarning),
+                    "Mentions", phrases, from, chartType: "wordcloud", emptyWarning: NoDataWarning, countsPeople: true),
                 RunTimeSeriesAsync("copilot-sentiment", "Prompt sentiment over time",
                     "Average positive-sentiment confidence of Copilot prompts each week, from 0.0 (negative) through 0.5 (neutral) to 1.0 (positive). Weeks with no scored prompts are left as gaps, not zero.",
                     "Sentiment", "Average sentiment", sentiment, from, weekSpine, missingValue: null),
                 RunCategoryAsync("copilot-languages", "Prompt languages",
                     "Languages detected in Copilot prompts across the window.",
-                    "Prompts", languages, from, emptyWarning: NoDataWarning),
+                    "Prompts", languages, from, emptyWarning: NoDataWarning, countsPeople: true),
             };
         }
 
-        /// <summary>Top extracted key phrases in the window. TOP N in SQL - the link table is large.</summary>
+        /// <summary>
+        /// Top extracted key phrases in the window, with the distinct people whose prompts each came from - a phrase is text
+        /// taken from what people asked, so a reader without See PII is shown only those five or more people used (#844).
+        /// TOP N in SQL - the link table is large.
+        /// </summary>
         internal static string BuildCopilotKeyPhrasesQuery(int top = 40)
         {
             return
-                $"SELECT TOP {top} k.[name] AS Label, CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
+                $"SELECT TOP {top} k.[name] AS Label, CAST(COUNT_BIG(*) AS float) AS Value, COUNT(DISTINCT i.user_id) AS People\r\n" +
                 "FROM dbo.copilot_interaction_keywords AS ck\r\n" +
                 "INNER JOIN dbo.keywords AS k ON k.id = ck.keyword_id\r\n" +
                 "INNER JOIN dbo.copilot_interactions AS i ON i.id = ck.interaction_id\r\n" +
@@ -481,11 +498,11 @@ namespace Web.AnalyticsWeb.Controllers
                 "OPTION (RECOMPILE);";
         }
 
-        /// <summary>Detected prompt languages in the window.</summary>
+        /// <summary>Detected prompt languages in the window, with the distinct people behind each (see <see cref="BuildCopilotKeyPhrasesQuery"/>).</summary>
         internal static string BuildCopilotLanguagesQuery(int top = 8)
         {
             return
-                $"SELECT TOP {top} l.[name] AS Label, CAST(COUNT_BIG(*) AS float) AS Value\r\n" +
+                $"SELECT TOP {top} l.[name] AS Label, CAST(COUNT_BIG(*) AS float) AS Value, COUNT(DISTINCT i.user_id) AS People\r\n" +
                 "FROM dbo.copilot_interactions AS i\r\n" +
                 "INNER JOIN dbo.languages AS l ON l.id = i.language_id\r\n" +
                 "WHERE i.created_utc >= @from AND i.language_id IS NOT NULL" + InteractionUserScope + "\r\n" +
@@ -1166,8 +1183,13 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>Runs a categorical (bar) query - label + value rows, already ordered by the query.</summary>
+        /// <param name="countsPeople">
+        /// The query also returns a <c>People</c> column - the distinct people behind each bar - which decides what a reader
+        /// without See PII is shown (<see cref="ReportChart.WithoutSmallGroups"/>). It is never sent.
+        /// </param>
         private static async Task<ReportChart> RunCategoryAsync(string key, string title, string description,
-            string valueLabel, string body, DateTime from, string chartType = "bar", string emptyWarning = null)
+            string valueLabel, string body, DateTime from, string chartType = "bar", string emptyWarning = null,
+            bool countsPeople = false)
         {
             var chart = new ReportChart
             {
@@ -1184,12 +1206,24 @@ namespace Web.AnalyticsWeb.Controllers
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     db.Database.CommandTimeout = QueryTimeoutSecs;
-                    var rows = await db.Database
-                        .SqlQuery<CategoryRow>(Scoped(body), ScopedParameters(new SqlParameter("@from", from)))
-                        .ToListAsync();
-                    chart.Categories = rows
-                        .Select(r => new ReportCategory { Label = r.Label, Value = r.Value })
-                        .ToList();
+                    if (countsPeople)
+                    {
+                        var rows = await db.Database
+                            .SqlQuery<CategoryPeopleRow>(Scoped(body), ScopedParameters(new SqlParameter("@from", from)))
+                            .ToListAsync();
+                        chart.Categories = rows
+                            .Select(r => new ReportCategory { Label = r.Label, Value = r.Value, People = r.People })
+                            .ToList();
+                    }
+                    else
+                    {
+                        var rows = await db.Database
+                            .SqlQuery<CategoryRow>(Scoped(body), ScopedParameters(new SqlParameter("@from", from)))
+                            .ToListAsync();
+                        chart.Categories = rows
+                            .Select(r => new ReportCategory { Label = r.Label, Value = r.Value })
+                            .ToList();
+                    }
 
                     // "Nothing came back" is ambiguous for the cognitive charts - the import may simply be
                     // off - so let the caller explain it rather than leaving an empty panel.
@@ -1471,6 +1505,14 @@ namespace Web.AnalyticsWeb.Controllers
         {
             public string Label { get; set; }
             public double Value { get; set; }
+        }
+
+        /// <summary>A <see cref="CategoryRow"/> with the distinct people behind it.</summary>
+        private sealed class CategoryPeopleRow
+        {
+            public string Label { get; set; }
+            public double Value { get; set; }
+            public int People { get; set; }
         }
 
         #endregion

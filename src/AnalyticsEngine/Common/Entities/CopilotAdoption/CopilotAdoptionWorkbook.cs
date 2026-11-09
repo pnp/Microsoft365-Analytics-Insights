@@ -3201,12 +3201,61 @@ namespace Common.Entities.CopilotAdoption
 
             var headerRow = sheet.CurrentRow;
 
+            var withheld = summary?.WithheldSections ?? new List<string>();
             foreach (var fact in ScalarFacts(summary))
             {
-                sheet.AddRow(fact.Key, fact.Value, XlsxCell.Wrapped(fact.Label));
+                sheet.AddRow(fact.Key, IsWithheldFact(fact.Key, withheld) ? string.Empty : fact.Value, XlsxCell.Wrapped(fact.Label));
             }
 
             sheet.FreezeTopRows(headerRow);
+        }
+
+        /// <summary>
+        /// The Snapshot facts keys of each section the administrator's global filter leaves out
+        /// (<see cref="CopilotAdoptionSummary.WithheldSections"/>), each with everything beneath it. The withheld section holds
+        /// zeros and empty lists, which written as they are would read as a measured collapse to zero; they are written blank -
+        /// unknown, as the sheet says - instead (#844).
+        /// </summary>
+        private static readonly Dictionary<string, string[]> WithheldSectionFactKeys = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            [CopilotAdoptionUnscopedSections.UsageByApp] = new[] { "usageByApp", "unlicensed.usageByApp" },
+            [CopilotAdoptionUnscopedSections.TopResourceTypes] = new[] { "topResourceTypes" },
+            [CopilotAdoptionUnscopedSections.WeeklyTrend] = new[] { "weeklyTrend", "weeklyVolumeTrend" },
+            [CopilotAdoptionUnscopedSections.Agents] = new[] { "agents", "agentsInThreeOrMoreDepartments", "agentsInThreeOrMoreDepartmentsUnknownOrigin" },
+            [CopilotAdoptionUnscopedSections.PurchasedSeats] = new[] { "purchasedCopilotSeats", "unassignedCopilotSeats", "subscribedSkusAvailable" },
+            [CopilotAdoptionUnscopedSections.CoworkCredits] = new[] { "coworkCreditPosition" },
+            [CopilotAdoptionUnscopedSections.MicrosoftReport] = new[]
+            {
+                "microsoftReportDate", "microsoftReportPeriodDays", "microsoftReportVersion",
+                "microsoftReportPromptsSubmitted", "microsoftReportAveragePromptsPerActiveUser",
+            },
+        };
+
+        /// <summary>
+        /// Keys under a withheld section that stay, because they are as true of the narrowed view as of the tenant: the
+        /// agent inventory's look-back is a setting, and whether per-person credit rows are imported is a fact about the import.
+        /// </summary>
+        private static readonly HashSet<string> FactsKeptUnderWithheldSections = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "agents.historyDays",
+            "coworkCreditPosition.perUserCreditsAvailable",
+        };
+
+        /// <summary>True when <paramref name="key"/> belongs to one of <paramref name="withheldSections"/>, so it is written blank.</summary>
+        internal static bool IsWithheldFact(string key, IEnumerable<string> withheldSections)
+        {
+            if (string.IsNullOrEmpty(key) || withheldSections == null || FactsKeptUnderWithheldSections.Contains(key)) return false;
+
+            foreach (var section in withheldSections)
+            {
+                if (section == null || !WithheldSectionFactKeys.TryGetValue(section, out var prefixes)) continue;
+                foreach (var prefix in prefixes)
+                {
+                    if (key == prefix || key.StartsWith(prefix + ".", StringComparison.Ordinal)) return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

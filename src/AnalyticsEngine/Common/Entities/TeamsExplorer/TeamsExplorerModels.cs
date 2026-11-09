@@ -126,6 +126,70 @@ namespace Common.Entities.TeamsExplorer
         public string Label { get; set; }
         public long Count { get; set; }
         public double SharePct { get; set; }
+
+        /// <summary>
+        /// True for the single row a reader without See PII gets in place of every bucket that fewer than the minimum
+        /// number of people are behind (see <see cref="TeamsSmallGroups.FoldBuckets"/>). Sent only when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Other { get; set; }
+
+        /// <summary>
+        /// Distinct people behind the bucket, where its query counts them; null where it does not. It only decides what a
+        /// reader without See PII is shown, so it is never sent.
+        /// </summary>
+        [JsonIgnore]
+        public int? People { get; set; }
+    }
+
+    /// <summary>
+    /// The small-group rules the Teams Explorer's lists share, for a reader without the portal's See PII permission (#844).
+    /// </summary>
+    public static class TeamsSmallGroups
+    {
+        /// <summary>
+        /// <paramref name="rows"/> with every bucket of fewer than <paramref name="minimumPeople"/> people folded into one
+        /// <see cref="TeamsBucketRow.Other"/> row. A bucket whose people were not counted is treated as small. When the
+        /// folded buckets' people could be fewer than the minimum - always, since each is small - the smallest bucket shown
+        /// goes into the row too, so that a combined row of at least the minimum people is published and the small buckets
+        /// cannot be worked out as the difference from the shown ones. When no bucket is big enough, none is shown.
+        /// People are counted per bucket, and one person can be behind several, so the combined row's people are bounded
+        /// below by its biggest bucket, never by their sum. New rows: the list is cached and shared between readers.
+        /// </summary>
+        /// <param name="folded">How many buckets were folded into the combined row, or left out with it.</param>
+        public static List<TeamsBucketRow> FoldBuckets(List<TeamsBucketRow> rows, int minimumPeople, out int folded)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var all = rows ?? new List<TeamsBucketRow>();
+            var shown = all.Where(r => (r.People ?? 0) >= minimumPeople).ToList();
+            var small = all.Where(r => (r.People ?? 0) < minimumPeople).ToList();
+            folded = small.Count;
+            if (small.Count == 0) return all.ToList();
+            if (shown.Count == 0) return new List<TeamsBucketRow>();
+
+            var smallest = shown
+                .OrderBy(r => r.People ?? 0)
+                .ThenBy(r => r.Count)
+                .ThenBy(r => r.Key, StringComparer.Ordinal)
+                .First();
+            shown.Remove(smallest);
+            small.Add(smallest);
+            folded = small.Count;
+
+            var total = all.Sum(r => r.Count);
+            var count = small.Sum(r => r.Count);
+            shown.Add(new TeamsBucketRow
+            {
+                Key = null,
+                Label = null,
+                Other = true,
+                Count = count,
+                SharePct = TeamsExplorerScoring.Percentage(count, total),
+                People = small.Max(r => r.People ?? 0),
+            });
+            return shown;
+        }
     }
 
     #region Overview
@@ -527,9 +591,28 @@ namespace Common.Entities.TeamsExplorer
     public sealed class TeamsCallTrendPoint
     {
         public DateTime WeekStart { get; set; }
-        public long Calls { get; set; }
-        public double Minutes { get; set; }
-        public int Attendees { get; set; }
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public long? Calls { get; set; }
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public double? Minutes { get; set; }
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public int? Attendees { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, the week's figures are null: one to four people attended its calls, or
+        /// none was counted, so its calls and minutes are those few people's own (#844). Sent only when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Withheld { get; set; }
+
+        /// <summary>True when the week had calls and fewer than <paramref name="minimumPeople"/> attendees were counted.</summary>
+        internal bool DescribesFewerThan(int minimumPeople) => (Calls ?? 0) > 0 && (Attendees ?? 0) < minimumPeople;
+
+        /// <summary>This week with its figures withheld. A new point: the trend is cached and shared between readers.</summary>
+        internal TeamsCallTrendPoint AsWithheld() => new TeamsCallTrendPoint { WeekStart = WeekStart, Withheld = true };
     }
 
     /// <summary>One cell of the day-of-week x hour heatmap.</summary>
@@ -581,6 +664,25 @@ namespace Common.Entities.TeamsExplorer
         public TeamsCallQuality Quality { get; set; } = new TeamsCallQuality();
 
         /// <summary>
+        /// The fewest people a figure of this section describes, for a reader without See PII; <c>null</c> when nothing is
+        /// held back for the reader. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, the distributions - meeting size and length, the heatmap, time of day,
+        /// the modalities and the call experience - are empty because fewer than <see cref="MinimumGroupSize"/> people
+        /// attended the calls in view. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public bool DistributionsWithheld { get; set; }
+
+        /// <summary>
+        /// How many modalities were folded into the <see cref="TeamsBucketRow.Other"/> row of <see cref="ModalityMix"/> - or,
+        /// when no modality had enough people, left out of it. 0 when none were.
+        /// </summary>
+        public int OtherModalities { get; set; }
+
+        /// <summary>
         /// This section without the two leaderboards that name people, for a reader who does not hold the
         /// portal's See PII permission (#661). A shallow copy: the section is cached and shared between
         /// readers, so the instance itself must never be edited for one of them.
@@ -590,6 +692,48 @@ namespace Common.Entities.TeamsExplorer
             var copy = (TeamsMeetings)MemberwiseClone();
             copy.TopOrganisers = new List<TeamsNamedCountRow>();
             copy.TopAttendees = new List<TeamsNamedCountRow>();
+            return copy;
+        }
+
+        /// <summary>
+        /// This section with no figure of fewer than <paramref name="minimumPeople"/> people, for a reader who does not hold
+        /// the portal's See PII permission (#844). Applied where the data says how many people a figure describes:
+        /// <list type="bullet">
+        /// <item>a week of the trend with calls but fewer attendees than that is withheld;</item>
+        /// <item>when fewer than that attended every call in view, the distributions are withheld, since each of their
+        /// buckets describes some of those few people;</item>
+        /// <item>modalities are counted in distinct people each, and those used by fewer are folded
+        /// (<see cref="TeamsSmallGroups.FoldBuckets"/>).</item>
+        /// </list>
+        /// The meeting size and length buckets, the heatmap's cells and time of day carry no people count, so they are
+        /// shown whenever the section as a whole describes enough people. A shallow copy: the section is cached and shared
+        /// between readers.
+        /// </summary>
+        public TeamsMeetings WithoutSmallGroups(int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var copy = (TeamsMeetings)MemberwiseClone();
+            copy.MinimumGroupSize = minimumPeople;
+            copy.Trend = (Trend ?? new List<TeamsCallTrendPoint>())
+                .Select(p => p.DescribesFewerThan(minimumPeople) ? p.AsWithheld() : p)
+                .ToList();
+
+            if ((Kpis?.Calls ?? 0) > 0 && (Kpis?.Attendees ?? 0) < minimumPeople)
+            {
+                copy.DistributionsWithheld = true;
+                copy.SizeDistribution = new List<TeamsBucketRow>();
+                copy.DurationDistribution = new List<TeamsBucketRow>();
+                copy.Heatmap = new List<TeamsHeatCell>();
+                copy.PeriodOfDay = new List<TeamsBucketRow>();
+                copy.ModalityMix = new List<TeamsBucketRow>();
+                copy.OtherModalities = (ModalityMix ?? new List<TeamsBucketRow>()).Count;
+                copy.Quality = new TeamsCallQuality();
+                return copy;
+            }
+
+            copy.ModalityMix = TeamsSmallGroups.FoldBuckets(ModalityMix, minimumPeople, out var folded);
+            copy.OtherModalities = folded;
             return copy;
         }
     }
@@ -628,7 +772,20 @@ namespace Common.Entities.TeamsExplorer
         public int Channels { get; set; }
         public int Tabs { get; set; }
         public long Messages { get; set; }
-        public long Reactions { get; set; }
+
+        /// <summary>Null when <see cref="ReactionsWithheld"/>.</summary>
+        public long? Reactions { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Reactions"/> is null: one to four people reacted in the
+        /// team's channels, so the count is those few people's own (#844). Sent only when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool ReactionsWithheld { get; set; }
+
+        /// <summary>Distinct people who reacted in the team's channels. Only decides what is withheld, so it is never sent.</summary>
+        [JsonIgnore]
+        public int ReactingUsers { get; set; }
 
         /// <summary>
         /// Chat-count weighted mean sentiment: 0 negative, 0.5 NEUTRAL, 1 positive. Null when
@@ -641,6 +798,16 @@ namespace Common.Entities.TeamsExplorer
 
         /// <summary>False when the team has never been authorised, so silence means "not measured".</summary>
         public bool Authorised { get; set; }
+
+        /// <summary>This row with its reactions withheld when one to four people are behind them. A new row when it changes.</summary>
+        internal TeamsTeamRow WithoutFewReactors(int minimumPeople)
+        {
+            if (ReactingUsers <= 0 || ReactingUsers >= minimumPeople) return this;
+            var copy = (TeamsTeamRow)MemberwiseClone();
+            copy.Reactions = null;
+            copy.ReactionsWithheld = true;
+            return copy;
+        }
     }
 
     /// <summary>A channel on the leaderboard.</summary>
@@ -652,10 +819,12 @@ namespace Common.Entities.TeamsExplorer
         public string TeamName { get; set; }
         public int Tabs { get; set; }
         public long Messages { get; set; }
-        public long Reactions { get; set; }
+
+        /// <summary>Null when <see cref="ReactionsWithheld"/>.</summary>
+        public long? Reactions { get; set; }
 
         /// <summary>
-        /// Distinct people who reacted to something in the channel.
+        /// Distinct people who reacted to something in the channel. Null when <see cref="ReactionsWithheld"/>.
         /// </summary>
         /// <remarks>
         /// Reactions are used because they are the only per-user, per-channel signal the schema
@@ -663,12 +832,38 @@ namespace Common.Entities.TeamsExplorer
         /// posters, but nothing creates or writes its table, so a "contributors" column would be a
         /// guaranteed query failure rather than a better measure.
         /// </remarks>
-        public int ReactingUsers { get; set; }
+        public int? ReactingUsers { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Reactions"/> and <see cref="ReactingUsers"/> are null: one
+        /// to four people reacted in the channel, so the count is those few people's own (#844). Sent only when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool ReactionsWithheld { get; set; }
+
+        /// <summary>
+        /// Members of the channel's team at its latest membership snapshot: the people a channel row describes. Only decides
+        /// what a reader without See PII is shown, so it is never sent.
+        /// </summary>
+        [JsonIgnore]
+        public int TeamMembers { get; set; }
 
         /// <summary>See <see cref="TeamsTeamRow.Sentiment"/> - 0.5 is neutral, not 50% positive.</summary>
         public double? Sentiment { get; set; }
 
         public int ActiveDays { get; set; }
+
+        /// <summary>This row with its reactions withheld when one to four people are behind them. A new row when it changes.</summary>
+        internal TeamsChannelRow WithoutFewReactors(int minimumPeople)
+        {
+            var reacting = ReactingUsers ?? 0;
+            if (reacting <= 0 || reacting >= minimumPeople) return this;
+            var copy = (TeamsChannelRow)MemberwiseClone();
+            copy.Reactions = null;
+            copy.ReactingUsers = null;
+            copy.ReactionsWithheld = true;
+            return copy;
+        }
     }
 
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
@@ -682,6 +877,62 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsBucketRow> ReactionMix { get; set; } = new List<TeamsBucketRow>();
         public List<TeamsNamedCountRow> TabUsage { get; set; } = new List<TeamsNamedCountRow>();
         public List<TeamsTrendPoint> MembershipTrend { get; set; } = new List<TeamsTrendPoint>();
+
+        /// <summary>
+        /// The fewest people a row of this section describes, for a reader without See PII; <c>null</c> when nothing is held
+        /// back for the reader. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>Teams left out of <see cref="Teams"/> for a reader without See PII: fewer than the minimum members.</summary>
+        public int WithheldTeams { get; set; }
+
+        /// <summary>Channels left out of <see cref="Channels"/> for a reader without See PII: their team has fewer than the minimum members.</summary>
+        public int WithheldChannels { get; set; }
+
+        /// <summary>
+        /// How many reactions were folded into the <see cref="TeamsBucketRow.Other"/> row of <see cref="ReactionMix"/> - or,
+        /// when no reaction was used by enough people, left out of it. 0 when none were.
+        /// </summary>
+        public int OtherReactions { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="TabUsage"/> is empty. A tab's name can be whatever a member
+        /// typed, and nothing stored says how many people pinned or use it.
+        /// </summary>
+        public bool TabUsageWithheld { get; set; }
+
+        /// <summary>
+        /// This section with no row of fewer than <paramref name="minimumPeople"/> people, for a reader who does not hold the
+        /// portal's See PII permission (#844):
+        /// <list type="bullet">
+        /// <item>a team with fewer members is left out of the team leaderboard, and a channel whose team has fewer members
+        /// out of the channel leaderboard - their messages, reactions and sentiment are those few people's own;</item>
+        /// <item>a team's or channel's reactions are withheld when one to four people reacted;</item>
+        /// <item>reactions used by fewer people are folded (<see cref="TeamsSmallGroups.FoldBuckets"/>);</item>
+        /// <item>the tab list is withheld, since nothing stored counts the people behind a tab.</item>
+        /// </list>
+        /// A shallow copy: the section is cached and shared between readers.
+        /// </summary>
+        public TeamsCollaboration WithoutSmallGroups(int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var teams = Teams ?? new List<TeamsTeamRow>();
+            var channels = Channels ?? new List<TeamsChannelRow>();
+
+            var copy = (TeamsCollaboration)MemberwiseClone();
+            copy.MinimumGroupSize = minimumPeople;
+            copy.Teams = teams.Where(t => t.Members >= minimumPeople).Select(t => t.WithoutFewReactors(minimumPeople)).ToList();
+            copy.WithheldTeams = teams.Count - copy.Teams.Count;
+            copy.Channels = channels.Where(c => c.TeamMembers >= minimumPeople).Select(c => c.WithoutFewReactors(minimumPeople)).ToList();
+            copy.WithheldChannels = channels.Count - copy.Channels.Count;
+            copy.ReactionMix = TeamsSmallGroups.FoldBuckets(ReactionMix, minimumPeople, out var folded);
+            copy.OtherReactions = folded;
+            copy.TabUsage = new List<TeamsNamedCountRow>();
+            copy.TabUsageWithheld = true;
+            return copy;
+        }
     }
 
     #endregion
@@ -707,6 +958,13 @@ namespace Common.Entities.TeamsExplorer
         public string Name { get; set; }
         public double Sentiment { get; set; }
         public long Messages { get; set; }
+
+        /// <summary>
+        /// Members of the team (for a channel, of its team) at its latest membership snapshot: the people the row describes.
+        /// Only decides what a reader without See PII is shown, so it is never sent.
+        /// </summary>
+        [JsonIgnore]
+        public int Members { get; set; }
     }
 
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
@@ -723,6 +981,57 @@ namespace Common.Entities.TeamsExplorer
         public List<TeamsSentimentPoint> SentimentTrend { get; set; } = new List<TeamsSentimentPoint>();
         public List<TeamsSentimentRow> SentimentByTeam { get; set; } = new List<TeamsSentimentRow>();
         public List<TeamsSentimentRow> SentimentByChannel { get; set; } = new List<TeamsSentimentRow>();
+
+        /// <summary>
+        /// The fewest people a row of this section describes, for a reader without See PII; <c>null</c> when nothing is held
+        /// back for the reader. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Keywords"/> is empty: key phrases are text taken from what
+        /// people wrote, and nothing stored says how many people wrote each one.
+        /// </summary>
+        public bool KeywordsWithheld { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Languages"/> is empty: nothing stored says how many people
+        /// wrote in each language, so a language one person writes in would be that person's channel activity.
+        /// </summary>
+        public bool LanguagesWithheld { get; set; }
+
+        /// <summary>Teams left out of <see cref="SentimentByTeam"/> for a reader without See PII: fewer than the minimum members.</summary>
+        public int WithheldSentimentTeams { get; set; }
+
+        /// <summary>Channels left out of <see cref="SentimentByChannel"/> for a reader without See PII: their team has fewer than the minimum members.</summary>
+        public int WithheldSentimentChannels { get; set; }
+
+        /// <summary>
+        /// This section with no row of fewer than <paramref name="minimumPeople"/> people, for a reader who does not hold the
+        /// portal's See PII permission (#844). The key phrases and languages are withheld, because the stored scores count
+        /// mentions and channel-days, never the people behind them; a team's or channel's sentiment is left out when the
+        /// team has fewer members, since its sentiment is then those few people's mood. The weekly sentiment is the whole
+        /// tenant's and stays. A shallow copy: the section is cached and shared between readers.
+        /// </summary>
+        public TeamsConversations WithoutSmallGroups(int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var byTeam = SentimentByTeam ?? new List<TeamsSentimentRow>();
+            var byChannel = SentimentByChannel ?? new List<TeamsSentimentRow>();
+
+            var copy = (TeamsConversations)MemberwiseClone();
+            copy.MinimumGroupSize = minimumPeople;
+            copy.Keywords = new List<TeamsNamedCountRow>();
+            copy.KeywordsWithheld = true;
+            copy.Languages = new List<TeamsNamedCountRow>();
+            copy.LanguagesWithheld = true;
+            copy.SentimentByTeam = byTeam.Where(r => r.Members >= minimumPeople).ToList();
+            copy.WithheldSentimentTeams = byTeam.Count - copy.SentimentByTeam.Count;
+            copy.SentimentByChannel = byChannel.Where(r => r.Members >= minimumPeople).ToList();
+            copy.WithheldSentimentChannels = byChannel.Count - copy.SentimentByChannel.Count;
+            return copy;
+        }
     }
 
     #endregion

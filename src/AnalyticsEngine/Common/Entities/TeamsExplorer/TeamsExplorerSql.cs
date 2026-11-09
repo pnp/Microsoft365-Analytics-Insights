@@ -665,9 +665,12 @@ ORDER BY DayOfWeek, [Hour]
 OPTION (RECOMPILE);";
         }
 
-        /// <summary>Which modalities calls actually used - is video and sharing being exploited at all?</summary>
+        /// <summary>
+        /// Which modalities calls actually used - is video and sharing being exploited at all? - and how many people used
+        /// each, so a modality only a few people used can be folded for a reader without See PII (#844).
+        /// </summary>
         public const string CallModalities = @"
-SELECT m.[name] AS Name, COUNT_BIG(DISTINCT l.call_session_id) AS [Count]
+SELECT m.[name] AS Name, COUNT_BIG(DISTINCT l.call_session_id) AS [Count], COUNT(DISTINCT s.attendee_user_id) AS People
 FROM dbo.call_session_call_modalities AS l
 INNER JOIN dbo.call_modalities AS m ON m.id = l.call_modality_id
 INNER JOIN dbo.call_sessions AS s ON s.id = l.call_session_id
@@ -763,6 +766,25 @@ SELECT
 OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>
+        /// Each team's members at its most recent membership snapshot, as the CTEs <c>LatestMembership</c> and <c>Members</c>
+        /// (one row per team: <c>team_id</c>, <c>Members</c>), for a statement's <c>WITH</c> list. The same counting as
+        /// <see cref="TeamLeaderboard"/>: <c>team_membership_log</c> is an append-only history, so counting all of it would
+        /// count everyone who has ever been a member. The people a team's or channel's figures describe, for the floor a
+        /// reader without See PII is held to (#844).
+        /// </summary>
+        public const string LatestTeamMembers = @"LatestMembership AS (
+    SELECT m.team_id, MAX(m.[date]) AS LatestDate
+    FROM dbo.team_membership_log AS m
+    GROUP BY m.team_id
+),
+Members AS (
+    SELECT m.team_id, COUNT(DISTINCT m.user_id) AS Members
+    FROM dbo.team_membership_log AS m
+    INNER JOIN LatestMembership AS l ON l.team_id = m.team_id AND l.LatestDate = m.[date]
+    GROUP BY m.team_id
+)";
+
+        /// <summary>
         /// The team leaderboard. Membership is taken from the most recent membership log date per team
         /// rather than from every row, because <c>team_membership_log</c> is an append-only history and
         /// counting all of it would count everyone who has ever been a member.
@@ -796,7 +818,7 @@ Stats AS (
     GROUP BY ch.team_id
 ),
 Reactions AS (
-    SELECT ch.team_id, COUNT_BIG(*) AS Reactions
+    SELECT ch.team_id, COUNT_BIG(*) AS Reactions, COUNT(DISTINCT r.user_id) AS ReactingUsers
     FROM dbo.teams_user_channel_reactions AS r
     INNER JOIN dbo.teams_channels AS ch ON ch.id = r.channel_id
     WHERE r.[date] >= @from AND r.[date] < @to
@@ -818,6 +840,7 @@ SELECT TOP (@top)
     ISNULL(tab.Tabs, 0)                             AS Tabs,
     ISNULL(st.Messages, 0)                          AS Messages,
     ISNULL(re.Reactions, 0)                         AS Reactions,
+    ISNULL(re.ReactingUsers, 0)                     AS ReactingUsers,
     CASE WHEN ISNULL(st.ScoredMessages, 0) > 0
          THEN st.SentimentWeight / st.ScoredMessages END AS Sentiment,
     ISNULL(st.MessageDays, 0)                       AS ActiveDays,
@@ -839,7 +862,8 @@ OPTION (RECOMPILE);" + TenantWide;
         /// counts are what the schema can actually support.
         /// </remarks>
         public const string ChannelLeaderboard = @"
-WITH Stats AS (
+WITH " + LatestTeamMembers + @",
+Stats AS (
     SELECT s.channel_id,
            SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)) AS Messages,
            SUM(CASE WHEN ISNULL(s.chats_count, 0) > 0 THEN 1 ELSE 0 END) AS MessageDays,
@@ -875,9 +899,11 @@ SELECT TOP (@top)
     ISNULL(re.ReactingUsers, 0) AS ReactingUsers,
     CASE WHEN ISNULL(st.ScoredMessages, 0) > 0
          THEN st.SentimentWeight / st.ScoredMessages END AS Sentiment,
-    ISNULL(st.MessageDays, 0)   AS ActiveDays
+    ISNULL(st.MessageDays, 0)   AS ActiveDays,
+    ISNULL(mem.Members, 0)      AS TeamMembers
 FROM dbo.teams_channels AS ch
 INNER JOIN dbo.teams AS t ON t.id = ch.team_id
+LEFT JOIN Members   AS mem ON mem.team_id = ch.team_id
 LEFT JOIN Stats     AS st  ON st.channel_id = ch.id
 LEFT JOIN Reactions AS re  ON re.channel_id = ch.id
 LEFT JOIN Tabs      AS tab ON tab.channel_id = ch.id
@@ -911,9 +937,12 @@ WHERE t.has_refresh_token = 1
 ORDER BY [Count] DESC, t.[name]
 OPTION (RECOMPILE);" + TenantWide;
 
-        /// <summary>Which reactions people use - a cheap but genuine engagement signal.</summary>
+        /// <summary>
+        /// Which reactions people use - a cheap but genuine engagement signal - and how many people used each, so a reaction
+        /// only a few people use can be folded for a reader without See PII (#844).
+        /// </summary>
         public const string ReactionMix = @"
-SELECT ISNULL(rt.[name], N'(unknown)') AS Name, COUNT_BIG(*) AS [Count]
+SELECT ISNULL(rt.[name], N'(unknown)') AS Name, COUNT_BIG(*) AS [Count], COUNT(DISTINCT r.user_id) AS People
 FROM dbo.teams_user_channel_reactions AS r
 LEFT JOIN dbo.teams_reaction_types AS rt ON rt.id = r.reaction_id
 WHERE r.[date] >= @from AND r.[date] < @to
@@ -994,16 +1023,23 @@ ORDER BY WeekStart
 OPTION (RECOMPILE);{TenantWide}";
         }
 
-        /// <summary>Sentiment per team, weighted by message count.</summary>
+        /// <summary>
+        /// Sentiment per team, weighted by message count, with the team's members: the people the row describes, for the
+        /// floor a reader without See PII is held to (#844). Teams that share a name are one row, so their largest
+        /// membership is the people it describes at least.
+        /// </summary>
         public const string SentimentByTeam = @"
+WITH " + LatestTeamMembers + @"
 SELECT TOP (@top)
     t.[name] AS Name,
     SUM(s.sentiment_score * ISNULL(s.chats_count, 0))
         / NULLIF(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0) AS Sentiment,
-    ISNULL(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0)       AS Messages
+    ISNULL(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0)       AS Messages,
+    ISNULL(MAX(mem.Members), 0)                                    AS Members
 FROM dbo.teams_channel_stats_log AS s
 INNER JOIN dbo.teams_channels AS ch ON ch.id = s.channel_id
 INNER JOIN dbo.teams AS t ON t.id = ch.team_id
+LEFT JOIN Members AS mem ON mem.team_id = t.id
 WHERE s.[date] >= @from AND s.[date] < @to
   AND s.sentiment_score IS NOT NULL
   AND ISNULL(s.chats_count, 0) > 0
@@ -1011,16 +1047,19 @@ GROUP BY t.[name]
 ORDER BY Messages DESC
 OPTION (RECOMPILE);" + TenantWide;
 
-        /// <summary>Sentiment per channel, weighted by message count.</summary>
+        /// <summary>Sentiment per channel, weighted by message count, with its team's members (see <see cref="SentimentByTeam"/>).</summary>
         public const string SentimentByChannel = @"
+WITH " + LatestTeamMembers + @"
 SELECT TOP (@top)
     t.[name] + N' / ' + ch.[name] AS Name,
     SUM(s.sentiment_score * ISNULL(s.chats_count, 0))
         / NULLIF(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0) AS Sentiment,
-    ISNULL(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0)       AS Messages
+    ISNULL(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0)       AS Messages,
+    ISNULL(MAX(mem.Members), 0)                                    AS Members
 FROM dbo.teams_channel_stats_log AS s
 INNER JOIN dbo.teams_channels AS ch ON ch.id = s.channel_id
 INNER JOIN dbo.teams AS t ON t.id = ch.team_id
+LEFT JOIN Members AS mem ON mem.team_id = t.id
 WHERE s.[date] >= @from AND s.[date] < @to
   AND s.sentiment_score IS NOT NULL
   AND ISNULL(s.chats_count, 0) > 0

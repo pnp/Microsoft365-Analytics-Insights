@@ -78,6 +78,10 @@ export const reports = {
   'reports.chart.sqlTitle': 'SQL behind this chart',
   'reports.chart.loadError': "Couldn't load this chart: {error}",
   'reports.chart.noData': 'No data for this period.',
+  'reports.withheld.matrix':
+    'Columns of fewer than {count} people are not shown, and a cell of fewer than {count} people is shown as a dash, so that nobody can be singled out.',
+  'reports.withheld.prompts':
+    'Only phrases and languages used by at least {count} different people are shown, so that nobody can be singled out.',
   'reports.chart.error.noCompletedUsageWeeks': 'No completed usage-report weeks are available.',
   'reports.chart.error.noWorkloadSeriesLoaded': 'No workload series could be loaded. {details}',
   'reports.chart.error.noCompletedUsageWeeksWithData': 'No completed usage-report weeks are available for workloads with data.',

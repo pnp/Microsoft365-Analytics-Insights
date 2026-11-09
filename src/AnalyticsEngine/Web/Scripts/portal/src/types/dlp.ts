@@ -59,6 +59,14 @@ export interface DlpSummary {
   tenantTopPolicies: DlpImpactRow[];
   tenantBlockedCount: number;
   tenantAuditedCount: number;
+
+  /**
+   * For a reader without See PII, the fewest people a row of the agent, policy, sensitivity-label and tenant policy
+   * tables describes - rows that affected fewer are left out. Null for a reader with See PII.
+   */
+  minimumGroupSize: number | null;
+  /** Rows left out of those tables for a reader without See PII. */
+  withheldRows: number;
 }
 
 /**

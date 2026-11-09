@@ -678,6 +678,11 @@ export default function DlpPage() {
           <Text className={styles.sectionTitle} weight="semibold" size={500} block>
             {t('dlp.affected.title')}
           </Text>
+          {summary.minimumGroupSize != null && (
+            <Body1 block className={styles.muted} style={{ marginTop: '4px' }}>
+              {t('dlp.affected.withheldNote', { count: formatNumber(summary.minimumGroupSize) })}
+            </Body1>
+          )}
 
           <ImpactTable
             title={t('dlp.affected.agents.title')}
@@ -726,6 +731,11 @@ export default function DlpPage() {
           <Body1 block className={styles.muted} style={{ marginTop: '4px' }}>
             {t('dlp.tenant.description')}
           </Body1>
+          {summary.minimumGroupSize != null && availability?.tenantDlpAvailable && (
+            <Body1 block className={styles.muted} style={{ marginTop: '4px' }}>
+              {t('dlp.tenant.withheldNote', { count: formatNumber(summary.minimumGroupSize) })}
+            </Body1>
+          )}
 
           {!availability?.tenantDlpAvailable ? (
             <Text size={200} className={styles.muted} block style={{ marginTop: '8px' }}>

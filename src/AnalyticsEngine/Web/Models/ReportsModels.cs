@@ -1,6 +1,7 @@
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Web.AnalyticsWeb.Models
 {
@@ -63,8 +64,17 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("column")]
         public string Column { get; set; }
 
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
         [JsonProperty("value")]
-        public double Value { get; set; }
+        public double? Value { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Value"/> is null: one to four people are behind the cell, so
+        /// it is withheld rather than shown - and never shown as zero, which is what an absent cell means (#844). Sent only
+        /// when true.
+        /// </summary>
+        [JsonProperty("withheld", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Withheld { get; set; }
     }
 
     /// <summary>
@@ -123,6 +133,15 @@ namespace Web.AnalyticsWeb.Models
         /// </remarks>
         [JsonProperty("shadeByRow")]
         public bool ShadeByRow { get; set; }
+
+        /// <summary>
+        /// The distinct people behind each column, where the query counts them (the department and email-domain grids);
+        /// null otherwise. Only decides what a reader without See PII is shown; internal, so never sent.
+        /// </summary>
+        internal Dictionary<string, int> ColumnPeople { get; set; }
+
+        /// <summary>A shallow copy, so a reader's copy can replace the columns and cells without editing the cached grid.</summary>
+        internal ReportMatrix Copy() => (ReportMatrix)MemberwiseClone();
     }
 
     /// <summary>
@@ -194,6 +213,12 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("value")]
         public double Value { get; set; }
+
+        /// <summary>
+        /// The distinct people behind the bar, where the query counts them (the prompt key phrases and languages); null
+        /// otherwise. Only decides what a reader without See PII is shown; internal, so never sent.
+        /// </summary>
+        internal int? People { get; set; }
     }
 
     /// <summary>
@@ -286,6 +311,62 @@ namespace Web.AnalyticsWeb.Models
         /// <summary>Structured partial-data warnings behind <see cref="Warning"/>.</summary>
         [JsonProperty("seriesWarnings")]
         public List<ReportSeriesWarning> SeriesWarnings { get; set; }
+
+        /// <summary>
+        /// For a reader without See PII, the fewest people a bar, word or matrix column and cell of this chart describes
+        /// (#844); null when nothing is held back for the reader. The SPA says so beside the chart.
+        /// </summary>
+        [JsonProperty("minimumGroupSize", NullValueHandling = NullValueHandling.Ignore)]
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>
+        /// How many bars or words (or, for a matrix, columns) were left out for a reader without See PII. Sent only when
+        /// some were.
+        /// </summary>
+        [JsonProperty("withheldItems", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public int WithheldItems { get; set; }
+
+        /// <summary>
+        /// This chart for a reader who does not hold the portal's See PII permission, when it counts the people behind its
+        /// parts (#844): a bar or word fewer than <paramref name="minimumPeople"/> people are behind is left out; a matrix
+        /// column of fewer people is left out, and a cell of one to four people withheld. A chart that counts nobody is
+        /// returned as it is. A copy: areas are cached and shared between readers.
+        /// </summary>
+        internal ReportChart WithoutSmallGroups(int minimumPeople)
+        {
+            if (Matrix?.ColumnPeople != null)
+            {
+                var columns = Matrix.Columns
+                    .Where(c => Matrix.ColumnPeople.TryGetValue(c, out var people) && people >= minimumPeople)
+                    .ToList();
+                var shown = new HashSet<string>(columns, StringComparer.Ordinal);
+                var matrix = Matrix.Copy();
+                matrix.Columns = columns;
+                matrix.Cells = Matrix.Cells
+                    .Where(cell => shown.Contains(cell.Column))
+                    .Select(cell => cell.Value > 0 && cell.Value < minimumPeople
+                        ? new ReportMatrixCell { Row = cell.Row, Column = cell.Column, Value = null, Withheld = true }
+                        : cell)
+                    .ToList();
+
+                var copy = (ReportChart)MemberwiseClone();
+                copy.Matrix = matrix;
+                copy.MinimumGroupSize = minimumPeople;
+                copy.WithheldItems = Matrix.Columns.Count - columns.Count;
+                return copy;
+            }
+
+            if (Categories != null && Categories.Any(c => c.People.HasValue))
+            {
+                var copy = (ReportChart)MemberwiseClone();
+                copy.Categories = Categories.Where(c => (c.People ?? 0) >= minimumPeople).ToList();
+                copy.MinimumGroupSize = minimumPeople;
+                copy.WithheldItems = Categories.Count - copy.Categories.Count;
+                return copy;
+            }
+
+            return this;
+        }
     }
 
     /// <summary>The set of charts for one report area over the requested window.</summary>
@@ -317,5 +398,17 @@ namespace Web.AnalyticsWeb.Models
         /// </summary>
         [JsonProperty("cognitiveConfigured")]
         public bool CognitiveConfigured { get; set; }
+
+        /// <summary>
+        /// This area for a reader who does not hold the portal's See PII permission (#844): every chart that counts the
+        /// people behind its parts held to <paramref name="minimumPeople"/> (see <see cref="ReportChart.WithoutSmallGroups"/>).
+        /// A copy: the area is cached and shared between readers, so the instance itself is never edited for one of them.
+        /// </summary>
+        internal ReportAreaData WithoutSmallGroups(int minimumPeople)
+        {
+            var copy = (ReportAreaData)MemberwiseClone();
+            copy.Charts = (Charts ?? new List<ReportChart>()).Select(c => c?.WithoutSmallGroups(minimumPeople)).ToList();
+            return copy;
+        }
     }
 }

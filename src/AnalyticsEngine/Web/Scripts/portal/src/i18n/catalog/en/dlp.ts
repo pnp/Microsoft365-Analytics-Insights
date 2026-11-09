@@ -48,6 +48,8 @@ export const dlp = {
 
   // Copilot impact tables
   'dlp.affected.title': 'Who and what is affected',
+  'dlp.affected.withheldNote':
+    'An agent, policy or sensitivity label that affected fewer than {count} people is not listed - nor is a policy under an agent that affected fewer - so that nobody can be singled out.',
   'dlp.affected.agents.title': 'Agents',
   'dlp.affected.agents.description': 'Copilot agents whose access to content was affected by a DLP policy. This is the only view that can attribute a DLP block to a specific agent. Select an agent to see which policies affected it.',
   'dlp.affected.people.title': 'People',
@@ -97,6 +99,7 @@ export const dlp = {
   // Tenant-wide DLP activity
   'dlp.tenant.title': 'Tenant-wide DLP activity',
   'dlp.tenant.description': 'DLP policy activity across Exchange, SharePoint/OneDrive and endpoint devices, from the separate DLP audit feed. These records identify the person but never the Copilot agent, so they are reported separately and are not combined with the Copilot figures above.',
+  'dlp.tenant.withheldNote': 'A policy that matched the activity of fewer than {count} people is not listed so that nobody can be singled out.',
   'dlp.tenant.importOff': 'The DLP import is switched off, so there is nothing to show here.',
   'dlp.tenant.blocked.hint': 'Across all workloads',
   'dlp.tenant.auditedOnly.hint': 'Matched, not enforced',
