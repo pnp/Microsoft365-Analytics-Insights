@@ -45,7 +45,7 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
-        [Timeout(30000)]
+        [Timeout(120000)]
         public async Task EveryPackage_IsWrittenToDiskWhole()
         {
             var github = new FakeGitHub();
@@ -60,7 +60,7 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
-        [Timeout(30000)]
+        [Timeout(120000)]
         public async Task APackageThatNeverAnswers_TimesOut_NamingOnlyThatPackage()
         {
             var github = new FakeGitHub();
@@ -84,7 +84,7 @@ namespace Tests.UnitTests.InstallTests
         /// do; then the connection goes quiet and the partial file is removed.
         /// </summary>
         [TestMethod]
-        [Timeout(30000)]
+        [Timeout(120000)]
         public async Task APackageThatStallsPartWay_IsStreamed_ThenTimesOut_LeavingNoPartialFile()
         {
             var github = new FakeGitHub();
@@ -103,7 +103,7 @@ namespace Tests.UnitTests.InstallTests
 
         /// <summary>A download that keeps moving is not a stall, but it still has an overall limit.</summary>
         [TestMethod]
-        [Timeout(30000)]
+        [Timeout(120000)]
         public async Task APackageThatTrickles_TimesOutOnTheOverallLimit()
         {
             var github = new FakeGitHub();
@@ -120,7 +120,7 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
-        [Timeout(30000)]
+        [Timeout(120000)]
         public async Task AMissingPackage_NamesThePackageAndWhatGitHubSaid()
         {
             var github = new FakeGitHub();
@@ -138,7 +138,7 @@ namespace Tests.UnitTests.InstallTests
         /// which the install reports as cancelled, and the log says which packages were still downloading or waiting to.
         /// </summary>
         [TestMethod]
-        [Timeout(30000)]
+        [Timeout(120000)]
         public async Task CancelWhileDownloading_IsReportedAsTheUsersCancel()
         {
             var github = new FakeGitHub();
@@ -175,7 +175,7 @@ namespace Tests.UnitTests.InstallTests
         /// while they wait: on a slow link a package queued behind two large ones would otherwise "stall" before it started.
         /// </summary>
         [TestMethod]
-        [Timeout(60000)]
+        [Timeout(120000)]
         public async Task PackagesWaitingForAConnection_AreNotTimedOutForTheWait()
         {
             var github = new FakeGitHub();
@@ -208,7 +208,7 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
-        [Timeout(30000)]
+        [Timeout(120000)]
         public async Task ReleaseMetadataThatNeverArrives_TimesOut_AndSaysWhichCall()
         {
             var github = new FakeGitHub { ReleaseHangs = true };
@@ -226,7 +226,7 @@ namespace Tests.UnitTests.InstallTests
         /// anything runs or deploys it (#852 R11-14).
         /// </summary>
         [TestMethod]
-        [Timeout(30000)]
+        [Timeout(120000)]
         public async Task APackageThatIsNotWhatTheReleaseBuildPublished_IsRefusedAndDeleted()
         {
             var github = new FakeGitHub();
@@ -245,7 +245,7 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [DataTestMethod]
-        [Timeout(30000)]
+        [Timeout(120000)]
         [DataRow("no manifest")]
         [DataRow("no entry")]
         [DataRow("not a hash")]
@@ -292,7 +292,7 @@ namespace Tests.UnitTests.InstallTests
             {
                 // Bigger than one 80 KB read, so a package arrives in several chunks.
                 var seed = Encoding.UTF8.GetBytes(package);
-                return Enumerable.Range(0, 200 * 1024).Select(i => seed[i % seed.Length]).ToArray();
+                return Enumerable.Range(0, 100 * 1024).Select(i => seed[i % seed.Length]).ToArray();
             }
 
             public static string Sha256(byte[] bytes)

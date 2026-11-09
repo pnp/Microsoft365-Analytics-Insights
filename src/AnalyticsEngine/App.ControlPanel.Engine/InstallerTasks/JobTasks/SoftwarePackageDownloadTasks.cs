@@ -311,10 +311,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
                             int read;
                             while ((read = await source.ReadAsync(buffer, 0, buffer.Length, linked.Token)) > 0)
                             {
-                                stall.CancelAfter(StallTimeout);
+                                // The stall limit is for the network, so its clock stops while a chunk is written: a disk slowed
+                                // by, say, an antivirus scan must not be reported as a connection that went quiet.
+                                stall.CancelAfter(Timeout.InfiniteTimeSpan);
                                 sha256.AppendData(buffer, 0, read);
                                 await target.WriteAsync(buffer, 0, read, linked.Token);
                                 received += read;
+                                stall.CancelAfter(StallTimeout);
                             }
                         }
                     }
