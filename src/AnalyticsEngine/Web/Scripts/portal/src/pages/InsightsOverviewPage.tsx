@@ -9,7 +9,7 @@ import {
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
-import { useT, type TFunction, type TranslationKey } from '../i18n';
+import { useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 import { buildLabelText } from '../product';
 import { fetchSystemStatus } from '../api/systemStatusApi';
 import { fetchHealthData, fetchHealthSummary } from '../api/healthApi';
@@ -119,6 +119,7 @@ export function enabledImportLabelText(t: TFunction, serverLabel: string): strin
  */
 export default function InsightsOverviewPage() {
   const t = useT();
+  const tNode = useTNode();
   const access = usePortalAccess();
   const styles = useStyles();
   // Only the Insights half of api/SystemStatus: a reader without the Administration permission is sent
@@ -189,6 +190,7 @@ export default function InsightsOverviewPage() {
   const counts = useMemo(() => status?.dataCounts ?? [], [status]);
   const countKeys = useMemo(() => counts.map((c) => c.key), [counts]);
   const hasAnyData = useMemo(() => counts.some((c) => (c.count ?? 0) > 0), [counts]);
+  const serviceHealthLink = <a href="#/admin/health">{t('overview.page.serviceHealthLink')}</a>;
 
   if (loading) {
     return (
@@ -237,10 +239,7 @@ export default function InsightsOverviewPage() {
             <MessageBar intent="info">
               <MessageBarBody>
                 {access.administration ? (
-                  <>
-                    {t('overview.page.noImportsPrefix')}{' '}
-                    <a href="#/admin/health">{t('overview.page.serviceHealthLink')}</a>.
-                  </>
+                  tNode('overview.page.noImports', { serviceHealth: serviceHealthLink })
                 ) : (
                   t('overview.page.noImportsAskAdmin')
                 )}
@@ -254,9 +253,7 @@ export default function InsightsOverviewPage() {
                   <MessageBar intent="warning">
                     <MessageBarBody>
                       {access.administration ? (
-                        <>
-                          {t('overview.page.zeroFiguresPrefix')} <a href="#/admin/health">{t('overview.page.serviceHealthLink')}</a> {t('overview.page.zeroFiguresSuffix')}
-                        </>
+                        tNode('overview.page.zeroFigures', { serviceHealth: serviceHealthLink })
                       ) : (
                         t('overview.page.zeroFiguresAskAdmin')
                       )}

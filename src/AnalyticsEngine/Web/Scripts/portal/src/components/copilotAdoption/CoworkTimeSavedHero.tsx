@@ -2,7 +2,7 @@ import { makeStyles, tokens, Text, Button, Badge, MessageBar, MessageBarBody } f
 import { ArrowRight16Regular, Options16Regular } from '@fluentui/react-icons';
 import type { CopilotAdoptionOptions, CopilotAdoptionSummary } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
-import { formatNumber, plural, useT } from '../../i18n';
+import { formatList, formatNumber, plural, useT } from '../../i18n';
 import {
   COWORK_ASSUMPTION_KEYS,
   customisesAny,
@@ -23,6 +23,7 @@ import {
   TIME_SAVED_COWORK_COLOUR,
   TimeSavedHeroFrame,
   formatAssumption,
+  formatWholeShare,
   wholeShares,
   type HeroStat,
 } from './timeSavedShared';
@@ -236,9 +237,9 @@ export default function CoworkTimeSavedHero({
           className={styles.bar}
           role="img"
           aria-label={t('copilotAdoptionCowork.timeSaved.hero.breakdownAria', {
-            parts: segments
-              .map((s, i) => t('copilotAdoptionCowork.timeSaved.hero.breakdownPart', { activity: s.label, share: `${shares[i]}%` }))
-              .join(', '),
+            parts: formatList(
+              segments.map((s, i) => t('copilotAdoptionCowork.timeSaved.hero.breakdownPart', { activity: s.label, share: formatWholeShare(shares[i]) })),
+            ),
           })}
         >
           {segments.map((s, i) =>
@@ -250,10 +251,10 @@ export default function CoworkTimeSavedHero({
                 title={t('copilotAdoptionCowork.timeSaved.hero.sliceTitle', {
                   activity: s.label,
                   hours: formatCount(s.hours),
-                  share: `${shares[i]}%`,
+                  share: formatWholeShare(shares[i]),
                 })}
               >
-                {shares[i] >= 10 ? `${shares[i]}%` : ''}
+                {shares[i] >= 10 ? formatWholeShare(shares[i]) : ''}
               </div>
             ) : null,
           )}
@@ -266,7 +267,7 @@ export default function CoworkTimeSavedHero({
                 {t('copilotAdoptionCowork.timeSaved.hero.legendEntry', {
                   activity: s.label,
                   hours: formatCount(s.hours),
-                  share: `${shares[i]}%`,
+                  share: formatWholeShare(shares[i]),
                 })}
               </Text>
             </div>

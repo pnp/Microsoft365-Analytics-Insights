@@ -1,6 +1,6 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportCategory } from '../../types/reports';
-import { useT } from '../../i18n';
+import { formatNumber, useT } from '../../i18n';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatValue, seriesColor, seriesColorLight } from './chartCommon';
 
@@ -126,7 +126,7 @@ export default function CategoryBarChart({ categories, valueLabel, showShare, va
               />
               {showShare && share >= 0.5 && (
                 <span className={styles.share} style={{ insetInlineStart: `${Math.min(pct, 92)}%` }}>
-                  {Math.round(share * 10) / 10}%
+                  {formatNumber(Math.round(share * 10) / 10)}%
                 </span>
               )}
             </div>

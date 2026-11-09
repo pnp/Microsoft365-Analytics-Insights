@@ -29,6 +29,7 @@ import { ERROR_CODE_KEYS as USER_IMPORT_CHECKPOINT_ERROR_KEYS } from '../../api/
 import { routesForArea } from '../../navigation';
 import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_QUERY_ERROR_CODE_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
+import { JUDGEMENT_VALUE_FORMATS as WEB_ACTIVITY_JUDGEMENT_VALUE_FORMATS } from '../../components/webActivity/webActivityShared';
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
 import { USER_ORG_MESSAGE_KEYS } from '../../components/userOrgs/userOrgShared';
 import { BLOCKING_KEYS, CSV_DELIMITER_KEYS, ROW_PROBLEM_KEYS } from '../../components/userOrgs/CsvImportPanel';
@@ -36,7 +37,7 @@ import { ACCOUNTABILITY_DIMENSION_TEXT, ACCOUNTABILITY_EMPTY_SEGMENT_KEYS } from
 import { LEADERSHIP_REASON_KEYS, LEADERSHIP_STATUS_KEYS } from '../../components/copilotAdoption/LeadershipComparisonCard';
 import { LEADERSHIP_ERROR_KEYS, LEADERSHIP_FAILURE_KIND_KEYS, LEADERSHIP_REFRESH_STATUS_KEYS } from '../../pages/LeadershipCohortPage';
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
-import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
+import { OFFICE_PLATFORM_LABEL_KEYS, USAGE_WARNING_KEYS } from '../../pages/ReportsPage';
 import { GUIDANCE_LINK_TITLE_KEYS } from '../../components/copilotAdoption/serverText';
 import { WORKLOADS } from '../../types/licenceActivity';
 import { PORTAL_PERMISSION_ERROR_CODE } from '../../access';
@@ -388,7 +389,7 @@ const CHART_KEY_CONST = /const\s+string\s+key\s*=\s*"([^"]+)"/g;
 const EXTRA_REPORT_CHART_FIELDS: Record<string, string[]> = {
   'copilot-key-phrases': ['warning'],
   'copilot-languages': ['warning'],
-  'usage-active-users': ['warning'],
+  'usage-active-users': ['warning', 'warning.incompleteWeeks', 'warning.seriesUnavailableAndIncompleteWeeks'],
   'office-apps-platform-matrix': ['rowLabel', 'columnLabel'],
   'office-apps-by-department': ['rowLabel', 'columnLabel'],
   'office-apps-department-adoption': ['description.groupFiltered', 'warning'],
@@ -611,6 +612,75 @@ describe('Teams Explorer server-authored judgements', () => {
       'These have catalog entries but are not defined in TeamsExplorerScoring - either the\n' +
         'judgement was removed, or its key was renamed and the card is now falling back to English.',
     ).toEqual([]);
+  });
+});
+
+/**
+ * Web activity's Overview judgements are worded by the SPA too. `WebActivityScoring` sends a stable
+ * key for each sentence (`reach.headline.share`) and the figures it quotes, unformatted; its English
+ * is only the fallback for a key this build does not know. (`WEB_ACTIVITY_SCORING`, the path of that
+ * file, is declared with the bucket-label checks below.)
+ */
+function webActivityJudgementSource(): string {
+  const source = readFileSync(WEB_ACTIVITY_SCORING, 'utf8');
+  const start = source.indexOf('#region Judgements');
+  expect(start, 'WebActivityScoring.cs has no "#region Judgements"').toBeGreaterThanOrEqual(0);
+  return source.slice(start, source.indexOf('#endregion', start));
+}
+
+function webActivitySentenceKeys(): string[] {
+  const sentence = /"([a-z][a-z-]*\.(?:headline|detail)(?:\.[A-Za-z]+)?)"/g;
+  return sortedUnique([...webActivityJudgementSource().matchAll(sentence)].map((m) => m[1]));
+}
+
+function webActivityValueNames(): string[] {
+  return sortedUnique([...webActivityJudgementSource().matchAll(/\["([A-Za-z][A-Za-z0-9]*)"\]\s*=/g)].map((m) => m[1]));
+}
+
+describe('Web activity server-authored judgements', () => {
+  it('finds the sentence keys and figures in the scoring file', () => {
+    expect(webActivitySentenceKeys().length).toBeGreaterThanOrEqual(39);
+    expect(webActivityValueNames().length).toBeGreaterThanOrEqual(11);
+  });
+
+  it('words every judgement sentence the server can send', () => {
+    const missing = webActivitySentenceKeys()
+      .map((key) => `webActivity.judgement.${key}`)
+      .filter((key) => !(key in EN_CATALOG));
+
+    expect(
+      missing,
+      'These Web activity judgement sentences are sent by WebActivityScoring but have no catalog\n' +
+        "entry, so the Overview shows the server's English in every language. Add them to\n" +
+        'src/i18n/catalog/{en,es}/webActivity.ts:\n  ' +
+        missing.join('\n  '),
+    ).toEqual([]);
+  });
+
+  it('has no catalog entry for a sentence the server no longer sends', () => {
+    const known = new Set(webActivitySentenceKeys());
+    const orphans = catalogKeys('webActivity.judgement.')
+      .map((key) => key.slice('webActivity.judgement.'.length))
+      .filter((key) => !known.has(key));
+
+    expect(
+      orphans,
+      'These have catalog entries but WebActivityScoring no longer sends them - the sentence was\n' +
+        'removed, or its key was renamed and the Overview is now falling back to English.',
+    ).toEqual([]);
+  });
+
+  it('formats every figure the server sends, and quotes no figure it does not send', () => {
+    const sent = webActivityValueNames();
+    const unformatted = sent.filter((name) => !(name in WEB_ACTIVITY_JUDGEMENT_VALUE_FORMATS));
+    const unsent = catalogKeys('webActivity.judgement.').flatMap((key) =>
+      [...EN_CATALOG[key].matchAll(/\{(\w+)\}/g)]
+        .map((m) => m[1])
+        .filter((name) => !sent.includes(name))
+        .map((name) => `${key}: {${name}}`),
+    );
+
+    expect({ unformatted, unsent }).toEqual({ unformatted: [], unsent: [] });
   });
 });
 
@@ -2629,6 +2699,16 @@ describe('Reports partial-data warning facts', () => {
       missing,
       'ReportsAPIController added a structured chart error key without a matching catalog entry.',
     ).toEqual([]);
+  });
+
+  it('words every chart-level warning key the server can send', () => {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'ReportsAPIController.cs'), 'utf8');
+    const statements = [...source.matchAll(/WarningKey\s*=[^;]+;/g)].map((m) => m[0]).join('\n');
+    const keys = sortedUnique([...statements.matchAll(/"([^"]+)"/g)].map((m) => m[1]));
+
+    expect(keys).toEqual(['incompleteWeeks', 'seriesUnavailable', 'seriesUnavailableAndIncompleteWeeks']);
+    expect(Object.keys(USAGE_WARNING_KEYS).sort()).toEqual(keys);
+    expect(Object.values(USAGE_WARNING_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
   });
 });
 

@@ -153,6 +153,11 @@ export function wholeShares(shares: number[]): number[] {
   return floors;
 }
 
+/** A share from `wholeShares` as "45%", its digits in the reader's number format. */
+export function formatWholeShare(share: number): string {
+  return `${formatNumber(share)}%`;
+}
+
 // ---------------------------------------------------------------------------------------------
 // The headline
 // ---------------------------------------------------------------------------------------------

@@ -422,8 +422,18 @@ namespace Common.Entities.SpoWebActivity
         /// Reads the headline figures and says, in words an intranet owner can act on, what they mean.
         /// </summary>
         /// <remarks>
+        /// <para>
         /// Every judgement names the figure it is based on. A verdict that does not show its working is
         /// an opinion, and an admin cannot reasonably be asked to re-platform a landing page on one.
+        /// </para>
+        /// <para>
+        /// The portal words each verdict from its <see cref="WebActivityJudgement.HeadlineKey"/> and
+        /// <see cref="WebActivityJudgement.DetailKey"/>, formatting <see cref="WebActivityJudgement.Values"/>
+        /// for the reader's locale. The English written here is only its fallback for a key it does
+        /// not recognise, so a new sentence needs its catalog entry in <c>catalog/{en,es}/webActivity.ts</c>
+        /// (<c>serverAuthoredText.test.ts</c> fails without one), and a new figure needs a formatter in
+        /// <c>webActivityShared.tsx</c>.
+        /// </para>
         /// </remarks>
         public static List<WebActivityJudgement> Judgements(WebActivityJudgementInputs inputs)
         {
@@ -437,29 +447,7 @@ namespace Common.Entities.SpoWebActivity
                 // suppress the judgements about the data that IS there.
                 var hasData = inputs.PageViews > 0;
 
-                judgements.Add(new WebActivityJudgement
-                {
-                    Key = "import-off",
-                    Tone = "warning",
-                    Headline = inputs.ConfigurationReadable
-                        ? (hasData
-                            ? "The web-traffic import is switched off, so these figures stop at the last collected date"
-                            : "The web-traffic import is switched off")
-                        : "Application configuration could not be read",
-                    Detail = inputs.ConfigurationReadable
-                        ? (hasData
-                            ? "Everything below was measured from page views already in the database. No new "
-                                + "hits are arriving, so the trend will not advance and recent weeks will look "
-                                + "emptier than the intranet really is. Enable the web traffic import in the "
-                                + "installer to resume collection."
-                            : "Nothing on this page can be measured until the SharePoint page-view tracker is "
-                                + "collecting hits. Enable the web traffic import in the installer and deploy the "
-                                + "AI Tracker to the sites you want reported on.")
-                        : "The import toggles cannot be read, so whether the web-traffic import is on is "
-                            + "unknown - it is NOT necessarily switched off. Any figures below came from data "
-                            + "that is already in the database. Fix the configuration before changing anything "
-                            + "in the installer.",
-                });
+                judgements.Add(ImportOffJudgement(inputs.ConfigurationReadable, hasData));
 
                 if (!hasData) return judgements;
             }
@@ -473,7 +461,9 @@ namespace Common.Entities.SpoWebActivity
                 {
                     Key = "kpis-unavailable",
                     Tone = "warning",
+                    HeadlineKey = "kpis-unavailable.headline",
                     Headline = "The headline figures could not be calculated",
+                    DetailKey = "kpis-unavailable.detail",
                     Detail = "The query behind them did not complete, so nothing on this tab can be judged. "
                         + "This is usually a timeout on a large window - try a shorter reporting period. The "
                         + "failing query and its error are on the section below.",
@@ -484,23 +474,7 @@ namespace Common.Entities.SpoWebActivity
 
             if (inputs.PageViews == 0)
             {
-                judgements.Add(new WebActivityJudgement
-                {
-                    Key = "no-traffic",
-                    Tone = "warning",
-                    Headline = "No page views were recorded in this window",
-
-                    // Deliberately does NOT diagnose the tracker. Page views exist outside this
-                    // window often enough that "nothing in the last 28 days" usually means a quiet
-                    // period, not a broken deployment, and telling an admin to redeploy on that
-                    // evidence is how a working tracker gets pulled apart.
-                    Detail = inputs.HasEverCollected
-                        ? "Page views have been collected before, so this is a quiet period rather than a "
-                            + "broken tracker. Widen the reporting period to see the traffic that does exist."
-                        : "No page view has ever been recorded, so the tracker is probably not deployed to any "
-                            + "site, or the Application Insights resource it writes to is not the one this "
-                            + "deployment reads. Check the Service health page.",
-                });
+                judgements.Add(NoTrafficJudgement(inputs));
 
                 return judgements;
             }
@@ -521,6 +495,74 @@ namespace Common.Entities.SpoWebActivity
             return judgements;
         }
 
+        private static WebActivityJudgement ImportOffJudgement(bool configurationReadable, bool hasData)
+        {
+            var judgement = new WebActivityJudgement { Key = "import-off", Tone = "warning" };
+
+            if (!configurationReadable)
+            {
+                judgement.HeadlineKey = "import-off.headline.configurationUnreadable";
+                judgement.Headline = "Application configuration could not be read";
+                judgement.DetailKey = "import-off.detail.configurationUnreadable";
+                judgement.Detail = "The import toggles cannot be read, so whether the web-traffic import is on is "
+                    + "unknown - it is NOT necessarily switched off. Any figures below came from data "
+                    + "that is already in the database. Fix the configuration before changing anything "
+                    + "in the installer.";
+            }
+            else if (hasData)
+            {
+                judgement.HeadlineKey = "import-off.headline.withHistory";
+                judgement.Headline = "The web-traffic import is switched off, so these figures stop at the last collected date";
+                judgement.DetailKey = "import-off.detail.withHistory";
+                judgement.Detail = "Everything below was measured from page views already in the database. No new "
+                    + "hits are arriving, so the trend will not advance and recent weeks will look "
+                    + "emptier than the intranet really is. Enable the web traffic import in the "
+                    + "installer to resume collection.";
+            }
+            else
+            {
+                judgement.HeadlineKey = "import-off.headline.noHistory";
+                judgement.Headline = "The web-traffic import is switched off";
+                judgement.DetailKey = "import-off.detail.noHistory";
+                judgement.Detail = "Nothing on this page can be measured until the SharePoint page-view tracker is "
+                    + "collecting hits. Enable the web traffic import in the installer and deploy the "
+                    + "AI Tracker to the sites you want reported on.";
+            }
+
+            return judgement;
+        }
+
+        private static WebActivityJudgement NoTrafficJudgement(WebActivityJudgementInputs inputs)
+        {
+            var judgement = new WebActivityJudgement
+            {
+                Key = "no-traffic",
+                Tone = "warning",
+                HeadlineKey = "no-traffic.headline",
+                Headline = "No page views were recorded in this window",
+            };
+
+            // Deliberately does NOT diagnose the tracker. Page views exist outside this window often
+            // enough that "nothing in the last 28 days" usually means a quiet period, not a broken
+            // deployment, and telling an admin to redeploy on that evidence is how a working tracker
+            // gets pulled apart.
+            if (inputs.HasEverCollected)
+            {
+                judgement.DetailKey = "no-traffic.detail.collectedBefore";
+                judgement.Detail = "Page views have been collected before, so this is a quiet period rather than a "
+                    + "broken tracker. Widen the reporting period to see the traffic that does exist.";
+            }
+            else
+            {
+                judgement.DetailKey = "no-traffic.detail.neverCollected";
+                judgement.Detail = "No page view has ever been recorded, so the tracker is probably not deployed to any "
+                    + "site, or the Application Insights resource it writes to is not the one this "
+                    + "deployment reads. Check the Service health page.";
+            }
+
+            return judgement;
+        }
+
         private static WebActivityJudgement ReachJudgement(WebActivityJudgementInputs inputs)
         {
             // Reach needs a denominator that means "people who could have used this intranet". Without
@@ -528,77 +570,130 @@ namespace Common.Entities.SpoWebActivity
             // ratio would be close to 100% by construction.
             if (!inputs.DirectoryImported || inputs.KnownUsers <= 0)
             {
-                return new WebActivityJudgement
+                var noDenominator = new WebActivityJudgement
                 {
                     Key = "reach",
                     Tone = "neutral",
-                    Headline = string.Format("{0:N0} people visited the intranet", inputs.Visitors),
-
-                    // The two causes need different advice. Telling an admin whose import is ON to
-                    // switch it on sends them to a toggle that is already correct and hides the real
-                    // problem, which is that the import ran and produced nothing.
-                    Detail = inputs.DirectoryImported
-                        ? "There is no population to express that as a share of: the Graph user metadata "
-                            + "import is switched on but no users are on record, so it has not completed "
-                            + "successfully yet. Check the user metadata import on the Service health page "
-                            + "rather than the installer."
-                        : "There is no population to express that as a share of: the Graph user metadata "
-                            + "import is off, so the only users on record are the ones an importer has already "
-                            + "seen. Enable it to get a denominator.",
+                    HeadlineKey = inputs.Visitors == 1 ? "reach.headline.oneVisitor" : "reach.headline.visitors",
+                    Headline = inputs.Visitors == 1
+                        ? "1 person visited the intranet"
+                        : string.Format("{0:N0} people visited the intranet", inputs.Visitors),
+                    Values = new Dictionary<string, double>
+                    {
+                        ["visitors"] = inputs.Visitors,
+                    },
                 };
+
+                // The two causes need different advice. Telling an admin whose import is ON to switch
+                // it on sends them to a toggle that is already correct and hides the real problem,
+                // which is that the import ran and produced nothing.
+                if (inputs.DirectoryImported)
+                {
+                    noDenominator.DetailKey = "reach.detail.importIncomplete";
+                    noDenominator.Detail = "There is no population to express that as a share of: the Graph user metadata "
+                        + "import is switched on but no users are on record, so it has not completed "
+                        + "successfully yet. Check the user metadata import on the Service health page "
+                        + "rather than the installer.";
+                }
+                else
+                {
+                    noDenominator.DetailKey = "reach.detail.importOff";
+                    noDenominator.Detail = "There is no population to express that as a share of: the Graph user metadata "
+                        + "import is off, so the only users on record are the ones an importer has already "
+                        + "seen. Enable it to get a denominator.";
+                }
+
+                return noDenominator;
             }
 
             var reach = Percentage(inputs.EnabledVisitors, inputs.KnownUsers);
-            var tone = reach < LowReachPct ? "critical" : reach < GoodReachPct ? "warning" : "good";
-
-            return new WebActivityJudgement
+            var judgement = new WebActivityJudgement
             {
                 Key = "reach",
-                Tone = tone,
+                HeadlineKey = "reach.headline.share",
                 Headline = string.Format(
                     "{0:N1}% of enabled directory users had a tracked visit ({1:N0} of {2:N0})",
                     reach, inputs.EnabledVisitors, inputs.KnownUsers),
-                Detail = reach < LowReachPct
-                    ? "Check the measurement before the content. The denominator is every enabled directory "
-                        + "user - guests, shared mailboxes and service accounts included - and the numerator "
-                        + "only counts sites the tracker is deployed to, so both ends can be wrong. Once you "
-                        + "trust the figure, the usual levers are the browser home page and the Microsoft 365 "
-                        + "app-bar home site."
-                    : reach < GoodReachPct
-                        ? "A substantial minority have no tracked visit. Some of that is the denominator "
-                            + "(guests and service accounts) and some is sites the tracker is not on; the rest "
-                            + "is worth comparing against where you actually promote the intranet."
-                        : "Most of the directory shows up here, so the useful questions now are about depth "
-                            + "and speed rather than getting people through the door.",
+                Values = new Dictionary<string, double>
+                {
+                    ["reach"] = reach,
+                    ["enabledVisitors"] = inputs.EnabledVisitors,
+                    ["knownUsers"] = inputs.KnownUsers,
+                },
             };
+
+            if (reach < LowReachPct)
+            {
+                judgement.Tone = "critical";
+                judgement.DetailKey = "reach.detail.low";
+                judgement.Detail = "Check the measurement before the content. The denominator is every enabled directory "
+                    + "user - guests, shared mailboxes and service accounts included - and the numerator "
+                    + "only counts sites the tracker is deployed to, so both ends can be wrong. Once you "
+                    + "trust the figure, the usual levers are the browser home page and the Microsoft 365 "
+                    + "app-bar home site.";
+            }
+            else if (reach < GoodReachPct)
+            {
+                judgement.Tone = "warning";
+                judgement.DetailKey = "reach.detail.moderate";
+                judgement.Detail = "A substantial minority have no tracked visit. Some of that is the denominator "
+                    + "(guests and service accounts) and some is sites the tracker is not on; the rest "
+                    + "is worth comparing against where you actually promote the intranet.";
+            }
+            else
+            {
+                judgement.Tone = "good";
+                judgement.DetailKey = "reach.detail.high";
+                judgement.Detail = "Most of the directory shows up here, so the useful questions now are about depth "
+                    + "and speed rather than getting people through the door.";
+            }
+
+            return judgement;
         }
 
         private static WebActivityJudgement BounceJudgement(WebActivityJudgementInputs inputs)
         {
-            var tone = inputs.BouncePct >= HighBouncePct
-                ? "critical"
-                : inputs.BouncePct > HealthyBouncePct ? "warning" : "good";
-
-            return new WebActivityJudgement
+            var judgement = new WebActivityJudgement
             {
                 Key = "bounce",
-                Tone = tone,
+                HeadlineKey = "bounce.headline",
                 Headline = string.Format(
                     "{0:N1}% of visits were a single page, and the average visit saw {1:N1} pages",
                     inputs.BouncePct, inputs.PagesPerVisit),
-                Detail = inputs.BouncePct >= HighBouncePct
-                    ? "Judge this per page rather than in aggregate. A deep link straight to one policy "
-                        + "document is a perfectly good one-page visit, and on an intranet those are common; "
-                        + "the same rate on the home page is not. The Journeys tab names the pages it is "
-                        + "happening on."
-                    : inputs.BouncePct > HealthyBouncePct
-                        ? "A meaningful share of visits stop at the first page. Look at which pages on the "
-                            + "Journeys tab before drawing a conclusion - the answer differs by page."
-                        : "Most visits record more than one page view. That is not quite the same as "
-                            + "navigating: a refresh or a tracker firing twice counts as a second view, so "
-                            + "check the Journeys tab for real page-to-page steps, which exclude "
-                            + "same-page moves.",
+                Values = new Dictionary<string, double>
+                {
+                    ["bounce"] = inputs.BouncePct,
+                    ["pagesPerVisit"] = inputs.PagesPerVisit,
+                },
             };
+
+            if (inputs.BouncePct >= HighBouncePct)
+            {
+                judgement.Tone = "critical";
+                judgement.DetailKey = "bounce.detail.high";
+                judgement.Detail = "Judge this per page rather than in aggregate. A deep link straight to one policy "
+                    + "document is a perfectly good one-page visit, and on an intranet those are common; "
+                    + "the same rate on the home page is not. The Journeys tab names the pages it is "
+                    + "happening on.";
+            }
+            else if (inputs.BouncePct > HealthyBouncePct)
+            {
+                judgement.Tone = "warning";
+                judgement.DetailKey = "bounce.detail.moderate";
+                judgement.Detail = "A meaningful share of visits stop at the first page. Look at which pages on the "
+                    + "Journeys tab before drawing a conclusion - the answer differs by page.";
+            }
+            else
+            {
+                judgement.Tone = "good";
+                judgement.DetailKey = "bounce.detail.healthy";
+                judgement.Detail = "Most visits record more than one page view. That is not quite the same as "
+                    + "navigating: a refresh or a tracker firing twice counts as a second view, so "
+                    + "check the Journeys tab for real page-to-page steps, which exclude "
+                    + "same-page moves.";
+            }
+
+            return judgement;
         }
 
         private static WebActivityJudgement LoadJudgement(WebActivityJudgementInputs inputs)
@@ -615,99 +710,171 @@ namespace Common.Entities.SpoWebActivity
             var tailIsBad = tail.HasValue && tail.Value >= SlowLoadSeconds * 2;
             if (tailIsBad && tone == "good") tone = "warning";
 
-            var headline = tail.HasValue
-                ? string.Format(
-                    "Pages took {0:N2}s to load on average, and one view in twenty took {1:N2}s or more",
-                    average, tail.Value)
-                : string.Format("Pages took {0:N2}s to load on average", average);
-
-            return new WebActivityJudgement
+            var judgement = new WebActivityJudgement
             {
                 Key = "performance",
                 Tone = tone,
-                Headline = headline,
-                Detail = average >= SlowLoadSeconds
-                    ? "That is slow enough for people to feel it. The Page views tab ranks the slowest "
-                        + "pages; the Technology tab shows whether it is specific to a browser or device, "
-                        + "which is the first thing to rule out."
-                    : tailIsBad
-                        ? "The average is fine but the slow tail is not, and the tail is what a complaining "
-                            + "minority is describing. Start from the slowest pages on the Page views tab."
-                        : average > FastLoadSeconds
-                            ? "Acceptable, with headroom. Check the slowest pages on the Page views tab before "
-                                + "the list grows."
-                            : tail.HasValue
-                                // Only claim the tail is fine when the tail was actually measured. The
-                                // percentile comes from its own query, which can fail while this one
-                                // succeeds - and "comfortably fast in the slow tail" is exactly the
-                                // reassurance a reader should not be given about a figure nobody read.
-                                ? "Page load is comfortably fast, at the average and in the slow tail."
-                                : "Page load is comfortably fast on average. The slow tail could not be "
-                                    + "measured for this period, so check the Technology tab before "
-                                    + "concluding it is fast for everyone.",
+                Values = new Dictionary<string, double>
+                {
+                    ["average"] = average,
+                },
             };
+
+            if (tail.HasValue)
+            {
+                judgement.HeadlineKey = "performance.headline.withTail";
+                judgement.Headline = string.Format(
+                    "Pages took {0:N2}s to load on average, and one view in twenty took {1:N2}s or more",
+                    average, tail.Value);
+                judgement.Values["p95"] = tail.Value;
+            }
+            else
+            {
+                judgement.HeadlineKey = "performance.headline.averageOnly";
+                judgement.Headline = string.Format("Pages took {0:N2}s to load on average", average);
+            }
+
+            if (average >= SlowLoadSeconds)
+            {
+                judgement.DetailKey = "performance.detail.slow";
+                judgement.Detail = "That is slow enough for people to feel it. The Page views tab ranks the slowest "
+                    + "pages; the Technology tab shows whether it is specific to a browser or device, "
+                    + "which is the first thing to rule out.";
+            }
+            else if (tailIsBad)
+            {
+                judgement.DetailKey = "performance.detail.slowTail";
+                judgement.Detail = "The average is fine but the slow tail is not, and the tail is what a complaining "
+                    + "minority is describing. Start from the slowest pages on the Page views tab.";
+            }
+            else if (average > FastLoadSeconds)
+            {
+                judgement.DetailKey = "performance.detail.acceptable";
+                judgement.Detail = "Acceptable, with headroom. Check the slowest pages on the Page views tab before "
+                    + "the list grows.";
+            }
+            else if (tail.HasValue)
+            {
+                // Only claim the tail is fine when the tail was actually measured. The percentile
+                // comes from its own query, which can fail while this one succeeds - and "comfortably
+                // fast in the slow tail" is exactly the reassurance a reader should not be given about
+                // a figure nobody read.
+                judgement.DetailKey = "performance.detail.fast";
+                judgement.Detail = "Page load is comfortably fast, at the average and in the slow tail.";
+            }
+            else
+            {
+                judgement.DetailKey = "performance.detail.fastTailUnmeasured";
+                judgement.Detail = "Page load is comfortably fast on average. The slow tail could not be "
+                    + "measured for this period, so check the Technology tab before "
+                    + "concluding it is fast for everyone.";
+            }
+
+            return judgement;
         }
 
         private static WebActivityJudgement SearchJudgement(WebActivityJudgementInputs inputs)
         {
             var reliance = Percentage(inputs.SessionsWithSearch, inputs.Visits);
-            var tone = reliance >= HighSearchReliancePct ? "warning" : "neutral";
-
-            return new WebActivityJudgement
+            var judgement = new WebActivityJudgement
             {
                 Key = "search-reliance",
-                Tone = tone,
+                HeadlineKey = "search-reliance.headline",
                 Headline = string.Format("{0:N1}% of visits used search", reliance),
-                Detail = reliance >= HighSearchReliancePct
-                    ? "More than a third of visits reach for search. That can mean the navigation is not "
-                        + "getting people where they are going, or simply that the intranet is large and "
-                        + "people know what they want. Either way the top terms are a list of what the menu "
-                        + "could be offering."
-                    : "Search is being used as a supplement rather than as the primary way around. The top "
-                        + "terms are still worth reading as a demand signal.",
+                Values = new Dictionary<string, double>
+                {
+                    ["reliance"] = reliance,
+                },
             };
+
+            if (reliance >= HighSearchReliancePct)
+            {
+                judgement.Tone = "warning";
+                judgement.DetailKey = "search-reliance.detail.high";
+                judgement.Detail = "More than a third of visits reach for search. That can mean the navigation is not "
+                    + "getting people where they are going, or simply that the intranet is large and "
+                    + "people know what they want. Either way the top terms are a list of what the menu "
+                    + "could be offering.";
+            }
+            else
+            {
+                judgement.Tone = "neutral";
+                judgement.DetailKey = "search-reliance.detail.supplement";
+                judgement.Detail = "Search is being used as a supplement rather than as the primary way around. The top "
+                    + "terms are still worth reading as a demand signal.";
+            }
+
+            return judgement;
         }
 
         private static WebActivityJudgement ConcentrationJudgement(WebActivityJudgementInputs inputs)
         {
-            var tone = "neutral";
-
-            return new WebActivityJudgement
+            var judgement = new WebActivityJudgement
             {
                 Key = "concentration",
-                Tone = tone,
+                Tone = "neutral",
+                HeadlineKey = "concentration.headline",
                 Headline = string.Format(
                     "The busiest 10% of pages took {0:N1}% of all page views, across {1:N0} pages viewed at all",
                     inputs.TopDecilePagePct, inputs.UniquePages),
-                Detail = inputs.TopDecilePagePct >= 90
-                    ? "Traffic is heavily concentrated, which is normal for an intranet with a strong home "
-                        + "page and news feed - it is not on its own evidence that the rest should be "
-                        + "retired. The Page views tab's quiet-page list is where to look, one page at a time."
-                    : "Traffic is spread across a reasonable share of the site. The quiet-page list on the "
-                        + "Page views tab is still the cheapest place to start a content review.",
+                Values = new Dictionary<string, double>
+                {
+                    ["share"] = inputs.TopDecilePagePct,
+                    ["pages"] = inputs.UniquePages,
+                },
             };
+
+            if (inputs.TopDecilePagePct >= 90)
+            {
+                judgement.DetailKey = "concentration.detail.heavy";
+                judgement.Detail = "Traffic is heavily concentrated, which is normal for an intranet with a strong home "
+                    + "page and news feed - it is not on its own evidence that the rest should be "
+                    + "retired. The Page views tab's quiet-page list is where to look, one page at a time.";
+            }
+            else
+            {
+                judgement.DetailKey = "concentration.detail.spread";
+                judgement.Detail = "Traffic is spread across a reasonable share of the site. The quiet-page list on the "
+                    + "Page views tab is still the cheapest place to start a content review.";
+            }
+
+            return judgement;
         }
 
         private static WebActivityJudgement MobileJudgement(WebActivityJudgementInputs inputs)
         {
             var share = inputs.MobilePageViewPct ?? 0;
-
-            return new WebActivityJudgement
+            var judgement = new WebActivityJudgement
             {
                 Key = "mobile",
                 Tone = "neutral",
+                HeadlineKey = "mobile.headline",
                 Headline = string.Format(
                     "{0:N1}% of page views with a known device came from a phone or tablet", share),
-                Detail = share >= 25
-                    ? "A quarter or more of measured page views are mobile, so test page layouts on a phone "
-                        + "before publishing - wide tables and image-heavy web parts are the usual casualties. "
-                        + "Mobile visits are typically shorter than desktop ones, so the share of VISITS is "
-                        + "likely higher than this."
-                    : "Mobile is a minority of measured page views. That is normal for a desk-based "
-                        + "workforce; check it against how many people you expect to be deskless before "
-                        + "treating it as a finding. Mobile visits tend to be shorter, so the share of VISITS "
-                        + "is likely higher than this.",
+                Values = new Dictionary<string, double>
+                {
+                    ["share"] = share,
+                },
             };
+
+            if (share >= 25)
+            {
+                judgement.DetailKey = "mobile.detail.high";
+                judgement.Detail = "A quarter or more of measured page views are mobile, so test page layouts on a phone "
+                    + "before publishing - wide tables and image-heavy web parts are the usual casualties. "
+                    + "Mobile visits are typically shorter than desktop ones, so the share of VISITS is "
+                    + "likely higher than this.";
+            }
+            else
+            {
+                judgement.DetailKey = "mobile.detail.minority";
+                judgement.Detail = "Mobile is a minority of measured page views. That is normal for a desk-based "
+                    + "workforce; check it against how many people you expect to be deskless before "
+                    + "treating it as a finding. Mobile visits tend to be shorter, so the share of VISITS "
+                    + "is likely higher than this.";
+            }
+
+            return judgement;
         }
 
         #endregion

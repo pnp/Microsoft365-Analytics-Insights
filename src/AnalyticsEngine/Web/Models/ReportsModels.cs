@@ -283,6 +283,14 @@ namespace Web.AnalyticsWeb.Models
         [JsonProperty("warning")]
         public string Warning { get; set; }
 
+        /// <summary>
+        /// Stable key for a <see cref="Warning"/> built from <see cref="SeriesWarnings"/>, which the SPA words:
+        /// <c>seriesUnavailable</c>, <c>incompleteWeeks</c> (every series is charted, but some weeks are missing a
+        /// day of reports) or <c>seriesUnavailableAndIncompleteWeeks</c>. Absent for any other warning.
+        /// </summary>
+        [JsonProperty("warningKey", NullValueHandling = NullValueHandling.Ignore)]
+        public string WarningKey { get; set; }
+
         /// <summary>Structured partial-data warnings behind <see cref="Warning"/>.</summary>
         [JsonProperty("seriesWarnings")]
         public List<ReportSeriesWarning> SeriesWarnings { get; set; }

@@ -258,6 +258,10 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, warning.Count);
             StringAssert.Contains(result.Warning, "missing at least one day of usage reports");
 
+            // Teams is charted, so it must not be reported as an unavailable series (#816).
+            Assert.AreEqual("incompleteWeeks", result.WarningKey);
+            Assert.IsFalse(result.Warning.Contains("unavailable"), result.Warning);
+
             var json = JsonConvert.SerializeObject(points);
             Assert.AreEqual(1, json.Split(new[] { "\"incomplete\":true" }, StringSplitOptions.None).Length - 1,
                 "Only the incomplete week carries the flag on the wire.");
@@ -277,8 +281,47 @@ namespace Tests.UnitTests
                 new Dictionary<string, List<DateTime>> { { "Teams", new List<DateTime>() } });
 
             Assert.IsNull(result.Warning);
+            Assert.IsNull(result.WarningKey);
             Assert.IsNull(result.SeriesWarnings);
             Assert.IsFalse(result.Series.Single().Points.Single().Incomplete);
+        }
+
+        [TestMethod]
+        public void CompleteMultiTimeSeries_KeysTheWarningByWhatIsWrong()
+        {
+            // An unavailable series and a charted series with incomplete weeks are different facts, and
+            // the SPA words each from this key: one sentence each, never one listed as the other.
+            var week = new DateTime(2026, 6, 1);
+            var weeks = new List<DateTime> { week };
+
+            var unavailable = ReportsAPIController.CompleteMultiTimeSeries(
+                Chart(),
+                new List<KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>>
+                {
+                    Series("Teams", week),
+                    new KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>("Outlook", new List<ReportsAPIController.WeekValueRow>()),
+                },
+                new List<string>(),
+                weeks);
+            Assert.AreEqual("seriesUnavailable", unavailable.WarningKey);
+            StringAssert.StartsWith(unavailable.Warning, "Some workload series are unavailable: Outlook");
+
+            var both = ReportsAPIController.CompleteMultiTimeSeries(
+                Chart(),
+                new List<KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>>
+                {
+                    Series("Teams", week),
+                    new KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>("Outlook", new List<ReportsAPIController.WeekValueRow>()),
+                },
+                new List<string>(),
+                weeks,
+                null,
+                new Dictionary<string, List<DateTime>> { { "Teams", new List<DateTime> { week } } });
+            Assert.AreEqual("seriesUnavailableAndIncompleteWeeks", both.WarningKey);
+            StringAssert.StartsWith(both.Warning, "Some workload series are unavailable: Outlook: no settled usage data. Some weeks are incomplete: Teams:");
+            CollectionAssert.AreEquivalent(
+                new[] { "noSettledData", "incompleteWeeks" },
+                both.SeriesWarnings.Select(w => w.Reason).ToList());
         }
 
         [TestMethod]

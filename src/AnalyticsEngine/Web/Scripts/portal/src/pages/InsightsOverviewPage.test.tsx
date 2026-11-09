@@ -4,6 +4,7 @@ import { renderWithProvider } from '../test/renderWithProvider';
 import InsightsOverviewPage from './InsightsOverviewPage';
 import type { SystemStatus } from '../types/systemStatus';
 import type { DataOverviewSection, HealthSummary } from '../types/health';
+import { loadCatalog, translateStatic } from '../i18n';
 
 const mockStatus = vi.fn();
 const mockHealthSummary = vi.fn();
@@ -194,6 +195,19 @@ describe('InsightsOverviewPage', () => {
     renderWithProvider(<InsightsOverviewPage />);
 
     expect(await screen.findByText(/Every figure is still zero/)).toBeInTheDocument();
+  });
+
+  it('words the zero-figures warning as one sentence with the link inside it', async () => {
+    await loadCatalog('es');
+    mockStatus.mockResolvedValue(status({ dataCounts: [{ key: 'users', name: 'Users', count: 0, hint: null }] }));
+
+    renderWithProvider(<InsightsOverviewPage />, { language: 'es' });
+
+    // One catalog sentence with the link substituted in, so a translator can put it where the
+    // language needs it, rather than a prefix, a link and a suffix glued together in English order.
+    const linkText = translateStatic('es', 'overview.page.serviceHealthLink');
+    const link = await screen.findByRole('link', { name: linkText });
+    expect(link.parentElement?.textContent).toBe(translateStatic('es', 'overview.page.zeroFigures', { serviceHealth: linkText }));
   });
 
   it('explains an empty overview rather than showing a bare grid', async () => {

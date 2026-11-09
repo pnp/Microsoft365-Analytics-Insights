@@ -124,6 +124,8 @@ export const reports = {
   'reports.chart.usage-active-users.description': 'Distinct users active in each completed week. Weeks with no usage report yet are left blank rather than shown as zero.',
   'reports.chart.usage-active-users.valueLabel': 'Active users',
   'reports.chart.usage-active-users.warning': 'Some workload series are unavailable: {details}.',
+  'reports.chart.usage-active-users.warning.incompleteWeeks': 'Some weeks are incomplete: {details}.',
+  'reports.chart.usage-active-users.warning.seriesUnavailableAndIncompleteWeeks': 'Some workload series are unavailable: {unavailable}. Some weeks are incomplete: {incomplete}.',
   'reports.chart.spo-operations.title': 'File activity per week',
   'reports.chart.spo-operations.description': 'SharePoint & OneDrive audit operations each week.',
   'reports.chart.spo-operations.valueLabel': 'Operations',
