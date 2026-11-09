@@ -50,6 +50,9 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         internal Func<TimeSpan, Task> RetryDelay { get; set; } = Task.Delay;
 
+        /// <summary>Where the <c>-logApiResponses</c> debug switch writes its dumps, one folder per query type.</summary>
+        internal string DebugDumpDirectory { get; set; } = Path.Combine(Path.GetTempPath(), "AppInsightsImporter", "REST");
+
         #region Constructors
 
         /// <summary>
@@ -493,7 +496,7 @@ namespace WebJob.AppInsightsImporter.Engine
         {
             var responseBody = await response.Content.ReadAsStringAsync();
 
-            var dir = Path.Combine(Path.GetTempPath(), "AppInsightsImporter", "REST", operationType);
+            var dir = Path.Combine(DebugDumpDirectory, operationType);
             Directory.CreateDirectory(dir);
             // UTC + zero-padded month so files sort lexicographically by time. The previous
             // "yyyy-dd-M_HH-mm-ss" format used non-padded month which collides for files with

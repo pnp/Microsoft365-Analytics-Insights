@@ -210,7 +210,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             UserImportScope userScope = null)
         {
             var teamsLoadContext = new TeamsLoadContext(GraphServiceClientFactory.CreateWithTimeout(graphServiceClientAuthenticationProvider, GraphServiceClientFactory.DefaultGraphSdkTimeout));
+            return await SaveNewCallToDB(callId, manualClient, teamsLoadContext, logger, thisTenantId, userScope);
+        }
 
+        internal static async Task<CallRecord> SaveNewCallToDB(string callId, ManualGraphCallClient manualClient, TeamsLoadContext teamsLoadContext, ILogger logger, string thisTenantId,
+            UserImportScope userScope)
+        {
             var newCall = await LoadFromGraphByID(callId, manualClient, teamsLoadContext, logger, thisTenantId);
 
             logger.LogInformation($"Response payload from Graph:\n{newCall.JsonText}");

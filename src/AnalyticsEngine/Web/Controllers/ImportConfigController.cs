@@ -11,6 +11,17 @@ namespace Web.AnalyticsWeb.Controllers
     /// </summary>
     public class ImportConfigController : ApiController
     {
+        private readonly Func<AppConfig> _config;
+
+        public ImportConfigController() : this(() => new AppConfig())
+        {
+        }
+
+        internal ImportConfigController(Func<AppConfig> config)
+        {
+            _config = config;
+        }
+
         // Get App Insights import config
         // POST: api/ImportConfig?appInsightsStringEncoded=base64encodedstring
         [AllowCorsForOrgUrls()]
@@ -29,7 +40,7 @@ namespace Web.AnalyticsWeb.Controllers
             // ApplicationId). Compare the InstrumentationKey value parsed by name from both sides,
             // not "the first GUID found" - the prior regex-by-position approach matched whichever
             // GUID appeared first textually and could be tricked by reordering the keys.
-            var config = new AppConfig();
+            var config = _config();
             var paramPassedKey = ParseInstrumentationKey(decodedString);
             var configuredKey = ParseInstrumentationKey(config.AppInsightsConnectionString);
 
