@@ -1047,7 +1047,11 @@ namespace Web.AnalyticsWeb.Controllers
             var rows = CopilotAdoptionExports.Apply(analysis.CoworkReadiness, query).Take(MaxCsvRows).ToList();
 
             return CsvResponse(
-                CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.CoworkReadinessColumns()),
+                CsvSerialiser.ToBytes(
+                    rows,
+                    CopilotAdoptionExports.CoworkReadinessColumns(
+                        analysis.Summary.FiguresIncomplete,
+                        WarningSummary(analysis.Summary))),
                 CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-cowork-readiness", emailDomain, filter, analysis.Summary), analysis.Summary.GeneratedUtc),
                 analysis.Summary.Diagnostics?.RunId);
         }
