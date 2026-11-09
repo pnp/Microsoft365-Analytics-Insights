@@ -135,8 +135,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     return new CallImportResult(CallImportOutcome.ProcessedWithoutSaving, callResponse, "OutOfScope");
                 }
 
+                // Before SQL: a call with nothing usable to save is a permanent payload failure, dead-lettered under its own
+                // reason; a call with some malformed sessions is saved without them.
+                callResponse.ValidateForSave();
                 await _store.SaveOrReplaceCallRecord(callResponse, userScope);
                 LogOutcome(callId, "Saved", callResponse, stopwatch);
+                if (callResponse.LoadStats.SkippedSessions > 0 && _unresolvedOrganiserWarnings.TryAcquire("SkippedSessions", out var held))
+                {
+                    _logger.LogWarning($"Call record '{callId}' was saved without {callResponse.LoadStats.SkippedSessions} of its {callResponse.Sessions.Count} session(s): " +
+                        "nobody on them could be attributed (no caller or callee, or two people neither of whom organised the call). " +
+                        $"Logged at most once every {WarningInterval.TotalMinutes:0} minutes ({held} similar call(s) since the last).");
+                }
                 return new CallImportResult(CallImportOutcome.Saved, callResponse);
             }
 
@@ -182,7 +191,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             var stats = call?.LoadStats;
             return $"{Prefix} call='{callId}' outcome={outcome}" +
                 (call == null ? string.Empty
-                    : $" sessions={call.Sessions?.Count ?? 0} pages={stats.SessionPages} users={stats.DistinctUsers} external={stats.ExternalUsers} unresolved={stats.UnresolvedUsers} resolveMs={stats.ResolveMs}") +
+                    : $" sessions={call.Sessions?.Count ?? 0}" + (stats.SkippedSessions > 0 ? $" skippedSessions={stats.SkippedSessions}" : string.Empty) +
+                      $" pages={stats.SessionPages} users={stats.DistinctUsers} external={stats.ExternalUsers} unresolved={stats.UnresolvedUsers} resolveMs={stats.ResolveMs}") +
                 (failure == null ? string.Empty : $" failure={failure}") +
                 $" elapsedMs={elapsedMs}";
         }

@@ -1468,6 +1468,85 @@ namespace Tests.UnitTests
         private static List<CapturingLogger.Entry> CallPayloadWarnings(CapturingLogger logger) =>
             logger.Entries.Where(e => e.Level == LogLevel.Warning && e.Message.StartsWith("Call record '") && e.Message.Contains("no organiser identity")).ToList();
 
+        #region Malformed sessions (#847, R9-9)
+
+        private const string R99Organiser = "organiser@contoso.example";
+
+        private static CallSessionDTO R99Session(string caller, string callee, bool hasCallee = true) => new CallSessionDTO
+        {
+            Caller = new ParticipantEndpointDTO { UserEmailAddress = caller },
+            Callee = hasCallee ? new ParticipantEndpointDTO { UserEmailAddress = callee } : null,
+        };
+
+        private static CallRecordDTO R99Call(string callType, List<CallSessionDTO> sessions) => new CallRecordDTO
+        {
+            GraphCallID = "00000000-0000-0000-0000-000000000847",
+            CallType = callType,
+            OrganizerEmail = R99Organiser,
+            StartDateTime = QueueNow.AddHours(-1),
+            EndDateTime = QueueNow,
+            Sessions = sessions,
+        };
+
+        /// <summary>
+        /// One session nobody can be attributed to - a missing one, one without a callee, or two people neither of whom
+        /// organised the call (after a transfer, say) - used to fail the whole call. It is now left out and counted, the rest
+        /// of the call is saved, and the outcome line and a rate-limited warning say so - without naming anyone.
+        /// </summary>
+        [TestMethod]
+        public async Task CallRecordImporter_MalformedSessions_AreSkippedAndCounted_AndTheRestOfTheCallIsSaved()
+        {
+            var call = R99Call("groupCall", new List<CallSessionDTO>
+            {
+                R99Session(R99Organiser, "attendee@contoso.example"),
+                R99Session(R99Organiser, null, hasCallee: false),
+                null,
+                R99Session("transferred.a@contoso.example", "transferred.b@contoso.example"),
+            });
+            var store = new InMemoryCallRecordPersistenceManager();
+            var logger = new CapturingLogger();
+            var importer = new CallRecordImporter(new FakeCallRecordSourceLoader().Returning(call.GraphCallID, call), store, logger);
+
+            var result = await importer.Import(Notification(call.GraphCallID));
+
+            Assert.AreEqual(CallImportOutcome.Saved, result.Outcome);
+            Assert.AreSame(call, store.Saved.Single());
+            Assert.AreEqual(3, call.LoadStats.SkippedSessions);
+            Assert.IsTrue(logger.Entries.Any(e => e.Message.StartsWith(CallImportLog.Prefix) && e.Message.Contains("outcome=Saved sessions=4 skippedSessions=3 ")));
+            Assert.AreEqual(1, logger.Entries.Count(e => e.Level == LogLevel.Warning && e.Message.Contains("was saved without 3 of its 4 session(s)")));
+            Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains("transferred.") || e.Message.Contains("attendee@")), "No address is logged.");
+        }
+
+        /// <summary>
+        /// A call with nothing usable to save is a payload failure with its own reason, dead-lettered at once. These used to
+        /// throw a NullReferenceException (no session list) or an ArgumentOutOfRangeException (two people neither of whom
+        /// organised the call) out of the save, which counted as Transient: the call was fetched again ten times over about
+        /// four hours, then dead-lettered as CallImportRetriesExhausted, which said nothing about what was wrong.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("NoSessions")]
+        [DataRow("NoUsableSessions")]
+        [DataRow("NoCallType")]
+        public async Task QueueHandler_ACallWithNothingUsableToSave_IsDeadLetteredAtOnceWithItsReason(string reason)
+        {
+            var call = R99Call(reason == "NoCallType" ? null : "groupCall", reason == "NoSessions" ? null : new List<CallSessionDTO>
+            {
+                R99Session("transferred.a@contoso.example", "transferred.b@contoso.example"),
+                R99Session(R99Organiser, null, hasCallee: false),
+            });
+            var store = new InMemoryCallRecordPersistenceManager();
+            var importer = new CallRecordImporter(new FakeCallRecordSourceLoader().Returning(call.GraphCallID, call), store, new CapturingLogger());
+            var settlement = new FakeCallQueueMessageSettlement();
+
+            var outcome = await QueueHandler(async n => (await importer.Import(n)).Outcome).HandleAsync(QueueMessage(call.GraphCallID), settlement);
+
+            Assert.AreEqual(CallQueueMessageOutcome.DeadLettered, outcome, "Not retried: fetching the same record again cannot help.");
+            Assert.AreEqual(reason, settlement.DeadLetterReason, "The dead-letter queue says what is wrong.");
+            Assert.AreEqual(0, store.Saved.Count);
+        }
+
+        #endregion
+
         /// <summary>
         /// An organiser identity that is present but cannot be turned into a user of this tenant - someone from another
         /// tenant, a deleted account - will never resolve, so the call stays processed-without-saving and its message is
@@ -2042,6 +2121,42 @@ namespace Tests.UnitTests
         }
 
         #endregion
+
+        /// <summary>
+        /// #847: the importer's own subscriptions read is strict too. A 200 without the list used to read as "no
+        /// subscription", and the webhook went on to create one it may already have had.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("{}")]
+        [DataRow("{\"value\":null}")]
+        public async Task SubscriptionManager_AListWithoutItsCollection_IsAFailedReadNotNoSubscription(string body)
+        {
+            var webhook = new Uri("https://contoso-analytics.example/api/CallRecordWebhook");
+            var unreadable = new GraphCallRecordSubscriptionManager(TeamsCrawlTests.StubGraphHandler.Client(new TeamsCrawlTests.StubGraphHandler().Json("/subscriptions", body)));
+            await Assert.ThrowsExceptionAsync<GraphPageWithoutValueException>(() => unreadable.FindCallRecordSubscriptions(webhook));
+
+            var none = new GraphCallRecordSubscriptionManager(TeamsCrawlTests.StubGraphHandler.Client(new TeamsCrawlTests.StubGraphHandler().Json("/subscriptions", "{\"value\":[]}")));
+            Assert.AreEqual(0, (await none.FindCallRecordSubscriptions(webhook)).Count, "An explicit empty list is no subscription.");
+        }
+
+        /// <summary>
+        /// #847 (R9-3): disposing the queue processor closes its Service Bus client, which owns the connection its processor
+        /// and retry sender share - it used to be left open - and doesn't fail for a processor that never started (removing
+        /// handlers it never registered threw, and the client was never reached).
+        /// </summary>
+        [TestMethod]
+        public void CallQueueProcessor_Dispose_ClosesTheServiceBusClient_EvenWhenItNeverStarted()
+        {
+            var config = StressHarness.StressAppConfigFactory.Create("Server=(localdb)\\unused;");
+            config.ConnectionStrings.ServiceBusConnectionString = "Endpoint=sb://contoso-calls.servicebus.windows.net/;EntityPath=calls";
+            var processor = new CallQueueProcessor(config, config.TenantGUID.ToString(),
+                TestUserScopes.Provider(Common.Entities.UserScope.UserImportScope.Unfiltered));
+            var client = processor.ServiceBusClient;
+
+            processor.Dispose();
+
+            Assert.IsTrue(client.IsClosed, "The client, and the connection it owns, is closed.");
+        }
 
         /// <summary>Minimal <see cref="ILogger"/> that records level and formatted message for assertions.</summary>
         internal class CapturingLogger : ILogger

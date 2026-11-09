@@ -2196,9 +2196,13 @@ describe('Service Configuration webhook status details', () => {
     // The non-literal assignments carry data, not sentences: the cached detail and an exception message.
     expect(assigned.filter((value) => !value.startsWith('"')).sort()).toEqual(['cached.Detail', 'ex.Message']);
     const sentences = assigned.filter((value) => value.startsWith('"')).map((value) => csharpStringLiteralValue(value.slice(1, -1)));
-    expect(sentences).toEqual(["WebAppURL is not configured, so the webhook subscription URL can't be determined."]);
+    expect(sentences).toEqual([
+      "WebAppURL is not configured, so the webhook subscription URL can't be determined.",
+      "Microsoft Graph answered without a readable list of subscriptions, so the webhook couldn't be checked. Reload the page to try again.",
+    ]);
     expect(sortedUnique(Object.keys(WEBHOOK_STATUS_DETAIL_TEXT)), 'WEBHOOK_STATUS_DETAIL_TEXT must translate exactly these').toEqual(sortedUnique(sentences));
     expect(EN_CATALOG['admin.serviceConfiguration.webhook.detail.webAppUrlMissing']).toBe(sentences[0]);
+    expect(EN_CATALOG['admin.serviceConfiguration.webhook.detail.subscriptionsUnreadable']).toBe(sentences[1]);
   });
 });
 

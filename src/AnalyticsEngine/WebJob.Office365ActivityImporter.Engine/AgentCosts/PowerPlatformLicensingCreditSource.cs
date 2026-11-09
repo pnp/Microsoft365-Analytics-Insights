@@ -1,5 +1,6 @@
 using DataUtils.Http;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
@@ -131,9 +132,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
             var response = await ReadAsync(url, "Copilot Studio per-user credit consumption", treatNotFoundAsUnavailable: true);
 
-            // Only a MISSING ROUTE returns null. A day with no consumption comes back as 204 or an empty
-            // body, which is an empty page - not an absent route. Collapsing the two would let one quiet day
-            // abort the whole window and discard the days already read.
+            // Only a MISSING ROUTE returns null. A day with no consumption comes back as 204, which is an empty
+            // page - not an absent route. Collapsing the two would let one quiet day abort the whole window and
+            // discard the days already read.
             if (response.RouteUnavailable) return null;
 
             return CopilotStudioCreditParser.ParseUserConsumptionPage(response.Json);
@@ -173,9 +174,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         /// </summary>
         /// <remarks>
         /// The distinction is load-bearing. A 404 means this tenant's API surface has no such route, so the
-        /// caller should stop asking. A 204 or an empty body means the route exists and simply had nothing
-        /// for the requested range, so the caller should carry on to the next day. Returning a bare null for
-        /// both let one quiet day be mistaken for a missing route.
+        /// caller should stop asking. A 204 means the route exists and simply had nothing for the requested
+        /// range, so the caller should carry on to the next day. Returning a bare null for both let one quiet
+        /// day be mistaken for a missing route.
+        /// <para>A 200 whose body is blank or is not a JSON object is neither: its rows are unknown, so it throws
+        /// <see cref="AgentCostIncompleteReadException"/> (#812, #847). It used to be read as an empty page, so a
+        /// truncated response counted as a successful read of a day without consumption.</para>
         /// </remarks>
         private async Task<LicensingApiResponse> ReadAsync(string url, string what, bool treatNotFoundAsUnavailable)
         {
@@ -224,14 +228,25 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                         $"The Power Platform licensing API returned HTTP {(int)response.StatusCode} ({response.StatusCode}) for {what}.");
                 }
 
-                var content = await response.Content.ReadAsStringAsync();
+                var content = response.Content == null ? null : await response.Content.ReadAsStringAsync();
                 if (string.IsNullOrWhiteSpace(content))
                 {
-                    // An empty body on a 200. Same meaning as 204: the route answered, with nothing.
-                    return LicensingApiResponse.Empty;
+                    // Not the documented 204: a 200 that lost its body. Neither the message nor the log carries the body.
+                    throw new AgentCostIncompleteReadException(
+                        $"The Power Platform licensing API answered the {what} request with HTTP 200 and an empty body, so what it "
+                        + "holds is unknown. This is a failed read, not an empty one; it will be retried on the next cycle.");
                 }
 
-                return new LicensingApiResponse(JObject.Parse(content));
+                try
+                {
+                    return new LicensingApiResponse(JObject.Parse(content));
+                }
+                catch (JsonReaderException)
+                {
+                    throw new AgentCostIncompleteReadException(
+                        $"The Power Platform licensing API answered the {what} request with HTTP 200 and a body that is not a JSON "
+                        + "object, so what it holds is unknown. This is a failed read, not an empty one; it will be retried on the next cycle.");
+                }
             }
         }
 
