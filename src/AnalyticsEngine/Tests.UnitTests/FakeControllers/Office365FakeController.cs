@@ -76,12 +76,11 @@ namespace Tests.UnitTests.FakeControllers
 
         [HttpGet]
         [Route("api/v1.0/{tenantDomain}/activity/feed/subscriptions/content")]
-        public HttpResponseMessage GetFakeActivitySummary(Guid tenantDomain)
+        public HttpResponseMessage GetFakeActivitySummary(Guid tenantDomain, [FromUri] bool isNextPage = false)
         {
             string fakeActivity = string.Empty;
-            Guid fakeDomain = default(Guid);
 
-            // Taken from a real request 30-5-2018. Each summary gets a UNIQUE contentId/contentUri (via a
+            // Shaped like a real request of 30-5-2018, with synthetic identifiers. Each summary gets a UNIQUE contentId/contentUri (via a
             // process-wide counter) - real Activity API content blobs each have a distinct id, and the
             // importer now de-duplicates summaries by contentId (a blob in the time-chunk overlap window is
             // legitimately listed twice), so reusing one id here would collapse every summary into one blob.
@@ -89,7 +88,7 @@ namespace Tests.UnitTests.FakeControllers
             for (int i = 0; i < Constants.ACTIVITIES_PER_SUMMARY; i++)
             {
                 var uniqueContentId = "20180530160628319079931$" + System.Threading.Interlocked.Increment(ref _fakeContentCounter) + "$audit_sharepoint$Audit_SharePoint";
-                fakeActivity += "{\"contentUri\":\"https://manage.office.com/api/v1.0/34eb3720-3d40-4da8-9f80-f939e220821c/activity/feed/audit/" + uniqueContentId + "\",\"contentId\":\"" + uniqueContentId + "\",\"contentType\":\"Audit.SharePoint\",\"contentCreated\":\"2018-05-30T16:06:28.319Z\",\"contentExpiration\":\"2018-06-06T16:06:28.319Z\"}";
+                fakeActivity += "{\"contentUri\":\"https://manage.office.com/api/v1.0/00000000-0000-0000-0000-000000000000/activity/feed/audit/" + uniqueContentId + "\",\"contentId\":\"" + uniqueContentId + "\",\"contentType\":\"Audit.SharePoint\",\"contentCreated\":\"2018-05-30T16:06:28.319Z\",\"contentExpiration\":\"2018-06-06T16:06:28.319Z\"}";
                 fakeActivity += ",";
             }
             fakeActivity = fakeActivity.TrimEnd(",".ToCharArray());
@@ -99,16 +98,12 @@ namespace Tests.UnitTests.FakeControllers
 
             HttpResponseMessage r = Request.CreateResponse(HttpStatusCode.OK, allActivity);
 
-            // Add a fake "next page" to not-next-page requests
-            if (!fakeDomain.Equals(tenantDomain))
+            // Every first page gets one fake next page. A next page is told by its query string, not by the tenant in its URL: it
+            // used to be the zero tenant id, which is also what a run without secrets is configured with, so there no first page
+            // got a next page and FakeActivityTests found half the reports it expected (#860).
+            if (!isNextPage)
             {
-                //Console.WriteLine($"--Office365FakeController.GetFakeActivities called. Returning {Constants.ACTIVITIES_PER_TIME_CHUNK} activities, with next-page results.");
-                r.Headers.Add("NextPageUri", $"https://manage.office.com/api/v1.0/{fakeDomain}/activity/feed/subscriptions/content?isNextPage=true");
-            }
-            else
-            {
-                // Don't add "next page"
-                //Console.WriteLine($"--Office365FakeController.GetFakeActivities called. Returning {Constants.ACTIVITIES_PER_TIME_CHUNK} activities.");
+                r.Headers.Add("NextPageUri", $"https://manage.office.com/api/v1.0/{tenantDomain}/activity/feed/subscriptions/content?isNextPage=true");
             }
 
             return r;
@@ -118,11 +113,11 @@ namespace Tests.UnitTests.FakeControllers
         [Route("api/v1.0/{tenantDomain}/activity/feed/audit/{contentId}")]
         public HttpResponseMessage GetFakeReportDetails(Guid tenantDomain, string contentId, [FromUri] Guid publisherIdentifier)
         {
-            // Taken from a real request 30-5-2018.
+            // Shaped like a real request of 30-5-2018, with synthetic identifiers.
             string fakeAuditLogs = "[";
             for (int i = 0; i < Constants.REPORTS_PER_ACTIVITY; i++)
             {
-                fakeAuditLogs += "{\"CreationTime\":\"2018-05-30T16:03:20\",\"Id\":\"" + Guid.NewGuid() + "\",\"Operation\":\"PageViewed\",\"OrganizationId\":\"34eb3720-3d40-4da8-9f80-f939e220821c\",\"RecordType\":4,\"UserKey\":\"i:0h.f|membership|10037ffea94e7503@live.com\",\"UserType\":0,\"Version\":1,\"Workload\":\"SharePoint\",\"ClientIP\":\"83.37.221.242\",\"ObjectId\":\"https:\\/\\/m365x246423.sharepoint.com\\/sites\\/SPOInsightsModern\\/_layouts\\/15\\/viewlsts.aspx\",\"UserId\":\"admin@m365x246423.onmicrosoft.com\",\"CorrelationId\":\"6e3f6c9e-a089-0000-1644-b54c7f86c559\",\"CustomUniqueId\":true,\"EventSource\":\"SharePoint\",\"ItemType\":\"Page\",\"ListItemUniqueId\":\"59a8433d-9bb8-cfef-be22-5dc365e07851\",\"Site\":\"cb8fc1be-12bf-47ff-b45d-397a4a17f10a\",\"UserAgent\":\"Mozilla\\/5.0 (Windows NT 10.0; WOW64) AppleWebKit\\/537.36 (KHTML, like Gecko) Chrome\\/66.0.3359.139 Safari\\/537.36\",\"WebId\":\"30e1714c-fcff-49f9-ade4-f6de4c43d929\"}";
+                fakeAuditLogs += "{\"CreationTime\":\"2018-05-30T16:03:20\",\"Id\":\"" + Guid.NewGuid() + "\",\"Operation\":\"PageViewed\",\"OrganizationId\":\"00000000-0000-0000-0000-000000000000\",\"RecordType\":4,\"UserKey\":\"i:0h.f|membership|1003000000000000@live.com\",\"UserType\":0,\"Version\":1,\"Workload\":\"SharePoint\",\"ClientIP\":\"203.0.113.10\",\"ObjectId\":\"https:\\/\\/contoso.sharepoint.com\\/sites\\/SPOInsightsModern\\/_layouts\\/15\\/viewlsts.aspx\",\"UserId\":\"admin@contoso.onmicrosoft.com\",\"CorrelationId\":\"00000000-0000-0000-0000-000000000001\",\"CustomUniqueId\":true,\"EventSource\":\"SharePoint\",\"ItemType\":\"Page\",\"ListItemUniqueId\":\"00000000-0000-0000-0000-000000000002\",\"Site\":\"00000000-0000-0000-0000-000000000003\",\"UserAgent\":\"Mozilla\\/5.0 (Windows NT 10.0; WOW64) AppleWebKit\\/537.36 (KHTML, like Gecko) Chrome\\/66.0.3359.139 Safari\\/537.36\",\"WebId\":\"00000000-0000-0000-0000-000000000004\"}";
                 fakeAuditLogs += ",";
             }
             fakeAuditLogs = fakeAuditLogs.TrimEnd(",".ToCharArray());
