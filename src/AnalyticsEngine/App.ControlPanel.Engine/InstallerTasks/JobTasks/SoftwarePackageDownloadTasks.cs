@@ -5,9 +5,12 @@ using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace App.ControlPanel.Engine.InstallerTasks
@@ -16,15 +19,50 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class LatestStableSoftwarePackageDownloadTask : ResourceInstallTask<LocalStorageInstallSourceInfo>
     {
         public const string CFG_KEY_RepoOwner = "RepoOwner", CFG_KEY_RepoName = "RepoName";
-        private static readonly HttpClient _httpClient = CreateHttpClient();
 
-        public LatestStableSoftwarePackageDownloadTask(TaskConfig config, ILogger logger) : base(config, logger)
+        /// <summary>
+        /// Longest one release package may take to download. The packages are tens of megabytes each and all five are
+        /// fetched at once, so HttpClient's default of 100 seconds for the whole transfer failed on a slow link.
+        /// </summary>
+        public static readonly TimeSpan PackageDownloadTimeout = TimeSpan.FromMinutes(30);
+
+        /// <summary>
+        /// Longest a package download may go without receiving any data. A dead connection then fails in minutes,
+        /// not at <see cref="PackageDownloadTimeout"/>, while a slow one that is still moving is left to finish.
+        /// </summary>
+        public static readonly TimeSpan PackageDownloadStallTimeout = TimeSpan.FromMinutes(2);
+
+        /// <summary>Longest the GitHub API may take to describe the latest release: HttpClient's default.</summary>
+        public static readonly TimeSpan ReleaseMetadataTimeout = TimeSpan.FromSeconds(100);
+
+        /// <summary>The release asset CI publishes with the SHA-256 of every package (<c>.github/scripts/prepare-release.mjs</c>).</summary>
+        public const string ReleaseManifestAssetName = "release-manifest.json";
+
+        private static readonly HttpClient _sharedHttpClient = CreateHttpClient(new HttpClientHandler());
+        private readonly HttpClient _httpClient;
+
+        public LatestStableSoftwarePackageDownloadTask(TaskConfig config, ILogger logger) : this(config, logger, _sharedHttpClient)
         {
         }
 
-        private static HttpClient CreateHttpClient()
+        /// <summary>Test seam: downloads through <paramref name="httpClient"/>, normally one over a fake handler.</summary>
+        internal LatestStableSoftwarePackageDownloadTask(TaskConfig config, ILogger logger, HttpClient httpClient) : base(config, logger)
         {
-            var client = new HttpClient();
+            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        }
+
+        internal TimeSpan DownloadTimeout { get; set; } = PackageDownloadTimeout;
+        internal TimeSpan StallTimeout { get; set; } = PackageDownloadStallTimeout;
+        internal TimeSpan MetadataTimeout { get; set; } = ReleaseMetadataTimeout;
+
+        /// <summary>Where the packages are written. Null is the installer's temporary folder.</summary>
+        internal string DownloadDirectory { get; set; }
+
+        internal static HttpClient CreateHttpClient(HttpMessageHandler handler)
+        {
+            // Each request carries its own limit (the timeouts above), so the client's single whole-request timeout
+            // must not cut a package download short.
+            var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
             client.DefaultRequestHeaders.Add("User-Agent", "AnalyticsEngine-Installer");
             client.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
 
@@ -98,11 +136,24 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // Fetch latest release metadata from GitHub
             _logger.LogInformation($"Fetching latest stable release from GitHub repo {repoOwner}/{repoName}...");
             string json;
-            using (var response = await _httpClient.GetAsync(apiUrl, CancellationToken))
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken))
             {
-                if (!response.IsSuccessStatusCode)
-                    throw new UnexpectedInstallException(DescribeFailedRelease(response, apiUrl));
-                json = await response.Content.ReadAsStringAsync();
+                timeout.CancelAfter(MetadataTimeout);
+                try
+                {
+                    using (var response = await _httpClient.GetAsync(apiUrl, timeout.Token))
+                    {
+                        if (!response.IsSuccessStatusCode)
+                            throw new UnexpectedInstallException(DescribeFailedRelease(response, apiUrl));
+                        json = await response.Content.ReadAsStringAsync();
+                    }
+                }
+                catch (OperationCanceledException) when (!CancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+                {
+                    throw new UnexpectedInstallException($"GitHub did not describe the latest release within {DescribeDuration(MetadataTimeout)}. " +
+                        "Check that this machine can reach api.github.com, through the proxy configured in the installer if there is one, " +
+                        $"and retry, or download the release ZIPs manually and install from local files instead. URL: {apiUrl}");
+                }
             }
             var release = JObject.Parse(json);
             var tagName = release["tag_name"]?.ToString();
@@ -145,22 +196,52 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 }
             }
 
+            // Every package is checked against the SHA-256 the release build published before anything runs or deploys it:
+            // the control-panel app among them is run on this machine with the SQL administrator password or the installer's
+            // client secret. So a release that can't say what its packages should be is refused before they are downloaded.
+            if (!assetUrls.TryGetValue(ReleaseManifestAssetName, out var manifestUrl))
+            {
+                throw new UnexpectedInstallException($"GitHub release '{tagName}' has no {ReleaseManifestAssetName}, which holds the SHA-256 " +
+                    "of each package, so its packages can't be verified. " + UnverifiedPackagesAdvice);
+            }
+            var expectedHashes = await DownloadReleaseManifestAsync(manifestUrl, tagName, componentFiles.Values);
+
             _logger.LogInformation("Downloading latest stable release...");
 
             var locallyDownloadedRelease = new LocalStorageInstallSourceInfo();
-            var tempDir = StringUtils.TempDirPath;
+            var tempDir = DownloadDirectory ?? StringUtils.TempDirPath;
             Directory.CreateDirectory(tempDir);
 
-            // Download each asset in parallel
+            // Download each asset, two at a time
             var downloadTasks = new Dictionary<SoftwareComponent, Task<string>>();
-            foreach (var kvp in componentFiles)
+            using (var slots = new SemaphoreSlim(ParallelDownloads))
             {
-                var url = assetUrls[kvp.Value];
-                var fileName = kvp.Value;
-                downloadTasks[kvp.Key] = DownloadFileToDir(url, fileName, tempDir);
-            }
+                foreach (var kvp in componentFiles)
+                {
+                    var url = assetUrls[kvp.Value];
+                    var fileName = kvp.Value;
+                    downloadTasks[kvp.Key] = DownloadWhenASlotIsFree(slots, url, fileName, tempDir, expectedHashes[fileName]);
+                }
 
-            await Task.WhenAll(downloadTasks.Values);
+                try
+                {
+                    await Task.WhenAll(downloadTasks.Values);
+                }
+                catch (Exception) when (CancellationToken.IsCancellationRequested)
+                {
+                    var unfinished = componentFiles.Where(c => downloadTasks[c.Key].Status != TaskStatus.RanToCompletion).Select(c => c.Value);
+                    _logger.LogInformation($"Release download cancelled by the user before {string.Join(", ", unfinished)} finished.");
+                    CancellationToken.ThrowIfCancellationRequested();
+                    throw;
+                }
+                catch (Exception)
+                {
+                    // Every package's own reason, not just the first: on a slow link several fail together.
+                    var reasons = downloadTasks.Values.Where(t => t.IsFaulted).Select(t => t.Exception.GetBaseException().Message).ToList();
+                    throw new UnexpectedInstallException($"Could not download {reasons.Count} of {downloadTasks.Count} packages of GitHub release " +
+                        $"'{tagName}': {string.Join("; ", reasons)}. Retry, or download the release ZIPs manually and install from local files instead.");
+                }
+            }
 
             // Build return structure
             foreach (var kvp in downloadTasks)
@@ -171,29 +252,218 @@ namespace App.ControlPanel.Engine.InstallerTasks
             return locallyDownloadedRelease;
         }
 
-        async Task<string> DownloadFileToDir(string downloadUrl, string fileName, string baseDir)
+        /// <summary>
+        /// How many packages download at once. .NET Framework opens at most two connections to a server
+        /// (<c>ServicePointManager.DefaultConnectionLimit</c>), so a third request would only queue - with its timeouts
+        /// running while it waited, which on a slow link would fail it for a stall that never happened.
+        /// </summary>
+        internal const int ParallelDownloads = 2;
+
+        async Task<string> DownloadWhenASlotIsFree(SemaphoreSlim slots, string downloadUrl, string fileName, string baseDir, string expectedSha256)
+        {
+            await slots.WaitAsync(CancellationToken);
+            try
+            {
+                return await DownloadFileToDir(downloadUrl, fileName, baseDir, expectedSha256);
+            }
+            finally
+            {
+                slots.Release();
+            }
+        }
+
+        /// <summary>
+        /// Streams one package to disk, giving up after <see cref="DownloadTimeout"/> overall or after
+        /// <see cref="StallTimeout"/> without data, and checks it against <paramref name="expectedSha256"/>. A failure is a
+        /// <see cref="PackageDownloadFailedException"/> that names the package and says whether it timed out, and leaves no
+        /// file behind; the user's cancel is an <see cref="OperationCanceledException"/>.
+        /// </summary>
+        async Task<string> DownloadFileToDir(string downloadUrl, string fileName, string baseDir, string expectedSha256)
         {
             if (string.IsNullOrEmpty(downloadUrl))
             {
                 throw new ArgumentNullException(nameof(downloadUrl));
             }
 
-            using (var response = await _httpClient.GetAsync(downloadUrl, CancellationToken))
+            var filePath = Path.Combine(baseDir, fileName);
+            long received = 0;
+            using (var overall = new CancellationTokenSource(DownloadTimeout))
+            using (var stall = new CancellationTokenSource(StallTimeout))
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, overall.Token, stall.Token))
+            using (var sha256 = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
             {
-                response.EnsureSuccessStatusCode();
-                var fileBytes = await response.Content.ReadAsByteArrayAsync();
-                CancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, linked.Token))
+                    // On .NET Framework a read already waiting on the network ignores the token; disposing the response ends it.
+                    using (linked.Token.Register(response.Dispose))
+                    {
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            throw new PackageDownloadFailedException(fileName, false,
+                                $"'{fileName}' failed: GitHub answered {(int)response.StatusCode} ({response.ReasonPhrase})");
+                        }
 
-                var filePath = Path.Combine(baseDir, fileName);
+                        using (var source = await response.Content.ReadAsStreamAsync())
+                        using (var target = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                        {
+                            var buffer = new byte[81920];
+                            int read;
+                            while ((read = await source.ReadAsync(buffer, 0, buffer.Length, linked.Token)) > 0)
+                            {
+                                stall.CancelAfter(StallTimeout);
+                                sha256.AppendData(buffer, 0, read);
+                                await target.WriteAsync(buffer, 0, read, linked.Token);
+                                received += read;
+                            }
+                        }
+                    }
 
-                var fileDir = new FileInfo(filePath).Directory;
-                if (!fileDir.Exists)
-                    fileDir.Create();
-
-                File.WriteAllBytes(filePath, fileBytes);
-                return filePath;
+                    var actualSha256 = ToHex(sha256.GetHashAndReset());
+                    if (!string.Equals(actualSha256, expectedSha256, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new PackageDownloadFailedException(fileName, false, $"'{fileName}' is not the file the release build published: " +
+                            $"its SHA-256 is {actualSha256}, and {ReleaseManifestAssetName} says {expectedSha256.ToLowerInvariant()}. It was " +
+                            "deleted without being run or deployed. If this happens again, something between this machine and GitHub is " +
+                            "changing the download");
+                    }
+                    return filePath;
+                }
+                catch (Exception ex)
+                {
+                    TryDelete(filePath);
+                    CancellationToken.ThrowIfCancellationRequested();
+                    if (ex is PackageDownloadFailedException) throw;
+                    if (stall.IsCancellationRequested)
+                    {
+                        throw new PackageDownloadFailedException(fileName, true, $"'{fileName}' timed out: no data arrived for " +
+                            $"{DescribeDuration(StallTimeout)} ({DescribeSize(received)} received)");
+                    }
+                    if (overall.IsCancellationRequested)
+                    {
+                        throw new PackageDownloadFailedException(fileName, true, $"'{fileName}' timed out: it did not finish within " +
+                            $"{DescribeDuration(DownloadTimeout)} ({DescribeSize(received)} received)");
+                    }
+                    var cause = ex.GetBaseException();
+                    throw new PackageDownloadFailedException(fileName, false, $"'{fileName}' failed: {cause.GetType().Name}: {cause.Message}");
+                }
             }
         }
+
+        static void TryDelete(string filePath)
+        {
+            try
+            {
+                File.Delete(filePath);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+            }
+        }
+
+        const string UnverifiedPackagesAdvice = "The installer won't run or deploy packages it can't check against the hashes the " +
+            "release build published. Retry, or download the release ZIPs manually and install from local files instead.";
+
+        /// <summary>
+        /// Reads the SHA-256 of each of <paramref name="packages"/> from the release's manifest. Refuses, naming the package,
+        /// when one has no hash: it could not be verified.
+        /// </summary>
+        async Task<Dictionary<string, string>> DownloadReleaseManifestAsync(string manifestUrl, string tagName, IEnumerable<string> packages)
+        {
+            string json;
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken))
+            {
+                timeout.CancelAfter(MetadataTimeout);
+                try
+                {
+                    using (var response = await _httpClient.GetAsync(manifestUrl, timeout.Token))
+                    {
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            throw new UnexpectedInstallException($"Could not download {ReleaseManifestAssetName} of GitHub release '{tagName}': " +
+                                $"GitHub answered {(int)response.StatusCode} ({response.ReasonPhrase}). " + UnverifiedPackagesAdvice);
+                        }
+                        json = await response.Content.ReadAsStringAsync();
+                    }
+                }
+                catch (OperationCanceledException) when (!CancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+                {
+                    throw new UnexpectedInstallException($"{ReleaseManifestAssetName} of GitHub release '{tagName}' did not download within " +
+                        $"{DescribeDuration(MetadataTimeout)}. " + UnverifiedPackagesAdvice);
+                }
+            }
+
+            Dictionary<string, string> hashes;
+            try
+            {
+                hashes = ParseReleaseManifest(json);
+            }
+            catch (Newtonsoft.Json.JsonException ex)
+            {
+                throw new UnexpectedInstallException($"{ReleaseManifestAssetName} of GitHub release '{tagName}' can't be read ({ex.Message}). " +
+                    UnverifiedPackagesAdvice);
+            }
+
+            foreach (var package in packages)
+            {
+                if (!hashes.TryGetValue(package, out var hash) || !IsSha256(hash))
+                {
+                    throw new UnexpectedInstallException($"{ReleaseManifestAssetName} of GitHub release '{tagName}' has no SHA-256 for " +
+                        $"'{package}', so it can't be verified. " + UnverifiedPackagesAdvice);
+                }
+            }
+            return hashes;
+        }
+
+        /// <summary>
+        /// Package name to SHA-256 (hex), from the manifest <c>.github/scripts/prepare-release.mjs</c> writes:
+        /// <c>{ "commit": ..., "assets": [ { "name": "ControlPanelApp.zip", "sha256": "..." }, ... ] }</c>.
+        /// </summary>
+        internal static Dictionary<string, string> ParseReleaseManifest(string json)
+        {
+            var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (JObject.Parse(json)["assets"] is JArray assets)
+            {
+                foreach (var asset in assets.OfType<JObject>())
+                {
+                    var name = asset["name"]?.ToString();
+                    if (!string.IsNullOrEmpty(name)) hashes[name] = asset["sha256"]?.ToString();
+                }
+            }
+            return hashes;
+        }
+
+        static bool IsSha256(string hex) => hex != null && hex.Length == 64 && hex.All(Uri.IsHexDigit);
+
+        static string ToHex(byte[] bytes) => BitConverter.ToString(bytes).Replace("-", string.Empty).ToLowerInvariant();
+
+        internal static string DescribeDuration(TimeSpan duration)
+        {
+            if (duration.TotalMinutes >= 1 && duration.Seconds == 0 && duration.Milliseconds == 0)
+            {
+                return duration.TotalMinutes == 1 ? "1 minute" : duration.TotalMinutes.ToString("0", CultureInfo.InvariantCulture) + " minutes";
+            }
+            if (duration.TotalSeconds >= 1)
+            {
+                return duration.TotalSeconds == 1 ? "1 second" : duration.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture) + " seconds";
+            }
+            return duration.TotalMilliseconds.ToString("0", CultureInfo.InvariantCulture) + " ms";
+        }
+
+        static string DescribeSize(long bytes) => (bytes / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB";
+    }
+
+    /// <summary>One release package that could not be downloaded, and whether that was because it timed out.</summary>
+    public class PackageDownloadFailedException : UnexpectedInstallException
+    {
+        public PackageDownloadFailedException(string packageName, bool timedOut, string message) : base(message)
+        {
+            PackageName = packageName;
+            TimedOut = timedOut;
+        }
+
+        public string PackageName { get; }
+        public bool TimedOut { get; }
     }
 
     public class UseLocalOverrideDownloadTask : ResourceInstallTask<LocalStorageInstallSourceInfo>
