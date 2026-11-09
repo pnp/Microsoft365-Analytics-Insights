@@ -2,7 +2,7 @@ import { makeStyles, tokens, Text, Button, Badge, MessageBar, MessageBarBody } f
 import { ArrowRight16Regular, Options16Regular } from '@fluentui/react-icons';
 import type { CopilotAdoptionOptions, CopilotAdoptionSummary } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
-import { formatList, formatNumber, plural, useT } from '../../i18n';
+import { formatNumber, plural, useT } from '../../i18n';
 import {
   COWORK_ASSUMPTION_KEYS,
   customisesAny,
@@ -237,9 +237,9 @@ export default function CoworkTimeSavedHero({
           className={styles.bar}
           role="img"
           aria-label={t('copilotAdoptionCowork.timeSaved.hero.breakdownAria', {
-            parts: formatList(
-              segments.map((s, i) => t('copilotAdoptionCowork.timeSaved.hero.breakdownPart', { activity: s.label, share: formatWholeShare(shares[i]) })),
-            ),
+            parts: segments
+              .map((s, i) => t('copilotAdoptionCowork.timeSaved.hero.breakdownPart', { activity: s.label, share: formatWholeShare(shares[i]) }))
+              .join(', '),
           })}
         >
           {segments.map((s, i) =>
