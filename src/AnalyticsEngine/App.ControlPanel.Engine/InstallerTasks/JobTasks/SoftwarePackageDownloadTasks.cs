@@ -300,7 +300,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     {
                         if (!response.IsSuccessStatusCode)
                         {
-                            throw new PackageDownloadFailedException(fileName, false,
+                            throw new PackageDownloadFailedException(
                                 $"'{fileName}' failed: GitHub answered {(int)response.StatusCode} ({response.ReasonPhrase})");
                         }
 
@@ -325,7 +325,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     var actualSha256 = ToHex(sha256.GetHashAndReset());
                     if (!string.Equals(actualSha256, expectedSha256, StringComparison.OrdinalIgnoreCase))
                     {
-                        throw new PackageDownloadFailedException(fileName, false, $"'{fileName}' is not the file the release build published: " +
+                        throw new PackageDownloadFailedException($"'{fileName}' is not the file the release build published: " +
                             $"its SHA-256 is {actualSha256}, and {ReleaseManifestAssetName} says {expectedSha256.ToLowerInvariant()}. It was " +
                             "deleted without being run or deployed. If this happens again, something between this machine and GitHub is " +
                             "changing the download");
@@ -339,16 +339,16 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     if (ex is PackageDownloadFailedException) throw;
                     if (stall.IsCancellationRequested)
                     {
-                        throw new PackageDownloadFailedException(fileName, true, $"'{fileName}' timed out: no data arrived for " +
+                        throw new PackageDownloadFailedException($"'{fileName}' timed out: no data arrived for " +
                             $"{DescribeDuration(StallTimeout)} ({DescribeSize(received)} received)");
                     }
                     if (overall.IsCancellationRequested)
                     {
-                        throw new PackageDownloadFailedException(fileName, true, $"'{fileName}' timed out: it did not finish within " +
+                        throw new PackageDownloadFailedException($"'{fileName}' timed out: it did not finish within " +
                             $"{DescribeDuration(DownloadTimeout)} ({DescribeSize(received)} received)");
                     }
                     var cause = ex.GetBaseException();
-                    throw new PackageDownloadFailedException(fileName, false, $"'{fileName}' failed: {cause.GetType().Name}: {cause.Message}");
+                    throw new PackageDownloadFailedException($"'{fileName}' failed: {cause.GetType().Name}: {cause.Message}");
                 }
             }
         }
@@ -422,7 +422,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// Package name to SHA-256 (hex), from the manifest <c>.github/scripts/prepare-release.mjs</c> writes:
         /// <c>{ "commit": ..., "assets": [ { "name": "ControlPanelApp.zip", "sha256": "..." }, ... ] }</c>.
         /// </summary>
-        internal static Dictionary<string, string> ParseReleaseManifest(string json)
+        static Dictionary<string, string> ParseReleaseManifest(string json)
         {
             var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             if (JObject.Parse(json)["assets"] is JArray assets)
@@ -440,7 +440,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         static string ToHex(byte[] bytes) => BitConverter.ToString(bytes).Replace("-", string.Empty).ToLowerInvariant();
 
-        internal static string DescribeDuration(TimeSpan duration)
+        static string DescribeDuration(TimeSpan duration)
         {
             if (duration.TotalMinutes >= 1 && duration.Seconds == 0 && duration.Milliseconds == 0)
             {
@@ -456,17 +456,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
         static string DescribeSize(long bytes) => (bytes / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture) + " MB";
     }
 
-    /// <summary>One release package that could not be downloaded, and whether that was because it timed out.</summary>
-    public class PackageDownloadFailedException : UnexpectedInstallException
+    /// <summary>One release package that could not be downloaded. The message names the package and says why.</summary>
+    internal sealed class PackageDownloadFailedException : UnexpectedInstallException
     {
-        public PackageDownloadFailedException(string packageName, bool timedOut, string message) : base(message)
+        public PackageDownloadFailedException(string message) : base(message)
         {
-            PackageName = packageName;
-            TimedOut = timedOut;
         }
-
-        public string PackageName { get; }
-        public bool TimedOut { get; }
     }
 
     public class UseLocalOverrideDownloadTask : ResourceInstallTask<LocalStorageInstallSourceInfo>
