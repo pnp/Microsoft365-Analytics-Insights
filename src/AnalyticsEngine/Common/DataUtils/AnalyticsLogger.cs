@@ -1,4 +1,4 @@
-using DataUtils.Health;
+﻿using DataUtils.Health;
 using Microsoft.ApplicationInsights;
 using Microsoft.ApplicationInsights.DataContracts;
 using Microsoft.ApplicationInsights.Extensibility;
