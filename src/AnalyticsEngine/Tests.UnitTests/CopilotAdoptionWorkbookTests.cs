@@ -1862,6 +1862,50 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public void NonFiniteNumbers_AreWrittenAsBlankCells()
+        {
+            // A ratio over a zero denominator is NaN or infinite. SpreadsheetML has no form for either,
+            // and "NaN" in a cell or a chart cache makes Excel report the whole workbook as damaged.
+            byte[] bytes;
+            using (var workbook = new XlsxWriter())
+            {
+                var sheet = workbook.AddSheet("Data")
+                    .SetColumnWidths(double.NaN, 12)
+                    .AddRow("Contoso", double.NaN, double.PositiveInfinity, double.NegativeInfinity, float.NaN, 1.5);
+                sheet.AddChart(new XlsxChart { Type = XlsxChartType.Column, CategoryRange = "'Data'!$A$1:$A$1" }
+                    .AddSeries("Ratio", "'Data'!$B$1:$F$1"));
+                bytes = workbook.ToArray();
+            }
+
+            var cells = SheetCellElements(bytes, "Data");
+            Assert.AreEqual(6, cells.Count, "A blank is still written, so the columns after it stay in place.");
+            foreach (var blank in cells.Skip(1).Take(4))
+            {
+                Assert.IsFalse(blank.HasElements, $"{blank.Attribute("r")} should be blank: {blank}");
+            }
+            Assert.AreEqual("1.5", cells[5].Value);
+
+            var chart = ChartXmls(bytes).Single();
+            StringAssert.Contains(chart, "<c:v>1.5</c:v>");
+            foreach (var xml in new[] { SheetXml(bytes, "Data"), chart })
+            {
+                Assert.IsFalse(xml.Contains("NaN") || xml.Contains("Infinity") || xml.Contains("\u221E"),
+                    "A non-finite value reached the package: " + xml);
+            }
+        }
+
+        private static string SheetXml(byte[] bytes, string sheetName)
+        {
+            var index = WorkbookSheetNames(bytes).IndexOf(sheetName);
+            using (var stream = new MemoryStream(bytes))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
+            using (var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet" + (index + 1) + ".xml").Open(), Encoding.UTF8))
+            {
+                return reader.ReadToEnd();
+            }
+        }
+
         #endregion
 
         #region Helpers
