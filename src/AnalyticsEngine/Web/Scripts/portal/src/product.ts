@@ -38,9 +38,6 @@ export function buildLabel(): string | null {
   return label;
 }
 
-/** What the footer says in place of a build number when the pipeline never stamped one. */
-export const DEVELOPMENT_BUILD_TEXT = 'development build';
-
 /**
  * How the printed footer names the build, for the parenthesis after the product name -
  * "Microsoft 365 Advanced Analytics (build 1836)".
