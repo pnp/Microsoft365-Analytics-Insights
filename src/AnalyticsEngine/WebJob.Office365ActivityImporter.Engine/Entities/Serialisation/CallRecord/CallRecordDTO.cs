@@ -203,12 +203,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         }
 
         /// <summary>
-        /// Debug testing method
+        /// Operator single-call mode (<c>--callId</c>): loads one call record from Graph and saves it.
         /// </summary>
+        /// <param name="graphServiceClientAuthenticationProvider">
+        /// The app's credential. <see cref="DataUtils.Http.ImportAppIndentityOAuthContext.Creds"/> is null until
+        /// <c>InitClientCredential</c> has run.
+        /// </param>
         /// <param name="userScope">The <c>UserGroupsFilter</c> scope to apply; null means unfiltered.</param>
         public static async Task<CallRecord> SaveNewCallToDB(string callId, ManualGraphCallClient manualClient, TokenCredential graphServiceClientAuthenticationProvider, ILogger logger, string thisTenantId,
             UserImportScope userScope = null)
         {
+            if (graphServiceClientAuthenticationProvider == null)
+            {
+                throw new ArgumentNullException(nameof(graphServiceClientAuthenticationProvider),
+                    "No Graph credential: call InitClientCredential on the OAuth context before reading its Creds.");
+            }
+
             var teamsLoadContext = new TeamsLoadContext(GraphServiceClientFactory.CreateWithTimeout(graphServiceClientAuthenticationProvider, GraphServiceClientFactory.DefaultGraphSdkTimeout));
             return await SaveNewCallToDB(callId, manualClient, teamsLoadContext, logger, thisTenantId, userScope);
         }
@@ -217,8 +227,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             UserImportScope userScope)
         {
             var newCall = await LoadFromGraphByID(callId, manualClient, teamsLoadContext, logger, thisTenantId);
+            if (newCall == null)
+            {
+                return null;    // LoadFromGraphByID has said why
+            }
 
-            logger.LogInformation($"Response payload from Graph:\n{newCall.JsonText}");
+            // Counts, never the payload: it names everyone on the call (#853)
+            logger.LogInformation($"Loaded call record '{callId}' from Graph: {newCall.Sessions?.Count ?? 0} session(s) " +
+                $"on {newCall.LoadStats.SessionPages} page(s). The payload is not logged.");
 
             var scope = userScope ?? UserImportScope.Unfiltered;
             if (!CallRecordScopeRules.AnyParticipantInScope(newCall, scope))

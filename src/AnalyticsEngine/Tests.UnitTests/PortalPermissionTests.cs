@@ -571,6 +571,88 @@ namespace Tests.UnitTests
             Assert.IsInstanceOfType(anonymous.Result, typeof(System.Web.Mvc.HttpUnauthorizedResult));
         }
 
+        /// <summary>
+        /// Sign-out and the Teams connection change state, and with consent already granted Entra ID asks nothing during
+        /// the connection, so a page on another site must not be able to start either by linking to it or by posting a
+        /// form (#853, R6-8): POST only, and only from this origin. Sign-out needs no role; the Teams connection keeps
+        /// its Administration requirement (above).
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(nameof(AccountController.ConnectTeams))]
+        [DataRow(nameof(AccountController.SignOut))]
+        public void AccountStateChange_IsASameOriginPostOnly(string actionName)
+        {
+            var action = typeof(AccountController).GetMethod(actionName);
+            Assert.IsTrue(action.IsDefined(typeof(System.Web.Mvc.HttpPostAttribute), true), "A GET must not reach " + actionName);
+            Assert.IsFalse(action.IsDefined(typeof(System.Web.Mvc.HttpGetAttribute), true));
+            var filter = action.GetCustomAttributes(typeof(RequireSameOriginFormPostAttribute), true)
+                .Cast<RequireSameOriginFormPostAttribute>()
+                .Single();
+
+            Assert.IsNull(SameOriginAuthorization(filter, actionName, ("Sec-Fetch-Site", "same-origin")).Result, "The portal's own form.");
+            Assert.IsNull(SameOriginAuthorization(filter, actionName, ("Origin", "https://contoso.invalid")).Result, "A browser without Sec-Fetch-Site.");
+            Assert.IsNull(SameOriginAuthorization(filter, actionName, ("Referer", "https://contoso.invalid/#/admin/teams-permissions")).Result,
+                "A browser that sends neither.");
+
+            foreach (var refused in new[]
+            {
+                SameOriginAuthorization(filter, actionName, ("Sec-Fetch-Site", "cross-site"), ("Origin", "https://contoso.invalid")),
+                SameOriginAuthorization(filter, actionName, ("Sec-Fetch-Site", "same-site")),
+                SameOriginAuthorization(filter, actionName, ("Origin", "https://contoso.example")),
+                SameOriginAuthorization(filter, actionName, ("Origin", "null")),
+                SameOriginAuthorization(filter, actionName, ("Referer", "https://contoso.invalid.example/")),
+                SameOriginAuthorization(filter, actionName),
+            })
+            {
+                Assert.IsInstanceOfType(refused.Result, typeof(System.Web.Mvc.HttpStatusCodeResult));
+                Assert.AreEqual((int)HttpStatusCode.Forbidden, ((System.Web.Mvc.HttpStatusCodeResult)refused.Result).StatusCode);
+            }
+        }
+
+        private static System.Web.Mvc.AuthorizationContext SameOriginAuthorization(
+            RequireSameOriginFormPostAttribute filter, string actionName, params (string Name, string Value)[] headers)
+        {
+            var request = new HeaderRequest(new Uri("https://contoso.invalid/Account/" + actionName), headers);
+            var controllerDescriptor = new System.Web.Mvc.ReflectedControllerDescriptor(typeof(AccountController));
+            var actionDescriptor = new System.Web.Mvc.ReflectedActionDescriptor(
+                typeof(AccountController).GetMethod(actionName), actionName, controllerDescriptor);
+            var context = new System.Web.Mvc.AuthorizationContext(
+                new System.Web.Mvc.ControllerContext(new RequestOnlyHttpContext(request), new RouteData(), new AccountController()),
+                actionDescriptor);
+            filter.OnAuthorization(context);
+            return context;
+        }
+
+        private sealed class HeaderRequest : HttpRequestBase
+        {
+            private readonly Uri _url;
+            private readonly System.Collections.Specialized.NameValueCollection _headers = new System.Collections.Specialized.NameValueCollection();
+
+            internal HeaderRequest(Uri url, IEnumerable<(string Name, string Value)> headers)
+            {
+                _url = url;
+                foreach (var header in headers) _headers.Add(header.Name, header.Value);
+            }
+
+            public override Uri Url => _url;
+            public override string HttpMethod => "POST";
+            public override System.Collections.Specialized.NameValueCollection Headers => _headers;
+        }
+
+        private sealed class RequestOnlyHttpContext : HttpContextBase
+        {
+            private readonly HttpRequestBase _request;
+            private readonly System.Collections.IDictionary _items = new System.Collections.Hashtable();
+
+            internal RequestOnlyHttpContext(HttpRequestBase request)
+            {
+                _request = request;
+            }
+
+            public override HttpRequestBase Request => _request;
+            public override System.Collections.IDictionary Items => _items;
+        }
+
         private static System.Web.Mvc.AuthorizationContext ConnectTeamsAuthorization(
             IPrincipal principal,
             PortalAccessPolicy policy,

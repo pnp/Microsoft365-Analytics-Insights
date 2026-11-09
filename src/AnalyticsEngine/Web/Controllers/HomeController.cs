@@ -24,11 +24,6 @@ namespace Web.AnalyticsWeb.Controllers
             return ServePortalApp();
         }
 
-        public ActionResult CredentialsInvalid()
-        {
-            return View();
-        }
-
         // Back-compat aliases for the SPA's old URLs.
         public ActionResult AdminApp()
         {

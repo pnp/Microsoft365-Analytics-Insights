@@ -29,6 +29,21 @@ export type PageTableColumns = {
 };
 
 /**
+ * The address a page row may link to: only an `http(s)` URL. The rows come from tracker telemetry, which
+ * anyone who can load a tracked page can shape, so a `javascript:` or `data:` value must never become a
+ * link (#853, R5-10). The rows carry no list of the tenant's SharePoint hosts to check the host against.
+ */
+export function pageHref(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The one table every page list on this page renders through.
  *
  * Page lists appear on four tabs - most viewed, slowest, quiet, entry and exit - and they all answer
@@ -84,54 +99,62 @@ export default function PageTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map((row) => (
-            <TableRow key={row.url}>
-              <TableCell className={styles.td}>
-                <div className={styles.ellipsis} title={row.url}>
-                  <a href={row.url} target="_blank" rel="noopener noreferrer">
-                    {row.title || shortenUrl(row.url)}
-                  </a>
-                </div>
-                <Text size={100} className={styles.muted}>
-                  {shortenUrl(row.url)}
-                </Text>
-              </TableCell>
-              {show.site && (
+          {rows.map((row) => {
+            const href = pageHref(row.url);
+            const name = row.title || shortenUrl(row.url);
+            return (
+              <TableRow key={row.url}>
                 <TableCell className={styles.td}>
-                  <div className={styles.ellipsis} title={row.site ?? ''}>
-                    {row.site ?? '\u2014'}
+                  <div className={styles.ellipsis} title={row.url}>
+                    {href ? (
+                      <a href={href} target="_blank" rel="noopener noreferrer">
+                        {name}
+                      </a>
+                    ) : (
+                      name
+                    )}
                   </div>
+                  <Text size={100} className={styles.muted}>
+                    {shortenUrl(row.url)}
+                  </Text>
                 </TableCell>
-              )}
-              <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.pageViews)}</TableCell>
-              {show.uniquePageViews && (
-                <TableCell className={`${styles.td} ${styles.numeric}`}>
-                  {formatCount(row.uniquePageViews)}
-                </TableCell>
-              )}
-              {show.dwell && (
-                <TableCell className={`${styles.td} ${styles.numeric}`}>
-                  {formatDuration(row.averageSecondsOnPage)}
-                </TableCell>
-              )}
-              {show.load && (
-                <TableCell className={`${styles.td} ${styles.numeric}`}>
-                  {formatSeconds(row.averageLoadSeconds)}
-                </TableCell>
-              )}
-              {show.entries && (
-                <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.entries)}</TableCell>
-              )}
-              {show.exits && (
-                <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.exits)}</TableCell>
-              )}
-              {show.bounce && (
-                <TableCell className={`${styles.td} ${styles.numeric}`} title={t('webActivity.pageTable.bouncesTitle', { count: formatCount(row.bounces) })}>
-                  {formatPct(row.bouncePct)}
-                </TableCell>
-              )}
-            </TableRow>
-          ))}
+                {show.site && (
+                  <TableCell className={styles.td}>
+                    <div className={styles.ellipsis} title={row.site ?? ''}>
+                      {row.site ?? '\u2014'}
+                    </div>
+                  </TableCell>
+                )}
+                <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.pageViews)}</TableCell>
+                {show.uniquePageViews && (
+                  <TableCell className={`${styles.td} ${styles.numeric}`}>
+                    {formatCount(row.uniquePageViews)}
+                  </TableCell>
+                )}
+                {show.dwell && (
+                  <TableCell className={`${styles.td} ${styles.numeric}`}>
+                    {formatDuration(row.averageSecondsOnPage)}
+                  </TableCell>
+                )}
+                {show.load && (
+                  <TableCell className={`${styles.td} ${styles.numeric}`}>
+                    {formatSeconds(row.averageLoadSeconds)}
+                  </TableCell>
+                )}
+                {show.entries && (
+                  <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.entries)}</TableCell>
+                )}
+                {show.exits && (
+                  <TableCell className={`${styles.td} ${styles.numeric}`}>{formatCount(row.exits)}</TableCell>
+                )}
+                {show.bounce && (
+                  <TableCell className={`${styles.td} ${styles.numeric}`} title={t('webActivity.pageTable.bouncesTitle', { count: formatCount(row.bounces) })}>
+                    {formatPct(row.bouncePct)}
+                  </TableCell>
+                )}
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
       {dwellFootnote && show.dwell && (

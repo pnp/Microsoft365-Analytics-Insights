@@ -71,4 +71,54 @@ namespace Web.AnalyticsWeb
                 : Enumerable.Empty<string>();
         }
     }
+
+    /// <summary>
+    /// The MVC counterpart, for the account actions a page starts with a form POST: sign-out and the Teams connection.
+    /// Refuses the request with a 403 unless a page on this origin sent it.
+    /// </summary>
+    /// <remarks>
+    /// Both were GET actions, so any page the signed-in admin visited could sign them out, or - once consent had been
+    /// granted, when Entra ID asks nothing - run the Teams connection, just by linking to them (#853, R6-8). They are now
+    /// <c>[HttpPost]</c>. A form on another site can still POST, and a browser that doesn't default the auth cookie to
+    /// <c>SameSite=Lax</c> sends the cookie with it, so the request must also say where it came from:
+    /// <c>Sec-Fetch-Site: same-origin</c>, which every current browser sends and a page cannot forge; or, from a browser
+    /// that doesn't send that, an <c>Origin</c> - failing that a <c>Referer</c> - on this host. A request with none of
+    /// them is refused.
+    /// </remarks>
+    [AttributeUsage(AttributeTargets.Method | AttributeTargets.Class, AllowMultiple = false)]
+    public sealed class RequireSameOriginFormPostAttribute : System.Web.Mvc.FilterAttribute, System.Web.Mvc.IAuthorizationFilter
+    {
+        public void OnAuthorization(System.Web.Mvc.AuthorizationContext filterContext)
+        {
+            if (!IsSameOrigin(filterContext?.HttpContext?.Request))
+            {
+                filterContext.Result = new System.Web.Mvc.HttpStatusCodeResult(HttpStatusCode.Forbidden, "Refused: this request did not come from this site.");
+            }
+        }
+
+        internal static bool IsSameOrigin(System.Web.HttpRequestBase request)
+        {
+            var here = request?.Url;
+            if (here == null)
+            {
+                return false;
+            }
+
+            var fetchSite = request.Headers[RequireSameOriginXhrAttribute.FetchSiteHeader];
+            if (!string.IsNullOrWhiteSpace(fetchSite))
+            {
+                return string.Equals(fetchSite.Trim(), "same-origin", StringComparison.OrdinalIgnoreCase);
+            }
+
+            // The host only: behind App Service's front end, or another proxy, the scheme and port the app sees need not
+            // be the browser's
+            var source = request.Headers["Origin"];
+            if (string.IsNullOrWhiteSpace(source))
+            {
+                source = request.Headers["Referer"];
+            }
+            return Uri.TryCreate(source?.Trim(), UriKind.Absolute, out var from)
+                && string.Equals(from.Host, here.Host, StringComparison.OrdinalIgnoreCase);
+        }
+    }
 }

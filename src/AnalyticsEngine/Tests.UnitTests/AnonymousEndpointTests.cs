@@ -2,7 +2,6 @@ extern alias AnalyticsWeb;
 
 using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Security;
-using Common.Entities.Config;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.IO;
@@ -84,6 +83,7 @@ namespace Tests.UnitTests
         /// used to write an Information trace, to the console and to Application Insights.
         /// </summary>
         [TestMethod]
+        [DoNotParallelize]
         public async Task CallRecordWebhook_RepeatedPingsAndBadBodies_AreNotEachTraced()
         {
             string console;
@@ -103,9 +103,26 @@ namespace Tests.UnitTests
             Assert.IsTrue(Regex.Matches(console, "invalid body").Count <= 1, console);
         }
 
+        [TestMethod]
+        public void SampledTrace_TracesTheFirstRequest_ThenOncePerIntervalWithTheCount()
+        {
+            var start = new DateTime(2026, 11, 9, 12, 0, 0, DateTimeKind.Utc);
+            var sampled = new CallRecordWebhookController.SampledTrace(TimeSpan.FromMinutes(15));
+
+            Assert.IsTrue(sampled.ShouldTrace(start, out var first, out var firstSince));
+            Assert.AreEqual(1, first);
+            Assert.AreEqual(start, firstSince);
+            Assert.IsFalse(sampled.ShouldTrace(start.AddMinutes(1), out _, out _));
+            Assert.IsFalse(sampled.ShouldTrace(start.AddMinutes(14), out _, out _));
+
+            Assert.IsTrue(sampled.ShouldTrace(start.AddMinutes(15), out var next, out var nextSince));
+            Assert.AreEqual(3, next, "The two that weren't traced, and this one.");
+            Assert.AreEqual(start.AddMinutes(1), nextSince);
+        }
+
         private static PortalTestHost ImportConfigHost() =>
             new PortalTestHost(new[] { typeof(ImportConfigController) }, PortalTestHost.Anonymous(), PortalAccessPolicy.NotEnforcing,
-                create: t => new ImportConfigController(() => new AppConfig { AppInsightsConnectionString = ConfiguredConnectionString, MetadataRefreshMinutes = 42 }),
+                create: t => new ImportConfigController(() => (ConfiguredConnectionString, 42)),
                 productionExceptionHandler: true);
 
         private static PortalTestHost WebhookHost() =>

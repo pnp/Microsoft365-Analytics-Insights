@@ -153,11 +153,33 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
             }
             catch (JsonException)
             {
-                // Parse-error visibility: no logger is injected into the DTO so we still fall back
-                // to stderr until callers thread one through. See audit follow-up TEST-09 in PR notes.
-                // Never the JSON itself: it holds comment text and author addresses.
-                Console.WriteLine($"\nERROR:Unexpected {fieldName} value for URL {Url}: {json.Length} characters that aren't a valid JSON list");
+                // Never the JSON itself (it holds comment text and author addresses), nor the page's URL: PageUpdateManager
+                // logs this by URL id.
+                NoteParseProblem($"{fieldName} is {json.Length} characters that aren't a valid JSON list, so it is ignored");
                 return new List<T>();
+            }
+        }
+
+        private readonly List<string> _parseProblems = new List<string>();
+
+        /// <summary>
+        /// What could not be read from this update, without the page's URL or any of its content. Recorded rather than
+        /// printed: the DTO has no logger and doesn't know the URL's id, which is how the problem is reported (#853).
+        /// </summary>
+        [JsonIgnore]
+        public IReadOnlyList<string> ParseProblems
+        {
+            get
+            {
+                lock (_parseProblems) return _parseProblems.ToList();
+            }
+        }
+
+        private void NoteParseProblem(string problem)
+        {
+            lock (_parseProblems)
+            {
+                if (!_parseProblems.Contains(problem)) _parseProblems.Add(problem);
             }
         }
 
@@ -200,15 +222,15 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                                             // For now just warn anyway
                                             if (prop.Name == "Comments")
                                             {
-                                                Console.WriteLine($"DEBUG ERROR: Page update for '{this.Url}' contains legacy comments data. Check AITracker is updated");
+                                                NoteParseProblem("props contain legacy comments data; check the AITracker is updated");
                                             }
                                             else if (prop.Name == "PageLikes")
                                             {
-                                                Console.WriteLine($"DEBUG ERROR: Page update for '{this.Url}' contains legacy likes data. Check AITracker is updated");
+                                                NoteParseProblem("props contain legacy likes data; check the AITracker is updated");
                                             }
                                             else
                                             {
-                                                Console.WriteLine($"DEBUG ERROR: Page update for '{this.Url}' contains invalid JSon");
+                                                NoteParseProblem("props contain a value that isn't a simple JSON value, so it is ignored");
                                             }
                                         }
                                     }
@@ -217,7 +239,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                         }
                         else
                         {
-                            Console.WriteLine($"DEBUG ERROR: Page update for '{this.Url}' contains invalid JSon");
+                            NoteParseProblem("props aren't valid JSON, so they are ignored");
                         }
                     }
                 }

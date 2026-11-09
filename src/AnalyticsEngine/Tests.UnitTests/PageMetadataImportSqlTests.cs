@@ -208,6 +208,7 @@ namespace Tests.UnitTests
         /// the console with the page's address (#853).
         /// </summary>
         [TestMethod]
+        [DoNotParallelize]
         public async Task AnUnreadablePageUpdate_IsReportedByUrlId_NotByItsAddress()
         {
             var url = await NewUrl("unreadable");

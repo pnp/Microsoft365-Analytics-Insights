@@ -213,6 +213,9 @@ namespace WebJob.Office365ActivityImporter
 
                 var auth = new GraphAppIndentityOAuthContext(logger, configuredSettings.ClientID, configuredSettings.TenantGUID.ToString(), configuredSettings.ClientSecret, configuredSettings.KeyVaultUrl, configuredSettings.UseClientCertificate);
 
+                // Creds is null until this has run, and the mode used to pass it anyway (#853)
+                await auth.InitClientCredential();
+
                 var newCall = await Engine.Entities.Serialisation.CallRecordDTO.SaveNewCallToDB(
                     commandLine.CallId,
                     new Engine.Graph.ManualGraphCallClient(auth, logger),

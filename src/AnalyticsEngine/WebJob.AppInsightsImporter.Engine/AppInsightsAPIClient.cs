@@ -519,7 +519,26 @@ namespace WebJob.AppInsightsImporter.Engine
                 responseDebug = responseBody;
             }
 
-            var fileOut = new { Response = response, Body = responseDebug, Request = response.RequestMessage };
+            // A record made for the purpose, never the HttpResponseMessage: that carries the request, and with it the
+            // Authorization header - a live bearer token for the query API (#853). The body is raw telemetry - page URLs,
+            // user names - which is what the dump is for: delete the folder as soon as the investigation is over, and
+            // within 7 days at most. Program.cs says the same when the switch is used.
+            var fileOut = new
+            {
+                WrittenUtc = DateTime.UtcNow,
+                Operation = operationType,
+                Request = new
+                {
+                    Method = response.RequestMessage?.Method?.Method,
+                    Uri = response.RequestMessage?.RequestUri?.ToString(),
+                },
+                Response = new
+                {
+                    StatusCode = (int)response.StatusCode,
+                    response.ReasonPhrase,
+                },
+                Body = responseDebug,
+            };
 
             File.WriteAllText(fileName, JsonConvert.SerializeObject(fileOut));
             Console.WriteLine($"--DEBUG: Wrote {fileName}");

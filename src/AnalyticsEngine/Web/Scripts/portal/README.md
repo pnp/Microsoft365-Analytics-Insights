@@ -341,7 +341,8 @@ granted them got a server error instead of the portal).
 The only page that needs the admin's own Microsoft Graph token is **Teams permissions** (Teams deep
 analytics), and it asks for the delegated `Team.ReadBasic.All` and `ChannelMessage.Read.All`
 permissions **on demand**. When the site has no Graph token for the session, the page offers
-*Connect to Microsoft Teams*: a full-page navigation to `/Account/ConnectTeams`, which re-runs the
+*Connect to Microsoft Teams*: a full-page POST to `/Account/ConnectTeams` (`src/auth/serverPost.ts`; the
+server refuses a GET, and a POST another site sent, so a link elsewhere can't start it), which re-runs the
 OIDC challenge marked as a Teams connection. The callback redeems the authorisation code for the
 Teams scopes and captures the OAuth **refresh token** into the encrypted, httpOnly auth cookie.
 If Entra ID refuses — no admin consent, or the prompt was declined — the admin comes back to the
