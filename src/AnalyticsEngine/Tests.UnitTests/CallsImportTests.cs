@@ -1146,7 +1146,9 @@ namespace Tests.UnitTests
 
         private static CallRecordDTO Call(string graphCallId, string organiserEmail)
         {
-            return new CallRecordDTO { GraphCallID = graphCallId, OrganizerEmail = organiserEmail };
+            // Graph always sends a call type and the session list ($expand=sessions); a call without them is a payload
+            // failure (#847), which these tests are not about.
+            return new CallRecordDTO { GraphCallID = graphCallId, OrganizerEmail = organiserEmail, CallType = "groupCall", Sessions = new List<CallSessionDTO>() };
         }
 
         private static GraphChangeNotification Notification(string callId)
@@ -1970,6 +1972,7 @@ namespace Tests.UnitTests
             CallRecordDTO CallWith(string callId, string attendee) => new CallRecordDTO
             {
                 GraphCallID = callId,
+                CallType = "groupCall",
                 OrganizerEmail = "organiser@contoso.com",
                 Sessions = new List<CallSessionDTO>
                 {
