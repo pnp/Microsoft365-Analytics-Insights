@@ -101,17 +101,17 @@ export default function PageTable({
         <TableBody>
           {rows.map((row) => {
             const href = pageHref(row.url);
-            const name = row.title || shortenUrl(row.url);
+            const pageName = row.title || shortenUrl(row.url);
             return (
               <TableRow key={row.url}>
                 <TableCell className={styles.td}>
                   <div className={styles.ellipsis} title={row.url}>
                     {href ? (
                       <a href={href} target="_blank" rel="noopener noreferrer">
-                        {name}
+                        {pageName}
                       </a>
                     ) : (
-                      name
+                      pageName
                     )}
                   </div>
                   <Text size={100} className={styles.muted}>
