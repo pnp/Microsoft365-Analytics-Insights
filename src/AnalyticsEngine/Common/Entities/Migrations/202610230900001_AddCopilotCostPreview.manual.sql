@@ -1,7 +1,76 @@
--- Additive preview schema. Stop the importer for manual upgrades. No existing fact-table rebuild.
--- Run after 202610221500003_UniqueOnlineMeetingIds; retain all facts until explicit purge.
-IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId='202610221500003_UniqueOnlineMeetingIds')
- THROW 51000, 'Required predecessor migration is missing.', 1;
+/* =====================================================================================================
+   MANUAL SQL UPGRADE SCRIPT
+   Migration: 202610230900001_AddCopilotCostPreview
+   Predecessor: 202610221500003_UniqueOnlineMeetingIds
+   =====================================================================================================
+   For operators / DBAs who upgrade the Analytics database BY HAND instead of running the installer. It
+   applies the migration's SQL verbatim (AddCopilotCostPreview.Up_Sql, then Purge_Sql), then stamps
+   __MigrationHistory so EF (DatabaseUpgrader / MigrateDatabaseToLatestVersion) and the web app Health
+   page treat it as applied.
+
+   RUN ORDER
+     Run every manual script in migration-id order. The prerequisite is
+     202610221500003_UniqueOnlineMeetingIds, which must already be stamped in __MigrationHistory. Without
+     it this script creates nothing and stops with "NOT stamped".
+
+   WHAT IT DOES
+     Creates the empty stores of the default-off Copilot credit history preview (nine dbo.copilot_cost_*
+     tables and their indexes) and dbo.copilot_cost_purge_preview, the bounded, dry-run-first purge.
+
+   CLASSIFICATION: PURELY ADDITIVE
+     New empty tables, their indexes and one procedure. Nothing existing is altered, rebuilt or dropped,
+     so there is no "before" query to measure and the benchmark gate for performance-motivated schema
+     changes does not apply.
+
+   UPGRADE TIME
+     Seconds, on a tenant of any size and any SQL Server edition: creating empty tables does not depend
+     on how much data the database already holds. Stop the importer for a manual upgrade, and deploy the
+     matching binaries before restarting it.
+
+   RETENTION
+     Preview facts are kept until an administrator purges them explicitly. Purge preview (a dry run;
+     synthetic example):
+       EXEC dbo.copilot_cost_purge_preview @BeforeDate='20000101', @BatchSize=1000;
+     Deleting also requires @DryRun=0, @Confirm=N'PURGE COPILOT COST HISTORY'. It removes observations
+     and history only; the private token cache, work and context are independent.
+
+   SAFE TO RE-RUN
+     Every step is guarded. Re-running the script against an upgraded database changes nothing and leaves
+     the stamp in place.
+
+   THIS IS A CORRECTED COPY (#848)
+     The copy attached to earlier stable releases checked the predecessor with a THROW in a batch of its
+     own. sqlcmd and SSMS carry on with the next batch after an error, so on a database without the
+     predecessor that copy created the preview schema anyway, and its stamp then inserted nothing,
+     silently. This copy stops with SET NOEXEC ON, and says "NOT stamped" whenever it does not stamp. If
+     the earlier copy left the preview tables on a database without the predecessor, nothing is damaged:
+     stamp the predecessor (its manual script, or the installer), then run this script. Every step is
+     guarded, so it completes and stamps.
+   ===================================================================================================== */
+
+SET NOCOUNT ON;
+SET QUOTED_IDENTIFIER ON;
+
+/* =====================================================================================================
+   PRE-FLIGHT - runs BEFORE anything is created.
+
+   sqlcmd and SSMS do NOT stop at an error: they abandon the failing batch and carry on with the next
+   one. So a RAISERROR or THROW alone does not prevent an out-of-order run. SET NOEXEC ON is what makes
+   the failure real: every following batch is compiled but not executed, and the SET NOEXEC OFF at the
+   very end of the script restores the session.
+   ===================================================================================================== */
+IF OBJECT_ID(N'dbo.__MigrationHistory', N'U') IS NULL
+BEGIN
+    RAISERROR('AddCopilotCostPreview: NOT stamped - dbo.__MigrationHistory does not exist, so this does not look like an Analytics database. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
+
+IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202610221500003_UniqueOnlineMeetingIds')
+   AND NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202610230900001_AddCopilotCostPreview')
+BEGIN
+    RAISERROR('AddCopilotCostPreview: NOT stamped - prerequisite migration 202610221500003_UniqueOnlineMeetingIds is not stamped in __MigrationHistory. Run the manual scripts in migration-id order. Nothing has been changed.', 16, 1) WITH NOWAIT;
+    SET NOEXEC ON;
+END
 GO
 
 SET NOCOUNT ON;
@@ -139,6 +208,16 @@ BEGIN
 END;
 
 GO
+
+/* =====================================================================================================
+   Record the migration in __MigrationHistory.
+
+   The guard checks SCHEMA only: every table, column, index and the purge procedure the migration
+   creates must exist, and the predecessor must be stamped. It never checks data. It is reached on every
+   path, including a re-run against a database that is already up to date. The model blob is copied from
+   the predecessor's row, because this migration does not change the EF model: its .resx snapshot is
+   byte-identical to the predecessor's.
+   ===================================================================================================== */
 IF OBJECT_ID(N'dbo.copilot_cost_work',N'U') IS NULL OR OBJECT_ID(N'dbo.copilot_cost_services',N'U') IS NULL
  OR OBJECT_ID(N'dbo.copilot_cost_control',N'U') IS NULL
  OR OBJECT_ID(N'dbo.copilot_cost_runs',N'U') IS NULL OR OBJECT_ID(N'dbo.copilot_cost_observations',N'U') IS NULL
@@ -155,12 +234,25 @@ IF OBJECT_ID(N'dbo.copilot_cost_work',N'U') IS NULL OR OBJECT_ID(N'dbo.copilot_c
  OR NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_cost_context') AND name=N'IX_copilot_cost_context_run')
  OR NOT EXISTS(SELECT 1 FROM sys.indexes WHERE object_id=OBJECT_ID(N'dbo.copilot_cost_pages') AND name=N'IX_copilot_cost_pages_queue')
  OR OBJECT_ID(N'dbo.copilot_cost_purge_preview',N'P') IS NULL
- THROW 51000, 'Preview schema is incomplete; migration was not stamped.', 1;
-IF NOT EXISTS(SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId='202610230900001_AddCopilotCostPreview')
- INSERT dbo.__MigrationHistory(MigrationId,ContextKey,Model,ProductVersion)
- SELECT '202610230900001_AddCopilotCostPreview',ContextKey,Model,ProductVersion
- FROM dbo.__MigrationHistory WHERE MigrationId='202610221500003_UniqueOnlineMeetingIds';
--- Purge preview (dry run, synthetic example):
--- EXEC dbo.copilot_cost_purge_preview @BeforeDate='20000101', @BatchSize=1000;
--- Deletion additionally requires @DryRun=0,@Confirm=N'PURGE COPILOT COST HISTORY'.
--- This removes observations/history only; private token cache, work, and context are independent.
+BEGIN
+    RAISERROR('AddCopilotCostPreview: NOT stamped - Preview schema is incomplete: a dbo.copilot_cost_* table, column or index, or dbo.copilot_cost_purge_preview, is missing. Read the errors above (sqlcmd and SSMS carry on past a failed batch, so the first error may be further up), then re-run this script; every step is guarded.', 16, 1) WITH NOWAIT;
+END
+ELSE IF EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202610230900001_AddCopilotCostPreview')
+BEGIN
+    RAISERROR('AddCopilotCostPreview: __MigrationHistory is already stamped; nothing to do.', 0, 1) WITH NOWAIT;
+END
+ELSE IF NOT EXISTS (SELECT 1 FROM dbo.__MigrationHistory WHERE MigrationId = N'202610221500003_UniqueOnlineMeetingIds')
+BEGIN
+    RAISERROR('AddCopilotCostPreview: NOT stamped - prerequisite migration 202610221500003_UniqueOnlineMeetingIds is not stamped in __MigrationHistory. Run the manual scripts in migration-id order, then re-run this script.', 16, 1) WITH NOWAIT;
+END
+ELSE
+BEGIN
+    INSERT dbo.__MigrationHistory(MigrationId,ContextKey,Model,ProductVersion)
+    SELECT '202610230900001_AddCopilotCostPreview',ContextKey,Model,ProductVersion
+    FROM dbo.__MigrationHistory WHERE MigrationId='202610221500003_UniqueOnlineMeetingIds';
+    RAISERROR('AddCopilotCostPreview: stamped __MigrationHistory.', 0, 1) WITH NOWAIT;
+END
+
+-- Restore the session. SET NOEXEC OFF still executes under NOEXEC, so this is reached even when the
+-- pre-flight above turned NOEXEC on and skipped everything in between.
+SET NOEXEC OFF;
