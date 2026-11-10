@@ -98,7 +98,6 @@ export const callDeadLetters = {
   'callDeadLetters.reason.CallImportRetryWindowExpired': 'Still failing when its retry window closed',
   'callDeadLetters.reason.MaxDeliveryCountExceeded': 'Service Bus gave up after too many deliveries',
   'callDeadLetters.reason.NoOrganiserIdentity': 'The call record names no organiser',
-  'callDeadLetters.reason.NoSessions': 'The call record has no sessions',
   'callDeadLetters.reason.NoUsableSessions': "None of the call record's sessions could be used",
   'callDeadLetters.reason.NoCallType': 'The call record has no call type',
   'callDeadLetters.reason.none': 'No reason recorded',

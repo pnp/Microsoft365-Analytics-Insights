@@ -128,7 +128,6 @@ export const DEAD_LETTER_REASON_KEYS = new Map<string, TranslationKey>([
   ['CallImportRetryWindowExpired', 'callDeadLetters.reason.CallImportRetryWindowExpired'],
   ['MaxDeliveryCountExceeded', 'callDeadLetters.reason.MaxDeliveryCountExceeded'],
   ['NoOrganiserIdentity', 'callDeadLetters.reason.NoOrganiserIdentity'],
-  ['NoSessions', 'callDeadLetters.reason.NoSessions'],
   ['NoUsableSessions', 'callDeadLetters.reason.NoUsableSessions'],
   ['NoCallType', 'callDeadLetters.reason.NoCallType'],
 ]);
