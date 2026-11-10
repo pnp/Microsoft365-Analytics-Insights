@@ -63,6 +63,9 @@ const summary: AgentCostSummary = {
   daysWithUsage: 10,
   peakDistinctUsersOnASlice: 5,
   unclassifiedHarnessCredits: 0,
+  minPeoplePerSlice: null,
+  smallSlicesWithheld: false,
+  withheld: false,
   capacity: null,
   azureCost: [],
 };
@@ -74,6 +77,8 @@ const agentRow = (billedCredits: number): AgentCostBreakdownRow => ({
   nonBilledCredits: 0,
   activeDays: 3,
   peakDistinctUsers: 2,
+  folded: 0,
+  withheld: false,
 });
 
 const breakdownRow = () => screen.getByText('Contoso helpdesk agent', { selector: 'td' }).closest('tr')!;
@@ -86,7 +91,7 @@ beforeEach(() => {
   vi.mocked(fetchTrend).mockResolvedValue([]);
   vi.mocked(fetchTopUsers).mockResolvedValue([]);
   vi.mocked(fetchBreakdown).mockResolvedValue([agentRow(617)]);
-  vi.mocked(fetchDetail).mockResolvedValue({ rows: [], totalRows: 0, page: 1, pageSize: 50 });
+  vi.mocked(fetchDetail).mockResolvedValue({ rows: [], totalRows: 0, page: 1, pageSize: 50, minPeoplePerSlice: null, smallSlicesWithheld: false });
   vi.mocked(fetchAzureBreakdown).mockResolvedValue([]);
   vi.mocked(fetchAllDetailRows).mockResolvedValue({ rows: [], truncated: false, totalRows: 0 });
 });
