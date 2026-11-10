@@ -33,6 +33,18 @@ function placeholders(text: string): string[] {
   return [...text.matchAll(PLACEHOLDER)].map((m) => m[1]).sort();
 }
 
+/**
+ * A value that begins or ends mid-sentence.
+ *
+ * Surrounding whitespace is the usual sign. A value that opens with the punctuation closing the
+ * sentence before it - `'. Licensed users only'`, `': days they used Copilot'` - is the other: it is
+ * the second half of a sentence another key started, glued on at the call site, and has no leading
+ * space for the whitespace check to see.
+ */
+function isFragment(value: string): boolean {
+  return value !== value.trim() || /^[.,;:]/.test(value);
+}
+
 /** Every language other than the one the catalog is authored in. */
 const TRANSLATED: Language[] = LANGUAGES.map((l) => l.id).filter((id) => id !== 'en');
 
@@ -99,7 +111,7 @@ describe('Translation catalog', () => {
    */
   it('has no sentence fragments in English, which cannot be translated', () => {
     const fragments = Object.entries(EN_CATALOG)
-      .filter(([, value]) => value !== value.trim())
+      .filter(([, value]) => isFragment(value))
       .map(([key, value]) => `${key}: "${value}"`);
 
     expect(
@@ -168,7 +180,7 @@ describe.each(TRANSLATED)('Translation catalog: %s', (language) => {
 
   it('has no sentence fragments', () => {
     const fragments = Object.entries(catalog())
-      .filter(([, value]) => value !== value.trim())
+      .filter(([, value]) => isFragment(value))
       .map(([key, value]) => `${key}: "${value}"`);
     expect(fragments, `Fragments in ${language}:\n  ${fragments.join('\n  ')}`).toEqual([]);
   });

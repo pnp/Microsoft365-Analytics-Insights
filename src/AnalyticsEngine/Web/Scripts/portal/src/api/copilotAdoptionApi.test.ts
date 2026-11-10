@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { apiFetch, PortalPermissionError } from './http';
+import { apiFetch, PortalPermissionError, ReportScopeError, SessionExpiredError, UnexpectedServerError } from './http';
 import {
-  AdoptionGenerationChangedError, AdoptionRequestError, canRetryAdoptionRequest,
+  AdoptionGenerationChangedError, AdoptionRequestError, adoptionFailure, adoptionFailureText, canRetryAdoptionRequest,
   fetchAdoptionFilters, fetchAdoptionSummary, rebuildAdoption, workbookExportUrl,
 } from './copilotAdoptionApi';
-import { loadCatalog, setActiveLanguage } from '../i18n';
+import { loadCatalog, setActiveLanguage, translateActive, translateStatic } from '../i18n';
 
 vi.mock('./http', async importOriginal => ({
   ...await importOriginal<typeof import('./http')>(),
@@ -168,5 +168,47 @@ describe('copilotAdoptionApi polling', () => {
     mockedFetch.mockResolvedValueOnce(response);
     await expect(fetchAdoptionFilters(28, undefined, undefined, null, { generationId: runId }))
       .rejects.toBeInstanceOf(AdoptionGenerationChangedError);
+  });
+});
+
+describe('copilotAdoptionApi failures a page keeps', () => {
+  afterEach(() => setActiveLanguage('en'));
+
+  it('keeps the catalog key a failed request was worded from, so the page can word it in another language', async () => {
+    await loadCatalog('es');
+    mockedFetch.mockResolvedValueOnce(jsonResponse({}, 500));
+    const error = await fetchAdoptionFilters(28).catch((e: unknown) => e);
+    expect((error as Error).message).toBe("Couldn't load the Copilot adoption filters (500).");
+
+    const failure = adoptionFailure(error, 'copilotAdoption.loading.state.failed');
+    expect(failure).toEqual({ key: 'errors.copilotAdoption.filtersFailed', values: { status: 500 } });
+    expect(adoptionFailureText((key, values) => translateStatic('es', key, values), failure))
+      .toBe('No se han podido cargar los filtros de adopci\u00f3n de Copilot (500).');
+  });
+
+  it('words each apiFetch failure from the same catalog key its own message comes from, in every language', async () => {
+    await loadCatalog('es');
+    for (const language of ['en', 'es'] as const) {
+      setActiveLanguage(language);
+      for (const error of [
+        new SessionExpiredError(),
+        new PortalPermissionError('administration', 'Portal.Administration'),
+        new PortalPermissionError('seePii', 'Portal.SeePII'),
+        new ReportScopeError('globalFilterUnavailable', 'errors.globalFilter.unavailable'),
+        new UnexpectedServerError('00000000-0000-0000-0000-000000000000'),
+        new AdoptionGenerationChangedError(),
+      ]) {
+        const failure = adoptionFailure(error, 'copilotAdoption.page.errors.loadSummary');
+        expect('key' in failure, `${error.name} kept as text`).toBe(true);
+        expect(adoptionFailureText(translateActive, failure)).toBe(error.message);
+      }
+    }
+  });
+
+  it('keeps the text of an error the portal did not word, and words anything else from the fallback', () => {
+    expect(adoptionFailure(new TypeError('Failed to fetch'), 'copilotAdoption.page.errors.loadSummary'))
+      .toEqual({ text: 'Failed to fetch' });
+    expect(adoptionFailure('not an error', 'copilotAdoption.page.errors.loadSummary'))
+      .toEqual({ key: 'copilotAdoption.page.errors.loadSummary' });
   });
 });

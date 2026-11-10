@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
-import { loadCatalog } from '../../i18n';
+import { LanguageSwitcher, loadCatalog } from '../../i18n';
 import { PRINT_ROW_LIMIT, requestPrint, resetPrintPreparation } from '../shared/printPreparation';
 import type {
   CopilotAdoptionOptions,
@@ -656,6 +656,74 @@ describe('OpportunitiesPanel licence model', () => {
     expect(within(model).getByRole('radiogroup').closest('[data-print="hide"]')).not.toBeNull();
     const printed = [...model.querySelectorAll('[data-print="only"]')].map((n) => n.textContent);
     expect(printed).toContain('Working shown for: All 10 people recommended');
+  });
+});
+
+describe('OpportunitiesPanel language and number format', () => {
+  const candidateRow = {
+    userId: 1,
+    userPrincipalName: 'candidate@contoso.example',
+    mail: null,
+    department: 'Finance',
+    jobTitle: null,
+    country: null,
+    officeLocation: null,
+    companyName: null,
+    manager: null,
+    unlicensedCopilotInteractions: 12,
+    unlicensedCopilotActiveDays: 4,
+    lastCopilotInteractionUtc: null,
+    teamsMessages: 10,
+    teamsMeetings: 2,
+    emailsSent: 5,
+    emailsRead: 9,
+    filesViewedOrEdited: 3,
+    lastM365ActivityUtc: null,
+    opportunityScore: 70,
+    copilotDemandScore: 20,
+    collaborationScore: 60,
+    emailScore: 50,
+    documentScore: 40,
+    recommended: true,
+    qualificationTier: null,
+    qualificationTierLabel: null,
+    rationale: 'Workload inferred.',
+  };
+
+  it('keeps the candidate list and its search when the reader switches language, without asking again', async () => {
+    await loadCatalog('es');
+    const user = userEvent.setup();
+    renderWithProvider(
+      <>
+        <LanguageSwitcher />
+        <OpportunitiesPanel windowDays={28} summary={summary()} options={OPTIONS} />
+      </>,
+    );
+    await user.type(await screen.findByRole('textbox', { name: 'Search licence candidates' }, { timeout: 5000 }), 'contoso{Enter}');
+    await waitFor(() => expect((fetchOpportunities.mock.calls.at(-1)![1] as OpportunityFilters).search).toBe('contoso'));
+    const requests = fetchOpportunities.mock.calls.length;
+
+    await user.click(screen.getByRole('button', { name: /Language: English/ }));
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Espa\u00f1ol' }, { timeout: 5000 }));
+
+    expect(await screen.findByRole('textbox', { name: 'Buscar candidatos a licencia' }, { timeout: 5000 })).toHaveValue('contoso');
+    expect(fetchOpportunities).toHaveBeenCalledTimes(requests);
+  });
+
+  it('writes the Copilot target scaled to the period with the reader\u2019s decimal comma', async () => {
+    fetchOpportunities.mockResolvedValue({ total: 1, skip: 0, take: 50, warnings: [], rows: [candidateRow] });
+    await loadCatalog('es');
+    const user = userEvent.setup();
+    renderWithProvider(<OpportunitiesPanel windowDays={90} summary={summary()} options={OPTIONS} />, { language: 'es' });
+    await screen.findByText('candidate@contoso.example', undefined, { timeout: 5000 });
+
+    // 20 interactions per 28 days, at 90 days: about 64.3.
+    await user.click(screen.getByRole('button', { name: 'C\u00f3mo se calcula \u00abPuntuaci\u00f3n de caso de negocio\u00bb' }));
+    expect(await screen.findByText(/aproximadamente 64,3 aqu\u00ed/, undefined, { timeout: 5000 })).toBeVisible();
+    expect(screen.getByText(/\(20 x 90 \/ 28\)/)).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Mostrar la evaluaci\u00f3n completa de candidate@contoso.example' }));
+    expect(await screen.findByText('objetivo 64,3 para este periodo', undefined, { timeout: 5000 })).toBeVisible();
   });
 });
 

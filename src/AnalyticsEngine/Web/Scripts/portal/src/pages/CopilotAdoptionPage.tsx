@@ -28,9 +28,12 @@ import {
   fetchAdoptionSummary,
   rebuildAdoption,
   canRetryAdoptionRequest,
+  adoptionFailure,
+  adoptionFailureText,
   AdoptionRequestError,
   AdoptionGenerationChangedError,
   workbookExportUrl,
+  type AdoptionFailure,
 } from '../api/copilotAdoptionApi';
 import type {
   AccountabilityRollupRow,
@@ -76,7 +79,7 @@ import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/ad
 import { ManagerModellingLine, hasManagerModelling } from '../components/copilotAdoption/ManagerModelling';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
-import { activeLocale, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
+import { activeLocale, formatList, formatNumber, plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 import {
   adoptionBandLabel,
   availabilityMessages,
@@ -460,8 +463,9 @@ function CopilotAdoptionView({
   const canSeePii = access.seePii;
 
   const [availability, setAvailability] = useState<CopilotAdoptionAvailability | null>(null);
-  const [availabilityError, setAvailabilityError] = useState<string | null>(null);
+  const [availabilityError, setAvailabilityError] = useState<AdoptionFailure | null>(null);
   const [availabilityRetryable, setAvailabilityRetryable] = useState(false);
+  const [availabilityChecking, setAvailabilityChecking] = useState(true);
   const [availabilityAttempt, setAvailabilityAttempt] = useState(0);
   const [windowDays, setWindowDays] = useState(28);
   // A period with explicit dates - last calendar month or quarter, or the reader's own range. Null for
@@ -511,7 +515,7 @@ function CopilotAdoptionView({
 
   const [summary, setSummary] = useState<CopilotAdoptionSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
-  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [summaryError, setSummaryError] = useState<AdoptionFailure | null>(null);
   const [summaryRetryable, setSummaryRetryable] = useState(false);
   const [progress, setProgress] = useState<AdoptionProgress | null>(null);
   const [loadRequest, setLoadRequest] = useState<{ attempt: number; after?: string; rebuild?: boolean }>({ attempt: 0 });
@@ -531,25 +535,33 @@ function CopilotAdoptionView({
   // The reader's own time-saved figures, if any, so the Excel report models the hours on screen.
   const timeSaved = useTimeSavedAssumptions(summary);
 
+  // Keyed on the attempt alone, never on the language: asking again on a language switch reloaded the
+  // whole report behind it. A failure stays on screen, in whichever language is being read, until a
+  // later check succeeds; its retry button is disabled while that check runs.
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    setAvailabilityError(null);
+    setAvailabilityChecking(true);
     fetchAdoptionAvailability(controller.signal)
       .then((a) => {
-        if (!cancelled) setAvailability(a);
+        if (cancelled) return;
+        setAvailability(a);
+        setAvailabilityError(null);
       })
       .catch((e: unknown) => {
         if (!cancelled) {
-          setAvailabilityError(e instanceof Error ? e.message : t('copilotAdoption.page.errors.checkAvailability'));
+          setAvailabilityError(adoptionFailure(e, 'copilotAdoption.page.errors.checkAvailability'));
           setAvailabilityRetryable(canRetryAdoptionRequest(e));
         }
+      })
+      .finally(() => {
+        if (!cancelled) setAvailabilityChecking(false);
       });
     return () => {
       cancelled = true;
       controller.abort();
     };
-  }, [t, availabilityAttempt]);
+  }, [availabilityAttempt]);
 
   useEffect(() => {
     if (cooldownUntil <= Date.now()) return;
@@ -620,7 +632,7 @@ function CopilotAdoptionView({
       })
       .catch((e: unknown) => {
         if (cancelled || controller.signal.aborted) return;
-        setSummaryError(e instanceof Error ? e.message : t('copilotAdoption.page.errors.loadSummary'));
+        setSummaryError(adoptionFailure(e, 'copilotAdoption.page.errors.loadSummary'));
         setSummaryRetryable(canRetryAdoptionRequest(e));
         if (e instanceof AdoptionRequestError && e.retryAfterSeconds > 0) {
           setNow(Date.now());
@@ -657,12 +669,12 @@ function CopilotAdoptionView({
         if (e instanceof AdoptionGenerationChangedError && onGenerationChanged()) return;
         setFiltersLoad({
           state: 'failed',
-          error: e instanceof Error ? e.message : `${t('copilotAdoption.loading.filters')}: ${t('copilotAdoption.loading.state.failed')}`,
+          error: adoptionFailure(e, 'copilotAdoption.loading.state.failed'),
           retryable: canRetryAdoptionRequest(e),
         });
       });
     return () => { cancelled = true; controller.abort(); };
-  }, [summary, summaryLoading, generationId, windowDays, dateRange, filtersAttempt, onGenerationChanged, t]);
+  }, [summary, summaryLoading, generationId, windowDays, dateRange, filtersAttempt, onGenerationChanged]);
 
   useEffect(() => {
     if (!summary || summaryLoading) return;
@@ -679,12 +691,12 @@ function CopilotAdoptionView({
         if (e instanceof AdoptionGenerationChangedError && onGenerationChanged()) return;
         setSqlLoad({
           state: 'failed',
-          error: e instanceof Error ? e.message : `${t('copilotAdoption.loading.sql')}: ${t('copilotAdoption.loading.state.failed')}`,
+          error: adoptionFailure(e, 'copilotAdoption.loading.state.failed'),
           retryable: canRetryAdoptionRequest(e),
         });
       });
     return () => { cancelled = true; controller.abort(); };
-  }, [summary, summaryLoading, generationId, windowDays, dateRange, sqlAttempt, onGenerationChanged, t]);
+  }, [summary, summaryLoading, generationId, windowDays, dateRange, sqlAttempt, onGenerationChanged]);
 
   const cooldownSeconds = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
   const hasFailedAnalysis = summary?.diagnostics?.steps.some(step => step.failed) ?? false;
@@ -836,9 +848,9 @@ function CopilotAdoptionView({
       {availabilityError && (
         <MessageBar intent="error" style={{ marginTop: '16px' }}>
           <MessageBarBody>
-            {availabilityError}
+            {adoptionFailureText(t, availabilityError)}
             {availabilityRetryable && (
-              <Button onClick={() => setAvailabilityAttempt(attempt => attempt + 1)}>
+              <Button disabled={availabilityChecking} onClick={() => setAvailabilityAttempt(attempt => attempt + 1)}>
                 {t('copilotAdoption.loading.retryRequest')}
               </Button>
             )}
@@ -897,13 +909,14 @@ function CopilotAdoptionView({
               {summary.figuresIncomplete && (
                 <MessageBar intent="error">
                   <MessageBarBody>
-                    {tNode('copilotAdoption.page.incomplete.message', {
-                      warning: <strong>{t('copilotAdoption.page.incomplete.warning')}</strong>,
-                      missing:
-                        summary.incompleteReasons.length > 0
-                          ? `${t('copilotAdoption.page.incomplete.missingPrefix')} ${summary.incompleteReasons.map((reason) => incompleteDatasetText(t, reason)).join(', ')}. `
-                          : '',
-                    })}
+                    {summary.incompleteReasons.length > 0
+                      ? tNode('copilotAdoption.page.incomplete.messageWithReasons', {
+                          warning: <strong>{t('copilotAdoption.page.incomplete.warning')}</strong>,
+                          reasons: formatList(summary.incompleteReasons.map((reason) => incompleteDatasetText(t, reason))),
+                        })
+                      : tNode('copilotAdoption.page.incomplete.message', {
+                          warning: <strong>{t('copilotAdoption.page.incomplete.warning')}</strong>,
+                        })}
                   </MessageBarBody>
                 </MessageBar>
               )}
@@ -1259,7 +1272,7 @@ function ExecutiveTab({
               title={t('copilotAdoption.page.licencePosition2')}
               content={{
                 what: t('copilotAdoption.page.theHeadlineLicencePositionAssignedSeatsAdoptionHabitReclaim'),
-                how: t('copilotAdoption.page.adoptionMeansLeastOneCopilotInteractionDaysHabitMeans', { v0: o.windowDays, v1: o.establishedScore }),
+                how: t('copilotAdoption.page.adoptionMeansLeastOneCopilotInteractionDaysHabitMeans', { v0: formatNumber(o.windowDays), v1: formatNumber(o.establishedScore) }),
                 source:
                   t('copilotAdoption.page.useAnalystViewSqlLicensedUsersLicenceOpportunitiesTabs'),
               }}
@@ -1334,14 +1347,14 @@ function ExecutiveTab({
             <div>
               <Text weight="semibold" size={400}>{t('copilotAdoption.page.departmentLeagueTable')}</Text>
               <Text size={200} block className={styles.muted}>
-                {t('copilotAdoption.page.lowestHabitRateDepartmentsCappedTopDepartmentsAboveSeat', { v0: o.topSegments })}
+                {t('copilotAdoption.page.lowestHabitRateDepartmentsCappedTopDepartmentsAboveSeat', { v0: formatNumber(o.topSegments) })}
               </Text>
             </div>
             <InfoTip
               title={t('copilotAdoption.page.departmentLeagueTable2')}
               content={{
                 what: t('copilotAdoption.page.departmentsRankedShareLicensedUsersFormedCopilotHabit'),
-                how: t('copilotAdoption.page.habitualUsersEstablishedChampionDepartmentsLicencesOmittedExecutiveTable', { v0: o.minSeatsPerSegment, v1: o.topSegments }),
+                how: t('copilotAdoption.page.habitualUsersEstablishedChampionDepartmentsLicencesOmittedExecutiveTable', { v0: formatNumber(o.minSeatsPerSegment), v1: formatNumber(o.topSegments) }),
                 source:
                   t('copilotAdoption.page.theAnalystViewKeepsFullAdoptionOpportunityBreakdownsDetail'),
               }}
@@ -1362,7 +1375,7 @@ function ExecutiveTab({
               title={t('copilotAdoption.page.adoptionFunnel2')}
               content={{
                 what: t('copilotAdoption.page.theLicensedPopulationNarrowedOneStageTimeSingleBiggest'),
-                how: t('copilotAdoption.page.licensedCopilotSeatHoldersEverUsedIncludesActiveDormant', { v0: o.windowDays, v1: o.establishedScore, v2: o.championScore }),
+                how: t('copilotAdoption.page.licensedCopilotSeatHoldersEverUsedIncludesActiveDormant', { v0: formatNumber(o.windowDays), v1: formatNumber(o.establishedScore), v2: formatNumber(o.championScore) }),
                 source: t('copilotAdoption.page.theSameFunnelAppearsAnalystViewSqlUsedReproduce'),
               }}
             />
@@ -1397,7 +1410,7 @@ function ExecutiveTab({
               title={t('copilotAdoption.page.adoptionEmailDomain2')}
               content={{
                 what: t('copilotAdoption.page.copilotAdoptionEachEmailDomainTenantPracticeEachOrganisations'),
-                how: t('copilotAdoption.page.theDomainTakenEachPersonSignNameDomainNeeds', { v0: o.minSeatsPerSegment }),
+                how: t('copilotAdoption.page.theDomainTakenEachPersonSignNameDomainNeeds', { v0: formatNumber(o.minSeatsPerSegment) }),
                 source:
                   t('copilotAdoption.page.worthReadingAlongsideDepartmentTableInsteadTenantBuiltAcquisition'),
               }}
@@ -1524,7 +1537,7 @@ function accountabilityDimensionCopy(summary: CopilotAdoptionSummary, t: TFuncti
       label: fallbackLabel,
       aggregateView: t('copilotAdoption.page.aggregateOnlyViewSortedLargestAbsoluteOpportunityFirstGroups', {
         v0: fallbackDescription,
-        v1: summary.options.minSeatsPerSegment,
+        v1: formatNumber(summary.options.minSeatsPerSegment),
       }),
       safeView: t('copilotAdoption.page.leaderSafeAggregateViewSeatsAdoptionHabitReclaimTiers', {
         v0: fallbackDescription,
@@ -1534,7 +1547,7 @@ function accountabilityDimensionCopy(summary: CopilotAdoptionSummary, t: TFuncti
 
   return {
     label: t(text.labelKey),
-    aggregateView: t(text.aggregateViewKey, { minSeats: summary.options.minSeatsPerSegment }),
+    aggregateView: t(text.aggregateViewKey, { minSeats: formatNumber(summary.options.minSeatsPerSegment) }),
     safeView: t(text.safeViewKey),
   };
 }
@@ -1614,7 +1627,7 @@ function AnalystTab({
             title={t('copilotAdoption.page.whereStand3')}
             content={{
               what: t('copilotAdoption.page.adoptionRateShareLicensedUsersTouchedCopilotAllHabit'),
-              how: t('copilotAdoption.page.theColouredArcJudgementScaleSmoothGradientContinuousRamp', { v0: describeBands(), v1: o.establishedScore, v2: o.coworkLoadMinScore, v3: o.coworkFluencyMinScore }),
+              how: t('copilotAdoption.page.theColouredArcJudgementScaleSmoothGradientContinuousRamp', { v0: describeBands(), v1: formatNumber(o.establishedScore), v2: formatNumber(o.coworkLoadMinScore), v3: formatNumber(o.coworkFluencyMinScore) }),
               source:
                 t('copilotAdoption.page.theGapBetweenAdoptionHabitGaugesFindingAdoptionHabit'),
             }}
@@ -1659,7 +1672,7 @@ function AnalystTab({
               title={t('copilotAdoption.page.adoptionFunnel4')}
               content={{
                 what: t('copilotAdoption.page.theLicensedPopulationNarrowedOneStageTimeSingleBiggest2'),
-                how: t('copilotAdoption.page.licensedHoldersCopilotLicenceSkuEverUsedCountedActive', { v0: o.establishedScore, v1: o.championScore }),
+                how: t('copilotAdoption.page.licensedHoldersCopilotLicenceSkuEverUsedCountedActive', { v0: formatNumber(o.establishedScore), v1: formatNumber(o.championScore) }),
                 source:
                   t('copilotAdoption.page.licensedCountsComeImportedLicenceAssignmentsEveryActivityStage'),
               }}
@@ -1732,7 +1745,7 @@ function AnalystTab({
             title={t('copilotAdoption.page.accountabilityRollUp2')}
             content={{
               what: accountabilityCopy.safeView,
-              how: t('copilotAdoption.page.theDimensionDefaultsDirectManagerUsersManagerGroupedExplicitly', { v0: o.minSeatsPerSegment }),
+              how: t('copilotAdoption.page.theDimensionDefaultsDirectManagerUsersManagerGroupedExplicitly', { v0: formatNumber(o.minSeatsPerSegment) }),
               source:
                 t('copilotAdoption.page.thisDeliberatelyAddNamedPerUserLeaderViewDrill'),
             }}
@@ -1766,14 +1779,14 @@ function AnalystTab({
           <div>
             <Text weight="semibold" size={400}>{t('copilotAdoption.page.adoptionDepartment')}</Text>
             <Text size={200} block className={styles.muted}>
-              {t('copilotAdoption.page.lowestAdoptionFirstRunningOrderEnablementPlanDepartmentsFewer', { v0: o.minSeatsPerSegment })}
+              {t('copilotAdoption.page.lowestAdoptionFirstRunningOrderEnablementPlanDepartmentsFewer', { v0: formatNumber(o.minSeatsPerSegment) })}
             </Text>
           </div>
           <InfoTip
             title={t('copilotAdoption.page.adoptionDepartment2')}
             content={{
               what: t('copilotAdoption.page.copilotAdoptionEachDepartmentWorstFirstRawLicenceCounts'),
-              how: t('copilotAdoption.page.departmentComesImportedUserMetadataUsersNoneGroupedNo', { v0: o.minSeatsPerSegment }),
+              how: t('copilotAdoption.page.departmentComesImportedUserMetadataUsersNoneGroupedNo', { v0: formatNumber(o.minSeatsPerSegment) }),
               source:
                 t('copilotAdoption.page.theCountsShownNextRateDeliberatelyAcrossSixLicences'),
             }}
@@ -1805,7 +1818,7 @@ function AnalystTab({
               title={t('copilotAdoption.page.adoptionEmailDomain4')}
               content={{
                 what: t('copilotAdoption.page.adoptionReclaimUnlicensedDemandLicenceCandidatesEachEmailDomain'),
-                how: t('copilotAdoption.page.theDomainTakenEachPersonSignNamePeopleWhose', { v0: o.minSeatsPerSegment }),
+                how: t('copilotAdoption.page.theDomainTakenEachPersonSignNamePeopleWhose', { v0: formatNumber(o.minSeatsPerSegment) }),
                 source:
                   t('copilotAdoption.page.invitedGuestsAttributedOwnHomeOrganisationTenantUsingDomain'),
               }}
@@ -1832,7 +1845,7 @@ function AnalystTab({
               <InfoTip
                 title={t('copilotAdoption.page.whereUnmetDemand2')}
                 content={{
-                  what: t('copilotAdoption.page.howManyUnlicensedUsersEachDepartmentRecommendedLicenceEither', { v0: o.opportunityProvenDemandMinActiveDays, v1: o.opportunityRecommendScore }),
+                  what: t('copilotAdoption.page.howManyUnlicensedUsersEachDepartmentRecommendedLicenceEither', { v0: formatNumber(o.opportunityProvenDemandMinActiveDays), v1: formatNumber(o.opportunityRecommendScore) }),
                   how: t('copilotAdoption.page.onlyRecommendedCandidatesCountedEveryUnlicensedUserDisabledAccounts'),
                   source:
                     t('copilotAdoption.page.readAgainstDepartmentAdoptionTableDepartmentAppearsBothLicences'),
@@ -1865,8 +1878,16 @@ function AnalystTab({
             title={t('copilotAdoption.page.howOftenPeopleOpenCopilot2')}
             content={{
               what: t('copilotAdoption.page.activeLicensedUsersSplitOftenUseCopilotNoWeighting'),
-              how: t('copilotAdoption.page.activeDaysSelectedPeriodRestatedDaysPerDayMonth', { v0: o.habitBucketNormalisationDays, v1: o.habitModerateMinDays - 1, v2: o.habitModerateMinDays, v3: o.habitFrequentMinDays - 1, v4: o.habitFrequentMinDays, v5: o.habitDailyMinDays - 1, v6: o.habitDailyMinDays }),
-              formula: t('copilotAdoption.page.dayspermonthRoundActivedays', { v0: o.habitBucketNormalisationDays, v1: o.windowDays }),
+              how: t('copilotAdoption.page.activeDaysSelectedPeriodRestatedDaysPerDayMonth', {
+                v0: formatNumber(o.habitBucketNormalisationDays),
+                v1: formatNumber(o.habitModerateMinDays - 1),
+                v2: formatNumber(o.habitModerateMinDays),
+                v3: formatNumber(o.habitFrequentMinDays - 1),
+                v4: formatNumber(o.habitFrequentMinDays),
+                v5: formatNumber(o.habitDailyMinDays - 1),
+                v6: formatNumber(o.habitDailyMinDays),
+              }),
+              formula: t('copilotAdoption.page.dayspermonthRoundActivedays', { v0: formatNumber(o.habitBucketNormalisationDays), v1: formatNumber(o.windowDays) }),
               source:
                 t('copilotAdoption.page.thisDeliberatelySameMeasureHabitRateTopPageOne'),
             }}
@@ -1888,7 +1909,7 @@ function AnalystTab({
               title={t('copilotAdoption.page.engagementMix2')}
               content={{
                 what: t('copilotAdoption.page.theWholeLicensedPopulationSplitSixMutuallyExclusiveEngagement'),
-                how: t('copilotAdoption.page.championEstablishedDevelopingTriallingAnyoneNoActivityPeriodScored', { v0: o.championScore, v1: o.establishedScore, v2: o.developingScore, v3: o.historyDays }),
+                how: t('copilotAdoption.page.championEstablishedDevelopingTriallingAnyoneNoActivityPeriodScored', { v0: formatNumber(o.championScore), v1: formatNumber(o.establishedScore), v2: formatNumber(o.developingScore), v3: formatNumber(o.historyDays) }),
                 source:
                   t('copilotAdoption.page.theTwoZeroActivityBandsSeparatedNeedOppositeResponses'),
               }}
@@ -1915,7 +1936,7 @@ function AnalystTab({
                 title={t('copilotAdoption.page.whereCopilotUsed2')}
                 content={{
                   what: t('copilotAdoption.page.totalCopilotInteractionsPeriodAppHappenedSizedArea'),
-                  how: t('copilotAdoption.page.everyInteractionCopilotAuditLogLicensedUserAttributedApp', { v0: o.topSegments }),
+                  how: t('copilotAdoption.page.everyInteractionCopilotAuditLogLicensedUserAttributedApp', { v0: formatNumber(o.topSegments) }),
                   source:
                     t('copilotAdoption.page.needsCopilotAuditImportMicrosoftOwnUsageReportBreak'),
                 }}
@@ -1980,9 +2001,9 @@ function AnalystTab({
               title={t('copilotAdoption.page.usageFrequencyIntensity2')}
               content={{
                 what: t('copilotAdoption.page.eachDepartmentPlottedOftenUsersOpenCopilotHorizontalAgainst'),
-                how: t('copilotAdoption.page.onlyUsersWereActiveLeastOnceAveragedUnusedLicences', { v0: o.habitBucketNormalisationDays, v1: o.minSeatsPerSegment }),
+                how: t('copilotAdoption.page.onlyUsersWereActiveLeastOnceAveragedUnusedLicences', { v0: formatNumber(o.habitBucketNormalisationDays), v1: formatNumber(o.minSeatsPerSegment) }),
                 formula:
-                  t('copilotAdoption.page.intensityFormula', { normalisationDays: o.habitBucketNormalisationDays, windowDays: o.windowDays }),
+                  t('copilotAdoption.page.intensityFormula', { normalisationDays: formatNumber(o.habitBucketNormalisationDays), windowDays: formatNumber(o.windowDays) }),
                 source:
                   t('copilotAdoption.page.bottomRightFrequentButShallowThoseUsersNeedRicher'),
               }}
@@ -2057,7 +2078,7 @@ function AnalystTab({
               <InfoTip
                 title={t('copilotAdoption.page.whatCopilotReferenced2')}
                 content={{
-                  what: t('copilotAdoption.page.theRawAccessedresourcesTypeValuesRecordedAgainstEachCopilot', { v0: o.topSegments }),
+                  what: t('copilotAdoption.page.theRawAccessedresourcesTypeValuesRecordedAgainstEachCopilot', { v0: formatNumber(o.topSegments) }),
                   how: t('copilotAdoption.page.readGroupsSeparatelyOneRankingOnlyTenantContentAnswers'),
                   source:
                     t('copilotAdoption.page.microsoftPublishesNoListPossibleValuesFieldPurviewDocumentation'),
@@ -2144,7 +2165,7 @@ function AnalystTab({
               title={t('copilotAdoption.page.licensedUnlicensedSideSide2')}
               content={{
                 what: t('copilotAdoption.page.forEachDepartmentMuchCopilotLicencesUsedMuchCopilot'),
-                how: t('copilotAdoption.page.bothInteractionsPerUserColumnsNormalisedDayMonthLicensed', { v0: o.habitBucketNormalisationDays, v1: o.minSeatsPerSegment }),
+                how: t('copilotAdoption.page.bothInteractionsPerUserColumnsNormalisedDayMonthLicensed', { v0: formatNumber(o.habitBucketNormalisationDays), v1: formatNumber(o.minSeatsPerSegment) }),
                 source:
                   t('copilotAdoption.page.theShadingMarksOutliersEachColumnLookDepartmentRight'),
               }}
@@ -2275,7 +2296,8 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
   // Shown as the computation rather than a rounded product: printing "64.3" at a 90-day period would put
   // the published formula on the wrong side of the recommendation bar for a candidate sitting exactly on
   // it. `approx` is for prose only, never for the formula.
-  const opportunityCopilotTargetExpression = `${o.opportunityCopilotTarget} x ${o.windowDays} / ${o.opportunityCopilotTargetBasisDays}`;
+  const opportunityCopilotTargetExpression =
+    `${formatNumber(o.opportunityCopilotTarget)} x ${formatNumber(o.windowDays)} / ${formatNumber(o.opportunityCopilotTargetBasisDays)}`;
   const opportunityCopilotTargetApprox =
     Math.round(
       Math.max(
@@ -2312,63 +2334,63 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 {tNode('copilotAdoption.page.howManyDistinctDaysUsedCopilotAgainstTargetWorking', {
                   heading: <strong>{t('copilotAdoption.page.frequencyScore', { v0: formatPct(weightSharePct(o.frequencyWeight, weights)) })}</strong>,
                   targetRatio: formatPct(o.frequencyTargetRatio * 100),
-                  workingDays: o.workingDaysPerWeek,
-                  windowDays: o.windowDays,
-                  targetDays: <strong>{t('copilotAdoption.page.activeDays', { v0: frequencyTargetDays })}</strong>,
+                  workingDays: formatNumber(o.workingDaysPerWeek),
+                  windowDays: formatNumber(o.windowDays),
+                  targetDays: <strong>{t('copilotAdoption.page.activeDays', { v0: formatNumber(frequencyTargetDays) })}</strong>,
                 })}
               </Text>
               <Text>
                 {tNode('copilotAdoption.page.interactionsPerActiveDayAgainstTargetPerDayWhat', {
                   heading: <strong>{t('copilotAdoption.page.depth', { v0: formatPct(weightSharePct(o.depthWeight, weights)) })}</strong>,
-                  target: o.depthTargetInteractionsPerActiveDay,
+                  target: formatNumber(o.depthTargetInteractionsPerActiveDay),
                   active: <em>{t('copilotAdoption.page.active3')}</em>,
                 })}
               </Text>
               <Text>
                 {tNode('copilotAdoption.page.becauseDepthDividesNumberUserControlsScaledDownActive', {
-                  minDays: o.depthMinActiveDays,
+                  minDays: formatNumber(o.depthMinActiveDays),
                   fewer: <em>{t('copilotAdoption.page.fewer')}</em>,
                 })}
               </Text>
               <Text>
                 {tNode('copilotAdoption.page.howManyDistinctCopilotSurfacesTeamsWordOutlookCopilot', {
                   heading: <strong>{t('copilotAdoption.page.breadth', { v0: formatPct(weightSharePct(o.breadthWeight, weights)) })}</strong>,
-                  target: o.breadthTargetApps,
+                  target: formatNumber(o.breadthTargetApps),
                 })}
               </Text>
               <Text>{t('copilotAdoption.page.eachComponentRatioCappedBeforeWeightedNothingAboveTarget')}</Text>
               <div className={styles.formula}>
                 {[
                   t('copilotAdoption.page.frequencyMinActivedaysExpectedactivedays'),
-                  t('copilotAdoption.page.confidenceMinActivedays', { v0: o.depthMinActiveDays }),
-                  t('copilotAdoption.page.depthMinInteractionsActivedaysConfidence', { v0: o.depthTargetInteractionsPerActiveDay }),
-                  t('copilotAdoption.page.breadthMinAppsused', { v0: o.breadthTargetApps }),
+                  t('copilotAdoption.page.confidenceMinActivedays', { v0: formatNumber(o.depthMinActiveDays) }),
+                  t('copilotAdoption.page.depthMinInteractionsActivedaysConfidence', { v0: formatNumber(o.depthTargetInteractionsPerActiveDay) }),
+                  t('copilotAdoption.page.breadthMinAppsused', { v0: formatNumber(o.breadthTargetApps) }),
                   '',
                   `${t('copilotAdoption.page.scoreFrequencyDepthBreadth', {
-                    v0: o.frequencyWeight,
-                    v1: o.depthWeight,
-                    v2: o.breadthWeight,
-                  })}\n        / ${weightSum} x 100`,
+                    v0: formatNumber(o.frequencyWeight),
+                    v1: formatNumber(o.depthWeight),
+                    v2: formatNumber(o.breadthWeight),
+                  })}\n        / ${formatNumber(weightSum)} x 100`,
                 ].join('\n')}
               </div>
               <Text>
                 {tNode('copilotAdoption.page.overDayPeriodFrequencyTargetActiveDaysUserActive', {
                   heading: <strong>{t('copilotAdoption.page.workedExample')}</strong>,
-                  windowDays: o.windowDays,
-                  frequencyTargetDays,
-                  exampleActiveDays,
-                  depthTarget: o.depthTargetInteractionsPerActiveDay,
-                  exampleScore,
+                  windowDays: formatNumber(o.windowDays),
+                  frequencyTargetDays: formatNumber(frequencyTargetDays),
+                  exampleActiveDays: formatNumber(exampleActiveDays),
+                  depthTarget: formatNumber(o.depthTargetInteractionsPerActiveDay),
+                  exampleScore: formatNumber(exampleScore),
                   confidence:
                     exampleDepthConfidence < 1
                       ? t('copilotAdoption.page.overShortPeriodActiveDaysNeededFullConfidenceDepth', {
-                          v0: exampleActiveDays,
-                          v1: o.depthMinActiveDays,
+                          v0: formatNumber(exampleActiveDays),
+                          v1: formatNumber(o.depthMinActiveDays),
                           v2: formatPct(exampleDepthConfidence * 100),
                         })
                       : t('copilotAdoption.page.activeDaysAboveDepthConfidenceFactorHereChangeNumber', {
-                          v0: exampleActiveDays,
-                          v1: o.depthMinActiveDays,
+                          v0: formatNumber(exampleActiveDays),
+                          v1: formatNumber(o.depthMinActiveDays),
                         }),
                 })}
               </Text>
@@ -2383,9 +2405,9 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               <Text>
                 {tNode('copilotAdoption.page.turnScoreDecisionChampionAboveEstablishedDevelopingTriallingPoint', {
                   bands: <strong>{t('copilotAdoption.page.bands')}</strong>,
-                  championScore: o.championScore,
-                  establishedScore: o.establishedScore,
-                  developingScore: o.developingScore,
+                  championScore: formatNumber(o.championScore),
+                  establishedScore: formatNumber(o.establishedScore),
+                  developingScore: formatNumber(o.developingScore),
                   habitualUsers: <strong>{t('copilotAdoption.page.establishedAboveWhatHabitualUsersCounts')}</strong>,
                 })}
               </Text>
@@ -2393,7 +2415,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 {tNode('copilotAdoption.page.usersActivityPeriodNeverScoredAllScoreZeroPut', {
                   no: <em>{t('copilotAdoption.page.no2')}</em>,
                   dormant: <em>{t('copilotAdoption.page.dormant')}</em>,
-                  historyDays: o.historyDays,
+                  historyDays: formatNumber(o.historyDays),
                   neverUsed: <em>{t('copilotAdoption.page.neverUsed2')}</em>,
                   idleSeats: <strong>{t('copilotAdoption.page.idleSeats')}</strong>,
                   not: <em>{t('copilotAdoption.page.not')}</em>,
@@ -2405,17 +2427,17 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               <Text>
                 {tNode('copilotAdoption.page.answersNarrowerQuestionNoWeightingWhatMakesUsefulSceptical', {
                   heading: <strong>{t('copilotAdoption.page.howOftenPeopleOpenCopilot3')}</strong>,
-                  infrequentMax: o.habitModerateMinDays - 1,
-                  moderateMin: o.habitModerateMinDays,
-                  moderateMax: o.habitFrequentMinDays - 1,
-                  frequentMin: o.habitFrequentMinDays,
-                  frequentMax: o.habitDailyMinDays - 1,
-                  dailyMin: o.habitDailyMinDays,
+                  infrequentMax: formatNumber(o.habitModerateMinDays - 1),
+                  moderateMin: formatNumber(o.habitModerateMinDays),
+                  moderateMax: formatNumber(o.habitFrequentMinDays - 1),
+                  frequentMin: formatNumber(o.habitFrequentMinDays),
+                  frequentMax: formatNumber(o.habitDailyMinDays - 1),
+                  dailyMin: formatNumber(o.habitDailyMinDays),
                 })}
               </Text>
-              <Text>{t('copilotAdoption.page.becauseReportingPeriodAdjustableActiveDaysRestatedDaysPer', { v0: o.habitBucketNormalisationDays })}</Text>
+              <Text>{t('copilotAdoption.page.becauseReportingPeriodAdjustableActiveDaysRestatedDaysPer', { v0: formatNumber(o.habitBucketNormalisationDays) })}</Text>
               <div className={styles.formula}>
-                {t('copilotAdoption.page.dayspermonthRoundActivedays2', { v0: o.habitBucketNormalisationDays, v1: o.windowDays })}
+                {t('copilotAdoption.page.dayspermonthRoundActivedays2', { v0: formatNumber(o.habitBucketNormalisationDays), v1: formatNumber(o.windowDays) })}
               </div>
               <Text>
                 {tNode('copilotAdoption.page.theHabitPercentagesShareUsersAllLicencesSomeoneNever', {
@@ -2443,59 +2465,60 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               <Text>
                 {tNode('copilotAdoption.page.unlicensedUsersScoredOutFourWeightedSignalsWeightingSet', {
                   provenDemand: <strong>{t('copilotAdoption.page.provenDemand')}</strong>,
-                  minDays: o.opportunityProvenDemandMinActiveDays,
+                  minDays: formatNumber(o.opportunityProvenDemandMinActiveDays),
                   workloadInferred: <strong>{t('copilotAdoption.page.workloadInferred')}</strong>,
-                  score: o.opportunityRecommendScore,
+                  score: formatNumber(o.opportunityRecommendScore),
                 })}
               </Text>
               <Text>
                 {tNode('copilotAdoption.page.provenDemandQualifyOwnCopilotSignalWorthScoreBar', {
-                  copilotWeight: o.opportunityUnlicensedCopilotWeight,
-                  score: o.opportunityRecommendScore,
+                  copilotWeight: formatNumber(o.opportunityUnlicensedCopilotWeight),
+                  score: formatNumber(o.opportunityRecommendScore),
                   proves: <em>{t('copilotAdoption.page.proves')}</em>,
-                  otherWeights:
+                  otherWeights: formatNumber(
                     o.opportunityCollaborationWeight + o.opportunityEmailWeight + o.opportunityDocumentWeight,
+                  ),
                 })}
               </Text>
               <Text>
                 {tNode('copilotAdoption.page.theHeaviestSignalWideMarginOnlyOneProvesDemand', {
-                  heading: <strong>{t('copilotAdoption.page.alreadyUsingCopilotChatLicencePoints', { v0: o.opportunityUnlicensedCopilotWeight })}</strong>,
+                  heading: <strong>{t('copilotAdoption.page.alreadyUsingCopilotChatLicencePoints', { v0: formatNumber(o.opportunityUnlicensedCopilotWeight) })}</strong>,
                 })}
               </Text>
               <Text>
                 {tNode('copilotAdoption.page.andMakeUpRestIdentifyHeavyKnowledgeWorkersBenefit', {
-                  collaboration: <strong>{t('copilotAdoption.page.teamsCollaboration', { v0: o.opportunityCollaborationWeight })}</strong>,
-                  email: <strong>{t('copilotAdoption.page.emailVolume', { v0: o.opportunityEmailWeight })}</strong>,
-                  documents: <strong>{t('copilotAdoption.page.documentWork', { v0: o.opportunityDocumentWeight })}</strong>,
+                  collaboration: <strong>{t('copilotAdoption.page.teamsCollaboration', { v0: formatNumber(o.opportunityCollaborationWeight) })}</strong>,
+                  email: <strong>{t('copilotAdoption.page.emailVolume', { v0: formatNumber(o.opportunityEmailWeight) })}</strong>,
+                  documents: <strong>{t('copilotAdoption.page.documentWork', { v0: formatNumber(o.opportunityDocumentWeight) })}</strong>,
                 })}
               </Text>
               <div className={styles.formula}>
                 {[
                   t('copilotAdoption.page.copilotMinUnlicensedcopilotinteractions', { v0: opportunityCopilotTargetExpression }),
-                  t('copilotAdoption.page.collabMinTeamsmessagesTeamsmeetings', { v0: o.opportunityCollaborationTarget }),
-                  t('copilotAdoption.page.emailMinEmailssentEmailsread', { v0: o.opportunityEmailTarget }),
-                  t('copilotAdoption.page.documentsMinFilesviewedoredited', { v0: o.opportunityDocumentTarget }),
+                  t('copilotAdoption.page.collabMinTeamsmessagesTeamsmeetings', { v0: formatNumber(o.opportunityCollaborationTarget) }),
+                  t('copilotAdoption.page.emailMinEmailssentEmailsread', { v0: formatNumber(o.opportunityEmailTarget) }),
+                  t('copilotAdoption.page.documentsMinFilesviewedoredited', { v0: formatNumber(o.opportunityDocumentTarget) }),
                   '',
                   `${t('copilotAdoption.page.scoreCopilotCollab', {
-                    v0: o.opportunityUnlicensedCopilotWeight,
-                    v1: o.opportunityCollaborationWeight,
+                    v0: formatNumber(o.opportunityUnlicensedCopilotWeight),
+                    v1: formatNumber(o.opportunityCollaborationWeight),
                   })} ${t('copilotAdoption.page.emailDocuments', {
-                    v0: o.opportunityEmailWeight,
-                    v1: o.opportunityDocumentWeight,
+                    v0: formatNumber(o.opportunityEmailWeight),
+                    v1: formatNumber(o.opportunityDocumentWeight),
                   })}`,
                   '',
                   `${t('copilotAdoption.page.recommendedWhenUnlicensedcopilotactivedays', {
-                    v0: o.opportunityProvenDemandMinActiveDays,
+                    v0: formatNumber(o.opportunityProvenDemandMinActiveDays),
                   })} ${t('copilotAdoption.page.provenDemand2')}`,
-                  `               ${t('copilotAdoption.page.orScoreWorkloadInferred', { v0: o.opportunityRecommendScore })}`,
+                  `               ${t('copilotAdoption.page.orScoreWorkloadInferred', { v0: formatNumber(o.opportunityRecommendScore) })}`,
                 ].join('\n')}
               </div>
               <Text>
                 {t('copilotAdoption.page.theCopilotTargetInteractionsPerDaysScaledDayPeriod', {
-                  v0: o.opportunityCopilotTarget,
-                  v1: o.opportunityCopilotTargetBasisDays,
-                  v2: o.windowDays,
-                  v3: opportunityCopilotTargetApprox,
+                  v0: formatNumber(o.opportunityCopilotTarget),
+                  v1: formatNumber(o.opportunityCopilotTargetBasisDays),
+                  v2: formatNumber(o.windowDays),
+                  v3: formatNumber(opportunityCopilotTargetApprox),
                 })}
               </Text>
               <Text>
@@ -2534,28 +2557,28 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               <Text>
                 {tNode('copilotAdoption.page.isMuchDelegableMultiStepWorkPersonCarriesFour', {
                   heading: <strong>{t('copilotAdoption.page.coordinationLoad')}</strong>,
-                  meetingWeight: o.coworkMeetingWeight,
-                  meetingTarget: o.coworkMeetingTarget,
-                  emailWeight: o.coworkEmailWeight,
-                  emailTarget: o.coworkEmailTarget,
-                  collaborationWeight: o.coworkCollaborationWeight,
-                  collaborationTarget: o.coworkCollaborationTarget,
-                  documentWeight: o.coworkDocumentWeight,
-                  documentTarget: o.coworkDocumentTarget,
+                  meetingWeight: formatNumber(o.coworkMeetingWeight),
+                  meetingTarget: formatNumber(o.coworkMeetingTarget),
+                  emailWeight: formatNumber(o.coworkEmailWeight),
+                  emailTarget: formatNumber(o.coworkEmailTarget),
+                  collaborationWeight: formatNumber(o.coworkCollaborationWeight),
+                  collaborationTarget: formatNumber(o.coworkCollaborationTarget),
+                  documentWeight: formatNumber(o.coworkDocumentWeight),
+                  documentTarget: formatNumber(o.coworkDocumentTarget),
                 })}
               </Text>
               <Text>
                 {tNode('copilotAdoption.page.isEngagementScoreLicensedUsersTabPlusUpPoints', {
                   heading: <strong>{t('copilotAdoption.page.copilotFluency')}</strong>,
-                  uplift: o.coworkAgentFamiliarityUplift,
+                  uplift: formatNumber(o.coworkAgentFamiliarityUplift),
                 })}
               </Text>
               <Text>
                 {tNode('copilotAdoption.page.theBarsCoordinationLoadFluencyMoreSeparateDaysUse', {
-                  load: o.coworkLoadMinScore,
-                  fluency: o.coworkFluencyMinScore,
+                  load: formatNumber(o.coworkLoadMinScore),
+                  fluency: formatNumber(o.coworkFluencyMinScore),
                   observed: <strong>{t('copilotAdoption.page.observedCoworkUseTestedFirstWinsOutright')}</strong>,
-                  regularDays: o.coworkRegularMinActiveDays,
+                  regularDays: formatNumber(o.coworkRegularMinActiveDays),
                 })}
               </Text>
               <Text>
@@ -2595,18 +2618,18 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
               <Text>
                 {tNode('copilotAdoption.page.retireDaysUseReviewBetweenDaysWhileStillCurrent', {
                   heading: <strong>{t('copilotAdoption.page.agentVerdicts')}</strong>,
-                  retireDays: o.agentRetireInactiveDays,
-                  reviewDays: o.agentReviewInactiveDays,
-                  minUsers: o.agentMinUsers,
-                  newDays: o.agentNewDays,
+                  retireDays: formatNumber(o.agentRetireInactiveDays),
+                  reviewDays: formatNumber(o.agentReviewInactiveDays),
+                  minUsers: formatNumber(o.agentMinUsers),
+                  newDays: formatNumber(o.agentNewDays),
                   newLabel: <em>{t('copilotAdoption.page.new')}</em>,
                 })}
               </Text>
               <Text>
                 {t('copilotAdoption.page.theInventoryDeliberatelyCoversShorterHistoryRestAnalysisDays', {
-                  v0: summary.agents.historyDays,
-                  v1: o.historyDays,
-                  v2: o.agentRetireInactiveDays,
+                  v0: formatNumber(summary.agents.historyDays),
+                  v1: formatNumber(o.historyDays),
+                  v2: formatNumber(o.agentRetireInactiveDays),
                 })}
               </Text>
               <Text>
@@ -2638,18 +2661,19 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
           <AccordionHeader>{t('copilotAdoption.page.whereDataComes')}</AccordionHeader>          <AccordionPanel>
             <div className={styles.method}>
               <Text>
-                {tNode('copilotAdoption.page.coversEveryUserIncludingUnlicensedCopilotChatUseMatches', {
-                  heading: <strong>{t('copilotAdoption.page.copilotAuditLog')}</strong>,
-                  status: summary.dataSources.auditAvailable
-                    ? t('copilotAdoption.page.available')
-                    : t('copilotAdoption.page.noDataPeriod'),
-                })}
+                {summary.dataSources.auditAvailable
+                  ? tNode('copilotAdoption.page.sources.audit.available', {
+                      heading: <strong>{t('copilotAdoption.page.copilotAuditLog')}</strong>,
+                    })
+                  : tNode('copilotAdoption.page.sources.audit.noData', {
+                      heading: <strong>{t('copilotAdoption.page.copilotAuditLog')}</strong>,
+                    })}
               </Text>
               <Text>
                 {tNode('copilotAdoption.page.microsoftSaysAuditLogAggregatesIntendedMatchOfficialCopilot', {
                   heading: <strong>{t('copilotAdoption.page.whyDiffersMicrosoftReport')}</strong>,
                   link: <Link href={MICROSOFT_COPILOT_USAGE_REPORT_FAQ_URL} target="_blank" rel="noreferrer">{t('copilotAdoption.page.copilotUsageReportFaq')}</Link>,
-                  windowDays: o.windowDays,
+                  windowDays: formatNumber(o.windowDays),
                 })}
               </Text>
               <Text>
@@ -2659,32 +2683,40 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
                 })}
               </Text>
               <Text>
-                <strong>{t('copilotAdoption.page.microsoftCopilotUsageReport')}</strong>{' '}
                 {summary.dataSources.copilotUsageReportAvailable
-                  ? t('copilotAdoption.page.snapshot', { v0: formatDate(summary.dataSources.copilotUsageReportDate) })
-                  : t('copilotAdoption.page.notImported')}{' '}
-                {t('copilotAdoption.page.licensedUsersOnlyUnavailableEntirelyWhenTenantConcealsUser')}
+                  ? tNode('copilotAdoption.page.sources.copilotUsageReport.snapshot', {
+                      heading: <strong>{t('copilotAdoption.page.microsoftCopilotUsageReport')}</strong>,
+                      date: formatDate(summary.dataSources.copilotUsageReportDate),
+                    })
+                  : tNode('copilotAdoption.page.sources.copilotUsageReport.notImported', {
+                      heading: <strong>{t('copilotAdoption.page.microsoftCopilotUsageReport')}</strong>,
+                    })}
               </Text>
               <Text>
-                {tNode('copilotAdoption.page.microsoftReport.method', {
-                  heading: <strong>{t('copilotAdoption.page.microsoftReport.methodHeading')}</strong>,
-                  // Under an administrator's report filter the tenant-wide report is withheld, not missing: say which.
-                  status: isWithheld(summary, UNSCOPED_SECTIONS.microsoftReport)
-                    ? t('copilotAdoption.page.microsoftReport.withheld')
-                    : summary.microsoftReportDate && summary.microsoftReportPeriodDays != null
-                      ? t('copilotAdoption.page.microsoftReport.period', {
-                          days: formatCount(summary.microsoftReportPeriodDays),
-                          date: formatDate(summary.microsoftReportDate),
-                        })
-                      : t('copilotAdoption.page.notImported'),
-                })}
+                {/* Under an administrator's report filter the tenant-wide report is withheld, not missing: say which. */}
+                {isWithheld(summary, UNSCOPED_SECTIONS.microsoftReport)
+                  ? tNode('copilotAdoption.page.microsoftReport.method.withheld', {
+                      heading: <strong>{t('copilotAdoption.page.microsoftReport.methodHeading')}</strong>,
+                    })
+                  : summary.microsoftReportDate && summary.microsoftReportPeriodDays != null
+                    ? tNode('copilotAdoption.page.microsoftReport.method.period', {
+                        heading: <strong>{t('copilotAdoption.page.microsoftReport.methodHeading')}</strong>,
+                        days: formatCount(summary.microsoftReportPeriodDays),
+                        date: formatDate(summary.microsoftReportDate),
+                      })
+                    : tNode('copilotAdoption.page.microsoftReport.method.notImported', {
+                        heading: <strong>{t('copilotAdoption.page.microsoftReport.methodHeading')}</strong>,
+                      })}
               </Text>
               <Text>
-                <strong>{t('copilotAdoption.page.microsoftUsageReports')}</strong>{' '}
                 {summary.dataSources.m365UsageReportsAvailable
-                  ? t('copilotAdoption.page.snapshot2', { v0: formatDate(summary.dataSources.m365UsageReportDate) })
-                  : t('copilotAdoption.page.notImported2')}{' '}
-                {t('copilotAdoption.page.usedFindHeavyMicrosoftUsersHoldCopilotLicence')}
+                  ? tNode('copilotAdoption.page.sources.m365UsageReports.snapshot', {
+                      heading: <strong>{t('copilotAdoption.page.microsoftUsageReports')}</strong>,
+                      date: formatDate(summary.dataSources.m365UsageReportDate),
+                    })
+                  : tNode('copilotAdoption.page.sources.m365UsageReports.notImported', {
+                      heading: <strong>{t('copilotAdoption.page.microsoftUsageReports')}</strong>,
+                    })}
               </Text>
               <Text className={styles.muted}>
                 {t('copilotAdoption.page.analysisGeneratedCovering', {
@@ -3046,11 +3078,11 @@ function buildKpis(
       tone: bandTone(summary.adoptionRatePct),
       info: {
         what: t('copilotAdoption.page.theShareLicensedUsersUsedCopilotLeastOnceSelected'),
-        how: t('copilotAdoption.page.deliberatelyLowBarWeakestNumberPageOneInteractionDays', { v0: o.windowDays }),
+        how: t('copilotAdoption.page.deliberatelyLowBarWeakestNumberPageOneInteractionDays', { v0: formatNumber(o.windowDays) }),
         formula: t('copilotAdoption.page.active2', { v0: formatCount(summary.activeUsers), v1: formatCount(
           summary.scoredUsers,
         ), v2: t(capped ? 'copilotAdoption.page.population.analysed' : 'copilotAdoption.page.population.licensed'), v3: formatPct(summary.adoptionRatePct) }),
-        source: t('copilotAdoption.page.activityComesCopilotAuditLogDayPeriodFallingBack', { v0: o.windowDays, v1: denominatorNote }),
+        source: t('copilotAdoption.page.activityComesCopilotAuditLogDayPeriodFallingBack', { v0: formatNumber(o.windowDays), v1: denominatorNote }),
       },
     },
     {
@@ -3061,8 +3093,8 @@ function buildKpis(
       tone: summary.habitRatePct >= 50 ? 'good' : summary.habitRatePct >= 25 ? 'warning' : 'critical',
       info: {
         what: t('copilotAdoption.page.licensedUsersWhomCopilotRoutinePartWorkingWeekSomething'),
-        how: t('copilotAdoption.page.userHabitualWhenEngagementScoreReachesOutEstablishedChampion', { v0: o.establishedScore }),
-        formula: t('copilotAdoption.page.usersScoring', { v0: formatCount(summary.habitualUsers), v1: o.establishedScore, v2: formatCount(
+        how: t('copilotAdoption.page.userHabitualWhenEngagementScoreReachesOutEstablishedChampion', { v0: formatNumber(o.establishedScore) }),
+        formula: t('copilotAdoption.page.usersScoring', { v0: formatCount(summary.habitualUsers), v1: formatNumber(o.establishedScore), v2: formatCount(
           summary.scoredUsers,
         ), v3: t(capped ? 'copilotAdoption.page.population.analysed' : 'copilotAdoption.page.population.licensed'), v4: formatPct(summary.habitRatePct) }),
         source: t('copilotAdoption.page.thisFigureTracksRealisedValueAdoptionRateSitWhile', { v0: denominatorNote }),
@@ -3079,7 +3111,7 @@ function buildKpis(
       info: {
         what: t('copilotAdoption.page.licencesSafeEnoughIncludeActionableReclaimTotalDisabledAccounts'),
         how: t('copilotAdoption.page.newUserProtectedDaysUsingGraphUserCreateddatetimeAccount', {
-          v0: o.reclaimGraceDays,
+          v0: formatNumber(o.reclaimGraceDays),
           v1: reclaimCaveatText(t, summary.reclaimCaveatKey, summary.reclaimCaveat),
         }),
         // Two independent mechanisms hold seats back - confidence tiering and a Microsoft
@@ -3134,7 +3166,7 @@ function buildKpis(
       key: 'score',
       label: t('copilotAdoption.page.averageEngagement'),
       value: Math.round(summary.averageAdoptionScore),
-      hint: t('copilotAdoption.page.median', { v0: Math.round(summary.medianAdoptionScore) }),
+      hint: t('copilotAdoption.page.median', { v0: formatNumber(Math.round(summary.medianAdoptionScore)) }),
       info: {
         what: t('copilotAdoption.page.theMeanEngagementScoreAcrossAllLicensedUsersIncluding'),
         how: t('copilotAdoption.page.eachUserScoreOutCombinesFrequencyDepthBreadthUnused', { v0: formatPct(
@@ -3142,9 +3174,9 @@ function buildKpis(
         ), v1: formatPct(weightSharePct(o.depthWeight, scoreWeights)), v2: formatPct(
           weightSharePct(o.breadthWeight, scoreWeights),
         ) }),
-        formula: t('copilotAdoption.page.meanMedian', { v0: Math.round(summary.averageAdoptionScore), v1: Math.round(
+        formula: t('copilotAdoption.page.meanMedian', { v0: formatNumber(Math.round(summary.averageAdoptionScore)), v1: formatNumber(Math.round(
           summary.medianAdoptionScore,
-        ) }),
+        )) }),
         source:
           t('copilotAdoption.page.theMedianShownNextMeanHandfulChampionsPullMean'),
       },
@@ -3197,9 +3229,14 @@ function buildKpis(
     hint: t('copilotAdoption.page.heavyMicrosoftUsersStrongBusinessCase'),
     tone: 'opportunity',
     info: {
-      what: t('copilotAdoption.page.unlicensedUsersRecommendedLicenceEitherAlreadyUseCopilotLeast', { v0: o.opportunityProvenDemandMinActiveDays, v1: o.opportunityRecommendScore }),
-      how: t('copilotAdoption.page.fourWeightedSignalsAlreadyUsingCopilotChatLicencePoints', { v0: o.opportunityUnlicensedCopilotWeight, v1: o.opportunityCollaborationWeight, v2: o.opportunityEmailWeight, v3: o.opportunityDocumentWeight }),
-      formula: t('copilotAdoption.page.recommendedWhenUnlicensedcopilotactivedaysScore', { v0: o.opportunityProvenDemandMinActiveDays, v1: o.opportunityRecommendScore }),
+      what: t('copilotAdoption.page.unlicensedUsersRecommendedLicenceEitherAlreadyUseCopilotLeast', { v0: formatNumber(o.opportunityProvenDemandMinActiveDays), v1: formatNumber(o.opportunityRecommendScore) }),
+      how: t('copilotAdoption.page.fourWeightedSignalsAlreadyUsingCopilotChatLicencePoints', {
+        v0: formatNumber(o.opportunityUnlicensedCopilotWeight),
+        v1: formatNumber(o.opportunityCollaborationWeight),
+        v2: formatNumber(o.opportunityEmailWeight),
+        v3: formatNumber(o.opportunityDocumentWeight),
+      }),
+      formula: t('copilotAdoption.page.recommendedWhenUnlicensedcopilotactivedaysScore', { v0: formatNumber(o.opportunityProvenDemandMinActiveDays), v1: formatNumber(o.opportunityRecommendScore) }),
       source:
         t('copilotAdoption.page.disabledAccountsUsersNoRecordedActivityAllExcludedMicrosoft'),
     },

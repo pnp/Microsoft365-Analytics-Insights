@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithProvider } from '../../test/renderWithProvider';
+import { loadCatalog } from '../../i18n';
 import LicensedUsersPanel from './LicensedUsersPanel';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { CopilotAdoptionOptions, LicensedUserAdoptionRow, LicensedUserPage } from '../../types/copilotAdoption';
@@ -329,13 +330,38 @@ describe('LicensedUsersPanel source reconciliation', () => {
 
     renderWithProvider(<LicensedUsersPanel windowDays={28} filterOptions={null} actionPlan={[]} options={OPTIONS} />, { language: 'es' });
 
-    // The Spanish catalog arrives after the first render, and the list reloads when it does, so the row
-    // is looked up afresh on every attempt rather than held from before the switch.
+    // The Spanish catalog arrives after the first render, and the rows re-render in Spanish when it does,
+    // so the row is looked up afresh on every attempt rather than held from before the switch.
     await waitFor(() => {
       const starter = within(screen.getByText('starter@contoso.com').closest('tr')!);
       expect(starter.getAllByText('Revisar antes de recuperar')).toHaveLength(1);
       expect(starter.queryByText('Review before reclaim')).toBeNull();
     });
+  });
+
+  it('explains the engagement score in whole Spanish sentences, with Spanish decimal commas', async () => {
+    vi.mocked(fetchLicensedUsers).mockResolvedValue({
+      total: 1,
+      skip: 0,
+      take: 50,
+      warnings: [],
+      rows: [row({ userPrincipalName: 'decimal@contoso.com' })],
+    });
+    await loadCatalog('es');
+    // The server's own default weights are fractions of one.
+    const options = { ...OPTIONS, frequencyWeight: 0.5, depthWeight: 0.3, breadthWeight: 0.2, depthTargetInteractionsPerActiveDay: 2.5 };
+    renderWithProvider(<LicensedUsersPanel windowDays={28} filterOptions={null} actionPlan={[]} options={options} />, { language: 'es' });
+    await screen.findByText('decimal@contoso.com', undefined, { timeout: 5000 });
+
+    fireEvent.click(screen.getByRole('button', { name: 'C\u00f3mo se calcula \u00abPuntuaci\u00f3n de interacci\u00f3n\u00bb' }));
+    expect(await screen.findByText(/puntuacion = \(frecuencia x 0,5 \+ profundidad x 0,3 \+ amplitud x 0,2\) x 100/, undefined, { timeout: 5000 })).toBeVisible();
+    expect(screen.getByText(/profundidad = min\(1, interacciones \/ diasActivos \/ 2,5\) x confianza/)).toBeVisible();
+    expect(screen.getByText('Cu\u00e1nto: profundidad (30%)').closest('li')!.textContent).toBe(
+      'Cu\u00e1nto: profundidad (30%). Interacciones en cada d\u00eda en que lo us\u00f3, frente a un objetivo de 2,5.',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'C\u00f3mo se calcula \u00abD\u00edas activos\u00bb' }));
+    expect(await screen.findByText('expectedActiveDays = 28 d\u00edas x (5/7) x 0,6', undefined, { timeout: 5000 })).toBeVisible();
   });
 });
 

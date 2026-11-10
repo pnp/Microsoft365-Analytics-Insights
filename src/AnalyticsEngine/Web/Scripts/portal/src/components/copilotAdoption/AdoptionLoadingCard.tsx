@@ -3,6 +3,7 @@ import {
   Button, Card, MessageBar, MessageBarBody, ProgressBar, Text, makeStyles, tokens,
 } from '@fluentui/react-components';
 import type { AdoptionProgress } from '../../types/copilotAdoption';
+import { adoptionFailureText, type AdoptionFailure } from '../../api/copilotAdoptionApi';
 import { formatNumber, useT, type TranslationKey } from '../../i18n';
 import { reportQueryFailureText } from '../shared/reportQueryFailure';
 
@@ -42,7 +43,7 @@ const PHASE_KEYS: Record<string, TranslationKey> = {
 
 export type OptionalAdoptionLoad = {
   state: 'pending' | 'running' | 'loaded' | 'failed';
-  error?: string;
+  error?: AdoptionFailure;
   retryable?: boolean;
 };
 
@@ -66,7 +67,7 @@ export default function AdoptionLoadingCard({
   progress: AdoptionProgress | null;
   busy: boolean;
   keepingReport: boolean;
-  error: string | null;
+  error: AdoptionFailure | null;
   filters: OptionalAdoptionLoad;
   sql: OptionalAdoptionLoad;
   onCheckAgain?: () => void;
@@ -113,7 +114,7 @@ export default function AdoptionLoadingCard({
         </>
       )}
       {keepingReport && busy && <Text>{t('copilotAdoption.loading.previousReport')}</Text>}
-      {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error"><MessageBarBody>{adoptionFailureText(t, error)}</MessageBarBody></MessageBar>}
       <Accordion key={`${progress?.generationId ?? 'starting'}:${needsAttention}`} collapsible defaultOpenItems={busy || needsAttention ? ['steps'] : []}>
         <AccordionItem value="steps">
           <AccordionHeader>{t('copilotAdoption.loading.details')}</AccordionHeader>
@@ -144,7 +145,7 @@ export default function AdoptionLoadingCard({
                 <li key={key} className={styles.row}>
                   <div>
                     <Text>{t(key)}</Text>
-                    {load.error && <Text block size={200} className={styles.failed}>{load.error}</Text>}
+                    {load.error && <Text block size={200} className={styles.failed}>{adoptionFailureText(t, load.error)}</Text>}
                   </div>
                   {load.state === 'failed' && load.retryable
                     ? <Button onClick={retry} disabled={busy}>{t('copilotAdoption.loading.retryRequest')}</Button>
