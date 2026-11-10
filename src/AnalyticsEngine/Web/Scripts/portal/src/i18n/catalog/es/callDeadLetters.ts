@@ -94,7 +94,6 @@ const callDeadLetters: Record<keyof typeof en, string> = {
   'callDeadLetters.reason.CallImportRetryWindowExpired': 'Seguía fallando cuando se cerró su plazo de reintentos',
   'callDeadLetters.reason.MaxDeliveryCountExceeded': 'Service Bus desistió tras demasiadas entregas',
   'callDeadLetters.reason.NoOrganiserIdentity': 'El registro de la llamada no indica el organizador',
-  'callDeadLetters.reason.NoSessions': 'El registro de la llamada no tiene sesiones',
   'callDeadLetters.reason.NoUsableSessions': 'No se pudo usar ninguna de las sesiones del registro de la llamada',
   'callDeadLetters.reason.NoCallType': 'El registro de la llamada no tiene tipo de llamada',
   'callDeadLetters.reason.none': 'Sin motivo registrado',

@@ -33,8 +33,14 @@ function constantsOf(source: string, className: string): string[] {
 
 const sorted = (values: Iterable<string>) => [...values].sort();
 
+/**
+ * Reasons that only an earlier release gave. Their dead letters can still be in a queue after an upgrade, so the card
+ * keeps their text. None so far: every reason a released build gave is still one the importer gives.
+ */
+const RETIRED_REASONS: string[] = [];
+
 describe('Dead-lettered Teams calls: codes the server sends', () => {
-  it('names every dead-letter reason the importer gives, and Service Bus its own', () => {
+  it('names every dead-letter reason the importer gives, and Service Bus its own, and no reason nothing gives', () => {
     const sources = [
       read('WebJob.Office365ActivityImporter.Engine', 'Graph', 'Calls', 'CallQueueMessageHandler.cs'),
       read('WebJob.Office365ActivityImporter.Engine', 'Graph', 'Calls', 'CallQueueRetryPolicy.cs'),
@@ -49,6 +55,15 @@ describe('Dead-lettered Teams calls: codes the server sends', () => {
       'The importer dead-letters calls with these reasons, but the card has no text for them. Add each to\n' +
         'DEAD_LETTER_REASON_KEYS and to src/i18n/catalog/{en,es}/callDeadLetters.ts:\n  ' +
         unmapped.join('\n  '),
+    ).toEqual([]);
+
+    const given = new Set([...importer, 'MaxDeliveryCountExceeded', ...RETIRED_REASONS]);
+    const stale = [...DEAD_LETTER_REASON_KEYS.keys()].filter((reason) => !given.has(reason));
+    expect(
+      stale,
+      'DEAD_LETTER_REASON_KEYS has text for reasons nothing gives. Remove each from the map and from\n' +
+        'src/i18n/catalog/{en,es}/callDeadLetters.ts - or, if a released build gave it, list it in RETIRED_REASONS:\n  ' +
+        stale.join('\n  '),
     ).toEqual([]);
   });
 
