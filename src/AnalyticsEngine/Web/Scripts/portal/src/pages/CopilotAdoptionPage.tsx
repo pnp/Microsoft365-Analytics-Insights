@@ -66,6 +66,7 @@ import ResourceTypesPanel from '../components/copilotAdoption/ResourceTypesPanel
 import EmailDomainPanel from '../components/copilotAdoption/EmailDomainPanel';
 import LeadershipComparisonCard from '../components/copilotAdoption/LeadershipComparisonCard';
 import MicrosoftReportFigures from '../components/copilotAdoption/MicrosoftReportFigures';
+import SeatLicenceTable from '../components/copilotAdoption/SeatLicenceTable';
 import { ConcentrationBar, CombinedSegmentTable } from '../components/copilotAdoption/CombinedViews';
 import InfoTip from '../components/shared/InfoTip';
 import PrintButton from '../components/shared/PrintButton';
@@ -2734,36 +2735,7 @@ function MethodTab({ summary }: { summary: CopilotAdoptionSummary }) {
           <AccordionPanel>
             <div className={styles.method}>
               <Text>{t('copilotAdoption.page.microsoftShipsCopilotBrandedSkusMicrosoftCopilotLicenceCopilot')}</Text>
-              <table className={styles.skuTable}>
-                <thead>
-                  <tr>
-                    <th className={styles.skuCell}>{t('copilotAdoption.page.product')}</th>
-                    <th className={styles.skuCell}>SKU</th>
-                    <th className={styles.skuCell}>{t('copilotAdoption.page.assigned')}</th>
-                    <th className={styles.skuCell}>{t('copilotAdoption.page.purchased')}</th>
-                    <th className={styles.skuCell}>{t('copilotAdoption.page.unassigned')}</th>
-                    <th className={styles.skuCell}>{t('copilotAdoption.page.assignedIdle')}</th>
-                    <th className={styles.skuCell}>{t('copilotAdoption.page.countedCopilotLicence')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(summary.seatLicenceTypes ?? []).map((licence) => (
-                    <tr key={licence.id}>
-                      <td className={styles.skuCell}>{licence.name}</td>
-                      <td className={styles.skuCell}>
-                        <Text size={200} className={styles.muted}>
-                          {licence.skuPartNumber}
-                        </Text>
-                      </td>
-                      <td className={styles.skuCell}>{formatCount(licence.assignedUsers)}</td>
-                      <td className={styles.skuCell}>{licence.purchasedUnits == null ? t('copilotAdoption.page.unknown') : formatCount(licence.purchasedUnits)}</td>
-                      <td className={styles.skuCell}>{licence.unassignedUnits == null ? t('copilotAdoption.page.unknown2') : formatCount(licence.unassignedUnits)}</td>
-                      <td className={styles.skuCell}>{formatCount(licence.assignedIdleUsers)}</td>
-                      <td className={styles.skuCell}>{licence.isCopilotSeat ? t('copilotAdoption.page.yes') : t('copilotAdoption.page.no')}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <SeatLicenceTable licences={summary.seatLicenceTypes ?? []} />
             </div>
           </AccordionPanel>
         </AccordionItem>

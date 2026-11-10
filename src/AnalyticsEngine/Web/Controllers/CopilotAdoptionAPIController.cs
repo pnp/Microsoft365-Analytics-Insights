@@ -679,6 +679,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// Under the administrator's global filter only the Copilot seat types are listed, with the narrowed
         /// assigned and idle counts the summary shows: a reader limited to one department must not be able to
         /// read the whole tenant's per-licence counts here instead.
+        ///
+        /// A reader without See PII is given the list the summary gives them: without the idle count of a Copilot seat
+        /// that one to four people hold, or of the seat that would give it back (#844).
         /// </summary>
         // GET: api/CopilotAdoption/licence-types
         [HttpGet]
@@ -696,7 +699,7 @@ namespace Web.AnalyticsWeb.Controllers
             var analysis = await TryGetScopedSummaryAsync(
                 windowDays, from, to, seatLicenceTypeIds, null, UserFilterExpression.Empty, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
-            return Ok(analysis.Summary.SeatLicenceTypes);
+            return Ok(SummaryForCaller(analysis.Summary).SeatLicenceTypes);
         }
 
         /// <summary>The queries behind the numbers, for the SQL popover the rest of the admin site uses.</summary>
@@ -1222,7 +1225,8 @@ namespace Web.AnalyticsWeb.Controllers
                     analysis,
                     timeSaved.Any ? timeSaved : null,
                     includeIndividualData: CanSeeIndividuals() && !analysis.Summary.Options.UsesExplicitDates,
-                    leadership: leadership);
+                    leadership: leadership,
+                    readerSeesPii: CanSeeIndividuals());
             }
             catch (Exception ex)
             {
