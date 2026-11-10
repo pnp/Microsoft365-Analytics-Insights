@@ -61,6 +61,8 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.error.personNotFound': 'Esta persona no está en el informe para el periodo y los filtros actuales.',
   'copilotInvestment.error.scenarioInvalid':
     'Las cifras de la simulación incumplen una regla: todos los precios deben ser mayores que cero, un rango necesita los tres valores de menor a mayor y el aprovechamiento es una proporción de 0 a 1.',
+  'copilotInvestment.error.currencyChangeNeedsPrices':
+    'La simulación cambia la moneda pero conserva algunos precios o el coste por hora de la organización. Esas cifras están en la moneda de la organización y no se convertirían, así que indique todos los precios y el coste por hora en la nueva moneda, o deje la moneda en blanco.',
 
   'copilotInvestment.badge.modelled': 'Modelado',
   'copilotInvestment.badge.observed': 'Observado',
@@ -799,7 +801,7 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.whatIf.required': 'Necesarias para modelar la rentabilidad',
   'copilotInvestment.whatIf.optional': 'Opcionales',
   'copilotInvestment.whatIf.optional.description': 'Cada una añade una fuente de coste; los importes se modelan sin ellas.',
-  'copilotInvestment.whatIf.guide.currency': 'Código ISO de tres letras, como EUR o USD. Todos los precios y el coste por hora van en esta moneda.',
+  'copilotInvestment.whatIf.guide.currency': 'Código ISO de tres letras, como EUR o USD. Todos los precios y el coste por hora van en esta moneda y ninguno se convierte: para usar otra moneda, indique también en ella cada cifra que haya definido la organización.',
   'copilotInvestment.whatIf.guide.seatPrice': 'Lo que le cuesta al mes una licencia de Microsoft 365 Copilot, según su contrato o factura.',
   'copilotInvestment.whatIf.guide.hourlyCost': 'Salario más cargas sociales de una hora de una persona típica, según finanzas.',
   'copilotInvestment.whatIf.guide.studioCreditPrice':
@@ -870,6 +872,8 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.settings.error.realisationOrder': 'El aprovechamiento debe ir de prudente a optimista sin bajar.',
   'copilotInvestment.settings.error.noteTooLong': 'La nota puede tener como máximo 500 caracteres.',
   'copilotInvestment.settings.error.scenarioInvalid': 'Las cifras incumplen una regla.',
+  'copilotInvestment.settings.error.currencyChangeNeedsPrices':
+    'Otra moneda exige indicar en ella todos los precios y el coste por hora: las cifras de la organización no se convierten.',
   'copilotInvestment.settings.error.loadFailed': 'No se pudieron cargar los supuestos.',
   'copilotInvestment.settings.error.saveFailed': 'No se pudieron guardar los supuestos.',
   // Excel workbook. The server writes it from this catalog (Common/Entities/CopilotInvestment/CopilotInvestmentWorkbook.cs).

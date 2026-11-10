@@ -236,7 +236,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
             {
                 await (ScriptRunner ?? RunGrantScriptAsync)(connectionString, sql);
             }
-            catch (SqlException ex)
+            // A Cancel during the script arrives as a SqlException too ("Operation cancelled by user"). It is not a failed
+            // grant, so it gets no remediation advice: it leaves for the caller, which reports it as the user's cancel.
+            catch (SqlException ex) when (!CancellationToken.IsCancellationRequested)
             {
                 // A known application ID gives the operator a statement that needs no directory lookup and
                 // cannot pick the wrong principal when two share a display name. Quoted exactly as the executed

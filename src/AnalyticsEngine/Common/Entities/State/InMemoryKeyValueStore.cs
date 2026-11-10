@@ -62,7 +62,8 @@ namespace Common.Entities.State
                     return Task.FromResult(entry.Value);
                 }
 
-                _entries.TryRemove(key, out _);
+                // Only the expired entry that was read: removing by key alone could delete a value written since (#847).
+                RemoveIfUnchanged(key, entry);
             }
 
             return Task.FromResult<string>(null);
@@ -161,7 +162,7 @@ namespace Common.Entities.State
             return Task.FromResult(
                 _entries.TryGetValue(key, out var current)
                 && string.Equals(current.Version, expectedVersionToken, StringComparison.Ordinal)
-                && ((ICollection<KeyValuePair<string, Entry>>)_entries).Remove(new KeyValuePair<string, Entry>(key, current)));
+                && RemoveIfUnchanged(key, current));
         }
 
         public async Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)
@@ -176,10 +177,17 @@ namespace Common.Entities.State
             {
                 if (pair.Value.IsExpired(now))
                 {
-                    _entries.TryRemove(pair.Key, out _);
+                    RemoveIfUnchanged(pair.Key, pair.Value);
                 }
             }
         }
+
+        /// <summary>
+        /// Removes <paramref name="key"/> only while it still holds <paramref name="entry"/>: <see cref="ConcurrentDictionary{TKey, TValue}"/>
+        /// compares the value by reference, so a value written since it was read is never deleted with it.
+        /// </summary>
+        private bool RemoveIfUnchanged(string key, Entry entry)
+            => ((ICollection<KeyValuePair<string, Entry>>)_entries).Remove(new KeyValuePair<string, Entry>(key, entry));
 
         private string NextVersion() => Interlocked.Increment(ref _lastVersion).ToString(System.Globalization.CultureInfo.InvariantCulture);
 

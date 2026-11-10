@@ -247,13 +247,20 @@ namespace Common.Entities.CopilotInvestment
         public const string NoteTooLong = "noteTooLong";
         public const string ScenarioInvalid = "scenarioInvalid";
 
+        /// <summary>
+        /// A what-if names another currency but leaves a price or the hourly cost to come from the organisation's figures,
+        /// which are in the organisation's currency and would be relabelled, not converted. Sent among a
+        /// <see cref="ScenarioInvalid"/> refusal's validation errors.
+        /// </summary>
+        public const string CurrencyChangeNeedsPrices = "currencyChangeNeedsPrices";
+
         /// <summary>Every code a save can be refused with, for the portal's translation test.</summary>
         public static readonly string[] All =
         {
             InvalidRequest, VersionConflict, StorageNotConfigured, StateUnavailable, CurrencyInvalid, CurrencyRequired,
             SeatPriceOutOfRange, CreditPriceOutOfRange, StudioCreditPriceOutOfRange, HourlyCostOutOfRange,
             MinutesOutOfRange, MinutesIncomplete, MinutesOrder, RealisationOutOfRange, RealisationIncomplete,
-            RealisationOrder, NoteTooLong, ScenarioInvalid,
+            RealisationOrder, NoteTooLong, ScenarioInvalid, CurrencyChangeNeedsPrices,
         };
     }
 
@@ -557,7 +564,9 @@ namespace Common.Entities.CopilotInvestment
             var result = (tenant ?? new CopilotInvestmentAssumptions()).Clone();
             var minutes = result.MinutesPerActiveDay;
             var realisation = result.Realisation;
-            Set(CopilotInvestmentFields.Currency, Currency == null ? null : Currency.Trim().ToUpperInvariant(), v => result.Currency = v, result.Currency, provenance);
+            var currency = Currency == null ? null : Currency.Trim().ToUpperInvariant();
+            var relabelsTenantMoney = RelabelsTenantMoney(currency, result);
+            Set(CopilotInvestmentFields.Currency, currency, v => result.Currency = v, result.Currency, provenance);
             Set(CopilotInvestmentFields.SeatPricePerMonth, SeatPricePerMonth, v => result.SeatPricePerMonth = v, result.SeatPricePerMonth, provenance);
             Set(CopilotInvestmentFields.CreditPrice, CreditPrice, v => result.CreditPrice = v, result.CreditPrice, provenance);
             Set(CopilotInvestmentFields.StudioCreditPrice, StudioCreditPrice, v => result.StudioCreditPrice = v, result.StudioCreditPrice, provenance);
@@ -569,8 +578,29 @@ namespace Common.Entities.CopilotInvestment
             Set(CopilotInvestmentFields.RealisationBase, RealisationBase, v => realisation.Base = v, realisation.Base, provenance);
             Set(CopilotInvestmentFields.RealisationUpside, RealisationUpside, v => realisation.Upside = v, realisation.Upside, provenance);
             var errors = result.Validate();
+            if (relabelsTenantMoney) errors.Insert(0, CopilotInvestmentErrorCodes.CurrencyChangeNeedsPrices);
             if (errors.Count > 0) throw new CopilotInvestmentAssumptionsRejectedException(CopilotInvestmentErrorCodes.ScenarioInvalid, errors);
             return result;
+        }
+
+        /// <summary>
+        /// True when this scenario names a currency other than the organisation's while a price or the hourly cost the
+        /// organisation set would still be used: that figure is in the organisation's currency, and nothing here holds an
+        /// exchange rate, so it would be relabelled rather than converted - 30 EUR shown as 30 USD (#851, R2-9). A currency
+        /// change is therefore accepted only with every money figure the organisation set restated in the new currency.
+        /// </summary>
+        private bool RelabelsTenantMoney(string currency, CopilotInvestmentAssumptions tenant)
+        {
+            if (currency == null || string.IsNullOrWhiteSpace(tenant.Currency)
+                || string.Equals(currency, tenant.Currency.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return (tenant.SeatPricePerMonth.HasValue && !SeatPricePerMonth.HasValue)
+                || (tenant.CreditPrice.HasValue && !CreditPrice.HasValue)
+                || (tenant.StudioCreditPrice.HasValue && !StudioCreditPrice.HasValue)
+                || (tenant.HourlyCost.HasValue && !HourlyCost.HasValue);
         }
 
         private static void Set<T>(string field, T scenario, Action<T> assign, T tenant, IDictionary<string, string> provenance)

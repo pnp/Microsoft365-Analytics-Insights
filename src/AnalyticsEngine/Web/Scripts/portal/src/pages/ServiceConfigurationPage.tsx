@@ -71,6 +71,8 @@ const useStyles = makeStyles({
 export const WEBHOOK_STATUS_DETAIL_TEXT: Record<string, Parameters<TFunction>[0]> = Object.freeze({
   [EN_CATALOG['admin.serviceConfiguration.webhook.detail.webAppUrlMissing']]:
     'admin.serviceConfiguration.webhook.detail.webAppUrlMissing',
+  [EN_CATALOG['admin.serviceConfiguration.webhook.detail.subscriptionsUnreadable']]:
+    'admin.serviceConfiguration.webhook.detail.subscriptionsUnreadable',
 });
 
 export function webhookStatusDetail(t: TFunction, detail: string | null): string | null {

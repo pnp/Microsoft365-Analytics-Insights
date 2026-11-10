@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 {
@@ -59,10 +60,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             $"(default 10 x {MaxOption}, at least {CallDeadLetterReplayOptions.MinimumDefaultScanLimit}).{Environment.NewLine}" +
             $"  {ReasonOption} R            Only messages dead-lettered with reason R, e.g. {CallQueueRetryPolicy.RetriesExhaustedReason}.{Environment.NewLine}" +
             $"  {IncludeInvalidOption}     Also replay what the importer found can never be imported ({CallQueueMessageHandler.InvalidNotificationReason}, " +
-            $"{CallQueueMessageHandler.MissingCallIdReason}, {CallQueueMessageHandler.NotRetryableReason}).{Environment.NewLine}" +
+            $"{CallQueueMessageHandler.MissingCallIdReason}, {CallQueueMessageHandler.NotRetryableReason}, {CallRecordPayloadException.NoUsableSessionsReason}, " +
+            $"{CallRecordPayloadException.NoCallTypeReason}).{Environment.NewLine}" +
             $"  {PurgeUnimportableOption}  DELETE dead-lettered calls first queued over 30 days ago: Graph no longer has them.{Environment.NewLine}" +
             $"  {PurgeInvalidOption}       DELETE what the importer found can never be imported ({CallQueueMessageHandler.InvalidNotificationReason}, " +
-            $"{CallQueueMessageHandler.MissingCallIdReason}, {CallQueueMessageHandler.NotRetryableReason}).{Environment.NewLine}" +
+            $"{CallQueueMessageHandler.MissingCallIdReason}, {CallQueueMessageHandler.NotRetryableReason}, {CallRecordPayloadException.NoUsableSessionsReason}, " +
+            $"{CallRecordPayloadException.NoCallTypeReason}).{Environment.NewLine}" +
             $"  {PurgeAllOption}           DELETE every dead-lettered call the run looks at, whatever its reason or age (with {ReasonOption}, every one " +
             $"dead-lettered for it), and replay none. Permanent: those calls are never imported.";
 

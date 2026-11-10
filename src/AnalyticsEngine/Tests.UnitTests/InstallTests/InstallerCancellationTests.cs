@@ -249,6 +249,65 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        /// <summary>
+        /// The same in-flight cancel during the installer's own SQL connection test: it used to come back as a failed
+        /// test, logged as "Error testing SQL connection ... Verify network connectivity to server", with private-network
+        /// guidance on top (#852 R11-12). A Cancel is not a connectivity result, so it leaves the test unreported.
+        /// </summary>
+        [TestMethod]
+        public async Task CancelDuringTheSqlConnectionTest_IsNotReportedAsAConnectionFailure()
+        {
+            using (var db = ScratchDatabase.Create("InstallCancelTest"))
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var logger = new CapturingLogger();
+                var process = new SlowSqlConnectionTest(logger) { CancellationToken = cancellation.Token };
+                cancellation.CancelAfter(TimeSpan.FromMilliseconds(500));
+
+                Exception thrown = null;
+                try
+                {
+                    await process.VerifySqlWithFirewallSelfHeal(db.ConnectionString, null);
+                }
+                catch (Exception ex)
+                {
+                    thrown = ex;
+                }
+
+                Assert.IsNotNull(thrown, "A Cancel must stop the install, not report a connection-test result." + Environment.NewLine + Describe(logger));
+                Assert.IsFalse(logger.Lines.Any(l => l.Level >= LogLevel.Warning), Describe(logger));
+            }
+        }
+
+        /// <summary>
+        /// The upgrade's own handler decided by type too, so a Cancel that arrived from the database step as a SqlException
+        /// was logged as a Critical "outcome=Failed" telling the operator the WebJobs' state was unconfirmed.
+        /// </summary>
+        [TestMethod]
+        public async Task UpgradeCancelledDuringTheDatabaseStep_IsLoggedAsCancelled_WhateverTheExceptionType()
+        {
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var logger = new CapturingLogger();
+                var restarted = false;
+                Func<Task> none = () => Task.CompletedTask;
+
+                await Assert.ThrowsExceptionAsync<SqlException>(() =>
+                    ConfigureAzureComponentsTasks.RunUpgradeDeploymentAsync(true, true, none, none, none,
+                        () => { restarted = true; return Task.CompletedTask; },
+                        () =>
+                        {
+                            cancellation.Cancel();
+                            throw (SqlException)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(SqlException));
+                        },
+                        none, logger, cancellation.Token));
+
+                Assert.IsTrue(restarted, "The stopped site must still be started again.");
+                Assert.IsTrue(logger.Lines.Any(l => l.Level == LogLevel.Warning && l.Message.Contains("stage=schema outcome=Cancelled")), Describe(logger));
+                Assert.IsFalse(logger.Lines.Any(l => l.Level >= LogLevel.Error), Describe(logger));
+            }
+        }
+
         [TestMethod]
         public async Task AnyFailureAfterCancelWasRequested_IsReportedAsCancelled_AndKeepsWhatTheCallSaid()
         {
@@ -381,6 +440,22 @@ namespace Tests.UnitTests.InstallTests
             {
                 release.TrySetResult(true);
                 try { await operation; } catch (OperationCanceledException) { }
+            }
+        }
+
+        /// <summary>A connection test whose query takes long enough to be cancelled while it runs, as a slow server's would.</summary>
+        sealed class SlowSqlConnectionTest : BaseInstallProcess
+        {
+            public SlowSqlConnectionTest(ILogger logger) : base(new SolutionInstallConfig(), logger) { }
+
+            internal override async Task RunConnectionTestAsync(SqlConnection conn)
+            {
+                await conn.OpenAsync(CancellationToken);
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "WAITFOR DELAY '00:00:30';";
+                    await cmd.ExecuteNonQueryAsync(CancellationToken);
+                }
             }
         }
 

@@ -396,7 +396,16 @@ namespace WebJob.Office365ActivityImporter
                                 if (callQueueProcessor == null)
                                 {
                                     var newProcessor = new CallQueueProcessor(configuredSettings, configuredSettings.TenantGUID.ToString(), userScopeProvider);
-                                    await newProcessor.Init();
+                                    try
+                                    {
+                                        await newProcessor.Init();
+                                    }
+                                    catch
+                                    {
+                                        // Tried again next cycle with a new processor: don't leave this one's Service Bus client open (#847).
+                                        newProcessor.Dispose();
+                                        throw;
+                                    }
                                     callQueueProcessor = newProcessor;
                                 }
 

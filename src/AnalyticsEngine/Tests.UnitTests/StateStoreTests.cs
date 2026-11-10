@@ -290,6 +290,35 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, store.Count);
         }
 
+        /// <summary>
+        /// #847 (R10-10): a read that finds an expired value removes only that value. It used to remove whatever the key held,
+        /// so a value written between the read and the removal was deleted. The clock is read between the two, so a write
+        /// made from inside it lands exactly there.
+        /// </summary>
+        [TestMethod]
+        public async Task InMemory_ExpiredRead_NeverDeletesAValueWrittenMeanwhile()
+        {
+            var now = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);
+            InMemoryKeyValueStore store = null;
+            var writeDuringRead = false;
+            store = new InMemoryKeyValueStore(() =>
+            {
+                if (writeDuringRead)
+                {
+                    writeDuringRead = false;
+                    store.SetStringAsync("k", "fresh").GetAwaiter().GetResult();
+                }
+                return now;
+            });
+            await store.SetStringAsync("k", "stale", TimeSpan.FromMinutes(1));
+
+            now = now.AddMinutes(2);
+            writeDuringRead = true;
+            Assert.IsNull(await store.GetStringAsync("k"), "The value read had expired.");
+
+            Assert.AreEqual("fresh", await store.GetStringAsync("k"), "The value written meanwhile survives.");
+        }
+
         /// <summary>A conditional delete removes only the version that was read; a row that moved on since is not an error.</summary>
         [TestMethod]
         public async Task InMemory_ConditionalDelete_RemovesOnlyTheVersionRead()
