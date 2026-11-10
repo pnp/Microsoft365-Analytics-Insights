@@ -7,7 +7,8 @@ import type { CopilotAdoptionOptions, LicensedUserAdoptionRow, LicensedUserPage 
 import { fetchLicensedUsers } from '../../api/copilotAdoptionApi';
 import { PRINT_ROW_LIMIT, requestPrint, resetPrintPreparation } from '../shared/printPreparation';
 
-vi.mock('../../api/copilotAdoptionApi', () => ({
+vi.mock('../../api/copilotAdoptionApi', async importOriginal => ({
+  ...await importOriginal<typeof import('../../api/copilotAdoptionApi')>(),
   fetchLicensedUsers: vi.fn(),
   licensedUsersExportUrl: vi.fn(() => '#export'),
 }));
@@ -144,6 +145,25 @@ function row(over: Partial<LicensedUserAdoptionRow>): LicensedUserAdoptionRow {
 
 describe('LicensedUsersPanel source reconciliation', () => {
   beforeEach(() => vi.mocked(fetchLicensedUsers).mockReset());
+
+  it('refreshes a mounted list when its summary generation changes and ignores the replaced request', async () => {
+    const first: LicensedUserPage = { total: 1, skip: 0, take: 50, warnings: [], rows: [row({ userPrincipalName: 'old@contoso.com' })] };
+    const latest: LicensedUserPage = { ...first, rows: [row({ userPrincipalName: 'latest@contoso.com' })] };
+    let release!: (page: LicensedUserPage) => void;
+    const delayed = new Promise<LicensedUserPage>(resolve => { release = resolve; });
+    vi.mocked(fetchLicensedUsers).mockReturnValueOnce(delayed).mockResolvedValueOnce(latest);
+    const render = (generationId: string) => (
+      <LicensedUsersPanel windowDays={28} filterOptions={null} actionPlan={[]} options={OPTIONS} generationId={generationId} />
+    );
+    const view = renderWithProvider(render('00000000000000000000000000000001'));
+    await waitFor(() => expect(fetchLicensedUsers).toHaveBeenCalledTimes(1));
+    view.rerender(render('00000000000000000000000000000002'));
+    expect(await screen.findByText('latest@contoso.com')).toBeVisible();
+    await act(async () => { release(first); await delayed; });
+    expect(screen.queryByText('old@contoso.com')).not.toBeInTheDocument();
+    expect(vi.mocked(fetchLicensedUsers).mock.lastCall?.[7]).toEqual({ generationId: '00000000000000000000000000000002' });
+    expect(vi.mocked(fetchLicensedUsers).mock.calls[0][5]?.aborted).toBe(true);
+  });
 
   it('keeps the signal out of the table, and shows both source figures in the expanded row of a user covered by both', async () => {
     const page: LicensedUserPage = {

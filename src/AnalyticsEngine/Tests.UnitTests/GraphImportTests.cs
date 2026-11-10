@@ -207,9 +207,21 @@ namespace Tests.UnitTests
         /// <summary>
         /// Insert a bunch of fake calls to SB so our calls processor picks it up. We then use a fake HTTP server to simulate Graph, and insert it in the DB
         /// </summary>
+        /// <remarks>
+        /// Opt-in: set <c>RUN_LIVE_CALL_QUEUE=1</c>. Not run in CI. Every run sends to and receives from the one Service Bus
+        /// queue named in the ServiceBus connection string, so while several pull requests were tested at once each run's
+        /// processor took the others' messages, and the run waiting for its own timed out (#855). It also needs that connection
+        /// string and a client secret, which Dependabot and fork pull requests don't get (#860). The dispatcher, the call-record
+        /// importer and the queue handler's complete, retry and dead-letter decisions are covered offline in CallsImportTests.
+        /// </remarks>
         [TestMethod]
         public async Task CallQueueProcessorTest()
         {
+            if (Environment.GetEnvironmentVariable("RUN_LIVE_CALL_QUEUE") != "1")
+            {
+                Assert.Inconclusive("Live Service Bus round trip on the shared calls queue; set RUN_LIVE_CALL_QUEUE=1 to run it.");
+            }
+
             const int CALLS_TO_ADD = 10;
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
 
@@ -445,6 +457,7 @@ namespace Tests.UnitTests
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var authConfig = new AppConfig();
+            LiveCredentials.RequireGraphClientSecret(authConfig);
             var auth = new GraphAppIndentityOAuthContext(logger, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
             await auth.InitClientCredential();
 

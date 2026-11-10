@@ -137,9 +137,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </summary>
     /// <remarks>
     /// A confirmed miss (no row) returns null - the deliberate first-run / full-enumeration path. A store that can't be
-    /// read is NOT a miss: after bounded retries it falls back to the last token this process committed, and with none
-    /// it throws <see cref="DeltaTokenUnavailableException"/> so the user import is deferred rather than turned into a
+    /// read is NOT a miss: after bounded retries it falls back to the last token THIS INSTANCE read or committed, and with
+    /// none it throws <see cref="DeltaTokenUnavailableException"/> so the user import is deferred rather than turned into a
     /// full tenant crawl by a storage blip.
+    /// <para>The fallback is per instance, not per process: <c>UserMetadataUpdater</c> creates a new provider for every
+    /// import cycle. So it only covers a read that fails after one earlier in the same cycle succeeded; a store that can't
+    /// be read when a cycle starts defers that cycle's user import, and the next cycle tries again (#847, R8-7). That is
+    /// the safe direction - a token kept for the life of the process could be one a later cycle had already replaced or
+    /// cleared.</para>
     /// </remarks>
     public class PersistedDeltaValueProvider : IDeltaValueProvider
     {
@@ -190,12 +195,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 if (!string.IsNullOrEmpty(_lastKnownCommittedDeltaToken))
                 {
-                    _logger.LogWarning($"User delta token store read failed after {_retryOptions.MaxAttempts:N0} attempt(s); using the last committed in-process checkpoint for this WebJob process. The next successful read from the state store will resume normal persisted checkpoint use.");
+                    _logger.LogWarning($"User delta token store read failed after {_retryOptions.MaxAttempts:N0} attempt(s); using the checkpoint this import cycle already read or committed. The next successful read from the state store will resume normal persisted checkpoint use.");
                     return _lastKnownCommittedDeltaToken;
                 }
 
                 throw new DeltaTokenUnavailableException(
-                    "User delta token store is unavailable and this process has no last committed checkpoint. Deferring user metadata/licence import rather than treating the outage as a cache miss and starting a full tenant crawl.",
+                    "User delta token store is unavailable and this import cycle has not read or committed a checkpoint. Deferring user metadata/licence import rather than treating the outage as a cache miss and starting a full tenant crawl.",
                     ex);
             }
         }

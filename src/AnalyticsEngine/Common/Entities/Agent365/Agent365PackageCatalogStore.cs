@@ -92,12 +92,42 @@ namespace Common.Entities.Agent365
             _contextFactory = contextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
         }
 
+        /// <summary>
+        /// How long a run can go without completing before a later run treats it as interrupted (a WebJob restart): it is then
+        /// closed as failed and its rows are removed. Far longer than an import takes, so a run that may still be in progress
+        /// - on another instance, say - is never touched.
+        /// </summary>
+        public static readonly TimeSpan InterruptedRunAge = TimeSpan.FromHours(24);
+
         public async Task<Guid> BeginImportAsync(DateTime startedUtc)
         {
             var runId = Guid.NewGuid();
             using (var db = _contextFactory.Create())
             using (var transaction = db.Database.BeginTransaction())
             {
+                // A run a restart interrupted never gets completed_utc, and CompleteImportAsync only removes the rows of
+                // completed runs, so its packages and elements were kept for ever (#847, R10-12).
+                var interruptedBeforeUtc = startedUtc - InterruptedRunAge;
+                await db.Database.ExecuteSqlCommandAsync(
+                    "DELETE elements " +
+                    "FROM dbo.copilot_agent_package_elements elements " +
+                    "INNER JOIN dbo.copilot_agent_catalog_import_log runs ON runs.run_id = elements.import_run_id " +
+                    "WHERE runs.completed_utc IS NULL AND runs.started_utc < @interruptedBefore;",
+                    new SqlParameter("@interruptedBefore", SqlDbType.DateTime2) { Value = interruptedBeforeUtc });
+                await db.Database.ExecuteSqlCommandAsync(
+                    "DELETE packages " +
+                    "FROM dbo.copilot_agent_packages packages " +
+                    "INNER JOIN dbo.copilot_agent_catalog_import_log runs ON runs.run_id = packages.import_run_id " +
+                    "WHERE runs.completed_utc IS NULL AND runs.started_utc < @interruptedBefore;",
+                    new SqlParameter("@interruptedBefore", SqlDbType.DateTime2) { Value = interruptedBeforeUtc });
+                await db.Database.ExecuteSqlCommandAsync(
+                    "UPDATE dbo.copilot_agent_catalog_import_log " +
+                    "SET completed_utc = @completedUtc, is_success = 0, error = @error " +
+                    "WHERE completed_utc IS NULL AND started_utc < @interruptedBefore;",
+                    new SqlParameter("@completedUtc", SqlDbType.DateTime2) { Value = startedUtc },
+                    NVarChar("@error", 1000, InterruptedRunError),
+                    new SqlParameter("@interruptedBefore", SqlDbType.DateTime2) { Value = interruptedBeforeUtc });
+
                 await db.Database.ExecuteSqlCommandAsync(
                     "INSERT INTO dbo.copilot_agent_catalog_import_log " +
                     "(run_id, started_utc, is_success) VALUES (@runId, @startedUtc, 0);",
@@ -108,6 +138,10 @@ namespace Common.Entities.Agent365
 
             return runId;
         }
+
+        /// <summary>The error an interrupted run is closed with.</summary>
+        public const string InterruptedRunError =
+            "The import was interrupted before it completed (most likely the importer restarted). Its partial rows were removed.";
 
         public async Task SavePageAsync(Guid runId, IReadOnlyList<Agent365Package> packages)
         {

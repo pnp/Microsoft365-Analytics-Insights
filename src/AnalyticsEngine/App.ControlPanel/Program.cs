@@ -145,7 +145,8 @@ namespace App.ControlPanel
         {
             try
             {
-                var preferences = SecureLocalPreferences.Load<InstallerPreferences>();
+                var preferences = SecureLocalPreferences.Load<InstallerPreferences>(
+                    unreadable => InstallerLogs.AddToWindowsEventLog(unreadable, true));
                 if (!InstallerNetworkProxy.TryApplyProcessWide(preferences?.ProxyConfig, null, out var proxyError))
                 {
                     InstallerLogs.AddToWindowsEventLog($"The saved installer proxy settings can't be used, so the system proxy is in use: {proxyError}", true);

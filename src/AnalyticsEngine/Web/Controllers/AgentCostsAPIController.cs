@@ -202,10 +202,11 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             // Clamped rather than rejected: a too-wide window is a reasonable thing for someone to ask for,
-            // and silently answering the widest supported window beats an error page.
-            if ((toDate - fromDate).TotalDays > MaxDays)
+            // and silently answering the widest supported window beats an error page. Both ends are inclusive
+            // dates, so the window spans (to - from) + 1 of them: 2026-01-01 to 2026-06-30 is 181 dates, not 180.
+            if ((toDate - fromDate).TotalDays + 1 > MaxDays)
             {
-                fromDate = toDate.AddDays(-MaxDays);
+                fromDate = toDate.AddDays(-(MaxDays - 1));
             }
 
             return new AgentCostQuery

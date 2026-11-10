@@ -21,9 +21,6 @@
 
         public static string FILENAME_EXE_INSTALLER => "AnalyticsInstaller.exe";
 
-        public static string MasterBuildBlobPrefix => "master - build";
-
-
         public const string AI_TRACKER_FILE_TITLE = "aitracker.js";
         public const string AI_TRACKER_SPFX_FILE_TITLE = "spoinsights-modern-ui-aitracker.sppkg";
 

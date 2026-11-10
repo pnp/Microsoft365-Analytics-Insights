@@ -23,11 +23,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly string _installedByUsername;
         private readonly Func<string, Task<bool>> _verifySqlCallback;
 
-        /// <param name="configPassword">
-        /// No longer used: the configuration snapshot registered in the database carries no secrets, so it is not
-        /// encrypted (<see cref="SolutionInstallConfig.ToDatabaseSnapshotJson"/>).
-        /// </param>
-        public SqlInstallerTasks(SolutionInstallConfig config, FileInfo installerExeFileInfo, DatabasePaaSInfo dbInfo, ILogger logger, string installedByUsername, string configPassword,
+        public SqlInstallerTasks(SolutionInstallConfig config, FileInfo installerExeFileInfo, DatabasePaaSInfo dbInfo, ILogger logger, string installedByUsername,
             Func<string, Task<bool>> verifySqlCallback)
         {
             _config = config;
@@ -38,7 +34,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _verifySqlCallback = verifySqlCallback;
         }
 
-        public async Task UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(FileInfo installerExeFile, List<InstallLogEventArgs> installLogEvents)
+        internal async Task UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(FileInfo installerExeFile, InstallLogCapture installLog)
         {
             CancellationToken.ThrowIfCancellationRequested();
             // Init DB schema with downloaded control panel app?
@@ -55,7 +51,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             {
                 try
                 {
-                    await RegisterConfigAndStatus(installLogEvents);
+                    await RegisterConfigAndStatus(installLog);
                 }
                 catch (UnexpectedInstallException ex)
                 {
@@ -206,12 +202,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
             return upgradeInfo;
         }
 
-        internal async Task RegisterConfigAndStatus(List<InstallLogEventArgs> installLogEvents)
+        internal async Task RegisterConfigAndStatus(InstallLogCapture installLog)
         {
             var status = new InstallStatus
             {
                 ConfigurationJSon = _config.ToDatabaseSnapshotJson(),
-                Events = installLogEvents,
+                // A copy, taken under the capture's lock, so serialising it can't race a message logged on another thread.
+                Events = installLog.Snapshot(),
                 SetupUserName = _installedByUsername,
                 ConnectionString = _dbInfo.ConnectionString
             };

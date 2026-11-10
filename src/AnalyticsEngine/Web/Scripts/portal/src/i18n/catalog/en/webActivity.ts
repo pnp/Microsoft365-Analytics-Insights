@@ -162,6 +162,8 @@ export const webActivity = {
   'webActivity.journeys.kpi.pagesPerVisitWhat': 'How many pages a visit sees, on average and at the midpoint.',
   'webActivity.journeys.kpi.averageVisitLength': 'Average visit length',
   'webActivity.journeys.kpi.averageVisitLengthWhat': 'Total time a visit spent on pages.',
+  'webActivity.journeys.kpi.measuredVisitsHint': 'over the {measured} of {visits} visits with a measured time',
+  'webActivity.journeys.kpi.noMeasuredVisitsHint': 'no visit in this period reported a time on page',
   'webActivity.common.elementClicks': 'Element clicks',
   'webActivity.journeys.kpi.clicksRecordedHint': 'recorded in this period',
   'webActivity.journeys.kpi.noClicksHint': 'no clicks recorded yet',
@@ -417,7 +419,7 @@ export const webActivity = {
 
   'webActivity.journeys.kpi.bounceHow': 'Single-page visits over all visits. Judge it per page, not in aggregate: a deep link straight to one policy document is a perfectly good one-page visit, while a home page with the same rate is a navigation failure.',
   'webActivity.journeys.kpi.pagesPerVisitHow': 'The median is shown next to the mean because a handful of very deep visits - a content author clicking through fifty pages - drags the mean up and the median does not move. When the two are far apart, trust the median.',
-  'webActivity.journeys.kpi.visitLengthHow': 'The per-page dwell times in the visit, summed. The tracker cannot measure the last page of a visit, so this under-states real visit length - consistently, so it is still usable for comparing periods.',
+  'webActivity.journeys.kpi.visitLengthHow': 'The per-page dwell times in the visit, summed, and averaged over the visits that reported one - a visit with no dwell time is unmeasured, not a visit that took no time. The tracker cannot measure the last page of a visit, so this under-states real visit length - consistently, so it is still usable for comparing periods.',
   'webActivity.journeys.kpi.clicksHow': 'Optional: the SharePoint tracker only records these when element-click capture is enabled, so zero usually means the feature is off rather than that nobody clicked anything.',
   'webActivity.journeys.bounce.note': 'These are the landing pages with the highest bounce RATES, not the largest number of bounces - a page losing 5 of 5 visits ranks above one losing 500 of 1,000. Each one is either a page that answered the question completely - which is fine - or a dead end that should be offering a next step.',
   'webActivity.journeys.exit.note': 'No average time is shown here. The tracker measures dwell time against the NEXT page view, and by definition these pages have none - so the figure would be an artefact, not a measurement.',

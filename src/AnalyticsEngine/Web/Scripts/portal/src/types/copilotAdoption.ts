@@ -521,6 +521,23 @@ export interface ManagerModellingSegmentRow extends ManagerModellingFigures {
   licensedUsers: number;
 }
 
+export interface AdoptionProgressStep {
+  step: string;
+  state: 'pending' | 'running' | 'loaded' | 'failed' | 'skipped' | 'blocked';
+  durationMs: number;
+  queryElapsedMs?: number | null;
+  failure?: string | null;
+  reference?: string | null;
+}
+
+export interface AdoptionProgress {
+  generationId: string;
+  phase: string;
+  elapsedMs: number;
+  percentComplete: number | null;
+  steps: AdoptionProgressStep[];
+}
+
 /**
  * The executive view.
  *
@@ -528,6 +545,13 @@ export interface ManagerModellingSegmentRow extends ManagerModellingFigures {
  * fixture or a server that predates them still type-checks.
  */
 export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures> {
+  diagnostics?: {
+    generationId?: string;
+    runId?: string | null;
+    totalMs: number;
+    steps: { step: string; durationMs: number; failed: boolean }[];
+    progress?: AdoptionProgress;
+  };
   generatedUtc: string;
   windowDays: number;
   fromUtc: string;

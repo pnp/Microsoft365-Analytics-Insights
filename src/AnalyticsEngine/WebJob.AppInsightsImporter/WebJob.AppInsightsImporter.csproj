@@ -78,8 +78,6 @@
     <AssemblyOriginatorKeyFile>..\Certificates\SPOInsightsBinaries.pfx</AssemblyOriginatorKeyFile>
   </PropertyGroup>
   <ItemGroup>
-    <!-- These legacy files were not compiled before the SDK conversion. -->
-    <Compile Remove="O365AuditLogParser.cs" />
     <Reference Include="System" />
     <Reference Include="System.ComponentModel.Composition" />
     <Reference Include="System.ComponentModel.DataAnnotations" />
@@ -119,9 +117,6 @@
       <Generator>SettingsSingleFileGenerator</Generator>
       <LastGenOutput>Settings.Designer.cs</LastGenOutput>
     </None>
-    <None Include="Sample JSon Imports\Search Event.json" />
-    <Content Include="Sample JSon Imports\PageView Export.json.txt" />
-    <Content Include="Sample JSon Imports\Page Exit Event.json.txt" />
     <!-- Kudu starts a continuous WebJob on every instance of a scaled-out App Service unless settings.job says
          is_singleton, and the importers stage rows in fixed-name ##temp tables that every save drops and re-creates.
          Copied next to the .exe: CI zips the build output and the installer unpacks it into app_data\jobs\continuous\<name>. -->

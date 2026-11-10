@@ -502,7 +502,8 @@ namespace Common.Entities.SpoWebActivity
             var visits = depth.Sum(r => r.Visits);
             var pageViews = depth.Sum(r => r.Pages * r.Visits);
             var bounces = depth.Where(r => r.Pages == 1).Sum(r => r.Visits);
-            var measuredDwell = depth.Where(r => r.Seconds.HasValue).ToList();
+            var measuredVisits = depth.Sum(r => r.MeasuredVisits);
+            var measuredSeconds = depth.Where(r => r.Seconds.HasValue).Sum(r => r.Seconds.Value);
 
             model.Kpis = new WebActivityJourneyKpis
             {
@@ -511,11 +512,14 @@ namespace Common.Entities.SpoWebActivity
                 BouncePct = WebActivityScoring.Percentage(bounces, visits),
                 PagesPerVisit = visits > 0 ? (double)pageViews / visits : 0,
                 MedianPagesPerVisit = MedianPages(depth),
-                // Null rather than zero when nothing reported a dwell time: a confident "0s average
-                // visit" is the same missing-data failure the timing KPIs were just fixed for.
-                AverageVisitSeconds = measuredDwell.Count > 0 && visits > 0
-                    ? (double?)(measuredDwell.Sum(r => r.Seconds.Value) / visits)
+                // Over the visits that reported a dwell time, which are the visits the seconds were summed from: dividing
+                // by every visit counted each unmeasured one as a zero-second visit and shortened the average (#851).
+                // Null rather than zero when nothing reported a dwell time: a confident "0s average visit" is the same
+                // missing-data failure the timing KPIs were just fixed for.
+                AverageVisitSeconds = measuredVisits > 0
+                    ? (double?)(measuredSeconds / measuredVisits)
                     : null,
+                MeasuredVisits = measuredVisits,
                 Clicks = clickCountTask.Result.Rows.FirstOrDefault()?.Clicks ?? 0,
             };
 

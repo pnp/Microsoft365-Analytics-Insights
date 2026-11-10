@@ -256,6 +256,8 @@ export interface WebActivityJourneyKpis {
   medianPagesPerVisit: number;
   /** Null when no visit reported a dwell time - not a zero-second visit. */
   averageVisitSeconds: number | null;
+  /** The visits the average is over: those in which at least one page reported a dwell time. */
+  measuredVisits: number;
   clicks: number;
 }
 

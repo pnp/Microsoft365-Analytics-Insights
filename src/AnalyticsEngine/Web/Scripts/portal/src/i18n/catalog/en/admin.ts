@@ -432,6 +432,8 @@ export const admin = {
   'admin.serviceConfiguration.webhook.active': 'Active',
   'admin.serviceConfiguration.webhook.callRecordsPermission': 'CallRecords.Read.All',
   'admin.serviceConfiguration.webhook.couldNotCheck': "Couldn't check",
+  'admin.serviceConfiguration.webhook.detail.subscriptionsUnreadable':
+    "Microsoft Graph answered without a readable list of subscriptions, so the webhook couldn't be checked. Reload the page to try again.",
   'admin.serviceConfiguration.webhook.detail.webAppUrlMissing': "WebAppURL is not configured, so the webhook subscription URL can't be determined.",
   'admin.serviceConfiguration.webhook.missingHelp':
     'The importer web-job registers and renews this on every import cycle. If it stays missing, check the importer web-job is running and that its app registration has the {permission} Microsoft Graph application permission.',

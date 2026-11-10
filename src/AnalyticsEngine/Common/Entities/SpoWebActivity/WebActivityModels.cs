@@ -500,14 +500,21 @@ namespace Common.Entities.SpoWebActivity
         public int MedianPagesPerVisit { get; set; }
 
         /// <summary>
-        /// Mean visit length in seconds, or null when no visit reported a dwell time.
+        /// Mean visit length in seconds over the visits that reported a dwell time, or null when none did.
         /// </summary>
         /// <remarks>
         /// Summed from the per-page dwell times, which exclude each visit's last page - so this
         /// under-states real visit length, consistently, and is still usable for comparing periods.
+        /// Divided by <see cref="MeasuredVisits"/>, not by every visit: a visit with no dwell time is
+        /// unmeasured, not a visit that took no time.
         /// Null rather than zero when nothing was measured: "0s" reads as a finding.
         /// </remarks>
         public double? AverageVisitSeconds { get; set; }
+
+        /// <summary>
+        /// The visits <see cref="AverageVisitSeconds"/> averages over: those in which at least one page reported a dwell time.
+        /// </summary>
+        public long MeasuredVisits { get; set; }
 
         /// <summary>Recorded element clicks - only populated when the tracker's click capture is on.</summary>
         public long Clicks { get; set; }

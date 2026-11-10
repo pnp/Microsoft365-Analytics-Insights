@@ -503,7 +503,7 @@ namespace Tests.UnitTests
 
             var handler = new RoutingGraphHandler();
             handler.Routes[$"/teams/{teamId}"] = $"{{\"id\":\"{teamId}\",\"displayName\":\"Καλημέρα κόσμε\"}}";
-            handler.Routes[$"/groups/{teamId}"] = $"{{\"id\":\"{teamId}\",\"owners\":[{GraphUserJson(pilotId)},{GraphUserJson(outsiderId)}]}}";
+            handler.Routes[$"/groups/{teamId}/owners"] = $"{{\"value\":[{GraphUserJson(pilotId)},{GraphUserJson(outsiderId)}]}}";
             handler.Routes[$"/groups/{teamId}/members"] = $"{{\"value\":[{GraphUserJson(pilotId)},{GraphUserJson(outsiderId)}]}}";
             handler.Routes[$"/users/{pilotId}"] = $"{{\"id\":\"{pilotId}\",\"userPrincipalName\":\"{pilotUpn}\"}}";
             handler.Routes[$"/users/{outsiderId}"] = $"{{\"id\":\"{outsiderId}\",\"userPrincipalName\":\"outsider@contoso.local\"}}";
