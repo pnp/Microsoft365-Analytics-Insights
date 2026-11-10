@@ -48,8 +48,8 @@ namespace Tests.UnitTests
     [TestClass]
     public class PortalPermissionTests
     {
-        private const string Any = "any signed-in user";
-        private const string Public = "anonymous (not signed in)";
+        internal const string Any = "any signed-in user";
+        internal const string Public = "anonymous (not signed in)";
         private const string Admin = "Administration";
         private const string Pii = "See PII";
         private const string AdminAndPii = "Administration + See PII";
@@ -309,7 +309,8 @@ namespace Tests.UnitTests
             }
         }
 
-        private static string Classify(Type controller, MethodInfo method)
+        /// <summary>Who the attributes let call an action. Shared with <see cref="PortalPrivacyFloorTests"/>.</summary>
+        internal static string Classify(Type controller, MethodInfo method)
         {
             var authorized = controller.GetCustomAttributes<AuthorizeAttribute>(true).Any()
                              || method.GetCustomAttributes<AuthorizeAttribute>(true).Any();
@@ -331,8 +332,11 @@ namespace Tests.UnitTests
             return Any;
         }
 
-        /// <summary>The actions Web API itself would find: see <c>ApiControllerActionSelector</c>.</summary>
-        private static IEnumerable<(string Key, Type Controller, MethodInfo Method)> WebApiActions()
+        /// <summary>
+        /// The actions Web API itself would find: see <c>ApiControllerActionSelector</c>. Shared with
+        /// <see cref="PortalPrivacyFloorTests"/>.
+        /// </summary>
+        internal static IEnumerable<(string Key, Type Controller, MethodInfo Method)> WebApiActions()
         {
             foreach (var controller in PortalTestHost.WebControllers())
             {
@@ -778,6 +782,10 @@ namespace Tests.UnitTests
             (HttpMethod.Get, "api/CopilotInvestment/summary?userFilter=%5B%7B%22d%22%3A%22userName%22%2C%22v%22%3A%5B%22person1%40contoso.com%22%5D%7D%5D", "seePii"),
             (HttpMethod.Get, "api/CopilotInvestment/trend?userFilter=%5B%7B%22d%22%3A%22department%22%2C%22v%22%3A%5B%22Sales%22%5D%7D%5D", "seePii"),
             (HttpMethod.Get, "api/CopilotInvestment/export/workbook?userFilter=%5B%7B%22d%22%3A%22userName%22%2C%22v%22%3A%5B%22person1%40contoso.com%22%5D%7D%5D", "seePii"),
+            (HttpMethod.Get, "api/CopilotInvestment/export/workbook?dimension=manager", "seePii"),
+            (HttpMethod.Get, "api/CopilotSpend/summary?userFilter=%5B%7B%22d%22%3A%22userName%22%2C%22v%22%3A%5B%22person1%40contoso.com%22%5D%7D%5D", "seePii"),
+            (HttpMethod.Get, "api/CopilotSpend/trend?userFilter=%5B%7B%22d%22%3A%22department%22%2C%22v%22%3A%5B%22Sales%22%5D%7D%5D", "seePii"),
+            (HttpMethod.Get, "api/CopilotSpend/export/workbook?userFilter=%5B%7B%22d%22%3A%22userName%22%2C%22v%22%3A%5B%22person1%40contoso.com%22%5D%7D%5D", "seePii"),
 
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users", "seePii"),
             (HttpMethod.Get, "api/CopilotAdoption/licensed-users/export", "seePii"),
