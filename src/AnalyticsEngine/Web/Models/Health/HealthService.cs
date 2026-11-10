@@ -1,7 +1,5 @@
 using Azure.Core;
 using Azure.Identity;
-using Azure.Messaging.ServiceBus;
-using Azure.Messaging.ServiceBus.Administration;
 using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.CopilotCosts;
@@ -17,6 +15,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text.RegularExpressions;
+using Web.AnalyticsWeb.Models.Calls;
 
 namespace Web.AnalyticsWeb.Models.Health
 {
@@ -634,17 +633,14 @@ namespace Web.AnalyticsWeb.Models.Health
 
             try
             {
-                var sbProps = ServiceBusConnectionStringProperties.Parse(sbConn);
-                var admin = new ServiceBusAdministrationClient(sbProps.FullyQualifiedNamespace, credential, ServiceBusHealthClientOptions());
-                var runtime = await admin.GetQueueRuntimePropertiesAsync(sbProps.EntityPath, cancellationToken);
-                var props = runtime.Value;
+                var depth = await CallQueueDepth.ReadAsync(sbConn, credential, cancellationToken);
 
-                string status = props.DeadLetterMessageCount > 0 ? HealthStatusNames.Degraded : HealthStatusNames.Healthy;
+                string status = depth.DeadLetterMessageCount > 0 ? HealthStatusNames.Degraded : HealthStatusNames.Healthy;
                 UpsertComponent(section, new ComponentHealthRow
                 {
                     Component = "ServiceBus",
                     Status = status,
-                    Detail = $"Teams calls queue '{sbProps.EntityPath}': {props.ActiveMessageCount} active, {props.DeadLetterMessageCount} dead-lettered.",
+                    Detail = $"Teams calls queue '{depth.QueueName}': {depth.ActiveMessageCount} active, {depth.DeadLetterMessageCount} dead-lettered.",
                     LastSeenUtc = DateTime.UtcNow
                 });
             }
@@ -670,18 +666,6 @@ namespace Web.AnalyticsWeb.Models.Health
                     LastSeenUtc = DateTime.UtcNow
                 });
             }
-        }
-
-        /// <summary>
-        /// Service Bus's default retry policy (three retries of up to 100 seconds each) could outlast the section deadline
-        /// on its own. One retry of a short request leaves room for the rest of the section.
-        /// </summary>
-        private static ServiceBusAdministrationClientOptions ServiceBusHealthClientOptions()
-        {
-            var options = new ServiceBusAdministrationClientOptions();
-            options.Retry.MaxRetries = 1;
-            options.Retry.NetworkTimeout = TimeSpan.FromSeconds(15);
-            return options;
         }
 
         /// <summary>
@@ -982,7 +966,7 @@ namespace Web.AnalyticsWeb.Models.Health
             }
         }
 
-        private static async Task<TokenCredential> BuildCredential(AppConfig config)
+        internal static async Task<TokenCredential> BuildCredential(AppConfig config)
         {
             if (config.UseClientCertificate)
             {

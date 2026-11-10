@@ -224,7 +224,10 @@ describe('CopilotCostConnectionPage data check pacing', () => {
   /** Confirms a data check with fake timers in force, so each wait between steps is controlled. */
   async function startDataCheck() {
     renderWithProvider(<CopilotCostConnectionPage />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Run or resume data check' }));
+    // The button is on the page, disabled, while the first status read is in flight; a click then does nothing.
+    const run = await screen.findByRole('button', { name: 'Run or resume data check' });
+    await waitFor(() => expect(run).toBeEnabled());
+    fireEvent.click(run);
     vi.useFakeTimers();
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     await act(() => vi.advanceTimersByTimeAsync(0));

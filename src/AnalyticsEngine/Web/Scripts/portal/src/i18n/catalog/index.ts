@@ -28,6 +28,7 @@ import enGlobalFilter from './en/globalFilter';
 import enAccess from './en/access';
 import enPromptCategories from './en/promptCategories';
 import enUserDiagnostics from './en/userDiagnostics';
+import enCallDeadLetters from './en/callDeadLetters';
 
 /**
  * The translation catalog, split by feature area.
@@ -82,6 +83,7 @@ export const EN_MODULES = {
   access: enAccess,
   promptCategories: enPromptCategories,
   userDiagnostics: enUserDiagnostics,
+  callDeadLetters: enCallDeadLetters,
 } as const;
 
 /** The module names, so tests can report which area a duplicate key came from. */

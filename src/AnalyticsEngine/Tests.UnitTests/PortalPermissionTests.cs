@@ -239,6 +239,10 @@ namespace Tests.UnitTests
             ["CopilotAdoptionSettingsAPIController.Save"] = Admin,
             ["CopilotAdoptionSettingsAPIController.Reset"] = Admin,
 
+            // The Teams calls dead-letter queue: reprocessing re-imports calls and clearing deletes them for good. Counts and codes only.
+            ["CallDeadLettersAPIController.Status"] = Admin,
+            ["CallDeadLettersAPIController.Submit"] = Admin,
+
             ["WebActivityAPIController.Availability"] = Any,
             ["WebActivityAPIController.Overview"] = Any,
             ["WebActivityAPIController.Visits"] = Any,
@@ -769,6 +773,8 @@ namespace Tests.UnitTests
             (HttpMethod.Post, "api/CopilotAdoptionSettings/reset", "administration"),
             (HttpMethod.Get, "api/CopilotInvestmentSettings", "administration"),
             (HttpMethod.Post, "api/CopilotInvestmentSettings", "administration"),
+            (HttpMethod.Get, "api/CallDeadLetters", "administration"),
+            (HttpMethod.Post, "api/CallDeadLetters/requests", "administration"),
 
             (HttpMethod.Get, "api/CopilotInvestment/people", "seePii"),
             (HttpMethod.Get, "api/CopilotInvestment/person/1", "seePii"),
