@@ -88,6 +88,14 @@ export default function JourneysPanel({
       key: 'visit-length',
       label: t('webActivity.journeys.kpi.averageVisitLength'),
       value: formatDuration(kpis.averageVisitSeconds),
+      hint: kpis.visits === 0
+        ? t('webActivity.common.noVisitsRecorded')
+        : kpis.averageVisitSeconds === null
+          ? t('webActivity.journeys.kpi.noMeasuredVisitsHint')
+          : t('webActivity.journeys.kpi.measuredVisitsHint', {
+              measured: formatCount(kpis.measuredVisits),
+              visits: formatCount(kpis.visits),
+            }),
       info: {
         what: t('webActivity.journeys.kpi.averageVisitLengthWhat'),
         how: t('webActivity.journeys.kpi.visitLengthHow'),
