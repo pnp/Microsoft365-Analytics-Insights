@@ -3,7 +3,10 @@
 The maintainers of **Microsoft 365 Advanced Analytics** take the security of the
 software seriously. This covers the data-collection engine (the Activity and App
 Insights importer web jobs), the admin web app, the Windows installer
-(`App.ControlPanel`), and the Power BI report templates in this repository.
+(`App.ControlPanel`), the SharePoint tracker (`AITracker.js` and the SPFx
+extension that loads it on modern pages, in `src/SPO`), the Telemetry Service
+(`src/TelemetryService`, which receives the anonymous usage reports that
+installations send), and the Power BI report templates in this repository.
 
 If you believe you have found a security vulnerability in this project, please
 report it to us privately as described below. **Please do not report security
@@ -36,7 +39,8 @@ Please use **GitHub's private vulnerability reporting** for this repository:
 
 To help us triage quickly, please include where possible:
 
-* The component affected (importer web job, web app, installer, reports, etc.).
+* The component affected (importer web job, web app, installer, SharePoint
+  tracker, Telemetry Service, reports, etc.).
 * The type of issue (e.g. credential exposure, injection, privilege escalation,
   insecure storage of secrets).
 * Step-by-step instructions to reproduce the issue.

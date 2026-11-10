@@ -1,10 +1,14 @@
 ## AutomationPS
-Files here will be manually added to the Office365ActivityImporter.zip along with the compiled webjob output by DevOps. 
+The Azure Automation runbooks that run the SQL `profiling` aggregation (see `App.ControlPanel.Engine/SqlExtentions/PROFILING.md`).
 
-I.e the zip will have:
+The release build copies this folder into Office365ActivityImporter.zip, next to the compiled webjob: the *Copy automation scripts* step of `.github/workflows/build-packages.yml`, which `ci.yml` and `pr.yml` both use. Nothing is added by hand.
+
+So the zip contains:
 * SPOInsights.WebJob.Office365ActivityImport.exe
 * Common.Entities.dll
 * ..
-* AutomationPS\ProfilingJobs\Database_Upgrade.ps1
+* AutomationPS\ProfilingJobs\Aggregation_Status.ps1
 * AutomationPS\ProfilingJobs\Database_Maintenance.ps1
-* etc
+* AutomationPS\ProfilingJobs\Weekly.ps1
+
+The installer unzips the package, finds the three scripts there (`ProfilingScriptsLocateTask`) and uploads them to the Automation account as runbooks (`RunbookUploadTask`).
