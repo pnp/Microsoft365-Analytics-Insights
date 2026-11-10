@@ -331,6 +331,34 @@ traces
 | order by timestamp asc
 ```
 
+#### Reprocess and clear requests from the portal
+
+Administration > Service configuration's **Dead-lettered Teams calls** card records a request - reprocess, or clear - in the runtime state table; the activity job's poller checks for one every minute, claims it, runs the same replay as `--replayCallDeadLetters` (clear is its `--purge-all`), and records the outcome. Importer lines are under operation `Office365CallsImporter`, like the queue's; the web app's under `CallDeadLetters`. They carry the action, counts, codes and the request's random id - never a message, call id, user or URL.
+
+- Poller: once per process `Teams calls dead-letter requests from the portal: checked every 1 minute(s) in partition 'CallDeadLetters' of the runtime state table; each is worked on for at most 15 minutes.`; without a Storage connection string, `... not checked. There is no Storage connection string ...` (the card then says the feature is unavailable). Warning, at most hourly, `Teams calls dead-letter requests from the portal: couldn't check for one in the runtime state table ({type}, HTTP {status}, {code}). Tried again every 1 minute(s).`
+- **The one line saying a run was requested from the portal**: `Teams calls dead-letter request from the portal: reprocess (send the dead-lettered calls back to the queue) (request {id}, recorded {u}), claimed by this importer instance and worked on for at most 15 minutes. The replay's summary follows.` (or `clear (DELETE every dead-lettered call, whatever its reason or age)`). Then, per pass over the dead-letter queue, the replay tool's own `Teams calls dead-letter replay starting: ...` line and summary. Reprocess repeats passes while one stops at its limit having replayed something; clear is `DELETING every message it looks at`.
+- Finish: Information (succeeded) or Warning `Teams calls dead-letter request from the portal {id} ({action}) finished: {succeeded|partial|failed} ({failureCode}) after {n} pass(es); replayed {n}, deleted {n}, left in the dead-letter queue {n}. Recorded for the portal.` Failure codes: `queueUnavailable` (Error `... couldn't open the Teams calls queue ({type}), so nothing was done.`), `readFailed`, `sendFailures`, `sendFailed`, `deleteFailed`, `lockedElsewhere`, `locksLapsing`, `timeBudget` (15 minutes used, more to do), `scanLimit`, `unexpectedError`.
+- Warning `... was interrupted: the importer is stopping. It stays claimed ...` (shutdown mid-run; nothing recorded); Warning `... The request was replaced while it ran, so this result is in this log only.`; Warning `... Couldn't record it for the portal (...)`.
+- Web app: `Teams calls dead-letter {reprocess|clear} requested from the portal (request {id}); the importer checks for requests every 1 minute(s).`; Warnings `Teams calls dead-letter requests: couldn't read the latest request ({type}).`, `... couldn't record a {action} request ({type}).`, `... couldn't read the calls queue's counts ({type}).`
+
+**Reading a request's state.** The card shows it; so does the row itself: table `AnalyticsState`, PartitionKey `CallDeadLetters`, RowKey `LatestRequest`, column `Value` - JSON with `id`, `action`, `requestedUtc`, `claimedUtc`, `finishedUtc`, `outcome`, `failureCode` and `result` (`passes`, `scanned`, `replayed`, `deleted`, `sendFailed`, `deleteFailed`, `skipped` by code, `reasons` by dead-letter reason, `stopCode`). Only the latest request is kept. Deleting the row forgets it and lets a new request be made at once.
+
+| Last evidence | What it proves |
+|---|---|
+| `requested from the portal` (web app), then no `claimed by this importer instance` within a few minutes | No importer is polling: the WebJob is stopped, or it has no Storage connection string or a different one. After 15 minutes the card says "Not picked up" and lets it be asked again; the importer never runs a request that went stale unclaimed |
+| `claimed by this importer instance`, then neither `finished:` nor `interrupted` | The process died mid-run (Kudu restart, scale-in). The card shows "Running" until 2 hours after the claim, then "Not finished"; ask again then, or delete the row |
+| `finished: partial (timeBudget)` | A big backlog: each request works for 15 minutes. Ask again to carry on |
+| `finished: partial (scanLimit)` after a reprocess | The head of the dead-letter queue is mostly what can never be imported; clear it (or `--purge-invalid` / `--purge-unimportable`) so a reprocess reaches the calls behind |
+| `finished: failed (queueUnavailable)` | The importer couldn't open Service Bus: see the Health page's Service Bus row and the queue's RBAC |
+
+```kusto
+traces
+| where timestamp between (startUtc .. endUtc)
+| where message startswith "Teams calls dead-letter request" or message startswith "Teams calls dead-letter replay" or message has "requested from the portal"
+| project timestamp, severityLevel, cloud_RoleName, message
+| order by timestamp asc
+```
+
 ### 3.7 App Insights importer (per-day outcomes)
 
 Job `AppInsightsImporter`, stage `AppInsightsImport`. Reads App Insights by an ingestion-time cursor, one bounded window at a time.

@@ -48,6 +48,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     public sealed class CallDeadLetterRequestPoller : IDisposable
     {
         private const string LogPrefix = "Teams calls dead-letter request from the portal";
+        private const string RequestsLogPrefix = "Teams calls dead-letter requests from the portal";
 
         /// <summary>A failure to read the request is logged as a warning at most this often; it is retried every poll.</summary>
         public static readonly TimeSpan ReadFailureLogInterval = TimeSpan.FromHours(1);
@@ -91,14 +92,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             var store = CallDeadLetterRequestStore.ForConfig(config, logger);
             if (!store.IsDurable)
             {
-                logger.LogInformation($"{LogPrefix}s: not checked. There is no Storage connection string, so the portal can't record a request this " +
+                logger.LogInformation($"{RequestsLogPrefix}: not checked. There is no Storage connection string, so the portal can't record a request this " +
                     $"importer would see. To reprocess or clear the dead-letter queue, run the importer with {CallDeadLetterReplayCommand.Switch} from the WebJob's console.");
                 return null;
             }
 
             var poller = new CallDeadLetterRequestPoller(store, () => ServiceBusCallDeadLetterQueue.Open(config), logger, SystemClock.Instance);
             poller.Start(() => HostRuntime.ShutdownRequested);
-            logger.LogInformation($"{LogPrefix}s: checked every {CallDeadLetterRequestRules.PollInterval.TotalMinutes:0} minute(s) in partition " +
+            logger.LogInformation($"{RequestsLogPrefix}: checked every {CallDeadLetterRequestRules.PollInterval.TotalMinutes:0} minute(s) in partition " +
                 $"'{StatePartitions.CallDeadLetters}' of the runtime state table; each is worked on for at most {CallDeadLetterRequestRules.RunBudget.TotalMinutes:0} minutes.");
             return poller;
         }
@@ -147,7 +148,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 catch (Exception ex)
                 {
                     // RunOnceAsync handles its own failures; this only keeps the poller alive through a bug.
-                    _logger.LogError(ex, $"{LogPrefix}s: the check failed unexpectedly ({ex.GetType().Name}); it carries on.");
+                    _logger.LogError(ex, $"{RequestsLogPrefix}: the check failed unexpectedly ({ex.GetType().Name}); it carries on.");
                 }
 
                 try
@@ -389,7 +390,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         private void LogStoreFailure(string what, CallDeadLetterStateUnavailableException ex)
         {
             var now = _clock.UtcNow;
-            var message = $"{LogPrefix}s: {what} in the runtime state table ({DescribeFailure(ex.InnerException ?? ex)}). Tried again every " +
+            var message = $"{RequestsLogPrefix}: {what} in the runtime state table ({DescribeFailure(ex.InnerException ?? ex)}). Tried again every " +
                 $"{CallDeadLetterRequestRules.PollInterval.TotalMinutes:0} minute(s).";
             if (_readFailureLoggedUtc == null || now - _readFailureLoggedUtc.Value >= ReadFailureLogInterval)
             {
