@@ -65,7 +65,8 @@ export const callDeadLetters = {
   'callDeadLetters.failure.timeBudget':
     'It stopped after {minutes} minutes, the longest one request may take, with more left to do. Ask again to carry on.',
   'callDeadLetters.failure.scanLimit':
-    "It looked at as many dead-lettered calls as one request may without reaching the end of the dead-letter queue, and most of those it looked at couldn't be reprocessed. Ask again, or clear the queue.",
+    'It looked at as many dead-lettered calls as one request may without reaching the end of the dead-letter queue. Ask again to carry on - or, if most of what is left can never be imported, clear the queue.',
+  'callDeadLetters.failure.scanLimitClear': 'It deleted as many dead-lettered calls as one request may, and there are more. Ask again to carry on.',
   'callDeadLetters.failure.unexpectedError': "Something unexpected went wrong. The importer's log has the error.",
   'callDeadLetters.failure.unknown': "It didn't finish cleanly ({code}). The importer's log has the detail.",
 

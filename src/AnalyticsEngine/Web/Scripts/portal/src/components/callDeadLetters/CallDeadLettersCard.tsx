@@ -242,7 +242,8 @@ function stateDetail(t: TFunction, status: CallDeadLetterStatus, latest: CallDea
 }
 
 /** Why a finished request didn't succeed, as a sentence; a code this build doesn't know is shown as it is. */
-export function failureText(t: TFunction, status: CallDeadLetterStatus, code: string): string {
+export function failureText(t: TFunction, status: CallDeadLetterStatus, latest: CallDeadLetterRequestView, code: string): string {
+  if (code === 'scanLimit' && latest.action === 'clear') return t('callDeadLetters.failure.scanLimitClear');
   const key = FAILURE_CODE_KEYS.get(code);
   return key ? t(key, { minutes: formatNumber(status.runBudgetMinutes) }) : t('callDeadLetters.failure.unknown', { code });
 }
@@ -364,7 +365,7 @@ function LatestRequest({ status, latest }: { status: CallDeadLetterStatus; lates
   const detail = stateDetail(t, status, latest);
   const failure =
     latest.state === 'finished' && latest.outcome !== 'succeeded' && latest.failureCode
-      ? failureText(t, status, latest.failureCode)
+      ? failureText(t, status, latest, latest.failureCode)
       : null;
 
   return (

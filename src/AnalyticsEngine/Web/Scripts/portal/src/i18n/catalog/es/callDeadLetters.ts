@@ -60,7 +60,9 @@ const callDeadLetters: Record<keyof typeof en, string> = {
   'callDeadLetters.failure.timeBudget':
     'Se detuvo al cabo de {minutes} minutos, el tiempo máximo de una solicitud, con trabajo pendiente. Vuelva a solicitarlo para continuar.',
   'callDeadLetters.failure.scanLimit':
-    'Revisó tantas llamadas de la cola de mensajes fallidos como permite una solicitud sin llegar al final de la cola, y la mayoría de las que revisó no se podían reprocesar. Vuelva a solicitarlo o vacíe la cola.',
+    'Revisó tantas llamadas de la cola de mensajes fallidos como permite una solicitud sin llegar al final de la cola. Vuelva a solicitarlo para continuar o, si la mayoría de las que quedan no se podrán importar nunca, vacíe la cola.',
+  'callDeadLetters.failure.scanLimitClear':
+    'Eliminó tantas llamadas de la cola de mensajes fallidos como permite una solicitud, y quedan más. Vuelva a solicitarlo para continuar.',
   'callDeadLetters.failure.unexpectedError': 'Se produjo un error inesperado. El registro del importador contiene el error.',
   'callDeadLetters.failure.unknown': 'No terminó correctamente ({code}). El registro del importador contiene los detalles.',
 

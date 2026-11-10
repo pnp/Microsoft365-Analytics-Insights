@@ -175,6 +175,13 @@ describe('CallDeadLettersCard', () => {
     expect(await screen.findByText("It didn't finish cleanly (contosoFutureCode). The importer's log has the detail.")).toBeInTheDocument();
     third.unmount();
 
+    mockFetch.mockResolvedValue(status({ latest: finished({ action: 'clear', outcome: 'partial', failureCode: 'scanLimit' }) }));
+    const fourth = renderWithProvider(<CallDeadLettersCard />);
+    expect(
+      await screen.findByText('It deleted as many dead-lettered calls as one request may, and there are more. Ask again to carry on.'),
+    ).toBeInTheDocument();
+    fourth.unmount();
+
     mockFetch.mockResolvedValue(status({ latest: waiting({ state: 'notPickedUp' }) }));
     renderWithProvider(<CallDeadLettersCard />);
     expect(await screen.findByText('Not picked up')).toBeInTheDocument();
