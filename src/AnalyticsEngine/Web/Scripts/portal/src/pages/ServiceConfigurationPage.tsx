@@ -31,6 +31,7 @@ import Spinner from '../components/Spinner';
 import { EN_CATALOG, useT, useTNode, type TFunction } from '../i18n';
 import { buildLabelText } from '../product';
 import { enabledImportLabelText } from './InsightsOverviewPage';
+import CallDeadLettersCard from '../components/callDeadLetters/CallDeadLettersCard';
 
 const useStyles = makeStyles({
   cards: {
@@ -553,6 +554,8 @@ export default function ServiceConfigurationPage() {
             </TableBody>
           </Table>
         </Card>
+
+        <CallDeadLettersCard />
       </div>
     </div>
   );
