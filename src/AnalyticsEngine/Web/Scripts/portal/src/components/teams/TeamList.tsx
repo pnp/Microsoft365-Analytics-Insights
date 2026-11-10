@@ -1,18 +1,22 @@
 import React from 'react';
 import {
+  Button,
   Table,
   TableHeader,
   TableHeaderCell,
   TableRow,
   TableBody,
   Checkbox,
+  MessageBar,
+  MessageBarActions,
+  MessageBarBody,
 } from '@fluentui/react-components';
 import TeamListItem from './TeamListItem';
 import { TeamAuthStatusResponse, TeamAuthStatus, AuthTokenResponse } from '../../types/TeamAuthStatus';
 import ConfirmSelection from './ConfirmSelection';
 import type { Team } from '@microsoft/microsoft-graph-types';
 import toast from '../toast';
-import { apiFetch } from '../../api/http';
+import { apiFetch, PortalPermissionError } from '../../api/http';
 import { EN_CATALOG, useT, type TFunction } from '../../i18n';
 
 type TeamListProps = {
@@ -26,6 +30,8 @@ type TeamListState = {
   teamIdsToAuth: Array<string>;
   teamIdsToDeauth: Array<string>;
   isBusy: boolean;
+  /** Why the Teams' authorisation status could not be read; the checkboxes stay disabled meanwhile. */
+  loadError: string | null;
 };
 
 export const TEAMS_AUTH_ERROR_TEXT: Record<string, Parameters<TFunction>[0]> = Object.freeze({
@@ -36,6 +42,22 @@ export function teamAuthErrorText(t: TFunction, message: string | undefined): st
   if (!message?.trim()) return t('admin.teams.teamList.unexpectedApiResponse');
   const key = TEAMS_AUTH_ERROR_TEXT[message];
   return key ? t(key) : message;
+}
+
+/**
+ * What to tell the admin when `api/TeamsAuthAPI` answers with an error status.
+ *
+ * A 401 here is not an expired portal session - `apiFetch` handles that one, by the header the
+ * server sets on it. It means the server holds no delegated Teams token for this admin, which no
+ * amount of retrying fixes: connecting to Microsoft Teams again does.
+ */
+export async function teamAuthResponseErrorText(t: TFunction, response: Response): Promise<string> {
+  if (response.status === 401) return t('admin.teams.teamList.connectRequired');
+  const serverMessage = await response
+    .json()
+    .then((b) => (b && typeof b.message === 'string' ? b.message : ''))
+    .catch(() => '');
+  return teamAuthErrorText(t, serverMessage);
 }
 
 class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
@@ -52,6 +74,7 @@ class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
       teamIdsToAuth: [],
       teamIdsToDeauth: [],
       isBusy: true,
+      loadError: null,
     };
   }
 
@@ -137,8 +160,18 @@ class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
   }
 
   render() {
+    // Until the current authorisation of each Team is known, a change cannot be made safely.
+    const locked = this.state.isBusy || this.state.loadError !== null;
     return (
       <div>
+        {this.state.loadError && (
+          <MessageBar intent="error" layout="multiline" style={{ marginBlock: '12px' }}>
+            <MessageBarBody>{this.state.loadError}</MessageBarBody>
+            <MessageBarActions>
+              <Button onClick={() => void this.updateTeamsAuthState()}>{this.props.t('admin.teams.teamList.retry')}</Button>
+            </MessageBarActions>
+          </MessageBar>
+        )}
         <ConfirmSelection
           saveCallback={this.authSelectedTeams.bind(this)}
           authCount={this.state.teamIdsToAuth.length}
@@ -150,7 +183,7 @@ class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
             <TableRow>
               <TableHeaderCell style={{ width: 420 }}>
                 <Checkbox
-                  disabled={this.state.isBusy}
+                  disabled={locked}
                   onChange={(_e: any, data: any) => this.toggleAllTeams(data.checked === true)}
                   label={this.props.t('admin.teams.teamList.columnTeamName')}
                 />
@@ -174,7 +207,7 @@ class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
                     team={team}
                     key={i}
                     authState={authState!}
-                    isBusy={this.state.isBusy}
+                    isBusy={locked}
                     isClickedOverrideCallback={this.isClickedOverrideCallback.bind(this)}
                     teamToggleCallback={(checked: boolean, id: string | undefined) => this.teamToggle(checked, id)}
                   />
@@ -197,7 +230,7 @@ class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
   async updateTeamsAuthState() {
     const teamIds: Array<string> = [];
 
-    this.setState({ isBusy: true });
+    this.setState({ isBusy: true, loadError: null });
 
     // Get list of team Ids
     this.props.teamsList.forEach((team) => {
@@ -208,40 +241,50 @@ class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
 
     // Is the ASP.Net API defined? If we're debugging from the react app only, it won't be.
     if (window.o365AnalyticsAuthAPI) {
-      const response = await apiFetch(window.o365AnalyticsAuthAPI, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify(teamIds),
-      }).catch((err) => {
-        this.showApiError(err);
+      let response: Response;
+      try {
+        response = await apiFetch(window.o365AnalyticsAuthAPI, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(teamIds),
+        });
+      } catch (err) {
+        console.log(err);
+        // A refusal carries its own translated reason; anything else has no message worth showing.
+        const loadError = err instanceof PortalPermissionError ? err.message : teamAuthErrorText(this.props.t, undefined);
+        this.setState({ isBusy: false, loadError });
+        return;
+      }
+
+      if (!response.ok) {
+        const loadError = await teamAuthResponseErrorText(this.props.t, response);
+        this.setState({ isBusy: false, loadError });
+        return;
+      }
+
+      const responseJson: Array<TeamAuthStatusResponse> = await response.json();
+
+      // For existing authed teams, add for re-auth
+      responseJson.forEach((r) => {
+        if (r.hasAuthToken) {
+          this.state.teamIdsToAuth.push(r.teamId);
+          console.info(`Adding team ${r.teamId} for re-auth`);
+        }
       });
 
-      if (response && response.ok) {
-        const responseJson: Array<TeamAuthStatusResponse> = await response.json();
+      // Build UI state
+      const loadedAuthState: Array<TeamAuthStatus> = [];
+      responseJson.forEach((teamAuthState) => {
+        if (teamAuthState.hasAuthToken) {
+          loadedAuthState.push({ authStatus: AuthTokenResponse.HaveAuth, teamId: teamAuthState.teamId });
+        } else loadedAuthState.push({ authStatus: AuthTokenResponse.NoAuth, teamId: teamAuthState.teamId });
+      });
 
-        // For existing authed teams, add for re-auth
-        responseJson.forEach((r) => {
-          if (r.hasAuthToken) {
-            this.state.teamIdsToAuth.push(r.teamId);
-            console.info(`Adding team ${r.teamId} for re-auth`);
-          }
-        });
-
-        // Build UI state
-        const loadedAuthState: Array<TeamAuthStatus> = [];
-        responseJson.forEach((teamAuthState) => {
-          if (teamAuthState.hasAuthToken) {
-            loadedAuthState.push({ authStatus: AuthTokenResponse.HaveAuth, teamId: teamAuthState.teamId });
-          } else loadedAuthState.push({ authStatus: AuthTokenResponse.NoAuth, teamId: teamAuthState.teamId });
-        });
-
-        // Set state for render
-        this.setState({ userTeamsAuthState: loadedAuthState });
-        this.setState({ isBusy: false });
-      }
+      // Set state for render
+      this.setState({ userTeamsAuthState: loadedAuthState, isBusy: false });
     }
   }
 
@@ -266,11 +309,8 @@ class TeamListInner extends React.Component<TeamListInnerProps, TeamListState> {
       .then(async (response) => {
         if (!response.ok) {
           // Surface the server's reason (e.g. "Azure Storage is not configured") when present.
-          const serverMessage = await response
-            .json()
-            .then((b) => (b && typeof b.message === 'string' ? b.message : ''))
-            .catch(() => '');
-          this.showApiError(response, serverMessage);
+          console.log(response);
+          toast.error(await teamAuthResponseErrorText(this.props.t, response));
         } else {
           toast(this.props.t('admin.teams.teamList.saveSuccess'));
           window.location.reload();

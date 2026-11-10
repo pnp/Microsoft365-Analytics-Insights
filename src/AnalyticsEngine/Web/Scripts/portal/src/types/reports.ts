@@ -112,6 +112,11 @@ export interface ReportChart {
   /** For `errorKey` `queryFailed`: the error reference the server log carries. */
   errorReference?: string | null;
   warning: string | null;
+  /**
+   * Which sentence a `seriesWarnings`-based warning is: `seriesUnavailable`, `incompleteWeeks` (every
+   * series is charted, some weeks are missing a day of reports) or `seriesUnavailableAndIncompleteWeeks`.
+   */
+  warningKey?: string | null;
   seriesWarnings?: ReportSeriesWarning[] | null;
   /**
    * For a reader without See PII, the fewest people a bar, word, or matrix column and cell describes; absent when nothing

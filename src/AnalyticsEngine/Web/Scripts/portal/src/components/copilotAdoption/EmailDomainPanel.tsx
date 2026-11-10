@@ -4,7 +4,7 @@ import { formatCount, formatPct } from '../shared/KpiGrid';
 import InfoTip from '../shared/InfoTip';
 import { rateColour, scoreColour, ScoreBar, useAdoptionTableStyles } from './adoptionShared';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
-import { useT } from '../../i18n';
+import { formatNumber, useT } from '../../i18n';
 
 const useStyles = makeStyles({
   intro: {
@@ -216,7 +216,7 @@ export default function EmailDomainPanel({
                   {hasSeats ? formatCount(row.reclaimableSeats) : NO_VALUE}
                 </td>
                 <td className={`${table.td} ${table.tdNumeric}`}>
-                  {hasSeats ? row.interactionsPerLicensedUser : NO_VALUE}
+                  {hasSeats ? formatNumber(row.interactionsPerLicensedUser, { maximumFractionDigits: 1 }) : NO_VALUE}
                 </td>
                 <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.unlicensedActiveUsers)}</td>
                 <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.recommendedForLicence)}</td>

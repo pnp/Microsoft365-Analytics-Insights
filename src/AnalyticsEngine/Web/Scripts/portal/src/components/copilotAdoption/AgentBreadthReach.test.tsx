@@ -175,7 +175,8 @@ describe('Department table: agent breadth, depth and builders (#646, #647)', () 
 
   it('renders the same in Spanish, with Spanish number formatting and tenant data untouched', async () => {
     await loadCatalog('es');
-    renderWithProvider(<CombinedSegmentTable rows={ROWS} agentTotals={TOTALS} minSeatsPerSegment={5} />, { language: 'es' });
+    const rows = [segment({ interactionsPerLicensedUser: 4.5, interactionsPerUnlicensedUser: 12.5 }), ROWS[1]];
+    renderWithProvider(<CombinedSegmentTable rows={rows} agentTotals={TOTALS} minSeatsPerSegment={5} />, { language: 'es' });
 
     expect(await screen.findByText('Amplitud y profundidad de los agentes', undefined, { timeout: 5000 })).toBeInTheDocument();
     expect(headerTexts()).toEqual(expect.arrayContaining([
@@ -189,6 +190,11 @@ describe('Department table: agent breadth, depth and builders (#646, #647)', () 
     expect(within(screen.getByTestId('agent-total-departments')).getByText('2 de 3 (66,7%)')).toBeInTheDocument();
     expect(within(screen.getByTestId('agent-total-perAgent')).getByText('1234,5')).toBeInTheDocument();
     expect(within(screen.getByText('Finance').closest('tr')!).getByText('18,8')).toBeInTheDocument();
+    // Interactions per licence and per unlicensed user: the decimal comma, not an English full stop.
+    const finance = within(screen.getByText('Finance').closest('tr')!);
+    expect(finance.getByText('4,5')).toBeInTheDocument();
+    expect(finance.getByText('12,5')).toBeInTheDocument();
+    expect(finance.queryByText('12.5')).toBeNull();
     expect(screen.getByText(GREEK)).toBeInTheDocument();
     expect(screen.queryByText('Using customer-built agents')).toBeNull();
   });

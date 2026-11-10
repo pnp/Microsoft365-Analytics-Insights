@@ -130,6 +130,8 @@ const reports: Record<keyof typeof en, string> = {
   'reports.chart.usage-active-users.description': 'Usuarios distintos activos en cada semana completada. Las semanas sin informe de uso todavía se dejan en blanco en lugar de mostrarse como cero.',
   'reports.chart.usage-active-users.valueLabel': 'Usuarios activos',
   'reports.chart.usage-active-users.warning': 'Algunas series de cargas de trabajo no están disponibles: {details}.',
+  'reports.chart.usage-active-users.warning.incompleteWeeks': 'Algunas semanas están incompletas: {details}.',
+  'reports.chart.usage-active-users.warning.seriesUnavailableAndIncompleteWeeks': 'Algunas series de cargas de trabajo no están disponibles: {unavailable}. Algunas semanas están incompletas: {incomplete}.',
   'reports.chart.spo-operations.title': 'Actividad de archivos por semana',
   'reports.chart.spo-operations.description': 'Operaciones de auditoría de SharePoint y OneDrive cada semana.',
   'reports.chart.spo-operations.valueLabel': 'Operaciones',

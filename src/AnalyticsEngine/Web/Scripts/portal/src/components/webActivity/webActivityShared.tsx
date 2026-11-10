@@ -434,22 +434,79 @@ export function WindowNote({ window: reportWindow }: { window: WebActivityWindow
 /** The judgement message bars shown under the Overview KPIs. */
 export function JudgementList({ judgements }: { judgements: WebActivityJudgement[] }) {
   const styles = useStyles();
+  const t = useT();
 
   if (judgements.length === 0) return null;
 
   return (
     <div className={styles.judgements}>
-      {judgements.map((judgement) => (
-        <MessageBar key={judgement.key} intent={judgementIntent(judgement.tone)}>
-          <MessageBarBody>
-            <Text weight="semibold">{judgement.headline}</Text>
-            <br />
-            <Text size={200}>{judgement.detail}</Text>
-          </MessageBarBody>
-        </MessageBar>
-      ))}
+      {judgements.map((judgement) => {
+        const values = judgementValues(judgement.values);
+        return (
+          <MessageBar key={judgement.key} intent={judgementIntent(judgement.tone)}>
+            <MessageBarBody>
+              <Text weight="semibold">{judgementSentence(t, judgement.headlineKey, judgement.headline, values)}</Text>
+              <br />
+              <Text size={200}>{judgementSentence(t, judgement.detailKey, judgement.detail, values)}</Text>
+            </MessageBarBody>
+          </MessageBar>
+        );
+      })}
     </div>
   );
+}
+
+function formatOneDecimal(value: number): string {
+  return formatNumber(Math.round(value * 10) / 10, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
+/**
+ * How each figure a judgement quotes is formatted, by the placeholder name `WebActivityScoring`
+ * sends it under. The server sends figures unformatted so that they follow the reader's locale;
+ * `serverAuthoredText.test.ts` fails when it sends a name this table does not know.
+ */
+export const JUDGEMENT_VALUE_FORMATS: Readonly<Record<string, (value: number) => string>> = {
+  visitors: formatCount,
+  enabledVisitors: formatCount,
+  knownUsers: formatCount,
+  pages: formatCount,
+  reach: formatPct,
+  bounce: formatPct,
+  reliance: formatPct,
+  share: formatPct,
+  pagesPerVisit: formatOneDecimal,
+  average: formatSeconds,
+  p95: formatSeconds,
+};
+
+/** Formats a judgement's figures; a non-finite one (Json.NET writes NaN as "NaN") is left out. */
+export function judgementValues(values: WebActivityJudgement['values']): Record<string, string> {
+  const formatted: Record<string, string> = {};
+  for (const [name, raw] of Object.entries(values ?? {})) {
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) continue;
+    formatted[name] = (JUDGEMENT_VALUE_FORMATS[name] ?? formatDecimal)(raw);
+  }
+  return formatted;
+}
+
+/**
+ * One sentence of a judgement in the reader's language.
+ *
+ * Falls back to the server's English for a key this build has no entry for (a newer server, or an
+ * older one that sent no key) and for a sentence whose figure did not arrive, which would otherwise
+ * render as a literal `{placeholder}`.
+ */
+export function judgementSentence(
+  t: TFunction,
+  sentenceKey: string | undefined,
+  fallback: string,
+  values: Record<string, string>,
+): string {
+  if (!sentenceKey) return fallback;
+  const catalogKey = `webActivity.judgement.${sentenceKey}` as TranslationKey;
+  const translated = t(catalogKey, values);
+  if (translated === catalogKey) return fallback;
+  return /\{\w+\}/.test(translated) ? fallback : translated;
 }
 
 /**

@@ -325,7 +325,7 @@ namespace Common.Entities.Xlsx
             for (int i = 0; i < _columnWidths.Length; i++)
             {
                 double width = _columnWidths[i];
-                if (width <= 0) continue;
+                if (!(width > 0) || !XlsxXml.IsFinite(width)) continue;
                 int columnIndex = i + 1;
                 sb.Append("<col min=\"").Append(XlsxXml.Int(columnIndex))
                   .Append("\" max=\"").Append(XlsxXml.Int(columnIndex))
@@ -448,6 +448,14 @@ namespace Common.Entities.Xlsx
 
         private static void AppendNumericCell(StringBuilder sb, string reference, string styleAttr, double value)
         {
+            // A blank cell, keeping its style, rather than "NaN" in a <v>, which Excel reports as a
+            // damaged workbook. Written rather than skipped so the row's columns stay where they are.
+            if (!XlsxXml.IsFinite(value))
+            {
+                sb.Append("<c r=\"").Append(reference).Append("\"").Append(styleAttr).Append("/>");
+                return;
+            }
+
             sb.Append("<c r=\"").Append(reference).Append("\"").Append(styleAttr)
               .Append("><v>").Append(XlsxXml.Num(value)).Append("</v></c>");
         }

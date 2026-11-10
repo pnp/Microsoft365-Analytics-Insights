@@ -1,5 +1,6 @@
 import { EN_CATALOG, formatDateParts, formatNumber, parseApiDate, translateActive, type TFunction, type TranslationKey } from '../../i18n';
 import type { AgentCostDetailRow, AzureDimension, CreditDimension } from '../../types/agentCosts';
+import { saveBlob } from '../../api/download';
 
 /** Shown for a dimension the billing API did not report for a row. */
 export const NOT_REPORTED = 'Not reported';
@@ -257,16 +258,5 @@ export function detailRowsToCsv(rows: AgentCostDetailRow[], _t?: TFunction): str
 export function saveCsv(csv: string, filename: string): void {
   // The BOM makes Excel open a UTF-8 CSV correctly. Agent names can be non-Latin, and without it
   // Excel guesses the local code page and mangles them.
-  const blob = new Blob(['\ufeff', csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  try {
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  saveBlob(new Blob(['\ufeff', csv], { type: 'text/csv;charset=utf-8;' }), filename);
 }

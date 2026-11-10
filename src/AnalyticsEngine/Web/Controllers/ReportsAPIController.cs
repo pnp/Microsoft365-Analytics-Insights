@@ -1048,6 +1048,7 @@ namespace Web.AnalyticsWeb.Controllers
                 })
                 .ToList();
 
+            var incompleteWeekWarnings = new List<string>();
             foreach (var series in chart.Series)
             {
                 List<DateTime> weeks = null;
@@ -1068,7 +1069,7 @@ namespace Web.AnalyticsWeb.Controllers
                 foreach (var point in flagged) point.Incomplete = true;
 
                 var latest = flagged.Max(point => point.WeekStart);
-                warnings.Add($"{series.Name}: {flagged.Count} of the charted weeks are missing at least one day of usage reports " +
+                incompleteWeekWarnings.Add($"{series.Name}: {flagged.Count} of the charted weeks are missing at least one day of usage reports " +
                              $"(most recently the week of {latest:yyyy-MM-dd}), so those weeks count only the days that were imported");
                 warningFacts.Add(new ReportSeriesWarning
                 {
@@ -1079,9 +1080,18 @@ namespace Web.AnalyticsWeb.Controllers
                 });
             }
 
-            if (warnings.Count > 0)
+            // A series charted from the days that were imported is not "unavailable", so incomplete
+            // weeks get their own sentence and key rather than being listed as a missing workload.
+            var sentences = new List<string>();
+            if (warnings.Count > 0) sentences.Add("Some workload series are unavailable: " + string.Join("; ", warnings) + ".");
+            if (incompleteWeekWarnings.Count > 0) sentences.Add("Some weeks are incomplete: " + string.Join("; ", incompleteWeekWarnings) + ".");
+
+            if (sentences.Count > 0)
             {
-                chart.Warning = "Some workload series are unavailable: " + string.Join("; ", warnings) + ".";
+                chart.Warning = string.Join(" ", sentences);
+                chart.WarningKey = warnings.Count == 0
+                    ? "incompleteWeeks"
+                    : incompleteWeekWarnings.Count == 0 ? "seriesUnavailable" : "seriesUnavailableAndIncompleteWeeks";
                 chart.SeriesWarnings = warningFacts.Count == 0 ? null : warningFacts;
             }
 
