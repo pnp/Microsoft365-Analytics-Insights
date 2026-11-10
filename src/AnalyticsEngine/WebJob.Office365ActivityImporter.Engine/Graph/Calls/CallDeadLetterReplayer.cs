@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 {
@@ -368,7 +369,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 case CallDeadLetterSkipReason.OtherReason: return "dead-lettered for a reason other than --reason";
                 case CallDeadLetterSkipReason.NeverImportable:
-                    return "never importable as it stands (malformed, no call id, or not retryable) - --include-invalid replays these, --purge-invalid deletes them";
+                    return "never importable as it stands (malformed, no call id, not retryable, no call type or no usable session) - --include-invalid replays these, --purge-invalid deletes them";
                 case CallDeadLetterSkipReason.CallRecordNoLongerInGraph:
                     return "first queued over 30 days ago - Graph no longer has the call record; --purge-unimportable deletes these";
                 case CallDeadLetterSkipReason.ReplayLimitReached: return $"already replayed {CallDeadLetterReplayer.MaxReplays} times";
@@ -450,7 +451,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         {
             CallQueueMessageHandler.InvalidNotificationReason,
             CallQueueMessageHandler.MissingCallIdReason,
-            CallQueueMessageHandler.NotRetryableReason
+            CallQueueMessageHandler.NotRetryableReason,
+            CallRecordPayloadException.NoUsableSessionsReason,
+            CallRecordPayloadException.NoCallTypeReason
         };
 
         // Not copied to the replay: what Service Bus set when it dead-lettered the message, the trace id of the original
@@ -484,7 +487,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// <summary>
         /// Whether a dead-letter reason is one the importer gives a notification that can never be imported as it stands:
         /// a body that isn't a Graph change notification, one with no call id, or a call whose import fails the same way
-        /// every time.
+        /// every time - not retryable, or a call record with no call type or no session anyone on it can be attributed to.
         /// </summary>
         public static bool IsNeverImportable(string deadLetterReason)
         {

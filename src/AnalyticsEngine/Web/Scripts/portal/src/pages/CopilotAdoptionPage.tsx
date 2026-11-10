@@ -26,16 +26,21 @@ import {
   fetchAdoptionFilters,
   fetchAdoptionSql,
   fetchAdoptionSummary,
+  rebuildAdoption,
+  canRetryAdoptionRequest,
+  AdoptionRequestError,
+  AdoptionGenerationChangedError,
   workbookExportUrl,
 } from '../api/copilotAdoptionApi';
 import type {
   AccountabilityRollupRow,
+  AdoptionProgress,
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
 } from '../types/copilotAdoption';
 import { UNSCOPED_SECTIONS } from '../types/copilotAdoption';
-import Spinner from '../components/Spinner';
+import AdoptionLoadingCard, { type OptionalAdoptionLoad } from '../components/copilotAdoption/AdoptionLoadingCard';
 import SqlPopover from '../components/SqlPopover';
 import TimeSeriesChart from '../components/charts/TimeSeriesChart';
 import CategoryBarChart from '../components/charts/CategoryBarChart';
@@ -456,6 +461,8 @@ function CopilotAdoptionView({
 
   const [availability, setAvailability] = useState<CopilotAdoptionAvailability | null>(null);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
+  const [availabilityRetryable, setAvailabilityRetryable] = useState(false);
+  const [availabilityAttempt, setAvailabilityAttempt] = useState(0);
   const [windowDays, setWindowDays] = useState(28);
   // A period with explicit dates - last calendar month or quarter, or the reader's own range. Null for
   // a rolling window, which ends today. `windowDays` keeps the last rolling window chosen meanwhile.
@@ -505,27 +512,60 @@ function CopilotAdoptionView({
   const [summary, setSummary] = useState<CopilotAdoptionSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [summaryRetryable, setSummaryRetryable] = useState(false);
+  const [progress, setProgress] = useState<AdoptionProgress | null>(null);
+  const [loadRequest, setLoadRequest] = useState<{ attempt: number; after?: string; rebuild?: boolean }>({ attempt: 0 });
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [now, setNow] = useState(Date.now());
   const [filterOptions, setFilterOptions] = useState<AdoptionFilterOptions | null>(null);
   const [sql, setSql] = useState<Record<string, string> | null>(null);
+  const [filtersLoad, setFiltersLoad] = useState<OptionalAdoptionLoad>({ state: 'pending' });
+  const [sqlLoad, setSqlLoad] = useState<OptionalAdoptionLoad>({ state: 'pending' });
+  const [filtersAttempt, setFiltersAttempt] = useState(0);
+  const [sqlAttempt, setSqlAttempt] = useState(0);
+  const [listLoading, setListLoading] = useState(false);
+  const [generationMismatch, setGenerationMismatch] = useState(false);
   const lastSummaryScope = useRef<string | null>(null);
+  const lastRebuildAttempt = useRef(-1);
+  const autoReconciled = useRef(false);
   // The reader's own time-saved figures, if any, so the Excel report models the hours on screen.
   const timeSaved = useTimeSavedAssumptions(summary);
 
   useEffect(() => {
     let cancelled = false;
-    fetchAdoptionAvailability()
+    const controller = new AbortController();
+    setAvailabilityError(null);
+    fetchAdoptionAvailability(controller.signal)
       .then((a) => {
         if (!cancelled) setAvailability(a);
       })
       .catch((e: unknown) => {
         if (!cancelled) {
           setAvailabilityError(e instanceof Error ? e.message : t('copilotAdoption.page.errors.checkAvailability'));
+          setAvailabilityRetryable(canRetryAdoptionRequest(e));
         }
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [t]);
+  }, [t, availabilityAttempt]);
+
+  useEffect(() => {
+    if (cooldownUntil <= Date.now()) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [cooldownUntil]);
+
+  const onGenerationChanged = useCallback(() => {
+    if (autoReconciled.current) {
+      setGenerationMismatch(true);
+      return false;
+    }
+    autoReconciled.current = true;
+    setLoadRequest(request => ({ attempt: request.attempt + 1 }));
+    return true;
+  }, []);
 
   useEffect(() => {
     if (!availability?.available) {
@@ -540,52 +580,125 @@ function CopilotAdoptionView({
     // and if the new request then failed, the page went on rendering the previous organisation's
     // figures underneath a heading naming the newly selected one.
     const scopeKey = `${windowDays}::${dateRange?.from ?? 'rolling'}::${dateRange?.to ?? 'rolling'}::${userFilterScope}`;
-    if (lastSummaryScope.current !== scopeKey) {
+    const sameScope = lastSummaryScope.current === scopeKey;
+    const startRebuild = loadRequest.rebuild && loadRequest.after && sameScope
+      && lastRebuildAttempt.current !== loadRequest.attempt;
+    if (loadRequest.rebuild) lastRebuildAttempt.current = loadRequest.attempt;
+    if (!sameScope) {
       setSummary(null);
+      autoReconciled.current = false;
     }
+    setGenerationMismatch(false);
     setSummaryLoading(true);
     setSummaryError(null);
+    setProgress(null);
+    setFilterOptions(null);
+    setSql(null);
+    setFiltersLoad({ state: 'pending' });
+    setSqlLoad({ state: 'pending' });
 
-    fetchAdoptionSummary(windowDays, undefined, controller.signal, null, userFilterScope || null, ...(dateRange ? [dateRange] as const : []))
+    const load = async () => {
+      if (startRebuild && loadRequest.after) {
+        const replacement = await rebuildAdoption(
+          windowDays, loadRequest.after, controller.signal, userFilterScope || null, dateRange,
+        );
+        if (!cancelled && replacement.progress) setProgress(replacement.progress);
+        if (cancelled) return null;
+      }
+      return fetchAdoptionSummary(windowDays, undefined, controller.signal, null, userFilterScope || null, dateRange, {
+        after: sameScope ? loadRequest.after : undefined,
+        onProgress: update => { if (!cancelled) setProgress(update); },
+      });
+    };
+    load()
       .then((s) => {
-        if (!cancelled) {
+        if (!cancelled && s) {
           lastSummaryScope.current = scopeKey;
           setSummary(s);
+          setProgress(s.diagnostics?.progress ?? null);
         }
       })
       .catch((e: unknown) => {
         if (cancelled || controller.signal.aborted) return;
         setSummaryError(e instanceof Error ? e.message : t('copilotAdoption.page.errors.loadSummary'));
+        setSummaryRetryable(canRetryAdoptionRequest(e));
+        if (e instanceof AdoptionRequestError && e.retryAfterSeconds > 0) {
+          setNow(Date.now());
+          setCooldownUntil(Date.now() + e.retryAfterSeconds * 1000);
+        }
       })
       .finally(() => {
         if (!cancelled) setSummaryLoading(false);
       });
 
-    // The filter lists and the SQL come from the same cached analysis, so these are cheap follow-ups
-    // rather than extra work. Their failure is not worth surfacing - the page works without them.
-    //
-    // Deliberately NOT narrowed by the user filter: these are the lists the per-table filters are
-    // chosen FROM, so narrowing them would strand the reader on whatever the filter left.
-    fetchAdoptionFilters(windowDays, undefined, controller.signal, ...(dateRange ? [dateRange] as const : []))
-      .then((f) => {
-        if (!cancelled) setFilterOptions(f);
-      })
-      .catch(() => undefined);
-
-    fetchAdoptionSql(windowDays, undefined, controller.signal, ...(dateRange ? [dateRange] as const : []))
-      .then((s) => {
-        if (!cancelled) setSql(s);
-      })
-      .catch(() => undefined);
-
     return () => {
       cancelled = true;
-      // Aborting matters now that a 202 makes these poll: a bare `cancelled` flag would only suppress
-      // the state update and leave three polling loops running for up to ten minutes after the period
-      // changed or the page unmounted.
       controller.abort();
     };
-  }, [availability, windowDays, dateRange, userFilterScope]);
+  }, [availability, windowDays, dateRange, userFilterScope, loadRequest]);
+
+  const generationId = summary?.diagnostics?.generationId;
+
+  useEffect(() => {
+    if (!summary || summaryLoading) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    setFiltersLoad({ state: 'running' });
+    setFilterOptions(null);
+    fetchAdoptionFilters(windowDays, undefined, controller.signal, dateRange, { generationId })
+      .then((f) => {
+        if (!cancelled) {
+          setFilterOptions(f);
+          setFiltersLoad({ state: 'loaded' });
+        }
+      })
+      .catch((e: unknown) => {
+        if (cancelled || controller.signal.aborted) return;
+        if (e instanceof AdoptionGenerationChangedError && onGenerationChanged()) return;
+        setFiltersLoad({
+          state: 'failed',
+          error: e instanceof Error ? e.message : `${t('copilotAdoption.loading.filters')}: ${t('copilotAdoption.loading.state.failed')}`,
+          retryable: canRetryAdoptionRequest(e),
+        });
+      });
+    return () => { cancelled = true; controller.abort(); };
+  }, [summary, summaryLoading, generationId, windowDays, dateRange, filtersAttempt, onGenerationChanged, t]);
+
+  useEffect(() => {
+    if (!summary || summaryLoading) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    setSqlLoad({ state: 'running' });
+    setSql(null);
+    fetchAdoptionSql(windowDays, undefined, controller.signal, dateRange, { generationId })
+      .then((s) => {
+        if (!cancelled) { setSql(s); setSqlLoad({ state: 'loaded' }); }
+      })
+      .catch((e: unknown) => {
+        if (cancelled || controller.signal.aborted) return;
+        if (e instanceof AdoptionGenerationChangedError && onGenerationChanged()) return;
+        setSqlLoad({
+          state: 'failed',
+          error: e instanceof Error ? e.message : `${t('copilotAdoption.loading.sql')}: ${t('copilotAdoption.loading.state.failed')}`,
+          retryable: canRetryAdoptionRequest(e),
+        });
+      });
+    return () => { cancelled = true; controller.abort(); };
+  }, [summary, summaryLoading, generationId, windowDays, dateRange, sqlAttempt, onGenerationChanged, t]);
+
+  const cooldownSeconds = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
+  const hasFailedAnalysis = summary?.diagnostics?.steps.some(step => step.failed) ?? false;
+  const reportBusy = summaryLoading || listLoading
+    || filtersLoad.state === 'running' || filtersLoad.state === 'pending'
+    || sqlLoad.state === 'running' || sqlLoad.state === 'pending';
+  const retryAnalysis = () => {
+    if (!generationId || summaryLoading || cooldownSeconds > 0) return;
+    setNow(Date.now());
+    setCooldownUntil(Date.now() + 60_000);
+    setSummaryLoading(true);
+    autoReconciled.current = false;
+    setLoadRequest(request => ({ attempt: request.attempt + 1, after: generationId, rebuild: true }));
+  };
 
   const onTabSelect: SelectTabEventHandler = (_e: unknown, data: { value: unknown }) => {
     setDrillAction(undefined);
@@ -651,6 +764,7 @@ function CopilotAdoptionView({
         {availability?.available && (
           <div className={styles.actions}>
             <PrintButton
+              disabled={!summary || reportBusy}
               tooltip={t('copilotAdoption.page.controls.printTooltip', {
                 v0: t(TAB_LABEL_KEYS[tab]),
                 limit: formatCount(PRINT_ROW_LIMIT),
@@ -659,7 +773,7 @@ function CopilotAdoptionView({
             <Tooltip
               relationship="description"
               content={
-                summary
+                summary && !reportBusy
                   ? t(canSeePii ? 'copilotAdoption.page.controls.excelTooltipReady' : 'copilotAdoption.page.controls.excelTooltipReadyNoPii')
                   : t('copilotAdoption.page.controls.excelTooltipLoading')
               }
@@ -672,11 +786,11 @@ function CopilotAdoptionView({
                 icon={<ArrowDownload16Regular />}
                 as="a"
                 href={
-                  summary
+                  summary && !reportBusy
                     ? workbookExportUrl(windowDays, undefined, null, timeSavedExportParams(timeSaved), userFilterParam, ...(dateRange ? [dateRange] as const : []))
                     : undefined
                 }
-                disabled={!summary}
+                disabled={!summary || reportBusy}
               >{t('copilotAdoption.page.controls.excelReport')}</Button>
             </Tooltip>
           </div>
@@ -721,7 +835,14 @@ function CopilotAdoptionView({
 
       {availabilityError && (
         <MessageBar intent="error" style={{ marginTop: '16px' }}>
-          <MessageBarBody>{availabilityError}</MessageBarBody>
+          <MessageBarBody>
+            {availabilityError}
+            {availabilityRetryable && (
+              <Button onClick={() => setAvailabilityAttempt(attempt => attempt + 1)}>
+                {t('copilotAdoption.loading.retryRequest')}
+              </Button>
+            )}
+          </MessageBarBody>
         </MessageBar>
       )}
 
@@ -752,20 +873,27 @@ function CopilotAdoptionView({
             </TabList>
           </div>
 
-          {summaryLoading && (
-            <div style={{ textAlign: 'center', padding: '32px' }}>
-              <Spinner size={80} label={t('copilotAdoption.page.loading.label')} />
-            </div>
-          )}
+          <AdoptionLoadingCard
+            progress={progress}
+            busy={summaryLoading}
+            keepingReport={!!summary}
+            error={summaryError}
+            filters={filtersLoad}
+            sql={sqlLoad}
+            onCheckAgain={(summaryError && summaryRetryable) || generationMismatch
+              ? () => {
+                autoReconciled.current = false;
+                setGenerationMismatch(false);
+                setLoadRequest(request => ({ attempt: request.attempt + 1, after: request.after }));
+              } : undefined}
+            onRebuild={hasFailedAnalysis && generationId ? retryAnalysis : undefined}
+            onRetryFilters={() => setFiltersAttempt(attempt => attempt + 1)}
+            onRetrySql={() => setSqlAttempt(attempt => attempt + 1)}
+            cooldownSeconds={cooldownSeconds}
+          />
 
-          {summaryError && (
-            <MessageBar intent="error" style={{ marginTop: '16px' }}>
-              <MessageBarBody>{summaryError}</MessageBarBody>
-            </MessageBar>
-          )}
-
-          {!summaryLoading && summary && (
-            <div className={styles.stack} data-print="flow">
+          {summary && (
+            <div className={styles.stack} data-print="flow" inert={summaryLoading || undefined}>
               {summary.figuresIncomplete && (
                 <MessageBar intent="error">
                   <MessageBarBody>
@@ -855,6 +983,9 @@ function CopilotAdoptionView({
                       actionPlan={summary.actionPlan}
                       options={summary.options}
                       dataSources={summary.dataSources}
+                      generationId={generationId}
+                      onGenerationChanged={onGenerationChanged}
+                      onLoadingChange={setListLoading}
                       initialAction={drillAction}
                       userFilter={userFilterParam}
                       shown={!seatTimeSectioned || licensedSection === 'people'}
@@ -893,6 +1024,8 @@ function CopilotAdoptionView({
                   key={userFilterScope || 'all'}
                   windowDays={windowDays} dateRange={dateRange}
                   summary={summary}
+                  onGenerationChanged={onGenerationChanged}
+                  onLoadingChange={setListLoading}
                   options={summary.options}
                   userFilter={userFilterParam}
                   canSeePii={canSeePii && !dateRange}
@@ -905,6 +1038,8 @@ function CopilotAdoptionView({
                   key={userFilterScope || 'all'}
                   windowDays={windowDays} dateRange={dateRange}
                   summary={summary}
+                  onGenerationChanged={onGenerationChanged}
+                  onLoadingChange={setListLoading}
                   options={summary.options}
                   guidanceLinks={summary.guidanceLinks}
                   userFilter={userFilterParam}
@@ -934,6 +1069,10 @@ function CopilotAdoptionView({
 /** Whether a summary describes fewer people than the whole tenant. */
 function isNarrowed(summary: CopilotAdoptionSummary): boolean {
   return !!summary.scopedEmailDomain || !!summary.userFilter || !!summary.globalFilter;
+}
+
+function resourceTypesFailed(summary: CopilotAdoptionSummary): boolean {
+  return summary.diagnostics?.steps.some(step => step.step === 'ResourceTypes' && step.failed) ?? false;
 }
 
 /**
@@ -1907,7 +2046,7 @@ function AnalystTab({
         </Card>
       )}
 
-      {summary.topResourceTypes.length > 0 && (
+      {(summary.topResourceTypes.length > 0 || resourceTypesFailed(summary)) && (
         <Card>
           <div className={styles.cardHead}>
             <div>
@@ -1928,7 +2067,9 @@ function AnalystTab({
             </div>
           </div>
           <div className={styles.cardBody}>
-            <ResourceTypesPanel rows={summary.topResourceTypes} />
+            {resourceTypesFailed(summary)
+              ? <MessageBar intent="error"><MessageBarBody>{t('copilotAdoption.loading.resourcesFailed')}</MessageBarBody></MessageBar>
+              : <ResourceTypesPanel rows={summary.topResourceTypes} />}
           </div>
         </Card>
       )}

@@ -182,6 +182,13 @@ namespace Web.AnalyticsWeb.Models
                     new CachedCallWebhookStatus { State = this.CallWebhookState, Expiry = this.CallWebhookExpiry, Detail = this.CallWebhookStatusDetail },
                     DateTimeOffset.UtcNow.AddMinutes(5));
             }
+            catch (SubscriptionPageUnreadableException)
+            {
+                // Graph answered without a readable subscriptions list: unknown, not Missing. Not cached, like any other
+                // failure, so the next page load asks Graph again.
+                this.CallWebhookState = CallWebhookSubscriptionState.Error;
+                this.CallWebhookStatusDetail = "Microsoft Graph answered without a readable list of subscriptions, so the webhook couldn't be checked. Reload the page to try again.";
+            }
             catch (Exception ex)
             {
                 this.CallWebhookState = CallWebhookSubscriptionState.Error;

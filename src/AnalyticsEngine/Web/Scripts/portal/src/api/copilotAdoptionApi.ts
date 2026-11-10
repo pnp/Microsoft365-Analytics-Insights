@@ -1,10 +1,11 @@
 ﻿import { translateActive } from '../i18n/runtime';
 import type { TranslationKey } from '../i18n/catalog';
-import { apiFetch } from './http';
+import { apiFetch, PortalPermissionError, SessionExpiredError, ReportScopeError } from './http';
 import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
+  AdoptionProgress,
   CoworkFilters,
   CoworkReadinessPage,
   LicenceOpportunityPage,
@@ -35,6 +36,31 @@ const DEFAULT_RETRY_SECONDS = 5;
  */
 const POLL_CEILING_MS = 10 * 60 * 1000;
 
+export interface AdoptionLoadOptions {
+  onProgress?: (progress: AdoptionProgress) => void;
+  after?: string;
+  generationId?: string;
+}
+
+export class AdoptionRequestError extends Error {
+  constructor(message: string, readonly status?: number, readonly retryAfterSeconds = 0) {
+    super(message);
+    this.name = 'AdoptionRequestError';
+  }
+}
+
+export class AdoptionGenerationChangedError extends Error {
+  constructor() {
+    super(translateActive('copilotAdoption.error.generationChanged'));
+    this.name = 'AdoptionGenerationChangedError';
+  }
+}
+
+export function canRetryAdoptionRequest(error: unknown): boolean {
+  if (error instanceof PortalPermissionError || error instanceof SessionExpiredError || error instanceof ReportScopeError) return false;
+  return !(error instanceof AdoptionRequestError) || error.status === undefined || error.status === 429 || error.status >= 500;
+}
+
 const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
   new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -55,7 +81,9 @@ const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 
-async function getJson<T>(path: string, failureKey: TranslationKey, signal?: AbortSignal): Promise<T> {
+async function getJson<T>(
+  path: string, failureKey: TranslationKey, signal?: AbortSignal, options?: AdoptionLoadOptions,
+): Promise<T> {
   const giveUpAt = Date.now() + POLL_CEILING_MS;
 
   // The server names the analysis run each 202 is waiting on. Quoted in the give-up message, it lets a
@@ -76,12 +104,14 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
       const body = (await response.json().catch(() => null)) as {
         retryAfterSeconds?: number;
         runId?: string;
+        progress?: AdoptionProgress;
       } | null;
       if (typeof body?.runId === 'string' && body.runId.length > 0) runId = body.runId;
+      if (body?.progress) options?.onProgress?.(body.progress);
       const waitMs = (body?.retryAfterSeconds ?? DEFAULT_RETRY_SECONDS) * 1000;
 
       if (Date.now() + waitMs >= giveUpAt) {
-        throw new Error(
+        throw new AdoptionRequestError(
           runId
             ? translateActive('errors.copilotAdoption.analysisStillRunningWithReference', { runId })
             : translateActive('errors.copilotAdoption.analysisStillRunning'),
@@ -95,13 +125,16 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
     }
 
     if (!response.ok) {
-      const body = (await response.clone().json().catch(() => null)) as { code?: unknown } | null;
+      const body = (await response.clone().json().catch(() => null)) as { code?: unknown; retryAfterSeconds?: number } | null;
       if (typeof body?.code === 'string' && body.code.startsWith('copilotAdoption.error.')) {
-        throw new Error(translateActive(body.code as TranslationKey));
+        throw new AdoptionRequestError(translateActive(body.code as TranslationKey), response.status, body.retryAfterSeconds);
       }
-      throw new Error(translateActive(failureKey, { status: response.status }));
+      throw new AdoptionRequestError(translateActive(failureKey, { status: response.status }), response.status);
     }
 
+    const generationId = response.headers.get('X-CopilotAdoption-GenerationId');
+    if (options?.generationId && generationId && generationId !== options.generationId)
+      throw new AdoptionGenerationChangedError();
     return response.json() as Promise<T>;
   }
 }
@@ -156,8 +189,8 @@ function applyCoworkFilters(params: URLSearchParams, filters: CoworkFilters): UR
   return params;
 }
 
-export function fetchAdoptionAvailability(): Promise<CopilotAdoptionAvailability> {
-  return getJson<CopilotAdoptionAvailability>('/availability', 'errors.copilotAdoption.availabilityFailed');
+export function fetchAdoptionAvailability(signal?: AbortSignal): Promise<CopilotAdoptionAvailability> {
+  return getJson<CopilotAdoptionAvailability>('/availability', 'errors.copilotAdoption.availabilityFailed', signal);
 }
 
 /**
@@ -174,14 +207,18 @@ export function fetchAdoptionSummary(
   emailDomain?: string | null,
   userFilter?: string | null,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<CopilotAdoptionSummary> {
   const params = scopeParams(windowDays, seatLicenceTypeIds, dateRange);
   if (emailDomain) params.set('emailDomain', emailDomain);
   if (userFilter) params.set('userFilter', userFilter);
+  if (options?.onProgress) params.set('includeProgress', 'true');
+  if (options?.after) params.set('after', options.after);
   return getJson<CopilotAdoptionSummary>(
     `/summary?${params}`,
     'errors.copilotAdoption.summaryFailed',
     signal,
+    options,
   );
 }
 
@@ -197,11 +234,13 @@ export function fetchAdoptionFilters(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<AdoptionFilterOptions> {
   return getJson<AdoptionFilterOptions>(
     `/filters?${scopeParams(windowDays, seatLicenceTypeIds, dateRange)}`,
     'errors.copilotAdoption.filtersFailed',
     signal,
+    options,
   );
 }
 
@@ -213,12 +252,13 @@ export function fetchLicensedUsers(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<LicensedUserPage> {
   const params = applyLicensedUserFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<LicensedUserPage>(`/licensed-users?${params}`, 'errors.copilotAdoption.licensedUsersFailed', signal);
+  return getJson<LicensedUserPage>(`/licensed-users?${params}`, 'errors.copilotAdoption.licensedUsersFailed', signal, options);
 }
 
 export function fetchOpportunities(
@@ -229,12 +269,13 @@ export function fetchOpportunities(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<LicenceOpportunityPage> {
   const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<LicenceOpportunityPage>(`/opportunities?${params}`, 'errors.copilotAdoption.opportunitiesFailed', signal);
+  return getJson<LicenceOpportunityPage>(`/opportunities?${params}`, 'errors.copilotAdoption.opportunitiesFailed', signal, options);
 }
 
 export function fetchCowork(
@@ -245,12 +286,13 @@ export function fetchCowork(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<CoworkReadinessPage> {
   const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<CoworkReadinessPage>(`/cowork?${params}`, 'errors.copilotAdoption.coworkFailed', signal);
+  return getJson<CoworkReadinessPage>(`/cowork?${params}`, 'errors.copilotAdoption.coworkFailed', signal, options);
 }
 
 export function fetchAdoptionSql(
@@ -258,12 +300,39 @@ export function fetchAdoptionSql(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<Record<string, string>> {
   return getJson<Record<string, string>>(
     `/sql?${scopeParams(windowDays, seatLicenceTypeIds, dateRange)}`,
     'errors.copilotAdoption.queriesFailed',
     signal,
+    options,
   );
+}
+
+export async function rebuildAdoption(
+  windowDays: number, expectedGenerationId: string, signal?: AbortSignal,
+  userFilter?: string | null, dateRange?: DateRange | null,
+): Promise<{ generationId: string; progress?: AdoptionProgress }> {
+  const params = scopeParams(windowDays, undefined, dateRange);
+  if (userFilter) params.set('userFilter', userFilter);
+  const response = await apiFetch(`${baseUrl()}/rebuild?${params}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expectedGenerationId }),
+    signal,
+  });
+  const body = await response.json().catch(() => null) as {
+    generationId: string; progress?: AdoptionProgress; code?: string; retryAfterSeconds?: number;
+  } | null;
+  if (!response.ok) {
+    const key = typeof body?.code === 'string' && body.code.startsWith('copilotAdoption.error.')
+      ? body.code as TranslationKey : 'copilotAdoption.error.rebuildFailed';
+    throw new AdoptionRequestError(translateActive(key), response.status, body?.retryAfterSeconds);
+  }
+  if (!body || typeof body.generationId !== 'string')
+    throw new AdoptionRequestError(translateActive('copilotAdoption.error.rebuildFailed'));
+  return body;
 }
 
 /**

@@ -18,19 +18,19 @@ namespace Tests.UnitTests
     public class DBLookupCacheDuplicateKeyErrorTests
     {
         /// <summary>
-        /// This test reproduces the production error scenario, using a synthetic example office location value:
+        /// This test reproduces the duplicate-key error scenario, using a synthetic example office location value:
         /// 1. First batch creates a lookup (e.g., "Princesa 47 Seguros", a made-up value)
         /// 2. DetachAllEntities is called (old broken behavior)
         /// 3. Second batch tries to create the same lookup again
         /// 4. Without the fix, this would cause: "Cannot insert duplicate key row in object 'dbo.user_office_locations' with unique index 'IX_name'"
         /// </summary>
         [TestMethod]
-        public async Task ProductionScenario_DetachAndRetry_WithFix_NoFKViolation()
+        public async Task DuplicateKeyScenario_DetachAndRetry_WithFix_NoFKViolation()
         {
             // Arrange - A synthetic example office location name (made up, not taken from any tenant)
-            string productionOfficeLocation = "Princesa 47 Seguros";
+            string exampleOfficeLocation = "Princesa 47 Seguros";
             string testRun = DateTime.Now.Ticks.ToString();
-            string uniqueLocation = $"{productionOfficeLocation}_{testRun}";
+            string uniqueLocation = $"{exampleOfficeLocation}_{testRun}";
 
             using (var db = new AnalyticsEntitiesContext())
             {
@@ -109,7 +109,7 @@ namespace Tests.UnitTests
         /// This documents the problem we fixed
         /// </summary>
         [TestMethod]
-        public async Task ProductionScenario_OldBehavior_WouldCauseFKViolation()
+        public async Task DuplicateKeyScenario_OldBehavior_WouldCauseFKViolation()
         {
             // Arrange
             string locationName = $"TestLocation_{DateTime.Now.Ticks}_{Guid.NewGuid()}";

@@ -77,7 +77,11 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
       const code = typeof body?.code === 'string' ? body.code : null;
       if (code === 'scenarioInvalid') {
         const fields = Array.isArray(body?.validationErrors) ? body.validationErrors.filter((v): v is string => typeof v === 'string') : [];
-        throw new InvestmentRequestError(code, translateActive('copilotInvestment.error.scenarioInvalid'), fields);
+        // A currency change that would relabel the organisation's prices is its own rule, and the general wording does not name it.
+        const message = fields.includes('currencyChangeNeedsPrices')
+          ? translateActive('copilotInvestment.error.currencyChangeNeedsPrices')
+          : translateActive('copilotInvestment.error.scenarioInvalid');
+        throw new InvestmentRequestError(code, message, fields);
       }
       if (code === 'personNotFound') throw new InvestmentRequestError(code, translateActive('copilotInvestment.error.personNotFound'));
       throw new Error(translateActive(failureKey, { status: response.status }));
@@ -182,6 +186,7 @@ export const COPILOT_INVESTMENT_SETTINGS_ERROR_KEYS: ReadonlyMap<string, Transla
   ['realisationOrder', 'copilotInvestment.settings.error.realisationOrder'],
   ['noteTooLong', 'copilotInvestment.settings.error.noteTooLong'],
   ['scenarioInvalid', 'copilotInvestment.settings.error.scenarioInvalid'],
+  ['currencyChangeNeedsPrices', 'copilotInvestment.settings.error.currencyChangeNeedsPrices'],
   ['loadFailed', 'copilotInvestment.settings.error.loadFailed'],
   ['saveFailed', 'copilotInvestment.settings.error.saveFailed'],
 ]);

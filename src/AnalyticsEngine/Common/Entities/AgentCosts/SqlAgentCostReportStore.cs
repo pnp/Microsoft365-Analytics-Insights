@@ -23,6 +23,13 @@ namespace Common.Entities.AgentCosts
         /// </summary>
         public const int MaxPageSize = 500;
 
+        /// <summary>The most agents, environments and features the report's pickers offer: the biggest spenders in the window.</summary>
+        internal const int MaxAgentOptions = 500;
+
+        internal const int MaxEnvironmentOptions = 500;
+
+        internal const int MaxFeatureOptions = 200;
+
         private readonly IAnalyticsDbContextFactory _dbContextFactory;
 
         public SqlAgentCostReportStore(IAnalyticsDbContextFactory dbContextFactory = null)
@@ -270,8 +277,11 @@ namespace Common.Entities.AgentCosts
                     // rather than returning zero.
                     summary.BilledCredits = await credits.SumAsync(r => (decimal?)r.BilledCredits) ?? 0m;
                     summary.NonBilledCredits = await credits.SumAsync(r => r.NonBilledCredits) ?? 0m;
-                    summary.DistinctAgents = await credits.Select(r => r.AgentId).Distinct().CountAsync();
-                    summary.DistinctEnvironments = await credits.Select(r => r.EnvironmentId).Distinct().CountAsync();
+
+                    // A row with no agent or no environment is not one more agent or environment: DISTINCT counts NULL
+                    // as a value of its own, so it is left out before counting.
+                    summary.DistinctAgents = await credits.Where(r => r.AgentId != null).Select(r => r.AgentId).Distinct().CountAsync();
+                    summary.DistinctEnvironments = await credits.Where(r => r.EnvironmentId != null).Select(r => r.EnvironmentId).Distinct().CountAsync();
                     summary.DaysWithUsage = await credits.Select(r => r.UsageDate).Distinct().CountAsync();
 
                     // MAX, never SUM - the counts overlap across slices. See the model docs.
@@ -386,10 +396,12 @@ namespace Common.Entities.AgentCosts
                 // rather than four near-identical GroupBy blocks. The label is only meaningful for the two
                 // dimensions that have a display name; elsewhere it repeats the key.
                 IQueryable<KeyedRow> keyed;
+                var named = false;
                 switch (dimension.ToLowerInvariant())
                 {
                     case AgentCostDimensions.Environment:
                         keyed = filtered.Select(r => new KeyedRow { Key = r.EnvironmentId, Label = r.EnvironmentName, Row = r });
+                        named = true;
                         break;
                     case AgentCostDimensions.Harness:
                         keyed = filtered.Select(r => new KeyedRow { Key = r.Harness, Label = r.Harness, Row = r });
@@ -399,6 +411,7 @@ namespace Common.Entities.AgentCosts
                         break;
                     default:
                         keyed = filtered.Select(r => new KeyedRow { Key = r.AgentId, Label = r.AgentName, Row = r });
+                        named = true;
                         break;
                 }
 
@@ -407,21 +420,25 @@ namespace Common.Entities.AgentCosts
                     .Select(g => new
                     {
                         Key = g.Key,
-                        Label = g.Max(k => k.Label),
                         Billed = g.Sum(k => (decimal?)k.Row.BilledCredits),
                         NonBilled = g.Sum(k => k.Row.NonBilledCredits),
                         ActiveDays = g.Select(k => k.Row.UsageDate).Distinct().Count(),
                         PeakUsers = g.Max(k => k.Row.DistinctUsers),
                     })
                     .OrderByDescending(g => g.Billed)
+                    .ThenBy(g => g.Key)
                     .Take(top)
                     .ToListAsync();
+
+                var labels = named
+                    ? await LatestLabelsAsync(keyed, grouped.Select(g => g.Key).ToList())
+                    : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
                 return grouped
                     .Select(g => new AgentCostBreakdownRow
                     {
                         Key = g.Key,
-                        Label = string.IsNullOrWhiteSpace(g.Label) ? g.Key : g.Label,
+                        Label = g.Key != null && labels.TryGetValue(g.Key, out var label) ? label : g.Key,
                         BilledCredits = g.Billed ?? 0m,
                         NonBilledCredits = g.NonBilled ?? 0m,
                         ActiveDays = g.ActiveDays,
@@ -580,31 +597,53 @@ namespace Common.Entities.AgentCosts
                 var inWindow = db.CopilotStudioCreditDaily
                     .Where(r => r.UsageDate >= query.FromUtc && r.UsageDate <= query.ToUtc);
 
+                // Each picker is capped, so WHICH values make the cut is decided here: the biggest spenders in the window,
+                // then by id. Without an order SQL Server is free to return any 500, and on a tenant with more than that
+                // the agent behind most of the bill could be the one the picker leaves out.
                 var agents = await inWindow
                     .Where(r => r.AgentId != null)
                     .GroupBy(r => r.AgentId)
-                    .Select(g => new { Id = g.Key, Label = g.Max(r => r.AgentName) })
-                    .Take(500)
+                    .Select(g => new { Id = g.Key, Billed = g.Sum(r => (decimal?)r.BilledCredits) })
+                    .OrderByDescending(g => g.Billed)
+                    .ThenBy(g => g.Id)
+                    .Take(MaxAgentOptions)
                     .ToListAsync();
 
                 var environments = await inWindow
                     .Where(r => r.EnvironmentId != null)
                     .GroupBy(r => r.EnvironmentId)
-                    .Select(g => new { Id = g.Key, Label = g.Max(r => r.EnvironmentName) })
-                    .Take(500)
+                    .Select(g => new { Id = g.Key, Billed = g.Sum(r => (decimal?)r.BilledCredits) })
+                    .OrderByDescending(g => g.Billed)
+                    .ThenBy(g => g.Id)
+                    .Take(MaxEnvironmentOptions)
                     .ToListAsync();
 
+                var agentLabels = await LatestLabelsAsync(
+                    inWindow.Select(r => new KeyedRow { Key = r.AgentId, Label = r.AgentName, Row = r }),
+                    agents.Select(a => a.Id).ToList());
+                var environmentLabels = await LatestLabelsAsync(
+                    inWindow.Select(r => new KeyedRow { Key = r.EnvironmentId, Label = r.EnvironmentName, Row = r }),
+                    environments.Select(e => e.Id).ToList());
+
                 var harnesses = await inWindow.Where(r => r.Harness != null).Select(r => r.Harness).Distinct().ToListAsync();
-                var features = await inWindow.Where(r => r.FeatureName != null).Select(r => r.FeatureName).Distinct().Take(200).ToListAsync();
+                var features = await inWindow
+                    .Where(r => r.FeatureName != null)
+                    .GroupBy(r => r.FeatureName)
+                    .Select(g => new { Name = g.Key, Billed = g.Sum(r => (decimal?)r.BilledCredits) })
+                    .OrderByDescending(g => g.Billed)
+                    .ThenBy(g => g.Name)
+                    .Take(MaxFeatureOptions)
+                    .Select(g => g.Name)
+                    .ToListAsync();
 
                 return new AgentCostFilterOptions
                 {
                     Agents = agents
-                        .Select(a => new AgentCostFilterOption { Id = a.Id, Label = string.IsNullOrWhiteSpace(a.Label) ? a.Id : a.Label })
+                        .Select(a => new AgentCostFilterOption { Id = a.Id, Label = agentLabels.TryGetValue(a.Id, out var label) ? label : a.Id })
                         .OrderBy(a => a.Label, StringComparer.CurrentCultureIgnoreCase)
                         .ToList(),
                     Environments = environments
-                        .Select(e => new AgentCostFilterOption { Id = e.Id, Label = string.IsNullOrWhiteSpace(e.Label) ? e.Id : e.Label })
+                        .Select(e => new AgentCostFilterOption { Id = e.Id, Label = environmentLabels.TryGetValue(e.Id, out var label) ? label : e.Id })
                         .OrderBy(e => e.Label, StringComparer.CurrentCultureIgnoreCase)
                         .ToList(),
                     Harnesses = harnesses.OrderBy(h => h, StringComparer.Ordinal).ToList(),
@@ -683,6 +722,44 @@ namespace Common.Entities.AgentCosts
                     })
                     .ToList();
             }
+        }
+
+        /// <summary>
+        /// The name each of <paramref name="keys"/> was last reported with in the window - the latest usage date's, then the
+        /// latest-imported row's - skipping rows that carried no name. Not the alphabetically greatest: MAX kept an agent
+        /// renamed from "Zeta helper" to "Alpha helper" under its old name for as long as the old rows were in the window.
+        /// </summary>
+        /// <remarks>
+        /// One grouped statement over at most a few hundred keys, returning one row per (key, name) pair - a handful per
+        /// agent, however many days it ran - rather than a per-key TOP (1) subquery. Keyed case-insensitively, as the
+        /// database groups them.
+        /// </remarks>
+        private static async Task<Dictionary<string, string>> LatestLabelsAsync(IQueryable<KeyedRow> keyed, List<string> keys)
+        {
+            var labels = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            keys = keys.Where(k => k != null).ToList();
+            if (keys.Count == 0) return labels;
+
+            var names = await keyed
+                .Where(k => k.Key != null && keys.Contains(k.Key) && k.Label != null && k.Label != "")
+                .GroupBy(k => new { k.Key, k.Label })
+                .Select(g => new
+                {
+                    g.Key.Key,
+                    g.Key.Label,
+                    LastSeen = g.Max(k => k.Row.UsageDate),
+                    LastRow = g.Max(k => k.Row.ID),
+                })
+                .ToListAsync();
+
+            foreach (var latest in names
+                .GroupBy(n => n.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.OrderByDescending(n => n.LastSeen).ThenByDescending(n => n.LastRow).First()))
+            {
+                labels[latest.Key] = latest.Label;
+            }
+
+            return labels;
         }
 
         /// <summary>
