@@ -86,8 +86,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// Whether the call was actually saved is reported by <see cref="Import"/>.
         /// </returns>
         /// <exception cref="CallRecordSessionPagingException">
-        /// Not all of the call's sessions could be read; nothing was saved. See <see cref="CallQueueMessageHandler"/>
-        /// for how the queue message is then retried or dead-lettered.
+        /// Not all of the call's sessions could be read - a page failed, or the call record came back without its session
+        /// list; nothing was saved. See <see cref="CallQueueMessageHandler"/> for how the queue message is then retried or
+        /// dead-lettered.
         /// </exception>
         /// <remarks>
         /// A call whose organiser can't be resolved to a user of this tenant (an external organiser, a deleted account) is

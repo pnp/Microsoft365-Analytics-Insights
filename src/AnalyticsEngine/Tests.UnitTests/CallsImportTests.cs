@@ -1146,8 +1146,8 @@ namespace Tests.UnitTests
 
         private static CallRecordDTO Call(string graphCallId, string organiserEmail)
         {
-            // Graph always sends a call type and the session list ($expand=sessions); a call without them is a payload
-            // failure (#847), which these tests are not about.
+            // Graph always sends a call type and the session list ($expand=sessions); a call without a call type is a
+            // payload failure, and one without its session list a failed read (#847), which these tests are not about.
             return new CallRecordDTO { GraphCallID = graphCallId, OrganizerEmail = organiserEmail, CallType = "groupCall", Sessions = new List<CallSessionDTO>() };
         }
 
@@ -1520,18 +1520,20 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
-        /// A call with nothing usable to save is a payload failure with its own reason, dead-lettered at once. These used to
-        /// throw a NullReferenceException (no session list) or an ArgumentOutOfRangeException (two people neither of whom
-        /// organised the call) out of the save, which counted as Transient: the call was fetched again ten times over about
-        /// four hours, then dead-lettered as CallImportRetriesExhausted, which said nothing about what was wrong.
+        /// A call with nothing usable to save is a payload failure with its own reason, dead-lettered at once, and a default
+        /// dead-letter replay leaves it there: fetching the same record again cannot help. These used to throw out of the
+        /// save - a NullReferenceException or an ArgumentOutOfRangeException for such sessions, an ArgumentNullException for
+        /// no call type - which counted as Transient: the call was fetched again ten times over about four hours, then
+        /// dead-lettered as CallImportRetriesExhausted, which said nothing about what was wrong. A call record without its
+        /// session list is different: a failed read, retried (see
+        /// <see cref="QueueHandler_ACallRecordWithoutItsSessionList_IsAFailedRead_RetriedThenDeadLetteredAsRetriesExhausted"/>).
         /// </summary>
         [DataTestMethod]
-        [DataRow("NoSessions")]
         [DataRow("NoUsableSessions")]
         [DataRow("NoCallType")]
         public async Task QueueHandler_ACallWithNothingUsableToSave_IsDeadLetteredAtOnceWithItsReason(string reason)
         {
-            var call = R99Call(reason == "NoCallType" ? null : "groupCall", reason == "NoSessions" ? null : new List<CallSessionDTO>
+            var call = R99Call(reason == "NoCallType" ? null : "groupCall", new List<CallSessionDTO>
             {
                 R99Session("transferred.a@contoso.example", "transferred.b@contoso.example"),
                 R99Session(R99Organiser, null, hasCallee: false),
@@ -1544,6 +1546,117 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(CallQueueMessageOutcome.DeadLettered, outcome, "Not retried: fetching the same record again cannot help.");
             Assert.AreEqual(reason, settlement.DeadLetterReason, "The dead-letter queue says what is wrong.");
+            Assert.IsTrue(CallDeadLetterReplayer.IsNeverImportable(settlement.DeadLetterReason), "A default dead-letter replay leaves it where it is.");
+            Assert.AreEqual(0, store.Saved.Count);
+        }
+
+        /// <summary>
+        /// A call record that comes back without its session list - no "sessions" at all, or "sessions": null - although
+        /// it was read with $expand=sessions has not been read: who was on the call is unknown, not "nobody", and Graph can
+        /// still be completing a record when its creation notification arrives. Like a sessions page that failed to load,
+        /// it is retried with the usual back-off before anything acts on the missing list - the user look-ups, or the
+        /// UserGroupsFilter check, which with the organiser out of scope completed the call as out of scope - and if it
+        /// never comes back whole it is dead-lettered as CallImportRetriesExhausted, which a default dead-letter replay
+        /// replays. Not dead-lettered at once as a payload failure (#847).
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(false, false)]
+        [DataRow(true, false)]
+        [DataRow(false, true)]
+        public async Task QueueHandler_ACallRecordWithoutItsSessionList_IsAFailedRead_RetriedThenDeadLetteredAsRetriesExhausted(bool sessionsNull, bool organiserOutsideUserGroupsFilter)
+        {
+            var call = new SyntheticMultiPageCall(firstPageAttendees: 2, secondPageAttendees: 1);
+            var graph = call.CreateGraph();
+            var record = JObject.Parse(call.CallRecordJson());
+            record.Remove("sessions@odata.context");
+            record.Remove("sessions@odata.nextLink");
+            if (sessionsNull)
+            {
+                record["sessions"] = JValue.CreateNull();
+            }
+            else
+            {
+                record.Remove("sessions");
+            }
+            graph.Serve(call.CallRecordUrl, record.ToString());
+            var store = new InMemoryCallRecordPersistenceManager();
+            var logger = new CapturingLogger();
+            var scope = organiserOutsideUserGroupsFilter ? TestUserScopes.Provider(TestUserScopes.Of(call.LateAttendeeUpn)) : null;
+            var importer = new CallRecordImporter(SyntheticMultiPageCall.CreateSourceLoader(graph), store, logger, scope);
+            var clock = new FixedClock(QueueNow);
+            var handler = QueueHandler(async n => (await importer.Import(n)).Outcome, clock, logger: logger);
+
+            var settlement = new FakeCallQueueMessageSettlement();
+            Assert.AreEqual(CallQueueMessageOutcome.RetryScheduled, await handler.HandleAsync(QueueMessage(call.CallId), settlement),
+                "Neither dead-lettered at once nor completed: it has to be read again.");
+            Assert.AreEqual(1, settlement.ScheduledState.Failures, "A failure of this call...");
+            Assert.AreEqual(0, settlement.ScheduledState.SystemicFailures, "...not an outage.");
+            Assert.IsTrue(logger.Entries.Any(e => e.Message.StartsWith(CallImportLog.Prefix) && e.Message.Contains("outcome=Retry:Transient failure=SessionPagingFailed ")));
+            Assert.AreEqual(0, graph.UserRequests.Count, "Nothing acted on the missing list: nobody was looked up.");
+
+            var attempts = 1;
+            while (attempts < 50)
+            {
+                var properties = new Dictionary<string, object>();
+                settlement.ScheduledState.WriteTo(properties);
+                clock.Advance(settlement.ScheduledForUtc.Value - clock.UtcNow);
+
+                attempts++;
+                settlement = new FakeCallQueueMessageSettlement();
+                if (await handler.HandleAsync(QueueMessage(call.CallId, $"message-{attempts}", properties), settlement) == CallQueueMessageOutcome.DeadLettered)
+                {
+                    break;
+                }
+            }
+
+            Assert.AreEqual(CallQueueRetryPolicy.Default.MaxFailures, attempts, "The usual back-off, about four hours.");
+            Assert.AreEqual(CallQueueRetryPolicy.RetriesExhaustedReason, settlement.DeadLetterReason);
+            StringAssert.Contains(settlement.DeadLetterDescription, "without its session list");
+            Assert.IsFalse(CallDeadLetterReplayer.IsNeverImportable(settlement.DeadLetterReason), "A default dead-letter replay replays it.");
+            Assert.AreEqual(0, store.Saved.Count);
+        }
+
+        /// <summary>
+        /// The legitimate case beside it: <c>"sessions": []</c> is Graph saying the call had no sessions, not a list that
+        /// was lost, so the call is saved - organiser, type and times - without sessions, as it always was.
+        /// </summary>
+        [TestMethod]
+        public async Task CallRecordImporter_ACallRecordWithAnEmptySessionList_IsSavedWithoutSessions()
+        {
+            var call = new SyntheticMultiPageCall(firstPageAttendees: 2, secondPageAttendees: 1);
+            var graph = call.CreateGraph();
+            var record = JObject.Parse(call.CallRecordJson());
+            record.Remove("sessions@odata.nextLink");
+            record["sessions"] = new JArray();
+            graph.Serve(call.CallRecordUrl, record.ToString());
+            var store = new InMemoryCallRecordPersistenceManager();
+
+            var result = await ImportOnce(call, graph, store);
+
+            Assert.AreEqual(CallImportOutcome.Saved, result.Outcome);
+            var saved = store.Saved.Single();
+            Assert.AreEqual(0, saved.Sessions.Count);
+            Assert.AreEqual(call.Organiser.Upn, saved.OrganizerEmail);
+        }
+
+        /// <summary>
+        /// The same rule for a call that reaches the save without the Graph read: with no session list it is retried, and
+        /// not judged on the rest of a record that was not read completely - not even on a missing call type.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("groupCall")]
+        [DataRow(null)]
+        public async Task QueueHandler_ACallWithNoSessionList_IsRetried_NotJudgedOnTheRestOfItsPayload(string callType)
+        {
+            var call = R99Call(callType, null);
+            var store = new InMemoryCallRecordPersistenceManager();
+            var importer = new CallRecordImporter(new FakeCallRecordSourceLoader().Returning(call.GraphCallID, call), store, new CapturingLogger());
+            var settlement = new FakeCallQueueMessageSettlement();
+
+            var outcome = await QueueHandler(async n => (await importer.Import(n)).Outcome).HandleAsync(QueueMessage(call.GraphCallID), settlement);
+
+            Assert.AreEqual(CallQueueMessageOutcome.RetryScheduled, outcome);
+            Assert.AreEqual(1, settlement.ScheduledState.Failures);
             Assert.AreEqual(0, store.Saved.Count);
         }
 

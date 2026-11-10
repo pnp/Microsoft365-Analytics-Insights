@@ -121,7 +121,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             callDTO.JsonText = callJsonText;
 
             // Every session first: the email look-ups, the UserGroupsFilter check and the save only see what is in
-            // Sessions, so a call whose in-scope people were all on a later page would be skipped as out of scope.
+            // Sessions, so a call whose in-scope people were all on a later page would be skipped as out of scope. For the
+            // same reason a record that came back without its own session list fails here, as a read that failed.
             await callDTO.LoadRemainingSessionPages(manualClient, callRecordUrl, logger);
 
             // Find email addresses for user IDs
@@ -133,23 +134,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         /// <summary>
         /// Follows <see cref="SessionsNextLink"/> until Graph has returned every session, appending each page to
-        /// <see cref="Sessions"/>. Each page is requested with the client's throttling retries.
+        /// <see cref="Sessions"/>. Each page is requested with the client's throttling retries. The call record's own
+        /// <c>sessions</c> is the first page, so a record without it fails like any other page that could not be read.
         /// </summary>
         /// <param name="callRecordUrl">The absolute URL the call record was read from; continuation links must stay on its host.</param>
         /// <exception cref="CallRecordSessionPagingException">
-        /// A page failed or was unreadable (retryable), or the paging ran away - more than
+        /// A page failed or was unreadable, the call record's own included (retryable), or the paging ran away - more than
         /// <see cref="CallRecordSessionPaging.MaxPages"/> pages, or a link repeated (not retryable).
         /// </exception>
         public async Task LoadRemainingSessionPages(ManualGraphCallClient manualClient, string callRecordUrl, ILogger logger)
         {
+            if (Sessions == null)
+            {
+                throw SessionListMissing(GraphCallID);
+            }
+
             if (string.IsNullOrEmpty(SessionsNextLink))
             {
                 return;
-            }
-
-            if (Sessions == null)
-            {
-                Sessions = new List<CallSessionDTO>();
             }
 
             var requestedUrls = new HashSet<string>(StringComparer.Ordinal);
@@ -446,23 +448,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// <see cref="CallLoadStats.SkippedSessions"/>. One odd session no longer fails the whole call: it is left out and
         /// the rest saved.
         /// </summary>
+        /// <exception cref="CallRecordSessionPagingException">
+        /// No session list: the call record was not read completely, so it is retried like a sessions page that failed to
+        /// load - never judged on the rest of the payload or dead-lettered as it stands (see <see cref="SessionListMissing"/>).
+        /// </exception>
         /// <exception cref="CallRecordPayloadException">
         /// A permanent payload failure, dead-lettered under its own reason rather than retried: the call has no call type
-        /// (<see cref="CallRecordPayloadException.NoCallTypeReason"/>), no session list
-        /// (<see cref="CallRecordPayloadException.NoSessionsReason"/>), or sessions of which none can be attributed
-        /// (<see cref="CallRecordPayloadException.NoUsableSessionsReason"/>).
+        /// (<see cref="CallRecordPayloadException.NoCallTypeReason"/>), or sessions of which none can be attributed
+        /// (<see cref="CallRecordPayloadException.NoUsableSessionsReason"/>). An empty session list is neither: the call
+        /// is saved without sessions.
         /// </exception>
         public void ValidateForSave()
         {
+            if (Sessions == null)
+            {
+                throw SessionListMissing(GraphCallID);
+            }
             if (string.IsNullOrEmpty(CallType))
             {
                 throw new CallRecordPayloadException(GraphCallID, CallRecordPayloadException.NoCallTypeReason,
                     "The call record has no call type, which every saved call needs.", isPermanent: true);
-            }
-            if (Sessions == null)
-            {
-                throw new CallRecordPayloadException(GraphCallID, CallRecordPayloadException.NoSessionsReason,
-                    "The call record has no session list, although it was read with its sessions expanded.", isPermanent: true);
             }
 
             var skipped = Sessions.Count(session => ClassifySession(session, OrganizerEmail, out _) == SessionUse.Malformed);
@@ -473,6 +478,21 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                     $"None of the call record's {skipped} session(s) can be attributed: each has no caller or callee, or two people neither of whom organised the call.",
                     isPermanent: true);
             }
+        }
+
+        /// <summary>
+        /// A call record without its session list (no <c>sessions</c>, or <c>"sessions": null</c>), although it was read
+        /// with <c>$expand=sessions</c>. Who was on the call is unknown, not "nobody", so it is a failed read: retried with
+        /// the usual back-off, like a later sessions page that failed, and dead-lettered as
+        /// <c>CallImportRetriesExhausted</c> if it never comes back whole. Graph can still be completing a call record
+        /// when its creation notification arrives.
+        /// </summary>
+        private static CallRecordSessionPagingException SessionListMissing(string callId)
+        {
+            return new CallRecordSessionPagingException(callId,
+                $"Call record '{callId}' came back without its session list (sessions page 1), so who was on the call is unknown; " +
+                "Graph may still be completing the record.",
+                isPermanent: false);
         }
 
         /// <summary>

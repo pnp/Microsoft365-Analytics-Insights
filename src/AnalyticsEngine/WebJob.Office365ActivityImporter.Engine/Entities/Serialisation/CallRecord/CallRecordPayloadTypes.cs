@@ -63,9 +63,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// <summary>The call record carries no organiser identity at all.</summary>
         public const string NoOrganiserIdentityReason = "NoOrganiserIdentity";
 
-        /// <summary>The call record has no session list at all, although it was read with <c>$expand=sessions</c>.</summary>
-        public const string NoSessionsReason = "NoSessions";
-
         /// <summary>The call record has sessions, but every one is malformed, so nobody on the call can be attributed.</summary>
         public const string NoUsableSessionsReason = "NoUsableSessions";
 
