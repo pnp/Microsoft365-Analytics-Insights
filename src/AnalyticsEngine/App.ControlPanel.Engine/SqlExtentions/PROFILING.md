@@ -13,7 +13,7 @@ Ola-Hallengren maintenance scripts `Profiling-01-CommandExecute.sql` and
 
 ## Copilot correctness contract (#639 / #699)
 
-`usp_UpsertCopilotActivities` counts turns, not raw audit records: it excludes
+`profiling.usp_UpsertCopilot` counts turns, not raw audit records: it excludes
 `copilot_chat_duplicates` and the `Copilot Studio` maker-test host in both its
 per-host and total/file/meeting paths. `Microsoft Teams` maps to Teams and an
 unpaired `m365copilot` runtime record maps to Office. Same-host records seconds
@@ -112,7 +112,7 @@ schema extension, and driven on a schedule by **Azure Automation runbooks**, not
 - The installer runs **every `*.sql` in `SqlExtentions/`** (they are embedded resources) as
   part of the database upgrade, **after** the EF Code-First migrations, in **alphabetical
   order** — so `Profiling-01` → `02` → `03`. See `SqlExtentions/readme.md` and
-  `App.ControlPanel.Engine/DatabaseUpgrader.cs` (`CheckDbUpgraded`, custom-SQL step).
+  `App.ControlPanel.Engine/Utils/DatabaseUpgrader.cs` (`CheckDbUpgraded`, custom-SQL step).
 - The scripts are **idempotent**: each object is guarded with `IF OBJECT_ID(...) IS NULL`
   (create-if-absent for tables) or `DROP ... ; CREATE ...` (procs/views/functions), and
   columns are added with `IF NOT EXISTS (... sys.columns ...)` `ALTER TABLE ADD`. You can
@@ -120,9 +120,10 @@ schema extension, and driven on a schedule by **Azure Automation runbooks**, not
 - `usp_...` procedures cannot contain `GO`; the installer splits a file on `GO` and executes
   each batch separately (a hack — see the readme). Keep `GO` only as batch separators.
 
-### Legacy cleanup block (lines ~119–181)
-The top of `Profiling-03` **drops** objects from earlier versions of this subsystem that no
-longer exist: `usp_CompileDaily`, `usp_Version`, `udf_GetLimitDate`, `tvf_ActivitiesBetweenDates`,
+### Legacy cleanup block (the `CLEANUP` section)
+The section of `Profiling-03` under the `CLEANUP` / `Remove unused objects` banner, near the top of
+the file, **drops** objects from earlier versions of this subsystem that no longer exist:
+`usp_GetErrorInfo`, `usp_CompileDaily`, `usp_Version`, `udf_GetLimitDate`, `tvf_ActivitiesBetweenDates`,
 `tvf_DuplicatedUsers`, `tvf_Version`, `usp_CompileWeek/Columns/Rows`, and the old
 `profiling.Activities` / `profiling.ActivitiesDaily` tables. If you see these names referenced
 anywhere, they are **historical** — the current pipeline does not use them.

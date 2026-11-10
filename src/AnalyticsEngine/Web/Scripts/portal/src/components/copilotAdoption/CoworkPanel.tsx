@@ -23,7 +23,7 @@ import {
   DataScatter20Regular,
   PeopleList20Regular,
 } from '@fluentui/react-icons';
-import { fetchCowork, coworkExportUrl } from '../../api/copilotAdoptionApi';
+import { AdoptionGenerationChangedError, fetchCowork, coworkExportUrl } from '../../api/copilotAdoptionApi';
 import type {
   AdoptionFilterOptions,
   CopilotAdoptionOptions,
@@ -330,6 +330,8 @@ export default function CoworkPanel({
   userFilter,
   canSeePii = true,
   hiddenListNote,
+  onGenerationChanged,
+  onLoadingChange,
 }: {
   windowDays: number;
   dateRange?: DateRange | null;
@@ -353,6 +355,8 @@ export default function CoworkPanel({
    * range passes its own note, because there the list is hidden for a different reason.
    */
   hiddenListNote?: ReactNode;
+  onGenerationChanged?: () => boolean;
+  onLoadingChange?: (loading: boolean) => void;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -420,26 +424,32 @@ export default function CoworkPanel({
     let cancelled = false;
     const controller = new AbortController();
     setLoading(true);
+    onLoadingChange?.(true);
     setError(null);
+    setData(null);
 
-    fetchCowork(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal, ...(dateRange ? [dateRange] as const : []))
+    fetchCowork(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal,
+      dateRange, { generationId: summary.diagnostics?.generationId })
       .then((result) => {
         if (!cancelled) setData(result);
       })
       .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
+        if (e instanceof AdoptionGenerationChangedError && onGenerationChanged?.()) return;
         setError(e instanceof Error ? e.message : t('copilotAdoptionCowork.error.loadReadinessList'));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) { setLoading(false); onLoadingChange?.(false); }
       });
 
     return () => {
       cancelled = true;
       // These requests poll while the analysis is building, so cleanup has to actually stop them.
       controller.abort();
+      onLoadingChange?.(false);
     };
-  }, [available, canSeePii, windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
+  }, [available, canSeePii, windowDays, dateRange, filters, page, seatLicenceTypeIds, reloadKey,
+    summary.diagnostics?.generationId, onGenerationChanged, onLoadingChange, t]);
 
   const sortValue = `${filters.sortBy}:${filters.sortDesc ? 'desc' : 'asc'}`;
   const exportUrl = useMemo(

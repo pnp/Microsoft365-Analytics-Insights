@@ -87,6 +87,7 @@ namespace Tests.UnitTests
 
             ["CopilotAdoptionAPIController.Availability"] = Any,
             ["CopilotAdoptionAPIController.Summary"] = Any,            // trims the manager roll-up; an email domain, user filter or seat-licence override needs See PII
+            ["CopilotAdoptionAPIController.Rebuild"] = Any,            // same scope checks as Summary; a generation token cannot grant access
             ["CopilotAdoptionAPIController.LicenceTypes"] = Any,       // a seat-licence override needs See PII
             ["CopilotAdoptionAPIController.Sql"] = Any,                // a seat-licence override needs See PII
             ["CopilotAdoptionAPIController.Filters"] = Any,            // a seat-licence override needs See PII
@@ -1242,6 +1243,50 @@ namespace Tests.UnitTests
                 {
                     Assert.AreEqual(HttpStatusCode.OK, (await host.Client.GetAsync(url)).StatusCode, url);
                 }
+            }
+        }
+
+        [TestMethod]
+        public async Task CopilotAdoptionRebuild_NarrowedRequestsRequireSeePiiBeforeStartingWork()
+        {
+            var runner = new FixedRunner(SmallAnalysis());
+            using (var host = CopilotAdoptionHost(runner, PortalTestHost.SignedIn()))
+            {
+                foreach (var query in new[]
+                {
+                    "?emailDomain=contoso.com",
+                    "?seatLicenceTypeIds=1",
+                    "?userFilter=%5B%7B%22d%22%3A%22userName%22%2C%22v%22%3A%5B%22person1%40contoso.com%22%5D%7D%5D",
+                })
+                {
+                    var response = await host.Client.PostAsync("api/CopilotAdoption/rebuild" + query,
+                        new StringContent("{\"expectedGenerationId\":\"00000000000000000000000000000001\"}", Encoding.UTF8, "application/json"));
+                    Assert.AreEqual(HttpStatusCode.Forbidden, response.StatusCode, query);
+                    Assert.AreEqual("seePii", (string)JObject.Parse(await response.Content.ReadAsStringAsync())["permission"]);
+                }
+                Assert.AreEqual(0, runner.Overrides.Count, "A refused request cannot start an analysis.");
+            }
+        }
+
+        [TestMethod]
+        public async Task CopilotAdoptionRebuild_RejectsInvalidTokens_AndStaleTokensReturnOnlyGenerationMetadata()
+        {
+            var analysis = SmallAnalysis();
+            using (var host = CopilotAdoptionHost(analysis, PortalTestHost.SignedIn()))
+            {
+                var invalid = await host.Client.PostAsync("api/CopilotAdoption/rebuild",
+                    new StringContent("{\"expectedGenerationId\":\"invalid\"}", Encoding.UTF8, "application/json"));
+                Assert.AreEqual(HttpStatusCode.BadRequest, invalid.StatusCode);
+                await host.Client.GetAsync("api/CopilotAdoption/summary");
+                var response = await host.Client.PostAsync("api/CopilotAdoption/rebuild",
+                    new StringContent("{\"expectedGenerationId\":\"00000000000000000000000000000001\"}", Encoding.UTF8, "application/json"));
+                Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+                var body = JObject.Parse(await response.Content.ReadAsStringAsync());
+                Assert.AreEqual(analysis.Summary.Diagnostics.GenerationId, (string)body["generationId"]);
+                Assert.IsNull(body["accountabilityRollup"], "Rebuild responses contain no report data.");
+                Assert.IsFalse(body.ToString().Contains("manager@contoso.com"));
+                Assert.AreEqual(analysis.Summary.Diagnostics.GenerationId,
+                    response.Headers.GetValues(CopilotAdoptionAPIController.GenerationIdHeader).Single());
             }
         }
 

@@ -118,10 +118,19 @@ If it fails, rebuild the extension and commit the package, as
   every step limited to one shard names a shard that exists, so such a step can't silently stop running.
 * Downloadable test binaries contain synthetic configuration only. Credentials are substituted
   into the executing runner's config after download, and that config is never re-uploaded.
+* Dependabot and fork pull requests get no repository secrets, so their runs have no client secret.
+  A test that never calls the test tenant must not need one: give it its dependencies without a
+  credential (`OfflineSqlActivityPersistence` for the audit-event SQL path). A test that does call it
+  starts with `LiveCredentials.RequireGraphClientSecret`, which makes it Inconclusive without a secret.
+  Every other run sets `REQUIRE_LIVE_CREDENTIALS=true`, which turns that skip into a failure. Don't
+  add the secrets as Dependabot secrets: dependency code, npm lifecycle scripts included, would run
+  beside them.
 * Runs portal production/test type checks and the complete Vitest suite independently on Linux.
   The i18n suite is included. `npm run typecheck:tests` uses `tsconfig.tests.json`, because
   production TypeScript excludes test files and Vitest alone does not type-check them.
-* Uploads per-shard TRX and portal JUnit results, with slow .NET tests in each job summary.
+* Uploads per-shard TRX and portal JUnit results. Each shard's job summary lists its slowest .NET
+  tests and every test that did not run, with the reason it gave, and warns when a test that needs
+  a live credential was skipped, so a green run doesn't overstate what ran.
 * Preserves required checks `test_dotnet (Release)` and `test_aitracker`. The former is a final
   gate that fails if any applicable build, shard, portal or CI-helper check fails or is cancelled.
   `workflow-contract.test.mjs` pins those names (and `gitleaks`), that their workflows report on
@@ -129,6 +138,9 @@ If it fails, rebuild the extension and commit the package, as
   that the `ci` and `pr` path triggers cover everything `ci-paths.json` selects tests for.
 * Cancels superseded PR runs; jobs have explicit timeouts. CI helpers and actionlint run without
   tenant credentials. NuGet caches are keyed on dependency manifests, not build outputs.
+* Downloaded tools are pinned by SHA-256 and their downloads retry a transient failure: actionlint
+  here, gitleaks in `secret-scan.yml`. Change a tool's version and its checksum together, taking the
+  checksum from that release's published checksums file.
 
 All workflow actions are pinned to immutable commits. Dependabot proposes updates against `dev`:
 actions weekly, and the four npm packages (the portal, AITracker, the SPFx extension and the
@@ -143,6 +155,11 @@ its own. Two of them need more than a green build before merging, as
   Dependabot proposes no major update and no new SPFx release (SPFx ships each release as a semver
   minor), because the SPFx generator chose those versions together. Take them in a deliberate SPFx
   upgrade.
+
+Dependabot also proposes no TypeScript 7 for the portal or AITracker. The portal's translation gate
+(`src/i18n/lint/hardcodedStrings.ts`) uses the TypeScript compiler API, which TypeScript 7 doesn't
+expose the same way, and AITracker's `ts-jest` 29 doesn't accept it (#836, #840). Take it in a
+deliberate upgrade.
 
 To validate workflow changes locally:
 
