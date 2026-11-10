@@ -622,6 +622,13 @@ function ReportAreaView({
               <Text size={200} block className={styles.muted}>
                 {description}
               </Text>
+              {chart.minimumGroupSize != null && (
+                <Text size={200} block className={styles.muted}>
+                  {t(chart.type === 'matrix' ? 'reports.withheld.matrix' : 'reports.withheld.prompts', {
+                    count: formatNumber(chart.minimumGroupSize),
+                  })}
+                </Text>
+              )}
             </div>
             <SqlPopover sql={chart.sql} title={t('reports.chart.sqlTitle')} />
           </div>
@@ -656,7 +663,7 @@ function ReportAreaView({
                         valueSuffix={chart.valueSuffix}
                       />
                     ) : chart.type === 'matrix' && matrix ? (
-                      <MatrixChart matrix={matrix} valueLabel={valueLabel} />
+                      <MatrixChart matrix={matrix} valueLabel={valueLabel} withheldMinimum={chart.minimumGroupSize} />
                     ) : chart.type === 'wordcloud' && categories ? (
                       <WordCloud categories={categories} valueLabel={valueLabel} />
                     ) : (

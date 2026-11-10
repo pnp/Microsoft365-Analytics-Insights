@@ -320,7 +320,8 @@ namespace Web.AnalyticsWeb.Controllers
                     rowLabel: "App", columnLabel: "Department",
                     rows: OfficeAppCatalogue.Select(a => a.Name).ToList(),
                     columns: null,
-                    shadeByRow: true)),
+                    shadeByRow: true,
+                    countsColumnPeople: true)),
 
                 DepartmentAdoptionChart(from, groupFiltered),
 
@@ -332,7 +333,8 @@ namespace Web.AnalyticsWeb.Controllers
                     rowLabel: "App", columnLabel: "Domain",
                     rows: OfficeAppCatalogue.Select(a => a.Name).ToList(),
                     columns: null,
-                    shadeByRow: true)),
+                    shadeByRow: true,
+                    countsColumnPeople: true)),
 
                 Gated("office-apps-web-only", "People who only ever use the browser version",
                     () => RunCategoryAsync("office-apps-web-only",
@@ -796,11 +798,13 @@ namespace Web.AnalyticsWeb.Controllers
                 "    FROM Counts\r\n" +
                 "),\r\n" +
                 "Ranked AS (\r\n" +
-                "    SELECT AppName, DimensionName, People,\r\n" +
+                "    SELECT AppName, DimensionName, People, ActivePeople,\r\n" +
                 "           DENSE_RANK() OVER (ORDER BY ActivePeople DESC, DimensionName) AS DimensionRank\r\n" +
                 "    FROM WithTotals\r\n" +
                 ")\r\n" +
-                "SELECT AppName AS RowLabel, DimensionName AS ColumnLabel, CAST(People AS float) AS Value\r\n" +
+                // ColumnPeople, the column's distinct active people, decides what a reader without See PII is shown: a
+                // department or domain of one to four people is theirs alone (#844). It is never sent.
+                "SELECT AppName AS RowLabel, DimensionName AS ColumnLabel, CAST(People AS float) AS Value, ActivePeople AS ColumnPeople\r\n" +
                 "FROM Ranked\r\n" +
                 $"WHERE DimensionRank <= {MatrixColumnLimit} AND AppName <> N'{AnyAppSentinel}'\r\n" +
                 // Ordered by the same rank the WHERE selected on, so the column order the UI shows is
@@ -1015,9 +1019,13 @@ namespace Web.AnalyticsWeb.Controllers
         /// Fixed column order, or null to derive it from the returned cells. The SQL has already chosen
         /// WHICH columns come back, by distinct active headcount; this only puts them in order.
         /// </param>
+        /// <param name="countsColumnPeople">
+        /// The query also returns <c>ColumnPeople</c>, each column's distinct people, which decides what a reader without
+        /// See PII is shown (<see cref="ReportChart.WithoutSmallGroups"/>). It is never sent.
+        /// </param>
         private static async Task<ReportChart> RunMatrixAsync(string key, string title, string description,
             string valueLabel, string body, DateTime from, string rowLabel, string columnLabel,
-            List<string> rows, List<string> columns, bool shadeByRow)
+            List<string> rows, List<string> columns, bool shadeByRow, bool countsColumnPeople = false)
         {
             var chart = new ReportChart
             {
@@ -1035,9 +1043,13 @@ namespace Web.AnalyticsWeb.Controllers
                 using (var db = new AnalyticsEntitiesContext())
                 {
                     db.Database.CommandTimeout = QueryTimeoutSecs;
-                    result = await db.Database
-                        .SqlQuery<MatrixRow>(Scoped(body), ScopedParameters(new SqlParameter("@from", from)))
-                        .ToListAsync();
+                    result = countsColumnPeople
+                        ? (await db.Database
+                            .SqlQuery<PeopleMatrixRow>(Scoped(body), ScopedParameters(new SqlParameter("@from", from)))
+                            .ToListAsync()).Cast<MatrixRow>().ToList()
+                        : await db.Database
+                            .SqlQuery<MatrixRow>(Scoped(body), ScopedParameters(new SqlParameter("@from", from)))
+                            .ToListAsync();
                 }
 
                 chart.Matrix = new ReportMatrix
@@ -1055,6 +1067,7 @@ namespace Web.AnalyticsWeb.Controllers
                             Value = r.Value,
                         })
                         .ToList(),
+                    ColumnPeople = countsColumnPeople ? PeoplePerColumn(result.OfType<PeopleMatrixRow>()) : null,
                 };
             }
             catch (Exception ex)
@@ -1063,6 +1076,18 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             return chart;
+        }
+
+        /// <summary>Each column's distinct people, from the rows that carry them.</summary>
+        private static Dictionary<string, int> PeoplePerColumn(IEnumerable<PeopleMatrixRow> rows)
+        {
+            var people = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var row in rows)
+            {
+                if (row.ColumnLabel == null) continue;
+                people[row.ColumnLabel] = people.TryGetValue(row.ColumnLabel, out var seen) ? Math.Max(seen, row.ColumnPeople) : row.ColumnPeople;
+            }
+            return people;
         }
 
         /// <summary>Distinct labels in the order the query returned them.</summary>
@@ -1097,11 +1122,17 @@ namespace Web.AnalyticsWeb.Controllers
             return chart;
         }
 
-        private sealed class MatrixRow
+        private class MatrixRow
         {
             public string RowLabel { get; set; }
             public string ColumnLabel { get; set; }
             public double Value { get; set; }
+        }
+
+        /// <summary>A <see cref="MatrixRow"/> of a grid whose query also counts each column's distinct people.</summary>
+        private sealed class PeopleMatrixRow : MatrixRow
+        {
+            public int ColumnPeople { get; set; }
         }
 
         #endregion

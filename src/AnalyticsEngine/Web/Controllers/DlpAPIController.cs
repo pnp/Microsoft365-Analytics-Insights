@@ -155,7 +155,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>
         /// The whole page in one call: KPIs, the ranked tables and the trend. The "top users" table names
         /// people, so a reader without the portal's See PII permission gets it empty (#661) - and the query
-        /// behind it is not run for them at all.
+        /// behind it is not run for them at all. Such a reader's summary is built under its own cache key and
+        /// also leaves out every agent, policy and label row of fewer than five people (#844,
+        /// <see cref="WithoutSmallGroups"/>).
         /// </summary>
         // GET: api/Dlp/summary?days=28
         [HttpGet]
@@ -365,10 +367,12 @@ namespace Web.AnalyticsWeb.Controllers
                         Name = g.Key.Name,
                         Blocked = g.Count(m => m.IsBlocked),
                         Audited = g.Count(m => !m.IsBlocked),
+                        Users = g.Where(m => m.AuditEvent.UserId != null).Select(m => m.AuditEvent.UserId).Distinct().Count(),
                     })
                     .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
                     .Take(TopN).ToListAsync(cancellationToken), countUsers: false);
 
+                if (!includeIndividuals) WithoutSmallGroups(summary, ReportScopeResolver.MinimumPeopleWithoutSeePii);
                 return summary;
             }
         }
@@ -417,6 +421,7 @@ namespace Web.AnalyticsWeb.Controllers
             public string Name { get; set; }
             public int Blocked { get; set; }
             public int Audited { get; set; }
+            public int Users { get; set; }
         }
 
         /// <summary>The narrowed DLP.All totals.</summary>
@@ -456,7 +461,8 @@ GROUP BY a.agent_id, a.name;";
         internal const string ScopedAgentPoliciesSql = @"
 SELECT a.agent_id AS AgentId, p.policy_id AS PolicyId, p.name AS Name,
        SUM(CASE WHEN e.is_blocked = 1 THEN 1 ELSE 0 END) AS Blocked,
-       SUM(CASE WHEN e.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited
+       SUM(CASE WHEN e.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited,
+       COUNT(DISTINCT c.user_id) AS Users
 FROM dbo.copilot_dlp_events AS e
 INNER JOIN dbo.copilot_chats AS c ON c.event_id = e.copilot_chat_id
 INNER JOIN dbo.copilot_agents AS a ON a.id = c.agent_id
@@ -518,7 +524,7 @@ WHERE ae.time_stamp >= @from AND ae.time_stamp <= @to AND ae.user_id IS NOT NULL
 SELECT p.policy_id AS Id, p.name AS Name,
        SUM(CASE WHEN m.is_blocked = 1 THEN 1 ELSE 0 END) AS Blocked,
        SUM(CASE WHEN m.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited,
-       0 AS Users
+       COUNT(DISTINCT ae.user_id) AS Users
 FROM dbo.dlp_rule_matches AS m
 INNER JOIN dbo.audit_events AS ae ON ae.id = m.event_id
 INNER JOIN dbo.dlp_policies AS p ON p.id = m.dlp_policy_id
@@ -597,6 +603,7 @@ GROUP BY p.policy_id, p.name;";
                         Name = r.Name,
                         Blocked = r.Blocked,
                         Audited = r.Audited,
+                        Users = r.Users,
                     }));
                 }
 
@@ -638,8 +645,40 @@ GROUP BY p.policy_id, p.name;";
                 summary.TenantAuditedCount = tenant.Audited;
                 summary.TenantTopPolicies = Rank(await QueryAsync<RankProjection>(ScopedTenantPoliciesSql), countUsers: false);
 
+                if (!includeIndividuals) WithoutSmallGroups(summary, ReportScopeResolver.MinimumPeopleWithoutSeePii);
                 return summary;
             }
+        }
+
+        /// <summary>
+        /// The summary for a reader who does not hold the portal's See PII permission (#844): an agent, policy, sensitivity
+        /// label or tenant-wide policy that affected fewer than <paramref name="minimumPeople"/> people is left out of its
+        /// table, as is a policy under a listed agent that affected fewer - its counts would be those few people's own. The
+        /// top-users table is never built for such a reader. Edits <paramref name="summary"/>: it was built for readers
+        /// without the permission alone, under its own cache key, so no reader with it is ever served this object.
+        /// </summary>
+        internal static void WithoutSmallGroups(DlpSummary summary, int minimumPeople)
+        {
+            var withheld = 0;
+            List<DlpImpactRow> Keep(List<DlpImpactRow> rows)
+            {
+                var all = rows ?? new List<DlpImpactRow>();
+                var kept = all.Where(r => r.People >= minimumPeople).ToList();
+                withheld += all.Count - kept.Count;
+                return kept;
+            }
+
+            summary.TopAgents = Keep(summary.TopAgents);
+            foreach (var agent in summary.TopAgents)
+            {
+                if (agent.Policies != null) agent.Policies = agent.Policies.Where(p => p.People >= minimumPeople).ToList();
+            }
+
+            summary.TopPolicies = Keep(summary.TopPolicies);
+            summary.TopSensitivityLabels = Keep(summary.TopSensitivityLabels);
+            summary.TenantTopPolicies = Keep(summary.TenantTopPolicies);
+            summary.MinimumGroupSize = minimumPeople;
+            summary.WithheldRows = withheld;
         }
 
         /// <summary>
@@ -663,6 +702,9 @@ GROUP BY p.policy_id, p.name;";
             public string Name { get; set; }
             public int Blocked { get; set; }
             public int Audited { get; set; }
+
+            /// <summary>Distinct people behind the pair; 0 where nobody asks (the people's own breakdown).</summary>
+            public int Users { get; set; }
         }
 
         /// <summary>
@@ -702,6 +744,7 @@ GROUP BY p.policy_id, p.name;";
                     g.Key.Name,
                     Blocked = g.Count(e => e.IsBlocked),
                     Audited = g.Count(e => !e.IsBlocked),
+                    Users = g.Where(e => e.RelatedChat.UserId != null).Select(e => e.RelatedChat.UserId).Distinct().Count(),
                 })
                 .ToListAsync(cancellationToken);
 
@@ -712,6 +755,7 @@ GROUP BY p.policy_id, p.name;";
                 Name = r.Name,
                 Blocked = r.Blocked,
                 Audited = r.Audited,
+                Users = r.Users,
             }));
         }
 
@@ -803,6 +847,7 @@ GROUP BY p.policy_id, p.name;";
                         Name = string.IsNullOrEmpty(r.Name) ? r.PolicyId : r.Name,
                         BlockedCount = r.Blocked,
                         AuditedCount = r.Audited,
+                        People = r.Users,
                     })
                     .ToList();
             }
@@ -819,6 +864,7 @@ GROUP BY p.policy_id, p.name;";
                 BlockedCount = p.Blocked,
                 AuditedCount = p.Audited,
                 UsersAffected = countUsers ? (int?)p.Users : null,
+                People = p.Users,
             }).ToList();
         }
 

@@ -1173,6 +1173,52 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void SnapshotFacts_WriteTheSectionsTheGlobalFilterWithholdsBlank_NeverZero()
+        {
+            // Under the administrator's global filter the tenant-wide sections are left out and hold zeros and empty lists
+            // (CopilotAdoptionScopeFilter.WithholdTenantSections). Written as they are, a filtered snapshot diffed against
+            // an unfiltered one reads as a collapse to zero (#844).
+            var analysis = SyntheticAnalysis();
+            var unfiltered = SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
+            Assert.AreNotEqual(string.Empty, unfiltered["usageByApp.count"], "The control: unfiltered, the section has a figure.");
+            Assert.AreNotEqual(string.Empty, unfiltered["agents.knownAgents"]);
+
+            analysis.Summary.WithheldSections = new List<string>
+            {
+                CopilotAdoptionUnscopedSections.UsageByApp,
+                CopilotAdoptionUnscopedSections.TopResourceTypes,
+                CopilotAdoptionUnscopedSections.WeeklyTrend,
+                CopilotAdoptionUnscopedSections.Agents,
+                CopilotAdoptionUnscopedSections.PurchasedSeats,
+                CopilotAdoptionUnscopedSections.CoworkCredits,
+                CopilotAdoptionUnscopedSections.MicrosoftReport,
+            };
+            analysis.Summary.UsageByApp = new List<AdoptionCategory>();
+            analysis.Summary.TopResourceTypes = new List<AdoptionResourceTypeRow>();
+            analysis.Summary.WeeklyTrend = new List<AdoptionSeries>();
+            analysis.Summary.WeeklyVolumeTrend = new List<AdoptionSeries>();
+            analysis.Summary.Agents = new AgentEstateSummary { HistoryDays = 90 };
+            analysis.Summary.CoworkCreditPosition = new CoworkCreditPosition { PerUserCreditsAvailable = true };
+            analysis.Summary.SubscribedSkusAvailable = false;
+            var filtered = SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
+
+            CollectionAssert.AreEqual(unfiltered.Keys.ToList(), filtered.Keys.ToList(), "The same keys, so the two files still diff.");
+            var blanked = filtered.Keys.Where(k => CopilotAdoptionWorkbook.IsWithheldFact(k, analysis.Summary.WithheldSections)).ToList();
+            CollectionAssert.IsSubsetOf(
+                new[] { "usageByApp.count", "topResourceTypes.count", "weeklyTrend.count", "weeklyVolumeTrend.count", "agents.knownAgents", "agents.activeAgents", "subscribedSkusAvailable", "unlicensed.usageByApp.count" },
+                blanked);
+            Assert.IsTrue(blanked.Any(k => k.StartsWith("coworkCreditPosition.", StringComparison.Ordinal)));
+            foreach (var key in blanked)
+            {
+                Assert.AreEqual(string.Empty, filtered[key], $"'{key}' is withheld under the global filter: blank, never 0.");
+            }
+
+            Assert.AreEqual("90", filtered["agents.historyDays"], "A setting is as true of the narrowed view as of the tenant.");
+            Assert.AreNotEqual(string.Empty, filtered["coworkCreditPosition.perUserCreditsAvailable"]);
+            Assert.AreEqual(unfiltered["licensedUsers"], filtered["licensedUsers"], "A narrowed figure is written as before.");
+        }
+
+        [TestMethod]
         public void Workbook_WithoutIndividualData_NamesNobody_ButKeepsEveryAggregate()
         {
             // The workbook a reader without the portal's See PII permission downloads (#661). An export

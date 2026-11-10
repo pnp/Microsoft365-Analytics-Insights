@@ -5,6 +5,7 @@ using Common.Entities.Entities.AuditLog;
 using Common.Entities.UserFilters;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
 using System.Data.Common;
 using System.Data.Entity.Infrastructure.Interception;
 using System.Data.Entity.Migrations;
@@ -242,12 +243,53 @@ namespace Tests.UnitTests
             Assert.IsNull(summary.TopPolicies.Single().Policies,
                 "Only agent rows carry a nested breakdown; a policy row nesting policies would be meaningless.");
 
-            // A reader without the portal's See PII permission gets every figure above except the people (#661).
+            // A reader without the portal's See PII permission gets every aggregate above except the people (#661) - and,
+            // because one person is behind every agent, policy and label here, none of those rows either (#844): one
+            // person's matches are that person's.
             var aggregateOnly = await NewController().BuildSummaryAsync(28, includeIndividuals: false);
             Assert.AreEqual(0, aggregateOnly.TopUsers.Count, "The top-users rows are sign-in names.");
             Assert.AreEqual(1, aggregateOnly.UsersImpacted, "How many people were affected names nobody.");
-            Assert.AreEqual("Contoso HR Agent", aggregateOnly.TopAgents.Single().Name);
-            Assert.AreEqual(1, aggregateOnly.TopAgents.Single().UsersAffected);
+            Assert.AreEqual(0, aggregateOnly.TopAgents.Count, "One person's agent is withheld.");
+            Assert.AreEqual(0, aggregateOnly.TopPolicies.Count + aggregateOnly.TopSensitivityLabels.Count + aggregateOnly.TenantTopPolicies.Count);
+            Assert.AreEqual(4, aggregateOnly.WithheldRows);
+            Assert.AreEqual(5, aggregateOnly.MinimumGroupSize);
+            Assert.IsNull(summary.MinimumGroupSize, "A See PII reader is shown every row, as before.");
+            Assert.AreEqual(0, summary.WithheldRows);
+        }
+
+        /// <summary>
+        /// The floor a reader without See PII is held to (#844), on the people each row counts: one to four people's agent,
+        /// policy, label, tenant policy or policy-under-an-agent is left out, five or more stay as they were.
+        /// </summary>
+        [TestMethod]
+        public void WithoutSmallGroups_LeavesOutRowsOfFewerThanFivePeople_AndKeepsFiveOrMore()
+        {
+            DlpImpactRow Row(string name, int people, List<DlpImpactRow> policies = null) =>
+                new DlpImpactRow { Id = name, Name = name, BlockedCount = 3, AuditedCount = 1, UsersAffected = people, People = people, Policies = policies };
+
+            var summary = new DlpSummary
+            {
+                TopAgents = new List<DlpImpactRow>
+                {
+                    Row("Contoso Big Agent", 12, new List<DlpImpactRow> { Row("Contoso Policy A", 9), Row("Contoso Policy B", 1) }),
+                    Row("Contoso Small Agent", 4),
+                },
+                TopPolicies = new List<DlpImpactRow> { Row("Contoso Policy A", 5), Row("Contoso Policy B", 1) },
+                TopSensitivityLabels = new List<DlpImpactRow> { Row("00000000-0000-0000-0000-000000000001", 2) },
+                TenantTopPolicies = new List<DlpImpactRow> { Row("Contoso Tenant Policy", 6), Row("Contoso Rare Policy", 0) },
+            };
+
+            DlpAPIController.WithoutSmallGroups(summary, 5);
+
+            CollectionAssert.AreEqual(new[] { "Contoso Big Agent" }, summary.TopAgents.Select(r => r.Name).ToArray());
+            CollectionAssert.AreEqual(new[] { "Contoso Policy A" }, summary.TopAgents.Single().Policies.Select(r => r.Name).ToArray(),
+                "One person's policy under an agent is that person's.");
+            CollectionAssert.AreEqual(new[] { "Contoso Policy A" }, summary.TopPolicies.Select(r => r.Name).ToArray(), "Five people stay.");
+            Assert.AreEqual(0, summary.TopSensitivityLabels.Count);
+            CollectionAssert.AreEqual(new[] { "Contoso Tenant Policy" }, summary.TenantTopPolicies.Select(r => r.Name).ToArray(),
+                "Matches with nobody to count are withheld too: nothing says they are five people's.");
+            Assert.AreEqual(4, summary.WithheldRows);
+            Assert.AreEqual(5, summary.MinimumGroupSize);
         }
 
         /// <summary>

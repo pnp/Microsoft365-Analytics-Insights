@@ -329,6 +329,16 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.meetings.modalities.description': '¿Se usa algo más que audio?',
   'teamsExplorer.meetings.modalities.note': 'Contado por sesión de asistente, y una sesión puede usar varias modalidades, por lo que no suman el número de llamadas.',
   'teamsExplorer.meetings.modalities.centreLabel': 'sesiones',
+  'teamsExplorer.meetings.modalities.other.one': '1 modalidad menos usada, combinada',
+  'teamsExplorer.meetings.modalities.other.other': '{count} modalidades menos usadas, combinadas',
+  'teamsExplorer.meetings.modalities.otherNote':
+    'Las modalidades que usaron menos de {count} personas se combinan en un solo sector para que no se pueda identificar a nadie.',
+  'teamsExplorer.meetings.modalities.allSmall':
+    'Cada modalidad la usaron menos de {count} personas, así que este gráfico se oculta para proteger su privacidad.',
+  'teamsExplorer.meetings.withheld.weeksNote':
+    'Las semanas en las que menos de {count} personas asistieron a llamadas se dejan en blanco para que no se pueda identificar a nadie.',
+  'teamsExplorer.meetings.withheld.distributions':
+    'Menos de {count} personas asistieron a las llamadas de esta vista, así que el desglose de sus reuniones se oculta para proteger su privacidad.',
   'teamsExplorer.meetings.topOrganisers.title': 'Principales organizadores',
   'teamsExplorer.meetings.topOrganisers.description': 'Quién dirige las reuniones.',
   'teamsExplorer.meetings.valueLabel.meetings': 'reuniones',
@@ -396,6 +406,19 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.collaboration.appsTabs.description': '¿Teams es un área de trabajo o solo una aplicación de chat?',
   'teamsExplorer.collaboration.reactionsUsed.title': 'Reacciones usadas',
   'teamsExplorer.collaboration.reactionsUsed.description': 'Cómo responden las personas cuando no tienen nada que añadir.',
+  'teamsExplorer.collaboration.reactionsUsed.other.one': '1 reacción menos usada, combinada',
+  'teamsExplorer.collaboration.reactionsUsed.other.other': '{count} reacciones menos usadas, combinadas',
+  'teamsExplorer.collaboration.reactionsUsed.otherNote':
+    'Las reacciones que usaron menos de {count} personas se combinan en una sola barra para que no se pueda identificar a nadie.',
+  'teamsExplorer.collaboration.reactionsUsed.allSmall':
+    'Cada reacción la usaron menos de {count} personas, así que este gráfico se oculta para proteger su privacidad.',
+  'teamsExplorer.collaboration.teamLeaderboard.withheldNote':
+    'Los equipos con menos de {count} miembros no se muestran, y las reacciones de menos de {count} personas aparecen como un guion, para que no se pueda identificar a nadie.',
+  'teamsExplorer.collaboration.channelLeaderboard.withheldNote':
+    'Los canales de equipos con menos de {count} miembros no se muestran, y las reacciones de menos de {count} personas aparecen como un guion, para que no se pueda identificar a nadie.',
+  'teamsExplorer.collaboration.reactionsWithheld': 'Oculto: reaccionaron menos de {count} personas',
+  'teamsExplorer.collaboration.appsTabs.withheld':
+    'Oculto para proteger la privacidad: una pestaña puede llamarse como la haya escrito un miembro, y nada de lo registrado indica cuántas personas la usan.',
   'teamsExplorer.collaboration.membership.title': 'Actividad de pertenencia',
   'teamsExplorer.collaboration.membership.description': 'Personas distintas vistas en la pertenencia a equipos cada semana.',
   'teamsExplorer.collaboration.membershipSnapshotNote': 'La pertenencia a equipos se lee desde la instantánea de pertenencia más reciente por equipo, no desde todo el historial; de lo contrario, se contaría a cada persona que alguna vez haya sido miembro.',
@@ -405,17 +428,25 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.conversations.keywords.title': 'De qué hablan las personas',
   'teamsExplorer.conversations.keywords.description': 'Las frases clave extraídas de la conversación de canal.',
   'teamsExplorer.conversations.keywords.empty': 'No se extrajeron frases clave para este periodo.',
+  'teamsExplorer.conversations.keywords.withheld':
+    'Oculto para proteger la privacidad: las frases clave se toman de lo que escribieron las personas, y nada de lo registrado indica cuántas personas escribieron cada una.',
   'teamsExplorer.conversations.sentimentOverTime.title': 'Sentimiento a lo largo del tiempo',
   'teamsExplorer.conversations.sentimentOverTime.description': 'Ponderado por recuento de mensajes, semana a semana.',
   'teamsExplorer.conversations.sentimentOverTime.empty': 'No hay conversación puntuada en este periodo.',
   'teamsExplorer.conversations.languages.title': 'Idiomas en uso',
   'teamsExplorer.conversations.languages.description': 'En qué escribe realmente la organización.',
+  'teamsExplorer.conversations.languages.withheld':
+    'Oculto para proteger la privacidad: nada de lo registrado indica cuántas personas escriben en cada idioma, así que un idioma que solo usa una persona mostraría lo que escribió.',
   'teamsExplorer.conversations.sentimentByTeam.title': 'Sentimiento por equipo',
   'teamsExplorer.conversations.sentimentByTeam.description': 'Dónde la conversación es positiva y dónde no.',
   'teamsExplorer.conversations.sentimentByTeam.aria': 'Sentimiento por equipo',
+  'teamsExplorer.conversations.sentimentByTeam.withheldNote':
+    'Los equipos con menos de {count} miembros no se muestran para que no se pueda identificar a nadie.',
   'teamsExplorer.conversations.sentimentByChannel.title': 'Sentimiento por canal',
   'teamsExplorer.conversations.sentimentByChannel.description': 'La misma lectura, un nivel más abajo.',
   'teamsExplorer.conversations.sentimentByChannel.aria': 'Sentimiento por canal',
+  'teamsExplorer.conversations.sentimentByChannel.withheldNote':
+    'Los canales de equipos con menos de {count} miembros no se muestran para que no se pueda identificar a nadie.',
   'teamsExplorer.conversations.scoredChannelDays': '{count} días de canal de este periodo tienen una puntuación de sentimiento. La puntuación solo cubre equipos autorizados para análisis profundos.',
 
   'teamsExplorer.people.usageReportsOff': 'La importación de informes de uso de Microsoft 365 está desactivada, por lo que no hay actividad de Teams por usuario y nadie se puede clasificar. Active {importName} en el instalador y conceda a la aplicación en tiempo de ejecución {permission}.',

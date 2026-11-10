@@ -80,6 +80,10 @@ const reports: Record<keyof typeof en, string> = {
   'reports.chart.sqlTitle': 'SQL de este gráfico',
   'reports.chart.loadError': 'No se ha podido cargar este gráfico: {error}',
   'reports.chart.noData': 'Sin datos para este periodo.',
+  'reports.withheld.matrix':
+    'No se muestran las columnas de menos de {count} personas, y una celda de menos de {count} personas aparece como un guion, para que no se pueda identificar a nadie.',
+  'reports.withheld.prompts':
+    'Solo se muestran las frases y los idiomas que usaron al menos {count} personas distintas, para que no se pueda identificar a nadie.',
   'reports.chart.error.noCompletedUsageWeeks': 'No hay semanas completadas de informes de uso disponibles.',
   'reports.chart.error.noWorkloadSeriesLoaded': 'No se pudo cargar ninguna serie de carga de trabajo. {details}',
   'reports.chart.error.noCompletedUsageWeeksWithData': 'No hay semanas completadas de informes de uso disponibles para cargas de trabajo con datos.',

@@ -187,6 +187,14 @@ namespace Common.Entities.TeamsExplorer
             public long Count { get; set; }
         }
 
+        /// <summary>A name, a bigint count and the distinct people behind it, for a list floored for a reader without See PII.</summary>
+        public class NamePeopleCountRow
+        {
+            public string Name { get; set; }
+            public long Count { get; set; }
+            public int People { get; set; }
+        }
+
         public class FeedbackRatingRow
         {
             public string Rating { get; set; }
@@ -222,6 +230,10 @@ namespace Common.Entities.TeamsExplorer
             public int Tabs { get; set; }
             public long Messages { get; set; }
             public long Reactions { get; set; }
+
+            /// <summary>Distinct people who reacted in the team's channels.</summary>
+            public int ReactingUsers { get; set; }
+
             public double? Sentiment { get; set; }
             public int ActiveDays { get; set; }
 
@@ -243,6 +255,9 @@ namespace Common.Entities.TeamsExplorer
 
             public double? Sentiment { get; set; }
             public int ActiveDays { get; set; }
+
+            /// <summary>Members of the channel's team at its latest membership snapshot of the last week; 0 when there is none.</summary>
+            public int TeamMembers { get; set; }
         }
 
         public class MembershipTrendRow
@@ -263,6 +278,9 @@ namespace Common.Entities.TeamsExplorer
             public string Name { get; set; }
             public double Sentiment { get; set; }
             public long Messages { get; set; }
+
+            /// <summary>Members of the team (for a channel, of its team) at its latest membership snapshot of the last week; 0 when there is none.</summary>
+            public int Members { get; set; }
         }
 
         public class ScoredChannelDaysRow

@@ -160,6 +160,21 @@ namespace Common.Entities.CopilotInvestment
                         && !(creditsGone && f.Code == CopilotInvestmentFindingCodes.CreditConcentration)).ToList();
             }
             copy.Services = CopilotInvestmentServiceRow.WithoutSmallPopulations(Services, minPeople);
+
+            // One to four unmatched objects' balances, or unmatched makers' Studio charges, are theirs (#844), so they are
+            // withheld; the totals beside them are already held to the floor above. The confidence reason that quotes the
+            // balances keeps its wording without the figure.
+            var unresolvedBalances = Sources?.Credits != null && SmallPopulations.IsSmall(Sources.Credits.UnresolvedContributors, minPeople);
+            var unresolvedStudio = Sources?.Studio != null && SmallPopulations.IsSmall(Sources.Studio.UnresolvedContributors, minPeople);
+            if (unresolvedBalances || unresolvedStudio)
+            {
+                var sources = Sources.Copy();
+                if (unresolvedBalances) sources.Credits = Sources.Credits.WithUnresolvedCreditsWithheld();
+                if (unresolvedStudio) sources.Studio = Sources.Studio.WithUnresolvedCreditsWithheld();
+                copy.Sources = sources;
+            }
+            if (unresolvedBalances && Trust != null)
+                copy.Trust = Trust.WithValueWithheld(CopilotInvestmentTrustCodes.CreditsUnresolved, "credits");
             return copy;
         }
 
@@ -251,6 +266,9 @@ namespace Common.Entities.CopilotInvestment
 
         [JsonProperty("studio")]
         public CopilotInvestmentStudioSource Studio { get; set; } = new CopilotInvestmentStudioSource();
+
+        /// <summary>A shallow copy, so a reader's copy can replace a source without editing the cached one.</summary>
+        internal CopilotInvestmentSources Copy() => (CopilotInvestmentSources)MemberwiseClone();
     }
 
     public sealed class CopilotInvestmentAdoptionSource
@@ -319,8 +337,29 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("unresolvedObjects")]
         public int? UnresolvedObjects { get; set; }
 
+        /// <summary>The unmatched objects' balances. Null in a filtered view, or when <see cref="UnresolvedCreditsWithheld"/>.</summary>
         [JsonProperty("unresolvedCredits")]
         public double? UnresolvedCredits { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="UnresolvedCredits"/> is null because one to four unmatched
+        /// objects have a balance other than zero: it would be their own (#844).
+        /// </summary>
+        [JsonProperty("unresolvedCreditsWithheld")]
+        public bool UnresolvedCreditsWithheld { get; set; }
+
+        /// <summary>Unmatched objects whose balance is other than zero: who <see cref="UnresolvedCredits"/> describes.</summary>
+        [JsonIgnore]
+        internal int UnresolvedContributors { get; set; }
+
+        /// <summary>A copy without the unmatched objects' balances, for a reader without See PII. The cached source is never edited.</summary>
+        internal CopilotInvestmentCreditSource WithUnresolvedCreditsWithheld()
+        {
+            var copy = (CopilotInvestmentCreditSource)MemberwiseClone();
+            copy.UnresolvedCredits = null;
+            copy.UnresolvedCreditsWithheld = true;
+            return copy;
+        }
 
         [JsonProperty("partialUsers")]
         public int PartialUsers { get; set; }
@@ -383,8 +422,29 @@ namespace Common.Entities.CopilotInvestment
         [JsonProperty("lastImportFailed")]
         public bool LastImportFailed { get; set; }
 
+        /// <summary>Studio charges no imported user matches. Null in a filtered view, or when <see cref="UnresolvedCreditsWithheld"/>.</summary>
         [JsonProperty("unresolvedCredits")]
         public double? UnresolvedCredits { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="UnresolvedCredits"/> is null because one to four unmatched makers
+        /// were charged: the charges would be their own (#844).
+        /// </summary>
+        [JsonProperty("unresolvedCreditsWithheld")]
+        public bool UnresolvedCreditsWithheld { get; set; }
+
+        /// <summary>Unmatched makers charged something other than zero: who <see cref="UnresolvedCredits"/> describes.</summary>
+        [JsonIgnore]
+        internal int UnresolvedContributors { get; set; }
+
+        /// <summary>A copy without the unmatched charges, for a reader without See PII. The cached source is never edited.</summary>
+        internal CopilotInvestmentStudioSource WithUnresolvedCreditsWithheld()
+        {
+            var copy = (CopilotInvestmentStudioSource)MemberwiseClone();
+            copy.UnresolvedCredits = null;
+            copy.UnresolvedCreditsWithheld = true;
+            return copy;
+        }
 
         [JsonProperty("failureCode")]
         public string FailureCode { get; set; }
@@ -1703,6 +1763,27 @@ namespace Common.Entities.CopilotInvestment
 
         [JsonProperty("reasons")]
         public List<CopilotInvestmentTrustReason> Reasons { get; set; } = new List<CopilotInvestmentTrustReason>();
+
+        /// <summary>
+        /// A copy in which every reason with <paramref name="code"/> carries <paramref name="value"/> as null - a figure
+        /// withheld from a reader without See PII. New reasons and lists: the cached trust is never edited.
+        /// </summary>
+        internal CopilotInvestmentTrust WithValueWithheld(string code, string value)
+        {
+            var copy = (CopilotInvestmentTrust)MemberwiseClone();
+            copy.Reasons = (Reasons ?? new List<CopilotInvestmentTrustReason>())
+                .Select(r => r == null || r.Code != code || r.Values == null || !r.Values.ContainsKey(value)
+                    ? r
+                    : new CopilotInvestmentTrustReason
+                    {
+                        Code = r.Code,
+                        Impact = r.Impact,
+                        Area = r.Area,
+                        Values = new Dictionary<string, double?>(r.Values, StringComparer.Ordinal) { [value] = null },
+                    })
+                .ToList();
+            return copy;
+        }
     }
 
     public sealed class CopilotInvestmentTrustArea

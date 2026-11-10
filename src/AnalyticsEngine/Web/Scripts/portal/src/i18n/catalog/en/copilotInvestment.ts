@@ -734,6 +734,8 @@ export const copilotInvestment = {
   'copilotInvestment.trust.creditsStale': 'The newest consumed-credit reading is {days} days older than the end of the period.',
   'copilotInvestment.trust.creditsPartial': '{share} of consumed-credit readings are partial.',
   'copilotInvestment.trust.creditsUnresolved': '{credits} credits sit on {objects} accounts not matched to an imported user.',
+  'copilotInvestment.trust.creditsUnresolvedWithheld':
+    'Credits sit on {objects} accounts not matched to an imported user. The amount is not shown, because fewer than five of those accounts hold any.',
   'copilotInvestment.trust.creditsMissing': 'No readings of Copilot credits consumed are available for this period.',
   'copilotInvestment.trust.creditsUnavailable': 'Copilot credits consumed could not be read just now: they are missing, not zero.',
   'copilotInvestment.trust.shortWindow': 'A {days}-day period: monthly figures are extrapolated from a short sample.',

@@ -86,6 +86,8 @@ export const copilotSpend = {
   'copilotSpend.overview.balanceReadings': 'Read on {date}: {people} people with consumed credits, of {observed} read',
   'copilotSpend.overview.balanceGaps': '{unknown} with an amount the source did not state and {partial} partial readings: unknown, not zero.',
   'copilotSpend.overview.unresolved': 'Also {accounts} accounts the user import did not match to a person, with {credits} credits (included in the total).',
+  'copilotSpend.overview.unresolvedWithheld':
+    'Also {accounts} accounts the user import did not match to a person. Their credits are not shown, and nor is the total that includes them, because fewer than {count} of those accounts have any.',
   'copilotSpend.balances.periodUnverified': 'Period not confirmed by the source',
   'copilotSpend.balances.notCollecting': 'Collection of Copilot credits consumed is turned off: this is the history already collected.',
   'copilotSpend.balances.snapshotBeforeWindow':
@@ -109,6 +111,7 @@ export const copilotSpend = {
   'copilotSpend.balances.facts.notEntitled': 'Not entitled',
   'copilotSpend.balances.facts.unresolved': 'Accounts not matched to a person',
   'copilotSpend.balances.facts.unresolvedValue': '{accounts} accounts, {credits} credits',
+  'copilotSpend.balances.facts.unresolvedValueWithheld': '{accounts} accounts; credits withheld (fewer than {count} of them have any)',
   'copilotSpend.balances.trendTitle': 'Consumed credits on each reading date',
   'copilotSpend.balances.trendDescription':
     'Each point is the consumed credits read on that date. Readings on different dates can count the same consumption again, so they are never added together.',
