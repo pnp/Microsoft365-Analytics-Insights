@@ -16,11 +16,12 @@ log and the Application event log entries, then, with -Recreate, deletes the ins
 Some runner VMs fail in a way no retry can fix (#855). Their disks report a physical sector size above 4 KB, which no
 version of SQL Server supports, LocalDB included: master doesn't start, and LocalDB's error log says "There have been
 256 misaligned log IOs which required falling back to synchronous IO", then error 5173. So before it starts anything,
-this prints the sector size of each volume LocalDB writes to, and of the workspace. When one LocalDB writes to
-reports more than 4096 bytes, it moves LocalDB's files to a virtual disk, which reports its own 512- or 4096-byte
-sectors whatever disk holds it (see Move-LocalDbFiles). That changes the machine, so it needs -Recreate, an elevated
-administrator and a GitHub-hosted runner, which is thrown away after the job. Without them the step stops at once,
-saying why. Set LOCALDB_FORCE_RELOCATION=true to move the files on a runner that doesn't need it, to test the move.
+this prints the sector size of each volume LocalDB writes to, and of the workspace. When a volume LocalDB writes to
+reports more than 4096 bytes, it moves LocalDB's files to a virtual disk, which reports the sector sizes it was created
+with, not those of the disk that holds it (see Move-LocalDbFiles). That changes the machine, so it needs -Recreate, an
+elevated administrator and a GitHub-hosted runner, which is thrown away after the job. Without them the step stops at
+once, saying why. Set LOCALDB_FORCE_RELOCATION=true to move the files on a runner that doesn't need it, to test the
+move.
 
 Without -Recreate nothing is deleted, so running this on a workstation can't remove an instance that holds databases.
 #>
@@ -230,7 +231,7 @@ function Write-VolumeReport([string]$Title, [object[]]$Volumes) {
 function Format-SectorSizeFailure([object[]]$Unsupported, [string]$Reason) {
     $volumes = ($Unsupported | ForEach-Object { "$($_.Path) is on a volume whose sector size is $($_.SectorSize) bytes" }) -join '; '
     "LocalDB can't run on this runner VM: $volumes. SQL Server, LocalDB included, supports only 512- and " +
-    "$script:LargestSupportedSector-byte sectors, so starting it again can't help: $script:SectorSizeArticle. $Reason. " +
+    "$script:LargestSupportedSector-byte sectors, so starting it again can't help: $script:SectorSizeArticle. $($Reason.TrimEnd('.')). " +
     'Re-run the job: another runner VM will usually have a supported disk.'
 }
 
@@ -247,7 +248,7 @@ function Select-LocalDbPlan([object[]]$Volumes, [bool]$Force, [string]$MoveBlock
 function Get-MoveBlocker {
     if (-not $Recreate) { return 'moving them deletes the instance, and -Recreate was not given' }
     if ($env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
-        return 'moving them attaches a virtual disk and repoints the profile folder while LocalDB starts, which only a GitHub-hosted runner, thrown away after the job, should have done to it'
+        return "moving them attaches a virtual disk and briefly repoints the user's profile folder, which is only done on a GitHub-hosted runner, thrown away after the job"
     }
     $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { return 'attaching a virtual disk needs an elevated administrator' }
@@ -265,8 +266,9 @@ function Invoke-Diskpart([string[]]$Commands) {
 }
 
 <#
-Puts everything LocalDB writes on a new virtual disk. A VHDX reports its own sector sizes, 512 bytes logical and 4096
-physical, whatever the disk that holds its file reports.
+Puts everything LocalDB writes on a new virtual disk. A virtual disk reports the sector sizes it was created with - a
+VHDX 512 bytes logical and 4096 physical - not those of the disk its file is on. If one ever didn't, the check after
+the move would stop the step.
 - The instances. LocalDB keeps each instance's folder, with its system databases, under %LOCALAPPDATA%. That folder
   becomes a junction to the disk. LocalDB records the path the junction resolves to, so SQL Server opens master and
   the rest on the disk itself.
