@@ -1,4 +1,5 @@
 using Azure.Messaging.ServiceBus;
+using Common.Entities.Calls;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -142,6 +143,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// (<see cref="CallDeadLetterReplayer.IsNeverImportable"/>). Never the default.
         /// </summary>
         public bool PurgeInvalid { get; set; }
+
+        /// <summary>
+        /// Delete every dead-lettered message the run looks at, whatever its reason or age - with <see cref="Reason"/>, every
+        /// one dead-lettered for it - and replay none. Within the scan limit; a dry run only counts. Never the default.
+        /// </summary>
+        public bool PurgeAll { get; set; }
     }
 
     /// <summary>Why a dead-lettered message was left where it is.</summary>
@@ -160,13 +167,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         ReplayLimitReached,
 
         /// <summary>A copy this run sent, which the importer dead-lettered again while the run was still going.</summary>
-        ReplayedInThisRun
+        ReplayedInThisRun,
+
+        /// <summary>Deleted, not left: the run was asked to delete everything it looked at (<see cref="CallDeadLetterReplayOptions.PurgeAll"/>).</summary>
+        PurgeAll
     }
 
     /// <summary>The dead-lettered messages one run looked at that had one dead-letter reason.</summary>
     public sealed class CallDeadLetterReasonSummary
     {
         public int Count { get; internal set; }
+
+        /// <summary>Of <see cref="Count"/>, those sent back to the calls queue (in a dry run: would be).</summary>
+        public int Replayed { get; internal set; }
+
+        /// <summary>Of <see cref="Count"/>, those deleted from the dead-letter queue (in a dry run: would be).</summary>
+        public int Deleted { get; internal set; }
         public DateTime? OldestFirstQueuedUtc { get; internal set; }
         public DateTime? NewestFirstQueuedUtc { get; internal set; }
     }
@@ -181,7 +197,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             DryRun = options.DryRun;
             MaxMessages = options.MaxMessages;
             ScanLimit = options.EffectiveScanLimit;
-            PurgeRequested = options.PurgeUnimportable || options.PurgeInvalid;
+            PurgeRequested = options.PurgeUnimportable || options.PurgeInvalid || options.PurgeAll;
+            PurgeAll = options.PurgeAll;
         }
 
         public bool DryRun { get; }
@@ -227,6 +244,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// <summary>Why the run gave up before it had looked at all it should have; null when it didn't.</summary>
         public string StoppedEarly { get; internal set; }
 
+        /// <summary>
+        /// <see cref="StoppedEarly"/> as a stable code (<see cref="CallDeadLetterFailureCodes"/>), for a caller that reports it
+        /// somewhere other than this log; null when the run didn't stop early.
+        /// </summary>
+        public string StopCode { get; internal set; }
+
         /// <summary>The run stopped because it had replayed (or tried to replay) <see cref="MaxMessages"/>.</summary>
         public bool ReachedMaxMessages { get; internal set; }
 
@@ -244,6 +267,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// <summary>Whether the run was asked to delete what can never be imported.</summary>
         public bool PurgeRequested { get; internal set; }
 
+        /// <summary>Whether the run was asked to delete everything it looked at (<see cref="CallDeadLetterReplayOptions.PurgeAll"/>).</summary>
+        public bool PurgeAll { get; }
+
         /// <summary>Deleted from the dead-letter queue (in a dry run: would be), by why they can never be imported.</summary>
         public IDictionary<CallDeadLetterSkipReason, int> PurgedByReason { get; } = new SortedDictionary<CallDeadLetterSkipReason, int>();
         public int Purged => PurgedByReason.Values.Sum();
@@ -256,25 +282,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         internal void AddSkipped(CallDeadLetterSkipReason reason) => Increment(SkippedByReason, reason);
 
-        internal void AddPurged(CallDeadLetterSkipReason reason) => Increment(PurgedByReason, reason);
+        internal void AddPurged(CallDeadLetterSkipReason reason, string deadLetterReason)
+        {
+            Increment(PurgedByReason, reason);
+            ReasonFor(deadLetterReason).Deleted++;
+        }
+
+        internal void AddReplayed(string deadLetterReason)
+        {
+            Replayed++;
+            ReasonFor(deadLetterReason).Replayed++;
+        }
 
         /// <summary>Records that the run gave up, and why; the first reason is the one reported.</summary>
-        internal void StopEarly(string reason)
+        internal void StopEarly(string code, string reason)
         {
             if (StoppedEarly == null)
             {
                 StoppedEarly = reason;
+                StopCode = code;
             }
         }
 
         internal void Record(string deadLetterReason, DateTime? firstQueuedUtc, DateTime nowUtc)
         {
-            var key = string.IsNullOrEmpty(deadLetterReason) ? NoReason : deadLetterReason;
-            if (!ByDeadLetterReason.TryGetValue(key, out var reason))
-            {
-                reason = new CallDeadLetterReasonSummary();
-                ByDeadLetterReason[key] = reason;
-            }
+            var reason = ReasonFor(deadLetterReason);
             reason.Count++;
 
             if (!firstQueuedUtc.HasValue)
@@ -331,8 +363,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             }
             if (ReachedScanLimit)
             {
-                yield return $"Reached the scan limit ({ScanLimit}) before the end of the dead-letter queue: run it again - and delete what can never be " +
-                    "imported (--purge-unimportable, --purge-invalid), so that runs stop having to look past it.";
+                yield return PurgeAll
+                    ? $"Reached the scan limit ({ScanLimit}) before the end of the dead-letter queue: run it again to delete the rest."
+                    : $"Reached the scan limit ({ScanLimit}) before the end of the dead-letter queue: run it again - and delete what can never be " +
+                        "imported (--purge-unimportable, --purge-invalid), so that runs stop having to look past it.";
             }
             if (ReplayLimitReachedMessageIds.Count > 0)
             {
@@ -362,6 +396,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             counts[reason] = count + 1;
         }
 
+        private CallDeadLetterReasonSummary ReasonFor(string deadLetterReason)
+        {
+            var key = string.IsNullOrEmpty(deadLetterReason) ? NoReason : deadLetterReason;
+            if (!ByDeadLetterReason.TryGetValue(key, out var reason))
+            {
+                reason = new CallDeadLetterReasonSummary();
+                ByDeadLetterReason[key] = reason;
+            }
+            return reason;
+        }
+
         private static string DescribeSkip(CallDeadLetterSkipReason reason)
         {
             switch (reason)
@@ -383,6 +428,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 case CallDeadLetterSkipReason.CallRecordNoLongerInGraph: return "first queued over 30 days ago - Graph no longer has the call record (--purge-unimportable)";
                 case CallDeadLetterSkipReason.NeverImportable: return "never importable as it stands (--purge-invalid)";
+                case CallDeadLetterSkipReason.PurgeAll: return "deleted as asked, whatever its reason or age (--purge-all)";
                 default: return reason.ToString();
             }
         }
@@ -414,7 +460,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     /// (<see cref="IsNeverImportable"/>, unless asked for), notifications first queued over 30 days ago (Graph deletes a call
     /// record 30 days after the call, so it could only fail), and messages replayed <see cref="MaxReplays"/> times. Nothing
     /// else ever removes dead letters, so when asked - never by default - a run deletes the first two kinds instead
-    /// (<see cref="CallDeadLetterReplayOptions.PurgeUnimportable"/>, <see cref="CallDeadLetterReplayOptions.PurgeInvalid"/>).
+    /// (<see cref="CallDeadLetterReplayOptions.PurgeUnimportable"/>, <see cref="CallDeadLetterReplayOptions.PurgeInvalid"/>), or
+    /// every message it looks at, replaying none (<see cref="CallDeadLetterReplayOptions.PurgeAll"/>).
     /// </para>
     /// <para>
     /// Skipped messages stay at the head of the dead-letter queue, so they don't count towards how many a run replays: it
@@ -497,17 +544,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (options.MaxMessages < 1) throw new ArgumentOutOfRangeException(nameof(options), "MaxMessages must be at least 1.");
             if (options.ScanLimit.HasValue && options.ScanLimit < 1) throw new ArgumentOutOfRangeException(nameof(options), "ScanLimit must be at least 1.");
             if (options.IncludeInvalid && options.PurgeInvalid) throw new ArgumentException("IncludeInvalid replays what PurgeInvalid deletes.", nameof(options));
+            if (options.IncludeInvalid && options.PurgeAll) throw new ArgumentException("IncludeInvalid replays what PurgeAll deletes.", nameof(options));
 
             var summary = new CallDeadLetterReplaySummary(options);
             var nowUtc = _clock.UtcNow;
 
-            _logger.LogInformation($"Teams calls dead-letter replay starting{(options.DryRun ? " (dry run)" : string.Empty)}: replaying at most {options.MaxMessages} " +
-                $"message(s) and looking at no more than {summary.ScanLimit}" +
+            _logger.LogInformation($"Teams calls dead-letter replay starting{(options.DryRun ? " (dry run)" : string.Empty)}: " +
+                (options.PurgeAll ? "DELETING every message it looks at, whatever its reason or age, and replaying none" : $"replaying at most {options.MaxMessages} message(s)") +
+                $" and looking at no more than {summary.ScanLimit}" +
                 $"{(string.IsNullOrEmpty(options.Reason) ? string.Empty : $", only those dead-lettered as '{options.Reason}'")}" +
                 $"{(options.IncludeInvalid ? ", including those the importer found can never be imported" : string.Empty)}" +
-                $"{(options.PurgeUnimportable ? ", DELETING those first queued over 30 days ago" : string.Empty)}" +
-                $"{(options.PurgeInvalid ? ", DELETING those the importer found can never be imported" : string.Empty)}.");
-            if (!string.IsNullOrEmpty(options.Reason) && !options.IncludeInvalid && !options.PurgeInvalid && IsNeverImportable(options.Reason))
+                $"{(options.PurgeUnimportable && !options.PurgeAll ? ", DELETING those first queued over 30 days ago" : string.Empty)}" +
+                $"{(options.PurgeInvalid && !options.PurgeAll ? ", DELETING those the importer found can never be imported" : string.Empty)}.");
+            if (!string.IsNullOrEmpty(options.Reason) && !options.IncludeInvalid && !options.PurgeInvalid && !options.PurgeAll && IsNeverImportable(options.Reason))
             {
                 _logger.LogWarning($"'{options.Reason}' is a reason the importer gives to notifications that can never be imported as they stand, " +
                     "so they are all skipped. --include-invalid replays them anyway; --purge-invalid deletes them.");
@@ -559,17 +608,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     var reason = Examine(message, options, summary, nowUtc, replayedThisRun: null, purge: out var purge);
                     if (!reason.HasValue)
                     {
-                        summary.Replayed++;
+                        summary.AddReplayed(message.DeadLetterReason);
                     }
                     else if (purge)
                     {
-                        summary.AddPurged(reason.Value);
+                        summary.AddPurged(reason.Value, message.DeadLetterReason);
                     }
                 }
                 if (examined == 0)
                 {
                     // Browsing moves on by sequence number, so this is not the end of the queue but a browse going wrong.
-                    summary.StopEarly("browsing the dead-letter queue returned only messages it had already looked at.");
+                    summary.StopEarly(CallDeadLetterFailureCodes.BrowseRepeated, "browsing the dead-letter queue returned only messages it had already looked at.");
                 }
             }
         }
@@ -634,7 +683,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                             try
                             {
                                 await _deadLetters.CompleteAsync(message, CancellationToken.None);
-                                summary.AddPurged(reason.Value);
+                                summary.AddPurged(reason.Value, message.DeadLetterReason);
                                 _logger.LogInformation($"Teams calls dead-letter replay: deleted dead-lettered message '{message.MessageId}' " +
                                     $"({DescribeReason(message.DeadLetterReason)}, first queued {DescribeTime(GetFirstQueuedUtc(message))}): {DescribeCannotImport(reason.Value)}.");
                             }
@@ -674,13 +723,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                             if (++sendFailuresInARow >= MaxConsecutiveSendFailures)
                             {
                                 summary.StoppedAfterSendFailures = true;
-                                summary.StopEarly($"{MaxConsecutiveSendFailures} sends to the queue failed in a row.");
+                                summary.StopEarly(CallDeadLetterFailureCodes.SendFailures, $"{MaxConsecutiveSendFailures} sends to the queue failed in a row.");
                             }
                             continue;
                         }
 
                         sendFailuresInARow = 0;
-                        summary.Replayed++;
+                        summary.AddReplayed(message.DeadLetterReason);
                         replayedThisRun.Add(replay.MessageId);
                         try
                         {
@@ -725,7 +774,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                         // could come round at all means some came round twice before the run got past them.
                         if (cameRoundInARow > outstanding.Count)
                         {
-                            summary.StopEarly(passedUnread != null && passedUnread.Count > 0
+                            summary.StopEarly(passedUnread != null && passedUnread.Count > 0 ? CallDeadLetterFailureCodes.LockedElsewhere : CallDeadLetterFailureCodes.LocksLapsing,
+                                passedUnread != null && passedUnread.Count > 0
                                 ? $"{passedUnread.Count} message(s) it hasn't read are locked by something else - another replay, or Service Bus " +
                                     "Explorer, say. Run it again once they are free."
                                 : $"the {outstanding.Count} message(s) it holds at the head of the dead-letter queue keep losing their locks " +
@@ -766,7 +816,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         private static void MarkCancelled(CallDeadLetterReplaySummary summary)
         {
             summary.Cancelled = true;
-            summary.StopEarly("cancelled.");
+            summary.StopEarly(CallDeadLetterFailureCodes.Cancelled, "cancelled.");
         }
 
         /// <summary>Whether anything lies beyond <paramref name="sequenceNumber"/>; null when that can't be told.</summary>
@@ -843,7 +893,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             catch (Exception ex)
             {
                 summary.Error = $"{ex.GetType().Name}: {ex.Message}";
-                summary.StopEarly($"couldn't read the dead-letter queue. {summary.Error}");
+                summary.StopEarly(CallDeadLetterFailureCodes.ReadFailed, $"couldn't read the dead-letter queue. {summary.Error}");
                 _logger.LogError($"Teams calls dead-letter replay: couldn't read the dead-letter queue. {summary.Error}");
             }
             return Array.Empty<CallDeadLetterMessage>();
@@ -929,6 +979,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (!string.IsNullOrEmpty(options.Reason) && !string.Equals(options.Reason, message.DeadLetterReason, StringComparison.OrdinalIgnoreCase))
             {
                 return CallDeadLetterSkipReason.OtherReason;
+            }
+            if (options.PurgeAll)
+            {
+                purge = true;
+                return CallDeadLetterSkipReason.PurgeAll;
             }
 
             var noLongerInGraph = firstQueuedUtc.HasValue && nowUtc - firstQueuedUtc.Value > GraphCallRecordRetention;
@@ -1044,9 +1099,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         private static string DescribeCannotImport(CallDeadLetterSkipReason reason)
         {
-            return reason == CallDeadLetterSkipReason.CallRecordNoLongerInGraph
-                ? "Graph no longer has its call record"
-                : "the importer found it can never be imported";
+            switch (reason)
+            {
+                case CallDeadLetterSkipReason.CallRecordNoLongerInGraph: return "Graph no longer has its call record";
+                case CallDeadLetterSkipReason.PurgeAll: return "the run was asked to delete every dead-lettered call it looks at";
+                default: return "the importer found it can never be imported";
+            }
         }
 
         private static string ReadString(IReadOnlyDictionary<string, object> properties, string name)

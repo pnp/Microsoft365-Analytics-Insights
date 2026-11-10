@@ -354,6 +354,10 @@ namespace WebJob.Office365ActivityImporter
             // take longer than the subscription lives, and a failed create must be retried in minutes, not a cycle later.
             var callSubscriptionMaintainer = CallSubscriptionMaintainer.StartIfEnabled(configuredSettings, webHookUrl, logger);
 
+            // Administrators' requests from the portal's Service configuration page to reprocess or clear the Teams calls dead-letter
+            // queue: checked about once a minute on their own timer, independently of the cycle. Null without calls import or Storage.
+            var callDeadLetterRequests = CallDeadLetterRequestPoller.StartIfEnabled(configuredSettings);
+
             // Run app
             var stages = StageTracker.Process;
             using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.ActivityJob))
