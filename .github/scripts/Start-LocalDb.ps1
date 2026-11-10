@@ -309,6 +309,8 @@ function Move-LocalDbFiles {
         if (Test-Path -LiteralPath $source) {
             $output = & robocopy.exe $source $target /E /MOVE /MT:8 /R:1 /W:1 /NFL /NDL /NJH /NP
             if ($LASTEXITCODE -ge 8) { throw "Could not move $source to the virtual disk: robocopy exited with ${LASTEXITCODE}: $(($output | Where-Object { $_ -match '\S' }) -join ' ')" }
+            # robocopy exits 1 when it has copied files. Left alone, that would become the step's exit code.
+            $global:LASTEXITCODE = 0
             if (Test-Path -LiteralPath $source) { Remove-Item -LiteralPath $source -Recurse -Force }
         }
         else { New-Item -ItemType Directory -Force -Path (Split-Path -Parent $source) | Out-Null }
