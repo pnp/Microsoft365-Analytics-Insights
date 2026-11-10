@@ -91,6 +91,20 @@ try {
         -not $text.Contains('| Contoso opt-in | Set CONTOSO_SCALE=1 \| to run it. |')) {
         throw 'TRX summary did not list each skipped test with its escaped reason.'
     }
-    Write-Output 'Package and TRX helper contracts passed.'
+    . "$PSScriptRoot\Start-LocalDb.ps1"
+    $volume = { param([string]$Name, [long]$SectorSize) [pscustomobject]@{ Label = $Name; Path = "C:\Contoso\$Name"; SectorSize = $SectorSize } }
+    $supported = @((& $volume 'instance' 4096), (& $volume 'databases' 512))
+    $large = @((& $volume 'instance' 4096), (& $volume 'databases' (Get-SectorSize 4096 8192)))
+    if ((Select-LocalDbPlan $supported $false '') -ne 'Start') { throw 'LocalDB did not start as usual on volumes with supported sectors.' }
+    if ((Select-LocalDbPlan $large $false '') -ne 'Move') { throw "LocalDB's files did not move off a volume with 8 KB physical sectors." }
+    if ((Select-LocalDbPlan $supported $true '') -ne 'Move') { throw "LOCALDB_FORCE_RELOCATION did not move LocalDB's files." }
+    $failure = ''
+    try { Select-LocalDbPlan $large $false 'Contoso blocker' | Out-Null } catch { $failure = $_.Exception.Message }
+    foreach ($expected in 'C:\Contoso\databases is on a volume whose sector size is 8192 bytes', $SectorSizeArticle, 'Contoso blocker',
+        'Re-run the job: another runner VM will usually have a supported disk.') {
+        if (-not $failure.Contains($expected)) { throw "LocalDB on unsupported sectors did not fail at once saying '$expected'." }
+    }
+    Assert-Fails { Select-LocalDbPlan $supported $true 'Contoso blocker' } 'LOCALDB_FORCE_RELOCATION is set'
+    Write-Output 'Package, TRX and LocalDB sector-size helper contracts passed.'
 }
 finally { Remove-Item -LiteralPath $root -Recurse -Force }
