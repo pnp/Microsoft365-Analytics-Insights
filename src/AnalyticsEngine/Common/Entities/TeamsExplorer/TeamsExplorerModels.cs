@@ -842,8 +842,9 @@ namespace Common.Entities.TeamsExplorer
         public bool ReactionsWithheld { get; set; }
 
         /// <summary>
-        /// Members of the channel's team at its latest membership snapshot: the people a channel row describes. Only decides
-        /// what a reader without See PII is shown, so it is never sent.
+        /// Members of the channel's team at its latest membership snapshot of the last week (<see cref="TeamsExplorerSql.LatestTeamMembers"/>;
+        /// 0 when there is none): the people a channel row describes. Only decides what a reader without See PII is shown, so it
+        /// is never sent.
         /// </summary>
         [JsonIgnore]
         public int TeamMembers { get; set; }
@@ -960,8 +961,9 @@ namespace Common.Entities.TeamsExplorer
         public long Messages { get; set; }
 
         /// <summary>
-        /// Members of the team (for a channel, of its team) at its latest membership snapshot: the people the row describes.
-        /// Only decides what a reader without See PII is shown, so it is never sent.
+        /// Members of the team (for a channel, of its team) at its latest membership snapshot of the last week
+        /// (<see cref="TeamsExplorerSql.LatestTeamMembers"/>; 0 when there is none): the people the row describes. Only decides
+        /// what a reader without See PII is shown, so it is never sent.
         /// </summary>
         [JsonIgnore]
         public int Members { get; set; }

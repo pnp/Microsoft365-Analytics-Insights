@@ -766,21 +766,57 @@ SELECT
 OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>
-        /// Each team's members at its most recent membership snapshot, as the CTEs <c>LatestMembership</c> and <c>Members</c>
-        /// (one row per team: <c>team_id</c>, <c>Members</c>), for a statement's <c>WITH</c> list. The same counting as
-        /// <see cref="TeamLeaderboard"/>: <c>team_membership_log</c> is an append-only history, so counting all of it would
-        /// count everyone who has ever been a member. The people a team's or channel's figures describe, for the floor a
-        /// reader without See PII is held to (#844).
+        /// The days of membership snapshots, ending with the report window's last day, in which <see cref="LatestTeamMembers"/>
+        /// looks for each team's latest one. See its remarks for why seven.
         /// </summary>
+        public const int LatestMembershipHorizonDays = 7;
+
+        /// <summary>
+        /// Each team's members at its most recent membership snapshot in the <see cref="LatestMembershipHorizonDays"/> days that
+        /// end with the report window, as the CTEs <c>LatestMembership</c> and <c>Members</c> (one row per team with a snapshot
+        /// in them: <c>team_id</c>, <c>Members</c>), for a statement's <c>WITH</c> list. The people a team's or channel's
+        /// figures describe, for the floor a reader without See PII is held to (#844). Never sent to any reader.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>The latest snapshot, as <see cref="TeamLeaderboard"/> counts.</b> <c>team_membership_log</c> is an append-only
+        /// history, so counting all of it would count everyone who has ever been a member.
+        /// </para>
+        /// <para>
+        /// <b>Bounded, unlike <see cref="TeamLeaderboard"/>.</b> <c>SqlTeamsPersistenceStore.SaveMembers</c> writes one row per
+        /// member per day a Team is crawled, so the table grows by about the tenant's number of Team memberships every day.
+        /// Unbounded, finding each team's latest date read the whole history, in each of the three statements that use this, on
+        /// every uncached request. The range below seeks <c>IX_team_membership_log_date</c> (<c>[date]</c> INCLUDE
+        /// <c>team_id</c>, <c>user_id</c>) over seven days, whatever the window's length and however long the history.
+        /// </para>
+        /// <para>
+        /// <b>Why seven days.</b> Every Teams crawl logs the membership of every Team it crawls (<c>O365Team.SaveToSQL</c>), and
+        /// the crawl runs every <c>GraphTeamsImportIntervalHours</c>: 24 hours under the Balanced and Gentle presets, every
+        /// cycle under High. A Team that fails is retried at the next run. So a Team's latest snapshot is normally a day or two
+        /// old, and seven days allows for most of a week of failed crawls or a stopped importer.
+        /// </para>
+        /// <para>
+        /// <b>Fail safe.</b> A team with no snapshot in those days has no row here, so it counts as fewer members than the
+        /// floor and a reader without See PII is not shown its channels or sentiment - nothing read says who its members are
+        /// now. A reader with See PII is shown the same rows either way.
+        /// </para>
+        /// <para>
+        /// The <c>7</c> below is <see cref="LatestMembershipHorizonDays"/>, written out because a constant string cannot be
+        /// built from an integer; <c>TeamsExplorerMembershipHorizonSqlIntegrationTests</c> pins both sides of the boundary.
+        /// The range is repeated in <c>Members</c> so that it seeks the same days too.
+        /// </para>
+        /// </remarks>
         public const string LatestTeamMembers = @"LatestMembership AS (
     SELECT m.team_id, MAX(m.[date]) AS LatestDate
     FROM dbo.team_membership_log AS m
+    WHERE m.[date] >= DATEADD(DAY, -7, @to) AND m.[date] < @to
     GROUP BY m.team_id
 ),
 Members AS (
     SELECT m.team_id, COUNT(DISTINCT m.user_id) AS Members
     FROM dbo.team_membership_log AS m
     INNER JOIN LatestMembership AS l ON l.team_id = m.team_id AND l.LatestDate = m.[date]
+    WHERE m.[date] >= DATEADD(DAY, -7, @to) AND m.[date] < @to
     GROUP BY m.team_id
 )";
 

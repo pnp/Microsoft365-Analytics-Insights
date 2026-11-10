@@ -256,7 +256,7 @@ namespace Common.Entities.TeamsExplorer
             public double? Sentiment { get; set; }
             public int ActiveDays { get; set; }
 
-            /// <summary>Members of the channel's team at its latest membership snapshot.</summary>
+            /// <summary>Members of the channel's team at its latest membership snapshot of the last week; 0 when there is none.</summary>
             public int TeamMembers { get; set; }
         }
 
@@ -279,7 +279,7 @@ namespace Common.Entities.TeamsExplorer
             public double Sentiment { get; set; }
             public long Messages { get; set; }
 
-            /// <summary>Members of the team (for a channel, of its team) at its latest membership snapshot.</summary>
+            /// <summary>Members of the team (for a channel, of its team) at its latest membership snapshot of the last week; 0 when there is none.</summary>
             public int Members { get; set; }
         }
 
