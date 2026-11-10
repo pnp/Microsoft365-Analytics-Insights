@@ -129,7 +129,10 @@ namespace Tests.UnitTests.InstallTests
             timer.Stop();
 
             Assert.IsTrue(result.IsValid);
-            Assert.IsTrue(timer.Elapsed >= trickleFor, $"The download took {timer.Elapsed}, so it didn't trickle for {trickleFor}.");
+            // Task.Delay is timed by the system timer, whose ticks (about 15.6 ms on Windows) are coarser than the Stopwatch's,
+            // so a download held for exactly trickleFor can measure a fraction of a tick less.
+            var timerSlack = TimeSpan.FromMilliseconds(100);
+            Assert.IsTrue(timer.Elapsed >= trickleFor - timerSlack, $"The download took {timer.Elapsed}, so it didn't trickle for {trickleFor}.");
             CollectionAssert.AreEqual(FakeGitHub.Content(slowPackage), File.ReadAllBytes(Path.Combine(_directory, slowPackage)));
         }
 
