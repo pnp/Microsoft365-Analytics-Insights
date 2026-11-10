@@ -473,6 +473,52 @@ namespace Tests.UnitTests
             Assert.AreEqual(fake.TotalCalls, stats.GraphCalls, "Every Graph call made inside the lock is counted.");
         }
 
+        /// <summary>
+        /// #847: a library enumeration Graph answered without its drives collection is a failed read. It used to be read as
+        /// "this site has no other libraries" and cached for the run, so the context was cached as unresolvable and its
+        /// interactions saved without their file for good. It is now transient: not cached, and resolved once Graph answers.
+        /// </summary>
+        [TestMethod]
+        public async Task GetSpoFileInfoSingleAttempt_LibraryEnumerationWithoutItsCollection_IsTransientAndNotCached()
+        {
+            var fake = new FakeSpoGraphClient
+            {
+                OnGetSite = siteIdentifier => new Site { Id = "site-guid", WebUrl = "https://contoso.sharepoint.com/sites/project" },
+                OnGetSiteDrive = siteIdentifier => DriveWithIds("site-guid", "default-list"),
+                OnGetDriveItemByUrl = url => throw NotFoundError(),
+                OnGetSiteDocumentLibraryDrives = (siteIdentifier, maxDrives) => null,
+                OnGetListItemById = (siteId, listId, itemId) => listId == "archive-list"
+                    ? new ListItem { WebUrl = "https://contoso.sharepoint.com/sites/project/Archive/Καλημέρα.docx" }
+                    : throw NotFoundError(),
+            };
+            var loader = NewLoader(fake);
+            var now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            loader.UtcNow = () => now;
+
+            await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(
+                () => loader.GetSpoFileInfoSingleAttempt(SourceDocContext, "alice@contoso.com"));
+            Assert.AreEqual(1, loader.InLockStats.Transient);
+
+            fake.OnGetSiteDocumentLibraryDrives = (siteIdentifier, maxDrives) => new[] { DriveWithIds("site-guid", "default-list"), DriveWithIds("site-guid", "archive-list") };
+            now += GraphFileMetadataLoader.TransientOutcomeMemoTtl;
+            var recovered = await loader.GetSpoFileInfoSingleAttempt(SourceDocContext, "alice@contoso.com");
+
+            Assert.AreEqual("Καλημέρα.docx", recovered?.Filename, "Neither the libraries nor the context were cached as missing.");
+            Assert.AreEqual(2, fake.GetSiteDocumentLibraryDrivesCalls);
+        }
+
+        [TestMethod]
+        public async Task GraphSpoClient_LibraryEnumerationWithoutItsCollection_ReturnsNullNotAnEmptyList()
+        {
+            var handler = new TeamsCrawlTests.StubGraphHandler()
+                .Json("/sites/site-guid/drives", "{}")
+                .Json("/sites/other-site/drives", "{\"value\":[]}");
+            var client = new GraphSpoClient(TeamsCrawlTests.StubGraphHandler.Client(handler));
+
+            Assert.IsNull(await client.GetSiteDocumentLibraryDrivesAsync("site-guid", 50), "Unknown libraries, for the loader to treat as a failed read.");
+            Assert.AreEqual(0, (await client.GetSiteDocumentLibraryDrivesAsync("other-site", 50)).Count, "An explicit empty 'value' is a site without libraries.");
+        }
+
         /// <summary>D-3: an in-lock lookup stops making Graph calls once its end-to-end deadline has passed.</summary>
         [TestMethod]
         public async Task GetSpoFileInfoSingleAttempt_DeadlinePassedMidChain_StopsAndReportsTransient()

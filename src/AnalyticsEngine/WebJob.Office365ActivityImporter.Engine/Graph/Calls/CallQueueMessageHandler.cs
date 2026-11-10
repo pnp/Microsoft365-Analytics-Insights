@@ -176,7 +176,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
                 if (kind == CallImportFailureKind.Permanent)
                 {
-                    return await DeadLetterAsync(message, settlement, NotRetryableReason, $"Call '{callId}': {error}", callId, failureCode, importStopwatch.ElapsedMilliseconds);
+                    // A payload problem keeps its own reason (e.g. NoUsableSessions), so the dead-letter queue says what is wrong.
+                    return await DeadLetterAsync(message, settlement, PayloadFailure(failure)?.Reason ?? NotRetryableReason, $"Call '{callId}': {error}", callId, failureCode, importStopwatch.ElapsedMilliseconds);
                 }
 
                 var decision = _policy.Decide(CallQueueRetryState.FromMessage(message), kind, _clock.UtcNow, error);
