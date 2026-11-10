@@ -364,6 +364,74 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// "Last 7 days" is seven calendar dates including today - Copilot Adoption's window - not midnight seven days ago,
+        /// which spans eight (#851, R3-9). An interaction a second either side of each end shows exactly where the window
+        /// stops, on every path that reads it: the summary, the summary under a filter, and the governance figures.
+        /// </summary>
+        /// <remarks>
+        /// On a clock fixed in 2020, years before every other test's rows, so these counts are this test's alone whichever
+        /// order the tests run in.
+        /// </remarks>
+        [TestMethod]
+        public async Task Window_CoversNCalendarDatesIncludingToday_AsCopilotAdoptionDoes()
+        {
+            var now = new DateTime(2020, 6, 15, 10, 30, 0, DateTimeKind.Utc);
+            var start = new DateTime(2020, 6, 9, 0, 0, 0, DateTimeKind.Utc);
+            Assert.AreEqual(start, Common.Entities.CopilotAdoption.CopilotAdoptionScoring.WindowStartUtc(now, 7),
+                "The window the DLP page must match.");
+
+            int frances;
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                var operation = new EventOperation { Name = "CopilotInteractionAtTheWindowEdges" };
+                db.event_operations.Add(operation);
+                var user = new User { UserPrincipalName = "frances@contoso.com" };
+                db.users.Add(user);
+                var agent = new CopilotAgent { AgentID = "CopilotStudio.Declarative.edges", Name = "Contoso Edge Agent" };
+                db.CopilotAgents.Add(agent);
+                var policy = new DlpPolicy { PolicyId = "pol-edges", Name = "Block at the edges" };
+                db.dlp_policies.Add(policy);
+                db.SaveChanges();
+                frances = user.ID;
+
+                foreach (var when in new[] { start.AddSeconds(-1), start, now, now.AddSeconds(1) })
+                {
+                    var eventId = Guid.NewGuid();
+                    db.AuditEventsCommon.Add(new CommonAuditEvent { Id = eventId, TimeStamp = when, User = user, Operation = operation });
+                    db.CopilotChats.Add(new CopilotChat { EventID = eventId, Agent = agent, UserId = user.ID, TimeStampUtc = when });
+                    db.SaveChanges();
+
+                    db.copilot_dlp_events.Add(new CopilotDlpEvent { ChatId = eventId, DlpPolicyId = policy.ID, IsBlocked = true });
+                    db.dlp_rule_matches.Add(new DlpRuleMatch { EventId = eventId, DlpPolicyId = policy.ID, IsBlocked = true });
+                    db.SaveChanges();
+                }
+            }
+
+            var controller = new DlpAPIController(new ConnectionStringAnalyticsDbContextFactory(_connectionString), utcNow: () => now);
+
+            foreach (var scope in new[] { null, ReportUserScope.ForUsers(new[] { frances }) })
+            {
+                var because = scope == null ? "unfiltered" : "under a filter";
+                var summary = await controller.BuildSummaryAsync(7, scope: scope);
+
+                Assert.AreEqual(start, summary.FromUtc, because);
+                Assert.AreEqual(now, summary.ToUtc, because);
+                Assert.AreEqual(2, summary.CopilotBlockedCount,
+                    "Midnight six days ago and now are inside; a second before that midnight and a second after now are not - " + because);
+                Assert.AreEqual(2, summary.TenantBlockedCount, "The DLP.All figures use the same window - " + because);
+                CollectionAssert.AreEqual(
+                    new[] { start, now.Date },
+                    summary.Trend.Select(p => p.Date).ToArray(),
+                    "The trend has no point for the day before the window - " + because);
+            }
+
+            var governance = await controller.BuildGovernanceAsync(7);
+            Assert.AreEqual(start, governance.FromUtc);
+            Assert.AreEqual(now, governance.ToUtc);
+            Assert.AreEqual(2, governance.Interactions, "The governance figures use the same window.");
+        }
+
+        /// <summary>
         /// Under the administrator's global filter every figure is narrowed in SQL, statement by statement. A
         /// scope holding everyone must give exactly the unfiltered summary; one person, only theirs; nobody,
         /// nothing.

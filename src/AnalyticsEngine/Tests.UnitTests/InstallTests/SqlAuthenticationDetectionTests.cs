@@ -125,7 +125,7 @@ namespace Tests.UnitTests.InstallTests
                 var server = (await arm.Server.GetAsync()).Value;
                 var database = (await server.GetSqlDatabases().GetAsync("analytics")).Value;
                 var dbInfo = new DatabasePaaSInfo(server, database, config) { AuthMethod = decision.Method };
-                var tasks = new SqlInstallerTasks(config, null, dbInfo, null, "Synthetic operator", null, null);
+                var tasks = new SqlInstallerTasks(config, null, dbInfo, null, "Synthetic operator", null);
                 var payload = tasks.CreateDatabaseUpgradeInfo(new List<string> { "https://contoso.sharepoint.com" });
                 var received = DatabaseUpgradeInfo.GetFromBase64String(payload.ToBase64());
 
@@ -171,10 +171,10 @@ namespace Tests.UnitTests.InstallTests
                 var server = (await arm.Server.GetAsync()).Value;
                 var database = (await server.GetSqlDatabases().GetAsync("analytics")).Value;
                 var dbInfo = new DatabasePaaSInfo(server, database, config);
-                var tasks = new SqlInstallerTasks(config, child.Executable, dbInfo, new CapturingLogger(), "Synthetic operator", null,
+                var tasks = new SqlInstallerTasks(config, child.Executable, dbInfo, new CapturingLogger(), "Synthetic operator",
                     connectionString => Task.FromResult(true));
 
-                await tasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(child.Executable, new List<InstallLogEventArgs>());
+                await tasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(child.Executable, new InstallLogCapture());
 
                 var launches = child.Launches();
                 CollectionAssert.AreEqual(new[] { InstallerConstants.PARAM_INITDB, InstallerConstants.PARAM_REGISTERCONFIG },
@@ -214,7 +214,7 @@ namespace Tests.UnitTests.InstallTests
                 var server = (await arm.Server.GetAsync()).Value;
                 var database = (await server.GetSqlDatabases().GetAsync("analytics")).Value;
                 var tasks = new SqlInstallerTasks(config, child.Executable, new DatabasePaaSInfo(server, database, config), new CapturingLogger(),
-                    "Synthetic operator", null, connectionString => Task.FromResult(true));
+                    "Synthetic operator", connectionString => Task.FromResult(true));
 
                 var ex = await Assert.ThrowsExceptionAsync<UnexpectedInstallException>(() => tasks.InitDatabaseSchema(new List<string>()));
 
@@ -239,7 +239,7 @@ namespace Tests.UnitTests.InstallTests
                 var server = (await arm.Server.GetAsync()).Value;
                 var database = (await server.GetSqlDatabases().GetAsync("analytics")).Value;
                 var tasks = new SqlInstallerTasks(config, child.Executable, new DatabasePaaSInfo(server, database, config), new CapturingLogger(),
-                    "Synthetic operator", null, connectionString => Task.FromResult(true));
+                    "Synthetic operator", connectionString => Task.FromResult(true));
 
                 if (readsPayloadFile)
                 {

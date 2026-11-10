@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
 import CopilotAdoptionPage, { USER_FILTER_URL_PARAM } from './CopilotAdoptionPage';
 import { MemoryRouter } from 'react-router-dom';
@@ -11,8 +11,11 @@ import {
   fetchAdoptionSql,
   fetchAdoptionSummary,
   fetchLicensedUsers,
+  rebuildAdoption,
+  AdoptionRequestError,
+  AdoptionGenerationChangedError,
 } from '../api/copilotAdoptionApi';
-import { AdoptionBand, CopilotResourceTypeKind, type CopilotAdoptionOptions, type CopilotAdoptionSummary } from '../types/copilotAdoption';
+import { AdoptionBand, CopilotResourceTypeKind, type AdoptionProgress, type CopilotAdoptionOptions, type CopilotAdoptionSummary } from '../types/copilotAdoption';
 import type { UserFilterClause, UserFilterEcho } from '../types/userFilter';
 import { TIME_SAVED_STORAGE_KEY, resetTimeSavedStore } from '../components/copilotAdoption/coworkTimeSaved';
 import { TIME_SAVED_COHORT_STORAGE_KEY, resetTimeSavedCohortStore } from '../components/copilotAdoption/timeSavedCohort';
@@ -25,6 +28,7 @@ vi.mock('../api/copilotAdoptionApi', async (importOriginal) => ({
   fetchAdoptionSql: vi.fn(),
   fetchAdoptionSummary: vi.fn(),
   fetchLicensedUsers: vi.fn(),
+  rebuildAdoption: vi.fn(),
 }));
 
 vi.mock('../api/userFilterApi', () => ({
@@ -288,6 +292,139 @@ async function renderPage(options?: Parameters<typeof renderWithProvider>[1]) {
   await screen.findByRole('tab', { name: options?.language === 'es' ? 'Vista ejecutiva' : 'Executive view', selected: true });
 }
 
+describe('CopilotAdoptionPage loading and recovery', () => {
+  const generationId = '00000000000000000000000000000001';
+  const replacementId = '00000000000000000000000000000002';
+  const errorReference = '00000000-0000-0000-0000-000000000003';
+
+  function resultProgress(failed = false): AdoptionProgress {
+    return {
+      generationId, phase: 'completed', elapsedMs: 90_000, percentComplete: 100,
+      steps: [
+        { step: 'LicenceTypes', state: 'loaded', durationMs: 10 },
+        { step: 'ResourceTypes', state: failed ? 'failed' : 'loaded', durationMs: 90_000,
+          failure: failed ? 'Timeout' : null, reference: failed ? errorReference : null },
+        { step: 'Publishing', state: 'loaded', durationMs: 0 },
+      ],
+    };
+  }
+
+  function partialReport(): CopilotAdoptionSummary {
+    return summary({
+      topResourceTypes: [],
+      diagnostics: {
+        generationId, totalMs: 90_000,
+        steps: [{ step: 'ResourceTypes', durationMs: 90_000, failed: true }],
+        progress: resultProgress(true),
+      },
+    });
+  }
+
+  it.each([
+    { language: 'en' as const, percent: '25% of stages processed', progressLabel: 'Analysis stages processed' },
+    { language: 'es' as const, percent: '25% de etapas procesadas', progressLabel: 'Etapas del análisis procesadas' },
+  ])('shows live stage progress in $language without pretending the report is ready', async ({ language, percent, progressLabel }) => {
+    vi.mocked(fetchAdoptionSummary).mockImplementationOnce((_window, _ids, _signal, _domain, _filter, _range, options) => {
+      options?.onProgress?.({
+        generationId, phase: 'analysing', elapsedMs: 5000, percentComplete: 25,
+        steps: [
+          { step: 'LicenceTypes', state: 'loaded', durationMs: 10 },
+          { step: 'ResourceTypes', state: 'running', durationMs: 4000 },
+          { step: 'Scoring', state: 'pending', durationMs: 0 },
+          { step: 'Publishing', state: 'pending', durationMs: 0 },
+        ],
+      });
+      return new Promise(() => {});
+    });
+    await renderPage({ language });
+    expect(await screen.findByText(percent, { exact: false })).toBeVisible();
+    const bar = screen.getByRole('progressbar', { name: progressLabel });
+    expect(bar.closest('[aria-busy]')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByText('Where we stand')).not.toBeInTheDocument();
+    expect(fetchAdoptionFilters).not.toHaveBeenCalled();
+    expect(rebuildAdoption).not.toHaveBeenCalled();
+  });
+
+  it('keeps a partial report visible during a rebuild and reconciles supporting data after publication', async () => {
+    let resolve!: (report: CopilotAdoptionSummary) => void;
+    const replacement = new Promise<CopilotAdoptionSummary>(done => { resolve = done; });
+    vi.mocked(fetchAdoptionSummary).mockResolvedValueOnce(partialReport()).mockImplementationOnce(() => replacement);
+    vi.mocked(rebuildAdoption).mockResolvedValueOnce({
+      generationId: replacementId,
+      progress: { ...resultProgress(), generationId: replacementId, phase: 'analysing', percentComplete: 50 },
+    });
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry failed analysis' }));
+    expect(await screen.findByText(/The previous report remains visible/)).toBeVisible();
+    expect(screen.getAllByText('Where we stand')[0]).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Print' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Retry failed analysis' })).toBeDisabled();
+    await waitFor(() => expect(rebuildAdoption).toHaveBeenCalledTimes(1));
+
+    const recovered = summary({
+      diagnostics: {
+        generationId: replacementId, totalMs: 100,
+        steps: [{ step: 'ResourceTypes', durationMs: 100, failed: false }],
+        progress: { ...resultProgress(), generationId: replacementId },
+      },
+    });
+    await act(async () => { resolve(recovered); await replacement; });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry failed analysis' })).not.toBeInTheDocument());
+    expect(screen.queryByText(errorReference, { exact: false })).not.toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(fetchAdoptionFilters).mock.lastCall?.[4]).toEqual({ generationId: replacementId }));
+    expect(vi.mocked(fetchAdoptionSql).mock.lastCall?.[4]).toEqual({ generationId: replacementId });
+    expect(vi.mocked(fetchAdoptionSummary).mock.lastCall?.[6]?.after).toBe(generationId);
+  });
+
+  it('renders a failed resource-types card instead of silently hiding an empty result', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValueOnce(partialReport());
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+    expect(await screen.findByText(/This is a failed section, not evidence/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Retry failed analysis' })).toBeEnabled();
+  });
+
+  it('retries a failed filter request without rebuilding SQL or retrying successful requests', async () => {
+    vi.mocked(fetchAdoptionFilters).mockRejectedValueOnce(new Error('Synthetic filter request failure'));
+    await renderPage();
+    expect(await screen.findByText('Synthetic filter request failure')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry request' }));
+    await waitFor(() => expect(fetchAdoptionFilters).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText('Synthetic filter request failure')).not.toBeInTheDocument());
+    expect(fetchAdoptionSql).toHaveBeenCalledTimes(1);
+    expect(rebuildAdoption).not.toHaveBeenCalled();
+  });
+
+  it('checks a failed summary request again without issuing a rebuild', async () => {
+    vi.mocked(fetchAdoptionSummary).mockRejectedValueOnce(new AdoptionRequestError('Synthetic polling ceiling'));
+    await renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Check again' }));
+    await screen.findAllByText('Where we stand');
+    expect(fetchAdoptionSummary).toHaveBeenCalledTimes(2);
+    expect(rebuildAdoption).not.toHaveBeenCalled();
+  });
+
+  it('bounds automatic generation reconciliation instead of looping between different server instances', async () => {
+    vi.mocked(fetchAdoptionFilters).mockRejectedValue(new AdoptionGenerationChangedError());
+    await renderPage();
+    expect(await screen.findByRole('button', { name: 'Check again' })).toBeVisible();
+    expect(fetchAdoptionSummary).toHaveBeenCalledTimes(2);
+    expect(fetchAdoptionFilters).toHaveBeenCalledTimes(2);
+    expect(rebuildAdoption).not.toHaveBeenCalled();
+  });
+
+  it('does not offer an analysis retry for genuine empty data or ordinary caveats', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValueOnce(summary({ topResourceTypes: [], warnings: ['Synthetic explanatory caveat'] }));
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+    expect(screen.queryByRole('button', { name: 'Retry failed analysis' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+    expect(screen.queryByText('What Copilot referenced')).not.toBeInTheDocument();
+  });
+});
+
 /** Picks a reporting period from the page's one period drop-down: a rolling window's days, `lastMonth`, `lastQuarter` or `custom`. */
 function choosePeriod(value: string) {
   fireEvent.change(screen.getByLabelText('Reporting period'), { target: { value } });
@@ -318,6 +455,8 @@ describe('CopilotAdoptionPage custom ranges', () => {
       expect.any(AbortSignal),
       null,
       null,
+      null,
+      expect.objectContaining({ onProgress: expect.any(Function) }),
     ));
 
     choosePeriod('lastMonth');
@@ -328,6 +467,7 @@ describe('CopilotAdoptionPage custom ranges', () => {
       null,
       null,
       { ...lastCalendarMonthRange() },
+      expect.objectContaining({ onProgress: expect.any(Function) }),
     ));
 
     choosePeriod('lastQuarter');
@@ -338,6 +478,7 @@ describe('CopilotAdoptionPage custom ranges', () => {
       null,
       null,
       { ...lastCalendarQuarterRange() },
+      expect.objectContaining({ onProgress: expect.any(Function) }),
     ));
 
     choosePeriod('90');
@@ -347,6 +488,8 @@ describe('CopilotAdoptionPage custom ranges', () => {
       expect.any(AbortSignal),
       null,
       null,
+      null,
+      expect.objectContaining({ onProgress: expect.any(Function) }),
     ));
   });
 
@@ -391,6 +534,7 @@ describe('CopilotAdoptionPage custom ranges', () => {
       null,
       null,
       { from: '2026-08-03', to: '2026-08-30' },
+      expect.objectContaining({ onProgress: expect.any(Function) }),
     ));
     // Applied, so there is nothing left to apply until a date changes again.
     expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
@@ -683,6 +827,8 @@ describe('CopilotAdoptionPage email-domain filter', () => {
         expect.anything(),
         null,
         '[{"d":"emailDomain","v":["fabrikam.com"]}]',
+        null,
+        expect.objectContaining({ onProgress: expect.any(Function) }),
       ),
     );
     // ...and the choice shows up as a condition in the filter bar, where it can be edited or removed.
@@ -774,6 +920,8 @@ describe('CopilotAdoptionPage email-domain filter', () => {
         expect.anything(),
         null,
         '[{"d":"emailDomain","v":["fabrikam.com"]}]',
+        null,
+        expect.objectContaining({ onProgress: expect.any(Function) }),
       ),
     );
 
@@ -786,6 +934,8 @@ describe('CopilotAdoptionPage email-domain filter', () => {
         expect.anything(),
         null,
         null,
+        null,
+        expect.objectContaining({ onProgress: expect.any(Function) }),
       ),
     );
   });
@@ -890,6 +1040,7 @@ describe('CopilotAdoptionPage printing', () => {
   it('prints the report when the Print button is used', async () => {
     const print = vi.spyOn(window, 'print').mockImplementation(() => {});
     await renderPage();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Print' })).not.toBeDisabled());
 
     fireEvent.click(screen.getByRole('button', { name: 'Print' }));
 

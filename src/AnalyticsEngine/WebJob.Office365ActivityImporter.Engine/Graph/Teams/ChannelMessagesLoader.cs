@@ -146,14 +146,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
             return repliesResult;
         }
-
-        public class ChannelChatInfo
-        {
-            public List<ChatMessage> NewMessages { get; set; }
-            public List<ChatMessageReaction> NewReactions { get; set; }
-
-            public TeamChannelDeltaTokenInfo DeltaInfo { get; set; }
-        }
     }
 
     internal interface IChannelMessagesPageReader

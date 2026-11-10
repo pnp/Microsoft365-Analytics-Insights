@@ -119,10 +119,6 @@ export function isTextOperator(operator: UserFilterOperator): boolean {
   return operator === 'contains' || operator === 'notContains';
 }
 
-export function isNegatedOperator(operator: UserFilterOperator): boolean {
-  return operator === 'isNot' || operator === 'notContains';
-}
-
 /** A clause the server would accept: at least one value, or "not set". */
 export function clauseIsComplete(clause: UserFilterClause): boolean {
   return clause.values.length > 0 || clause.includeNotSet;

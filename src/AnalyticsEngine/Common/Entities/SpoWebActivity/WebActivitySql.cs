@@ -377,10 +377,15 @@ ORDER BY p.ActiveDays
 OPTION (RECOMPILE);";
 
         /// <summary>Visits by the number of pages they saw - the raw input to bounce rate and depth.</summary>
+        /// <remarks>
+        /// <c>MeasuredVisits</c> counts the visits with a dwell time (<c>COUNT</c> skips the NULL <c>Seconds</c> of a visit
+        /// none of whose pages reported one), so an average visit length divides <c>Seconds</c> by the visits it was summed
+        /// from rather than by every visit.
+        /// </remarks>
         public const string VisitDepth = @"
 WITH" + HitWindowCte + @",
 " + VisitCte + @"
-SELECT v.PageViews AS Pages, COUNT_BIG(*) AS Visits, SUM(v.Seconds) AS Seconds
+SELECT v.PageViews AS Pages, COUNT_BIG(*) AS Visits, SUM(v.Seconds) AS Seconds, COUNT_BIG(v.Seconds) AS MeasuredVisits
 FROM V AS v
 GROUP BY v.PageViews
 ORDER BY v.PageViews

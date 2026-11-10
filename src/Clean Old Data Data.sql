@@ -8,7 +8,20 @@ set @archiveDateMax = dateadd(month, -1, GETDATE())
 --begin transaction archive
 
 --Delete hits & activity from before achive date
-delete from hits where [hit_timestamp] < @archiveDateMax
+-- In batches, like the Copilot usage-report deletes further down. hits is one of the largest tables: a
+-- single DELETE of everything older than a month takes one long exclusive lock, escalates to a table lock
+-- that blocks the App Insights importer and the reports, and writes the whole purge to the log as one
+-- transaction. Each batch also removes its rows' hits_clicked_elements (ON DELETE CASCADE), and
+-- IX_hits_hit_timestamp serves the range. Same rules as the Copilot loops: the batch size is the same
+-- variable in the DELETE and in the loop condition, and batching only bounds the transaction when the
+-- script is NOT wrapped in the "begin transaction archive" above.
+declare @hitsBatch int = 10000
+declare @hitsDeleted int = @hitsBatch
+while @hitsDeleted = @hitsBatch
+begin
+	delete top (@hitsBatch) from hits where [hit_timestamp] < @archiveDateMax
+	set @hitsDeleted = @@ROWCOUNT
+end
 
 -- Delete searches that have sessions that have now no hits
 delete from searches where exists (

@@ -26,7 +26,10 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
         /// <summary>A site's default document library drive (with SharePointIds populated). Accepts a site id or a host:/path address.</summary>
         Task<Drive> GetSiteDriveAsync(string siteIdentifier);
 
-        /// <summary>A bounded page of a site's document library drives (with SharePointIds populated).</summary>
+        /// <summary>
+        /// A bounded page of a site's document library drives (with SharePointIds populated), or <c>null</c> when Graph
+        /// answered without the drives collection - the site's libraries are then unknown, not absent.
+        /// </summary>
         Task<IReadOnlyList<Drive>> GetSiteDocumentLibraryDrivesAsync(string siteIdentifier, int maxDrives);
 
         /// <summary>A site by id or by host:/path address.</summary>
@@ -105,7 +108,8 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
                 rc.QueryParameters.Top = maxDrives;
                 Apply(rc);
             }, _cancellationToken);
-            return drives?.Value ?? new List<Drive>();
+            // Null when the collection is missing: the loader decides what that means (#847), not this pass-through.
+            return drives?.Value;
         }
 
         public Task<Site> GetSiteAsync(string siteIdentifier)

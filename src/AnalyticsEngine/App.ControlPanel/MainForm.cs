@@ -82,7 +82,15 @@ namespace App.ControlPanel
 #else
             chkDisclaimer.Checked = false;
 #endif
-            this.SavedPreferences = SecureLocalPreferences.Load<InstallerPreferences>();
+            string unreadablePreferences = null;
+            this.SavedPreferences = SecureLocalPreferences.Load<InstallerPreferences>(problem => unreadablePreferences = problem);
+            if (unreadablePreferences != null)
+            {
+                // Without this the saved proxy would silently stop being used, and an install behind it would then fail.
+                MessageBox.Show($"{unreadablePreferences}\r\n\r\nSet any proxy and solution-test settings again: choose Configure " +
+                    "solution, then Window > Proxy Configuration or Solution Tests Configuration.",
+                    "Installer Preferences", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
             if (this.SavedPreferences.ProxyConfig == null)
             {
                 this.SavedPreferences.ProxyConfig = new InstallerProxyConfig();
@@ -224,9 +232,18 @@ namespace App.ControlPanel
         private void clearSettingsToolStripMenuItem_Click(object sender, EventArgs e)
         {
             Properties.Settings.Default.Reset();
-            this.SavedPreferences.DeleteTempFile();
-            this.SavedPreferences = new InstallerPreferences();
+            ResetSavedPreferences();
             MessageBox.Show("Settings reset to default");
+        }
+
+        /// <summary>
+        /// Deletes the saved preferences file and goes back to the defaults. Works when nothing was loaded, as when start-up
+        /// stopped before reading the file.
+        /// </summary>
+        public void ResetSavedPreferences()
+        {
+            new InstallerPreferences().DeleteTempFile();
+            this.SavedPreferences = new InstallerPreferences();
         }
 
         private void exitToolStripMenuItem_Click(object sender, EventArgs e)
@@ -359,10 +376,12 @@ namespace App.ControlPanel
         {
             if (saveFileDialog.ShowDialog() == DialogResult.OK)
             {
-                var passwordForm = (new EnterPasswordForm());
-                if (passwordForm.ShowDialog() == DialogResult.OK)
+                using (var passwordForm = new EnterPasswordForm { ConfirmPassword = true })
                 {
-                    return SaveCurrentSettings(saveFileDialog.FileName, passwordForm.Password);
+                    if (passwordForm.ShowDialog() == DialogResult.OK)
+                    {
+                        return SaveCurrentSettings(saveFileDialog.FileName, passwordForm.Password);
+                    }
                 }
             }
             return false;

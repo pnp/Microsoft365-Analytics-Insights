@@ -167,28 +167,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 {
                     await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-                    foreach (var entry in resolved)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        var sql = SqlContainedUserScript.CreateUserAndGrantRoles(
-                            entry.Key.Login, entry.Value, DatabaseUserRoles, entry.Key.IsGroup);
-
-                        try
-                        {
-                            using (var cmd = connection.CreateCommand())
-                            {
-                                cmd.CommandText = sql;
-                                cmd.CommandTimeout = 120;
-                                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-                            }
-                            granted++;
-                        }
-                        catch (SqlException ex)
-                        {
-                            // One bad entry must not cost the others their access.
-                            _logger.LogWarning($"Could not grant database access to '{entry.Key.Login}': {ex.Message}");
-                        }
-                    }
+                    await GrantEachAsync(resolved, sql => RunGrantScriptAsync(connection, sql, cancellationToken), () => granted++,
+                        cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -207,6 +187,44 @@ namespace App.ControlPanel.Engine.InstallerTasks
             }
 
             return granted;
+        }
+
+        /// <summary>
+        /// Runs each resolved principal's grant script, calling <paramref name="granted"/> after each one that worked.
+        /// Separate from the connection so what a refusal or a Cancel does is testable without a database.
+        /// </summary>
+        internal async Task GrantEachAsync(IEnumerable<KeyValuePair<SqlDatabaseUser, Guid>> resolved, Func<string, Task> runScript,
+            Action granted, CancellationToken cancellationToken)
+        {
+            foreach (var entry in resolved)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var sql = SqlContainedUserScript.CreateUserAndGrantRoles(
+                    entry.Key.Login, entry.Value, DatabaseUserRoles, entry.Key.IsGroup);
+
+                try
+                {
+                    await runScript(sql).ConfigureAwait(false);
+                    granted();
+                }
+                // A Cancel during the script arrives as a SqlException too ("Operation cancelled by user"); it is not this
+                // principal's grant failing, so it leaves for the caller rather than being reported as one.
+                catch (SqlException ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // One bad entry must not cost the others their access.
+                    _logger.LogWarning($"Could not grant database access to '{entry.Key.Login}': {ex.Message}");
+                }
+            }
+        }
+
+        static async Task RunGrantScriptAsync(SqlConnection connection, string sql, CancellationToken cancellationToken)
+        {
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = sql;
+                cmd.CommandTimeout = 120;
+                await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 

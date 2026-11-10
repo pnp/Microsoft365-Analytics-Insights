@@ -125,6 +125,7 @@ namespace Tests.UnitTests
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var authConfig = new AppConfig();
+            LiveCredentials.RequireGraphClientSecret(authConfig);
 
             var graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
 
@@ -375,6 +376,71 @@ namespace Tests.UnitTests
             Assert.IsFalse(ex.Message.Contains(skipToken), "The paging link, and its skip token, stay out of the message.");
             Assert.AreEqual(0, loader.ItemsQueuedForSave, "Page 1's Sunday row must not be saved without the rest of the report.");
             Assert.AreEqual(0, loader.CommitCount);
+        }
+
+        /// <summary>
+        /// #847 (R9-4): a next link Graph had already returned looped for ever - the background usage-report pass never
+        /// finished and Graph was called without end. It now fails the report for this cycle, before anything is saved.
+        /// </summary>
+        [TestMethod]
+        public async Task WeeklyReport_ALinkBackToAPageAlreadyRead_FailsTheReportInsteadOfLooping()
+        {
+            const string secondPage = "https://graph.microsoft.com/beta/reports/syntheticWeeklyReport?$skiptoken=synthetic-page-2";
+            var loader = new ScriptedWeeklyUsageReportLoader(
+                new AggregateResourceUsageDetail<FakeStats> { Stats = new List<FakeStats> { new FakeStats { RandoId = "1", ReportRefreshDateString = "2024-02-25" } }, NextLink = secondPage },
+                new AggregateResourceUsageDetail<FakeStats> { Stats = new List<FakeStats> { new FakeStats { RandoId = "2", ReportRefreshDateString = "2024-02-25" } }, NextLink = secondPage });
+
+            var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => loader.LoadAndSaveLastWeeksReportsIfRefreshOnDayWithResult(DayOfWeek.Sunday));
+
+            Assert.AreEqual(2, loader.RequestCount, "The repeated link is not requested again.");
+            StringAssert.Contains(ex.Message, "already returned");
+            Assert.IsFalse(ex.Message.Contains("synthetic-page-2"), "The paging link, and its skip token, stay out of the message.");
+            Assert.AreEqual(0, loader.ItemsQueuedForSave);
+        }
+
+        /// <summary>#847 (R9-4): paging that never repeats a link but never ends either stops at the page cap.</summary>
+        [TestMethod]
+        public async Task WeeklyReport_PagingThatNeverEnds_StopsAtThePageCap_AndNeverLogsALink()
+        {
+            var logger = new CallsImportTests.CapturingLogger();
+            var loader = new EndlessWeeklyUsageReportLoader(logger);
+
+            var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => loader.LoadReportData());
+
+            Assert.AreEqual(AbstractAggregateWeeklyUsageReportLoader<FakeStats>.MaxPages, loader.RequestCount);
+            StringAssert.Contains(ex.Message, "pages");
+            Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains("skiptoken")), "No log line names a paging link.");
+            Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Information && e.Message.Contains("loading page 50...")), "Progress is the page number.");
+        }
+
+        /// <summary>Returns a page with a new next link every time, with a guard so a loader without the page cap fails rather than hangs.</summary>
+        private sealed class EndlessWeeklyUsageReportLoader : AbstractAggregateWeeklyUsageReportLoader<FakeStats>
+        {
+            public EndlessWeeklyUsageReportLoader(ILogger logger) : base(logger) { }
+
+            public int RequestCount { get; private set; }
+
+            public override string ReportGraphURL => "https://graph.microsoft.com/beta/reports/syntheticWeeklyReport";
+            public override string ReportName => "Synthetic endless weekly usage";
+
+            public override Task<AggregateResourceUsageDetail<FakeStats>> LoadReportDataForUrl(string requestUrl)
+            {
+                RequestCount++;
+                if (RequestCount > MaxPages + 10)
+                {
+                    throw new TimeoutException($"The report was requested {RequestCount} times: the loader has no page cap.");
+                }
+                return Task.FromResult(new AggregateResourceUsageDetail<FakeStats>
+                {
+                    Stats = new List<FakeStats>(),
+                    NextLink = ReportGraphURL + "?$skiptoken=synthetic-" + RequestCount,
+                });
+            }
+
+            protected override Task<DateTime?> GetLastStoredResultFor(FakeStats item) => Task.FromResult<DateTime?>(null);
+            protected override Task AddItemToSaveList(FakeStats item) => Task.CompletedTask;
+            protected override Task CommitAllChanges() => Task.CompletedTask;
         }
 
         /// <summary>Returns scripted pages in order; fails fast if asked for more than a loop would, instead of hanging.</summary>

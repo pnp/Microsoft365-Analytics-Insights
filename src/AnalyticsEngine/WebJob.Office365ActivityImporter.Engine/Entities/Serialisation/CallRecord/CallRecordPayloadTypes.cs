@@ -42,30 +42,50 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         /// <summary>People of this tenant Entra ID could not return a UPN for.</summary>
         public int UnresolvedUsers { get; set; }
 
+        /// <summary>
+        /// Sessions saving leaves out because nobody on them can be attributed: a missing session, one without a caller or
+        /// callee, or two people neither of whom organised the call. The rest of the call is still saved (#847, R9-9).
+        /// </summary>
+        public int SkippedSessions { get; set; }
+
         /// <summary>How long resolving the people took, in milliseconds.</summary>
         public long ResolveMs { get; set; }
     }
 
     /// <summary>
     /// The call record Graph returned cannot be used, in a way that is about its payload rather than about this
-    /// attempt: it is retried (a later version of a call record can carry more) and then dead-lettered with
-    /// <see cref="Reason"/>, rather than completed as though it had been processed.
+    /// attempt. By default it is retried (a later version of a call record can carry more) and then dead-lettered with
+    /// <see cref="Reason"/>, rather than completed as though it had been processed. A <see cref="IsPermanent"/> one is
+    /// dead-lettered with <see cref="Reason"/> straight away.
     /// </summary>
     public class CallRecordPayloadException : Exception
     {
         /// <summary>The call record carries no organiser identity at all.</summary>
         public const string NoOrganiserIdentityReason = "NoOrganiserIdentity";
 
-        public CallRecordPayloadException(string callId, string reason, string message)
+        /// <summary>The call record has sessions, but every one is malformed, so nobody on the call can be attributed.</summary>
+        public const string NoUsableSessionsReason = "NoUsableSessions";
+
+        /// <summary>The call record has no call type, which every saved call needs.</summary>
+        public const string NoCallTypeReason = "NoCallType";
+
+        public CallRecordPayloadException(string callId, string reason, string message, bool isPermanent = false)
             : base(message)
         {
             CallId = callId;
             Reason = reason;
+            IsPermanent = isPermanent;
         }
 
         public string CallId { get; }
 
         /// <summary>The dead-letter reason, e.g. <see cref="NoOrganiserIdentityReason"/>.</summary>
         public string Reason { get; }
+
+        /// <summary>
+        /// Fetching the same call record again cannot help, so it is not retried: one malformed record used to be fetched
+        /// ten times over about four hours, then dead-lettered as <c>CallImportRetriesExhausted</c>.
+        /// </summary>
+        public bool IsPermanent { get; }
     }
 }

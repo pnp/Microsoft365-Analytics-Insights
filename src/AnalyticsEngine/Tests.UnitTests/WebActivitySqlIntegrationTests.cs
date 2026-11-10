@@ -522,6 +522,69 @@ namespace Tests.UnitTests
             Assert.AreEqual(100, fromHome, 0.01);
         }
 
+        /// <summary>
+        /// The average visit length is over the visits that reported a dwell time (#851, R7-6). A visit none of whose pages
+        /// reported one is unmeasured, and counting it in the denominator shortened the average as if it took no time.
+        /// </summary>
+        /// <remarks>
+        /// Seeded in March and April 2020, years before the fixture's traffic, and read through windows that cover only
+        /// those weeks, so no other test sees these visits and these figures see no other test's.
+        /// </remarks>
+        [TestMethod]
+        public async Task Journeys_AverageVisitLength_IsOverTheVisitsWithAMeasuredDwellTime()
+        {
+            var measuredDay = new DateTime(2020, 3, 10, 9, 0, 0, DateTimeKind.Utc);
+            var unmeasuredDay = new DateTime(2020, 4, 7, 9, 0, 0, DateTimeKind.Utc);
+
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                var ada = db.users.Single(u => u.UserPrincipalName == "ada@contoso.com");
+                var home = db.urls.Single(u => u.ID == _homeUrlId);
+                var news = db.urls.Single(u => u.ID == _newsUrlId);
+
+                void Visit(string id, DateTime start, params (Url Page, double? Seconds)[] pages)
+                {
+                    var session = NewSession(db, ada, id);
+                    for (var i = 0; i < pages.Length; i++)
+                    {
+                        db.hits.Add(new Hit
+                        {
+                            url = pages[i].Page,
+                            session = session,
+                            hit_timestamp = start.AddMinutes(i),
+                            seconds_on_page = pages[i].Seconds,
+                            page_request_id = Guid.NewGuid(),
+                        });
+                    }
+
+                    db.SaveChanges();
+                }
+
+                // Two measured visits, 60s and 90s - the second only partly measured - and two that reported no dwell
+                // time at all: a single page, and two pages.
+                Visit("s-2020-measured", measuredDay, (home, 30), (news, 30));
+                Visit("s-2020-partly", measuredDay.AddHours(1), (home, 90), (news, null));
+                Visit("s-2020-bounce", measuredDay.AddHours(2), (home, null));
+                Visit("s-2020-unmeasured", measuredDay.AddHours(3), (home, null), (news, null));
+
+                Visit("s-2020-april", unmeasuredDay, (home, null), (news, null));
+            }
+
+            var store = NewStore();
+
+            var march = await store.GetJourneysAsync(WebActivityQuery.Create(7, new DateTime(2020, 3, 13, 12, 0, 0, DateTimeKind.Utc)));
+            Assert.AreEqual(0, march.Queries.Count(q => q.Error != null), string.Join(" | ", march.Queries.Select(q => q.Key + ": " + q.Error)));
+            Assert.AreEqual(4, march.Kpis.Visits);
+            Assert.AreEqual(2, march.Kpis.MeasuredVisits, "Only two of the four visits reported a dwell time.");
+            Assert.AreEqual(75.0, march.Kpis.AverageVisitSeconds.Value, 1e-9,
+                "(60 + 90) seconds over the two measured visits - not over all four, which would say 37.5.");
+
+            var april = await store.GetJourneysAsync(WebActivityQuery.Create(7, new DateTime(2020, 4, 10, 12, 0, 0, DateTimeKind.Utc)));
+            Assert.AreEqual(1, april.Kpis.Visits);
+            Assert.AreEqual(0, april.Kpis.MeasuredVisits);
+            Assert.IsNull(april.Kpis.AverageVisitSeconds, "No visit was measured, which is not a zero-second average.");
+        }
+
         [TestMethod]
         public async Task Search_CountsADeadEndOnlyWhenNothingFollowedOutsideTheGraceWindow()
         {

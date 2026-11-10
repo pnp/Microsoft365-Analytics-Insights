@@ -44,7 +44,7 @@ namespace Tests.UnitTests.InstallTests
                     () => { ConfigureAzureComponentsTasks.PauseUpgradeWebJobs(settings); return stage("pause"); },
                     () => { ConfigureAzureComponentsTasks.ResumeUpgradeWebJobs(settings); return stage("resume"); },
                     () => stage("stop"), () => stage("start"),
-                    () => tasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(tasks.Executable, new List<InstallLogEventArgs>()),
+                    () => tasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(tasks.Executable, new InstallLogCapture()),
                     () => stage("content"), logger, schemaUpgradeDeferred: () => tasks.SchemaUpgradeDeferred);
                 stages.Add("remaining-tasks");
 
@@ -91,7 +91,7 @@ namespace Tests.UnitTests.InstallTests
                     ConfigureAzureComponentsTasks.RunUpgradeDeploymentAsync(true, true,
                         () => Task.CompletedTask, () => { resumed = true; return Task.CompletedTask; },
                         () => Task.CompletedTask, () => { restarted = true; return Task.CompletedTask; },
-                        () => tasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(tasks.Executable, new List<InstallLogEventArgs>()),
+                        () => tasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(tasks.Executable, new InstallLogCapture()),
                         () => { deployed = true; return Task.CompletedTask; }, logger,
                         schemaUpgradeDeferred: () => tasks.SchemaUpgradeDeferred));
                 Assert.IsFalse(tasks.SchemaUpgradeDeferred);
@@ -115,10 +115,40 @@ namespace Tests.UnitTests.InstallTests
                     process => { cancellation.Cancel(); throw new Win32Exception(5); })
                 { CancellationToken = cancellation.Token };
                 await Assert.ThrowsExceptionAsync<OperationCanceledException>(() =>
-                    tasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(tasks.Executable, new List<InstallLogEventArgs>()));
+                    tasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(tasks.Executable, new InstallLogCapture()));
                 Assert.AreEqual(1, tasks.Launches);
                 Assert.IsFalse(tasks.SchemaUpgradeDeferred);
             }
+        }
+
+        /// <summary>
+        /// The downloaded app's standard output and standard error are each read on a thread of their own, and both log,
+        /// so the install log registered in the database is written from several threads at once. A plain list lost
+        /// messages, or threw, when two arrived together (#852 R11-13).
+        /// </summary>
+        [TestMethod]
+        public void InstallLog_KeepsEveryMessageWrittenFromManyThreadsAtOnce()
+        {
+            const int writers = 8, perWriter = 20000;
+            var capture = new InstallLogCapture();
+            var logger = new InstallLogCapturingLogger(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, capture);
+
+            Parallel.For(0, writers, new ParallelOptions { MaxDegreeOfParallelism = writers }, writer =>
+            {
+                for (var line = 0; line < perWriter; line++)
+                {
+                    logger.LogInformation("writer {Writer} line {Line}", writer, line);
+                    if (line % 2000 == 0)
+                    {
+                        // Reading while others write, as registering the log does.
+                        Assert.IsTrue(capture.Snapshot().All(e => e != null && e.Text != null), "A torn entry was captured.");
+                    }
+                }
+            });
+
+            var captured = capture.Snapshot();
+            Assert.AreEqual(writers * perWriter, captured.Count, "Messages were lost.");
+            Assert.AreEqual(writers * perWriter, captured.Select(e => e.Text).Distinct().Count(), "Messages were duplicated or overwritten.");
         }
 
         [DataTestMethod]
@@ -149,7 +179,7 @@ namespace Tests.UnitTests.InstallTests
 
             internal LaunchControlledTasks(SolutionInstallConfig config, DatabasePaaSInfo database, ILogger logger, Action<Process> launch)
                 : base(config, new FileInfo(@"C:\Contoso\AnalyticsInstaller.exe"), database, logger,
-                    "Synthetic operator", "synthetic-password", connection => Task.FromResult(true))
+                    "Synthetic operator", connection => Task.FromResult(true))
             {
                 _launch = launch;
             }
