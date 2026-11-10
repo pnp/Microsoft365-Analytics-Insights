@@ -8,6 +8,7 @@ using Common.Entities.CopilotInvestment;
 using Common.Entities.CopilotSpend;
 using Common.Entities.LicenceActivity;
 using Common.Entities.PromptCategories;
+using Common.Entities.SpoWebActivity;
 using Common.Entities.TeamsExplorer;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -397,35 +398,87 @@ namespace Tests.UnitTests
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsExplorerExport_OnlyThePeopleSectionsNeedSeePii)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.EveryRestrictedEndpoint_RefusesASignedInUserWithoutThePermission))),
 
-            // WebActivityAPIController has no See PII check: every reader shares one cached answer.
+            // WebActivityAPIController: the cache holds the complete section, and a reader without See PII is sent a trimmed copy
+            // of it (#844, G2). Lists whose queries count no people are withheld rather than floored.
             ["WebActivityAPIController.Availability"] = NoGroupedFigures(
                 "Whether the tracker is collecting, when it last saw a page view, and whether search and click tracking are in use."),
-            ["WebActivityAPIController.Overview"] = KnownGap(
-                "Page views per site (topSites) with no count of the people behind a site and no floor, so a site that one to "
-                + "four people visit shows their browsing, beside the scope-wide KPIs, trend, heatmap and visitor segments."),
-            ["WebActivityAPIController.Visits"] = KnownGap(
-                "Visits by site, page, device and browser, and each site over time, with no floor: a page or site that one to "
-                + "four people visited shows their visits."),
-            ["WebActivityAPIController.Pages"] = KnownGap(
-                "Top, slowest and quiet pages (title, URL and site) and sites, with page views, visitors (1-4 possible), time on "
-                + "page and load time, unfloored. Quiet pages are the least visited by design, so a row is often one to four "
-                + "people's reading."),
-            ["WebActivityAPIController.Journeys"] = KnownGap(
-                "Entry, exit and bounce pages, page-to-page transitions, start-to-end flows and clicked elements, unfloored: a "
-                + "path that one to four people took is their browsing."),
-            ["WebActivityAPIController.Geography"] = KnownGap(
-                "Countries, provinces and cities with visitors (1-4 possible), visits and page views, and countries over time, "
-                + "unfloored: a city with one visitor says where that person is and what they read."),
-            ["WebActivityAPIController.Search"] = KnownGap(
-                "Search terms, free text people typed, with searchers (1-4 possible), dead-end terms with no people count and "
-                + "searches by site, unfloored: the kind of text #866 floored for Copilot prompt phrases and withheld for Teams "
-                + "key phrases."),
-            ["WebActivityAPIController.Technology"] = KnownGap(
-                "Browsers, operating systems and devices with visitors (1-4 possible), and a detail table of browser, device, "
-                + "operating system and city with visitors, unfloored."),
-            ["WebActivityAPIController.Export"] = KnownGap(
-                "CSV files of the same unfloored rows - top, quiet and slow pages, entry and exit pages, transitions, flows, "
-                + "search terms and the technology detail with its cities - up to WebActivityQuery.MaximumTop rows each."),
+            ["WebActivityAPIController.Overview"] = Floored(
+                    "Sites visited by fewer than 5 people are left out of the busiest sites, with the smallest site shown, so none can "
+                    + "be worked out from the page-view total.")
+                .By(typeof(WebActivityOverview), nameof(WebActivityOverview.WithoutSmallGroups))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesJourneysVisitsAndOverview_WithoutSeePii_WithholdTheListsThatCountNoPeople_AndLeaveOutSmallSites)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut)))
+                .WithKnownGap("#844 (S4-1), waiting on the same product decision as Teams Explorer: the engagement-segment mix (people "
+                    + "per segment) is not floored. The headline figures, weekly trend, heatmap and visit depth are over the reader's "
+                    + "whole scope with no people count (judgement call 1)."),
+            ["WebActivityAPIController.Visits"] = Floored(
+                    "Sites, devices and browsers of fewer than 5 visitors are left out with the smallest row shown, and a site the list "
+                    + "leaves out is folded into '(other sites)' over time; the page list counts no people and is withheld.")
+                .By(typeof(WebActivityVisits), nameof(WebActivityVisits.WithoutSmallGroups))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithSeriesFolded))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesJourneysVisitsAndOverview_WithoutSeePii_WithholdTheListsThatCountNoPeople_AndLeaveOutSmallSites)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut)))
+                .WithKnownGap("The visit trend and the day, hour and period-of-day buckets are over the reader's whole scope with no "
+                    + "people count (judgement call 1). A site over time is matched to the site list by display name, so a site "
+                    + "outside the list's top N that shares a shown site's title keeps its series."),
+            ["WebActivityAPIController.Pages"] = Floored(
+                    "Top, slowest and quiet pages are withheld, because their queries count no people; sites of fewer than 5 visitors "
+                    + "are left out with the smallest site shown.")
+                .By(typeof(WebActivityPages), nameof(WebActivityPages.WithoutSmallGroups))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesJourneysVisitsAndOverview_WithoutSeePii_WithholdTheListsThatCountNoPeople_AndLeaveOutSmallSites)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallGroups_ReturnsACopy_AndLeavesTheCachedSectionAsItWasBuilt)))
+                .WithKnownGap("The weekly period-of-day chart is over the reader's whole scope with no people count (judgement call 1). "
+                    + "The page lists could be floored instead of withheld once their queries count distinct visitors."),
+            ["WebActivityAPIController.Journeys"] = Floored(
+                    "Entry, exit and bounce pages, transitions, flows and clicked elements are withheld: none of their queries counts "
+                    + "the people behind a row.")
+                .By(typeof(WebActivityJourneys), nameof(WebActivityJourneys.WithoutSmallGroups))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesJourneysVisitsAndOverview_WithoutSeePii_WithholdTheListsThatCountNoPeople_AndLeaveOutSmallSites)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallGroups_ReturnsACopy_AndLeavesTheCachedSectionAsItWasBuilt)))
+                .WithKnownGap("The visit-depth buckets and the click total are over the reader's whole scope with no people count "
+                    + "(judgement call 1)."),
+            ["WebActivityAPIController.Geography"] = Floored(
+                    "Countries, provinces and cities fewer than 5 people visited from are left out, each list with its smallest place "
+                    + "shown, so no place can be worked out from the located page views; a country the list leaves out is folded into "
+                    + "'(other countries)' over time.")
+                .By(typeof(WebActivityGeography), nameof(WebActivityGeography.WithoutSmallGroups))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithSeriesFolded))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Geography_WithoutSeePii_LeavesOutPlacesOfFewerThanFiveVisitors_AndWhatIsLeftOutIsNeverOneSmallPlace)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut))),
+            ["WebActivityAPIController.Search"] = Floored(
+                    "Search terms and dead-end terms are withheld, as Teams key phrases are: they are text people typed. Searches by "
+                    + "site count no people and are withheld too.")
+                .By(typeof(WebActivitySearch), nameof(WebActivitySearch.WithoutSmallGroups))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Search_WithoutSeePii_WithholdsEveryTermAndTheSitesSearched_AndTheCachedSectionKeepsThemForSeePii)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallGroups_ReturnsACopy_AndLeavesTheCachedSectionAsItWasBuilt)))
+                .WithKnownGap("The search trend and the day and period-of-day buckets are over the reader's whole scope with no "
+                    + "people count (judgement call 1)."),
+            ["WebActivityAPIController.Technology"] = Floored(
+                    "Browsers, operating systems, devices and the browser x device x operating system x city detail are left out below "
+                    + "5 visitors, each list with its smallest row shown; a device the list leaves out is folded into '(other devices)' "
+                    + "over time.")
+                .By(typeof(WebActivityTechnology), nameof(WebActivityTechnology.WithoutSmallGroups))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithSeriesFolded))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Technology_WithoutSeePii_LeavesOutDetailRowsAndPlatformsOfFewerThanFiveVisitors)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut))),
+            ["WebActivityAPIController.Export"] = Floored(
+                    "The technology file carries the screen's floored detail rows, cached apart from a See PII reader's file.")
+                .By(typeof(WebActivityTechnology), nameof(WebActivityTechnology.WithoutSmallGroups))
+                .ProvenBy(Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Export_WithoutSeePii_RefusesEveryFileItsScreenWithholds_AndTheTechnologyFileCarriesTheScreensRows)))
+                .Refusing("section pages, quiet-pages, slow-pages, entry-pages, exit-pages, transitions, flows, search-terms",
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Export_WithoutSeePii_RefusesEveryFileItsScreenWithholds_AndTheTechnologyFileCarriesTheScreensRows))),
         };
 
         #region The checks
