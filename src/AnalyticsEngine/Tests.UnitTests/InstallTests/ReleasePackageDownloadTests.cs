@@ -6,6 +6,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -101,22 +102,34 @@ namespace Tests.UnitTests.InstallTests
             Assert.IsFalse(File.Exists(Path.Combine(_directory, "Website.zip")), "A truncated package must not be left behind.");
         }
 
-        /// <summary>A download that keeps moving is not a stall, but it still has an overall limit.</summary>
+        /// <summary>
+        /// The installer sets no overall limit on a package download: one that keeps receiving data runs for as long as GitHub
+        /// and the network allow. This one trickles for twenty times the no-data limit. At the installer's real limit of
+        /// 2 minutes without data, that is a 40-minute download, which the earlier 30-minute overall limit would have failed.
+        /// </summary>
         [TestMethod]
         [Timeout(120000)]
-        public async Task APackageThatTrickles_TimesOutOnTheOverallLimit()
+        public async Task APackageThatTrickles_FinishesHoweverLongItTakes()
         {
+            const string slowPackage = "Office365ActivityImporter.zip";
             var github = new FakeGitHub();
-            github.Behaviour["Office365ActivityImporter.zip"] = ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StreamContent(new SlowStream(firstChunk: 1, thenEvery: TimeSpan.FromMilliseconds(20)))
-            });
             var task = NewTask(github, new CapturingLogger());
-            task.DownloadTimeout = TimeSpan.FromSeconds(1);
+            task.StallTimeout = TimeSpan.FromMilliseconds(500);
+            var trickleFor = TimeSpan.FromTicks(task.StallTimeout.Ticks * 20);
+            github.Behaviour[slowPackage] = ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                // A byte every 50 ms: never quiet for anything like the 500 ms the no-data limit allows.
+                Content = new StreamContent(new HeldStream(FakeGitHub.Content(slowPackage), Task.Delay(trickleFor), () => { },
+                    every: TimeSpan.FromMilliseconds(50)))
+            });
 
-            var ex = await Assert.ThrowsExceptionAsync<UnexpectedInstallException>(() => task.ExecuteTaskReturnResult(null));
+            var timer = Stopwatch.StartNew();
+            var result = await task.ExecuteTaskReturnResult(null);
+            timer.Stop();
 
-            StringAssert.Contains(ex.Message, "'Office365ActivityImporter.zip' timed out: it did not finish within 1 second");
+            Assert.IsTrue(result.IsValid);
+            Assert.IsTrue(timer.Elapsed >= trickleFor, $"The download took {timer.Elapsed}, so it didn't trickle for {trickleFor}.");
+            CollectionAssert.AreEqual(FakeGitHub.Content(slowPackage), File.ReadAllBytes(Path.Combine(_directory, slowPackage)));
         }
 
         [TestMethod]
@@ -364,21 +377,24 @@ namespace Tests.UnitTests.InstallTests
         }
 
         /// <summary>
-        /// A response body that sends <c>content</c> a byte every tenth of a second until <c>release</c> completes, then
-        /// the rest at once: never quiet long enough to stall, and finished only when the test says.
+        /// A response body that sends <c>content</c> a byte every <c>every</c> (a tenth of a second by default) until
+        /// <c>release</c> completes, then the rest at once: never quiet long enough to stall, and finished only when the test
+        /// says.
         /// </summary>
         sealed class HeldStream : FakeResponseBody
         {
             readonly byte[] _content;
             readonly Task _release;
             readonly Action _onEnd;
+            readonly TimeSpan _every;
             int _sent;
 
-            public HeldStream(byte[] content, Task release, Action onEnd)
+            public HeldStream(byte[] content, Task release, Action onEnd, TimeSpan? every = null)
             {
                 _content = content;
                 _release = release;
                 _onEnd = onEnd;
+                _every = every ?? TimeSpan.FromMilliseconds(100);
             }
 
             public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
@@ -390,7 +406,7 @@ namespace Tests.UnitTests.InstallTests
                 }
                 if (!_release.IsCompleted)
                 {
-                    await Task.WhenAny(_release, Task.Delay(100, cancellationToken));
+                    await Task.WhenAny(_release, Task.Delay(_every, cancellationToken));
                     cancellationToken.ThrowIfCancellationRequested();
                 }
                 var sending = _release.IsCompleted ? Math.Min(count, _content.Length - _sent) : 1;

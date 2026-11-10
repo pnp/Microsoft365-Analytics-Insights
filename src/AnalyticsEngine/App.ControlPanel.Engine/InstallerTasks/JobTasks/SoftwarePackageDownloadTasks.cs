@@ -21,18 +21,26 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public const string CFG_KEY_RepoOwner = "RepoOwner", CFG_KEY_RepoName = "RepoName";
 
         /// <summary>
-        /// Longest one release package may take to download. The packages are tens of megabytes each and all five are
-        /// fetched at once, so HttpClient's default of 100 seconds for the whole transfer failed on a slow link.
+        /// Longest a package download may go without receiving any data. It is the only limit on a package download: the
+        /// installer sets no overall one, so a download that keeps receiving data runs for as long as GitHub and the network
+        /// allow. HttpClient's default of 100 seconds for the whole transfer failed the packages, tens of megabytes each, on a
+        /// slow link.
         /// </summary>
-        public static readonly TimeSpan PackageDownloadTimeout = TimeSpan.FromMinutes(30);
-
-        /// <summary>
-        /// Longest a package download may go without receiving any data. A dead connection then fails in minutes,
-        /// not at <see cref="PackageDownloadTimeout"/>, while a slow one that is still moving is left to finish.
-        /// </summary>
+        /// <remarks>
+        /// This is not a speed limit: any data resets it, and its clock stops while a chunk is written to disk. Without it, a
+        /// connection that drops silently, with no TCP reset (a VPN, proxy or NAT that forgets it), would leave the installer
+        /// waiting indefinitely. On .NET Framework an asynchronous read already waiting on the network has no timeout of its own
+        /// (<c>HttpWebRequest.ReadWriteTimeout</c> covers only synchronous reads), and only TCP keep-alive would notice the dead
+        /// connection - after about two hours with Windows' defaults - but these sockets are opened without it
+        /// (<c>ServicePointManager.SetTcpKeepAlive</c> is off by default). The user's Cancel works at any time either way.
+        /// </remarks>
         public static readonly TimeSpan PackageDownloadStallTimeout = TimeSpan.FromMinutes(2);
 
-        /// <summary>Longest the GitHub API may take to describe the latest release: HttpClient's default.</summary>
+        /// <summary>
+        /// Longest the GitHub API may take to describe the latest release, and GitHub to send its
+        /// <see cref="ReleaseManifestAssetName"/>: HttpClient's default. Both are small, so unlike a package they have an
+        /// overall limit.
+        /// </summary>
         public static readonly TimeSpan ReleaseMetadataTimeout = TimeSpan.FromSeconds(100);
 
         /// <summary>The release asset CI publishes with the SHA-256 of every package (<c>.github/scripts/prepare-release.mjs</c>).</summary>
@@ -51,7 +59,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         }
 
-        internal TimeSpan DownloadTimeout { get; set; } = PackageDownloadTimeout;
         internal TimeSpan StallTimeout { get; set; } = PackageDownloadStallTimeout;
         internal TimeSpan MetadataTimeout { get; set; } = ReleaseMetadataTimeout;
 
@@ -60,8 +67,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         internal static HttpClient CreateHttpClient(HttpMessageHandler handler)
         {
-            // Each request carries its own limit (the timeouts above), so the client's single whole-request timeout
-            // must not cut a package download short.
+            // The client's single whole-request timeout would cut a long package download short. A package has only the
+            // no-data limit, and the release metadata and manifest requests carry their own limit (the timeouts above).
             var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
             client.DefaultRequestHeaders.Add("User-Agent", "AnalyticsEngine-Installer");
             client.DefaultRequestHeaders.Add("Accept", "application/vnd.github.v3+json");
@@ -254,7 +261,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         /// <summary>
         /// How many packages download at once. .NET Framework opens at most two connections to a server
-        /// (<c>ServicePointManager.DefaultConnectionLimit</c>), so a third request would only queue - with its timeouts
+        /// (<c>ServicePointManager.DefaultConnectionLimit</c>), so a third request would only queue - with its no-data clock
         /// running while it waited, which on a slow link would fail it for a stall that never happened.
         /// </summary>
         internal const int ParallelDownloads = 2;
@@ -273,8 +280,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
         }
 
         /// <summary>
-        /// Streams one package to disk, giving up after <see cref="DownloadTimeout"/> overall or after
-        /// <see cref="StallTimeout"/> without data, and checks it against <paramref name="expectedSha256"/>. A failure is a
+        /// Streams one package to disk and checks it against <paramref name="expectedSha256"/>. There is no overall limit: it
+        /// gives up only after <see cref="StallTimeout"/> without data, or when the user cancels. A failure is a
         /// <see cref="PackageDownloadFailedException"/> that names the package and says whether it timed out, and leaves no
         /// file behind; the user's cancel is an <see cref="OperationCanceledException"/>.
         /// </summary>
@@ -287,9 +294,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             var filePath = Path.Combine(baseDir, fileName);
             long received = 0;
-            using (var overall = new CancellationTokenSource(DownloadTimeout))
             using (var stall = new CancellationTokenSource(StallTimeout))
-            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, overall.Token, stall.Token))
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, stall.Token))
             using (var sha256 = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
             {
                 try
@@ -341,11 +347,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     {
                         throw new PackageDownloadFailedException($"'{fileName}' timed out: no data arrived for " +
                             $"{DescribeDuration(StallTimeout)} ({DescribeSize(received)} received)");
-                    }
-                    if (overall.IsCancellationRequested)
-                    {
-                        throw new PackageDownloadFailedException($"'{fileName}' timed out: it did not finish within " +
-                            $"{DescribeDuration(DownloadTimeout)} ({DescribeSize(received)} received)");
                     }
                     var cause = ex.GetBaseException();
                     throw new PackageDownloadFailedException($"'{fileName}' failed: {cause.GetType().Name}: {cause.Message}");
