@@ -14,6 +14,7 @@ import Spinner from '../components/Spinner';
 import { GraphResponse } from '../types/GraphResponse';
 import { fetchMsGraph, GRAPH_ENDPOINTS } from '../auth/graph';
 import { fetchGraphToken, SiteTokenUnavailableError } from '../auth/siteToken';
+import { postToServer } from '../auth/serverPost';
 import {
   TEAMS_CONNECT_URL,
   readTeamsConnectOutcome,
@@ -177,8 +178,8 @@ class TeamsPermissionsPageInner extends React.Component<TeamsPermissionsProps, T
                     {t('admin.teamsPermissions.noTokenMessage')}
                   </MessageBarBody>
                 </MessageBar>
-                {/* A full-page navigation: the server has to take the browser through Entra ID and back. */}
-                <Button appearance="primary" as="a" href={TEAMS_CONNECT_URL} style={{ marginTop: '12px' }}>
+                {/* A full-page POST: the server has to take the browser through Entra ID and back, and refuses a GET. */}
+                <Button appearance="primary" onClick={() => postToServer(TEAMS_CONNECT_URL)} style={{ marginTop: '12px' }}>
                   {t('admin.teamsPermissions.connect.button')}
                 </Button>
               </div>

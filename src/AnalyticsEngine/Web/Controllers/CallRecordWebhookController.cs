@@ -35,6 +35,12 @@ namespace Web.AnalyticsWeb.Controllers
         private static ServiceBusClient _queueClient;
         private static ICallNotificationQueueSender _queue;
 
+        // Graph validates the webhook, and the importer warms it up, many times a day, and anyone can post junk to it: a
+        // trace for each filled the customer's Application Insights. One line per interval, with a count, says as much.
+        internal static readonly TimeSpan SampledTraceInterval = TimeSpan.FromMinutes(15);
+        private static readonly SampledTrace ValidationTraces = new SampledTrace(SampledTraceInterval);
+        private static readonly SampledTrace BadBodyTraces = new SampledTrace(SampledTraceInterval);
+
         // Webhook called by Graph for new calls
         // POST: api/CallRecordWebhook - or api/CallRecordWebhook?cs=v1, the URL subscriptions with the derived clientState
         // use (CallSubscriptionRules.CurrentNotificationUrl). The extra parameter needs no binding: Graph appends its
@@ -46,9 +52,16 @@ namespace Web.AnalyticsWeb.Controllers
             // Test ping from Graph, or the importer warming the webhook up before it asks Graph for a subscription?
             if (!string.IsNullOrEmpty(validationToken))
             {
-                Logger.Value.LogInformation($"{nameof(CallRecordWebhookController)}: validation request received (from Graph, or the importer's warm-up).");
+                if (ValidationTraces.ShouldTrace(DateTime.UtcNow, out var pings, out var pingsSince))
+                {
+                    Logger.Value.LogInformation($"{nameof(CallRecordWebhookController)}: {pings} validation request(s) received (from Graph, or the importer's warm-up) " +
+                        $"since {pingsSince:u}. Logged at most every {SampledTraceInterval.TotalMinutes:0} minutes.");
+                }
                 var pingTestResponse = new HttpResponseMessage(HttpStatusCode.OK);
                 pingTestResponse.Content = new StringContent(validationToken, System.Text.Encoding.UTF8, "text/plain");
+
+                // The token is whatever the caller sent: it must never be read as anything but text
+                pingTestResponse.Headers.Add("X-Content-Type-Options", "nosniff");
                 return pingTestResponse;
             }
 
@@ -56,10 +69,15 @@ namespace Web.AnalyticsWeb.Controllers
             // just as malformed as no body at all - and used to be a NullReferenceException (a 500) for anyone.
             if (changeMsg?.Notifications == null)
             {
-                Logger.Value.LogInformation($"{nameof(CallRecordWebhookController)} invoked with invalid body.");
+                if (BadBodyTraces.ShouldTrace(DateTime.UtcNow, out var badBodies, out var badBodiesSince))
+                {
+                    Logger.Value.LogInformation($"{nameof(CallRecordWebhookController)} invoked with invalid body {badBodies} time(s) since {badBodiesSince:u}. " +
+                        $"Logged at most every {SampledTraceInterval.TotalMinutes:0} minutes.");
+                }
                 var errResponse = new HttpResponseMessage(HttpStatusCode.BadRequest);
                 errResponse.Content = new StringContent($"Could not find {nameof(GraphChangeNotificationList)} in body",
                     System.Text.Encoding.UTF8, "text/plain");
+                errResponse.Headers.Add("X-Content-Type-Options", "nosniff");
                 return errResponse;
             }
 
@@ -126,6 +144,45 @@ namespace Web.AnalyticsWeb.Controllers
                 }
 
                 return _queue;
+            }
+        }
+
+        /// <summary>
+        /// Lets one kind of request be traced at most once per interval per process, counting the ones in between.
+        /// </summary>
+        internal sealed class SampledTrace
+        {
+            private readonly TimeSpan _interval;
+            private readonly object _gate = new object();
+            private DateTime? _lastTracedUtc;
+            private DateTime _windowStartUtc;
+            private int _count;
+
+            internal SampledTrace(TimeSpan interval)
+            {
+                _interval = interval;
+            }
+
+            /// <summary>Counts a request; true when it should be traced, with how many it stands for and since when.</summary>
+            internal bool ShouldTrace(DateTime nowUtc, out int count, out DateTime sinceUtc)
+            {
+                lock (_gate)
+                {
+                    if (_count == 0) _windowStartUtc = nowUtc;
+                    _count++;
+                    if (_lastTracedUtc.HasValue && nowUtc - _lastTracedUtc.Value < _interval)
+                    {
+                        count = 0;
+                        sinceUtc = default;
+                        return false;
+                    }
+
+                    count = _count;
+                    sinceUtc = _windowStartUtc;
+                    _count = 0;
+                    _lastTracedUtc = nowUtc;
+                    return true;
+                }
             }
         }
     }

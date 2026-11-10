@@ -3,6 +3,7 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import EmailDomainPanel from './EmailDomainPanel';
+import { loadCatalog } from '../../i18n';
 import type {
   AdoptionDomainRow,
   CopilotAdoptionOptions,
@@ -99,6 +100,15 @@ describe('EmailDomainPanel', () => {
     expect(row.getByText('55')).toBeTruthy();
     expect(row.getByText('30')).toBeTruthy();
     expect(row.getByText('11')).toBeTruthy();
+  });
+
+  it('writes interactions per licence in the reader\u2019s number format', async () => {
+    await loadCatalog('es');
+    renderWithProvider(<EmailDomainPanel summary={summaryWith(DOMAINS)} />, { language: 'es' });
+
+    expect(within(rowFor('fabrikam.com')).getByText('1,2')).toBeTruthy();
+    expect(within(rowFor('contoso.com')).getByText('18,4')).toBeTruthy();
+    expect(within(rowFor('contoso.com')).queryByText('18.4')).toBeNull();
   });
 
   it('shows a dash for a domain with no seats, never 0%', () => {

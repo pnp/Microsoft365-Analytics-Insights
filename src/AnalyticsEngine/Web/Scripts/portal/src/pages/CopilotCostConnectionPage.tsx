@@ -25,6 +25,55 @@ const useStyles = makeStyles({
   success: { color: tokens.colorStatusSuccessForeground1, flexShrink: 0 },
 });
 
+/** The wait after a step that moved the data check on. */
+export const PROBE_FIRST_DELAY_MS = 500;
+
+/** The longest wait between steps: each step that changes nothing doubles the wait, up to this. */
+export const PROBE_MAX_DELAY_MS = 30_000;
+
+/**
+ * Steps one run takes before it stops and asks to be resumed, so a tab left open does not keep
+ * reading the tenant's credit data unattended. Progress is saved server-side, so nothing is lost.
+ */
+export const PROBE_MAX_STEPS = 250;
+
+type ProbeStatus = NonNullable<CostConnectionStatus['probe']>;
+
+/** What a step can change; an identical fingerprint after a step means it made no progress. */
+function probeFingerprint(probe: ProbeStatus | undefined): string {
+  if (!probe) return '';
+  return [probe.phase, probe.directoryUsers, probe.inventoryComplete, probe.observed, probe.measured, probe.empty,
+    probe.partial, probe.unevaluated, probe.failed, probe.denied].join('|');
+}
+
+/** Waits `ms`, or less if the run is stopped. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done);
+  });
+}
+
+/** Resolves once the tab is in the foreground, or the run is stopped: a background tab takes no steps. */
+function whenVisible(signal: AbortSignal): Promise<void> {
+  if (document.visibilityState !== 'hidden' || signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      if (document.visibilityState === 'hidden' && !signal.aborted) return;
+      document.removeEventListener('visibilitychange', done);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    document.addEventListener('visibilitychange', done);
+    signal.addEventListener('abort', done);
+  });
+}
+
 export default function CopilotCostConnectionPage() {
   const t = useT();
   const styles = useStyles();
@@ -32,6 +81,7 @@ export default function CopilotCostConnectionPage() {
   const [busy, setBusy] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [running, setRunning] = useState(false);
+  const [stoppedAtLimit, setStoppedAtLimit] = useState(false);
   const [confirmation, setConfirmation] = useState<'probe' | 'disconnect' | 'resetProbe' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [collection, setCollection] = useState<CostCollectionStatus | null>(null);
@@ -90,19 +140,32 @@ export default function CopilotCostConnectionPage() {
 
   useEffect(() => {
     if (!running) return;
+    const stopped = new AbortController();
+    const signal = stopped.signal;
     let active = true;
     async function run() {
       try {
         let current = await fetchCostConnection();
         if (active) setState(current);
-        while (active && current.status === 'connected' && current.csrfToken && current.probe?.phase !== 'observed') {
+        let delay = PROBE_FIRST_DELAY_MS;
+        let fingerprint = probeFingerprint(current.probe);
+        for (let steps = 0; active && current.status === 'connected' && current.csrfToken && current.probe?.phase !== 'observed'; steps++) {
+          if (steps >= PROBE_MAX_STEPS) {
+            setStoppedAtLimit(true);
+            break;
+          }
+          await whenVisible(signal);
+          if (!active) break;
           await changeCostConnection('probe', current.csrfToken);
           current = await fetchCostConnection();
           if (!active) break;
           setState(current);
           if (current.probe?.lastOutcome && current.probe.lastOutcome !== 'sliceCompleted')
             throw new Error(costConnectionText(current.probe.lastOutcome));
-          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+          const next = probeFingerprint(current.probe);
+          delay = next === fingerprint ? Math.min(delay * 2, PROBE_MAX_DELAY_MS) : PROBE_FIRST_DELAY_MS;
+          fingerprint = next;
+          await pause(delay, signal);
         }
       } catch (e) {
         if (active) {
@@ -116,7 +179,10 @@ export default function CopilotCostConnectionPage() {
       } finally { if (active) setRunning(false); }
     }
     void run();
-    return () => { active = false; };
+    return () => {
+      active = false;
+      stopped.abort();
+    };
   }, [running, t]);
 
   const manageable = !!state?.csrfToken;
@@ -189,6 +255,13 @@ export default function CopilotCostConnectionPage() {
             {(probe.failed > 0 || probe.partial > 0 || probe.unevaluated > 0) && <Text block>{t('admin.costConnection.coverageHelp')}</Text>}
           </div>
         )}
+        {stoppedAtLimit && !running && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              {t('admin.costConnection.stoppedAtLimit', { count: formatNumber(PROBE_MAX_STEPS), action: t('admin.costConnection.runProbe') })}
+            </MessageBarBody>
+          </MessageBar>
+        )}
       </Card>
       <Card className={styles.card}>
         <Subtitle2>{t('admin.costConnection.collectionTitle')}</Subtitle2>
@@ -247,6 +320,7 @@ export default function CopilotCostConnectionPage() {
                 else if (action === 'resetProbe') void change('resetProbe');
                 else {
                   setError(null);
+                  setStoppedAtLimit(false);
                   setRunning(true);
                 }
               }}>{t('admin.costConnection.confirm')}</Button>

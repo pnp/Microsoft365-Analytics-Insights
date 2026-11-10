@@ -41,6 +41,7 @@ import {
 import { PRODUCT_NAME, REPOSITORY_URL, printedBuildText } from './product';
 import { LanguageSwitcher, useT } from './i18n';
 import { roleForPermission, usePortalAccess, type PortalPermission } from './access';
+import { postToServer } from './auth/serverPost';
 import { useGlobalFilter } from './components/globalFilter/GlobalFilterProvider';
 import ReportAreasProvider, { useReportAreas } from './components/ReportAreasProvider';
 import RouteErrorBoundary from './components/RouteErrorBoundary';
@@ -294,8 +295,8 @@ function AppShell() {
           className={styles.signOut}
           icon={<SignOut20Regular />}
           onClick={() => {
-            // Server-side OIDC sign-out (full page navigation, not a SPA route).
-            window.location.href = '/Account/SignOut';
+            // Server-side OIDC sign-out: a POST from this page, which the server requires (#853)
+            postToServer('/Account/SignOut');
           }}
         >
           {t('app.signOut')}

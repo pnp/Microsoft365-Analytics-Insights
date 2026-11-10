@@ -631,8 +631,17 @@ namespace Common.Entities.Xlsx
             return true;
         }
 
-        /// <summary>Formats a double invariantly so a comma-decimal locale can never corrupt the XML.</summary>
+        /// <summary>
+        /// Formats a double invariantly so a comma-decimal locale can never corrupt the XML. Callers
+        /// must check <see cref="IsFinite"/> first: there is no SpreadsheetML form of NaN or infinity.
+        /// </summary>
         internal static string Num(double value) => value.ToString(CultureInfo.InvariantCulture);
+
+        /// <summary>
+        /// False for NaN and the infinities - typically a ratio over a zero denominator. Written verbatim
+        /// they make Excel report the whole workbook as damaged, so callers write a blank instead.
+        /// </summary>
+        internal static bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
 
         /// <summary>Formats an integer invariantly.</summary>
         internal static string Int(int value) => value.ToString(CultureInfo.InvariantCulture);

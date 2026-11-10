@@ -35,10 +35,22 @@ export interface WebActivityWindow {
   minimumPagesForDecile: number;
 }
 
-/** A verdict on one headline figure. */
+/**
+ * A verdict on one headline figure.
+ *
+ * The portal words it from `headlineKey`/`detailKey` and the unformatted `values`, so the sentence
+ * and its numbers follow the reader's language. `headline`/`detail` are the server's English, shown
+ * only for a key this build does not recognise.
+ */
 export interface WebActivityJudgement {
   key: string;
   tone: 'good' | 'neutral' | 'warning' | 'critical';
+  /** `{key}.headline` or `{key}.headline.{variant}`; absent from a server older than this build. */
+  headlineKey?: string;
+  /** `{key}.detail` or `{key}.detail.{variant}`; absent from a server older than this build. */
+  detailKey?: string;
+  /** The figures the sentences quote, by placeholder name. */
+  values?: Record<string, number | string>;
   headline: string;
   detail: string;
 }

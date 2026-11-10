@@ -50,6 +50,14 @@ namespace Web.AnalyticsWeb.Controllers
     /// one-person job title, office or department is not that person's activity. The cached section is the complete
     /// one; a reader without the permission gets a trimmed copy of it.
     /// </para>
+    /// <para>
+    /// The same reader is held to that floor in the other sections too (#844): meetings withholds a week of fewer than
+    /// five attendees, the distributions when fewer than five people attended at all, and folds modalities used by fewer;
+    /// collaboration leaves out teams - and the channels of teams - with fewer than five members, withholds reactions one
+    /// to four people made, folds rarely-used reactions and withholds the tab list; conversations withholds the key phrases
+    /// and languages and leaves out the sentiment of teams with fewer than five members. The team and channel exports
+    /// match the page.
+    /// </para>
     /// </remarks>
     [Authorize]
     [RoutePrefix("api/TeamsExplorer")]
@@ -157,7 +165,8 @@ namespace Web.AnalyticsWeb.Controllers
         {
             var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
             Func<TeamsMeetings, TeamsMeetings> forReader = null;
-            if (!PortalAccess.Evaluate(Request, User).SeePii) forReader = m => m.WithoutIndividualData();
+            if (!PortalAccess.Evaluate(Request, User).SeePii)
+                forReader = m => m.WithoutIndividualData().WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
             return await CachedAsync("meetings", query, () => _store.GetMeetingsAsync(query), forReader).ConfigureAwait(false);
         }
 
@@ -169,7 +178,10 @@ namespace Web.AnalyticsWeb.Controllers
             int top = TeamsExplorerQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
-            return await CachedAsync("collaboration", query, () => _store.GetCollaborationAsync(query)).ConfigureAwait(false);
+            Func<TeamsCollaboration, TeamsCollaboration> forReader = null;
+            if (!PortalAccess.Evaluate(Request, User).SeePii)
+                forReader = c => c.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
+            return await CachedAsync("collaboration", query, () => _store.GetCollaborationAsync(query), forReader).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/conversations?days=28
@@ -181,7 +193,10 @@ namespace Web.AnalyticsWeb.Controllers
         {
             var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
             var cognitive = ReadSources().Cognitive;
-            return await CachedAsync("conversations", query, () => _store.GetConversationsAsync(query, cognitive)).ConfigureAwait(false);
+            Func<TeamsConversations, TeamsConversations> forReader = null;
+            if (!PortalAccess.Evaluate(Request, User).SeePii)
+                forReader = c => c.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
+            return await CachedAsync("conversations", query, () => _store.GetConversationsAsync(query, cognitive), forReader).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/people?days=28&top=20
@@ -268,6 +283,8 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     var collaboration = await _store.GetCollaborationAsync(query).ConfigureAwait(false);
                     failedQuery = FailedQuery(collaboration, "collab-teams", out failedInfo);
+                    // Never less redacted than the page: the same teams are left out, and the same reactions withheld.
+                    if (!seePii) collaboration = collaboration.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
                     csv = CsvSerialiser.ToBytes(collaboration.Teams, TeamsExplorerExports.TeamColumns());
                     break;
                 }
@@ -276,6 +293,7 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     var collaboration = await _store.GetCollaborationAsync(query).ConfigureAwait(false);
                     failedQuery = FailedQuery(collaboration, "collab-channels", out failedInfo);
+                    if (!seePii) collaboration = collaboration.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
                     csv = CsvSerialiser.ToBytes(collaboration.Channels, TeamsExplorerExports.ChannelColumns());
                     break;
                 }

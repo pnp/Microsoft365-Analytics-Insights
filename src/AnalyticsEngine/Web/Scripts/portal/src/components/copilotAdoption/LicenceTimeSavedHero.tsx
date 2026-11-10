@@ -21,6 +21,7 @@ import {
   TIME_SAVED_ACTIVITY_LABEL,
   TimeSavedHeroFrame,
   formatAssumption,
+  formatWholeShare,
   wholeShares,
   type HeroStat,
 } from './timeSavedShared';
@@ -217,9 +218,9 @@ export default function LicenceTimeSavedHero({
           className={styles.bar}
           role="img"
           aria-label={t('copilotAdoptionTimeSaved.licence.hero.breakdownAria', {
-            meetings: `${shares[0]}%`,
-            email: `${shares[1]}%`,
-            documents: `${shares[2]}%`,
+            meetings: formatWholeShare(shares[0]),
+            email: formatWholeShare(shares[1]),
+            documents: formatWholeShare(shares[2]),
           })}
         >
           {segments.map((s, i) =>
@@ -231,10 +232,10 @@ export default function LicenceTimeSavedHero({
                 title={t('copilotAdoptionTimeSaved.licence.hero.sliceTitle', {
                   activity: s.label,
                   hours: formatCount(s.hours),
-                  share: `${shares[i]}%`,
+                  share: formatWholeShare(shares[i]),
                 })}
               >
-                {shares[i] >= 10 ? `${shares[i]}%` : ''}
+                {shares[i] >= 10 ? formatWholeShare(shares[i]) : ''}
               </div>
             ) : null,
           )}
@@ -247,7 +248,7 @@ export default function LicenceTimeSavedHero({
                 {t('copilotAdoptionTimeSaved.licence.hero.legendEntry', {
                   activity: s.label,
                   hours: formatCount(s.hours),
-                  share: `${shares[i]}%`,
+                  share: formatWholeShare(shares[i]),
                 })}
               </Text>
             </div>

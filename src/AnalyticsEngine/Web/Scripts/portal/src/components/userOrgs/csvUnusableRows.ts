@@ -1,3 +1,4 @@
+import { saveBlob } from '../../api/download';
 import type { UserOrgCsvUnusableRow } from '../../types/userOrgs';
 
 export interface UnusableRowsCsvText {
@@ -46,12 +47,5 @@ export function unusableRowsFileName(originalName: string | null | undefined, fa
 
 /** Hands a CSV document to the browser as a download: one string, or its pieces in order. */
 export function downloadCsv(csv: string | string[], fileName: string): void {
-  const url = URL.createObjectURL(new Blob(Array.isArray(csv) ? csv : [csv], { type: 'text/csv;charset=utf-8' }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = fileName;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  saveBlob(new Blob(Array.isArray(csv) ? csv : [csv], { type: 'text/csv;charset=utf-8' }), fileName);
 }

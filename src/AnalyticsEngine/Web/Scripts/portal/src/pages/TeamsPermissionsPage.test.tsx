@@ -8,11 +8,14 @@ import { loadCatalog, translateStatic } from '../i18n';
 import TeamsPermissionsPage from './TeamsPermissionsPage';
 import { fetchGraphToken } from '../auth/siteToken';
 import { fetchMsGraph, GraphRequestError, GRAPH_ENDPOINTS } from '../auth/graph';
+import { postToServer } from '../auth/serverPost';
 
 vi.mock('../auth/siteToken', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../auth/siteToken')>()),
   fetchGraphToken: vi.fn(),
 }));
+// Connect is a full-page POST, which jsdom can't perform: the test asserts where it would go.
+vi.mock('../auth/serverPost', () => ({ postToServer: vi.fn() }));
 vi.mock('../auth/graph', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../auth/graph')>()),
   fetchMsGraph: vi.fn(),
@@ -61,6 +64,7 @@ function renderAt(entry: string, language: 'en' | 'es' = 'en') {
 beforeEach(() => {
   vi.mocked(fetchGraphToken).mockReset();
   vi.mocked(fetchMsGraph).mockReset();
+  vi.mocked(postToServer).mockReset();
 });
 
 /**
@@ -74,8 +78,9 @@ describe('Teams permissions page: connecting to Microsoft Teams', () => {
 
     renderAt(ROUTE);
 
-    const connect = await screen.findByRole('link', { name: CONNECT });
-    expect(connect).toHaveAttribute('href', '/Account/ConnectTeams');
+    const connect = await screen.findByRole('button', { name: CONNECT });
+    await userEvent.click(connect);
+    expect(postToServer).toHaveBeenCalledWith('/Account/ConnectTeams');
     expect(screen.getByText(/It doesn't ask for these when you sign in/)).toBeVisible();
     expect(screen.getByText("Your Teams will be listed here once you've connected to Microsoft Teams.")).toBeVisible();
     expect(screen.queryByText(NOT_CONNECTED)).not.toBeInTheDocument();
@@ -94,7 +99,7 @@ describe('Teams permissions page: connecting to Microsoft Teams', () => {
 
     expect(await screen.findByText('Contoso Sales')).toBeVisible();
     expect(screen.getByText('Your Teams - Ada Contoso')).toBeVisible();
-    expect(screen.queryByRole('link', { name: CONNECT })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: CONNECT })).not.toBeInTheDocument();
   });
 
   it('reports a failed Graph call, rather than saying the admin is in no Teams', async () => {
@@ -115,7 +120,7 @@ describe('Teams permissions page: connecting to Microsoft Teams', () => {
     expect(screen.getByText(/hasn't granted the delegated Teams permissions this page needs/)).toBeVisible();
     expect(screen.getByText('Microsoft Entra ID error code: AADSTS65001')).toBeVisible();
     // Still offered, for once an administrator has granted consent.
-    expect(await screen.findByRole('link', { name: CONNECT })).toBeVisible();
+    expect(await screen.findByRole('button', { name: CONNECT })).toBeVisible();
   });
 
   it('says a declined request was declined, not that consent is missing', async () => {
@@ -154,7 +159,7 @@ describe('Teams permissions page: connecting to Microsoft Teams', () => {
 
     renderAt(`${ROUTE}?teamsConnect=consent_required&teamsConnectError=AADSTS65001`, 'es');
 
-    expect(await screen.findByRole('link', { name: es('admin.teamsPermissions.connect.button') })).toBeVisible();
+    expect(await screen.findByRole('button', { name: es('admin.teamsPermissions.connect.button') })).toBeVisible();
     expect(screen.getByText(es('admin.teamsPermissions.connect.outcomeTitle'))).toBeVisible();
     expect(screen.getByText(es('admin.teamsPermissions.noTokenMessage'))).toBeVisible();
     expect(screen.getByText('Código de error de Microsoft Entra ID: AADSTS65001')).toBeVisible();
@@ -206,7 +211,7 @@ describe('Teams permissions page: Microsoft Entra ID unavailable', () => {
     renderAt(ROUTE);
 
     expect(await screen.findByText(ENTRA_UNAVAILABLE)).toBeVisible();
-    expect(screen.queryByRole('link', { name: CONNECT })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: CONNECT })).not.toBeInTheDocument();
     expect(screen.queryByText(/It doesn't ask for these when you sign in/)).not.toBeInTheDocument();
     expect(screen.queryByText('No Teams found for your account.')).not.toBeInTheDocument();
     expect(fetchMsGraph).not.toHaveBeenCalled();
@@ -215,7 +220,7 @@ describe('Teams permissions page: Microsoft Entra ID unavailable', () => {
 
     expect(await screen.findByText('Contoso Sales')).toBeVisible();
     expect(screen.queryByText(ENTRA_UNAVAILABLE)).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: CONNECT })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: CONNECT })).not.toBeInTheDocument();
   });
 
   it('still offers Connect when the site has no working token for the admin (401)', async () => {
@@ -223,7 +228,8 @@ describe('Teams permissions page: Microsoft Entra ID unavailable', () => {
 
     renderAt(ROUTE);
 
-    expect(await screen.findByRole('link', { name: CONNECT })).toHaveAttribute('href', '/Account/ConnectTeams');
+    await userEvent.click(await screen.findByRole('button', { name: CONNECT }));
+    expect(postToServer).toHaveBeenCalledWith('/Account/ConnectTeams');
     expect(screen.queryByText(ENTRA_UNAVAILABLE)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
   });
@@ -237,7 +243,7 @@ describe('Teams permissions page: Microsoft Entra ID unavailable', () => {
 
     expect(await screen.findByText(es('admin.teamsPermissions.entraUnavailable.message'))).toBeVisible();
     expect(screen.getByRole('button', { name: es('admin.teamsPermissions.entraUnavailable.retry') })).toBeVisible();
-    expect(screen.queryByRole('link', { name: es('admin.teamsPermissions.connect.button') })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: es('admin.teamsPermissions.connect.button') })).not.toBeInTheDocument();
     expect(document.body.textContent).not.toContain(ENTRA_UNAVAILABLE);
   });
 });

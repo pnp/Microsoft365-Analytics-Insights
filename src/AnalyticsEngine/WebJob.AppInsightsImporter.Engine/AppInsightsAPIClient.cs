@@ -50,6 +50,9 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         internal Func<TimeSpan, Task> RetryDelay { get; set; } = Task.Delay;
 
+        /// <summary>Where the <c>-logApiResponses</c> debug switch writes its dumps, one folder per query type.</summary>
+        internal string DebugDumpDirectory { get; set; } = Path.Combine(Path.GetTempPath(), "AppInsightsImporter", "REST");
+
         #region Constructors
 
         /// <summary>
@@ -493,7 +496,7 @@ namespace WebJob.AppInsightsImporter.Engine
         {
             var responseBody = await response.Content.ReadAsStringAsync();
 
-            var dir = Path.Combine(Path.GetTempPath(), "AppInsightsImporter", "REST", operationType);
+            var dir = Path.Combine(DebugDumpDirectory, operationType);
             Directory.CreateDirectory(dir);
             // UTC + zero-padded month so files sort lexicographically by time. The previous
             // "yyyy-dd-M_HH-mm-ss" format used non-padded month which collides for files with
@@ -516,7 +519,26 @@ namespace WebJob.AppInsightsImporter.Engine
                 responseDebug = responseBody;
             }
 
-            var fileOut = new { Response = response, Body = responseDebug, Request = response.RequestMessage };
+            // A record made for the purpose, never the HttpResponseMessage: that carries the request, and with it the
+            // Authorization header - a live bearer token for the query API (#853). The body is raw telemetry - page URLs,
+            // user names - which is what the dump is for: delete the folder as soon as the investigation is over, and
+            // within 7 days at most. Program.cs says the same when the switch is used.
+            var fileOut = new
+            {
+                WrittenUtc = DateTime.UtcNow,
+                Operation = operationType,
+                Request = new
+                {
+                    Method = response.RequestMessage?.Method?.Method,
+                    Uri = response.RequestMessage?.RequestUri?.ToString(),
+                },
+                Response = new
+                {
+                    StatusCode = (int)response.StatusCode,
+                    response.ReasonPhrase,
+                },
+                Body = responseDebug,
+            };
 
             File.WriteAllText(fileName, JsonConvert.SerializeObject(fileOut));
             Console.WriteLine($"--DEBUG: Wrote {fileName}");

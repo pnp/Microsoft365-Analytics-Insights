@@ -223,7 +223,7 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
                 users: formatCount(b.users),
                 interactions: formatCount(b.interactions),
                 pct: formatPct(b.sharePct),
-                perUser: b.interactionsPerUser,
+                perUser: formatTenth(b.interactionsPerUser),
               })}
             >
               {b.sharePct >= 8 ? formatPct(b.sharePct) : ''}
@@ -243,7 +243,7 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
             <Text size={200}>
               <strong>{concentrationLabel(t, b.label)}</strong>{' '}
               <span className={styles.muted}>
-                {t('copilotAdoption.combinedViews.concentration.legendDetail', { users: formatCount(b.users), perUser: b.interactionsPerUser })}
+                {t('copilotAdoption.combinedViews.concentration.legendDetail', { users: formatCount(b.users), perUser: formatTenth(b.interactionsPerUser) })}
               </span>
             </Text>
           </div>
@@ -351,7 +351,7 @@ export function CombinedSegmentTable({
                         borderRadius: '3px',
                       }}
                     >
-                      {r.interactionsPerLicensedUser ?? NOT_MEASURED}
+                      {formatTenth(r.interactionsPerLicensedUser)}
                     </span>
                   </td>
                   <td className={`${table.td} ${table.tdNumeric}`} title={licensedTitle}>{formatOptionalPct(r.licensedAgentUserPct)}</td>
@@ -364,7 +364,7 @@ export function CombinedSegmentTable({
                         borderRadius: '3px',
                       }}
                     >
-                      {r.interactionsPerUnlicensedUser ?? NOT_MEASURED}
+                      {formatTenth(r.interactionsPerUnlicensedUser)}
                     </span>
                   </td>
                   <td className={`${table.td} ${table.tdNumeric}`} title={unlicensedTitle}>{formatOptionalPct(r.unlicensedAgentUserPct)}</td>

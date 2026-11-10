@@ -1,6 +1,7 @@
 import { translateActive } from '../i18n/runtime';
 import type { TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
+import { filenameFromResponse, saveBlob } from './download';
 import type {
   LicenceActivityAvailability,
   LicenceActivityOverview,
@@ -220,30 +221,6 @@ export function fetchUsers(params: UsersParams, signal?: AbortSignal): Promise<L
   return getJson<LicenceActivityUsers>(`/users?${usersQuery(params)}`, USERS_FAILURE_KEYS, signal);
 }
 
-/** Pulls a filename out of a Content-Disposition header, if the server set one. */
-function filenameFromResponse(response: Response): string | null {
-  const header = response.headers.get('Content-Disposition');
-  if (!header) return null;
-  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(header);
-  if (utf8?.[1]) return decodeURIComponent(utf8[1]);
-  const plain = /filename="?([^";]+)"?/i.exec(header);
-  return plain?.[1] ?? null;
-}
-
-/** Saves a blob to disk via a transient object URL (download without navigating). */
-function saveBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  try {
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
 
 export interface ExportParams {
   /** The overview snapshot to export. Required - the export is always at least the aggregate. */

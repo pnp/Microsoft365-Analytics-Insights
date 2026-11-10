@@ -57,10 +57,14 @@ export type TeamsNamedCount = {
 };
 
 export type TeamsBucket = {
-  key: string;
-  label: string;
+  /** Null for the combined `other` row. */
+  key: string | null;
+  /** Null for the combined `other` row. */
+  label: string | null;
   count: number;
   sharePct: number;
+  /** The one row a reader without See PII gets in place of every bucket too few people are behind. */
+  other?: boolean;
 };
 
 export type TeamsAvailability = {
@@ -246,9 +250,14 @@ export type TeamsCallKpis = {
 
 export type TeamsCallTrendPoint = {
   weekStart: string;
-  calls: number;
-  minutes: number;
-  attendees: number;
+  /** Null when `withheld`. */
+  calls: number | null;
+  /** Null when `withheld`. */
+  minutes: number | null;
+  /** Null when `withheld`. */
+  attendees: number | null;
+  /** For a reader without See PII: one to four people attended the week's calls, so its figures are withheld. */
+  withheld?: boolean;
 };
 
 export type TeamsHeatCell = {
@@ -280,6 +289,12 @@ export type TeamsMeetings = TeamsSection & {
   topOrganisers: TeamsNamedCount[];
   topAttendees: TeamsNamedCount[];
   quality: TeamsCallQuality;
+  /** The fewest people a figure here describes, for a reader without See PII; null or absent otherwise. */
+  minimumGroupSize?: number | null;
+  /** For a reader without See PII: fewer than `minimumGroupSize` people attended, so the distributions are empty. */
+  distributionsWithheld?: boolean;
+  /** Modalities combined into the `other` row, or left out when too few people used even all of them. */
+  otherModalities?: number;
 };
 
 export type TeamsCollaborationKpis = {
@@ -302,7 +317,10 @@ export type TeamsTeamRow = {
   channels: number;
   tabs: number;
   messages: number;
-  reactions: number;
+  /** Null when `reactionsWithheld`. */
+  reactions: number | null;
+  /** For a reader without See PII: one to four people reacted, so the reactions are withheld. */
+  reactionsWithheld?: boolean;
   /** 0 negative, 0.5 NEUTRAL, 1 positive - chat-count weighted. Never render as a percentage. */
   sentiment: number | null;
   activeDays: number;
@@ -316,9 +334,12 @@ export type TeamsChannelRow = {
   teamName: string;
   tabs: number;
   messages: number;
-  reactions: number;
-  /** Distinct people who reacted - the only per-user, per-channel signal the schema stores. */
-  reactingUsers: number;
+  /** Null when `reactionsWithheld`. */
+  reactions: number | null;
+  /** Distinct people who reacted - the only per-user, per-channel signal the schema stores. Null when `reactionsWithheld`. */
+  reactingUsers: number | null;
+  /** For a reader without See PII: one to four people reacted, so the reactions are withheld. */
+  reactionsWithheld?: boolean;
   sentiment: number | null;
   activeDays: number;
 };
@@ -332,6 +353,16 @@ export type TeamsCollaboration = TeamsSection & {
   reactionMix: TeamsBucket[];
   tabUsage: TeamsNamedCount[];
   membershipTrend: TeamsTrendPoint[];
+  /** The fewest people a row here describes, for a reader without See PII; null or absent otherwise. */
+  minimumGroupSize?: number | null;
+  /** Teams left out of `teams` for a reader without See PII: fewer than `minimumGroupSize` members. */
+  withheldTeams?: number;
+  /** Channels left out of `channels` for a reader without See PII: their team has fewer than `minimumGroupSize` members. */
+  withheldChannels?: number;
+  /** Reactions combined into the `other` row of `reactionMix`, or left out when too few people used even all of them. */
+  otherReactions?: number;
+  /** For a reader without See PII: the tab list is withheld. */
+  tabUsageWithheld?: boolean;
 };
 
 export type TeamsSentimentPoint = {
@@ -354,6 +385,16 @@ export type TeamsConversations = TeamsSection & {
   sentimentTrend: TeamsSentimentPoint[];
   sentimentByTeam: TeamsSentimentRow[];
   sentimentByChannel: TeamsSentimentRow[];
+  /** The fewest people a row here describes, for a reader without See PII; null or absent otherwise. */
+  minimumGroupSize?: number | null;
+  /** For a reader without See PII: the key phrases are withheld. */
+  keywordsWithheld?: boolean;
+  /** For a reader without See PII: the languages are withheld. */
+  languagesWithheld?: boolean;
+  /** Teams left out of `sentimentByTeam` for a reader without See PII: fewer than `minimumGroupSize` members. */
+  withheldSentimentTeams?: number;
+  /** Channels left out of `sentimentByChannel` for a reader without See PII: their team has too few members. */
+  withheldSentimentChannels?: number;
 };
 
 export type TeamsPersonRow = {

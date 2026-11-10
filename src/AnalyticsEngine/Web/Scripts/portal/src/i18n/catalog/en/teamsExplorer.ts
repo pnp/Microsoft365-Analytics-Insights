@@ -327,6 +327,16 @@ export const teamsExplorer = {
   'teamsExplorer.meetings.modalities.description': 'Are people using more than audio?',
   'teamsExplorer.meetings.modalities.note': 'Counted per attendee session, and a session can use several modalities, so these do not sum to the number of calls.',
   'teamsExplorer.meetings.modalities.centreLabel': 'sessions',
+  'teamsExplorer.meetings.modalities.other.one': '1 less-used modality, combined',
+  'teamsExplorer.meetings.modalities.other.other': '{count} less-used modalities, combined',
+  'teamsExplorer.meetings.modalities.otherNote':
+    'Modalities used by fewer than {count} people are combined into one slice so that nobody can be singled out.',
+  'teamsExplorer.meetings.modalities.allSmall':
+    'Every modality was used by fewer than {count} people, so this chart is hidden to protect their privacy.',
+  'teamsExplorer.meetings.withheld.weeksNote':
+    'Weeks in which fewer than {count} people attended calls are left blank so that nobody can be singled out.',
+  'teamsExplorer.meetings.withheld.distributions':
+    'Fewer than {count} people attended the calls in this view, so how their meetings break down is hidden to protect their privacy.',
   'teamsExplorer.meetings.topOrganisers.title': 'Top organisers',
   'teamsExplorer.meetings.topOrganisers.description': 'Who runs the meetings.',
   'teamsExplorer.meetings.valueLabel.meetings': 'meetings',
@@ -394,6 +404,19 @@ export const teamsExplorer = {
   'teamsExplorer.collaboration.appsTabs.description': 'Is Teams a workspace, or just a chat app?',
   'teamsExplorer.collaboration.reactionsUsed.title': 'Reactions used',
   'teamsExplorer.collaboration.reactionsUsed.description': 'How people respond when they have nothing to add.',
+  'teamsExplorer.collaboration.reactionsUsed.other.one': '1 less-used reaction, combined',
+  'teamsExplorer.collaboration.reactionsUsed.other.other': '{count} less-used reactions, combined',
+  'teamsExplorer.collaboration.reactionsUsed.otherNote':
+    'Reactions used by fewer than {count} people are combined into one bar so that nobody can be singled out.',
+  'teamsExplorer.collaboration.reactionsUsed.allSmall':
+    'Every reaction was used by fewer than {count} people, so this chart is hidden to protect their privacy.',
+  'teamsExplorer.collaboration.teamLeaderboard.withheldNote':
+    'Teams with fewer than {count} members are not listed, and reactions made by fewer than {count} people are shown as a dash, so that nobody can be singled out.',
+  'teamsExplorer.collaboration.channelLeaderboard.withheldNote':
+    'Channels of teams with fewer than {count} members are not listed, and reactions made by fewer than {count} people are shown as a dash, so that nobody can be singled out.',
+  'teamsExplorer.collaboration.reactionsWithheld': 'Withheld: fewer than {count} people reacted',
+  'teamsExplorer.collaboration.appsTabs.withheld':
+    'Hidden to protect privacy: a tab can be named anything a member typed, and nothing recorded says how many people use it.',
   'teamsExplorer.collaboration.membership.title': 'Membership activity',
   'teamsExplorer.collaboration.membership.description': 'Distinct people seen in team membership each week.',
   'teamsExplorer.collaboration.membershipSnapshotNote': 'Team membership is read from the most recent membership snapshot per team, not from the whole history - otherwise every person who has ever been a member would be counted.',
@@ -403,17 +426,25 @@ export const teamsExplorer = {
   'teamsExplorer.conversations.keywords.title': 'What people are talking about',
   'teamsExplorer.conversations.keywords.description': 'The key phrases extracted from channel conversation.',
   'teamsExplorer.conversations.keywords.empty': 'No key phrases were extracted for this period.',
+  'teamsExplorer.conversations.keywords.withheld':
+    'Hidden to protect privacy: key phrases are taken from what people wrote, and nothing recorded says how many people wrote each one.',
   'teamsExplorer.conversations.sentimentOverTime.title': 'Sentiment over time',
   'teamsExplorer.conversations.sentimentOverTime.description': 'Weighted by message count, week by week.',
   'teamsExplorer.conversations.sentimentOverTime.empty': 'No scored conversation in this period.',
   'teamsExplorer.conversations.languages.title': 'Languages in use',
   'teamsExplorer.conversations.languages.description': 'What the organisation actually writes in.',
+  'teamsExplorer.conversations.languages.withheld':
+    'Hidden to protect privacy: nothing recorded says how many people write in each language, so a language only one person uses would show what they wrote.',
   'teamsExplorer.conversations.sentimentByTeam.title': 'Sentiment by team',
   'teamsExplorer.conversations.sentimentByTeam.description': 'Where the conversation is positive, and where it is not.',
   'teamsExplorer.conversations.sentimentByTeam.aria': 'Sentiment by team',
+  'teamsExplorer.conversations.sentimentByTeam.withheldNote':
+    'Teams with fewer than {count} members are not listed so that nobody can be singled out.',
   'teamsExplorer.conversations.sentimentByChannel.title': 'Sentiment by channel',
   'teamsExplorer.conversations.sentimentByChannel.description': 'The same read, one level down.',
   'teamsExplorer.conversations.sentimentByChannel.aria': 'Sentiment by channel',
+  'teamsExplorer.conversations.sentimentByChannel.withheldNote':
+    'Channels of teams with fewer than {count} members are not listed so that nobody can be singled out.',
   'teamsExplorer.conversations.scoredChannelDays': '{count} channel-days in this period carry a sentiment score. Scoring only covers teams authorised for deep analytics.',
 
   'teamsExplorer.people.usageReportsOff': 'The Microsoft 365 usage reports import is switched off, so there is no per-user Teams activity and nobody can be ranked. Enable {importName} in the installer and grant the runtime app {permission}.',

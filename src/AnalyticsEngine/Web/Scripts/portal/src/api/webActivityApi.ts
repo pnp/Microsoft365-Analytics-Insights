@@ -1,6 +1,7 @@
 import { translateActive } from '../i18n/runtime';
 import type { TranslationKey } from '../i18n/catalog';
 import { apiFetch } from './http';
+import { filenameFromResponse, saveBlob } from './download';
 import type {
   WebActivityAvailability,
   WebActivityExportSection,
@@ -102,28 +103,4 @@ export async function downloadWebActivityExport(
 
   const blob = await response.blob();
   saveBlob(blob, filenameFromResponse(response) ?? `web-activity-${section}.csv`);
-}
-
-function filenameFromResponse(response: Response): string | null {
-  const header = response.headers.get('Content-Disposition');
-  if (!header) return null;
-  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(header);
-  if (utf8?.[1]) return decodeURIComponent(utf8[1]);
-  const plain = /filename="?([^";]+)"?/i.exec(header);
-  return plain?.[1] ?? null;
-}
-
-/** Saves a blob to disk via a transient object URL (download without navigating). */
-function saveBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  try {
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-  } finally {
-    URL.revokeObjectURL(url);
-  }
 }

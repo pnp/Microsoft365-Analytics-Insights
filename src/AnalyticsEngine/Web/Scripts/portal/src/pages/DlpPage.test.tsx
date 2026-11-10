@@ -67,6 +67,8 @@ const summary = (over: Partial<DlpSummary> = {}): DlpSummary => ({
   tenantTopPolicies: [],
   tenantBlockedCount: 3,
   tenantAuditedCount: 1,
+  minimumGroupSize: null,
+  withheldRows: 0,
   ...over,
 });
 
@@ -96,6 +98,26 @@ beforeEach(() => {
 });
 
 describe('DlpPage', () => {
+  it('says that agents, policies and labels of fewer than five people are left out, for a reader without See PII', async () => {
+    mockSummary.mockResolvedValue(summary({ minimumGroupSize: 5, withheldRows: 2, topUsers: [] }));
+    renderWithProvider(<DlpPage />);
+
+    expect(
+      await screen.findByText(
+        'An agent, policy or sensitivity label that affected fewer than 5 people is not listed - nor is a policy under an agent that affected fewer - so that nobody can be singled out.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('A policy that matched the activity of fewer than 5 people is not listed so that nobody can be singled out.'),
+    ).toBeInTheDocument();
+  });
+
+  it('says nothing is left out to a reader with See PII', async () => {
+    renderWithProvider(<DlpPage />);
+
+    expect(await screen.findByText('Contoso HR Agent')).toBeInTheDocument();
+    expect(screen.queryByText(/is not listed/)).not.toBeInTheDocument();
+  });
   it('shows the blocked/audited split, the agents that were affected, and the policies responsible', async () => {
     renderWithProvider(<DlpPage />);
 

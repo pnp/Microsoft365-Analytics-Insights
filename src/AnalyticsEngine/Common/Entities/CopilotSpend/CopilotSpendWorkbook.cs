@@ -107,7 +107,8 @@ namespace Common.Entities.CopilotSpend
             if (balances.UnresolvedAccounts.HasValue)
             {
                 sheet.AddRow(words.W("balances.unresolvedAccounts"), XlsxCell.Number(balances.UnresolvedAccounts.Value), words.W("unit.accounts"));
-                sheet.AddRow(words.W("balances.unresolvedCredits"), balances.UnresolvedCredits, credits, words.W("balances.unresolvedNote"));
+                sheet.AddRow(words.W("balances.unresolvedCredits"), balances.UnresolvedCredits, credits,
+                    balances.UnresolvedCreditsWithheld ? withheld : words.W("balances.unresolvedNote"));
             }
             sheet.AddRow(words.W("balances.freshness"), balances.OldestFreshness?.UtcDateTime, balances.NewestFreshness?.UtcDateTime, words.W("balances.freshnessNote"));
             sheet.AddRow(words.W("balances.sweeps"), XlsxCell.Number(balances.SweepsInWindow), null,

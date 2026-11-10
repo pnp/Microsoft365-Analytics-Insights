@@ -422,6 +422,28 @@ describe('ReportsPage', () => {
 
     expect(warning).toContain('Viva Engage: a 2 de las semanas representadas les falta al menos un día de informes de uso');
     expect(warning).not.toContain('missing at least one day');
+
+    // Viva Engage is charted, from the days that were imported, so it is not an unavailable series (#816).
+    expect(warning).toMatch(/^Algunas semanas están incompletas: /);
+    expect(warning).not.toContain('no están disponibles');
+  });
+
+  it('words unavailable series and incomplete weeks as separate sentences', async () => {
+    const en = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('en', key, values);
+
+    const warning = reportChartWarningText(en, baseChart({
+      key: 'usage-active-users',
+      warning: 'Some workload series are unavailable: Outlook: no settled usage data. Some weeks are incomplete: Viva Engage: 2 of the charted weeks are missing at least one day of usage reports (most recently the week of 2026-06-15), so those weeks count only the days that were imported.',
+      warningKey: 'seriesUnavailableAndIncompleteWeeks',
+      seriesWarnings: [
+        { series: 'Outlook', reason: 'noSettledData', error: null, week: null },
+        { series: 'Viva Engage', reason: 'incompleteWeeks', error: null, week: '2026-06-15T00:00:00Z', count: 2 },
+      ],
+    }));
+
+    expect(warning).toMatch(/^Some workload series are unavailable: Outlook: no settled usage data\. Some weeks are incomplete: Viva Engage: 2 of the charted weeks/);
+    expect(warning).not.toMatch(/unavailable: [^.]*Viva Engage/);
   });
 
   /**

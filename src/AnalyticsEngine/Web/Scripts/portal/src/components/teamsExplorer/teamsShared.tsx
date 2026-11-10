@@ -85,9 +85,21 @@ export function toCategories(rows: TeamsNamedCount[]): ReportCategory[] {
   return rows.map((row) => ({ label: row.name, value: row.count }));
 }
 
-/** Distribution buckets -> bar categories, preserving bucket order. */
-export function bucketsToCategories(buckets: TeamsBucket[]): ReportCategory[] {
-  return buckets.map((bucket) => ({ label: bucket.label, value: bucket.count }));
+/**
+ * Distribution buckets -> bar categories, preserving bucket order. `otherLabel` names the combined row a reader without
+ * See PII gets in place of the buckets too few people are behind.
+ */
+export function bucketsToCategories(buckets: TeamsBucket[], otherLabel = ''): ReportCategory[] {
+  return buckets.map((bucket) => ({ label: bucket.other ? otherLabel : bucket.label ?? '', value: bucket.count }));
+}
+
+/** A figure withheld from a reader without See PII: a dash whose name says why - never a zero or a blank. */
+export function WithheldDash({ reason }: { reason: string }) {
+  return (
+    <span role="img" aria-label={reason} title={reason} data-withheld="true">
+      {'\u2014'}
+    </span>
+  );
 }
 
 // Graph callRecord modality and userFeedback rating values. Each code has its OWN label: two codes sharing
@@ -124,8 +136,12 @@ export function translatedCodeBucketsToCategories(
   t: TFunction,
   group: TeamsCallCodeGroup,
   buckets: TeamsBucket[],
+  otherLabel = '',
 ): ReportCategory[] {
-  return buckets.map((bucket) => ({ label: translatedCodeLabel(t, group, bucket.key), value: bucket.count }));
+  return buckets.map((bucket) => ({
+    label: bucket.other ? otherLabel : translatedCodeLabel(t, group, bucket.key),
+    value: bucket.count,
+  }));
 }
 
 export const TEAMS_SEGMENT_TEXT_KEYS: Record<string, { labelKey: TranslationKey; descriptionKey: TranslationKey }> = {
@@ -193,8 +209,8 @@ export function translatedBucketsToCategories(
 ): ReportCategory[] {
   const keys: Record<string, TranslationKey> = TEAMS_MEETING_BUCKET_LABEL_KEYS[group];
   return buckets.map((bucket) => {
-    const key = keys[bucket.key];
-    return { label: key ? t(key) : bucket.label, value: bucket.count };
+    const key = bucket.key == null ? undefined : keys[bucket.key];
+    return { label: key ? t(key) : bucket.label ?? '', value: bucket.count };
   });
 }
 

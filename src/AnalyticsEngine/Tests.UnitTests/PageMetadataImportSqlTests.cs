@@ -204,6 +204,38 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// Comments the tracker sent as something other than a JSON list are reported by URL id. They used to be printed to
+        /// the console with the page's address (#853).
+        /// </summary>
+        [TestMethod]
+        [DoNotParallelize]
+        public async Task AnUnreadablePageUpdate_IsReportedByUrlId_NotByItsAddress()
+        {
+            var url = await NewUrl("unreadable");
+            var update = Update(url, Props("Title", "Contoso unreadable"));
+            update.CustomProperties.CommentsString = "[{ not json";
+            var logger = new CapturingLogger();
+
+            var originalOut = Console.Out;
+            var console = new System.IO.StringWriter();
+            Console.SetOut(console);
+            try
+            {
+                await Manager(logger).SaveAll(new[] { update });
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+
+            var log = string.Join(Environment.NewLine, logger.Lines.Select(l => l.Message));
+            Assert.IsTrue(logger.Lines.Any(l => l.Level == LogLevel.Warning && l.Message.Contains($"URL id {url.ID}:") && l.Message.Contains("CommentsString")), log);
+            Assert.IsFalse(log.Contains(url.FullUrl), log);
+            Assert.IsFalse(console.ToString().Contains(url.FullUrl), console.ToString());
+            Assert.AreEqual("Contoso unreadable", (await StoredValues(url))["Title"].Value, "The rest of the update is still saved.");
+        }
+
+        /// <summary>
         /// A transient SQL failure - a dropped connection, a timeout - is not one page's problem. It is thrown, so the
         /// page-update section fails and the day is retried, and no page is marked as refreshed. It used to be logged and
         /// swallowed, and the page marked as refreshed with nothing saved.
