@@ -788,6 +788,11 @@ OPTION (RECOMPILE);" + TenantWide;
         /// Unbounded, finding each team's latest date read the whole history, in each of the three statements that use this, on
         /// every uncached request. The range below seeks <c>IX_team_membership_log_date</c> (<c>[date]</c> INCLUDE
         /// <c>team_id</c>, <c>user_id</c>) over seven days, whatever the window's length and however long the history.
+        /// Measured by <c>Benchmarks/Invoke-TeamsExplorerIndexBenchmark.ps1 -Compare MembershipHorizon</c> at 1:100 of the
+        /// 200,000-user design point (20,000 memberships a day, 400 days): reads of <c>team_membership_log</c> per statement fell
+        /// from 36,748-59,913 pages (10-18 million index rows: a seek per team that reads every team's rows for its latest day,
+        /// and sometimes a scan of the whole index) to 391 (one seek of the last days' 120,000 rows), and each statement got
+        /// faster at both 28 and 365 days (332-1,600 ms to 116-524 ms).
         /// </para>
         /// <para>
         /// <b>Why seven days.</b> Every Teams crawl logs the membership of every Team it crawls (<c>O365Team.SaveToSQL</c>), and
