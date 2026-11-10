@@ -12,6 +12,10 @@ on:
       - .github/workflows/copilot-adoption-guidance-links.yml
   workflow_dispatch:
 
+# Checkout only: the script reads the catalogue and fetches public Microsoft pages, with no GitHub API calls.
+permissions:
+  contents: read
+
 jobs:
   check_links:
     runs-on: windows-latest
