@@ -497,7 +497,7 @@ namespace Common.Entities.TeamsExplorer
             var sizeTask = RunAsync<CallSizeRow>("calls-sizes", TeamsExplorerSql.CallSizes, query, championDays);
             var durationTask = RunAsync<CallDurationRow>("calls-durations", TeamsExplorerSql.CallDurations, query, championDays);
             var heatTask = RunAsync<HeatRow>("calls-heatmap", TeamsExplorerSql.CallHeatmap(), query, championDays);
-            var modalityTask = RunAsync<NameCountRow>("calls-modalities", TeamsExplorerSql.CallModalities, query, championDays);
+            var modalityTask = RunAsync<NamePeopleCountRow>("calls-modalities", TeamsExplorerSql.CallModalities, query, championDays);
             var organiserTask = RunAsync<NameCountRow>("calls-top-organisers", TeamsExplorerSql.TopOrganisers, query, championDays);
             var attendeeTask = RunAsync<NameCountRow>("calls-top-attendees", TeamsExplorerSql.TopAttendees, query, championDays);
             var ratingTask = RunAsync<FeedbackRatingRow>("calls-ratings", TeamsExplorerSql.CallFeedbackRatings, query, championDays);
@@ -733,7 +733,7 @@ namespace Common.Entities.TeamsExplorer
             var channelTask = RunAsync<ChannelLeaderboardRow>("collab-channels", TeamsExplorerSql.ChannelLeaderboard, query, championDays);
             var ownerlessTask = RunAsync<NameCountRow>("collab-ownerless", TeamsExplorerSql.OwnerlessTeams, query, championDays);
             var dormantTask = RunAsync<NameCountRow>("collab-dormant", TeamsExplorerSql.DormantTeams, query, championDays);
-            var reactionTask = RunAsync<NameCountRow>("collab-reactions", TeamsExplorerSql.ReactionMix, query, championDays);
+            var reactionTask = RunAsync<NamePeopleCountRow>("collab-reactions", TeamsExplorerSql.ReactionMix, query, championDays);
             var tabTask = RunAsync<NameCountRow>("collab-tabs", TeamsExplorerSql.TabUsage, query, championDays);
             var membershipTask = RunAsync<MembershipTrendRow>("collab-membership", TeamsExplorerSql.MembershipTrend(), query, championDays);
 
@@ -773,6 +773,7 @@ namespace Common.Entities.TeamsExplorer
                     Tabs = r.Tabs,
                     Messages = r.Messages,
                     Reactions = r.Reactions,
+                    ReactingUsers = r.ReactingUsers,
                     Sentiment = r.Sentiment,
                     ActiveDays = r.ActiveDays,
                     Authorised = r.Authorised == 1,
@@ -791,6 +792,7 @@ namespace Common.Entities.TeamsExplorer
                     ReactingUsers = r.ReactingUsers,
                     Sentiment = r.Sentiment,
                     ActiveDays = r.ActiveDays,
+                    TeamMembers = r.TeamMembers,
                 })
                 .ToList();
 
@@ -1128,6 +1130,23 @@ namespace Common.Entities.TeamsExplorer
                 .ToList();
         }
 
+        /// <summary><see cref="ToBuckets(List{NameCountRow})"/> for a query that also counts the people behind each bucket.</summary>
+        private static List<TeamsBucketRow> ToBuckets(List<NamePeopleCountRow> rows)
+        {
+            var total = rows.Sum(r => r.Count);
+
+            return rows
+                .Select(r => new TeamsBucketRow
+                {
+                    Key = r.Name,
+                    Label = r.Name,
+                    Count = r.Count,
+                    SharePct = TeamsExplorerScoring.Percentage(r.Count, total),
+                    People = r.People,
+                })
+                .ToList();
+        }
+
         private static List<TeamsSentimentRow> ToSentimentRows(List<SentimentRow> rows)
         {
             return rows
@@ -1136,6 +1155,7 @@ namespace Common.Entities.TeamsExplorer
                     Name = r.Name,
                     Sentiment = r.Sentiment,
                     Messages = r.Messages,
+                    Members = r.Members,
                 })
                 .ToList();
         }

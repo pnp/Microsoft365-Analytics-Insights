@@ -1173,6 +1173,52 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void SnapshotFacts_WriteTheSectionsTheGlobalFilterWithholdsBlank_NeverZero()
+        {
+            // Under the administrator's global filter the tenant-wide sections are left out and hold zeros and empty lists
+            // (CopilotAdoptionScopeFilter.WithholdTenantSections). Written as they are, a filtered snapshot diffed against
+            // an unfiltered one reads as a collapse to zero (#844).
+            var analysis = SyntheticAnalysis();
+            var unfiltered = SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
+            Assert.AreNotEqual(string.Empty, unfiltered["usageByApp.count"], "The control: unfiltered, the section has a figure.");
+            Assert.AreNotEqual(string.Empty, unfiltered["agents.knownAgents"]);
+
+            analysis.Summary.WithheldSections = new List<string>
+            {
+                CopilotAdoptionUnscopedSections.UsageByApp,
+                CopilotAdoptionUnscopedSections.TopResourceTypes,
+                CopilotAdoptionUnscopedSections.WeeklyTrend,
+                CopilotAdoptionUnscopedSections.Agents,
+                CopilotAdoptionUnscopedSections.PurchasedSeats,
+                CopilotAdoptionUnscopedSections.CoworkCredits,
+                CopilotAdoptionUnscopedSections.MicrosoftReport,
+            };
+            analysis.Summary.UsageByApp = new List<AdoptionCategory>();
+            analysis.Summary.TopResourceTypes = new List<AdoptionResourceTypeRow>();
+            analysis.Summary.WeeklyTrend = new List<AdoptionSeries>();
+            analysis.Summary.WeeklyVolumeTrend = new List<AdoptionSeries>();
+            analysis.Summary.Agents = new AgentEstateSummary { HistoryDays = 90 };
+            analysis.Summary.CoworkCreditPosition = new CoworkCreditPosition { PerUserCreditsAvailable = true };
+            analysis.Summary.SubscribedSkusAvailable = false;
+            var filtered = SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
+
+            CollectionAssert.AreEqual(unfiltered.Keys.ToList(), filtered.Keys.ToList(), "The same keys, so the two files still diff.");
+            var blanked = filtered.Keys.Where(k => CopilotAdoptionWorkbook.IsWithheldFact(k, analysis.Summary.WithheldSections)).ToList();
+            CollectionAssert.IsSubsetOf(
+                new[] { "usageByApp.count", "topResourceTypes.count", "weeklyTrend.count", "weeklyVolumeTrend.count", "agents.knownAgents", "agents.activeAgents", "subscribedSkusAvailable", "unlicensed.usageByApp.count" },
+                blanked);
+            Assert.IsTrue(blanked.Any(k => k.StartsWith("coworkCreditPosition.", StringComparison.Ordinal)));
+            foreach (var key in blanked)
+            {
+                Assert.AreEqual(string.Empty, filtered[key], $"'{key}' is withheld under the global filter: blank, never 0.");
+            }
+
+            Assert.AreEqual("90", filtered["agents.historyDays"], "A setting is as true of the narrowed view as of the tenant.");
+            Assert.AreNotEqual(string.Empty, filtered["coworkCreditPosition.perUserCreditsAvailable"]);
+            Assert.AreEqual(unfiltered["licensedUsers"], filtered["licensedUsers"], "A narrowed figure is written as before.");
+        }
+
+        [TestMethod]
         public void Workbook_WithoutIndividualData_NamesNobody_ButKeepsEveryAggregate()
         {
             // The workbook a reader without the portal's See PII permission downloads (#661). An export
@@ -1897,6 +1943,50 @@ namespace Tests.UnitTests
 
                 Assert.IsTrue(stream.CanWrite, "Save() must not close or dispose the caller's stream.");
                 Assert.IsTrue(stream.Length > 0);
+            }
+        }
+
+        [TestMethod]
+        public void NonFiniteNumbers_AreWrittenAsBlankCells()
+        {
+            // A ratio over a zero denominator is NaN or infinite. SpreadsheetML has no form for either,
+            // and "NaN" in a cell or a chart cache makes Excel report the whole workbook as damaged.
+            byte[] bytes;
+            using (var workbook = new XlsxWriter())
+            {
+                var sheet = workbook.AddSheet("Data")
+                    .SetColumnWidths(double.NaN, 12)
+                    .AddRow("Contoso", double.NaN, double.PositiveInfinity, double.NegativeInfinity, float.NaN, 1.5);
+                sheet.AddChart(new XlsxChart { Type = XlsxChartType.Column, CategoryRange = "'Data'!$A$1:$A$1" }
+                    .AddSeries("Ratio", "'Data'!$B$1:$F$1"));
+                bytes = workbook.ToArray();
+            }
+
+            var cells = SheetCellElements(bytes, "Data");
+            Assert.AreEqual(6, cells.Count, "A blank is still written, so the columns after it stay in place.");
+            foreach (var blank in cells.Skip(1).Take(4))
+            {
+                Assert.IsFalse(blank.HasElements, $"{blank.Attribute("r")} should be blank: {blank}");
+            }
+            Assert.AreEqual("1.5", cells[5].Value);
+
+            var chart = ChartXmls(bytes).Single();
+            StringAssert.Contains(chart, "<c:v>1.5</c:v>");
+            foreach (var xml in new[] { SheetXml(bytes, "Data"), chart })
+            {
+                Assert.IsFalse(xml.Contains("NaN") || xml.Contains("Infinity") || xml.Contains("\u221E"),
+                    "A non-finite value reached the package: " + xml);
+            }
+        }
+
+        private static string SheetXml(byte[] bytes, string sheetName)
+        {
+            var index = WorkbookSheetNames(bytes).IndexOf(sheetName);
+            using (var stream = new MemoryStream(bytes))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
+            using (var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet" + (index + 1) + ".xml").Open(), Encoding.UTF8))
+            {
+                return reader.ReadToEnd();
             }
         }
 

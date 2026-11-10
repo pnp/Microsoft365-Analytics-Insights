@@ -3,10 +3,12 @@ import { screen } from '@testing-library/react';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import AdoptionPanel from './AdoptionPanel';
 import ConversationsPanel from './ConversationsPanel';
+import MeetingsPanel from './MeetingsPanel';
 import PeoplePanel from './PeoplePanel';
 import type {
   TeamsAdoption,
   TeamsConversations,
+  TeamsMeetings,
   TeamsPeople,
   TeamsWindow,
 } from '../../types/teamsExplorer';
@@ -171,6 +173,111 @@ describe('ConversationsPanel', () => {
     const lit = container.querySelector('[data-lamp="neutral"][data-lit="true"]');
     expect(lit).not.toBeNull();
     expect(lit?.closest('[title]')?.getAttribute('title')).toContain('Sentiment 0.50 (neutral)');
+  });
+
+  it('says why key phrases and languages are hidden from a reader without See PII, rather than reading as none', () => {
+    renderWithProvider(
+      <ConversationsPanel
+        data={conversations({
+          keywords: [],
+          languages: [],
+          keywordsWithheld: true,
+          languagesWithheld: true,
+          minimumGroupSize: 5,
+          withheldSentimentTeams: 1,
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/key phrases are taken from what people wrote/)).toBeInTheDocument();
+    expect(screen.getByText(/nothing recorded says how many people write in each language/)).toBeInTheDocument();
+    expect(screen.queryByText('No key phrases were extracted for this period.')).not.toBeInTheDocument();
+    expect(screen.getByText(/Teams with fewer than 5 members are not listed so that nobody can be singled out/)).toBeInTheDocument();
+  });
+
+  it('says nothing is held back from a reader with See PII', () => {
+    renderWithProvider(<ConversationsPanel data={conversations()} />);
+
+    expect(screen.queryByText(/Hidden to protect privacy/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/are not listed/)).not.toBeInTheDocument();
+  });
+});
+
+const meetings = (over: Partial<TeamsMeetings> = {}): TeamsMeetings => ({
+  window: window28,
+  queries: [],
+  workingDayStartHour: 8,
+  workingDayEndHour: 18,
+  kpis: {
+    calls: 6,
+    groupCalls: 4,
+    peerToPeerCalls: 2,
+    attendees: 4,
+    callHours: 3,
+    attendeeHours: 9,
+    meanDurationMinutes: 30,
+    meanAttendees: 3,
+    afterHoursPct: 0,
+    weekendPct: 0,
+    organiserConcentrationPct: 50,
+    attendeeEngagementPct: 80,
+  },
+  trend: [{ weekStart: '2026-03-02T00:00:00Z', calls: 6, minutes: 180, attendees: 4 }],
+  sizeDistribution: [{ key: '3-5', label: '3-5', count: 6, sharePct: 100 }],
+  durationDistribution: [{ key: '15-30', label: '15-30 minutes', count: 6, sharePct: 100 }],
+  heatmap: [{ dayOfWeek: 1, hour: 10, calls: 6 }],
+  periodOfDay: [{ key: 'late-morning', label: 'Late morning (09:00-12:00)', count: 6, sharePct: 100 }],
+  modalityMix: [{ key: 'audio', label: 'audio', count: 6, sharePct: 100 }],
+  topOrganisers: [],
+  topAttendees: [],
+  quality: { feedbackCount: 0, failureCount: 0, ratings: [], failureReasons: [], failureStages: [] },
+  ...over,
+});
+
+describe('MeetingsPanel', () => {
+  it('says the distributions are withheld when too few people attended, and that a small week is left blank', () => {
+    renderWithProvider(
+      <MeetingsPanel
+        data={meetings({
+          minimumGroupSize: 5,
+          distributionsWithheld: true,
+          sizeDistribution: [],
+          durationDistribution: [],
+          heatmap: [],
+          periodOfDay: [],
+          modalityMix: [],
+          trend: [{ weekStart: '2026-03-02T00:00:00Z', calls: null, minutes: null, attendees: null, withheld: true }],
+        })}
+        callsAvailable
+        showPii={false}
+      />,
+    );
+
+    // Heatmap, size, length, time of day, modalities and call experience each say why they are empty.
+    expect(screen.getAllByText(/Fewer than 5 people attended the calls in this view/)).toHaveLength(6);
+    expect(screen.getAllByText(/Weeks in which fewer than 5 people attended calls are left blank/)).toHaveLength(2);
+    expect(screen.queryByText(/No call feedback or failures were recorded/)).not.toBeInTheDocument();
+  });
+
+  it('names the combined slice of modalities few people used, and says why', () => {
+    renderWithProvider(
+      <MeetingsPanel
+        data={meetings({
+          minimumGroupSize: 5,
+          kpis: { ...meetings().kpis, attendees: 12 },
+          modalityMix: [
+            { key: 'audio', label: 'audio', count: 50, sharePct: 69 },
+            { key: null, label: null, count: 22, sharePct: 31, other: true },
+          ],
+          otherModalities: 2,
+        })}
+        callsAvailable
+        showPii={false}
+      />,
+    );
+
+    expect(screen.getByText(/Modalities used by fewer than 5 people are combined into one slice/)).toBeInTheDocument();
+    expect(screen.queryByText(/Fewer than 5 people attended the calls in this view/)).not.toBeInTheDocument();
   });
 });
 

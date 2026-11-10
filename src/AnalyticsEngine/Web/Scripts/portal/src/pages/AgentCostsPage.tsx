@@ -67,6 +67,7 @@ import {
 import { usePortalAccess } from '../access';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
+import { SortableTh } from '../components/copilotAdoption/adoptionShared';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'agentCosts.window.last7Days' },
@@ -151,7 +152,6 @@ const useStyles = makeStyles({
     whiteSpace: 'nowrap',
   },
   thNumeric: { textAlign: 'right' },
-  thSortable: { cursor: 'pointer', userSelect: 'none' },
   td: {
     padding: '6px 10px',
     borderBottomWidth: '1px',
@@ -516,18 +516,13 @@ export default function AgentCostsPage() {
   const detail = detailResult?.ok ? detailResult.value : null;
   const azure = azureResult?.ok ? azureResult.value : null;
 
-  const toggleSort = useCallback(
-    (column: DetailSort) => {
-      if (sort === column) {
-        setDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
-      } else {
-        setSort(column);
-        setDirection('desc');
-      }
-      setPage(1);
-    },
-    [sort],
-  );
+  // SortableTh works out the direction: the opposite one for the column already sorted by, otherwise
+  // descending, which is the most useful first answer for every column here.
+  const sortBy = useCallback((column: string, descending: boolean) => {
+    setSort(column as DetailSort);
+    setDirection(descending ? 'desc' : 'asc');
+    setPage(1);
+  }, []);
 
   const categories = useMemo(
     () => (breakdown ?? []).map((r) => ({ label: labelFor(dimension, r.label ?? r.key, t), value: r.billedCredits })),
@@ -797,15 +792,22 @@ export default function AgentCostsPage() {
               <div className={styles.empty}>{t('agentCosts.trend.empty')}</div>
             ) : (
               <>
-                <div className={styles.trendRow}>
-                  {trend.map((p) => (
-                    <div
-                      key={p.date}
-                      className={styles.trendBar}
-                      style={{ height: `${Math.max(2, (p.billedCredits / trendMax) * 100)}%` }}
-                      title={t('agentCosts.trend.barTitle', { day: formatDay(p.date), credits: formatCredits(p.billedCredits) })}
-                    />
-                  ))}
+                {/* A list with a label per day, as CreditsPanel does: the heights alone say nothing to a
+                    screen reader, and a title is read by few of them and by no keyboard user. */}
+                <div className={styles.trendRow} role="list" aria-label={t('agentCosts.trend.title')}>
+                  {trend.map((p) => {
+                    const label = t('agentCosts.trend.barTitle', { day: formatDay(p.date), credits: formatCredits(p.billedCredits) });
+                    return (
+                      <div
+                        key={p.date}
+                        role="listitem"
+                        aria-label={label}
+                        className={styles.trendBar}
+                        style={{ height: `${Math.max(2, (p.billedCredits / trendMax) * 100)}%` }}
+                        title={label}
+                      />
+                    );
+                  })}
                 </div>
                 <Text className={styles.muted} size={200}>
                   {t('agentCosts.trend.caption', {
@@ -989,30 +991,14 @@ export default function AgentCostsPage() {
                   <table className={styles.table}>
                     <thead>
                       <tr>
-                        <th className={`${styles.th} ${styles.thSortable}`} onClick={() => toggleSort('date')}>
-                          {t('agentCosts.table.day')}{sort === 'date' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
-                        </th>
-                        <th className={`${styles.th} ${styles.thSortable}`} onClick={() => toggleSort('agent')}>
-                          {t('agentCosts.table.agent')}{sort === 'agent' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
-                        </th>
+                        <SortableTh label={t('agentCosts.table.day')} sortKey="date" activeKey={sort} descending={direction === 'desc'} onSort={sortBy} defaultDescending />
+                        <SortableTh label={t('agentCosts.table.agent')} sortKey="agent" activeKey={sort} descending={direction === 'desc'} onSort={sortBy} defaultDescending />
                         <th className={styles.th}>{t('agentCosts.table.environment')}</th>
                         <th className={styles.th}>{t('agentCosts.table.harness')}</th>
-                        <th className={`${styles.th} ${styles.thSortable}`} onClick={() => toggleSort('feature')}>
-                          {t('agentCosts.table.billingFeature')}{sort === 'feature' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
-                        </th>
-                        <th
-                          className={`${styles.th} ${styles.thNumeric} ${styles.thSortable}`}
-                          onClick={() => toggleSort('credits')}
-                        >
-                          {t('agentCosts.table.credits')}{sort === 'credits' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
-                        </th>
+                        <SortableTh label={t('agentCosts.table.billingFeature')} sortKey="feature" activeKey={sort} descending={direction === 'desc'} onSort={sortBy} defaultDescending />
+                        <SortableTh label={t('agentCosts.table.credits')} sortKey="credits" activeKey={sort} descending={direction === 'desc'} onSort={sortBy} defaultDescending numeric />
                         <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.notCharged')}</th>
-                        <th
-                          className={`${styles.th} ${styles.thNumeric} ${styles.thSortable}`}
-                          onClick={() => toggleSort('users')}
-                        >
-                          {t('agentCosts.table.people')}{sort === 'users' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
-                        </th>
+                        <SortableTh label={t('agentCosts.table.people')} sortKey="users" activeKey={sort} descending={direction === 'desc'} onSort={sortBy} defaultDescending numeric />
                       </tr>
                     </thead>
                     <tbody>

@@ -450,10 +450,15 @@ function OverviewPanel({ summary, customDimensions, onOpenTab, trend, trendError
           )}
           {balances.unresolvedAccounts !== null && balances.unresolvedAccounts > 0 && (
             <Text size={200} className={styles.muted}>
-              {t('copilotSpend.overview.unresolved', {
-                accounts: formatNumber(balances.unresolvedAccounts),
-                credits: formatCredits(balances.unresolvedCredits),
-              })}
+              {balances.unresolvedCreditsWithheld || balances.unresolvedCredits === null
+                ? t('copilotSpend.overview.unresolvedWithheld', {
+                    accounts: formatNumber(balances.unresolvedAccounts),
+                    count: formatNumber(5),
+                  })
+                : t('copilotSpend.overview.unresolved', {
+                    accounts: formatNumber(balances.unresolvedAccounts),
+                    credits: formatCredits(balances.unresolvedCredits),
+                  })}
             </Text>
           )}
           {balances.hasData && (
@@ -973,10 +978,15 @@ function BalancesPanel({ summary, trend, trendError }: { summary: CopilotSpendSu
             <>
               <Text size={200}>{t('copilotSpend.balances.facts.unresolved')}</Text>
               <Text weight="semibold">
-                {t('copilotSpend.balances.facts.unresolvedValue', {
-                  accounts: formatNumber(balances.unresolvedAccounts),
-                  credits: formatCredits(balances.unresolvedCredits),
-                })}
+                {balances.unresolvedCreditsWithheld || balances.unresolvedCredits === null
+                  ? t('copilotSpend.balances.facts.unresolvedValueWithheld', {
+                      accounts: formatNumber(balances.unresolvedAccounts),
+                      count: formatNumber(5),
+                    })
+                  : t('copilotSpend.balances.facts.unresolvedValue', {
+                      accounts: formatNumber(balances.unresolvedAccounts),
+                      credits: formatCredits(balances.unresolvedCredits),
+                    })}
               </Text>
             </>
           )}

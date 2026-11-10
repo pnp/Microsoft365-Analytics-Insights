@@ -504,6 +504,21 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void UnmatchedAccountsBalances_ShowToAReaderWithoutSeePii_WhenFiveOrMoreAccountsHoldThem()
+        {
+            var input = Input();
+            // With the fixture's one, five unmatched accounts hold a balance: it is nobody's in particular.
+            for (var i = 0; i < 4; i++)
+                input.Credits.Users.Add(new CreditUserFact { ObjectId = Guid.NewGuid(), ObservationDate = Snapshot, Quality = 2, PeriodStatus = "unverified", ServiceRows = 1, CreditRows = 1, Credits = 10 });
+
+            var trimmed = CopilotSpendCalculator.Calculate(input).WithoutIndividualData();
+
+            Assert.AreEqual(90, trimmed.Balances.UnresolvedCredits.Value, 1e-9, "50 + 4 x 10, as before.");
+            Assert.IsFalse(trimmed.Balances.UnresolvedCreditsWithheld);
+            Assert.AreEqual(5, trimmed.Balances.UnresolvedAccounts);
+        }
+
+        [TestMethod]
         public void AReaderWithoutSeePii_GetsAggregatesOnly_OnACopy()
         {
             var summary = CopilotSpendCalculator.Calculate(Input());
@@ -517,14 +532,19 @@ namespace Tests.UnitTests
             Assert.IsTrue(summary.Organisation.Groups.Count > 0);
 
             // Three people billed for Studio and two readings in view: either total would be theirs, so it is withheld on the
-            // copy. The counts stay, and so do the charges and readings no one in view was matched to, which are not theirs.
+            // copy. The counts stay. The one unmatched account's balance is that account's own, so it is withheld too (#844);
+            // the Studio charges no one was matched to are not withheld here.
             Assert.IsNull(trimmed.Studio.Credits);
             Assert.IsTrue(trimmed.Studio.CreditsWithheld);
             Assert.AreEqual(3, trimmed.Studio.People);
             Assert.AreEqual(7, trimmed.Studio.UnmatchedCredits.Value, 1e-9);
             Assert.IsNull(trimmed.Balances.Credits);
             Assert.IsTrue(trimmed.Balances.CreditsWithheld);
-            Assert.AreEqual(50, trimmed.Balances.UnresolvedCredits.Value, 1e-9);
+            Assert.IsNull(trimmed.Balances.UnresolvedCredits, "One unmatched account's balance is that account's.");
+            Assert.IsTrue(trimmed.Balances.UnresolvedCreditsWithheld);
+            Assert.AreEqual(1, trimmed.Balances.UnresolvedAccounts, "The count of accounts stays: it is nobody's balance.");
+            Assert.AreEqual(50, summary.Balances.UnresolvedCredits.Value, 1e-9, "The cached summary keeps it for a See PII reader.");
+            Assert.IsFalse(summary.Balances.UnresolvedCreditsWithheld);
             Assert.IsTrue(trimmed.Studio.Days.Single(d => d.Status == CopilotSpendDayStatus.Recorded).Withheld, "Three people billed that day.");
             Assert.AreEqual(67, summary.Studio.Credits.Value, 1e-9, "A reader with See PII is given the cached totals.");
             Assert.AreEqual(220, summary.Balances.Credits.Value, 1e-9);

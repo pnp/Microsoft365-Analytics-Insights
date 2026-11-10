@@ -355,9 +355,7 @@
     <Content Include="Views\Shared\_LoginPartial.cshtml" />
     <Content Include="Views\Web.config" />
     <Content Include="Views\_ViewStart.cshtml" />
-    <Content Include="Views\Account\CredentialsInvalid.cshtml" />
     <None Include="Properties\PublishProfiles\SPOInsightsDemoTeams - Web Deploy.pubxml" />
-    <Content Include="Views\Home\YammerAuth.cshtml" />
     <Content Include="Web.config" />
     <None Include="Web.Debug.config">
       <DependentUpon>Web.Template.config</DependentUpon>

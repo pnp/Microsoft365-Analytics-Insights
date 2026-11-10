@@ -104,6 +104,15 @@ namespace Common.Entities.CopilotSpend
                     copy.Balances.Credits = null;
                     copy.Balances.CreditsWithheld = true;
                 }
+                // One to four unmatched accounts' balances are theirs (#844); the total less the groups shown beside it would
+                // give them back, so it goes with them.
+                if (SmallPopulations.IsSmall(Balances.UnresolvedContributors, CopilotSpendCalculator.DefaultMinGroupSize))
+                {
+                    copy.Balances.UnresolvedCredits = null;
+                    copy.Balances.UnresolvedCreditsWithheld = true;
+                    copy.Balances.Credits = null;
+                    copy.Balances.CreditsWithheld = true;
+                }
             }
             return copy;
         }
@@ -461,8 +470,21 @@ namespace Common.Entities.CopilotSpend
         [JsonProperty("unresolvedAccounts")]
         public int? UnresolvedAccounts { get; set; }
 
+        /// <summary>The unmatched accounts' latest balances. Null in a filtered view, or when <see cref="UnresolvedCreditsWithheld"/>.</summary>
         [JsonProperty("unresolvedCredits")]
         public double? UnresolvedCredits { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="UnresolvedCredits"/> is null because one to four unmatched
+        /// accounts have a reading other than zero: it would be their own (#844). <see cref="Credits"/> adds them to the people's
+        /// balances, which the groups beside it add up, so it is withheld with them.
+        /// </summary>
+        [JsonProperty("unresolvedCreditsWithheld")]
+        public bool UnresolvedCreditsWithheld { get; set; }
+
+        /// <summary>Unmatched accounts whose latest reading is other than zero: who <see cref="UnresolvedCredits"/> describes.</summary>
+        [JsonIgnore]
+        internal int UnresolvedContributors { get; set; }
 
         [JsonProperty("sweepsInWindow")]
         public int SweepsInWindow { get; set; }

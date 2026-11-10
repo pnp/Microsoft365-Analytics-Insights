@@ -15,7 +15,7 @@ import type { TranslationKey } from '../i18n/catalog';
  * `App_Start/DelegatedGraphConsent.cs`.
  */
 
-/** Full-page navigation target: a server round trip through Entra ID, not an API call. */
+/** Full-page POST target (`postToServer`): a server round trip through Entra ID, not an API call. The server refuses a GET (#853). */
 export const TEAMS_CONNECT_URL = '/Account/ConnectTeams';
 
 /** `DelegatedGraphConsent.OutcomeParameter` */

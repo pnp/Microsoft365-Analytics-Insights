@@ -628,6 +628,86 @@ namespace Tests.UnitTests
             StringAssert.Contains(offReach.Detail, "import is off");
         }
 
+        /// <summary>Every input combination the judgements branch on, so each sentence is reached.</summary>
+        private static IEnumerable<WebActivityJudgementInputs> EveryJudgementBranch()
+        {
+            WebActivityJudgementInputs With(Action<WebActivityJudgementInputs> change)
+            {
+                var inputs = Healthy();
+                change(inputs);
+                return inputs;
+            }
+
+            yield return Healthy();
+            yield return With(i => { i.WebTrafficAvailable = false; i.PageViews = 0; });
+            yield return With(i => i.WebTrafficAvailable = false);
+            yield return With(i => { i.WebTrafficAvailable = false; i.ConfigurationReadable = false; });
+            yield return With(i => i.KpisUnavailable = true);
+            yield return With(i => { i.PageViews = 0; i.HasEverCollected = true; });
+            yield return With(i => i.PageViews = 0);
+            yield return With(i => { i.DirectoryImported = false; i.Visitors = 1; });
+            yield return With(i => i.KnownUsers = 0);
+            yield return With(i => { i.EnabledVisitors = 200; i.BouncePct = 72; i.AverageLoadSeconds = 4.5; i.SessionsWithSearch = 9_000; i.TopDecilePagePct = 95; i.MobilePageViewPct = 40; });
+            yield return With(i => { i.EnabledVisitors = 900; i.BouncePct = 50; i.AverageLoadSeconds = 2; i.P95LoadSeconds = 4; });
+            yield return With(i => i.P95LoadSeconds = 12);
+            yield return With(i => i.P95LoadSeconds = 2);
+        }
+
+        [TestMethod]
+        public void Judgements_NameEachSentenceUnderTheirOwnKey()
+        {
+            // The portal words each sentence from these keys (catalog/{en,es}/webActivity.ts), so a
+            // missing or misplaced key shows the server's English on a Spanish page.
+            var sentences = new HashSet<string>();
+            foreach (var judgement in EveryJudgementBranch().SelectMany(inputs => WebActivityScoring.Judgements(inputs)))
+            {
+                StringAssert.StartsWith(judgement.HeadlineKey, judgement.Key + ".headline", judgement.Key);
+                StringAssert.StartsWith(judgement.DetailKey, judgement.Key + ".detail", judgement.Key);
+                Assert.IsNotNull(judgement.Values, judgement.Key);
+                sentences.Add(judgement.HeadlineKey);
+                sentences.Add(judgement.DetailKey);
+            }
+
+            Assert.AreEqual(39, sentences.Count, "Every headline and detail variant should be reachable: " + string.Join(", ", sentences.OrderBy(s => s)));
+        }
+
+        [TestMethod]
+        public void Judgements_SendTheirFiguresUnformatted()
+        {
+            // The portal formats these for the reader's locale. The English fallback's "1,500" is
+            // fifteen hundred in English and one point five in Spanish, so the raw value has to travel.
+            var slow = Healthy();
+            slow.P95LoadSeconds = 12.25;
+            var judgements = WebActivityScoring.Judgements(slow).ToDictionary(j => j.Key);
+
+            Assert.AreEqual("reach.headline.share", judgements["reach"].HeadlineKey);
+            Assert.AreEqual(75, judgements["reach"].Values["reach"], 1e-9);
+            Assert.AreEqual(1_500, judgements["reach"].Values["enabledVisitors"], 1e-9);
+            Assert.AreEqual(2_000, judgements["reach"].Values["knownUsers"], 1e-9);
+            Assert.AreEqual(30, judgements["bounce"].Values["bounce"], 1e-9);
+            Assert.AreEqual(4.2, judgements["bounce"].Values["pagesPerVisit"], 1e-9);
+            Assert.AreEqual("performance.headline.withTail", judgements["performance"].HeadlineKey);
+            Assert.AreEqual(1.1, judgements["performance"].Values["average"], 1e-9);
+            Assert.AreEqual(12.25, judgements["performance"].Values["p95"], 1e-9);
+            Assert.AreEqual(10, judgements["search-reliance"].Values["reliance"], 1e-9);
+            Assert.AreEqual(70, judgements["concentration"].Values["share"], 1e-9);
+            Assert.AreEqual(900, judgements["concentration"].Values["pages"], 1e-9);
+            Assert.AreEqual(12, judgements["mobile"].Values["share"], 1e-9);
+
+            // A tail that was not measured is not sent as zero, which the sentence would quote.
+            var meanOnly = WebActivityScoring.Judgements(Healthy()).Single(j => j.Key == "performance");
+            Assert.AreEqual("performance.headline.averageOnly", meanOnly.HeadlineKey);
+            Assert.IsFalse(meanOnly.Values.ContainsKey("p95"));
+
+            var oneVisitor = Healthy();
+            oneVisitor.DirectoryImported = false;
+            oneVisitor.Visitors = 1;
+            var reach = WebActivityScoring.Judgements(oneVisitor).Single(j => j.Key == "reach");
+            Assert.AreEqual("reach.headline.oneVisitor", reach.HeadlineKey);
+            Assert.AreEqual("1 person visited the intranet", reach.Headline);
+            Assert.AreEqual("reach.detail.importOff", reach.DetailKey);
+        }
+
         #endregion
     }
 }

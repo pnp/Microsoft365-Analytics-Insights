@@ -20,7 +20,7 @@ import HeatmapChart from '../charts/HeatmapChart';
 import { seriesColor } from '../charts/chartCommon';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import type { TeamsMeetings } from '../../types/teamsExplorer';
-import { useT, useTNode } from '../../i18n';
+import { plural, useT, useTNode } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
@@ -183,6 +183,26 @@ export default function MeetingsPanel({
     value: cell.calls,
   }));
 
+  // Without See PII, a week of one to four attendees comes back withheld, every distribution is withheld when fewer than
+  // that attended at all, and modalities few people used come back combined. Withheld is said, never drawn as a zero.
+  const minimumGroupSize = data.minimumGroupSize ?? null;
+  const minimumText = formatCount(minimumGroupSize ?? 5);
+  const weeksWithheldNote = data.trend.some((p) => p.withheld)
+    ? t('teamsExplorer.meetings.withheld.weeksNote', { count: minimumText })
+    : undefined;
+  const distributionsWithheld = data.distributionsWithheld === true;
+  const distributionsWithheldText = t('teamsExplorer.meetings.withheld.distributions', { count: minimumText });
+  const otherModalities = data.otherModalities ?? 0;
+  const otherModalitiesLabel = t(
+    plural(otherModalities, 'teamsExplorer.meetings.modalities.other.one', 'teamsExplorer.meetings.modalities.other.other'),
+    { count: formatCount(otherModalities) },
+  );
+  const modalitiesAllSmall = !distributionsWithheld && otherModalities > 0 && data.modalityMix.length === 0;
+  const modalitiesNote =
+    otherModalities > 0 && data.modalityMix.length > 0
+      ? `${t('teamsExplorer.meetings.modalities.note')} ${t('teamsExplorer.meetings.modalities.otherNote', { count: minimumText })}`
+      : t('teamsExplorer.meetings.modalities.note');
+
   if (!callsAvailable) {
     return (
       <div>
@@ -211,6 +231,7 @@ export default function MeetingsPanel({
           description={t('teamsExplorer.meetings.meetingVolume.description')}
           query={queryFor(data.queries, 'calls-trend')}
           isEmpty={data.trend.length === 0}
+          note={weeksWithheldNote}
         >
           <TimeSeriesChart series={trendSeries} valueLabel={t('teamsExplorer.meetings.valueLabel.count')} height={240} />
         </SectionCard>
@@ -220,6 +241,7 @@ export default function MeetingsPanel({
           description={t('teamsExplorer.meetings.meetingMinutes.description')}
           query={queryFor(data.queries, 'calls-trend')}
           isEmpty={data.trend.length === 0}
+          note={weeksWithheldNote}
         >
           <TimeSeriesChart series={minutesSeries} valueLabel={t('teamsExplorer.meetings.valueLabel.minutes')} height={200} />
         </SectionCard>
@@ -228,7 +250,8 @@ export default function MeetingsPanel({
           title={t('teamsExplorer.meetings.whenMeetingsHappen.title')}
           description={t('teamsExplorer.meetings.whenMeetingsHappen.description')}
           query={queryFor(data.queries, 'calls-heatmap')}
-          isEmpty={heatCells.length === 0}
+          isEmpty={distributionsWithheld || heatCells.length === 0}
+          emptyMessage={distributionsWithheld ? distributionsWithheldText : undefined}
           note={utcCaveat}
         >
           <HeatmapChart
@@ -244,7 +267,8 @@ export default function MeetingsPanel({
           title={t('teamsExplorer.meetings.meetingSize.title')}
           description={t('teamsExplorer.meetings.meetingSize.description')}
           query={queryFor(data.queries, 'calls-sizes')}
-          isEmpty={data.sizeDistribution.every((b) => b.count === 0)}
+          isEmpty={distributionsWithheld || data.sizeDistribution.every((b) => b.count === 0)}
+          emptyMessage={distributionsWithheld ? distributionsWithheldText : undefined}
         >
           <CategoryBarChart
             categories={translatedBucketsToCategories(t, 'size', data.sizeDistribution)}
@@ -257,7 +281,8 @@ export default function MeetingsPanel({
           title={t('teamsExplorer.meetings.meetingLength.title')}
           description={t('teamsExplorer.meetings.meetingLength.description')}
           query={queryFor(data.queries, 'calls-durations')}
-          isEmpty={data.durationDistribution.every((b) => b.count === 0)}
+          isEmpty={distributionsWithheld || data.durationDistribution.every((b) => b.count === 0)}
+          emptyMessage={distributionsWithheld ? distributionsWithheldText : undefined}
         >
           <CategoryBarChart
             categories={translatedBucketsToCategories(t, 'duration', data.durationDistribution)}
@@ -270,7 +295,8 @@ export default function MeetingsPanel({
           title={t('teamsExplorer.meetings.timeOfDay.title')}
           description={t('teamsExplorer.meetings.timeOfDay.description')}
           query={queryFor(data.queries, 'calls-heatmap')}
-          isEmpty={data.periodOfDay.every((b) => b.count === 0)}
+          isEmpty={distributionsWithheld || data.periodOfDay.every((b) => b.count === 0)}
+          emptyMessage={distributionsWithheld ? distributionsWithheldText : undefined}
         >
           <CategoryBarChart
             categories={translatedBucketsToCategories(t, 'period', data.periodOfDay)}
@@ -283,13 +309,18 @@ export default function MeetingsPanel({
           title={t('teamsExplorer.meetings.modalities.title')}
           description={t('teamsExplorer.meetings.modalities.description')}
           query={queryFor(data.queries, 'calls-modalities')}
-          isEmpty={data.modalityMix.length === 0}
-          note={
-            t('teamsExplorer.meetings.modalities.note')
+          isEmpty={distributionsWithheld || data.modalityMix.length === 0}
+          emptyMessage={
+            distributionsWithheld
+              ? distributionsWithheldText
+              : modalitiesAllSmall
+                ? t('teamsExplorer.meetings.modalities.allSmall', { count: minimumText })
+                : undefined
           }
+          note={modalitiesNote}
         >
           <DonutChart
-            categories={translatedCodeBucketsToCategories(t, 'modality', data.modalityMix)}
+            categories={translatedCodeBucketsToCategories(t, 'modality', data.modalityMix, otherModalitiesLabel)}
             colours={data.modalityMix.map((_, i) => seriesColor(i))}
             centreValue={formatCount(data.modalityMix.reduce((sum, b) => sum + b.count, 0))}
             centreLabel={t('teamsExplorer.meetings.modalities.centreLabel')}
@@ -324,9 +355,9 @@ export default function MeetingsPanel({
           title={t('teamsExplorer.meetings.callExperience.title')}
           description={t('teamsExplorer.meetings.callExperience.description')}
           query={queryFor(data.queries, 'calls-ratings')}
-          isEmpty={quality.feedbackCount === 0 && quality.failureCount === 0}
+          isEmpty={distributionsWithheld || (quality.feedbackCount === 0 && quality.failureCount === 0)}
           emptyMessage={
-            t('teamsExplorer.meetings.callExperience.empty')
+            distributionsWithheld ? distributionsWithheldText : t('teamsExplorer.meetings.callExperience.empty')
           }
           note={
             t('teamsExplorer.meetings.callExperience.note')
@@ -364,8 +395,8 @@ export default function MeetingsPanel({
                 </TableHeader>
                 <TableBody>
                   {quality.failureReasons.map((row) => (
-                    <TableRow key={row.key}>
-                      <TableCell>{serverPlaceholderText(t, row.label)}</TableCell>
+                    <TableRow key={row.key ?? ''}>
+                      <TableCell>{serverPlaceholderText(t, row.label ?? '')}</TableCell>
                       <TableCell className={styles.numeric}>{formatCount(row.count)}</TableCell>
                       <TableCell className={styles.numeric}>{formatPct(row.sharePct)}</TableCell>
                     </TableRow>

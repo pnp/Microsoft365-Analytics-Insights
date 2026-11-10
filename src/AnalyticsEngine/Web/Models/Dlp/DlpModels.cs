@@ -60,6 +60,12 @@ namespace Web.AnalyticsWeb.Models.Dlp
         public int? UsersAffected { get; set; }
 
         /// <summary>
+        /// Distinct people behind the row, including where <see cref="UsersAffected"/> is not shown (a policy under an
+        /// agent, a tenant-wide policy). Only decides what a reader without See PII is shown; internal, so never sent.
+        /// </summary>
+        internal int People { get; set; }
+
+        /// <summary>
         /// For an agent row, the individual policies that affected it, ranked the same way. Null on
         /// every other kind of row.
         /// </summary>
@@ -127,6 +133,18 @@ namespace Web.AnalyticsWeb.Models.Dlp
         public List<DlpImpactRow> TopSensitivityLabels { get; set; } = new List<DlpImpactRow>();
         [JsonProperty("trend")]
         public List<DlpTrendPoint> Trend { get; set; } = new List<DlpTrendPoint>();
+
+        /// <summary>
+        /// For a reader without See PII, the fewest people an agent, policy or sensitivity-label row - or a policy under
+        /// an agent - describes: rows that affected fewer are left out (#844). Null for a reader with See PII, who is
+        /// shown every row.
+        /// </summary>
+        [JsonProperty("minimumGroupSize")]
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>Rows left out of the agent, policy, sensitivity-label and tenant policy tables for a reader without See PII.</summary>
+        [JsonProperty("withheldRows")]
+        public int WithheldRows { get; set; }
 
         /// <summary>
         /// Tenant-wide DLP policies from the DLP.All feed, shown as a SEPARATE section.

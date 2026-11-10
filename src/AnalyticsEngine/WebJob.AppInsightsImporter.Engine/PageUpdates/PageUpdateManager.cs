@@ -192,6 +192,12 @@ namespace WebJob.AppInsightsImporter.Engine
                         // There can be multiple updates across several events. Compile all into one new update
                         var compiledUpdate = new PageUpdateEventAppInsightsQueryResult(correspondingPageUpdates);
 
+                        // What couldn't be read from them, by URL id: the URL is tenant content (#853)
+                        foreach (var problem in correspondingPageUpdates.SelectMany(u => u.CustomProperties?.ParseProblems ?? new List<string>()).Distinct())
+                        {
+                            _logger.LogWarning($"Page update for URL id {urlToUpdate.ID}: {problem}.");
+                        }
+
                         var urlMetadataUpdated = await UpdateUrlMetadataWith(urlToUpdate, compiledUpdate, context, urlMetadataFieldNameCache,
                             stored.ValuesFor(urlToUpdate.ID), pageEntities);
 

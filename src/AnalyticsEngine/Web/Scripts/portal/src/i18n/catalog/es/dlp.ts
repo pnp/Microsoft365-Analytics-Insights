@@ -50,6 +50,8 @@ const dlp: Record<keyof typeof en, string> = {
 
   // Tablas de impacto de Copilot
   'dlp.affected.title': 'Quién y qué se ve afectado',
+  'dlp.affected.withheldNote':
+    'Un agente, una directiva o una etiqueta de confidencialidad que afectó a menos de {count} personas no se muestra -tampoco una directiva de un agente que afectó a menos-, para que no se pueda identificar a nadie.',
   'dlp.affected.agents.title': 'Agentes',
   'dlp.affected.agents.description': 'Agentes de Copilot cuyo acceso al contenido se vio afectado por una directiva DLP. Esta es la única vista que puede atribuir un bloqueo de DLP a un agente específico. Seleccione un agente para ver qué directivas le afectaron.',
   'dlp.affected.people.title': 'Personas',
@@ -99,6 +101,7 @@ const dlp: Record<keyof typeof en, string> = {
   // Actividad DLP de todo el inquilino
   'dlp.tenant.title': 'Actividad DLP de todo el inquilino',
   'dlp.tenant.description': 'Actividad de directivas DLP en Exchange, SharePoint/OneDrive y dispositivos de punto de conexión, desde la fuente de auditoría DLP independiente. Estos registros identifican a la persona, pero nunca al agente de Copilot, por lo que se notifican por separado y no se combinan con las cifras de Copilot anteriores.',
+  'dlp.tenant.withheldNote': 'Una directiva que coincidió con la actividad de menos de {count} personas no se muestra, para que no se pueda identificar a nadie.',
   'dlp.tenant.importOff': 'La importación de DLP está desactivada, así que no hay nada que mostrar aquí.',
   'dlp.tenant.blocked.hint': 'En todas las cargas de trabajo',
   'dlp.tenant.auditedOnly.hint': 'Coincidencia sin cumplimiento',

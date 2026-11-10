@@ -344,10 +344,7 @@ export function reportChartWarningText(t: TFunction, chart: ReportChart): string
   if (!chart.warning) return null;
 
   if (chart.key === 'usage-active-users' && chart.seriesWarnings?.length) {
-    const details = chart.seriesWarnings.map((warning) => seriesWarningText(t, warning)).join('; ');
-    const catalogKey = 'reports.chart.usage-active-users.warning' as TranslationKey;
-    const translated = t(catalogKey, { details });
-    return translated === catalogKey ? chart.warning : translated;
+    return usageWarningText(t, chart, chart.seriesWarnings);
   }
 
   const usageWarningParts = EN_CATALOG['reports.chart.usage-active-users.warning'].split('{details}');
@@ -372,6 +369,41 @@ export function reportChartWarningText(t: TFunction, chart: ReportChart): string
   if (chart.warning !== EN_CATALOG[catalogKey]) return chart.warning;
   const translated = t(catalogKey);
   return translated === catalogKey ? chart.warning : translated;
+}
+
+/**
+ * The usage chart's warning sentence for each `warningKey` the server sends. A workload charted from
+ * the days that were imported is not unavailable, so its incomplete weeks get a sentence of their
+ * own rather than being listed as a missing series (#816).
+ */
+export const USAGE_WARNING_KEYS = {
+  seriesUnavailable: 'reports.chart.usage-active-users.warning',
+  incompleteWeeks: 'reports.chart.usage-active-users.warning.incompleteWeeks',
+  seriesUnavailableAndIncompleteWeeks: 'reports.chart.usage-active-users.warning.seriesUnavailableAndIncompleteWeeks',
+} as const satisfies Record<string, TranslationKey>;
+
+function usageWarningText(t: TFunction, chart: ReportChart, warnings: ReportSeriesWarning[]): string {
+  const details = (subset: ReportSeriesWarning[]) => subset.map((warning) => seriesWarningText(t, warning)).join('; ');
+  const incomplete = warnings.filter((warning) => warning.reason === 'incompleteWeeks');
+  const unavailable = warnings.filter((warning) => warning.reason !== 'incompleteWeeks');
+
+  // A server older than the key sends the facts alone; they say the same thing.
+  const key = chart.warningKey
+    ?? (unavailable.length === 0 ? 'incompleteWeeks' : incomplete.length === 0 ? 'seriesUnavailable' : 'seriesUnavailableAndIncompleteWeeks');
+
+  switch (key) {
+    case 'seriesUnavailable':
+      return t(USAGE_WARNING_KEYS.seriesUnavailable, { details: details(warnings) });
+    case 'incompleteWeeks':
+      return t(USAGE_WARNING_KEYS.incompleteWeeks, { details: details(warnings) });
+    case 'seriesUnavailableAndIncompleteWeeks':
+      return t(USAGE_WARNING_KEYS.seriesUnavailableAndIncompleteWeeks, {
+        unavailable: details(unavailable),
+        incomplete: details(incomplete),
+      });
+    default:
+      return chart.warning ?? '';
+  }
 }
 
 function seriesWarningText(t: TFunction, warning: ReportSeriesWarning): string {
@@ -622,6 +654,13 @@ function ReportAreaView({
               <Text size={200} block className={styles.muted}>
                 {description}
               </Text>
+              {chart.minimumGroupSize != null && (
+                <Text size={200} block className={styles.muted}>
+                  {t(chart.type === 'matrix' ? 'reports.withheld.matrix' : 'reports.withheld.prompts', {
+                    count: formatNumber(chart.minimumGroupSize),
+                  })}
+                </Text>
+              )}
             </div>
             <SqlPopover sql={chart.sql} title={t('reports.chart.sqlTitle')} />
           </div>
@@ -656,7 +695,7 @@ function ReportAreaView({
                         valueSuffix={chart.valueSuffix}
                       />
                     ) : chart.type === 'matrix' && matrix ? (
-                      <MatrixChart matrix={matrix} valueLabel={valueLabel} />
+                      <MatrixChart matrix={matrix} valueLabel={valueLabel} withheldMinimum={chart.minimumGroupSize} />
                     ) : chart.type === 'wordcloud' && categories ? (
                       <WordCloud categories={categories} valueLabel={valueLabel} />
                     ) : (

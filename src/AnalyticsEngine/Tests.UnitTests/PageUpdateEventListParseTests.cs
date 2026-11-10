@@ -97,18 +97,24 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, props.PageComments.Count);
         }
 
+        /// <summary>
+        /// The problem is recorded with the field and its length, for PageUpdateManager to log by URL id (#853). Neither
+        /// the comments nor the page's URL are printed.
+        /// </summary>
         [TestMethod]
         [DoNotParallelize]
-        public void PageComments_MalformedJson_PrintsTheFieldButNotTheComments()
+        public void PageComments_MalformedJson_RecordsTheFieldButNotTheComments()
         {
             const string commentText = "Contoso private comment";
+            const string url = "https://contoso.sharepoint.com/sites/private/SitePages/page.aspx";
             var original = System.Console.Out;
             var captured = new System.IO.StringWriter();
             System.Console.SetOut(captured);
+            PageUpdateEventCustomProps props;
             try
             {
                 // Cut off mid-way, as a truncated payload would be: valid entries before an invalid ending.
-                var props = new PageUpdateEventCustomProps { Url = "u", CommentsString = "[{\"comment\":\"" + commentText + "\"}, {\"comment\":" };
+                props = new PageUpdateEventCustomProps { Url = url, CommentsString = "[{\"comment\":\"" + commentText + "\"}, {\"comment\":" };
                 Assert.AreEqual(0, props.PageComments.Count);
             }
             finally
@@ -116,9 +122,11 @@ namespace Tests.UnitTests
                 System.Console.SetOut(original);
             }
 
+            var problem = props.ParseProblems.Single();
+            StringAssert.Contains(problem, nameof(PageUpdateEventCustomProps.CommentsString));
+            Assert.IsFalse(problem.Contains(commentText) || problem.Contains(url), "The comments or the URL were recorded: " + problem);
             var output = captured.ToString();
-            StringAssert.Contains(output, nameof(PageUpdateEventCustomProps.CommentsString));
-            Assert.IsFalse(output.Contains(commentText), "The comments were printed: " + output);
+            Assert.IsFalse(output.Contains(commentText) || output.Contains(url), "Printed: " + output);
         }
 
         [TestMethod]

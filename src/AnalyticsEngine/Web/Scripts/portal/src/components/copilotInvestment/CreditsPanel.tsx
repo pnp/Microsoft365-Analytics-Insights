@@ -410,7 +410,15 @@ export default function CreditsPanel({ summary, trend, trendLoading, trendError 
               <Text size={200}>{t('copilotInvestment.quality.unresolved')}</Text>
               <Text weight="semibold">{formatNumber(credits.unresolvedObjects)}</Text>
               <Text size={200}>{t('copilotInvestment.quality.unresolvedCredits')}</Text>
-              <Text weight="semibold">{formatCredits(credits.unresolvedCredits ?? 0)}</Text>
+              <Text weight="semibold">
+                {credits.unresolvedCreditsWithheld || credits.unresolvedCredits === null ? (
+                  <span className={styles.withheldMark} title={serviceWithheld} aria-label={serviceWithheld} role="img" data-withheld="true">
+                    {'\u2014'}
+                  </span>
+                ) : (
+                  formatCredits(credits.unresolvedCredits)
+                )}
+              </Text>
             </>
           )}
           <Text size={200}>{t('copilotInvestment.quality.collector')}</Text>

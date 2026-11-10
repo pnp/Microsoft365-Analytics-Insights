@@ -755,6 +755,8 @@ const copilotInvestment: Record<keyof typeof en, string> = {
   'copilotInvestment.trust.creditsStale': 'La lectura de créditos consumidos más reciente es {days} días anterior al final del periodo.',
   'copilotInvestment.trust.creditsPartial': 'El {share} de las lecturas de créditos consumidos son parciales.',
   'copilotInvestment.trust.creditsUnresolved': 'Hay {credits} créditos en {objects} cuentas no emparejadas con un usuario importado.',
+  'copilotInvestment.trust.creditsUnresolvedWithheld':
+    'Hay créditos en {objects} cuentas no emparejadas con un usuario importado. La cantidad no se muestra, porque menos de cinco de esas cuentas tienen alguno.',
   'copilotInvestment.trust.creditsMissing': 'No hay lecturas de créditos de Copilot consumidos disponibles para este periodo.',
   'copilotInvestment.trust.creditsUnavailable': 'No se pudieron leer los créditos de Copilot consumidos en este momento: faltan, no son cero.',
   'copilotInvestment.trust.shortWindow': 'Un periodo de {days} días: las cifras mensuales se extrapolan de una muestra corta.',

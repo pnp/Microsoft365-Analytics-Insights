@@ -12,3 +12,15 @@ it.each([false, true])('uses literal labels only when requested: %s', async (lit
   );
   expect(getByText(literalLabels ? '(unknown)' : '(desconocido)')).toBeInTheDocument();
 }, 30000);
+
+it('prints each bar\u2019s share in the reader\u2019s number format', async () => {
+  await loadCatalog('es');
+  const { getByText, queryByText } = renderWithProvider(
+    <CategoryBarChart showShare valueLabel="Synthetic unit"
+      categories={[{ label: 'Contoso A', value: 1 }, { label: 'Contoso B', value: 2 }]} />,
+    { language: 'es' },
+  );
+  expect(getByText('33,3%')).toBeInTheDocument();
+  expect(getByText('66,7%')).toBeInTheDocument();
+  expect(queryByText('33.3%')).not.toBeInTheDocument();
+}, 30000);

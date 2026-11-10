@@ -112,6 +112,12 @@ namespace Common.Entities.SpoWebActivity
     }
 
     /// <summary>A verdict on one headline figure, in words an intranet owner can act on.</summary>
+    /// <remarks>
+    /// The portal words the verdict itself, in the reader's language, from
+    /// <see cref="HeadlineKey"/>, <see cref="DetailKey"/> and the unformatted <see cref="Values"/>.
+    /// <see cref="Headline"/> and <see cref="Detail"/> are the English fallback for a key the portal
+    /// does not recognise; they are never shown when it does.
+    /// </remarks>
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class WebActivityJudgement
     {
@@ -119,6 +125,18 @@ namespace Common.Entities.SpoWebActivity
 
         /// <summary>One of good / neutral / warning / critical - drives the message-bar intent.</summary>
         public string Tone { get; set; }
+
+        /// <summary>Stable id of the headline sentence, <c>{Key}.headline</c> or <c>{Key}.headline.{variant}</c>.</summary>
+        public string HeadlineKey { get; set; }
+
+        /// <summary>Stable id of the detail sentence, <c>{Key}.detail</c> or <c>{Key}.detail.{variant}</c>.</summary>
+        public string DetailKey { get; set; }
+
+        /// <summary>
+        /// The figures the sentences quote, unformatted, so the portal formats them for the reader's
+        /// locale. Keyed by placeholder name; empty when the sentences quote no figure.
+        /// </summary>
+        public Dictionary<string, double> Values { get; set; } = new Dictionary<string, double>();
 
         public string Headline { get; set; }
 
