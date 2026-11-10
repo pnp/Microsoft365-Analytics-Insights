@@ -409,7 +409,9 @@ describe('CopilotAdoptionPage loading and recovery', () => {
   it('bounds automatic generation reconciliation instead of looping between different server instances', async () => {
     vi.mocked(fetchAdoptionFilters).mockRejectedValue(new AdoptionGenerationChangedError());
     await renderPage();
-    expect(await screen.findByRole('button', { name: 'Check again' })).toBeVisible();
+    // Two summary reads, two filter reads and their renders: on a loaded CI runner that can take longer than the
+    // default 1-second wait, as for the other heavy assertions in this file.
+    expect(await screen.findByRole('button', { name: 'Check again' }, { timeout: 5000 })).toBeVisible();
     expect(fetchAdoptionSummary).toHaveBeenCalledTimes(2);
     expect(fetchAdoptionFilters).toHaveBeenCalledTimes(2);
     expect(rebuildAdoption).not.toHaveBeenCalled();
