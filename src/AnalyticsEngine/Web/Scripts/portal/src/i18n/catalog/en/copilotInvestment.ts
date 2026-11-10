@@ -59,6 +59,8 @@ export const copilotInvestment = {
   'copilotInvestment.error.personNotFound': 'This person is not in the report for the current period and filters.',
   'copilotInvestment.error.scenarioInvalid':
     'The what-if figures break a rule: every price must be above zero, a range needs all three values from lowest to highest, and realisation is a share from 0 to 1.',
+  'copilotInvestment.error.currencyChangeNeedsPrices':
+    'The what-if changes the currency but keeps some of the organisation\u2019s prices or its hourly cost. Those are in the organisation\u2019s currency and would not be converted, so enter every price and the hourly cost in the new currency, or leave the currency blank.',
 
   'copilotInvestment.badge.modelled': 'Modelled',
   'copilotInvestment.badge.observed': 'Observed',
@@ -779,7 +781,7 @@ export const copilotInvestment = {
   'copilotInvestment.whatIf.required': 'Needed to model the return',
   'copilotInvestment.whatIf.optional': 'Optional',
   'copilotInvestment.whatIf.optional.description': 'Each adds a source of cost; money is modelled without them.',
-  'copilotInvestment.whatIf.guide.currency': 'Three-letter ISO code, such as EUR or USD. Every price and the hourly cost are in it.',
+  'copilotInvestment.whatIf.guide.currency': 'Three-letter ISO code, such as EUR or USD. Every price and the hourly cost are in it, and none is converted: to use another currency, give each figure the organisation has set in it too.',
   'copilotInvestment.whatIf.guide.seatPrice': 'What one Microsoft 365 Copilot licence costs you a month, from your agreement or invoice.',
   'copilotInvestment.whatIf.guide.hourlyCost': 'Salary plus on-costs for an hour of a typical person\u2019s time, from finance.',
   'copilotInvestment.whatIf.guide.studioCreditPrice':
@@ -845,6 +847,8 @@ export const copilotInvestment = {
   'copilotInvestment.settings.error.realisationOrder': 'Realisation must run from conservative to upside without going down.',
   'copilotInvestment.settings.error.noteTooLong': 'The note can be at most 500 characters.',
   'copilotInvestment.settings.error.scenarioInvalid': 'The figures break a rule.',
+  'copilotInvestment.settings.error.currencyChangeNeedsPrices':
+    'A different currency needs every price and the hourly cost given in it: the organisation\u2019s figures are not converted.',
   'copilotInvestment.settings.error.loadFailed': 'Couldn\u2019t load the assumptions.',
   'copilotInvestment.settings.error.saveFailed': 'Couldn\u2019t save the assumptions.',
   // Excel workbook. The server writes it from this catalog (Common/Entities/CopilotInvestment/CopilotInvestmentWorkbook.cs).

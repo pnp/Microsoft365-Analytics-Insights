@@ -1824,7 +1824,7 @@ namespace Common.Entities.CopilotAdoption
             // a worksheet has one set of column widths for both. Take the table's widths and widen the
             // first three to suit the label/value/notes block above it, so neither is unreadable.
             var coworkColumns = CombineColumns(
-                CopilotAdoptionExports.CoworkReadinessColumns(),
+                CopilotAdoptionExports.CoworkReadinessColumns(summary.FiguresIncomplete, WarningSummary(summary)),
                 CoworkWorkbookOnlyColumns());
             var widths = coworkColumns.Select(ColumnWidth).ToArray();
             widths[0] = Math.Max(widths[0], 34);
@@ -2043,7 +2043,7 @@ namespace Common.Entities.CopilotAdoption
             WriteRowsFromColumns(
                 sheet,
                 listed,
-                CopilotAdoptionExports.CoworkReadinessColumns(),
+                CopilotAdoptionExports.CoworkReadinessColumns(summary.FiguresIncomplete, WarningSummary(summary)),
                 CoworkWorkbookOnlyColumns(),
                 setColumnWidths: false,
                 freezePanes: false);

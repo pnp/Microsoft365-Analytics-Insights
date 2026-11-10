@@ -91,6 +91,12 @@ namespace Common.Entities.SpoWebActivity
             /// is one the data cannot support.
             /// </remarks>
             public double? Seconds { get; set; }
+
+            /// <summary>
+            /// How many of those visits reported a dwell time - the visits <see cref="Seconds"/> was summed from, and so the
+            /// only right denominator for an average of it.
+            /// </summary>
+            public long MeasuredVisits { get; set; }
         }
 
         public class HeatCellRow

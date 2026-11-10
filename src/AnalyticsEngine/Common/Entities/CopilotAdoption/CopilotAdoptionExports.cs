@@ -587,8 +587,14 @@ namespace Common.Entities.CopilotAdoption
         /// cohort-level figure built from an assumption, and a per-user column of modelled minutes would
         /// be read as a measurement of that individual - which it is not, and which this product cannot
         /// measure. It lives on its own clearly-labelled workbook sheet instead.</para>
+        ///
+        /// <para>Carries the run's "Figures incomplete" and "Figure warnings" on every row, as the licensed-user and
+        /// licence-opportunity files do: the file is pasted into a spending policy long after the banner above the tab
+        /// that said a source query failed has gone.</para>
         /// </summary>
-        public static IReadOnlyList<CsvColumn<CoworkReadinessRow>> CoworkReadinessColumns()
+        public static IReadOnlyList<CsvColumn<CoworkReadinessRow>> CoworkReadinessColumns(
+            bool figuresIncomplete = false,
+            string warningSummary = null)
         {
             return new List<CsvColumn<CoworkReadinessRow>>
             {
@@ -608,6 +614,8 @@ namespace Common.Entities.CopilotAdoption
                 // Evidence or inference. Sits next to the tier on purpose: "Prime candidate" is a
                 // prediction and must never be read as an observation of what the person already does.
                 new CsvColumn<CoworkReadinessRow>("Verdict based on", r => r.Basis),
+                new CsvColumn<CoworkReadinessRow>("Figures incomplete", r => figuresIncomplete),
+                new CsvColumn<CoworkReadinessRow>("Figure warnings", r => warningSummary),
 
                 new CsvColumn<CoworkReadinessRow>("Coordination load (0-100)", r => r.CoordinationLoadScore),
                 new CsvColumn<CoworkReadinessRow>("Copilot fluency (0-100)", r => r.FluencyScore),

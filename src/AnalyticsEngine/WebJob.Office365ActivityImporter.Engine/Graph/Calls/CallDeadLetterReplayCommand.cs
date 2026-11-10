@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 {
@@ -58,10 +59,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             $"(default 10 x {MaxOption}, at least {CallDeadLetterReplayOptions.MinimumDefaultScanLimit}).{Environment.NewLine}" +
             $"  {ReasonOption} R            Only messages dead-lettered with reason R, e.g. {CallQueueRetryPolicy.RetriesExhaustedReason}.{Environment.NewLine}" +
             $"  {IncludeInvalidOption}     Also replay what the importer found can never be imported ({CallQueueMessageHandler.InvalidNotificationReason}, " +
-            $"{CallQueueMessageHandler.MissingCallIdReason}, {CallQueueMessageHandler.NotRetryableReason}).{Environment.NewLine}" +
+            $"{CallQueueMessageHandler.MissingCallIdReason}, {CallQueueMessageHandler.NotRetryableReason}, {CallRecordPayloadException.NoUsableSessionsReason}, " +
+            $"{CallRecordPayloadException.NoCallTypeReason}).{Environment.NewLine}" +
             $"  {PurgeUnimportableOption}  DELETE dead-lettered calls first queued over 30 days ago: Graph no longer has them.{Environment.NewLine}" +
             $"  {PurgeInvalidOption}       DELETE what the importer found can never be imported ({CallQueueMessageHandler.InvalidNotificationReason}, " +
-            $"{CallQueueMessageHandler.MissingCallIdReason}, {CallQueueMessageHandler.NotRetryableReason}).";
+            $"{CallQueueMessageHandler.MissingCallIdReason}, {CallQueueMessageHandler.NotRetryableReason}, {CallRecordPayloadException.NoUsableSessionsReason}, " +
+            $"{CallRecordPayloadException.NoCallTypeReason}).";
 
         /// <summary>
         /// Whether the command line asks for this mode instead of the import - or looks as if it meant to. So that a mistyped

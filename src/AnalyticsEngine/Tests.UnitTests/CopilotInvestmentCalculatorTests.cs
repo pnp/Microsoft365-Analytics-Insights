@@ -1337,6 +1337,50 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void AWhatIfInAnotherCurrency_IsRefused_UnlessItRestatesEveryMoneyFigureTheOrganisationSet()
+        {
+            // The organisation's figures are in EUR: seat 30, credits 0.01 and 0.02, an hour 60.
+            var tenant = Assumptions();
+
+            // Only the currency and two prices: the credit prices would still be the organisation's euros, shown as dollars.
+            var relabelled = Assert.ThrowsException<CopilotInvestmentAssumptionsRejectedException>(() =>
+                new CopilotInvestmentScenario { Currency = "usd", SeatPricePerMonth = 32, HourlyCost = 65 }.ApplyTo(tenant, null));
+            Assert.AreEqual(CopilotInvestmentErrorCodes.ScenarioInvalid, relabelled.Code, "A refused what-if, as the page and the workbook link expect.");
+            CollectionAssert.Contains(relabelled.ValidationErrors.ToList(), CopilotInvestmentErrorCodes.CurrencyChangeNeedsPrices);
+            Assert.ThrowsException<CopilotInvestmentAssumptionsRejectedException>(() =>
+                new CopilotInvestmentScenario { Currency = "USD" }.ApplyTo(tenant, null), "A currency on its own relabels every figure.");
+
+            // Every money figure restated in the new currency: nothing of the organisation's is relabelled.
+            var restated = new CopilotInvestmentScenario
+            {
+                Currency = "USD", SeatPricePerMonth = 32, CreditPrice = 0.011, StudioCreditPrice = 0.021, HourlyCost = 65,
+            }.ApplyTo(tenant, null);
+            Assert.AreEqual("USD", restated.Currency);
+            Assert.AreEqual(0.011, restated.CreditPrice);
+
+            // The organisation's own currency, however it is typed, is not a change.
+            var same = new CopilotInvestmentScenario { Currency = " eur ", HourlyCost = 70 }.ApplyTo(tenant, null);
+            Assert.AreEqual("EUR", same.Currency);
+            Assert.AreEqual(30, same.SeatPricePerMonth);
+
+            // A price the organisation never set has nothing to relabel, so it need not be given.
+            var withoutCredits = Assumptions(a => { a.CreditPrice = null; a.StudioCreditPrice = null; });
+            var priced = new CopilotInvestmentScenario { Currency = "USD", SeatPricePerMonth = 32, HourlyCost = 65 }.ApplyTo(withoutCredits, null);
+            Assert.AreEqual("USD", priced.Currency);
+            Assert.IsNull(priced.CreditPrice);
+            Assert.AreEqual("USD", new CopilotInvestmentScenario { Currency = "USD", SeatPricePerMonth = 32 }
+                .ApplyTo(new CopilotInvestmentAssumptions(), null).Currency, "An organisation with no figures has no money to relabel.");
+
+            // The workbook link says why, in the reader's language.
+            var spanish = Common.Entities.Localisation.PortalLanguage.Spanish;
+            var es = Common.Entities.Localisation.PortalCatalog.For(CopilotInvestmentWorkbook.CatalogModule, spanish);
+            Assert.IsTrue(es.Has("copilotInvestment.settings.error." + CopilotInvestmentErrorCodes.CurrencyChangeNeedsPrices));
+            Assert.AreEqual(
+                es.Text("copilotInvestment.workbook.error.whatIf", ("errors", es.Text("copilotInvestment.settings.error.currencyChangeNeedsPrices"))),
+                CopilotInvestmentAPIController.WhatIfWorkbookError(relabelled, spanish).Content.ReadAsStringAsync().Result);
+        }
+
+        [TestMethod]
         public void Ranks_CountTheExactFraction_EvenWhereFloatingPointLandsJustAboveAWholeNumber()
         {
             int people = 100;

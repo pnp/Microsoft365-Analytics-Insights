@@ -239,8 +239,12 @@ describe('OrgTypeDialog', () => {
     });
 
     expect(screen.queryByText(/does not check the property name after the dot/)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Test' })).toBeEnabled();
+    // Including hidden elements on purpose. Fluent's focus trap (tabster) re-applies aria-hidden around modals on a
+    // 250 ms timer, and after a close and reopen in the same tick it hides this reopened dialog when that timer fires.
+    // Whether it had fired by this point depended on how fast the run was, which is how this test failed in CI (#855).
+    // It is not what this test is about, and the dialog unmounts on close, so there is one of each button.
+    expect(screen.getByRole('button', { name: 'Save', hidden: true })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Test', hidden: true })).toBeEnabled();
   });
 
   it('keeps saving disabled when the attribute cannot be read, and explains why', async () => {

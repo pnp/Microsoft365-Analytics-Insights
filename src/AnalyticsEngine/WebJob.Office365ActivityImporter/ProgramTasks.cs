@@ -51,7 +51,10 @@ namespace WebJob.Office365ActivityImporter
         // the directory has said do not exist (so they are neither asked about nor offered for re-linking every pass).
         private static readonly InMemoryKeyValueStore InMemoryAgentCostStateStore = new InMemoryKeyValueStore();
         private static readonly AgentCostDirectoryMissCache AgentCostDirectoryMisses = new AgentCostDirectoryMissCache();
-        private DateTimeOffset _copilotCostRetryAt;
+
+        // Process-lifetime for the same reason: the Copilot cost collector's back-off, and which outcome was last logged. Held
+        // on the per-cycle instance, the back-off was lost at every cycle boundary (#847, R8-13).
+        private static readonly CostCollectorPollGate CopilotCostPollGate = new CostCollectorPollGate();
 
         public ProgramTasks(AnalyticsLogger logger, AppConfig settings, ISingleDateStore activityReportsLastImportedStore = null, IImportLastRunStore graphLastRunStore = null, ISentEmailMailboxSkipList sentEmailMailboxSkipList = null)
             : this(logger, settings, activityReportsLastImportedStore, graphLastRunStore, sentEmailMailboxSkipList, reportCompletionStore: null)
@@ -77,17 +80,21 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>
-        /// Start listening for queued call notifications. The processor is owned by the caller because it must outlive a
-        /// single import cycle - Program.cs creates it once for the process (see issue #378). The Graph webhook
-        /// subscription is no longer checked here: <see cref="CallSubscriptionMaintainer"/> keeps it alive on its own timer.
+        /// Start listening for queued call notifications, unless already listening. The processor is owned by the caller
+        /// because it must outlive a single import cycle - Program.cs creates it once for the process (see issue #378). The
+        /// Graph webhook subscription is no longer checked here: <see cref="CallSubscriptionMaintainer"/> keeps it alive on
+        /// its own timer.
         /// </summary>
-        internal Task ProcessCallQueueAndWebhook(Uri webHookUrl, CallQueueProcessor callQueueProcessor)
+        /// <remarks>
+        /// Awaited: the start used to be fire-and-forget, so a start that failed was never seen (#847, R9-3). A failure now
+        /// fails this cycle's <c>CallQueueWebhook</c> stage and is logged by the caller, and the start is tried again on the
+        /// next cycle.
+        /// </remarks>
+        internal async Task ProcessCallQueueAndWebhook(Uri webHookUrl, CallQueueProcessor callQueueProcessor)
         {
             if (callQueueProcessor is null) throw new ArgumentNullException(nameof(callQueueProcessor));
 
-            // Fire and forget calls SB receiver
-            _ = callQueueProcessor.BeginProcessCallsQueue();
-            return Task.CompletedTask;
+            await callQueueProcessor.BeginProcessCallsQueue();
         }
 
         /// <summary>
@@ -197,15 +204,24 @@ namespace WebJob.Office365ActivityImporter
         internal async Task ImportCopilotCosts()
         {
             if (!_settings.ImportJobSettings.CopilotCostManagement) return;
-            if (DateTimeOffset.UtcNow < _copilotCostRetryAt) return;
+            if (!CopilotCostPollGate.IsDue(DateTimeOffset.UtcNow)) return;
             var status = await CostCollectorRuntime.RunAsync(_settings, System.Threading.CancellationToken.None);
-            if (status != "sliceCompleted" && status != "observed" && status != "partial")
-                _copilotCostRetryAt = DateTimeOffset.UtcNow.AddMinutes(status == "idle" ? 1 : 5);
-            // Only stable, application-authored classifications; never exception text/SQL/request URLs.
-            if (CostApiHealth.SafeCode(status) == status || status == "configurationRequired" || status == "storageRequired")
-                _logger.LogWarning("Copilot cost preview collection: {Outcome}. Previous observations are retained; check Administration > Copilot credit history.", status);
-            else
-                _logger.LogInformation("Copilot cost preview collection: {Outcome}", status);
+
+            // The cycle pause polls every 5 seconds: an outcome is logged at its own level only when it changes (a warning
+            // that persists, once an hour), otherwise at Debug. Only stable, application-authored classifications are
+            // logged; never exception text, SQL or request URLs.
+            switch (CopilotCostPollGate.Record(status, DateTimeOffset.UtcNow))
+            {
+                case LogLevel.Warning:
+                    _logger.LogWarning("Copilot cost preview collection: {Outcome}. Previous observations are retained; check Administration > Copilot credit history.", status);
+                    break;
+                case LogLevel.Information:
+                    _logger.LogInformation("Copilot cost preview collection: {Outcome}", status);
+                    break;
+                default:
+                    _logger.LogDebug("Copilot cost preview collection: {Outcome}", status);
+                    break;
+            }
         }
 
         internal bool CopilotCostsEnabled => _settings.ImportJobSettings.CopilotCostManagement

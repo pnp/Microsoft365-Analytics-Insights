@@ -936,6 +936,63 @@ namespace Tests.UnitTests
             protected override string FileTitle => "test.dat";
         }
 
+        /// <summary>
+        /// A preferences file Windows can't decrypt for this account (written by another account or machine, or after the
+        /// account's data-protection keys changed), or a damaged one, used to throw out of start-up, leaving the installer
+        /// without preferences (#852 R11-16). It now gives the defaults and says why, and saving replaces it.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("not encrypted")]
+        [DataRow("encrypted for something else")]
+        [DataRow("not JSON")]
+        [DataRow("empty")]
+        public void SecureLocalPreferences_AnUnreadableFile_GivesTheDefaultsAndSaysWhy(string damage)
+        {
+            var file = new UnreadablePreferences { StringVal = "Contoso proxy" }.SaveToTempFile();
+            try
+            {
+                byte[] bytes;
+                switch (damage)
+                {
+                    case "not encrypted": bytes = System.Text.Encoding.UTF8.GetBytes("{\"StringVal\":\"Contoso proxy\"}"); break;
+                    case "encrypted for something else":
+                        bytes = ProtectedData.Protect(System.Text.Encoding.UTF8.GetBytes("{\"StringVal\":\"Contoso proxy\"}"),
+                            new byte[] { 1, 2, 3 }, DataProtectionScope.CurrentUser);
+                        break;
+                    case "not JSON": bytes = StringUtils.ProtectString("Contoso proxy"); break;
+                    default: bytes = StringUtils.ProtectString(string.Empty); break;
+                }
+                System.IO.File.WriteAllBytes(file.FullName, bytes);
+
+                string reported = null;
+                var loaded = SecureLocalPreferences.Load<UnreadablePreferences>(problem => reported = problem);
+
+                Assert.IsNotNull(loaded);
+                Assert.AreEqual("default", loaded.StringVal);
+                Assert.IsNotNull(reported, "Falling back to the defaults must be reported.");
+                StringAssert.Contains(reported, file.Name);
+                StringAssert.Contains(reported, "so the defaults are in use");
+
+                new UnreadablePreferences { StringVal = "Contoso proxy" }.SaveToTempFile();
+                Assert.AreEqual("Contoso proxy", SecureLocalPreferences.Load<UnreadablePreferences>(problem => Assert.Fail(problem)).StringVal,
+                    "Saving again must replace the unreadable file.");
+            }
+            finally
+            {
+                System.IO.File.Delete(file.FullName);
+            }
+        }
+
+        public class UnreadablePreferences : SecureLocalPreferences
+        {
+            // Unique to this test run: the folder is shared by every test process of this user.
+            static readonly string Title = "unreadable-" + Guid.NewGuid().ToString("N") + ".dat";
+
+            public string StringVal { get; set; } = "default";
+
+            protected override string FileTitle => Title;
+        }
+
 
         [TestMethod]
         public void UrlFilterTests()

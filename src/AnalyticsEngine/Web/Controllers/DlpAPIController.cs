@@ -1,5 +1,6 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.CopilotAdoption;
 using Common.Entities.UserFilters;
 using DataUtils.Sql;
 using Microsoft.Data.SqlClient;
@@ -58,6 +59,7 @@ namespace Web.AnalyticsWeb.Controllers
         private readonly ReportScopeResolver _scopes;
         private readonly Models.SharedComputation<DlpSummary> _summaries;
         private readonly Models.SharedComputation<DlpGovernanceSummary> _governance;
+        private readonly Func<DateTime> _utcNow;
 
         /// <summary>
         /// SQL timeout for each statement behind the page. The default context has none (it is sized for importer
@@ -89,16 +91,28 @@ namespace Web.AnalyticsWeb.Controllers
         /// Testable entry point. The queries below are EF LINQ, so a translation failure (an unsupported
         /// expression, a bad navigation) only appears when they actually run - which is why the
         /// integration test points this at a real, migrated database rather than trusting a compile.
-        /// No global filter unless <paramref name="scopes"/> supplies one.
+        /// No global filter unless <paramref name="scopes"/> supplies one, and the real clock unless <paramref name="utcNow"/>
+        /// supplies one.
         /// </summary>
         internal DlpAPIController(IAnalyticsDbContextFactory contextFactory, ReportScopeResolver scopes = null,
-            Models.SharedComputation<DlpSummary> summaries = null, Models.SharedComputation<DlpGovernanceSummary> governance = null)
+            Models.SharedComputation<DlpSummary> summaries = null, Models.SharedComputation<DlpGovernanceSummary> governance = null,
+            Func<DateTime> utcNow = null)
         {
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
             _scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, CachedUserDirectorySource.Default);
             _summaries = summaries ?? SharedSummaries;
             _governance = governance ?? SharedGovernance;
+            _utcNow = utcNow ?? (() => DateTime.UtcNow);
         }
+
+        /// <summary>
+        /// Inclusive start of the "Last N days" window that ends at <paramref name="nowUtc"/>: midnight N-1 days ago, so the
+        /// window covers N calendar dates including today. It is Copilot Adoption's convention
+        /// (<see cref="CopilotAdoptionScoring.WindowStartUtc"/>), so the same label means the same dates on both pages;
+        /// midnight N days ago, as this page used to start, spans N+1 dates.
+        /// </summary>
+        internal static DateTime WindowStartUtc(DateTime nowUtc, int windowDays) =>
+            CopilotAdoptionScoring.WindowStartUtc(nowUtc, windowDays);
 
         // GET: api/Dlp/availability
         [HttpGet]
@@ -219,8 +233,8 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             var windowDays = SnapWindow(days);
-            var toUtc = DateTime.UtcNow;
-            var fromUtc = toUtc.Date.AddDays(-windowDays);
+            var toUtc = _utcNow();
+            var fromUtc = WindowStartUtc(toUtc, windowDays);
 
             using (var db = _contextFactory.Create())
             {
@@ -536,8 +550,8 @@ GROUP BY p.policy_id, p.name;";
             CancellationToken cancellationToken)
         {
             var windowDays = SnapWindow(days);
-            var toUtc = DateTime.UtcNow;
-            var fromUtc = toUtc.Date.AddDays(-windowDays);
+            var toUtc = _utcNow();
+            var fromUtc = WindowStartUtc(toUtc, windowDays);
 
             using (var db = _contextFactory.Create())
             {
@@ -1064,8 +1078,8 @@ OPTION (RECOMPILE);";
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var windowDays = SnapWindow(days);
-            var toUtc = DateTime.UtcNow;
-            var fromUtc = toUtc.Date.AddDays(-windowDays);
+            var toUtc = _utcNow();
+            var fromUtc = WindowStartUtc(toUtc, windowDays);
             var restricted = scope != null && scope.IsRestricted;
             var effectiveScope = restricted ? scope : ReportUserScope.Everyone;
 

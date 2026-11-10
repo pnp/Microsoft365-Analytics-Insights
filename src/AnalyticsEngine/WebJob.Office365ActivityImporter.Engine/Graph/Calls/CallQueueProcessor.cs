@@ -34,6 +34,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         private CallRecordImporter _callRecordImporter;
         private CallQueueMessageHandler _messageHandler;
         private bool _isInitialised = false;
+        private bool _handlersRegistered = false;
+        private readonly SemaphoreSlim _startLock = new SemaphoreSlim(1, 1);
         private readonly IUserImportScopeProvider _userScopeProvider;
 
         public ServiceBusClient ServiceBusClient => _sbClient;
@@ -125,33 +127,45 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             _isInitialised = true;
         }
 
-        public async Task BeginProcessCallsQueue()
+        public async Task<bool> BeginProcessCallsQueue()
         {
             if (!_isInitialised)
             {
                 throw new InvalidOperationException("CallQueueProcessor not initialised. Call Init() first.");
             }
 
-            if (_processor.IsProcessing)
+            await _startLock.WaitAsync();
+            try
             {
-                return;
+                if (_processor.IsProcessing)
+                {
+                    return true;
+                }
+
+                // Once for the life of the processor: it refuses a second handler, so registering on every start meant a
+                // start that had failed once could never succeed (#847, R9-3).
+                if (!_handlersRegistered)
+                {
+                    _processor.ProcessMessageAsync += ProcessSBMessagesAsync;
+                    _processor.ProcessErrorAsync += ExceptionReceivedHandler;
+                    _handlersRegistered = true;
+                }
+
+                // Start processing. A failure is thrown to the caller, which logs it and tries again on the next cycle.
+                await _processor.StartProcessingAsync();
+                if (_processor.IsProcessing)
+                {
+                    _logger.LogInformation("ServiceBus client: Now listening for service-bus messages.");
+                }
+                else
+                {
+                    _logger.LogWarning("ServiceBus client: Not listening for service-bus messages?");
+                }
+                return _processor.IsProcessing;
             }
-
-            // Add handler to process messages
-            _processor.ProcessMessageAsync += ProcessSBMessagesAsync;
-
-            // Add handler to process any errors
-            _processor.ProcessErrorAsync += ExceptionReceivedHandler;
-
-            // Start processing
-            await _processor.StartProcessingAsync();
-            if (_processor.IsProcessing)
+            finally
             {
-                _logger.LogInformation("ServiceBus client: Now listening for service-bus messages.");
-            }
-            else
-            {
-                _logger.LogWarning("ServiceBus client: Not listening for service-bus messages?");
+                _startLock.Release();
             }
         }
 
@@ -228,9 +242,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 }
 
                 // Unsubscribe handlers BEFORE disposing the processor (after disposal the
-                // event accessors can throw ObjectDisposedException) and before nulling the field.
-                _processor.ProcessMessageAsync -= ProcessSBMessagesAsync;
-                _processor.ProcessErrorAsync -= ExceptionReceivedHandler;
+                // event accessors can throw ObjectDisposedException) and before nulling the field. Only if they were
+                // registered: removing a handler the processor never had throws.
+                if (_handlersRegistered)
+                {
+                    _processor.ProcessMessageAsync -= ProcessSBMessagesAsync;
+                    _processor.ProcessErrorAsync -= ExceptionReceivedHandler;
+                    _handlersRegistered = false;
+                }
 
                 await _processor.DisposeAsync().ConfigureAwait(false);
 
@@ -241,6 +260,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 await _retrySender.DisposeAsync().ConfigureAwait(false);
                 _retrySender = null;
+            }
+
+            // Last: the client owns the connection the processor and the sender share. It used to be left open (#847, R9-3).
+            if (_sbClient != null)
+            {
+                await _sbClient.DisposeAsync().ConfigureAwait(false);
+                _sbClient = null;
             }
         }
 

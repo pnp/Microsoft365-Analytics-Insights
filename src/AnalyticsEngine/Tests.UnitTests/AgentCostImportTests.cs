@@ -2343,6 +2343,58 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// #847: a 200 whose body is blank or is not a JSON object is a failed read, never an empty one. It used to be
+        /// read exactly like a documented 204, so a lost body counted as a successful read of a day without consumption,
+        /// and the entitlement read logged "no entitlement for this tenant".
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("capacity", "")]
+        [DataRow("users", "")]
+        [DataRow("userResources", "   ")]
+        [DataRow("users", "<html>synthetic gateway page</html>")]
+        [DataRow("capacity", "[]")]
+        public async Task CreditSource_ABlankOrMalformed200_IsAFailedReadNotAnEmptyOne(string route, string body)
+        {
+            var handler = new RecordingPostHandler(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(handler, Logger))
+            {
+                var source = new PowerPlatformLicensingCreditSource(client, Logger, delegated: route != "capacity");
+                var day = new DateTime(2026, 9, 9);
+                Func<Task> read;
+                switch (route)
+                {
+                    case "capacity": read = () => source.GetCapacityAsync(); break;
+                    case "users": read = () => source.GetUserConsumptionPageAsync(day, day, null); break;
+                    default: read = () => source.GetUserResourceConsumptionPageAsync("bbbbbbbb-0000-0000-0000-000000000001", day, null); break;
+                }
+
+                var error = await Assert.ThrowsExceptionAsync<AgentCostIncompleteReadException>(read);
+
+                StringAssert.Contains(error.Message, "HTTP 200");
+                Assert.IsFalse(error.Message.Contains("synthetic gateway page"), "The body never reaches the message.");
+                Assert.IsFalse(CopilotStudioCreditImporter.IsRetryableReadFailure(error), "Failed for this run, and retried on the next cycle.");
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("users")]
+        [DataRow("userResources")]
+        public async Task CreditSource_A204_IsStillAQuietDay(string route)
+        {
+            var handler = new RecordingPostHandler(new HttpResponseMessage(HttpStatusCode.NoContent));
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(handler, Logger))
+            {
+                var source = new PowerPlatformLicensingCreditSource(client, Logger, delegated: true);
+                var day = new DateTime(2026, 9, 9);
+                var rows = route == "users"
+                    ? (await source.GetUserConsumptionPageAsync(day, day, null)).Rows.Count
+                    : (await source.GetUserResourceConsumptionPageAsync("bbbbbbbb-0000-0000-0000-000000000001", day, null)).Rows.Count;
+
+                Assert.AreEqual(0, rows, "A documented 204 is an empty page, not a failure and not a missing route.");
+            }
+        }
+
         [TestMethod]
         public async Task CreditSource_UserResourceRead_AsksForOneUserAndOneDay()
         {
