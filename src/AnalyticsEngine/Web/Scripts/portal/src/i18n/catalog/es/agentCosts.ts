@@ -14,7 +14,7 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.state.withheld': 'Oculto',
 
   // El umbral de privacidad para quien no tiene See PII (#844)
-  'agentCosts.floor.note': 'Su acceso no incluye el permiso See PII, así que todas las cifras de Copilot Studio de esta página excluyen las líneas facturadas en las que Microsoft informa de menos de {count} personas, o en las que no indica el número de personas: una cifra sobre tan pocas personas podría identificar a alguien. Por eso los totales son inferiores al gasto completo. Los mosaicos de capacidad siguen mostrando el consumo de todo el inquilino.',
+  'agentCosts.floor.note': 'Su acceso no incluye el permiso See PII, así que todas las cifras de Copilot Studio de esta página excluyen las líneas facturadas en las que Microsoft informa de menos de {count} personas, o en las que no indica el número de personas: una cifra sobre tan pocas personas podría identificar a alguien. Por eso los totales son inferiores al gasto completo. Las tarjetas de capacidad siguen mostrando el consumo de todo el inquilino.',
   'agentCosts.floor.allWithheld': 'Oculto. Microsoft informa de menos de {count} personas en cada línea facturada de esta selección, o no indica el número de personas, así que sus cifras podrían identificar a alguien. Solo se muestran a quienes tienen el permiso See PII.',
 
   // Valores de arnés
