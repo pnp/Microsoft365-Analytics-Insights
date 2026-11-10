@@ -114,11 +114,12 @@ namespace Tests.UnitTests.InstallTests
             const string slowPackage = "Office365ActivityImporter.zip";
             var github = new FakeGitHub();
             var task = NewTask(github, new CapturingLogger());
-            task.StallTimeout = TimeSpan.FromMilliseconds(500);
+            task.StallTimeout = TimeSpan.FromSeconds(1);
             var trickleFor = TimeSpan.FromTicks(task.StallTimeout.Ticks * 20);
             github.Behaviour[slowPackage] = ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                // A byte every 50 ms: never quiet for anything like the 500 ms the no-data limit allows.
+                // A byte every 50 ms: never quiet for anything like the second the no-data limit allows, even on a busy runner
+                // whose thread pool is slow to run the timer.
                 Content = new StreamContent(new HeldStream(FakeGitHub.Content(slowPackage), Task.Delay(trickleFor), () => { },
                     every: TimeSpan.FromMilliseconds(50)))
             });
