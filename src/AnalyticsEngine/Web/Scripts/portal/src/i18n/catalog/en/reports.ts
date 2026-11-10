@@ -82,6 +82,10 @@ export const reports = {
     'Columns of fewer than {count} people are not shown, and a cell of fewer than {count} people is shown as a dash, so that nobody can be singled out.',
   'reports.withheld.prompts':
     'Only phrases and languages used by at least {count} different people are shown, so that nobody can be singled out.',
+  'reports.withheld.agents':
+    'Only agents used by at least {count} different people in this period are shown, so that nobody can be singled out.',
+  'reports.withheld.agentsNone': 'No agent was used by at least {count} different people in this period.',
+  'reports.withheld.agentsNoneMatching': 'No agent matching the filter was used by at least {count} different people in this period.',
   'reports.chart.error.noCompletedUsageWeeks': 'No completed usage-report weeks are available.',
   'reports.chart.error.noWorkloadSeriesLoaded': 'No workload series could be loaded. {details}',
   'reports.chart.error.noCompletedUsageWeeksWithData': 'No completed usage-report weeks are available for workloads with data.',

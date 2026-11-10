@@ -538,4 +538,57 @@ describe('ReportsPage', () => {
     await waitFor(() => expect(mockArea).toHaveBeenCalledWith('office-apps', 3, undefined));
     expect(screen.queryByText(/Showing the last/)).not.toBeInTheDocument();
   });
+
+  /** For a reader without See PII the server charts only agents five or more people used (#844), and says so. */
+  it('says which agents a reader without See PII is shown', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, copilot: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'copilot-agents',
+      charts: [
+        baseChart({ key: 'copilot-agent-totals', categories: [{ label: 'Contoso Helpdesk', value: 14 }], minimumGroupSize: 5 }),
+        baseChart({
+          key: 'copilot-agent-interactions',
+          type: 'timeseries',
+          series: [{ name: 'Contoso Helpdesk', points: [{ weekStart: '2026-01-05T00:00:00Z', value: 14 }] }],
+          minimumGroupSize: 5,
+        }),
+      ],
+    });
+
+    renderReport('/insights/reports/copilot-agents');
+
+    expect(await screen.findAllByText(
+      'Only agents used by at least 5 different people in this period are shown, so that nobody can be singled out.',
+      undefined,
+      { timeout: 5000 },
+    )).toHaveLength(2);
+    expect(screen.getByTitle('Contoso Helpdesk: 14 Executions')).toBeInTheDocument();
+    expect(screen.queryByText(/phrases and languages/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['en', '', 'reports.withheld.agentsNone'],
+    ['es', '', 'reports.withheld.agentsNone'],
+    ['en', '?agentName=Contoso', 'reports.withheld.agentsNoneMatching'],
+    ['es', '?agentName=Contoso', 'reports.withheld.agentsNoneMatching'],
+  ] as const)('never reads as no data when every agent is withheld (%s, %s)', async (language, search, key) => {
+    await loadCatalog(language);
+    mockAreas.mockResolvedValue({ ...NO_AREAS, copilot: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'copilot-agents',
+      charts: [
+        baseChart({ key: 'copilot-agent-totals', categories: [], minimumGroupSize: 5 }),
+        baseChart({ key: 'copilot-agent-interactions', type: 'timeseries', series: [], minimumGroupSize: 5 }),
+      ],
+    });
+
+    renderReport('/insights/reports/copilot-agents', language, search);
+
+    const expected = translateStatic(language, key).replace('{count}', '5');
+    expect(await screen.findAllByText(expected, undefined, { timeout: 5000 })).toHaveLength(2);
+    expect(screen.queryByText(translateStatic(language, 'charts.empty.noDataForPeriod'))).not.toBeInTheDocument();
+    expect(screen.queryByText(translateStatic(language, 'reports.chart.noData'))).not.toBeInTheDocument();
+  });
 });
