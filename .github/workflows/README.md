@@ -109,6 +109,13 @@ If it fails, rebuild the extension and commit the package, as
   New tests automatically join a shard; no category or test is dropped.
 * Each runner has its own LocalDB instance and Azurite. Separate catalogs on one shared SQL
   instance would not isolate the global staging tables.
+* `Start-LocalDb.ps1` starts LocalDB before the tests and prints the sector size of every volume it
+  writes to. Some runner VMs have disks that report physical sectors larger than 4 KB, which no
+  version of SQL Server supports ([Learn](https://learn.microsoft.com/en-us/troubleshoot/sql/database-engine/database-file-operations/troubleshoot-os-4kb-disk-sector-size)).
+  On those, it moves LocalDB's instances, its default database location and the test binaries'
+  folder to a virtual disk, which reports 4 KB sectors, before LocalDB starts. If it can't, the
+  step fails at once and says to re-run the job. Set `LOCALDB_FORCE_RELOCATION=true` to move the
+  files on any runner, to test the move.
 * Runs the `TimeZone` test category again in Romance Standard Time (UTC+1, or UTC+2 in summer) at
   the end of the `migrations` shard, which finishes well before `core`. The runners' clock is UTC,
   where a local and a UTC timestamp have the same ticks, so in the main run these tests are
