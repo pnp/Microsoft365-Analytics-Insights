@@ -17,7 +17,7 @@ import {
   AccordionPanel,
 } from '@fluentui/react-components';
 import { ArrowDownload16Regular, ArrowClockwise16Regular } from '@fluentui/react-icons';
-import { fetchLicensedUsers, licensedUsersExportUrl } from '../../api/copilotAdoptionApi';
+import { AdoptionGenerationChangedError, fetchLicensedUsers, licensedUsersExportUrl } from '../../api/copilotAdoptionApi';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { DateRange } from '../../types/licenceActivity';
 import type {
@@ -176,6 +176,9 @@ export default function LicensedUsersPanel({
   initialAction,
   userFilter,
   shown = true,
+  generationId,
+  onGenerationChanged,
+  onLoadingChange,
 }: {
   windowDays: number;
   dateRange?: DateRange | null;
@@ -205,6 +208,9 @@ export default function LicensedUsersPanel({
    * printed, so it must not hold the printout up loading every row.
    */
   shown?: boolean;
+  generationId?: string;
+  onGenerationChanged?: () => boolean;
+  onLoadingChange?: (loading: boolean) => void;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -238,18 +244,22 @@ export default function LicensedUsersPanel({
     let cancelled = false;
     const controller = new AbortController();
     setLoading(true);
+    onLoadingChange?.(true);
     setError(null);
+    setData(null);
 
-    fetchLicensedUsers(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal, ...(dateRange ? [dateRange] as const : []))
+    fetchLicensedUsers(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal,
+      dateRange, { generationId })
       .then((result) => {
         if (!cancelled) setData(result);
       })
       .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
+        if (e instanceof AdoptionGenerationChangedError && onGenerationChanged?.()) return;
         setError(e instanceof Error ? e.message : t('copilotAdoptionUsers.licensed.loadError'));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) { setLoading(false); onLoadingChange?.(false); }
       });
 
     return () => {
@@ -257,8 +267,9 @@ export default function LicensedUsersPanel({
       // These requests poll while the analysis is building, so cleanup has to actually stop them -
       // a bare `cancelled` flag would only suppress the state update and leave the loop running.
       controller.abort();
+      onLoadingChange?.(false);
     };
-  }, [windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
+  }, [windowDays, dateRange, filters, page, seatLicenceTypeIds, reloadKey, generationId, onGenerationChanged, onLoadingChange, t]);
 
   /**
    * Applies a column-header sort. The effect above already resets the page whenever `filters`

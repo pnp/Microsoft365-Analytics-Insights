@@ -33,6 +33,12 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("runId")]
         public string RunId { get; set; }
 
+        [JsonProperty("generationId")]
+        public string GenerationId { get; set; }
+
+        [JsonProperty("progress")]
+        public CopilotAdoptionProgressSnapshot Progress { get; set; }
+
         /// <summary>Wall-clock time for the whole analysis.</summary>
         [JsonProperty("totalMs")]
         public long TotalMs { get; set; }
