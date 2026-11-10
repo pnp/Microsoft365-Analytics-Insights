@@ -28,6 +28,8 @@ concurrency:
 env:
   Storage: UseDevelopmentStorage=true
   REQUIRE_AZURITE: 'true'
+  # TEMPORARY (#855): prove the LocalDB move end to end on a normal runner. Reverted before review.
+  LOCALDB_FORCE_RELOCATION: 'true'
 
 jobs:
   setup_tests:
@@ -245,6 +247,30 @@ jobs:
           }
           finally { tzutil /s $original }
           ./.github/scripts/Write-TestSummary.ps1 -ResultsDirectory "$env:RUNNER_TEMP\timezone-results" -Name 'TimeZone tests in Romance Standard Time'
+      # TEMPORARY (#855): where every database went in the forced-move run. Reverted before review.
+      - name: TEMPORARY where the test databases went
+        if: always()
+        shell: pwsh
+        run: |
+          try {
+            $connection = [Data.SqlClient.SqlConnection]::new('Data Source=(localdb)\MSSQLLocalDB;Initial Catalog=master;Integrated Security=true;Pooling=false;Connect Timeout=60')
+            $connection.Open()
+            $command = $connection.CreateCommand()
+            $command.CommandText = "SELECT N'instance started (UTC)', CONVERT(nvarchar(40), DATEADD(minute, DATEDIFF(minute, GETDATE(), GETUTCDATE()), sqlserver_start_time), 126) FROM sys.dm_os_sys_info UNION ALL SELECT N'default data path', CONVERT(nvarchar(260), SERVERPROPERTY('InstanceDefaultDataPath')) UNION ALL SELECT N'user instance timeout', CONVERT(nvarchar(20), value_in_use) FROM sys.configurations WHERE name = N'user instance timeout' UNION ALL SELECT DB_NAME(database_id) + N' ' + LOWER(type_desc), physical_name FROM sys.master_files;"
+            $reader = $command.ExecuteReader()
+            while ($reader.Read()) { Write-Host "$($reader.GetValue(0)): $($reader.GetValue(1))" }
+            $connection.Dispose()
+            $left = @(Get-ChildItem -LiteralPath $env:USERPROFILE -File -Force | Where-Object { $_.Extension -in '.mdf', '.ldf' })
+            Write-Host "Database files in the profile folder, LocalDB's usual default location: $($left.Count)"
+            $left | ForEach-Object { Write-Host "  $($_.FullName)" }
+            $bin = Get-Item -LiteralPath src\AnalyticsEngine\Tests.UnitTests\bin\Release
+            Write-Host "Test binaries: $($bin.FullName) is a $($bin.LinkType) to $($bin.Target)"
+            $volume = Get-Volume -FileSystemLabel LocalDB
+            $volume | Format-Table -AutoSize | Out-String | Write-Host
+            Get-ChildItem -LiteralPath "$($volume.DriveLetter):\Instances", "$($volume.DriveLetter):\Databases" -Force | ForEach-Object { Write-Host "  $($_.FullName) $($_.Length)" }
+            Get-ChildItem -Path "$env:RUNNER_TEMP\localdb-*.vhdx" | ForEach-Object { Write-Host ('VHDX {0}: {1:N0} MB' -f $_.Name, ($_.Length / 1MB)) }
+          }
+          catch { Write-Host "Evidence incomplete: $($_.Exception.Message)" }
 
   test_portal:
     name: Portal type checks and tests
