@@ -150,6 +150,10 @@ export interface WebActivityOverview extends WebActivitySection {
   heatmap: WebActivityHeatCell[];
   topSites: WebActivityNamedCount[];
   judgements: WebActivityJudgement[];
+  /** For a reader without See PII, the fewest people a row may describe; null (or absent) when nothing is held back. */
+  minimumGroupSize?: number | null;
+  /** Sites left out of `topSites` for a reader without See PII. */
+  withheldSites?: number;
 }
 
 export interface WebActivityVisitKpis {
@@ -174,6 +178,12 @@ export interface WebActivityVisits extends WebActivitySection {
   byPeriodOfDay: WebActivityBucket[];
   byHour: WebActivityBucket[];
   siteOverTime: WebActivityStackPoint[];
+  minimumGroupSize?: number | null;
+  withheldSites?: number;
+  withheldDevices?: number;
+  withheldBrowsers?: number;
+  /** For a reader without See PII, `byPage` is empty: nothing counts the people behind a page. */
+  pagesWithheld?: boolean;
 }
 
 /** A page and everything the report knows about how it performed. */
@@ -222,6 +232,10 @@ export interface WebActivityPages extends WebActivitySection {
   quietPages: WebActivityPageRow[];
   bySite: WebActivitySiteRow[];
   periodOverTime: WebActivityStackPoint[];
+  minimumGroupSize?: number | null;
+  withheldSites?: number;
+  /** For a reader without See PII, the top, slowest and quiet pages are empty: their queries count no people. */
+  pageListsWithheld?: boolean;
 }
 
 export interface WebActivityTransitionRow {
@@ -272,6 +286,13 @@ export interface WebActivityJourneys extends WebActivitySection {
   flowsCoveragePct: number;
   depth: WebActivityBucket[];
   clickedElements: WebActivityNamedCount[];
+  minimumGroupSize?: number | null;
+  /** For a reader without See PII, the entry, exit and bounce pages are empty: their queries count no people. */
+  pageListsWithheld?: boolean;
+  /** For a reader without See PII, the transitions and flows are empty. */
+  pathsWithheld?: boolean;
+  /** For a reader without See PII, the clicked elements are empty. */
+  clickedElementsWithheld?: boolean;
 }
 
 export interface WebActivityGeographyKpis {
@@ -306,6 +327,10 @@ export interface WebActivityGeography extends WebActivitySection {
   cities: WebActivityPlaceRow[];
   provinces: WebActivityPlaceRow[];
   countryOverTime: WebActivityStackPoint[];
+  minimumGroupSize?: number | null;
+  withheldCountries?: number;
+  withheldCities?: number;
+  withheldProvinces?: number;
 }
 
 export interface WebActivitySearchKpis {
@@ -338,6 +363,11 @@ export interface WebActivitySearch extends WebActivitySection {
   byDay: WebActivityBucket[];
   byPeriodOfDay: WebActivityBucket[];
   bySite: WebActivityNamedCount[];
+  minimumGroupSize?: number | null;
+  /** For a reader without See PII, the search and dead-end terms are empty: they are text people typed. */
+  termsWithheld?: boolean;
+  /** For a reader without See PII, `bySite` is empty: nothing counts the people who searched on a site. */
+  sitesWithheld?: boolean;
 }
 
 export interface WebActivityTechnologyKpis {
@@ -387,6 +417,11 @@ export interface WebActivityTechnology extends WebActivitySection {
   devices: WebActivityPlatformRow[];
   deviceOverTime: WebActivityStackPoint[];
   detail: WebActivityTechnologyDetailRow[];
+  minimumGroupSize?: number | null;
+  withheldBrowsers?: number;
+  withheldOperatingSystems?: number;
+  withheldDevices?: number;
+  withheldDetailRows?: number;
 }
 
 /** The CSV exports the API offers. Must match `WebActivityExports.Sections` on the server. */
