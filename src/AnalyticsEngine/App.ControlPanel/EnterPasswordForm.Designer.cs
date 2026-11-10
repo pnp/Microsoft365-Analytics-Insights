@@ -31,6 +31,8 @@
             this.groupBox1 = new System.Windows.Forms.GroupBox();
             this.label1 = new System.Windows.Forms.Label();
             this.txtPassword = new System.Windows.Forms.TextBox();
+            this.lblConfirmPassword = new System.Windows.Forms.Label();
+            this.txtConfirmPassword = new System.Windows.Forms.TextBox();
             this.label2 = new System.Windows.Forms.Label();
             this.btnSave = new System.Windows.Forms.Button();
             this.chkShowPassword = new System.Windows.Forms.CheckBox();
@@ -44,9 +46,11 @@
             | System.Windows.Forms.AnchorStyles.Right)));
             this.groupBox1.Controls.Add(this.label1);
             this.groupBox1.Controls.Add(this.txtPassword);
+            this.groupBox1.Controls.Add(this.lblConfirmPassword);
+            this.groupBox1.Controls.Add(this.txtConfirmPassword);
             this.groupBox1.Location = new System.Drawing.Point(15, 53);
             this.groupBox1.Name = "groupBox1";
-            this.groupBox1.Size = new System.Drawing.Size(461, 67);
+            this.groupBox1.Size = new System.Drawing.Size(461, 107);
             this.groupBox1.TabIndex = 0;
             this.groupBox1.TabStop = false;
             // 
@@ -69,6 +73,25 @@
             this.txtPassword.Size = new System.Drawing.Size(446, 20);
             this.txtPassword.TabIndex = 0;
             // 
+            // lblConfirmPassword
+            // 
+            this.lblConfirmPassword.AutoSize = true;
+            this.lblConfirmPassword.Location = new System.Drawing.Point(6, 56);
+            this.lblConfirmPassword.Name = "lblConfirmPassword";
+            this.lblConfirmPassword.Size = new System.Drawing.Size(124, 13);
+            this.lblConfirmPassword.TabIndex = 3;
+            this.lblConfirmPassword.Text = "Enter the password again:";
+            // 
+            // txtConfirmPassword
+            // 
+            this.txtConfirmPassword.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+            | System.Windows.Forms.AnchorStyles.Right)));
+            this.txtConfirmPassword.Location = new System.Drawing.Point(9, 72);
+            this.txtConfirmPassword.Name = "txtConfirmPassword";
+            this.txtConfirmPassword.PasswordChar = '*';
+            this.txtConfirmPassword.Size = new System.Drawing.Size(446, 20);
+            this.txtConfirmPassword.TabIndex = 2;
+            // 
             // label2
             // 
             this.label2.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
@@ -83,7 +106,7 @@
             // btnSave
             // 
             this.btnSave.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
-            this.btnSave.Location = new System.Drawing.Point(391, 131);
+            this.btnSave.Location = new System.Drawing.Point(391, 171);
             this.btnSave.Name = "btnSave";
             this.btnSave.Size = new System.Drawing.Size(85, 25);
             this.btnSave.TabIndex = 2;
@@ -93,8 +116,9 @@
             // 
             // chkShowPassword
             // 
+            this.chkShowPassword.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
             this.chkShowPassword.AutoSize = true;
-            this.chkShowPassword.Location = new System.Drawing.Point(20, 130);
+            this.chkShowPassword.Location = new System.Drawing.Point(20, 170);
             this.chkShowPassword.Name = "chkShowPassword";
             this.chkShowPassword.Size = new System.Drawing.Size(73, 17);
             this.chkShowPassword.TabIndex = 3;
@@ -109,7 +133,7 @@
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ShowIcon = false;
             this.ShowInTaskbar = false;
-            this.ClientSize = new System.Drawing.Size(485, 168);
+            this.ClientSize = new System.Drawing.Size(485, 208);
             this.Controls.Add(this.chkShowPassword);
             this.Controls.Add(this.btnSave);
             this.Controls.Add(this.label2);
@@ -133,6 +157,8 @@
         private System.Windows.Forms.GroupBox groupBox1;
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.TextBox txtPassword;
+        private System.Windows.Forms.Label lblConfirmPassword;
+        private System.Windows.Forms.TextBox txtConfirmPassword;
         private System.Windows.Forms.Label label2;
         private System.Windows.Forms.Button btnSave;
         private System.Windows.Forms.CheckBox chkShowPassword;

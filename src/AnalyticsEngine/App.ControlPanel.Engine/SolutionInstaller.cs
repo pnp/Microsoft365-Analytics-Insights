@@ -86,7 +86,7 @@ namespace App.ControlPanel.Engine
                 ct.ThrowIfCancellationRequested();
                 // Run stuff now everything in Azure is created
                 log.LogInformation("=== Phase: App Service configuration & content deploy ===");
-                var tasks = new ConfigureAzureComponentsTasks(Config, log, _proxyConfig, InstalledByUsername, _softwareConfig, _configPassword);
+                var tasks = new ConfigureAzureComponentsTasks(Config, log, _proxyConfig, InstalledByUsername, _softwareConfig);
                 tasks.CancellationToken = ct;
                 await tasks.RunPostCreatePaaSTasks(
                     azureBackeEndCreationJob.CreatedWebSiteResource,
