@@ -835,6 +835,44 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// The Cowork readiness CSV and sheet carry the run's "Figures incomplete" and "Figure warnings" on every row, under
+        /// the same headers and with the same values as the licensed-user and licence-opportunity exports (#851, R3-7). The
+        /// Cowork file is pasted into a spending policy; without them it read as complete after a source query had failed.
+        /// </summary>
+        [TestMethod]
+        public void CoworkReadiness_CarriesTheRunsFigureWarningsOnEveryRow_AsTheOtherPerUserExportsDo()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.FiguresIncomplete = true;
+            analysis.Summary.IncompleteReasons.Add("Contoso test reason");
+            var warnings = string.Join(" | ", new[] { "Figures incomplete: Contoso test reason" }.Concat(analysis.Summary.Warnings));
+            Assert.IsTrue(analysis.CoworkReadiness.Count > 0, "The fixture must have Cowork rows to carry the warnings.");
+
+            var coworkColumns = CopilotAdoptionExports.CoworkReadinessColumns(true, warnings);
+            foreach (var header in new[] { "Figures incomplete", "Figure warnings" })
+            {
+                Assert.IsTrue(CopilotAdoptionExports.LicensedUserColumns(true, warnings).Any(c => c.Header == header), header);
+                Assert.IsTrue(CopilotAdoptionExports.LicenceOpportunityColumns(true, warnings).Any(c => c.Header == header), header);
+                Assert.AreEqual(1, coworkColumns.Count(c => c.Header == header), "The Cowork readiness CSV must carry '" + header + "' too.");
+            }
+
+            var incomplete = coworkColumns.Single(c => c.Header == "Figures incomplete");
+            var figureWarnings = coworkColumns.Single(c => c.Header == "Figure warnings");
+            foreach (var row in analysis.CoworkReadiness)
+            {
+                Assert.AreEqual(true, incomplete.Value(row), "Every CSV row says the figures are incomplete...");
+                Assert.AreEqual(warnings, figureWarnings.Value(row), "...and why.");
+            }
+
+            var bytes = CopilotAdoptionWorkbook.Build(analysis);
+            Assert.IsTrue(SheetCells(bytes, "Licensed users").Contains(warnings), "The licensed-user sheet is the behaviour to match.");
+            Assert.AreEqual(
+                analysis.CoworkReadiness.Count,
+                SheetCells(bytes, "Cowork readiness").Count(cell => cell == warnings),
+                "Every row of the Cowork readiness sheet carries the run's warnings.");
+        }
+
+        /// <summary>
         /// The governance columns specifically. These are the ones an admin exports the workbook for -
         /// the reclaim verdict per person, and who excluded a seat from reclaim - and they were the
         /// most damaging of the twenty-eight omissions, because the Report sheet counts them in a

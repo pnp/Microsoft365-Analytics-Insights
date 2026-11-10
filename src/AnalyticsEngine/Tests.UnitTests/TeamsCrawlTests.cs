@@ -645,7 +645,7 @@ namespace Tests.UnitTests
             const string goneOwnerId = "00000000-0000-0000-0000-0000000000b2";
             var handler = new StubGraphHandler()
                 .Json("/teams/" + teamId, "{\"id\":\"" + teamId + "\",\"displayName\":\"Contoso Καλημέρα\"}")
-                .Json("/groups/" + teamId, "{\"id\":\"" + teamId + "\",\"owners\":[" + GraphUserJson(goneOwnerId) + "," + GraphUserJson(ownerId) + "]}")
+                .Json("/groups/" + teamId + "/owners", "{\"value\":[" + GraphUserJson(goneOwnerId) + "," + GraphUserJson(ownerId) + "]}")
                 .Json("/groups/" + teamId + "/members", "{\"value\":[]}")
                 .Json("/users/" + ownerId, "{\"id\":\"" + ownerId + "\",\"userPrincipalName\":\"owner@contoso.example\"}")
                 .Json("/teams/" + teamId + "/channels", "{\"value\":[]}");
@@ -691,6 +691,100 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// #847: a 200 without its collection is a failed read. The member list, the channel list and each channel's tabs
+        /// used to be read as "none", so a response that lost its body saved the Team as having no members or channels, or a
+        /// channel as having no tabs. The Team now fails for this cycle, as any other failed read does, and keeps what was
+        /// saved before. Owners, now read page by page, follow the same rule.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("owners")]
+        [DataRow("members")]
+        [DataRow("channels")]
+        [DataRow("tabs")]
+        public async Task LoadTeamFull_AListWithoutItsCollection_FailsTheTeam(string missing)
+        {
+            const string teamId = "00000000-0000-0000-0000-0000000000f1";
+            var handler = TeamWithOneChannel(teamId,
+                ownersJson: missing == "owners" ? "{}" : null,
+                channelsJson: missing == "channels" ? "{}" : null,
+                tabsJson: missing == "tabs" ? "{}" : null);
+            if (missing == "members")
+            {
+                handler.Json("/groups/" + teamId + "/members", "{}");
+            }
+
+            await Assert.ThrowsExceptionAsync<GraphPageWithoutValueException>(() => O365Team.LoadTeamFull(
+                new Group { Id = teamId, DisplayName = "Contoso" }, new TeamsLoadContext(StubGraphHandler.Client(handler)), NullLogger.Instance, NoStateStorage(), null));
+        }
+
+        [TestMethod]
+        public async Task LoadTeamFull_AChannelWithAnEmptyTabList_StillLoads()
+        {
+            const string teamId = "00000000-0000-0000-0000-0000000000f2";
+            var handler = TeamWithOneChannel(teamId, ownersJson: null, channelsJson: null, tabsJson: null);
+
+            var team = await O365Team.LoadTeamFull(new Group { Id = teamId, DisplayName = "Contoso" },
+                new TeamsLoadContext(StubGraphHandler.Client(handler)), NullLogger.Instance, NoStateStorage(), null);
+
+            Assert.AreEqual(1, team.Channels.Count);
+            Assert.AreEqual(0, team.Channels[0].Tabs.Count, "An explicit empty 'value' is a channel without tabs.");
+            Assert.AreEqual(0, team.OwnerUserAccounts.Count, "...and an explicit empty owner list a group without owners.");
+        }
+
+        /// <summary>
+        /// #847 (R8-11): owners came from <c>$expand=owners</c> on the group, which Graph cuts short - to 20 - without saying
+        /// so. They are now read from <c>/groups/{id}/owners</c>, every page of it.
+        /// </summary>
+        [TestMethod]
+        public async Task LoadTeamFull_ReadsEveryPageOfOwners_NotTheFewAnExpandReturns()
+        {
+            const string teamId = "00000000-0000-0000-0000-0000000000f3";
+            var ownerIds = Enumerable.Range(1, 25).Select(i => "00000000-0000-0000-0000-" + i.ToString("000000000000")).ToList();
+            const string secondPage = "https://graph.microsoft.com/v1.0/groups/" + teamId + "/owners?$skiptoken=synthetic-page-2";
+            var handler = TeamWithOneChannel(teamId, ownersJson: null, channelsJson: null, tabsJson: null)
+                // What the old $expand read got: the first 20, and nothing to say there were more.
+                .Json("/groups/" + teamId, "{\"id\":\"" + teamId + "\",\"owners\":[" + string.Join(",", ownerIds.Take(20).Select(GraphUserJson)) + "]}")
+                .Route("/groups/" + teamId + "/owners", request => StubGraphHandler.Response(HttpStatusCode.OK,
+                    request.RequestUri.ToString().Contains("synthetic-page-2")
+                        ? "{\"value\":[" + string.Join(",", ownerIds.Skip(20).Select(GraphUserJson)) + "]}"
+                        : "{\"value\":[" + string.Join(",", ownerIds.Take(20).Select(GraphUserJson)) + "],\"@odata.nextLink\":\"" + secondPage + "\"}"));
+            foreach (var id in ownerIds)
+            {
+                handler.Json("/users/" + id, "{\"id\":\"" + id + "\",\"userPrincipalName\":\"owner-" + id.Substring(24) + "@contoso.example\"}");
+            }
+
+            var team = await O365Team.LoadTeamFull(new Group { Id = teamId, DisplayName = "Contoso" },
+                new TeamsLoadContext(StubGraphHandler.Client(handler)), NullLogger.Instance, NoStateStorage(), null);
+
+            Assert.AreEqual(25, team.OwnerUserAccounts.Count, "Every owner, from both pages.");
+        }
+
+        [TestMethod]
+        public async Task LoadAllGroupOwners_ALinkBackToAPageAlreadyRead_FailsInsteadOfLooping()
+        {
+            const string groupId = "00000000-0000-0000-0000-0000000000f4";
+            const string loop = "https://graph.microsoft.com/v1.0/groups/" + groupId + "/owners?$skiptoken=synthetic-loop";
+            var handler = new StubGraphHandler()
+                .Json("/groups/" + groupId + "/owners", "{\"value\":[],\"@odata.nextLink\":\"" + loop + "\"}");
+
+            var ex = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => O365Team.LoadAllGroupOwners(StubGraphHandler.Client(handler), groupId));
+
+            Assert.AreEqual(2, handler.Requests.Count, "The repeated link is not requested a second time.");
+            Assert.IsFalse(ex.Message.Contains("synthetic-loop"), "No message names a paging link.");
+        }
+
+        /// <summary>A Team with one channel and no members; null JSON means the healthy answer (no owners, no tabs).</summary>
+        private static StubGraphHandler TeamWithOneChannel(string teamId, string ownersJson, string channelsJson, string tabsJson)
+        {
+            return new StubGraphHandler()
+                .Json("/teams/" + teamId, "{\"id\":\"" + teamId + "\",\"displayName\":\"Contoso\"}")
+                .Json("/groups/" + teamId + "/owners", ownersJson ?? "{\"value\":[]}")
+                .Json("/groups/" + teamId + "/members", "{\"value\":[]}")
+                .Json("/teams/" + teamId + "/channels", channelsJson ?? "{\"value\":[{\"id\":\"channel-1\",\"displayName\":\"General\"}]}")
+                .Json("/teams/" + teamId + "/channels/channel-1/tabs", tabsJson ?? "{\"value\":[]}");
+        }
+
+        /// <summary>
         /// D6: members are resolved from one crawl-wide object id to UPN map rather than one SQL query each (on an
         /// unindexable nvarchar(max) column). The context is null here, so a per-member query would throw.
         /// </summary>
@@ -703,7 +797,7 @@ namespace Tests.UnitTests
             const string goneId = "00000000-0000-0000-0000-0000000000e3";
             var handler = new StubGraphHandler()
                 .Json("/teams/" + teamId, "{\"id\":\"" + teamId + "\",\"displayName\":\"Contoso\"}")
-                .Json("/groups/" + teamId, "{\"id\":\"" + teamId + "\",\"owners\":[]}")
+                .Json("/groups/" + teamId + "/owners", "{\"value\":[]}")
                 .Json("/groups/" + teamId + "/members", "{\"value\":[" + GraphUserJson(knownId) + "," + GraphUserJson(graphOnlyId) + "," + GraphUserJson(goneId) + "]}")
                 .Json("/users/" + graphOnlyId, "{\"id\":\"" + graphOnlyId + "\",\"userPrincipalName\":\"graph-only@contoso.example\"}")
                 .Json("/teams/" + teamId + "/channels", "{\"value\":[]}");

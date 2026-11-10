@@ -134,6 +134,29 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, authorByWords.Count);
         }
 
+        /// <summary>
+        /// #847 (R9-9): a session nobody can be attributed to - two people neither of whom organised the call (after a
+        /// transfer, say), one without a callee, or a missing one - used to throw out of the save, so the whole call was
+        /// fetched again ten times and then dead-lettered. It is now left out, and the rest of the call is saved.
+        /// </summary>
+        [TestMethod]
+        public async Task Call_WithMalformedSessions_IsSavedWithoutThem()
+        {
+            var organiser = NewUpn("organiser");
+            var attendee = NewUpn("attendee");
+            var call = Call(organiser, "groupCall",
+                Session(Person(organiser), Person(attendee, "attendee's words")),
+                Session(Person(NewUpn("transferred"), "transferred person's words"), Person(NewUpn("transferee"))),
+                Session(Person(organiser), null),
+                null);
+
+            var (saved, authorByWords) = await SaveAndReadFeedback(call);
+
+            Assert.AreEqual(attendee, saved.Sessions.Single().Attendee.UserPrincipalName, "Only the session that can be attributed is stored.");
+            Assert.AreEqual(3, call.LoadStats.SkippedSessions);
+            Assert.AreEqual(2, authorByWords.Count, "Feedback is the person's own, so a skipped session's feedback is still kept.");
+        }
+
         [TestMethod]
         public async Task PeerToPeerCall_InScopeOrganisersFeedback_IsStoredAgainstThem_NotTheAnonymousAttendee()
         {

@@ -5,7 +5,8 @@ namespace UsageReporting
 {
     /// <summary>
     /// Anonymised Copilot- and licence-adoption aggregates, uploaded alongside the rest of
-    /// <see cref="AnonUsageStatsModel"/> when the operator has opted in to telemetry.
+    /// <see cref="AnonUsageStatsModel"/> whenever usage reporting is allowed. It is allowed by default:
+    /// the installer's <c>AllowTelemetry</c> setting is true unless the operator turns it off.
     ///
     /// Everything here is a tenant-wide aggregate or a Microsoft-global SKU identifier. No department,
     /// country, agent, user or free-text value from the customer's tenant reaches this type - see

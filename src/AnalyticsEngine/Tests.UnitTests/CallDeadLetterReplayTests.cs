@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using UnitTests.FakeLoaderClasses;
+using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 
 namespace Tests.UnitTests
@@ -701,6 +702,46 @@ namespace Tests.UnitTests
             summary = await Run(included, new CallDeadLetterReplayOptions { IncludeInvalid = true });
             Assert.AreEqual(4, summary.Replayed);
             Assert.AreEqual(0, included.DeadLetters.Count);
+        }
+
+        /// <summary>
+        /// A call record with no call type, or whose every session nobody can be attributed to, is dead-lettered at once
+        /// (#847): fetching it again returns the same record. Like the importer's other never-importable reasons, a default
+        /// replay leaves it, <c>--include-invalid</c> replays it and <c>--purge-invalid</c> deletes it - and the help says so.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(CallRecordPayloadException.NoUsableSessionsReason)]
+        [DataRow(CallRecordPayloadException.NoCallTypeReason)]
+        public async Task CallRecordPayloadReasons_AreNeverImportable_SkippedByDefault_ReplayedOrDeletedOnlyWhenAsked(string reason)
+        {
+            Func<FakeCallDeadLetterQueue> deadLetters = () =>
+            {
+                var q = new FakeCallDeadLetterQueue();
+                q.AddDeadLetter("payload", reason, Now.AddHours(-1));
+                q.AddDeadLetter("retries", CallQueueRetryPolicy.RetriesExhaustedReason, Now.AddHours(-1));
+                return q;
+            };
+
+            var byDefault = deadLetters();
+            var summary = await Run(byDefault, new CallDeadLetterReplayOptions());
+            CollectionAssert.AreEqual(new[] { "payload" }, Ids(byDefault.DeadLetters), "A default replay leaves it in the dead-letter queue.");
+            CollectionAssert.AreEqual(new[] { "send:retries" }, byDefault.Operations.Where(o => o.StartsWith("send:")).ToList());
+            Assert.AreEqual(1, summary.SkippedByReason[CallDeadLetterSkipReason.NeverImportable]);
+
+            var included = deadLetters();
+            summary = await Run(included, new CallDeadLetterReplayOptions { IncludeInvalid = true });
+            Assert.AreEqual(2, summary.Replayed);
+            Assert.AreEqual(0, included.DeadLetters.Count);
+
+            var purged = deadLetters();
+            summary = await Run(purged, new CallDeadLetterReplayOptions { PurgeInvalid = true });
+            Assert.AreEqual(1, summary.PurgedByReason[CallDeadLetterSkipReason.NeverImportable]);
+            CollectionAssert.Contains(purged.Operations, "complete:payload");
+            CollectionAssert.DoesNotContain(purged.Operations, "send:payload", "Deleted, not replayed.");
+            Assert.AreEqual(1, summary.Replayed);
+            Assert.AreEqual(0, purged.DeadLetters.Count);
+
+            StringAssert.Contains(CallDeadLetterReplayCommand.Usage, reason);
         }
 
         /// <summary>

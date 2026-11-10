@@ -22,9 +22,9 @@ namespace App.ControlPanel.Engine
         public BaseInstallProcess(SolutionInstallConfig config, ILogger logger)
         {
             this.Config = config;
-            // Tee everything logged during the install into _installLogEvents so the full log can be
+            // Tee everything logged during the install into _installLog so the full log can be
             // registered into sys_configs.messages, while still forwarding to the on-screen logger.
-            _logger = new InstallLogCapturingLogger(logger, _installLogEvents);
+            _logger = new InstallLogCapturingLogger(logger, _installLog);
 
             RegisterEntraSqlCredential(config);
         }
@@ -50,7 +50,7 @@ namespace App.ControlPanel.Engine
             AzureSqlTokenAuth.SetCredential(new ClientSecretCredential(account.DirectoryId, account.ClientId, account.Secret));
         }
 
-        protected List<InstallLogEventArgs> _installLogEvents = new List<InstallLogEventArgs>();
+        private protected readonly InstallLogCapture _installLog = new InstallLogCapture();
         protected readonly ILogger _logger;
 
 
@@ -287,20 +287,29 @@ namespace App.ControlPanel.Engine
                     var sqlConnectionInfo = new SqlConnectionStringBuilder(connectionString);
                     _logger.LogInformation($"Testing connection to SQL Server '{sqlConnectionInfo.DataSource}'");
 
-                    await conn.OpenAsync(CancellationToken);
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.CommandText = "Select @@version";
-                        await cmd.ExecuteNonQueryAsync(CancellationToken);
-                    }
+                    await RunConnectionTestAsync(conn);
                 }
-                catch (SqlException ex)
+                // SqlClient reports a command cancelled in flight as a SqlException ("Operation cancelled by user"), so
+                // only the token can tell a Cancel from a connection failure. A Cancel is not a result to report with
+                // remediation advice: it leaves for the caller, which reports it as the user's cancel.
+                catch (SqlException ex) when (!CancellationToken.IsCancellationRequested)
                 {
                     return (false, ex);
                 }
             }
             _logger.LogInformation($"Connection test to SQL Server successful.");
             return (true, null);
+        }
+
+        /// <summary>Opens the connection and runs a trivial query. Virtual so a test can run a query that takes a while.</summary>
+        internal virtual async Task RunConnectionTestAsync(SqlConnection conn)
+        {
+            await conn.OpenAsync(CancellationToken);
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "Select @@version";
+                await cmd.ExecuteNonQueryAsync(CancellationToken);
+            }
         }
 
         void ReportSqlConnectionFailure(string connectionString, SqlException error)

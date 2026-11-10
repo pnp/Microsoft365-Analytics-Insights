@@ -259,10 +259,18 @@ Applied **before** any staging. Defined in:
 - `PowerPlatformOps.IsPowerAppShareOp()` → recognises share operation names
 
 ### 2. SharePoint Org-URL Whitelist (`AuditFilterConfig.cs`)
-Applied at **persistence** stage (`ActivityReportSqlPersistenceManager.SaveToSqlAllTheThings`).
-- Non-SharePoint content → always in scope (filter doesn't apply).
+Applied per event at the **staging** step of each save batch. `ActivityStagingPass.RunAsync`
+(`ActivityAPI/Persistence/`) hands `AuditFilterConfig.InScope` to
+`ActivityStagingRules.DecideAndRememberAsync` (`ActivityAPI/Rules/`), which tests the URL after
+de-duplication and before the user-groups filter. Both were lifted out of
+`ActivityReportSqlPersistenceManager.SaveToSqlAllTheThings` by #373; that method now calls
+`ActivityStagingPass` and then runs the metadata pass.
+- Non-SharePoint content → always in scope (filter doesn't apply), apart from DLP records (below).
 - SharePoint content without ObjectId → out of scope.
-- SharePoint content with ObjectId → `OrgUrlConfigs.UrlInScope(SiteUrl, ObjectId)`.
+- SharePoint content with ObjectId → `OrgUrlConfigs.UrlInScope(SiteUrl, ObjectId)`; out of scope
+  when no org URLs are configured.
+- DLP.All records detected in SharePoint/OneDrive → the same whitelist, matched on the record's site
+  collection (`DlpRecordInScope`); kept when there is no URL or no whitelist to test.
 
 ### 3. User Groups Filter
 Optional. Checks if the event's `UserId` belongs to configured Azure AD groups.
@@ -339,8 +347,12 @@ payloads to verify property names.
 
 Located in `Common/Entities/Migrations/`. Key points:
 
-- `Configuration.cs`: `AutomaticMigrationsEnabled = true` (EF6 auto-migrates the schema
-  forward when a new `AnalyticsEntitiesContext` is created with `autoUpdate: true`).
+- `Configuration.cs`: `AutomaticMigrationsEnabled = true`. A context migrates on first use only when
+  it is created with `autoUpdate: true` (`MigrateDatabaseToLatestVersion`), and the parameterless
+  `AnalyticsEntitiesContext()` does that only in DEBUG builds. Release builds use
+  `CreateDatabaseIfNotExists`, so the importers and the web app never migrate at runtime: a deployed
+  schema is upgraded by `DatabaseUpgrader.CheckDbUpgraded` (the installer's `--initdb` step), or by
+  hand with the release's `<migrationid>.manual.sql` scripts.
 - Each explicit migration has `.cs` (Up/Down), `.Designer.cs` (metadata), and `.resx`
   (compressed EDMX model snapshot).
 - The `.resx` Target value is **gzip + base64 of a UTF-8 BOM + EDMX XML**. When manually

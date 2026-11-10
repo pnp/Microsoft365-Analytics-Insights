@@ -16,6 +16,7 @@ using System.Threading;
 using Newtonsoft.Json;
 using System.Threading.Tasks;
 using System.Web.Http;
+using System.Web.Http.Results;
 using Web.AnalyticsWeb.Models;
 using Web.AnalyticsWeb.Models.CopilotAdoption;
 using Web.AnalyticsWeb.Models.UserFilters;
@@ -93,6 +94,12 @@ namespace Web.AnalyticsWeb.Controllers
         // ApiController is request-scoped. Keep the joined generation's identity, not a lookup using
         // settings that another request may change during the wait.
         private string _joinedRunId;
+        private CopilotAdoptionProgressSnapshot _joinedProgress;
+        private bool _progressRequested;
+        private string _afterGeneration;
+        private bool _rebuildRequested;
+        internal const string GenerationIdHeader = "X-CopilotAdoption-GenerationId";
+        private static readonly TimeSpan ProgressResponseBudget = TimeSpan.FromSeconds(3);
 
         /// <summary>The directory snapshot a <c>userFilter</c> is evaluated against.</summary>
         internal IUserDirectorySource Directory { get; }
@@ -394,10 +401,23 @@ namespace Web.AnalyticsWeb.Controllers
                 var waited = await Coordinator.TryGetWithRunIdAsync(
                     range,
                     ParseIds(seatLicenceTypeIds),
-                    budget,
-                    cancellationToken);
+                    _progressRequested ? ProgressResponseBudget : budget,
+                    cancellationToken, _afterGeneration, _rebuildRequested);
                 _joinedRunId = waited.RunId;
+                _joinedProgress = waited.Progress;
                 return waited.Analysis;
+            }
+            catch (CopilotAdoptionRebuildCooldownException ex)
+            {
+                var response = Request.CreateResponse((HttpStatusCode)429,
+                    new { code = "copilotAdoption.error.rebuildCooldown", retryAfterSeconds = ex.RetryAfterSeconds });
+                response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(ex.RetryAfterSeconds));
+                throw new HttpResponseException(response);
+            }
+            catch (CopilotAdoptionRebuildNotCompletedException)
+            {
+                throw new HttpResponseException(Request.CreateResponse(HttpStatusCode.ServiceUnavailable,
+                    new { code = "copilotAdoption.error.rebuildNotCompleted" }));
             }
             catch (CopilotAdoptionScoreSettingsUnavailableException ex)
             {
@@ -461,11 +481,36 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         private HttpResponseMessage StillBuildingResponse(string runId)
         {
-            var response = Request.CreateResponse(HttpStatusCode.Accepted, StillBuildingBody(runId));
+            var body = StillBuildingBody(runId);
+            if (_joinedProgress != null)
+            {
+                body["generationId"] = _joinedProgress.GenerationId;
+                if (_progressRequested) body["progress"] = _joinedProgress;
+            }
+            var response = Request.CreateResponse(HttpStatusCode.Accepted, body);
 
             response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(RetryAfterSeconds));
             AddRunIdHeader(response, runId);
             return response;
+        }
+
+        private IHttpActionResult AnalysisResult<T>(T model, CopilotAdoptionAnalysis analysis) =>
+            new GenerationResult<T>(model, this, analysis.Summary.Diagnostics.GenerationId);
+
+        private sealed class GenerationResult<T> : OkNegotiatedContentResult<T>
+        {
+            private readonly string _generationId;
+            internal GenerationResult(T model, ApiController controller, string generationId) : base(model, controller)
+            {
+                _generationId = generationId;
+            }
+            public override async Task<HttpResponseMessage> ExecuteAsync(CancellationToken cancellationToken)
+            {
+                var response = await base.ExecuteAsync(cancellationToken);
+                if (!string.IsNullOrEmpty(_generationId))
+                    response.Headers.TryAddWithoutValidation(GenerationIdHeader, _generationId);
+                return response;
+            }
         }
 
         private static void AddRunIdHeader(HttpResponseMessage response, string runId)
@@ -536,17 +581,53 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             string emailDomain = null,
             string userFilter = null,
-            CancellationToken cancellationToken = default(CancellationToken))
+            CancellationToken cancellationToken = default(CancellationToken),
+            bool includeProgress = false,
+            string after = null)
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
             var permissionDenied = ScopePermissionDenied(emailDomain, filter, seatLicenceTypeIds);
             if (permissionDenied != null) return ResponseMessage(permissionDenied);
+            _progressRequested = includeProgress;
+            _afterGeneration = after;
 
             var (analysis, narrowed) = await TryGetScopedAnalysisAsync(
                 windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
             var leadership = await LeadershipComparisonForAsync(analysis, narrowed, cancellationToken);
-            return Ok(SummaryForCaller(analysis.Summary.WithLeadershipComparison(leadership)));
+            return AnalysisResult(SummaryForCaller(analysis.Summary.WithLeadershipComparison(leadership)), analysis);
+        }
+
+        public sealed class RebuildRequest
+        {
+            [JsonProperty("expectedGenerationId")]
+            public string ExpectedGenerationId { get; set; }
+        }
+
+        [HttpPost]
+        [Route("rebuild")]
+        public async Task<IHttpActionResult> Rebuild(
+            RebuildRequest body,
+            int windowDays = 28, string from = null, string to = null,
+            string seatLicenceTypeIds = null, string emailDomain = null, string userFilter = null,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (body == null || !Guid.TryParseExact(body.ExpectedGenerationId, "N", out _))
+                return BadRequest();
+            if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
+            var permissionDenied = ScopePermissionDenied(emailDomain, filter, seatLicenceTypeIds);
+            if (permissionDenied != null) return ResponseMessage(permissionDenied);
+            await ResolveScopeAsync(emailDomain, filter, cancellationToken);
+            _progressRequested = true;
+            _rebuildRequested = true;
+            _afterGeneration = body.ExpectedGenerationId;
+            var analysis = await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, cancellationToken);
+            if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
+            return AnalysisResult(new
+            {
+                generationId = analysis.Summary.Diagnostics.GenerationId,
+                progress = analysis.Summary.Diagnostics.Progress,
+            }, analysis);
         }
 
         /// <summary>Whether the caller holds the portal's See PII permission (#661).</summary>
@@ -634,7 +715,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             var analysis = await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
-            return Ok(analysis.Sql);
+            return AnalysisResult(analysis.Sql, analysis);
         }
 
         /// <summary>
@@ -672,7 +753,7 @@ namespace Web.AnalyticsWeb.Controllers
             var cowork = analysis.CoworkReadiness.Where(c => visible(c.UserId)).ToList();
             var unlicensed = analysis.UnlicensedUsers.Where(u => visible(u.UserId)).ToList();
 
-            return Ok(new
+            return AnalysisResult(new
             {
                 // Every population, so a domain that holds no seats at all - an acquired business
                 // using Copilot Chat without ever having been licensed - is still selectable.
@@ -703,7 +784,7 @@ namespace Web.AnalyticsWeb.Controllers
                         basis = CopilotAdoptionScoring.CoworkTierBasis(t),
                     })
                     .ToList(),
-            });
+            }, analysis);
         }
 
         #endregion
@@ -755,7 +836,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             var matched = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query);
 
-            return Ok(new LicensedUserPage
+            return AnalysisResult(new LicensedUserPage
             {
                 Total = matched.Count,
                 Skip = Math.Max(0, skip),
@@ -763,7 +844,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Rows = CopilotAdoptionExports.Page(matched, skip, take, MaxTake),
                 Warnings = analysis.Summary.Warnings,
                 WarningDetails = analysis.Summary.WarningDetails,
-            });
+            }, analysis);
         }
 
         /// <summary>
@@ -887,7 +968,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             var matched = CopilotAdoptionExports.Apply(analysis.Opportunities, query);
 
-            return Ok(new LicenceOpportunityPage
+            return AnalysisResult(new LicenceOpportunityPage
             {
                 Total = matched.Count,
                 Skip = Math.Max(0, skip),
@@ -895,7 +976,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Rows = CopilotAdoptionExports.Page(matched, skip, take, MaxTake),
                 Warnings = analysis.Summary.Warnings,
                 WarningDetails = analysis.Summary.WarningDetails,
-            });
+            }, analysis);
         }
 
         // GET: api/CopilotAdoption/opportunities/export
@@ -993,7 +1074,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             var matched = CopilotAdoptionExports.Apply(analysis.CoworkReadiness, query);
 
-            return Ok(new CoworkReadinessPage
+            return AnalysisResult(new CoworkReadinessPage
             {
                 Total = matched.Count,
                 Skip = Math.Max(0, skip),
@@ -1001,7 +1082,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Rows = CopilotAdoptionExports.Page(matched, skip, take, MaxTake),
                 Warnings = analysis.Summary.Warnings,
                 WarningDetails = analysis.Summary.WarningDetails,
-            });
+            }, analysis);
         }
 
         /// <summary>
@@ -1047,7 +1128,11 @@ namespace Web.AnalyticsWeb.Controllers
             var rows = CopilotAdoptionExports.Apply(analysis.CoworkReadiness, query).Take(MaxCsvRows).ToList();
 
             return CsvResponse(
-                CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.CoworkReadinessColumns()),
+                CsvSerialiser.ToBytes(
+                    rows,
+                    CopilotAdoptionExports.CoworkReadinessColumns(
+                        analysis.Summary.FiguresIncomplete,
+                        WarningSummary(analysis.Summary))),
                 CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-cowork-readiness", emailDomain, filter, analysis.Summary), analysis.Summary.GeneratedUtc),
                 analysis.Summary.Diagnostics?.RunId);
         }
