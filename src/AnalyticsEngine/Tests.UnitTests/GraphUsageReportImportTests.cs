@@ -125,6 +125,7 @@ namespace Tests.UnitTests
         {
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
             var authConfig = new AppConfig();
+            LiveCredentials.RequireGraphClientSecret(authConfig);
 
             var graphAppIndentityOAuthContext = new GraphAppIndentityOAuthContext(logger, authConfig.ClientID, authConfig.TenantGUID.ToString(), authConfig.ClientSecret, authConfig.KeyVaultUrl, authConfig.UseClientCertificate);
 

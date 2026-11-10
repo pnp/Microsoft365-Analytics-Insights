@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { apiFetch } from './http';
-import { fetchAdoptionSummary, workbookExportUrl } from './copilotAdoptionApi';
+import { apiFetch, PortalPermissionError } from './http';
+import {
+  AdoptionGenerationChangedError, AdoptionRequestError, canRetryAdoptionRequest,
+  fetchAdoptionFilters, fetchAdoptionSummary, rebuildAdoption, workbookExportUrl,
+} from './copilotAdoptionApi';
 import { loadCatalog, setActiveLanguage } from '../i18n';
 
-vi.mock('./http', () => ({ apiFetch: vi.fn() }));
+vi.mock('./http', async importOriginal => ({
+  ...await importOriginal<typeof import('./http')>(),
+  apiFetch: vi.fn(),
+}));
 
 const mockedFetch = vi.mocked(apiFetch);
 
@@ -103,5 +109,64 @@ describe('copilotAdoptionApi polling', () => {
 
     expect(error.message).toContain(runId);
     expect(error.message).toMatch(/referencia/);
+  });
+
+  it('reports real progress and retains the after-generation hint without starting another rebuild', async () => {
+    const onProgress = vi.fn();
+    const progress = { generationId: runId, phase: 'analysing', elapsedMs: 5000, percentComplete: 40, steps: [] };
+    mockedFetch.mockResolvedValueOnce(jsonResponse({ retryAfterSeconds: 1, progress }, 202))
+      .mockResolvedValueOnce(jsonResponse({ generatedUtc: '2026-01-01T00:00:00Z' }));
+    const result = fetchAdoptionSummary(28, undefined, undefined, null, null, null, { after: runId, onProgress });
+    await vi.advanceTimersByTimeAsync(1000);
+    await result;
+    expect(onProgress).toHaveBeenCalledWith(progress);
+    for (const [url, init] of mockedFetch.mock.calls) {
+      expect(new URL(String(url)).searchParams.get('after')).toBe(runId);
+      expect(new URL(String(url)).searchParams.get('includeProgress')).toBe('true');
+      expect(init?.method).toBe('GET');
+    }
+  });
+
+  it('aborts progress polling without issuing a new request', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({ retryAfterSeconds: 5 }, 202));
+    const controller = new AbortController();
+    const result = fetchAdoptionSummary(28, undefined, controller.signal).catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    expect((await result).name).toBe('AbortError');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a one-shot POST for rebuild and preserves typed cooldown errors', async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse({ generationId: runId }, 202));
+    await rebuildAdoption(28, runId);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(mockedFetch.mock.calls[0][1]).toMatchObject({
+      method: 'POST', body: JSON.stringify({ expectedGenerationId: runId }),
+    });
+    mockedFetch.mockResolvedValueOnce(jsonResponse({ code: 'copilotAdoption.error.rebuildCooldown', retryAfterSeconds: 45 }, 429));
+    const error = await rebuildAdoption(28, runId).catch(error => error);
+    expect(error).toBeInstanceOf(AdoptionRequestError);
+    expect(error.retryAfterSeconds).toBe(45);
+    expect(canRetryAdoptionRequest(error)).toBe(true);
+    expect(canRetryAdoptionRequest(new PortalPermissionError('seePii', 'Portal.SeePII'))).toBe(false);
+  });
+
+  it.each([200, 503])('returns a safe retryable error for non-JSON rebuild responses (HTTP %i)', async status => {
+    mockedFetch.mockResolvedValueOnce(new Response('<html>Temporary failure</html>', { status }));
+    const error = await rebuildAdoption(28, runId).catch(error => error);
+    expect(error).toBeInstanceOf(AdoptionRequestError);
+    expect(error.message).not.toContain('<html>');
+    expect(canRetryAdoptionRequest(error)).toBe(true);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a supporting response from a different report generation', async () => {
+    const response = jsonResponse({ emailDomains: ['contoso.com'] });
+    response.headers.set('X-CopilotAdoption-GenerationId', '00000000000000000000000000000010');
+    mockedFetch.mockResolvedValueOnce(response);
+    await expect(fetchAdoptionFilters(28, undefined, undefined, null, { generationId: runId }))
+      .rejects.toBeInstanceOf(AdoptionGenerationChangedError);
   });
 });

@@ -21,7 +21,7 @@ import {
   Clock20Regular,
   PeopleList20Regular,
 } from '@fluentui/react-icons';
-import { fetchOpportunities, opportunitiesExportUrl } from '../../api/copilotAdoptionApi';
+import { AdoptionGenerationChangedError, fetchOpportunities, opportunitiesExportUrl } from '../../api/copilotAdoptionApi';
 import type {
   AdoptionFilterOptions,
   AdoptionGuidanceLink,
@@ -197,6 +197,8 @@ export default function OpportunitiesPanel({
   userFilter,
   canSeePii = true,
   hiddenListNote,
+  onGenerationChanged,
+  onLoadingChange,
 }: {
   windowDays: number;
   dateRange?: DateRange | null;
@@ -222,6 +224,8 @@ export default function OpportunitiesPanel({
    * range passes its own note, because there the list is hidden for a different reason.
    */
   hiddenListNote?: ReactNode;
+  onGenerationChanged?: () => boolean;
+  onLoadingChange?: (loading: boolean) => void;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -330,18 +334,22 @@ export default function OpportunitiesPanel({
     let cancelled = false;
     const controller = new AbortController();
     setLoading(true);
+    onLoadingChange?.(true);
     setError(null);
+    setData(null);
 
-    fetchOpportunities(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal, ...(dateRange ? [dateRange] as const : []))
+    fetchOpportunities(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal,
+      dateRange, { generationId: summary.diagnostics?.generationId })
       .then((result) => {
         if (!cancelled) setData(result);
       })
       .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
+        if (e instanceof AdoptionGenerationChangedError && onGenerationChanged?.()) return;
         setError(e instanceof Error ? e.message : t('copilotAdoptionUsers.opportunities.loadError'));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) { setLoading(false); onLoadingChange?.(false); }
       });
 
     return () => {
@@ -349,8 +357,10 @@ export default function OpportunitiesPanel({
       // These requests poll while the analysis is building, so cleanup has to actually stop them -
       // a bare `cancelled` flag would only suppress the state update and leave the loop running.
       controller.abort();
+      onLoadingChange?.(false);
     };
-  }, [canSeePii, windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
+  }, [canSeePii, windowDays, dateRange, filters, page, seatLicenceTypeIds, reloadKey,
+    summary.diagnostics?.generationId, onGenerationChanged, onLoadingChange, t]);
 
   /**
    * Applies a column-header sort. The effect above already resets the page whenever `filters`

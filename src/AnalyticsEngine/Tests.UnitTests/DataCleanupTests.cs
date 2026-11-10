@@ -243,6 +243,30 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// #848 R10-9: <c>hits</c> is one of the largest tables, and the script purged it in one DELETE: one long
+        /// exclusive lock, escalated to a table lock that blocked the App Insights importer and the reports, and the
+        /// whole purge in the log as one transaction. It is now batched like the Copilot deletes, with the batch size
+        /// in one variable that both the DELETE and the loop condition read. Matched against executable SQL only.
+        /// </summary>
+        [TestMethod]
+        public void CleanupScript_BatchesTheHitsDelete()
+        {
+            var executable = StripSqlCommentsAndLiterals(File.ReadAllText(GetCleanOldDataSqlPath()));
+
+            var hitsDeletes = Regex.Matches(executable,
+                    @"\bdelete\s+(?:top\s*\(\s*(?<batch>@\w+)\s*\)\s+)?from\s+(?:\[?dbo\]?\s*\.\s*)?\[?hits\b\]?",
+                    RegexOptions.IgnoreCase)
+                .Cast<Match>()
+                .ToList();
+
+            Assert.AreEqual(1, hitsDeletes.Count, "Expected exactly one DELETE from hits in Clean Old Data Data.sql.");
+            Assert.AreEqual("@hitsBatch", hitsDeletes[0].Groups["batch"].Value,
+                "The hits purge must delete TOP (@hitsBatch) rows at a time, not everything in one statement.");
+            StringAssert.Matches(executable, new Regex(@"while\s+@hitsDeleted\s*=\s*@hitsBatch\b", RegexOptions.IgnoreCase),
+                "The loop must stop on a short batch by comparing with the same @hitsBatch the DELETE uses.");
+        }
+
+        /// <summary>
         /// Whether <paramref name="cleanupScript"/> deletes <paramref name="table"/> in batches driven by
         /// <c>@copilotBatch</c>.
         /// <para>
