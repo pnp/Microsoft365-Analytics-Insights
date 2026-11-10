@@ -15,11 +15,12 @@ import {
   AdoptionRequestError,
   AdoptionGenerationChangedError,
 } from '../api/copilotAdoptionApi';
-import { AdoptionBand, CopilotResourceTypeKind, type AdoptionProgress, type CopilotAdoptionOptions, type CopilotAdoptionSummary } from '../types/copilotAdoption';
+import { AdoptionBand, CopilotResourceTypeKind, type AdoptionProgress, type CopilotAdoptionAvailability, type CopilotAdoptionOptions, type CopilotAdoptionSummary, type LicensedUserAdoptionRow } from '../types/copilotAdoption';
 import type { UserFilterClause, UserFilterEcho } from '../types/userFilter';
 import { TIME_SAVED_STORAGE_KEY, resetTimeSavedStore } from '../components/copilotAdoption/coworkTimeSaved';
 import { TIME_SAVED_COHORT_STORAGE_KEY, resetTimeSavedCohortStore } from '../components/copilotAdoption/timeSavedCohort';
-import { loadCatalog } from '../i18n';
+import { LanguageSwitcher, loadCatalog } from '../i18n';
+import userEvent from '@testing-library/user-event';
 
 vi.mock('../api/copilotAdoptionApi', async (importOriginal) => ({
   ...await importOriginal<typeof import('../api/copilotAdoptionApi')>(),
@@ -604,14 +605,15 @@ describe('CopilotAdoptionPage view split', () => {
     await loadCatalog('es');
     const spanish = renderWithProvider(<CopilotAdoptionPage />, { language: 'es' });
 
+    // One sentence with the list inside it, joined as each language joins a list.
     await waitFor(() => expect(document.body.textContent)
-      .toContain('tipos de licencia, preparación para Cowork, a dataset this build does not know. '));
+      .toContain('sin ellos: tipos de licencia, preparación para Cowork y a dataset this build does not know. Esto suele'));
     expect(document.body.textContent).not.toContain('licence types, Cowork readiness');
     spanish.unmount();
 
     renderWithProvider(<CopilotAdoptionPage />);
     await waitFor(() => expect(document.body.textContent)
-      .toContain('licence types, Cowork readiness, a dataset this build does not know. '));
+      .toContain('without them: licence types, Cowork readiness and a dataset this build does not know. This is usually'));
   });
 
   it('opens on an executive view with the three acts and no SQL popovers', async () => {
@@ -1898,5 +1900,203 @@ describe('CopilotAdoptionPage periods with their own dates', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Unlicensed usage' }));
 
     expect(await screen.findByText('Used Copilot in the last 28 days with no licence')).toBeInTheDocument();
+  });
+});
+
+describe('CopilotAdoptionPage language switch', () => {
+  /** The language picker in the header, as a reader uses it. */
+  async function switchToSpanish() {
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /Language: English/ }));
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Espa\u00f1ol' }, { timeout: 5000 }));
+  }
+
+  function seatHolder(id: number): LicensedUserAdoptionRow {
+    return {
+      userId: id,
+      userPrincipalName: `demo.user${String(id).padStart(7, '0')}@contoso.example`,
+      mail: null,
+      department: 'Finance',
+      jobTitle: null,
+      country: null,
+      officeLocation: null,
+      companyName: null,
+      manager: null,
+      accountEnabled: true,
+      accountCreatedUtc: '2026-01-01T00:00:00Z',
+      tenureStartUtc: '2026-01-01T00:00:00Z',
+      tenureBasis: 'accountAge',
+      daysSinceTenureStart: 120,
+      tooNewToJudge: false,
+      reclaimEligibility: '',
+      reclaimEligibilityReason: '',
+      reclaimExclusionReason: null,
+      reclaimExclusionNote: null,
+      reclaimExcludedBy: null,
+      reclaimExcludedUtc: null,
+      reclaimExclusionReviewAfterUtc: null,
+      reclaimExclusionExpired: false,
+      seatLicences: 'Microsoft 365 Copilot',
+      interactions: 12,
+      activeDays: 4,
+      auditInteractions: 12,
+      auditActiveDays: 4,
+      auditAppsUsed: 2,
+      sourceComparisonAvailable: false,
+      expectedActiveDays: 12,
+      appsUsed: 2,
+      agentsUsed: 0,
+      coworkInteractions: 0,
+      usedCowork: false,
+      firstInteractionUtc: '2026-08-01T00:00:00Z',
+      lastInteractionUtc: '2026-08-20T00:00:00Z',
+      daysSinceLastUse: 3,
+      reportPrompts: null,
+      reportActiveDays: null,
+      reportLastActivityUtc: null,
+      adoptionScore: 42,
+      frequencyScore: 33,
+      depthScore: 80,
+      breadthScore: 67,
+      band: AdoptionBand.Developing,
+      bandName: 'Developing',
+      signalSource: 'audit',
+      recommendedAction: 'Build a first habit.',
+      recommendedActionCode: 'coach',
+      recommendedActionLabel: 'Build a first habit',
+    };
+  }
+
+  /** How many times each Copilot Adoption request has been made so far. */
+  const requestCounts = () => [
+    fetchAdoptionAvailability, fetchAdoptionSummary, fetchAdoptionFilters, fetchAdoptionSql, fetchLicensedUsers,
+  ].map((fetcher) => vi.mocked(fetcher).mock.calls.length);
+
+  it('switches language without asking the server again, and keeps the licensed-user list where the reader left it', async () => {
+    await loadCatalog('es');
+    // 120 seat holders: three pages of fifty.
+    vi.mocked(fetchLicensedUsers).mockImplementation(async (_windowDays, _filters, skip, take) => ({
+      total: 120,
+      skip,
+      take,
+      warnings: [],
+      rows: Array.from({ length: Math.min(take, 120 - skip) }, (_, i) => seatHolder(skip + i + 1)),
+    }));
+    renderWithProvider(<><LanguageSwitcher /><CopilotAdoptionPage /></>);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Licensed users' }, { timeout: 5000 }));
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Search licensed Copilot users' }, { timeout: 5000 }), {
+      target: { value: 'contoso' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    const department = await screen.findByRole('columnheader', { name: 'Department' }, { timeout: 5000 });
+    fireEvent.click(within(department).getByRole('button'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled(), { timeout: 5000 });
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(await screen.findByText('Page 2 of 3', undefined, { timeout: 5000 })).toBeVisible();
+    expect(vi.mocked(fetchLicensedUsers).mock.lastCall?.[1]).toMatchObject({ search: 'contoso', sortBy: 'department', sortDesc: false });
+    expect(vi.mocked(fetchLicensedUsers).mock.lastCall?.[2]).toBe(50);
+    const before = requestCounts();
+
+    await switchToSpanish();
+
+    expect(await screen.findByRole('tab', { name: 'Usuarios con licencia', selected: true }, { timeout: 5000 })).toBeVisible();
+    expect(screen.getByRole('textbox', { name: 'Buscar usuarios con licencia de Copilot' })).toHaveValue('contoso');
+    expect(screen.getByRole('columnheader', { name: 'Departamento' })).toHaveAttribute('aria-sort', 'ascending');
+    expect(screen.getByText('P\u00e1gina 2 de 3')).toBeVisible();
+    expect(screen.getByText('demo.user0000051@contoso.example')).toBeVisible();
+    expect(requestCounts()).toEqual(before);
+  });
+
+  it('words a failed request in the language the reader switches to, without making it again', async () => {
+    await loadCatalog('es');
+    vi.mocked(fetchAdoptionFilters).mockRejectedValueOnce(
+      new AdoptionRequestError({ key: 'errors.copilotAdoption.filtersFailed', values: { status: 500 } }, 500),
+    );
+    renderWithProvider(<><LanguageSwitcher /><CopilotAdoptionPage /></>);
+    expect(await screen.findByText("Couldn't load the Copilot adoption filters (500).", undefined, { timeout: 5000 })).toBeVisible();
+
+    await switchToSpanish();
+
+    expect(await screen.findByText('No se han podido cargar los filtros de adopci\u00f3n de Copilot (500).', undefined, { timeout: 5000 })).toBeVisible();
+    expect(fetchAdoptionFilters).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an availability failure on screen until a later check succeeds, then clears it', async () => {
+    const available: CopilotAdoptionAvailability = {
+      available: true,
+      copilotAuditImportEnabled: true,
+      copilotUsageReportImportEnabled: true,
+      userMetadataImportEnabled: true,
+      m365UsageReportImportEnabled: true,
+      messages: [],
+    };
+    let answer!: (availability: CopilotAdoptionAvailability) => void;
+    vi.mocked(fetchAdoptionAvailability)
+      .mockRejectedValueOnce(new AdoptionRequestError({ key: 'errors.copilotAdoption.availabilityFailed', values: { status: 503 } }, 503))
+      .mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    renderWithProvider(<CopilotAdoptionPage />);
+    const failure = "Couldn't load the Copilot adoption availability (503).";
+    expect(await screen.findByText(failure, undefined, { timeout: 5000 })).toBeVisible();
+
+    const retry = screen.getByRole('button', { name: 'Retry request' });
+    await waitFor(() => expect(retry).toBeEnabled());
+    fireEvent.click(retry);
+    // The last answer stands while the next is awaited, and the check cannot be started twice.
+    await waitFor(() => expect(retry).toBeDisabled());
+    expect(screen.getByText(failure)).toBeVisible();
+
+    await act(async () => { answer(available); });
+    expect(await screen.findByRole('tab', { name: 'Executive view', selected: true }, { timeout: 5000 })).toBeVisible();
+    expect(screen.queryByText(failure)).not.toBeInTheDocument();
+    expect(fetchAdoptionAvailability).toHaveBeenCalledTimes(2);
+  });
+
+  it('says where each figure comes from in whole Spanish sentences that agree with their source', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      dataSources: { ...summary().dataSources, m365UsageReportsAvailable: false },
+    }));
+    await loadCatalog('es');
+    renderWithProvider(<CopilotAdoptionPage />, { language: 'es' });
+    await screen.findByRole('tab', { name: 'Vista ejecutiva', selected: true }, { timeout: 5000 });
+    fireEvent.click(screen.getByRole('tab', { name: 'C\u00f3mo se calcula' }));
+    const sources = await screen.findByRole('button', { name: 'De d\u00f3nde proceden los datos' }, { timeout: 5000 });
+    await waitFor(() => expect(sources).toBeEnabled());
+    fireEvent.click(sources);
+
+    const line = async (heading: string) => (await screen.findByText(heading, undefined, { timeout: 5000 })).parentElement!.textContent;
+    expect(await line('Registro de auditor\u00eda de Copilot:')).toBe(
+      'Registro de auditor\u00eda de Copilot: disponible. Cubre a todos los usuarios, incluido el uso de Copilot Chat sin licencia, y coincide exactamente con el periodo seleccionado.',
+    );
+    expect(await line('Informe de uso de Microsoft Copilot:')).toMatch(
+      /^Informe de uso de Microsoft Copilot: instant\u00e1nea del 1 ene\.? 2026\. Solo cubre a los usuarios con licencia, /,
+    );
+    expect(await line('Informes de uso de Microsoft 365:')).toBe(
+      'Informes de uso de Microsoft 365: no importados. Se usan para encontrar usuarios intensivos de Microsoft 365 que no tienen licencia de Copilot.',
+    );
+    expect(await line('Cifras de indicaciones del inquilino seg\u00fan Microsoft:')).toMatch(
+      /^Cifras de indicaciones del inquilino seg\u00fan Microsoft: no importadas\. Las indicaciones enviadas/,
+    );
+  });
+
+  it('writes the score settings in the Method tab with the reader\u2019s decimal comma', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      windowDays: 90,
+      // The server's own default weights are fractions of one.
+      options: { ...options, windowDays: 90, frequencyWeight: 0.5, depthWeight: 0.3, breadthWeight: 0.2, depthTargetInteractionsPerActiveDay: 2.5 },
+    }));
+    await loadCatalog('es');
+    renderWithProvider(<CopilotAdoptionPage />, { language: 'es' });
+    await screen.findByRole('tab', { name: 'Vista ejecutiva', selected: true }, { timeout: 5000 });
+    fireEvent.click(screen.getByRole('tab', { name: 'C\u00f3mo se calcula' }));
+
+    const formula = await screen.findByText(/^frecuencia = min\(1, /, undefined, { timeout: 5000 });
+    expect(formula.textContent).toContain('puntuacion = (frecuencia x 0,5 + profundidad x 0,3 + amplitud x 0,2)\n        / 1 x 100');
+    expect(formula.textContent).toContain('/ 2,5) x confianza');
+    expect(formula.textContent).not.toMatch(/\d\.\d/);
+
+    // 20 interactions per 28 days, at 90 days: about 64.3.
+    fireEvent.click(screen.getByRole('button', { name: 'C\u00f3mo se clasifican los candidatos a licencia' }));
+    expect(await screen.findByText(/aproximadamente 64,3 aqu\u00ed/, undefined, { timeout: 5000 })).toBeVisible();
   });
 });

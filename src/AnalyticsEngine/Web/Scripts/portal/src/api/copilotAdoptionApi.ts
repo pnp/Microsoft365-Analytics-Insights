@@ -1,6 +1,14 @@
 ﻿import { translateActive } from '../i18n/runtime';
 import type { TranslationKey } from '../i18n/catalog';
-import { apiFetch, PortalPermissionError, SessionExpiredError, ReportScopeError } from './http';
+import type { TranslationValues } from '../i18n/translate';
+import {
+  apiFetch,
+  PortalPermissionError,
+  REPORT_SCOPE_ERROR_KEYS,
+  ReportScopeError,
+  SessionExpiredError,
+  UnexpectedServerError,
+} from './http';
 import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
@@ -42,18 +50,76 @@ export interface AdoptionLoadOptions {
   generationId?: string;
 }
 
+/** The catalog key, and its values, that a failure is worded from. */
+export interface AdoptionWording {
+  key: TranslationKey;
+  values?: TranslationValues;
+}
+
+/**
+ * A failure as a page keeps it in state: its wording, or the text of an error the portal did not word
+ * (the browser's own network error). Never the translated sentence - that stays in the language the
+ * request failed in, and a reader who then switches language would read it in the old one.
+ */
+export type AdoptionFailure = AdoptionWording | { text: string };
+
 export class AdoptionRequestError extends Error {
-  constructor(message: string, readonly status?: number, readonly retryAfterSeconds = 0) {
-    super(message);
+  /** What the message was worded from, so it can be worded again in the language being read. */
+  readonly wording?: AdoptionWording;
+
+  constructor(message: string | AdoptionWording, readonly status?: number, readonly retryAfterSeconds = 0) {
+    super(typeof message === 'string' ? message : translateActive(message.key, message.values));
     this.name = 'AdoptionRequestError';
+    if (typeof message !== 'string') this.wording = message;
   }
 }
 
+const GENERATION_CHANGED: AdoptionWording = { key: 'copilotAdoption.error.generationChanged' };
+
 export class AdoptionGenerationChangedError extends Error {
+  readonly wording = GENERATION_CHANGED;
+
   constructor() {
-    super(translateActive('copilotAdoption.error.generationChanged'));
+    super(translateActive(GENERATION_CHANGED.key));
     this.name = 'AdoptionGenerationChangedError';
   }
+}
+
+/**
+ * What a page keeps when a Copilot Adoption request fails.
+ *
+ * Every error the portal words itself is kept as its catalog key: this module's own, and those
+ * `apiFetch` throws for an expired session, a missing permission, a report filter that cannot be
+ * applied and a server fault. Anything else that is an `Error` keeps its own text; anything that is
+ * not gets `fallbackKey`.
+ */
+export function adoptionFailure(error: unknown, fallbackKey: TranslationKey): AdoptionFailure {
+  if ((error instanceof AdoptionRequestError || error instanceof AdoptionGenerationChangedError) && error.wording) {
+    return error.wording;
+  }
+  if (error instanceof SessionExpiredError) return { key: 'errors.http.sessionExpired' };
+  if (error instanceof PortalPermissionError) {
+    return {
+      key: error.permission === 'administration'
+        ? 'access.permissionRequired.administration'
+        : 'access.permissionRequired.seePii',
+    };
+  }
+  if (error instanceof ReportScopeError) {
+    const key = REPORT_SCOPE_ERROR_KEYS.get(error.code);
+    if (key) return { key };
+  }
+  if (error instanceof UnexpectedServerError) return { key: 'errors.http.unexpected', values: { errorId: error.errorId } };
+  if (error instanceof Error && error.message) return { text: error.message };
+  return { key: fallbackKey };
+}
+
+/** A kept failure, in the language the reader is reading now. */
+export function adoptionFailureText(
+  t: (key: TranslationKey, values?: TranslationValues) => string,
+  failure: AdoptionFailure,
+): string {
+  return 'key' in failure ? t(failure.key, failure.values) : failure.text;
 }
 
 export function canRetryAdoptionRequest(error: unknown): boolean {
@@ -113,8 +179,8 @@ async function getJson<T>(
       if (Date.now() + waitMs >= giveUpAt) {
         throw new AdoptionRequestError(
           runId
-            ? translateActive('errors.copilotAdoption.analysisStillRunningWithReference', { runId })
-            : translateActive('errors.copilotAdoption.analysisStillRunning'),
+            ? { key: 'errors.copilotAdoption.analysisStillRunningWithReference', values: { runId } }
+            : { key: 'errors.copilotAdoption.analysisStillRunning' },
         );
       }
 
@@ -127,9 +193,9 @@ async function getJson<T>(
     if (!response.ok) {
       const body = (await response.clone().json().catch(() => null)) as { code?: unknown; retryAfterSeconds?: number } | null;
       if (typeof body?.code === 'string' && body.code.startsWith('copilotAdoption.error.')) {
-        throw new AdoptionRequestError(translateActive(body.code as TranslationKey), response.status, body.retryAfterSeconds);
+        throw new AdoptionRequestError({ key: body.code as TranslationKey }, response.status, body.retryAfterSeconds);
       }
-      throw new AdoptionRequestError(translateActive(failureKey, { status: response.status }), response.status);
+      throw new AdoptionRequestError({ key: failureKey, values: { status: response.status } }, response.status);
     }
 
     const generationId = response.headers.get('X-CopilotAdoption-GenerationId');
@@ -328,10 +394,10 @@ export async function rebuildAdoption(
   if (!response.ok) {
     const key = typeof body?.code === 'string' && body.code.startsWith('copilotAdoption.error.')
       ? body.code as TranslationKey : 'copilotAdoption.error.rebuildFailed';
-    throw new AdoptionRequestError(translateActive(key), response.status, body?.retryAfterSeconds);
+    throw new AdoptionRequestError({ key }, response.status, body?.retryAfterSeconds);
   }
   if (!body || typeof body.generationId !== 'string')
-    throw new AdoptionRequestError(translateActive('copilotAdoption.error.rebuildFailed'));
+    throw new AdoptionRequestError({ key: 'copilotAdoption.error.rebuildFailed' });
   return body;
 }
 

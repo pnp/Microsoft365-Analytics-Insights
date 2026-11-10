@@ -736,6 +736,13 @@ render directly, and an English failure message on a Spanish page is what a read
 moment something has already gone wrong. Import it from `../i18n/runtime`, not from `../i18n` —
 the package index re-exports `LanguageSwitcher`, which would pull Fluent UI into the API chunk.
 
+Switching language re-renders the page; it must not reload it. Keep keys and codes in state and word
+them when rendering, never translated text: an effect that lists `t` in its dependencies, so that it can
+word a failure, runs again — and asks the server again — every time the reader picks a language. A
+message that stays on screen, such as a failed request, is kept as its catalog key: Copilot Adoption
+keeps request failures as an `AdoptionFailure` (`adoptionFailure()` and `adoptionFailureText()` in
+`src/api/copilotAdoptionApi.ts`).
+
 Text that came out of the customer's tenant — user and display names, departments, site and team
 names, file names, URLs, agent and SKU names — is **never** translated. Only the product's own
 wording is.
