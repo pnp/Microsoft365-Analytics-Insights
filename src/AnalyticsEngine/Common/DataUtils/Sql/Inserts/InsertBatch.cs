@@ -121,7 +121,9 @@ namespace DataUtils.Sql.Inserts
                         }
                         catch (SqlException ex)
                         {
-                            throw new BatchSaveException($"Couldn't merge batch insert using given SQL: {ex.Message}", ex);
+                            // Without the value SQL Server quoted (a duplicate key, a truncated or unconvertible value): this
+                            // message is logged and persisted. The SqlException stays inner, for TransientSqlRetry.
+                            throw new BatchSaveException($"Couldn't merge batch insert using given SQL: {SqlErrorMessages.WithoutValues(ex.Message)}", ex);
                         }
                     }
                     finally

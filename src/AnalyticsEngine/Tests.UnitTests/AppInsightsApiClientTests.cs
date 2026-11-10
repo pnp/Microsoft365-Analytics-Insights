@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -69,7 +70,10 @@ namespace Tests.UnitTests
                 {
                     throw new InvalidOperationException("Stub handler ran out of queued responses.");
                 }
-                return Task.FromResult(factory());
+                // As the real transport does: the response carries the request, default headers and all.
+                var response = factory();
+                if (response.RequestMessage == null) response.RequestMessage = request;
+                return Task.FromResult(response);
             }
         }
 
@@ -399,6 +403,55 @@ namespace Tests.UnitTests
 
                 Assert.AreEqual(1, longLived.TokensIssued, "A still-valid token must not cost an Entra ID round-trip per request.");
             }
+        }
+
+        /// <summary>
+        /// The <c>-logApiResponses</c> dump serialised the whole response, and with it the request and its
+        /// Authorization header: a bearer token for the App Insights query API, written to disk (#853, R12-8).
+        /// </summary>
+        [TestMethod]
+        public async Task AppInsightsClient_DebugDump_KeepsTheResponseButNotTheBearerToken()
+        {
+            const string token = "contoso-bearer-token-853";
+            var folder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ai-dump-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                using (var client = NewClient(new StubHandler { Fallback = Ok }, new FixedCredential(token)))
+                {
+                    client.DebugDumpDirectory = folder;
+                    await client.GetPageViewsAsync(Day, saveRestResponses: true);
+                }
+
+                var dumps = Directory.GetFiles(folder, "*.json", SearchOption.AllDirectories);
+                Assert.IsTrue(dumps.Length > 0, "The switch still writes the responses.");
+                foreach (var dump in dumps)
+                {
+                    var text = File.ReadAllText(dump);
+                    Assert.IsFalse(text.Contains(token), text);
+                    Assert.IsFalse(text.IndexOf("Authorization", StringComparison.OrdinalIgnoreCase) >= 0, text);
+                    StringAssert.Contains(text, "PrimaryResult", "The response body is what the dump is for.");
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+        }
+
+        private sealed class FixedCredential : TokenCredential
+        {
+            private readonly string _token;
+
+            public FixedCredential(string token)
+            {
+                _token = token;
+            }
+
+            public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+                => new AccessToken(_token, DateTimeOffset.UtcNow.AddHours(1));
+
+            public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+                => new ValueTask<AccessToken>(GetToken(requestContext, cancellationToken));
         }
 
         [TestMethod]
