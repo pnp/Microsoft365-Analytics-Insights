@@ -239,6 +239,58 @@ describe('SegmentTable manager columns', () => {
     expect(screen.queryByText('Managers using Copilot')).not.toBeInTheDocument();
   });
 
+  it.each([
+    {
+      language: 'en' as const,
+      reason: 'Hidden: with the figures for everyone above the table, this department\u2019s would reveal those of a department with too few people managers to show',
+      own: 'Too few people to show without singling someone out',
+    },
+    {
+      language: 'es' as const,
+      reason: 'Oculto: con las cifras de todos que aparecen sobre la tabla, las de este departamento revelarían las de otro con demasiado pocos responsables de equipo para mostrarlas',
+      own: 'Demasiado pocas personas para mostrarlo sin señalar a nadie',
+    },
+  ])('says in $language why a department with enough managers is hidden from a reader without See PII (#844)', async ({ language, reason, own }) => {
+    // Legal's two managers are withheld for every reader; Support's share went too, and Sales' comparison, because the
+    // figures for everyone less the departments shown would otherwise give Legal's back.
+    if (language === 'es') await loadCatalog('es');
+    const hidden = {
+      reportsActiveRatePctManagerActive: null,
+      reportsActiveRatePctManagerInactive: null,
+      reportsHabitRatePctManagerActive: null,
+      reportsHabitRatePctManagerInactive: null,
+    };
+    renderWithProvider(
+      <SegmentTable
+        rows={[department('Contoso Sales'), department('Contoso Support'), department('Contoso Legal')]}
+        segmentLabel="Department"
+        managerModelling={[
+          { ...managerRow('Contoso Sales', hidden), comparisonWithheld: 'revealsSmallerGroup', seatSplitWithheld: 'revealsSmallerGroup' },
+          {
+            ...managerRow('Contoso Support', { ...hidden, managersActive: null, managersActivePct: null }),
+            managersWithheld: 'revealsSmallerGroup',
+            comparisonWithheld: 'revealsSmallerGroup',
+            seatSplitWithheld: 'revealsSmallerGroup',
+          },
+          managerRow('Contoso Legal', { ...hidden, managersStatusKnown: 2, managersActive: null, managersActivePct: null }),
+        ]}
+      />,
+      { language },
+    );
+
+    const sales = within(screen.getByText('Contoso Sales').closest('tr') as HTMLElement);
+    expect(sales.getByText(language === 'es' ? '62,5%' : '62.5%')).toBeInTheDocument();
+    expect(sales.getAllByLabelText(reason)).toHaveLength(4);
+
+    const support = within(screen.getByText('Contoso Support').closest('tr') as HTMLElement);
+    expect(support.getAllByLabelText(reason)).toHaveLength(5);
+    expect(support.queryByText('0%')).not.toBeInTheDocument();
+
+    const legal = within(screen.getByText('Contoso Legal').closest('tr') as HTMLElement);
+    expect(legal.getAllByLabelText(own)).toHaveLength(5);
+    expect(legal.queryByLabelText(reason)).not.toBeInTheDocument();
+  });
+
   it('leaves a table without manager figures - the country table - as it was', () => {
     renderWithProvider(<SegmentTable rows={[department('Ruritania')]} segmentLabel="Country" />);
 

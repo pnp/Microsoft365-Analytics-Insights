@@ -132,6 +132,15 @@ namespace Common.Entities.CopilotAdoption
         #endregion
 
         /// <summary>
+        /// The people managers in each group these figures describe, whether or not the group's figures are published.
+        /// Never serialised: a reader is given a group's size only through the figures the floor lets through. Read by
+        /// <see cref="CopilotAdoptionSmallGroups.ManagerDepartmentsWithoutComplements"/> to keep the whole population's
+        /// figures from giving a withheld department back. Null on figures the analysis did not build.
+        /// </summary>
+        [JsonIgnore]
+        internal ManagerGroupSizes Groups { get; set; }
+
+        /// <summary>
         /// Writes these figures onto the summary's top-level properties of the same names, where Snapshot
         /// facts and the API read them.
         /// </summary>
@@ -139,6 +148,7 @@ namespace Common.Entities.CopilotAdoption
         {
             if (summary == null) throw new ArgumentNullException(nameof(summary));
 
+            summary.ManagerGroups = Groups;
             summary.ReportsWithManager = ReportsWithManager;
             summary.ManagersStatusKnown = ManagersStatusKnown;
             summary.ManagersStatusUnknown = ManagersStatusUnknown;
@@ -173,6 +183,7 @@ namespace Common.Entities.CopilotAdoption
         {
             if (summary == null) throw new ArgumentNullException(nameof(summary));
 
+            Groups = summary.ManagerGroups;
             ReportsWithManager = summary.ReportsWithManager;
             ManagersStatusKnown = summary.ManagersStatusKnown;
             ManagersStatusUnknown = summary.ManagersStatusUnknown;
@@ -214,6 +225,44 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Licensed users analysed in the department, eligible as a report or not - the seat count the department row shows.</summary>
         [JsonProperty("licensedUsers")]
         public int LicensedUsers { get; set; }
+
+        /// <summary>
+        /// Why the share of managers using Copilot is withheld when the department has enough managers for it: one of
+        /// <see cref="SmallGroupWithheldReasons"/>, for a reader without See PII only (#844). Left out of the JSON otherwise.
+        /// </summary>
+        [JsonProperty("managersWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string ManagersWithheld { get; set; }
+
+        /// <summary>The same for the comparison of the teams whose manager does and does not use Copilot.</summary>
+        [JsonProperty("comparisonWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string ComparisonWithheld { get; set; }
+
+        /// <summary>The same for that comparison split by whether the manager holds a seat.</summary>
+        [JsonProperty("seatSplitWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string SeatSplitWithheld { get; set; }
+
+        /// <summary>A copy, so a reader's trimmed summary never edits the cached row.</summary>
+        internal ManagerModellingSegmentRow CloneRow() => (ManagerModellingSegmentRow)MemberwiseClone();
+    }
+
+    /// <summary>
+    /// How many people managers are in each group of <see cref="ManagerModellingFigures"/>, published or not: those whose use
+    /// is known split by whether they used Copilot, and each of those by whether they hold a seat. A manager is counted once
+    /// per population, in one group.
+    /// </summary>
+    internal sealed class ManagerGroupSizes
+    {
+        internal int Active { get; set; }
+
+        internal int Inactive { get; set; }
+
+        internal int ActiveLicensed { get; set; }
+
+        internal int ActiveUnlicensed { get; set; }
+
+        internal int InactiveLicensed { get; set; }
+
+        internal int InactiveUnlicensed { get; set; }
     }
 
     /// <summary>A people manager's own Copilot use in the period, as far as the loaded data can tell.</summary>
@@ -562,6 +611,15 @@ namespace Common.Entities.CopilotAdoption
                 var min = Math.Max(1, minGroup);
                 var known = _managersActive + _managersInactive;
 
+                figures.Groups = new ManagerGroupSizes
+                {
+                    Active = _managersActive,
+                    Inactive = _managersInactive,
+                    ActiveLicensed = _managersInCell[ActiveManager, Licensed],
+                    ActiveUnlicensed = _managersInCell[ActiveManager, Unlicensed],
+                    InactiveLicensed = _managersInCell[InactiveManager, Licensed],
+                    InactiveUnlicensed = _managersInCell[InactiveManager, Unlicensed],
+                };
                 figures.ReportsWithManager = _reportsWithManager;
                 figures.ManagersStatusKnown = known;
                 figures.ManagersStatusUnknown = _managersUnknown;

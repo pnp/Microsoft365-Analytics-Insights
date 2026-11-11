@@ -294,6 +294,13 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.moreCandidatesNeverUsedSeats': '{v0} candidatos más que puestos nunca usados',
   'copilotAdoption.page.moreNeverUsedSeatsCandidates': '{v0} puestos nunca usados más que candidatos',
   'copilotAdoption.page.balanced': 'Equilibrado',
+  // Recuento de candidatos de un departamento oculto a un lector sin See PII porque, con el total, revelaría uno menor (#844)
+  'copilotAdoption.page.candidatesWithheld.revealsSmallerGroup':
+    'Oculto: con los candidatos recomendados del inquilino, este recuento revelaría un departamento con menos de {count} candidatos',
+  'copilotAdoption.page.candidatesWithheldNote':
+    'También se puede ocultar un recuento mayor cuando, al restar los recuentos mostrados de los candidatos recomendados del inquilino, se revelaría un departamento con menos de {count}.',
+  'copilotAdoption.page.opportunityByDepartmentWithheldNote':
+    'También se omite un departamento cuando, al restar los departamentos mostrados de los candidatos recomendados del inquilino, se revelaría uno con menos de {count} candidatos.',
   'copilotAdoption.page.whereStand': 'Dónde estás',  'copilotAdoption.page.analyst.whereStandBlurb': 'La posición principal: cuántas licencias están rindiendo y dónde está la caída.',
   'copilotAdoption.page.population.analysed': 'analizados',
   'copilotAdoption.page.population.licensed': 'con licencia',
@@ -819,6 +826,8 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.shared.segmentTable.habitManagerDoesNot': 'Hábito: el responsable no lo usa',
   'copilotAdoption.shared.segmentTable.managersUnknown': 'Sin determinar: {count}',
   'copilotAdoption.shared.segmentTable.withheld': 'Demasiado pocas personas para mostrarlo sin señalar a nadie',
+  'copilotAdoption.shared.segmentTable.withheldRevealsSmallerGroup':
+    'Oculto: con las cifras de todos que aparecen sobre la tabla, las de este departamento revelarían las de otro con demasiado pocos responsables de equipo para mostrarlas',
   'copilotAdoption.shared.expandableUser.hideAssessment': 'Ocultar la evaluación completa de {user}',
   'copilotAdoption.shared.expandableUser.showAssessment': 'Mostrar la evaluación completa de {user}',
   'copilotAdoption.shared.expandAll.expand': 'Expandir todo',

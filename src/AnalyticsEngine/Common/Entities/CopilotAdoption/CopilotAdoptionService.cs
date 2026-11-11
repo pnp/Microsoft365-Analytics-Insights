@@ -2321,7 +2321,9 @@ namespace Common.Entities.CopilotAdoption
         /// all</b> but does have unlicensed users or licence candidates, because that is the single most
         /// actionable thing this view can find: an acquired business that was never given Copilot and is
         /// using Chat anyway. The same <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> floor is
-        /// applied to the combined population so one person in a domain is still not a data point.</para>
+        /// applied to the combined population so one person in a domain is still not a data point. A reader
+        /// without See PII is given each population floored on its own as well
+        /// (<see cref="CopilotAdoptionSmallGroups.EmailDomainsWithoutSmallPopulations"/>).</para>
         /// </remarks>
         private List<AdoptionDomainRow> BuildEmailDomains(CopilotAdoptionAnalysis analysis)
         {
@@ -2407,10 +2409,10 @@ namespace Common.Entities.CopilotAdoption
             // they represent instead. Ties break on size, so a large mediocre org outranks a tiny
             // terrible one.
             return rows
-                .OrderBy(r => r.LicensedUsers == 0 ? 1 : 0)
-                .ThenBy(r => r.LicensedUsers == 0 ? 0 : r.AdoptionRatePct)
-                .ThenByDescending(r => r.LicensedUsers)
-                .ThenByDescending(r => r.UnlicensedActiveUsers)
+                .OrderBy(r => r.LicensedUsers.GetValueOrDefault() == 0 ? 1 : 0)
+                .ThenBy(r => r.LicensedUsers.GetValueOrDefault() == 0 ? 0 : r.AdoptionRatePct.GetValueOrDefault())
+                .ThenByDescending(r => r.LicensedUsers.GetValueOrDefault())
+                .ThenByDescending(r => r.UnlicensedActiveUsers.GetValueOrDefault())
                 .ThenBy(r => r.Segment, StringComparer.OrdinalIgnoreCase)
                 .Take(_options.TopSegments)
                 .ToList();

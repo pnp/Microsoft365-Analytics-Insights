@@ -1001,6 +1001,66 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void EmailDomainSheet_WithoutSeePii_LeavesAFewPeoplesFiguresBlank_AsTheScreenDoes_AndWithItWritesThem()
+        {
+            // #844: each population on a domain row is floored on its own for a reader without See PII, and an export is
+            // never less redacted than the screen. Twenty seat holders and three of the twenty unlicensed Copilot Chat users
+            // are on fabrikam.example: its Chat count is about three people. Contoso's seventeen go too, because the
+            // tenant's unlicensed total less them would be fabrikam's three.
+            var analysis = SyntheticAnalysis();
+            for (var i = 0; i < 20; i++)
+            {
+                analysis.LicensedUsers[i].UserPrincipalName = "user" + i + "@fabrikam.example";
+                analysis.LicensedUsers[i].EmailDomain = "fabrikam.example";
+            }
+
+            for (var i = 0; i < 3; i++)
+            {
+                analysis.UnlicensedUsers[i].UserPrincipalName = "unlicensed" + i + "@fabrikam.example";
+                analysis.UnlicensedUsers[i].EmailDomain = "fabrikam.example";
+            }
+
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+
+            Dictionary<string, string> Row(byte[] workbook, string domain)
+            {
+                string Text(XElement c) => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
+                string RowOf(XElement c) => Regex.Match((string)c.Attribute("r"), @"\d+$").Value;
+                var cells = SheetCellElements(workbook, "Email domains");
+                var row = RowOf(cells.First(c => Text(c) == domain));
+                return cells.Where(c => RowOf(c) == row)
+                    .ToDictionary(c => Regex.Match((string)c.Attribute("r"), "^[A-Z]+").Value, Text);
+            }
+
+            // Columns: A domain, B seats, C active, ..., J unlicensed users, K licence candidates, L external.
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            var fabrikam = Row(trimmed, "fabrikam.example");
+            Assert.IsFalse(fabrikam.ContainsKey("J"), "Three Chat users: blank, never 0.");
+            Assert.AreEqual("20", fabrikam["B"], "Twenty seat holders are enough on their own.");
+            Assert.IsFalse(Row(trimmed, "contoso.com").ContainsKey("J"), "The count that would give the three back is blank too.");
+            Assert.IsTrue(SheetCells(trimmed, "Email domains").Any(c => c.Contains("a group of fewer than 5 people has its figures left blank")));
+
+            // The file says exactly what the screen does: blank wherever the summary served without See PII is null.
+            var screen = analysis.Summary.WithoutIndividualData().EmailDomains;
+            foreach (var domain in screen)
+            {
+                var cells = Row(trimmed, domain.Segment);
+                foreach (var (column, value) in new[] { ("B", domain.LicensedUsers), ("J", domain.UnlicensedActiveUsers), ("K", domain.RecommendedForLicence) })
+                {
+                    Assert.AreEqual(value?.ToString(CultureInfo.InvariantCulture), cells.TryGetValue(column, out var cell) ? cell : null,
+                        $"{domain.Segment}, column {column}: the workbook and the screen must agree.");
+                }
+            }
+
+            var full = CopilotAdoptionWorkbook.Build(analysis);
+            Assert.AreEqual("3", Row(full, "fabrikam.example")["J"], "With See PII every figure is written, as before.");
+            Assert.AreEqual("17", Row(full, "contoso.com")["J"]);
+            Assert.IsFalse(SheetCells(full, "Email domains").Any(c => c.Contains("left blank")));
+            Assert.AreEqual(3, analysis.Summary.EmailDomains.Single(d => d.Segment == "fabrikam.example").UnlicensedActiveUsers,
+                "The cached analysis must never be edited for one reader.");
+        }
+
+        [TestMethod]
         public void Workbook_SaysWhenItHasBeenNarrowedToOneEmailDomain()
         {
             // A spreadsheet outlives the screen it came from and gets forwarded without that context.

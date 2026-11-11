@@ -247,6 +247,9 @@ function hasTrendGaps(series: { points: { value: number | null }[] }[]): boolean
   return series.some((s) => s.points.some((p) => p.value === null));
 }
 
+/** The server's floor for a reader without See PII (`ReportScopeResolver.MinimumPeopleWithoutSeePii`, #844). */
+const CANDIDATES_WITHHELD_FLOOR = 5;
+
 const MICROSOFT_COPILOT_USAGE_REPORT_FAQ_URL =
   'https://learn.microsoft.com/en-us/microsoft-365/admin/activity-reports/microsoft-365-copilot-usage?view=o365-worldwide#whats-the-difference-between-the-user-activity-table-and-audit-log';
 const MICROSOFT_COPILOT_USAGE_REPORT_API_URL =
@@ -1464,7 +1467,9 @@ function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary
   // Each row carries its own department's candidate count, counted by the server over every candidate. It
   // used to be looked up in opportunityByDepartment, which keeps the departments with the MOST candidates
   // while these rows are the ones with the LOWEST habit rate, so most rows found nothing. A null count is
-  // withheld (too few to show) or unknown: a dash and no reassignment signal, never a zero.
+  // withheld (too few to show) or unknown: a dash and no reassignment signal, never a zero. For a reader without See
+  // PII a larger count can be withheld too, when with the tenant's recommended candidates it would give a smaller one
+  // back (#844); that dash says so.
   const rows = [...(summary.habitByDepartment ?? [])]
     .map((row) => {
       const habitRatePct = row.licensedUsers > 0 ? (row.habitualUsers / row.licensedUsers) * 100 : 0;
@@ -1487,39 +1492,56 @@ function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary
     );
   }
 
+  const floor = formatCount(CANDIDATES_WITHHELD_FLOOR);
+  const complementText = t('copilotAdoption.page.candidatesWithheld.revealsSmallerGroup', { count: floor });
+  const complement = rows.some((row) => row.candidates === undefined && row.recommendedCandidatesWithheld);
+
   return (
-    <table className={styles.skuTable} aria-label={t('copilotAdoption.page.departmentLeagueTable3')}>
-      <thead>
-        <tr>
-          <th className={styles.skuCell}>{t('copilotAdoption.page.department')}</th>
-          <th className={styles.skuCell}>{t('copilotAdoption.page.habitRate2')}</th>
-          <th className={styles.skuCell}>{t('copilotAdoption.page.licences')}</th>
-          <th className={styles.skuCell}>{t('copilotAdoption.page.neverUsed')}</th>
-          <th className={styles.skuCell}>{t('copilotAdoption.page.candidates')}</th>
-          <th className={styles.skuCell}>{t('copilotAdoption.page.reassignmentSignal')}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.segment}>
-            <td className={styles.skuCell}>{serverPlaceholderText(t, row.segment)}</td>
-            <td className={styles.skuCell}>{formatPct(row.habitRatePct)}</td>
-            <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
-            <td className={styles.skuCell}>{formatCount(row.idleSeats)}</td>
-            <td className={styles.skuCell}>{row.candidates === undefined ? '\u2014' : formatCount(row.candidates)}</td>
-            <td className={styles.skuCell}>
-              {row.netOpportunity === undefined
-                ? '\u2014'
-                : row.netOpportunity > 0
-                  ? t('copilotAdoption.page.moreCandidatesNeverUsedSeats', { v0: formatCount(row.netOpportunity) })
-                  : row.netOpportunity < 0
-                    ? t('copilotAdoption.page.moreNeverUsedSeatsCandidates', { v0: formatCount(Math.abs(row.netOpportunity)) })
-                    : t('copilotAdoption.page.balanced')}
-            </td>
+    <>
+      <table className={styles.skuTable} aria-label={t('copilotAdoption.page.departmentLeagueTable3')}>
+        <thead>
+          <tr>
+            <th className={styles.skuCell}>{t('copilotAdoption.page.department')}</th>
+            <th className={styles.skuCell}>{t('copilotAdoption.page.habitRate2')}</th>
+            <th className={styles.skuCell}>{t('copilotAdoption.page.licences')}</th>
+            <th className={styles.skuCell}>{t('copilotAdoption.page.neverUsed')}</th>
+            <th className={styles.skuCell}>{t('copilotAdoption.page.candidates')}</th>
+            <th className={styles.skuCell}>{t('copilotAdoption.page.reassignmentSignal')}</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.segment}>
+              <td className={styles.skuCell}>{serverPlaceholderText(t, row.segment)}</td>
+              <td className={styles.skuCell}>{formatPct(row.habitRatePct)}</td>
+              <td className={styles.skuCell}>{formatCount(row.licensedUsers)}</td>
+              <td className={styles.skuCell}>{formatCount(row.idleSeats)}</td>
+              <td className={styles.skuCell}>
+                {row.candidates !== undefined
+                  ? formatCount(row.candidates)
+                  : row.recommendedCandidatesWithheld
+                    ? <span className={styles.muted} title={complementText} aria-label={complementText}>{'\u2014'}</span>
+                    : '\u2014'}
+              </td>
+              <td className={styles.skuCell}>
+                {row.netOpportunity === undefined
+                  ? '\u2014'
+                  : row.netOpportunity > 0
+                    ? t('copilotAdoption.page.moreCandidatesNeverUsedSeats', { v0: formatCount(row.netOpportunity) })
+                    : row.netOpportunity < 0
+                      ? t('copilotAdoption.page.moreNeverUsedSeatsCandidates', { v0: formatCount(Math.abs(row.netOpportunity)) })
+                      : t('copilotAdoption.page.balanced')}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {complement && (
+        <Text size={200} block className={styles.muted}>
+          {t('copilotAdoption.page.candidatesWithheldNote', { count: floor })}
+        </Text>
+      )}
+    </>
   );
 }
 
@@ -1859,6 +1881,11 @@ function AnalystTab({
           </div>
           <div className={styles.cardBody}>
             <CategoryBarChart categories={summary.opportunityByDepartment} valueLabel={t('copilotAdoption.page.candidates2')} />
+            {summary.opportunityByDepartmentWithheld && (
+              <Text size={200} block className={styles.muted}>
+                {t('copilotAdoption.page.opportunityByDepartmentWithheldNote', { count: formatCount(CANDIDATES_WITHHELD_FLOOR) })}
+              </Text>
+            )}
           </div>
         </Card>
       )}

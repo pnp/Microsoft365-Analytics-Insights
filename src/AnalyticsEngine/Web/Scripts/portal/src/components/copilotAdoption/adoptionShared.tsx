@@ -521,30 +521,36 @@ export function SegmentTable({
 
 /**
  * One department's manager-modelling cells. A figure the server withheld - too few people managers or
- * reports to show without singling someone out - is a dash with the reason on hover, never 0%.
+ * reports to show without singling someone out - is a dash with the reason on hover, never 0%. For a
+ * reader without See PII a department with enough managers can be withheld too, when the figures for
+ * everyone above the table would give a smaller department's back (#844); its dash says that instead.
  */
 function ManagerModellingCells({ row }: { row: ManagerModellingSegmentRow | undefined }) {
   const styles = useStyles();
   const t = useT();
   const numeric = `${styles.td} ${styles.tdNumeric}`;
   const withheld = t('copilotAdoption.shared.segmentTable.withheld');
-  const value = (pct: number | null | undefined) =>
-    pct === null || pct === undefined ? <span title={withheld} aria-label={withheld}>{'\u2014'}</span> : formatPct(pct);
+  const revealsSmallerGroup = t('copilotAdoption.shared.segmentTable.withheldRevealsSmallerGroup');
+  const value = (pct: number | null | undefined, reason: string | null | undefined) => {
+    if (pct !== null && pct !== undefined) return formatPct(pct);
+    const text = reason ? revealsSmallerGroup : withheld;
+    return <span title={text} aria-label={text}>{'\u2014'}</span>;
+  };
 
   return (
     <>
       <td className={numeric}>
-        {value(row?.managersActivePct)}
+        {value(row?.managersActivePct, row?.managersWithheld)}
         {row && row.managersStatusUnknown > 0 && (
           <Text size={100} block className={styles.tdSub}>
             {t('copilotAdoption.shared.segmentTable.managersUnknown', { count: formatCount(row.managersStatusUnknown) })}
           </Text>
         )}
       </td>
-      <td className={numeric}>{value(row?.reportsActiveRatePctManagerActive)}</td>
-      <td className={numeric}>{value(row?.reportsActiveRatePctManagerInactive)}</td>
-      <td className={numeric}>{value(row?.reportsHabitRatePctManagerActive)}</td>
-      <td className={numeric}>{value(row?.reportsHabitRatePctManagerInactive)}</td>
+      <td className={numeric}>{value(row?.reportsActiveRatePctManagerActive, row?.comparisonWithheld)}</td>
+      <td className={numeric}>{value(row?.reportsActiveRatePctManagerInactive, row?.comparisonWithheld)}</td>
+      <td className={numeric}>{value(row?.reportsHabitRatePctManagerActive, row?.comparisonWithheld)}</td>
+      <td className={numeric}>{value(row?.reportsHabitRatePctManagerInactive, row?.comparisonWithheld)}</td>
     </>
   );
 }

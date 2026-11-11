@@ -325,6 +325,32 @@ namespace Common.Entities.CopilotAdoption
         /// </remarks>
         [JsonProperty("recommendedCandidates")]
         public int? RecommendedCandidates { get; set; }
+
+        /// <summary>
+        /// Why <see cref="RecommendedCandidates"/> is withheld when it is not small itself: one of
+        /// <see cref="SmallGroupWithheldReasons"/>, for a reader without See PII only. Left out of the JSON otherwise.
+        /// </summary>
+        [JsonProperty("recommendedCandidatesWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string RecommendedCandidatesWithheld { get; set; }
+
+        /// <summary>A copy of this row, so a reader's trimmed summary never edits the cached one.</summary>
+        internal AdoptionSegmentRow CloneSegment() => (AdoptionSegmentRow)MemberwiseClone();
+    }
+
+    /// <summary>
+    /// Why a figure a reader without See PII would otherwise be given is withheld (#844). Stable keys, not text: the
+    /// portal writes the sentence, and the workbook says it in English.
+    /// </summary>
+    public static class SmallGroupWithheldReasons
+    {
+        /// <summary>Fewer people than a reader without See PII may be given a figure about are behind it.</summary>
+        public const string FewPeople = "fewPeople";
+
+        /// <summary>
+        /// Enough people are behind it, but with the total published beside it, it would give back a figure withheld for
+        /// having fewer.
+        /// </summary>
+        public const string RevealsSmallerGroup = "revealsSmallerGroup";
     }
 
     /// <summary>
@@ -398,15 +424,43 @@ namespace Common.Entities.CopilotAdoption
     /// interesting comparison is not only "is this org using its seats" but "is it using them while
     /// also running unlicensed Copilot Chat, and does it have people who should be bought seats" - the
     /// three together say whether an acquired business needs training, more licences, or fewer.</para>
+    /// <para>Three populations share a row: the seat holders, whom every figure from <see cref="LicensedUsers"/> to
+    /// <see cref="CoworkPrimeCandidates"/> describes; the unlicensed Copilot Chat users; and the licence candidates. For a
+    /// reader without See PII each is floored on its own (#844): a population of one to four people has its figures
+    /// withheld - null, with the reason in <see cref="SeatHoldersWithheld"/>, <see cref="UnlicensedUsersWithheld"/> or
+    /// <see cref="LicenceCandidatesWithheld"/> - however many people the others hold. Not an
+    /// <see cref="AdoptionSegmentRow"/> for that reason: its figures can be withheld, and a segment row's cannot.</para>
     /// </summary>
-    public class AdoptionDomainRow : AdoptionSegmentRow
+    public class AdoptionDomainRow
     {
+        [JsonProperty("segment")]
+        public string Segment { get; set; }
+
+        /// <summary>Copilot seat holders on this domain. Null when the seat holders' figures are withheld.</summary>
+        [JsonProperty("licensedUsers")]
+        public int? LicensedUsers { get; set; }
+
+        [JsonProperty("activeUsers")]
+        public int? ActiveUsers { get; set; }
+
+        [JsonProperty("habitualUsers")]
+        public int? HabitualUsers { get; set; }
+
+        [JsonProperty("neverUsedUsers")]
+        public int? NeverUsedUsers { get; set; }
+
+        [JsonProperty("adoptionRatePct")]
+        public double? AdoptionRatePct { get; set; }
+
+        [JsonProperty("averageAdoptionScore")]
+        public double? AverageAdoptionScore { get; set; }
+
         /// <summary>
         /// Copilot seats in this domain that look reclaimable, on the same confidence tiering the
         /// headline reclaim figure uses.
         /// </summary>
         [JsonProperty("reclaimableSeats")]
-        public int ReclaimableSeats { get; set; }
+        public int? ReclaimableSeats { get; set; }
 
         /// <summary>
         /// Audit interactions per licensed user, normalised to a month so the column does not change
@@ -415,15 +469,15 @@ namespace Common.Entities.CopilotAdoption
         /// different units.
         /// </summary>
         [JsonProperty("interactionsPerLicensedUser")]
-        public double InteractionsPerLicensedUser { get; set; }
+        public double? InteractionsPerLicensedUser { get; set; }
 
         /// <summary>People in this domain using Copilot Chat in the window with no seat assigned.</summary>
         [JsonProperty("unlicensedActiveUsers")]
-        public int UnlicensedActiveUsers { get; set; }
+        public int? UnlicensedActiveUsers { get; set; }
 
         /// <summary>People in this domain the licence-opportunity ranking recommends buying a seat for.</summary>
         [JsonProperty("recommendedForLicence")]
-        public int RecommendedForLicence { get; set; }
+        public int? RecommendedForLicence { get; set; }
 
         /// <summary>
         /// Seat holders in this domain scored as prime Cowork candidates. Zero on a tenant whose Cowork
@@ -431,7 +485,7 @@ namespace Common.Entities.CopilotAdoption
         /// <see cref="CopilotAdoptionSummary.CoworkReadinessAvailable"/> before showing the column.
         /// </summary>
         [JsonProperty("coworkPrimeCandidates")]
-        public int CoworkPrimeCandidates { get; set; }
+        public int? CoworkPrimeCandidates { get; set; }
 
         /// <summary>
         /// True when the seats in this domain belong to external guests rather than to members of the
@@ -440,6 +494,29 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         [JsonProperty("external")]
         public bool External { get; set; }
+
+        /// <summary>
+        /// Why the seat holders' figures - <see cref="LicensedUsers"/> to <see cref="CoworkPrimeCandidates"/> - are withheld:
+        /// one of <see cref="SmallGroupWithheldReasons"/>. Set for a reader without See PII only, and left out of the JSON
+        /// when they are shown.
+        /// </summary>
+        [JsonProperty("seatHoldersWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string SeatHoldersWithheld { get; set; }
+
+        /// <summary>Why <see cref="UnlicensedActiveUsers"/> is withheld, as <see cref="SeatHoldersWithheld"/>.</summary>
+        [JsonProperty("unlicensedUsersWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string UnlicensedUsersWithheld { get; set; }
+
+        /// <summary>Why <see cref="RecommendedForLicence"/> is withheld, as <see cref="SeatHoldersWithheld"/>.</summary>
+        [JsonProperty("licenceCandidatesWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string LicenceCandidatesWithheld { get; set; }
+
+        /// <summary>The fewest people a figure on this row may describe, when any of them is withheld.</summary>
+        [JsonProperty("minimumPeople", NullValueHandling = NullValueHandling.Ignore)]
+        public int? MinimumPeople { get; set; }
+
+        /// <summary>A copy, so a reader's trimmed summary never edits the cached row.</summary>
+        internal AdoptionDomainRow Clone() => (AdoptionDomainRow)MemberwiseClone();
     }
 
     /// <summary>Which underlying imports actually supplied data, so no headline number is silently wrong.</summary>
@@ -509,17 +586,42 @@ namespace Common.Entities.CopilotAdoption
         /// out.</para>
         /// <para>One table is not a breakdown that option governs: the licence types (<see cref="SeatLicenceTypes"/>).
         /// A Copilot seat held by one to four people would say how many of those few left their seat unused, so its idle
-        /// count is withheld, with the one that would give it back (<see cref="LicenceTypeClassification.WithoutSmallSeatIdleCounts"/>).
+        /// count is withheld, with the one that would give it back (<see cref="LicenceTypeClassification.WithoutSmallSeatIdleCounts"/>).</para>
+        /// <para>And rows published beside a total are held so that the total less the rows shown never gives back a
+        /// withheld one (<see cref="CopilotAdoptionSmallGroups"/>): the email-domain table, each of whose populations is
+        /// floored on its own; the departments' licence-candidate counts beside the tenant's recommended candidates; and the
+        /// departments' manager figures beside the whole population's.
         /// When nothing applies the summary is returned as it is.</para>
         /// </remarks>
         public CopilotAdoptionSummary WithoutIndividualData()
         {
+            var minPeople = CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii;
             var trimmed = WithoutNamedLists();
-            var seats = LicenceTypeClassification.WithoutSmallSeatIdleCounts(SeatLicenceTypes, CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii);
-            if (ReferenceEquals(seats, SeatLicenceTypes)) return trimmed;
+            var seats = LicenceTypeClassification.WithoutSmallSeatIdleCounts(SeatLicenceTypes, minPeople);
+            var domains = CopilotAdoptionSmallGroups.EmailDomainsWithoutSmallPopulations(this, minPeople);
+            var managers = CopilotAdoptionSmallGroups.ManagerDepartmentsWithoutComplements(this, minPeople);
+            var candidatesWithheld = CopilotAdoptionSmallGroups.CandidateCountsWithoutComplements(
+                this, minPeople, out var adoptionByDepartment, out var habitByDepartment, out var opportunityByDepartment);
+            if (ReferenceEquals(seats, SeatLicenceTypes)
+                && ReferenceEquals(domains, EmailDomains)
+                && ReferenceEquals(managers, ManagerModellingByDepartment)
+                && !candidatesWithheld)
+            {
+                return trimmed;
+            }
 
             var copy = ReferenceEquals(trimmed, this) ? (CopilotAdoptionSummary)MemberwiseClone() : trimmed;
             copy.SeatLicenceTypes = seats;
+            copy.EmailDomains = domains;
+            copy.ManagerModellingByDepartment = managers;
+            copy.AdoptionByDepartment = adoptionByDepartment;
+            copy.HabitByDepartment = habitByDepartment;
+            copy.OpportunityByDepartment = opportunityByDepartment;
+            if ((opportunityByDepartment?.Count ?? 0) != (OpportunityByDepartment?.Count ?? 0))
+            {
+                copy.OpportunityByDepartmentWithheld = SmallGroupWithheldReasons.RevealsSmallerGroup;
+            }
+
             return copy;
         }
 
@@ -1117,6 +1219,13 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("managerModellingByDepartment")]
         public List<ManagerModellingSegmentRow> ManagerModellingByDepartment { get; set; } = new List<ManagerModellingSegmentRow>();
 
+        /// <summary>
+        /// The people managers behind each group of the figures above, published or not: what keeps them from giving a
+        /// department withheld from a reader without See PII back (#844). Never serialised.
+        /// </summary>
+        [JsonIgnore]
+        internal ManagerGroupSizes ManagerGroups { get; set; }
+
         #endregion
 
         #region Charts
@@ -1270,6 +1379,13 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Departments with the most unlicensed users who would benefit from a seat.</summary>
         [JsonProperty("opportunityByDepartment")]
         public List<AdoptionCategory> OpportunityByDepartment { get; set; } = new List<AdoptionCategory>();
+
+        /// <summary>
+        /// Why <see cref="OpportunityByDepartment"/> leaves out departments with enough candidates to show: one of
+        /// <see cref="SmallGroupWithheldReasons"/>, for a reader without See PII only (#844). Left out of the JSON otherwise.
+        /// </summary>
+        [JsonProperty("opportunityByDepartmentWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string OpportunityByDepartmentWithheld { get; set; }
 
         /// <summary>
         /// How concentrated Copilot usage is across the people who use it. See

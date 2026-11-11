@@ -663,6 +663,49 @@ describe('CopilotAdoptionPage view split', () => {
     expect(operations.queryByText('\u2014')).toBeNull();
   });
 
+  it.each([
+    {
+      language: 'en' as const,
+      analyst: 'Analyst view',
+      table: 'Department league table',
+      reason: 'Hidden: with the tenant\u2019s recommended candidates, this count would reveal a department with fewer than 5 candidates',
+      tableNote: /A larger count can be hidden too/,
+      chartNote: /A department is also left out when subtracting the departments shown/,
+    },
+    {
+      language: 'es' as const,
+      analyst: 'Vista de analista',
+      table: 'Tabla comparativa de departamentos',
+      reason: 'Oculto: con los candidatos recomendados del inquilino, este recuento revelaría un departamento con menos de 5 candidatos',
+      tableNote: /También se puede ocultar un recuento mayor/,
+      chartNote: /También se omite un departamento/,
+    },
+  ])('says in $language why a larger candidate count is hidden from a reader without See PII, never as 0', async ({ language, analyst, table, reason, tableNote, chartNote }) => {
+    // #844: Legal's two candidates are withheld for every reader. Finance's six went too, for a reader without See PII,
+    // because the tenant's recommended candidates less the counts shown would otherwise give Legal's two back.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      habitByDepartment: [
+        { segment: 'Legal', licensedUsers: 20, activeUsers: 10, habitualUsers: 1, neverUsedUsers: 2, adoptionRatePct: 50, averageAdoptionScore: 20, recommendedCandidates: null },
+        { segment: 'Finance', licensedUsers: 30, activeUsers: 10, habitualUsers: 3, neverUsedUsers: 15, adoptionRatePct: 33.3, averageAdoptionScore: 22, recommendedCandidates: null, recommendedCandidatesWithheld: 'revealsSmallerGroup' },
+      ],
+      opportunityByDepartment: [{ label: 'Sales', value: 8 }],
+      opportunityByDepartmentWithheld: 'revealsSmallerGroup',
+    }));
+    if (language === 'es') await loadCatalog('es');
+    await renderPage({ language });
+
+    const league = await screen.findByRole('table', { name: table }, { timeout: 5000 });
+    const finance = within(within(league).getByText('Finance').closest('tr') as HTMLElement);
+    expect(finance.getByLabelText(reason)).toHaveTextContent('\u2014');
+    const legal = within(within(league).getByText('Legal').closest('tr') as HTMLElement);
+    expect(legal.queryByLabelText(reason)).toBeNull();
+    expect(screen.getByText(tableNote)).toBeVisible();
+
+    fireEvent.click(screen.getByRole('tab', { name: analyst }));
+    await screen.findByRole('tab', { name: analyst, selected: true });
+    expect(await screen.findByText(chartNote, {}, { timeout: 5000 })).toBeVisible();
+  });
+
   it('shows Microsoft’s tenant prompt figures on the executive view, named and dated, beside the audit figures', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
       microsoftReportDate: '2026-10-05T00:00:00Z',

@@ -1,10 +1,10 @@
 import { makeStyles, tokens, Text, Badge, Button } from '@fluentui/react-components';
-import type { AdoptionDomainRow, CopilotAdoptionSummary } from '../../types/copilotAdoption';
+import type { AdoptionDomainRow, CopilotAdoptionSummary, SmallGroupWithheldReason } from '../../types/copilotAdoption';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 import InfoTip from '../shared/InfoTip';
 import { rateColour, scoreColour, ScoreBar, useAdoptionTableStyles } from './adoptionShared';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
-import { formatNumber, useT } from '../../i18n';
+import { formatNumber, useT, type TFunction, type TranslationKey } from '../../i18n';
 
 const useStyles = makeStyles({
   intro: {
@@ -38,10 +38,58 @@ const useStyles = makeStyles({
   selected: {
     backgroundColor: tokens.colorNeutralBackground1Selected,
   },
+  withheld: {
+    color: tokens.colorNeutralForeground3,
+  },
+  note: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    marginTop: '8px',
+    maxWidth: '78ch',
+    lineHeight: tokens.lineHeightBase300,
+  },
 });
 
 /** Domains with no seats have no adoption rate; a dash says so rather than implying 0%. */
 const NO_VALUE = '\u2014';
+
+/** The server's floor for a reader without See PII (`ReportScopeResolver.MinimumPeopleWithoutSeePii`), when a row does not carry it. */
+const WITHHELD_FLOOR = 5;
+
+/** The three populations a row holds, each floored on its own for a reader without See PII (#844). */
+type DomainPopulation = 'seats' | 'unlicensed' | 'candidates';
+
+const WITHHELD_KEYS: Record<DomainPopulation, Record<SmallGroupWithheldReason, TranslationKey>> = {
+  seats: {
+    fewPeople: 'copilotAdoptionUsers.emailDomain.withheld.seats.fewPeople',
+    revealsSmallerGroup: 'copilotAdoptionUsers.emailDomain.withheld.seats.revealsSmallerGroup',
+  },
+  unlicensed: {
+    fewPeople: 'copilotAdoptionUsers.emailDomain.withheld.unlicensed.fewPeople',
+    revealsSmallerGroup: 'copilotAdoptionUsers.emailDomain.withheld.unlicensed.revealsSmallerGroup',
+  },
+  candidates: {
+    fewPeople: 'copilotAdoptionUsers.emailDomain.withheld.candidates.fewPeople',
+    revealsSmallerGroup: 'copilotAdoptionUsers.emailDomain.withheld.candidates.revealsSmallerGroup',
+  },
+};
+
+/** Why a population's figures are not shown; a reason this build does not know gets the general sentence. */
+function withheldText(t: TFunction, row: AdoptionDomainRow, population: DomainPopulation, reason: string): string {
+  const key = WITHHELD_KEYS[population][reason as SmallGroupWithheldReason] ?? 'copilotAdoptionUsers.emailDomain.withheld.other';
+  return t(key, { count: formatCount(row.minimumPeople ?? WITHHELD_FLOOR) });
+}
+
+function withheldReason(row: AdoptionDomainRow, population: DomainPopulation): string | null {
+  switch (population) {
+    case 'seats':
+      return row.seatHoldersWithheld ?? (row.licensedUsers == null ? 'unknown' : null);
+    case 'unlicensed':
+      return row.unlicensedUsersWithheld ?? (row.unlicensedActiveUsers == null ? 'unknown' : null);
+    case 'candidates':
+      return row.licenceCandidatesWithheld ?? (row.recommendedForLicence == null ? 'unknown' : null);
+  }
+}
 
 /**
  * Adoption compared across the email domains sharing this tenant.
@@ -80,7 +128,14 @@ export default function EmailDomainPanel({
     established: o.establishedScore,
     developing: o.developingScore,
   };
-  const showCowork = summary.coworkReadinessAvailable && rows.some((r) => r.coworkPrimeCandidates > 0);
+  const showCowork = summary.coworkReadinessAvailable && rows.some((r) => (r.coworkPrimeCandidates ?? 0) > 0);
+  const anyWithheld = rows.some((r) =>
+    (['seats', 'unlicensed', 'candidates'] as DomainPopulation[]).some((p) => withheldReason(r, p) !== null));
+  const complement = rows.some((r) =>
+    r.seatHoldersWithheld === 'revealsSmallerGroup'
+    || r.unlicensedUsersWithheld === 'revealsSmallerGroup'
+    || r.licenceCandidatesWithheld === 'revealsSmallerGroup');
+  const floor = rows.find((r) => r.minimumPeople != null)?.minimumPeople ?? WITHHELD_FLOOR;
 
   if (rows.length === 0) {
     return (
@@ -162,7 +217,19 @@ export default function EmailDomainPanel({
         <tbody>
           {rows.map((row) => {
             const isSelected = !!selectedDomain && selectedDomain === row.segment;
-            const hasSeats = row.licensedUsers > 0;
+            // Withheld seat holders are not "no seats": the row says why their figures are hidden instead (#844).
+            const seatsWithheld = withheldReason(row, 'seats');
+            const hasSeats = seatsWithheld === null && (row.licensedUsers ?? 0) > 0;
+            const unlicensedWithheld = withheldReason(row, 'unlicensed');
+            const candidatesWithheld = withheldReason(row, 'candidates');
+            const dash = (population: DomainPopulation, reason: string) => {
+              const text = withheldText(t, row, population, reason);
+              return (
+                <span className={styles.withheld} title={text} aria-label={text}>
+                  {NO_VALUE}
+                </span>
+              );
+            };
 
             return (
               <tr key={row.segment} className={isSelected ? styles.selected : undefined}>
@@ -176,53 +243,70 @@ export default function EmailDomainPanel({
                     )}
                   </span>
                 </td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.licensedUsers)}</td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.activeUsers)}</td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.habitualUsers)}</td>
-                <td className={table.td}>
-                  {hasSeats ? (
-                    <div className={table.scoreCell}>
-                      <div className={table.scoreTrack}>
-                        <div
-                          className={table.scoreBar}
-                          style={{
-                            width: `${Math.max(0, Math.min(100, row.adoptionRatePct))}%`,
-                            backgroundColor: rateColour(row.adoptionRatePct),
-                          }}
-                        />
-                      </div>
-                      <Text size={200} weight="semibold" className={table.scoreValue}>
-                        {formatPct(row.adoptionRatePct)}
-                      </Text>
-                    </div>
-                  ) : (
-                    // No seats means there is no adoption rate to report. A 0% here would read as
-                    // "this organisation ignores Copilot" when the truth is it was never offered any.
-                    <Text size={200} className={styles.noSeats} title={t('copilotAdoptionUsers.emailDomain.noSeatsTitle')}>
-                      {NO_VALUE} {t('copilotAdoptionUsers.emailDomain.noSeats')}
+                {seatsWithheld !== null ? (
+                  // One sentence across every seat-holder column, rather than seven dashes that each need explaining.
+                  <td className={table.td} colSpan={7}>
+                    <Text size={200} className={styles.withheld}>
+                      {withheldText(t, row, 'seats', seatsWithheld)}
                     </Text>
-                  )}
-                </td>
-                <td className={table.td}>
-                  {hasSeats ? (
-                    <ScoreBar score={row.averageAdoptionScore} colour={scoreColour(row.averageAdoptionScore, bands)} />
-                  ) : (
-                    <Text size={200} className={styles.noSeats}>
-                      {NO_VALUE}
-                    </Text>
-                  )}
+                  </td>
+                ) : (
+                  <>
+                    <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.licensedUsers ?? 0)}</td>
+                    <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.activeUsers ?? 0)}</td>
+                    <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.habitualUsers ?? 0)}</td>
+                    <td className={table.td}>
+                      {hasSeats ? (
+                        <div className={table.scoreCell}>
+                          <div className={table.scoreTrack}>
+                            <div
+                              className={table.scoreBar}
+                              style={{
+                                width: `${Math.max(0, Math.min(100, row.adoptionRatePct ?? 0))}%`,
+                                backgroundColor: rateColour(row.adoptionRatePct ?? 0),
+                              }}
+                            />
+                          </div>
+                          <Text size={200} weight="semibold" className={table.scoreValue}>
+                            {formatPct(row.adoptionRatePct ?? 0)}
+                          </Text>
+                        </div>
+                      ) : (
+                        // No seats means there is no adoption rate to report. A 0% here would read as
+                        // "this organisation ignores Copilot" when the truth is it was never offered any.
+                        <Text size={200} className={styles.noSeats} title={t('copilotAdoptionUsers.emailDomain.noSeatsTitle')}>
+                          {NO_VALUE} {t('copilotAdoptionUsers.emailDomain.noSeats')}
+                        </Text>
+                      )}
+                    </td>
+                    <td className={table.td}>
+                      {hasSeats ? (
+                        <ScoreBar score={row.averageAdoptionScore ?? 0} colour={scoreColour(row.averageAdoptionScore ?? 0, bands)} />
+                      ) : (
+                        <Text size={200} className={styles.noSeats}>
+                          {NO_VALUE}
+                        </Text>
+                      )}
+                    </td>
+                    <td className={`${table.td} ${table.tdNumeric}`}>
+                      {hasSeats ? formatCount(row.reclaimableSeats ?? 0) : NO_VALUE}
+                    </td>
+                    <td className={`${table.td} ${table.tdNumeric}`}>
+                      {hasSeats ? formatNumber(row.interactionsPerLicensedUser ?? 0, { maximumFractionDigits: 1 }) : NO_VALUE}
+                    </td>
+                  </>
+                )}
+                <td className={`${table.td} ${table.tdNumeric}`}>
+                  {unlicensedWithheld !== null ? dash('unlicensed', unlicensedWithheld) : formatCount(row.unlicensedActiveUsers ?? 0)}
                 </td>
                 <td className={`${table.td} ${table.tdNumeric}`}>
-                  {hasSeats ? formatCount(row.reclaimableSeats) : NO_VALUE}
+                  {candidatesWithheld !== null ? dash('candidates', candidatesWithheld) : formatCount(row.recommendedForLicence ?? 0)}
                 </td>
-                <td className={`${table.td} ${table.tdNumeric}`}>
-                  {hasSeats ? formatNumber(row.interactionsPerLicensedUser, { maximumFractionDigits: 1 }) : NO_VALUE}
-                </td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.unlicensedActiveUsers)}</td>
-                <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.recommendedForLicence)}</td>
                 {showCowork && (
                   <td className={`${table.td} ${table.tdNumeric}`}>
-                    {hasSeats ? formatCount(row.coworkPrimeCandidates) : NO_VALUE}
+                    {seatsWithheld !== null
+                      ? dash('seats', seatsWithheld)
+                      : hasSeats ? formatCount(row.coworkPrimeCandidates ?? 0) : NO_VALUE}
                   </td>
                 )}
                 {onSelectDomain && (
@@ -242,6 +326,17 @@ export default function EmailDomainPanel({
           })}
         </tbody>
       </table>
+      {anyWithheld && (
+        <div className={styles.note}>
+          {t('copilotAdoptionUsers.emailDomain.withheldNote', { count: formatCount(floor) })}
+          {complement && (
+            <>
+              {' '}
+              {t('copilotAdoptionUsers.emailDomain.withheldNoteComplement')}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

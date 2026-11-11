@@ -293,6 +293,13 @@ export const copilotAdoption = {
   'copilotAdoption.page.moreCandidatesNeverUsedSeats': '{v0} more candidates than never-used seats',
   'copilotAdoption.page.moreNeverUsedSeatsCandidates': '{v0} more never-used seats than candidates',
   'copilotAdoption.page.balanced': 'Balanced',
+  // A department's candidate count withheld from a reader without See PII because, with the total, it would reveal a smaller one (#844)
+  'copilotAdoption.page.candidatesWithheld.revealsSmallerGroup':
+    'Hidden: with the tenant\u2019s recommended candidates, this count would reveal a department with fewer than {count} candidates',
+  'copilotAdoption.page.candidatesWithheldNote':
+    'A larger count can be hidden too, when subtracting the counts shown from the tenant\u2019s recommended candidates would otherwise reveal a department with fewer than {count}.',
+  'copilotAdoption.page.opportunityByDepartmentWithheldNote':
+    'A department is also left out when subtracting the departments shown from the tenant\u2019s recommended candidates would otherwise reveal one with fewer than {count} candidates.',
   'copilotAdoption.page.whereStand': 'Where you stand',  'copilotAdoption.page.analyst.whereStandBlurb': 'The headline position: how many licences are earning their keep, and where the drop-off is.',
   'copilotAdoption.page.population.analysed': 'analysed',
   'copilotAdoption.page.population.licensed': 'licensed',
@@ -818,6 +825,8 @@ export const copilotAdoption = {
   'copilotAdoption.shared.segmentTable.habitManagerDoesNot': 'Habit: manager does not',
   'copilotAdoption.shared.segmentTable.managersUnknown': 'Unknown: {count}',
   'copilotAdoption.shared.segmentTable.withheld': 'Too few people to show without singling someone out',
+  'copilotAdoption.shared.segmentTable.withheldRevealsSmallerGroup':
+    'Hidden: with the figures for everyone above the table, this department\u2019s would reveal those of a department with too few people managers to show',
   'copilotAdoption.shared.expandableUser.hideAssessment': 'Hide the full assessment for {user}',
   'copilotAdoption.shared.expandableUser.showAssessment': 'Show the full assessment for {user}',
   'copilotAdoption.shared.expandAll.expand': 'Expand all',

@@ -2511,6 +2511,69 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void DepartmentCandidateCounts_WithoutSeePii_NeverLetTheTotalLessTheCountsShownGiveBackAWithheldDepartment()
+        {
+            // The league table's rows and the candidate chart publish each department's count once it reaches five, beside
+            // the tenant's recommended candidates. Sales 8 and Finance 6 shown, Legal's 2 withheld: 16 - 14 = 2 was
+            // Legal's count, given back. For a reader without See PII the smallest count shown goes too.
+            var analysis = new CopilotAdoptionAnalysis();
+            foreach (var department in new[] { "Sales", "Finance", "Legal" })
+            {
+                analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                    .Select(i => Departmental($"{department.ToLowerInvariant()}{i}@contoso.com", department, 40)));
+            }
+
+            var id = 100;
+            foreach (var (department, count) in new[] { ("Sales", 8), ("Finance", 6), ("Legal", 2) })
+            {
+                analysis.Opportunities.AddRange(Enumerable.Range(0, count)
+                    .Select(i => new LicenceOpportunityRow { UserId = id++, Department = department, Recommended = true }));
+            }
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+            int? Count(IEnumerable<AdoptionSegmentRow> rows, string department) => rows.Single(r => r.Segment == department).RecommendedCandidates;
+
+            Assert.AreEqual(16, summary.RecommendedForLicence);
+            Assert.AreEqual(6, Count(summary.HabitByDepartment, "Finance"), "The control: with See PII, every count of five or more is shown.");
+            Assert.IsNull(Count(summary.HabitByDepartment, "Legal"));
+            CollectionAssert.AreEquivalent(new[] { "Sales", "Finance" }, summary.OpportunityByDepartment.Select(c => c.Label).ToList());
+
+            var trimmed = summary.WithoutIndividualData();
+
+            foreach (var rows in new[] { trimmed.HabitByDepartment, trimmed.AdoptionByDepartment })
+            {
+                Assert.IsNull(Count(rows, "Finance"), "Withheld, never 0: with the total it would give Legal's two back.");
+                Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, rows.Single(r => r.Segment == "Finance").RecommendedCandidatesWithheld);
+                Assert.AreEqual(8, Count(rows, "Sales"), "One more is enough: the difference now holds eight people.");
+                Assert.IsNull(Count(rows, "Legal"));
+                Assert.IsNull(rows.Single(r => r.Segment == "Legal").RecommendedCandidatesWithheld, "Legal's own floor applies to every reader, as before.");
+            }
+
+            CollectionAssert.AreEqual(new[] { "Sales" }, trimmed.OpportunityByDepartment.Select(c => c.Label).ToList(),
+                "The chart is a third place the count is shown, so it leaves Finance out too.");
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, trimmed.OpportunityByDepartmentWithheld);
+            Assert.AreEqual(16, trimmed.RecommendedForLicence, "The headline stays.");
+
+            var shown = trimmed.HabitByDepartment.Concat(trimmed.AdoptionByDepartment)
+                .Where(r => r.RecommendedCandidates.HasValue)
+                .GroupBy(r => r.Segment)
+                .Sum(g => g.First().RecommendedCandidates.Value);
+            Assert.IsTrue(trimmed.RecommendedForLicence - shown >= 5, "The total less the counts shown holds at least five people.");
+
+            Assert.AreEqual(6, Count(summary.HabitByDepartment, "Finance"), "The cached summary must never be edited for one reader.");
+            Assert.AreEqual(2, summary.OpportunityByDepartment.Count);
+            Assert.IsNull(summary.OpportunityByDepartmentWithheld);
+
+            // Nothing to protect: with no department withheld and nothing left over, every count stays.
+            var none = new CopilotAdoptionAnalysis();
+            none.LicensedUsers.AddRange(analysis.LicensedUsers.Where(u => u.Department != "Legal"));
+            none.Opportunities.AddRange(analysis.Opportunities.Where(o => o.Department != "Legal"));
+            new CopilotAdoptionService().FinaliseSummary(none);
+            Assert.AreSame(none.Summary.HabitByDepartment, none.Summary.WithoutIndividualData().HabitByDepartment);
+        }
+
+        [TestMethod]
         public void MedianIsReportedAlongsideTheMean()
         {
             // A handful of Champions pulls the mean up and makes adoption look healthier than it is.
