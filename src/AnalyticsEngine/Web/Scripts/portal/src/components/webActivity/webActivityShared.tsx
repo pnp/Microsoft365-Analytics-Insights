@@ -274,6 +274,28 @@ export function withNote(own: string | undefined, privacy: string | undefined): 
   return own ?? privacy;
 }
 
+/**
+ * How the card of a list floored for a reader without See PII reads (#844): its own note with the privacy note beside it,
+ * or - when every row was left out - the privacy note in place of the card's "nothing here" message, which would
+ * otherwise say the period had no such rows. `exportable` is false then: the file would be as empty as the card. For a
+ * See PII reader, whose sections carry no minimum, this is the card's own note and message.
+ */
+export function flooredCard(
+  t: TFunction,
+  minimumGroupSize: number | null | undefined,
+  leftOut: number | undefined,
+  rows: number,
+  own: { note?: string; empty?: string } = {},
+): { note: string | undefined; emptyMessage: string | undefined; exportable: boolean } {
+  const privacy = leftOutNote(t, minimumGroupSize, leftOut);
+  const allLeftOut = rows === 0 && privacy !== undefined;
+  return {
+    note: allLeftOut ? own.note : withNote(own.note, privacy),
+    emptyMessage: allLeftOut ? privacy : own.empty,
+    exportable: !allLeftOut,
+  };
+}
+
 const useStyles = makeStyles({
   card: {
     display: 'flex',

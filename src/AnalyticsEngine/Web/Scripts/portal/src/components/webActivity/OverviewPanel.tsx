@@ -27,6 +27,7 @@ import {
   toCategories,
   useWebActivityStyles,
   withNote,
+  withRemainder,
 } from './webActivityShared';
 
 /**
@@ -117,7 +118,14 @@ export default function OverviewPanel({
     },
   ];
 
-  const segmentCategories = translatedBucketsToCategories(t, 'visitorSegment', data.visitorSegments).filter((c) => c.value > 0);
+  // Without See PII, a segment of too few visitors is left out with the smallest segment shown. The ring keeps the visitors
+  // it does not show as one slice, so the segments shown are not drawn as all of them.
+  const segmentsLeftOut = leftOutNote(t, data.minimumGroupSize, data.withheldSegments);
+  const segmentCategories = withRemainder(
+    translatedBucketsToCategories(t, 'visitorSegment', data.visitorSegments).filter((c) => c.value > 0),
+    segmentsLeftOut ? kpis.visitors : 0,
+    t('webActivity.privacy.leftOutSlice'),
+  );
 
   return (
     <div>
@@ -160,11 +168,12 @@ export default function OverviewPanel({
         <SectionCard
           title={t('webActivity.overview.habit.title')}
           description={t('webActivity.overview.habit.description')}
-          note={
+          note={withNote(
             data.window.segmentsFullyReachable
               ? t('webActivity.overview.segments.noteFull')
-              : t('webActivity.overview.segments.noteShort')
-          }
+              : t('webActivity.overview.segments.noteShort'),
+            segmentsLeftOut,
+          )}
           query={queryFor(data.queries, 'overview-segments')}
           isEmpty={segmentCategories.length === 0}
         >

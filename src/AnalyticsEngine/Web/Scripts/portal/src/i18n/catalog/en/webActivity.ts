@@ -250,6 +250,8 @@ export const webActivity = {
   'webActivity.pages.kpi.quietPagesWhat': 'Pages viewed three times or fewer in the whole period.',
   'webActivity.pages.mostViewed.title': 'Most viewed pages',
   'webActivity.pages.mostViewed.description': 'Top {top} by page views, with how long people stayed and how many entered the site there.',
+  'webActivity.pages.mostViewed.visitFiguresWithheld':
+    "Unique page views, entries, exits and bounces are left out of this table to protect privacy. The Visits tab shows each page's visits, and the Journeys tab its entries, exits and bounces, where enough people are behind them.",
   'webActivity.pages.slowest.title': 'Slowest pages',
   'webActivity.pages.slowest.description': 'Pages with at least {minimumViews} views with a recorded load time, ranked by average load time.',
   'webActivity.pages.slowest.empty': 'No page has enough views with a recorded load time to rank.',
@@ -386,6 +388,7 @@ export const webActivity = {
   'webActivity.privacy.leftOut.one': 'One row is left out to protect privacy: fewer than {minimum} people are behind it.',
   'webActivity.privacy.leftOut.other':
     '{count} rows are left out to protect privacy: those with fewer than {minimum} people behind them, together with enough of the smallest other rows that none can be worked out from the totals.',
+  'webActivity.privacy.leftOutSlice': 'Left out to protect privacy',
   'webActivity.shared.failedQuery.one': 'One query on this tab could not be loaded, so some figures below may read as zero when they are in fact unknown. The affected sections show the error.',
   'webActivity.shared.failedQuery.other': '{count} queries on this tab could not be loaded, so some figures below may read as zero when they are in fact unknown. The affected sections show the error.',
   'webActivity.overview.kpi.visitsHow': 'One visit is one Application Insights session that had at least one page view in the window, measured from its first page view inside that window. Visits are therefore window-local: a session straddling the boundary is counted in both periods, so visit totals from adjacent periods are not additive.',

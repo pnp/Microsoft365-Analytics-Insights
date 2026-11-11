@@ -252,6 +252,8 @@ const webActivity: Record<keyof typeof en, string> = {
   'webActivity.pages.kpi.quietPagesWhat': 'Páginas vistas tres veces o menos en todo el periodo.',
   'webActivity.pages.mostViewed.title': 'Páginas más vistas',
   'webActivity.pages.mostViewed.description': 'Las {top} principales por páginas vistas, con cuánto tiempo permaneció la gente y cuántas entraron al sitio por ahí.',
+  'webActivity.pages.mostViewed.visitFiguresWithheld':
+    'Las páginas vistas únicas, las entradas, las salidas y los rebotes se omiten de esta tabla para proteger la privacidad. La pestaña Visitas muestra las visitas de cada página, y la pestaña Recorridos sus entradas, salidas y rebotes, cuando hay suficientes personas detrás.',
   'webActivity.pages.slowest.title': 'Páginas más lentas',
   'webActivity.pages.slowest.description': 'Páginas con al menos {minimumViews} vistas con un tiempo de carga registrado, ordenadas por tiempo medio de carga.',
   'webActivity.pages.slowest.empty': 'Ninguna página tiene suficientes vistas con tiempo de carga registrado para aparecer en la clasificación.',
@@ -388,6 +390,7 @@ const webActivity: Record<keyof typeof en, string> = {
   'webActivity.privacy.leftOut.one': 'Se omite una fila para proteger la privacidad: hay menos de {minimum} personas detrás de ella.',
   'webActivity.privacy.leftOut.other':
     'Se omiten {count} filas para proteger la privacidad: las que tienen menos de {minimum} personas detrás, junto con las filas más pequeñas necesarias para que ninguna pueda deducirse de los totales.',
+  'webActivity.privacy.leftOutSlice': 'Omitido para proteger la privacidad',
   'webActivity.shared.failedQuery.one': 'No se pudo cargar una consulta de esta pestaña, por lo que algunas cifras inferiores pueden aparecer como cero cuando en realidad son desconocidas. Las secciones afectadas muestran el error.',
   'webActivity.shared.failedQuery.other': 'No se pudieron cargar {count} consultas de esta pestaña, por lo que algunas cifras inferiores pueden aparecer como cero cuando en realidad son desconocidas. Las secciones afectadas muestran el error.',
   'webActivity.overview.kpi.visitsHow': 'Una visita es una sesión de Application Insights que tuvo al menos una página vista en el intervalo, medida desde su primera página vista dentro de ese intervalo. Por tanto, las visitas son locales al intervalo: una sesión que cruza el límite se cuenta en ambos periodos, así que los totales de visitas de periodos adyacentes no son aditivos.',
