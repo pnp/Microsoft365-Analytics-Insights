@@ -201,6 +201,10 @@ async function getJson<T>(
     const generationId = response.headers.get('X-CopilotAdoption-GenerationId');
     if (options?.generationId && generationId && generationId !== options.generationId)
       throw new AdoptionGenerationChangedError();
+    // Asked for the replacement of `after`, and handed `after` itself: the replacement ended without being published
+    // and the server kept the previous report, as it does once a replacement is no longer running.
+    if (options?.after && generationId === options.after)
+      throw new AdoptionRequestError({ key: 'copilotAdoption.error.rebuildNotCompleted' });
     return response.json() as Promise<T>;
   }
 }

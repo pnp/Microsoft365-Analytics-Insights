@@ -375,27 +375,53 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, runner.CallCount, "A stale retry must not rebuild the newer complete report.");
         }
 
+        /// <summary>
+        /// A replacement that ends without publishing - it faults, or is refused for losing complete headline figures - keeps
+        /// the previous report. While it runs, a request after the previous generation follows it, and the request waiting on
+        /// it sees how it ended; but a later request after the same generation ("Check again") gets the kept report. Handing
+        /// that request the stored failure repeated the error until the old report expired. The cooldown is unchanged.
+        /// </summary>
         [TestMethod]
-        public async Task FaultedRebuild_KeepsPreviousCache_AndItsFailureIsStillObservedByLaterPolls()
+        public async Task FaultedRebuild_KeepsPreviousCache_ItsWaiterSeesTheFailure_AndLaterRequestsGetThePreviousReport()
         {
-            var previous = new CopilotAdoptionAnalysis();
-            previous.Summary.Diagnostics.Record(CopilotAdoptionSteps.ResourceTypes, 90_000, true);
-            var runner = new SequencedRunner(Task.FromResult(previous),
-                Task.FromException<CopilotAdoptionAnalysis>(new InvalidOperationException("synthetic failure")));
-            var cache = new InMemoryAnalysisCache();
-            var coordinator = NewCoordinator(runner, cache, new RecordingSink(), new ManualHeartbeatFactory());
-            var range = CopilotAdoptionDateRange.Create(28, null, null, DateTime.UtcNow);
-            await coordinator.GetAsync(28, new List<int>());
-            var expected = previous.Summary.Diagnostics.GenerationId;
-            await Assert.ThrowsExceptionAsync<InvalidOperationException>(async () =>
-                await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.FromSeconds(2), CancellationToken.None, expected, rebuild: true));
-            await Assert.ThrowsExceptionAsync<InvalidOperationException>(async () =>
-                await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected));
-            await Assert.ThrowsExceptionAsync<AdoptionCooldown>(async () =>
-                await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected, rebuild: true));
-            Assert.AreSame(previous, await coordinator.GetAsync(28, new List<int>()));
-            Assert.AreEqual(1, cache.SetCount);
-            Assert.AreEqual(2, runner.CallCount);
+            foreach (var refused in new[] { false, true })
+            {
+                var previous = new CopilotAdoptionAnalysis();
+                previous.Summary.Diagnostics.Record(CopilotAdoptionSteps.ResourceTypes, 90_000, true);
+                var replacement = new TaskCompletionSource<CopilotAdoptionAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var runner = new SequencedRunner(Task.FromResult(previous), replacement.Task);
+                var cache = new InMemoryAnalysisCache();
+                var coordinator = NewCoordinator(runner, cache, new RecordingSink(), new ManualHeartbeatFactory());
+                var range = CopilotAdoptionDateRange.Create(28, null, null, DateTime.UtcNow);
+                await coordinator.GetAsync(28, new List<int>());
+                var expected = previous.Summary.Diagnostics.GenerationId;
+
+                var waiting = coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.FromSeconds(10), CancellationToken.None, expected, rebuild: true);
+                Assert.IsTrue(SpinWait.SpinUntil(() => runner.CallCount == 2, TimeSpan.FromSeconds(2)), "The replacement started.");
+                var poll = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected);
+                Assert.IsNull(poll.Analysis, "While the replacement runs, it is followed rather than the old report returned.");
+
+                if (refused)
+                {
+                    var worse = new CopilotAdoptionAnalysis();
+                    worse.Summary.MarkFiguresIncomplete("synthetic headline input");
+                    replacement.SetResult(worse);
+                    await Assert.ThrowsExceptionAsync<AdoptionRebuildNotCompleted>(async () => await waiting);
+                }
+                else
+                {
+                    replacement.SetException(new InvalidOperationException("synthetic failure"));
+                    await Assert.ThrowsExceptionAsync<InvalidOperationException>(async () => await waiting);
+                }
+
+                var later = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected);
+                Assert.AreSame(previous, later.Analysis, "A later request gets the kept report, not the stored failure.");
+                await Assert.ThrowsExceptionAsync<AdoptionCooldown>(async () =>
+                    await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected, rebuild: true));
+                Assert.AreSame(previous, await coordinator.GetAsync(28, new List<int>()));
+                Assert.AreEqual(1, cache.SetCount);
+                Assert.AreEqual(2, runner.CallCount);
+            }
         }
 
         [TestMethod]

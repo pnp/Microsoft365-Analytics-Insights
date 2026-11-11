@@ -407,6 +407,33 @@ describe('CopilotAdoptionPage loading and recovery', () => {
     expect(rebuildAdoption).not.toHaveBeenCalled();
   });
 
+  it('checks again after a failed retry by reading the kept report, not by asking for the failed replacement again', async () => {
+    const notCompleted = 'The replacement analysis did not complete safely. The previous report has been kept.';
+    vi.mocked(fetchAdoptionSummary)
+      .mockResolvedValueOnce(partialReport())
+      .mockRejectedValueOnce(new AdoptionRequestError({ key: 'copilotAdoption.error.rebuildNotCompleted' }, 503))
+      .mockResolvedValueOnce(partialReport());
+    vi.mocked(rebuildAdoption).mockResolvedValueOnce({
+      generationId: replacementId,
+      progress: { ...resultProgress(), generationId: replacementId, phase: 'analysing', percentComplete: 50 },
+    });
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry failed analysis' }));
+
+    expect(await screen.findByText(notCompleted, undefined, { timeout: 5000 })).toBeVisible();
+    expect(vi.mocked(fetchAdoptionSummary).mock.calls[1]?.[6]?.after).toBe(generationId);
+    const checkAgain = await screen.findByRole('button', { name: 'Check again' });
+    await waitFor(() => expect(checkAgain).toBeEnabled());
+    fireEvent.click(checkAgain);
+
+    await waitFor(() => expect(fetchAdoptionSummary).toHaveBeenCalledTimes(3));
+    expect(vi.mocked(fetchAdoptionSummary).mock.calls[2]?.[6]?.after).toBeUndefined();
+    await waitFor(() => expect(screen.queryByText(notCompleted)).not.toBeInTheDocument());
+    expect(screen.getAllByText('Where we stand')[0]).toBeVisible();
+    expect(rebuildAdoption).toHaveBeenCalledTimes(1);
+  });
+
   it('bounds automatic generation reconciliation instead of looping between different server instances', async () => {
     vi.mocked(fetchAdoptionFilters).mockRejectedValue(new AdoptionGenerationChangedError());
     await renderPage();

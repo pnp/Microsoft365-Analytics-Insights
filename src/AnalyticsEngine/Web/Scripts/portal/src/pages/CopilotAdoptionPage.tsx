@@ -900,7 +900,9 @@ function CopilotAdoptionView({
               ? () => {
                 autoReconciled.current = false;
                 setGenerationMismatch(false);
-                setLoadRequest(request => ({ attempt: request.attempt + 1, after: request.after }));
+                // Reads the report as it stands, never "the replacement for" an earlier one: after a failed retry, asking
+                // for that replacement again only ever repeated its failure.
+                setLoadRequest(request => ({ attempt: request.attempt + 1 }));
               } : undefined}
             onRebuild={hasFailedAnalysis && generationId ? retryAnalysis : undefined}
             onRetryFilters={() => setFiltersAttempt(attempt => attempt + 1)}
