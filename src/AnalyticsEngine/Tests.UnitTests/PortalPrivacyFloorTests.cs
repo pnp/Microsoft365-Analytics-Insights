@@ -8,6 +8,7 @@ using Common.Entities.CopilotInvestment;
 using Common.Entities.CopilotSpend;
 using Common.Entities.LicenceActivity;
 using Common.Entities.PromptCategories;
+using Common.Entities.SpoWebActivity;
 using Common.Entities.TeamsExplorer;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -79,25 +80,58 @@ namespace Tests.UnitTests
 
             ["AgentCostsAPIController.Availability"] = NoGroupedFigures(
                 "Whether the agent-cost imports are switched on, when they last ran, their last errors and which dimensions hold data."),
-            ["AgentCostsAPIController.Summary"] = KnownGap(
-                "Billed and non-billed Copilot Studio credits, and peakDistinctUsersOnASlice (Microsoft's user count for the busiest "
-                + "slice, 1-4 possible), narrowable to one agent, environment, harness, feature or agent-name search, with no "
-                + "floor: an agent or a developer's own environment that one to four people use is their consumption."),
-            ["AgentCostsAPIController.Trend"] = KnownGap(
-                "Daily billed and non-billed credits, narrowable as the summary is, with no floor: the daily credits of an agent "
-                + "or environment one to four people use are theirs."),
-            ["AgentCostsAPIController.Breakdown"] = KnownGap(
-                "Credits and active days per agent, environment, harness or feature, with peakDistinctUsers (1-4 possible), "
-                + "unfloored. A developer's own environment shows one person's charges under a name that identifies them - the "
-                + "reason Copilot spend combines small environments (CopilotSpendStudio.WithSmallEnvironmentsCombined)."),
-            ["AgentCostsAPIController.Detail"] = KnownGap(
-                "Every billed slice - day, environment, agent, harness and feature - with its distinctUsers (1 possible), "
-                + "unfloored and sortable by users: one person's daily credits for an agent."),
+            ["AgentCostsAPIController.Summary"] = Floored(
+                    "Billed and non-billed credits, counts and the busiest slice's people add up only the slices Microsoft reports "
+                    + "5 or more people on; a slice of fewer, or with no count, is in no figure, so no total less another gives one "
+                    + "back. Narrowing (agentId, environmentId, harness, feature, search) to slices that are all small gets every "
+                    + "figure withheld (null, withheld: true), never 0.")
+                .By(typeof(AgentCostsAPIController), nameof(AgentCostsAPIController.ForReader))
+                .By(typeof(Common.Entities.AgentCosts.SqlAgentCostReportStore), nameof(Common.Entities.AgentCosts.SqlAgentCostReportStore.Floored))
+                .ProvenBy(
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_IsGivenOnlySlicesOfFiveOrMorePeople_WithSmallAgentsAndEnvironmentsCombinedIntoOneRowWithoutFigures)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_NarrowingOrSearchingToAGroupOfFewerThanFivePeople_GetsItsFiguresWithheld_NeverZero)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.ForAReaderWithoutSeePii_NoTotalLessTheFiguresShown_GivesBackAWithheldSlice)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithSeePii_IsGivenEverySlice_AsBefore)))
+                .WithKnownGap("#844: the capacity tiles are the tenant's consumed credits, so in a period that matches theirs, they less the "
+                    + "figures shown give the withheld slices together with any consumption Microsoft attributes to nobody: one to four "
+                    + "people's credits in a tenant whose only small slices are theirs (few consumers)."),
+            ["AgentCostsAPIController.Trend"] = Floored(
+                    "Daily credits from slices of 5 or more people only; a day whose slices are all small is left out, never drawn "
+                    + "as 0, and narrowing is floored as the summary is.")
+                .By(typeof(AgentCostsAPIController), nameof(AgentCostsAPIController.ForReader))
+                .By(typeof(Common.Entities.AgentCosts.SqlAgentCostReportStore), nameof(Common.Entities.AgentCosts.SqlAgentCostReportStore.Floored))
+                .ProvenBy(
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_IsGivenOnlySlicesOfFiveOrMorePeople_WithSmallAgentsAndEnvironmentsCombinedIntoOneRowWithoutFigures)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_NarrowingOrSearchingToAGroupOfFewerThanFivePeople_GetsItsFiguresWithheld_NeverZero)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.ForAReaderWithoutSeePii_NoTotalLessTheFiguresShown_GivesBackAWithheldSlice)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithSeePii_IsGivenEverySlice_AsBefore))),
+            ["AgentCostsAPIController.Breakdown"] = Floored(
+                    "Rows per agent, environment, harness or feature from slices of 5 or more people only; the groups with no such "
+                    + "slice - a personal agent, a developer's own environment - are one last row with their number and no key, "
+                    + "name or figures, and are in no other figure.")
+                .By(typeof(AgentCostsAPIController), nameof(AgentCostsAPIController.ForReader))
+                .By(typeof(Common.Entities.AgentCosts.SqlAgentCostReportStore), nameof(Common.Entities.AgentCosts.SqlAgentCostReportStore.Floored))
+                .ProvenBy(
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_IsGivenOnlySlicesOfFiveOrMorePeople_WithSmallAgentsAndEnvironmentsCombinedIntoOneRowWithoutFigures)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_NarrowingOrSearchingToAGroupOfFewerThanFivePeople_GetsItsFiguresWithheld_NeverZero)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.ForAReaderWithoutSeePii_NoTotalLessTheFiguresShown_GivesBackAWithheldSlice)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithSeePii_IsGivenEverySlice_AsBefore))),
+            ["AgentCostsAPIController.Detail"] = Floored(
+                    "Only the billed slices of 5 or more people are listed, counted and exported (the page's CSV is built from "
+                    + "these rows); smallSlicesWithheld says others were left out, never how many.")
+                .By(typeof(AgentCostsAPIController), nameof(AgentCostsAPIController.ForReader))
+                .By(typeof(Common.Entities.AgentCosts.SqlAgentCostReportStore), nameof(Common.Entities.AgentCosts.SqlAgentCostReportStore.Floored))
+                .ProvenBy(
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_IsGivenOnlySlicesOfFiveOrMorePeople_WithSmallAgentsAndEnvironmentsCombinedIntoOneRowWithoutFigures)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_NarrowingOrSearchingToAGroupOfFewerThanFivePeople_GetsItsFiguresWithheld_NeverZero)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.ForAReaderWithoutSeePii_NoTotalLessTheFiguresShown_GivesBackAWithheldSlice)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithSeePii_IsGivenEverySlice_AsBefore))),
             ["AgentCostsAPIController.Azure"] = NoGroupedFigures(
                 "Azure Cost Management spend by meter, service, category, resource, resource group, subscription or tag: "
                 + "resource-scoped billing with no user identity on any row."),
             ["AgentCostsAPIController.Filters"] = NoGroupedFigures(
-                "The agents, environments, harnesses and features that occur in the window, for the pickers: names, no figures."),
+                "The agents, environments, harnesses and features that occur in the window, for the pickers: names, no figures. "
+                + "Without See PII, only values with a slice of 5 or more people, so no personal agent's name is offered."),
 
             ["CallRecordWebhookController.Post"] = NoGroupedFigures(
                 "Microsoft Graph's call-record change notifications: echoes the validation token or accepts a notification."),
@@ -309,10 +343,21 @@ namespace Tests.UnitTests
                 .ProvenBy(
                     Test<ReportsAPIControllerTests>(nameof(ReportsAPIControllerTests.WithoutSmallGroups_HoldsPhrasesLanguagesAndDepartmentGridsToFivePeople_OnACopy)),
                     Test<ReportsAPIControllerTests>(nameof(ReportsAPIControllerTests.PromptPhrasesAndLanguages_CountTheDistinctPeopleBehindEach))),
-            ["ReportsAPIController.CopilotAgents"] = KnownGap(
-                "Total and weekly executions of the top 1-20 Copilot agents, narrowable by agentName, with no count of the people "
-                + "behind an agent and no floor: an agent that one to four people use, a personal or a small team's agent, shows "
-                + "their use. DLP leaves out an agent row of fewer than 5 people (DlpAPIController.WithoutSmallGroups)."),
+            ["ReportsAPIController.CopilotAgents"] = Floored(
+                    "Each agent's distinct people are counted in SQL. For this reader the top 1-20 agents are the most used of "
+                    + "those five or more people used: an agent of fewer is left out of both charts, its total and its weekly "
+                    + "line, and the next agent takes its place. How many were left out is never said, so neither changing the "
+                    + "number of agents nor the agentName filter tells where a small agent ranks or whether one by that name exists.")
+                .By(typeof(ReportsAPIController), nameof(ReportsAPIController.BuildCopilotAgentsQuery))
+                .By(typeof(ReportAreaData), nameof(ReportAreaData.WithoutSmallGroups))
+                .By(typeof(ReportChart), nameof(ReportChart.WithoutSmallGroups))
+                .ProvenBy(
+                    Test<CopilotAgentsReportSqlTests>(nameof(CopilotAgentsReportSqlTests.TheAgentsQuery_CountsTheDistinctPeopleBehindEachAgent_AndRanksAgentsOfFewerThanFiveApart)),
+                    Test<CopilotAgentsReportSqlTests>(nameof(CopilotAgentsReportSqlTests.AReaderWithoutSeePii_GetsTheTopAgentsOfFiveOrMorePeople_AndASeePiiReaderTheTopAgents)),
+                    Test<CopilotAgentsReportSqlTests>(nameof(CopilotAgentsReportSqlTests.AReaderWithoutSeePii_NarrowingToAnAgentOfFewerThanFive_GetsWhatANameMatchingNothingGets)))
+                .WithKnownGap("#844 (S3-3): a week of an agent that five or more people used across the window can be one to four "
+                    + "people's use, and the 1- to 6-month windows all end this week, so one window's total less another's is "
+                    + "the weeks between (the few-consumers class of judgement call 1)."),
             ["ReportsAPIController.Usage"] = NoGroupedFigures(
                     "Weekly active users per Microsoft 365 workload over the reader's whole scope.")
                 .ProvenBy(ScopeIsNeverAHandful()),
@@ -406,35 +451,87 @@ namespace Tests.UnitTests
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsExplorerExport_OnlyThePeopleSectionsNeedSeePii)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.EveryRestrictedEndpoint_RefusesASignedInUserWithoutThePermission))),
 
-            // WebActivityAPIController has no See PII check: every reader shares one cached answer.
+            // WebActivityAPIController: the cache holds the complete section, and a reader without See PII is sent a trimmed copy
+            // of it (#844, G2). Lists whose queries count no people are withheld rather than floored.
             ["WebActivityAPIController.Availability"] = NoGroupedFigures(
                 "Whether the tracker is collecting, when it last saw a page view, and whether search and click tracking are in use."),
-            ["WebActivityAPIController.Overview"] = KnownGap(
-                "Page views per site (topSites) with no count of the people behind a site and no floor, so a site that one to "
-                + "four people visit shows their browsing, beside the scope-wide KPIs, trend, heatmap and visitor segments."),
-            ["WebActivityAPIController.Visits"] = KnownGap(
-                "Visits by site, page, device and browser, and each site over time, with no floor: a page or site that one to "
-                + "four people visited shows their visits."),
-            ["WebActivityAPIController.Pages"] = KnownGap(
-                "Top, slowest and quiet pages (title, URL and site) and sites, with page views, visitors (1-4 possible), time on "
-                + "page and load time, unfloored. Quiet pages are the least visited by design, so a row is often one to four "
-                + "people's reading."),
-            ["WebActivityAPIController.Journeys"] = KnownGap(
-                "Entry, exit and bounce pages, page-to-page transitions, start-to-end flows and clicked elements, unfloored: a "
-                + "path that one to four people took is their browsing."),
-            ["WebActivityAPIController.Geography"] = KnownGap(
-                "Countries, provinces and cities with visitors (1-4 possible), visits and page views, and countries over time, "
-                + "unfloored: a city with one visitor says where that person is and what they read."),
-            ["WebActivityAPIController.Search"] = KnownGap(
-                "Search terms, free text people typed, with searchers (1-4 possible), dead-end terms with no people count and "
-                + "searches by site, unfloored: the kind of text #866 floored for Copilot prompt phrases and withheld for Teams "
-                + "key phrases."),
-            ["WebActivityAPIController.Technology"] = KnownGap(
-                "Browsers, operating systems and devices with visitors (1-4 possible), and a detail table of browser, device, "
-                + "operating system and city with visitors, unfloored."),
-            ["WebActivityAPIController.Export"] = KnownGap(
-                "CSV files of the same unfloored rows - top, quiet and slow pages, entry and exit pages, transitions, flows, "
-                + "search terms and the technology detail with its cities - up to WebActivityQuery.MaximumTop rows each."),
+            ["WebActivityAPIController.Overview"] = Floored(
+                    "Sites visited by fewer than 5 people are left out of the busiest sites, with the smallest site shown, so none can "
+                    + "be worked out from the page-view total.")
+                .By(typeof(WebActivityOverview), nameof(WebActivityOverview.WithoutSmallGroups))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesJourneysVisitsAndOverview_WithoutSeePii_WithholdTheListsThatCountNoPeople_AndLeaveOutSmallSites)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut)))
+                .WithKnownGap("#844 (S4-1), waiting on the same product decision as Teams Explorer: the engagement-segment mix (people "
+                    + "per segment) is not floored. The headline figures, weekly trend, heatmap and visit depth are over the reader's "
+                    + "whole scope with no people count (judgement call 1)."),
+            ["WebActivityAPIController.Visits"] = Floored(
+                    "Sites, devices and browsers of fewer than 5 visitors are left out with the smallest row shown, and a site the list "
+                    + "leaves out is folded into '(other sites)' over time; the page list counts no people and is withheld.")
+                .By(typeof(WebActivityVisits), nameof(WebActivityVisits.WithoutSmallGroups))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithSeriesFolded))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesJourneysVisitsAndOverview_WithoutSeePii_WithholdTheListsThatCountNoPeople_AndLeaveOutSmallSites)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut)))
+                .WithKnownGap("The visit trend and the day, hour and period-of-day buckets are over the reader's whole scope with no "
+                    + "people count (judgement call 1). A site over time is matched to the site list by display name, so a site "
+                    + "outside the list's top N that shares a shown site's title keeps its series."),
+            ["WebActivityAPIController.Pages"] = Floored(
+                    "Top, slowest and quiet pages are withheld, because their queries count no people; sites of fewer than 5 visitors "
+                    + "are left out with the smallest site shown.")
+                .By(typeof(WebActivityPages), nameof(WebActivityPages.WithoutSmallGroups))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesJourneysVisitsAndOverview_WithoutSeePii_WithholdTheListsThatCountNoPeople_AndLeaveOutSmallSites)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallGroups_ReturnsACopy_AndLeavesTheCachedSectionAsItWasBuilt)))
+                .WithKnownGap("The weekly period-of-day chart is over the reader's whole scope with no people count (judgement call 1). "
+                    + "The page lists could be floored instead of withheld once their queries count distinct visitors."),
+            ["WebActivityAPIController.Journeys"] = Floored(
+                    "Entry, exit and bounce pages, transitions, flows and clicked elements are withheld: none of their queries counts "
+                    + "the people behind a row.")
+                .By(typeof(WebActivityJourneys), nameof(WebActivityJourneys.WithoutSmallGroups))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesJourneysVisitsAndOverview_WithoutSeePii_WithholdTheListsThatCountNoPeople_AndLeaveOutSmallSites)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallGroups_ReturnsACopy_AndLeavesTheCachedSectionAsItWasBuilt)))
+                .WithKnownGap("The visit-depth buckets and the click total are over the reader's whole scope with no people count "
+                    + "(judgement call 1)."),
+            ["WebActivityAPIController.Geography"] = Floored(
+                    "Countries, provinces and cities fewer than 5 people visited from are left out, each list with its smallest place "
+                    + "shown, so no place can be worked out from the located page views; a country the list leaves out is folded into "
+                    + "'(other countries)' over time.")
+                .By(typeof(WebActivityGeography), nameof(WebActivityGeography.WithoutSmallGroups))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithSeriesFolded))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Geography_WithoutSeePii_LeavesOutPlacesOfFewerThanFiveVisitors_AndWhatIsLeftOutIsNeverOneSmallPlace)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut))),
+            ["WebActivityAPIController.Search"] = Floored(
+                    "Search terms and dead-end terms are withheld, as Teams key phrases are: they are text people typed. Searches by "
+                    + "site count no people and are withheld too.")
+                .By(typeof(WebActivitySearch), nameof(WebActivitySearch.WithoutSmallGroups))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Search_WithoutSeePii_WithholdsEveryTermAndTheSitesSearched_AndTheCachedSectionKeepsThemForSeePii)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallGroups_ReturnsACopy_AndLeavesTheCachedSectionAsItWasBuilt)))
+                .WithKnownGap("The search trend and the day and period-of-day buckets are over the reader's whole scope with no "
+                    + "people count (judgement call 1)."),
+            ["WebActivityAPIController.Technology"] = Floored(
+                    "Browsers, operating systems, devices and the browser x device x operating system x city detail are left out below "
+                    + "5 visitors, each list with its smallest row shown; a device the list leaves out is folded into '(other devices)' "
+                    + "over time.")
+                .By(typeof(WebActivityTechnology), nameof(WebActivityTechnology.WithoutSmallGroups))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithSeriesFolded))
+                .ProvenBy(
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Technology_WithoutSeePii_LeavesOutDetailRowsAndPlatformsOfFewerThanFiveVisitors)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut))),
+            ["WebActivityAPIController.Export"] = Floored(
+                    "The technology file carries the screen's floored detail rows, cached apart from a See PII reader's file.")
+                .By(typeof(WebActivityTechnology), nameof(WebActivityTechnology.WithoutSmallGroups))
+                .ProvenBy(Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Export_WithoutSeePii_RefusesEveryFileItsScreenWithholds_AndTheTechnologyFileCarriesTheScreensRows)))
+                .Refusing("section pages, quiet-pages, slow-pages, entry-pages, exit-pages, transitions, flows, search-terms",
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Export_WithoutSeePii_RefusesEveryFileItsScreenWithholds_AndTheTechnologyFileCarriesTheScreensRows))),
         };
 
         #region The checks

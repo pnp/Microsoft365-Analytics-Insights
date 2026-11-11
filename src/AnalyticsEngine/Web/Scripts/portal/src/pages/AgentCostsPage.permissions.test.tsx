@@ -60,6 +60,9 @@ const summary: AgentCostSummary = {
   daysWithUsage: 10,
   peakDistinctUsersOnASlice: 5,
   unclassifiedHarnessCredits: 0,
+  minPeoplePerSlice: null,
+  smallSlicesWithheld: false,
+  withheld: false,
   capacity: null,
   azureCost: [],
 };
@@ -80,7 +83,7 @@ beforeEach(() => {
   vi.mocked(fetchTrend).mockResolvedValue([]);
   vi.mocked(fetchTopUsers).mockResolvedValue([maker]);
   vi.mocked(fetchBreakdown).mockResolvedValue([]);
-  vi.mocked(fetchDetail).mockResolvedValue({ rows: [], totalRows: 0, page: 1, pageSize: 50 });
+  vi.mocked(fetchDetail).mockResolvedValue({ rows: [], totalRows: 0, page: 1, pageSize: 50, minPeoplePerSlice: null, smallSlicesWithheld: false });
   vi.mocked(fetchAzureBreakdown).mockResolvedValue([]);
   vi.mocked(fetchAllDetailRows).mockResolvedValue({ rows: [], truncated: false, totalRows: 0 });
 });

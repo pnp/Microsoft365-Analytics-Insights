@@ -95,6 +95,7 @@ namespace Tests.UnitTests
             AssertKeys(new AgentCostSummary(),
                 "billedCredits", "nonBilledCredits", "distinctAgents", "distinctEnvironments",
                 "daysWithUsage", "peakDistinctUsersOnASlice", "unclassifiedHarnessCredits",
+                "minPeoplePerSlice", "smallSlicesWithheld", "withheld",
                 "capacity", "azureCost");
         }
 
@@ -122,7 +123,7 @@ namespace Tests.UnitTests
         public void BreakdownRow_SerialisesTheFieldNamesThePortalReads()
         {
             AssertKeys(new AgentCostBreakdownRow(),
-                "key", "label", "billedCredits", "nonBilledCredits", "activeDays", "peakDistinctUsers");
+                "key", "label", "billedCredits", "nonBilledCredits", "activeDays", "peakDistinctUsers", "folded", "withheld");
         }
 
         [TestMethod]
@@ -139,7 +140,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void DetailPage_SerialisesTheFieldNamesThePortalReads()
         {
-            AssertKeys(new AgentCostDetailPage(), "rows", "totalRows", "page", "pageSize");
+            AssertKeys(new AgentCostDetailPage(), "rows", "totalRows", "page", "pageSize", "minPeoplePerSlice", "smallSlicesWithheld");
         }
 
         [TestMethod]

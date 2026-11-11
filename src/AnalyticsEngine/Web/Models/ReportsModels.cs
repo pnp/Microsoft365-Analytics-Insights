@@ -175,6 +175,12 @@ namespace Web.AnalyticsWeb.Models
 
         [JsonProperty("points")]
         public List<ReportTimePoint> Points { get; set; } = new List<ReportTimePoint>();
+
+        /// <summary>
+        /// The distinct people behind the whole line across the window, where the query counts them (the Copilot agents);
+        /// null otherwise. Only decides what a reader without See PII is shown; internal, so never sent.
+        /// </summary>
+        internal int? People { get; set; }
     }
 
     /// <summary>Structured reason for a workload series that could not be fully charted.</summary>
@@ -215,8 +221,8 @@ namespace Web.AnalyticsWeb.Models
         public double Value { get; set; }
 
         /// <summary>
-        /// The distinct people behind the bar, where the query counts them (the prompt key phrases and languages); null
-        /// otherwise. Only decides what a reader without See PII is shown; internal, so never sent.
+        /// The distinct people behind the bar, where the query counts them (the prompt key phrases and languages, the
+        /// Copilot agents); null otherwise. Only decides what a reader without See PII is shown; internal, so never sent.
         /// </summary>
         internal int? People { get; set; }
     }
@@ -321,7 +327,7 @@ namespace Web.AnalyticsWeb.Models
         public List<ReportSeriesWarning> SeriesWarnings { get; set; }
 
         /// <summary>
-        /// For a reader without See PII, the fewest people a bar, word or matrix column and cell of this chart describes
+        /// For a reader without See PII, the fewest people a bar, word, line or matrix column and cell of this chart describes
         /// (#844); null when nothing is held back for the reader. The SPA says so beside the chart.
         /// </summary>
         [JsonProperty("minimumGroupSize", NullValueHandling = NullValueHandling.Ignore)]
@@ -329,17 +335,35 @@ namespace Web.AnalyticsWeb.Models
 
         /// <summary>
         /// How many bars or words (or, for a matrix, columns) were left out for a reader without See PII. Sent only when
-        /// some were.
+        /// some were, and never for a chart of the most-used N (see <see cref="WithoutSmallGroups"/>).
         /// </summary>
         [JsonProperty("withheldItems", DefaultValueHandling = DefaultValueHandling.Ignore)]
         public int WithheldItems { get; set; }
 
         /// <summary>
-        /// This chart for a reader who does not hold the portal's See PII permission, when it counts the people behind its
-        /// parts (#844): a bar or word fewer than <paramref name="minimumPeople"/> people are behind is left out; a matrix
-        /// column of fewer people is left out, and a cell of one to four people withheld. A chart that counts nobody is
-        /// returned as it is. A copy: areas are cached and shared between readers.
+        /// For a chart of the most-used N (the top Copilot agents), the bars that rank just below its
+        /// <see cref="Categories"/>, each used by at least the minimum number of people: a reader without See PII is shown
+        /// them in place of the bars left out, so their chart is the top N of what they may see. Empty when nothing ranks
+        /// below; null for any other chart. Internal, so never sent.
         /// </summary>
+        internal List<ReportCategory> CategoriesBelowTheTop { get; set; }
+
+        /// <summary>The lines that rank just below <see cref="Series"/>, as <see cref="CategoriesBelowTheTop"/> for bars.</summary>
+        internal List<ReportSeries> SeriesBelowTheTop { get; set; }
+
+        /// <summary>
+        /// This chart for a reader who does not hold the portal's See PII permission, when it counts the people behind its
+        /// parts (#844): a bar, word or line fewer than <paramref name="minimumPeople"/> people are behind is left out; a
+        /// matrix column of fewer people is left out, and a cell of one to four people withheld. A chart that counts nobody
+        /// is returned as it is. A copy: areas are cached and shared between readers.
+        /// </summary>
+        /// <remarks>
+        /// A chart of the most-used N (<see cref="CategoriesBelowTheTop"/> or <see cref="SeriesBelowTheTop"/> set) becomes
+        /// the top N of the parts this reader may see, and says neither how many were left out nor whether any were: a count
+        /// that changes with N would tell where a left-out part ranks, between the totals of two that are shown, and one
+        /// that changes with a name filter would say whether a small part by that name exists. So it is floored even when
+        /// it is empty, and reads the same whether the parts left out are none or many.
+        /// </remarks>
         internal ReportChart WithoutSmallGroups(int minimumPeople)
         {
             if (Matrix?.ColumnPeople != null)
@@ -364,16 +388,32 @@ namespace Web.AnalyticsWeb.Models
                 return copy;
             }
 
-            if (Categories != null && Categories.Any(c => c.People.HasValue))
+            var rankedTop = CategoriesBelowTheTop != null || SeriesBelowTheTop != null;
+            var categories = Categories?.Concat(CategoriesBelowTheTop ?? Enumerable.Empty<ReportCategory>()).ToList();
+            var series = Series?.Concat(SeriesBelowTheTop ?? Enumerable.Empty<ReportSeries>()).ToList();
+            var categoriesCountPeople = categories != null && (rankedTop || categories.Any(c => c.People.HasValue));
+            var seriesCountPeople = series != null && (rankedTop || series.Any(s => s.People.HasValue));
+            if (!categoriesCountPeople && !seriesCountPeople) return this;
+
+            var trimmed = (ReportChart)MemberwiseClone();
+            var leftOut = 0;
+            if (categoriesCountPeople)
             {
-                var copy = (ReportChart)MemberwiseClone();
-                copy.Categories = Categories.Where(c => (c.People ?? 0) >= minimumPeople).ToList();
-                copy.MinimumGroupSize = minimumPeople;
-                copy.WithheldItems = Categories.Count - copy.Categories.Count;
-                return copy;
+                trimmed.Categories = categories.Where(c => (c.People ?? 0) >= minimumPeople).ToList();
+                leftOut += Categories.Count(c => (c.People ?? 0) < minimumPeople);
             }
 
-            return this;
+            if (seriesCountPeople)
+            {
+                trimmed.Series = series.Where(s => (s.People ?? 0) >= minimumPeople).ToList();
+                leftOut += Series.Count(s => (s.People ?? 0) < minimumPeople);
+            }
+
+            trimmed.CategoriesBelowTheTop = null;
+            trimmed.SeriesBelowTheTop = null;
+            trimmed.MinimumGroupSize = minimumPeople;
+            trimmed.WithheldItems = rankedTop ? 0 : leftOut;
+            return trimmed;
         }
     }
 
