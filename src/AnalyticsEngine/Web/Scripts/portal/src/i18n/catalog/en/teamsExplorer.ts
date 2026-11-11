@@ -37,6 +37,11 @@ export const teamsExplorer = {
   'teamsExplorer.shared.noData': 'No data for this period.',
   'teamsExplorer.shared.callDataCovers': 'Call data covers {range}.',
   'teamsExplorer.shared.usageReportFiguresCover': 'Usage-report figures cover {range} \u2013 Microsoft publishes them a few days in arrears, so the window is shifted back rather than left half-empty.',
+  // What a reader without See PII is told, and shown, in place of a figure about one to four people (#844).
+  'teamsExplorer.privacy.readerNote':
+    'To protect privacy, these figures count only people whose accounts are enabled in the directory and leave out groups of fewer than {count} people, so their totals can differ slightly from what someone with the See PII permission sees.',
+  'teamsExplorer.privacy.withheld': 'Withheld: fewer than {count} people',
+  'teamsExplorer.privacy.withheldHint': 'Hidden to protect privacy',
 
   'teamsExplorer.source.usageReports': 'Microsoft 365 usage reports.',
   'teamsExplorer.source.graphCallRecords': 'Graph call-records change notifications (the Teams calls import).',
@@ -131,6 +136,10 @@ export const teamsExplorer = {
   'teamsExplorer.overview.engagementMix.description': "How habitually people use Teams across the period's working days.",
   'teamsExplorer.overview.engagementMix.empty': 'No users appeared in the Teams usage reports for this period.',
   'teamsExplorer.overview.engagementMix.centreLabel': 'measured users',
+  'teamsExplorer.overview.engagementMix.withheldNote':
+    'Segments of fewer than {count} people are hidden to protect privacy, together with the smallest other segment of active people, so that none can be worked out from the totals.',
+  'teamsExplorer.overview.engagementMix.allWithheld':
+    'Too few people are in these segments to show them without singling someone out, so this chart is hidden to protect their privacy.',
   // Why licensed people with no Teams activity are not called dormant (TeamsDormancy.Reason).
   'teamsExplorer.dormancy.incompleteImport': 'Dormant people cannot be identified for this period. Teams usage reports were imported for {imported} of its {expected} days, and they list only the people active each day, so someone with no recorded activity may have been active on a day that is missing.',
   'teamsExplorer.dormancy.groupFiltered': 'Dormant people cannot be identified. The usage import is limited to members of selected groups, so someone with no recorded activity may never have been imported at all.',
@@ -138,6 +147,7 @@ export const teamsExplorer = {
   'teamsExplorer.dormancy.noTeamsLicences': 'Dormant people cannot be identified. As far as the imported licences show, no one here holds a licence that includes Teams. Check that the user import is switched on.',
   'teamsExplorer.dormancy.notChecked': 'Dormant people cannot be identified, because the check that every day of this period was imported did not complete.',
   'teamsExplorer.dormancy.unmeasured': 'People licensed for Teams with no recorded activity, left out of this mix: {count}.',
+  'teamsExplorer.dormancy.unmeasuredWithheld': 'People licensed for Teams with no recorded activity, left out of this mix: fewer than {count}.',
   'teamsExplorer.overview.weeklyActiveUsers.title': 'Weekly active users',
   'teamsExplorer.overview.weeklyActiveUsers.description': 'Distinct people who did anything in Teams each week.',
   'teamsExplorer.overview.valueLabel.users': 'Users',
@@ -145,6 +155,10 @@ export const teamsExplorer = {
   'teamsExplorer.overview.whatPeopleAreDoing.description': 'Channel messages, private chat and meetings attended each week.',
   'teamsExplorer.overview.valueLabel.count': 'Count',
   'teamsExplorer.overview.noActiveUsersWarning': 'The directory has users but none were active in Teams in this period. That is unusual enough to be worth checking the import before drawing any conclusion from it.',
+  'teamsExplorer.overview.usageWithheld':
+    'Fewer than {count} people used Teams in this period, so the figures about them are hidden to protect their privacy.',
+  'teamsExplorer.overview.weeksWithheldNote':
+    'Weeks in which fewer than {count} people were active are left blank to protect privacy, together with the quietest other week, so that none can be worked out from the totals.',
 
   // Server-authored Teams Explorer segment and meeting bucket labels.
   'teamsExplorer.segment.Power.label': 'Power',
@@ -247,6 +261,8 @@ export const teamsExplorer = {
   'teamsExplorer.adoption.engagementOverTime.title': 'Engagement over time',
   'teamsExplorer.adoption.engagementOverTime.description': 'How the split between power, regular and light users moves week to week.',
   'teamsExplorer.adoption.engagementOverTime.note': 'Each week is judged against its own number of working days, so a short first or last week does not push everyone into the light band.',
+  'teamsExplorer.adoption.engagementOverTime.withheldNote':
+    'Weeks in which a segment has fewer than {count} people are left blank to protect privacy.',
   'teamsExplorer.adoption.valueLabel.users': 'Users',
   'teamsExplorer.adoption.reachBy.title': 'Reach by {group}',
   'teamsExplorer.adoption.reachBy.description': 'Where Teams has landed, and where it has not.',
@@ -271,6 +287,8 @@ export const teamsExplorer = {
   'teamsExplorer.adoption.devices.description': 'Distinct users seen on each client platform.',
   'teamsExplorer.adoption.devices.empty': 'No device usage was reported for this period.',
   'teamsExplorer.adoption.devices.note': 'Shares add up to more than 100% on purpose: most people use more than one platform. Mobile reach is the one to watch for frontline and deskless staff.',
+  'teamsExplorer.adoption.devices.withheldNote':
+    'Platforms used by fewer than {count} people are not shown to protect privacy, and neither is the mobile total when one of the mobile platforms is hidden.',
   'teamsExplorer.adoption.valueLabel.usersLower': 'users',
 
   'teamsExplorer.meetings.utcCaveat': 'Call times are recorded in UTC and the database holds no per-user timezone, so a genuinely global organisation will read high on out-of-hours activity. Compare departments against each other rather than against an absolute target.',

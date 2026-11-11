@@ -10,7 +10,9 @@ import { formatNumber, useT, type TFunction, type TranslationKey } from '../../i
 import {
   SectionCard,
   WindowNote,
+  PrivacyReaderNote,
   dormancyText,
+  figureOrWithheld,
   formatCount,
   formatDecimal,
   formatHours,
@@ -20,6 +22,7 @@ import {
   segmentDescription,
   segmentLabel,
   useTeamsStyles,
+  withheldReason,
 } from './teamsShared';
 
 const useStyles = makeStyles({
@@ -86,14 +89,32 @@ function formatOneDecimal(value: number): string {
   return formatNumber(Math.round(value * 10) / 10, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 }
 
+/**
+ * True when a judgement is worded from a figure this reader was sent withheld. The server leaves such judgements out for a
+ * reader without See PII; this keeps one from ever being drawn from a missing figure, or with a zero in its place.
+ */
+function judgementFiguresWithheld(judgement: TeamsJudgement, kpis: TeamsOverviewKpis): boolean {
+  switch (judgement.key) {
+    case 'reach':
+      return kpis.reachPct == null || kpis.activeUsers == null || kpis.knownUsers == null;
+    case 'open-collaboration':
+      return kpis.openCollaborationPct == null;
+    case 'meeting-load':
+      return kpis.meetingsPerActiveUser == null;
+    default:
+      return false;
+  }
+}
+
 function translatedJudgement(judgement: TeamsJudgement, kpis: TeamsOverviewKpis, t: TFunction) {
   switch (judgement.key) {
     case 'reach': {
+      const reachPct = kpis.reachPct ?? 0;
       const values = {
-        reach: formatPct(kpis.reachPct),
-        active: formatCount(kpis.activeUsers),
-        known: formatCount(kpis.knownUsers),
-        band: adoptionBandLabel(kpis.reachPct, t).toLowerCase(),
+        reach: formatPct(reachPct),
+        active: formatCount(kpis.activeUsers ?? 0),
+        known: formatCount(kpis.knownUsers ?? 0),
+        band: adoptionBandLabel(reachPct, t).toLowerCase(),
       };
       return {
         headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
@@ -101,7 +122,7 @@ function translatedJudgement(judgement: TeamsJudgement, kpis: TeamsOverviewKpis,
       };
     }
     case 'open-collaboration': {
-      const values = { share: formatPct(kpis.openCollaborationPct) };
+      const values = { share: formatPct(kpis.openCollaborationPct ?? 0) };
       return {
         headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
         detail: judgementText(
@@ -129,7 +150,7 @@ function translatedJudgement(judgement: TeamsJudgement, kpis: TeamsOverviewKpis,
       };
     }
     case 'meeting-load': {
-      const values = { meetingsPerActiveUser: formatOneDecimal(kpis.meetingsPerActiveUser) };
+      const values = { meetingsPerActiveUser: formatOneDecimal(kpis.meetingsPerActiveUser ?? 0) };
       return {
         headline: judgementText(t, judgement.key, 'headline', judgement.headline, values),
         detail: judgementText(t, judgement.key, 'detail', judgement.detail, values),
@@ -193,16 +214,27 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
   const t = useT();
   const { kpis } = data;
 
+  // For a reader without See PII, a figure about one to four people comes back null: it is drawn as a dash that says
+  // why, never as a zero, and nothing - a tone, a hint, a sentence - is worked out from it.
+  const minimumGroupSize = data.minimumGroupSize ?? null;
+  const minimumText = formatCount(minimumGroupSize ?? 5);
+  const withheld = withheldReason(t, minimumGroupSize);
+  const withheldHint = t('teamsExplorer.privacy.withheldHint');
+  const usageWithheldText = t('teamsExplorer.overview.usageWithheld', { count: minimumText });
+
   const kpiItems: KpiDefinition[] = [
     {
       key: 'reach',
       label: t('teamsExplorer.overview.kpi.teamsReach.label'),
-      value: formatPct(kpis.reachPct),
-      hint: t('teamsExplorer.overview.kpi.teamsReach.hint', {
-        active: formatCount(kpis.activeUsers),
-        known: formatCount(kpis.knownUsers),
-      }),
-      tone: reachTone(kpis.reachPct),
+      value: figureOrWithheld(kpis.reachPct, formatPct, withheld),
+      hint:
+        kpis.activeUsers == null || kpis.knownUsers == null
+          ? withheldHint
+          : t('teamsExplorer.overview.kpi.teamsReach.hint', {
+              active: formatCount(kpis.activeUsers),
+              known: formatCount(kpis.knownUsers),
+            }),
+      tone: kpis.reachPct == null ? 'neutral' : reachTone(kpis.reachPct),
       info: {
         what: t('teamsExplorer.overview.kpi.teamsReach.what'),
         how:
@@ -215,9 +247,9 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
     {
       key: 'channel-share',
       label: t('teamsExplorer.overview.kpi.openCollaboration.label'),
-      value: formatPct(kpis.openCollaborationPct),
-      hint: t('teamsExplorer.overview.kpi.openCollaboration.hint'),
-      tone: kpis.openCollaborationPct < 15 ? 'warning' : 'neutral',
+      value: figureOrWithheld(kpis.openCollaborationPct, formatPct, withheld),
+      hint: kpis.openCollaborationPct == null ? withheldHint : t('teamsExplorer.overview.kpi.openCollaboration.hint'),
+      tone: kpis.openCollaborationPct != null && kpis.openCollaborationPct < 15 ? 'warning' : 'neutral',
       info: {
         what: t('teamsExplorer.overview.kpi.openCollaboration.what'),
         how:
@@ -229,10 +261,13 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
     {
       key: 'meetings',
       label: t('teamsExplorer.overview.kpi.meetingsPerActiveUser.label'),
-      value: formatDecimal(kpis.meetingsPerActiveUser),
-      hint: t('teamsExplorer.overview.kpi.meetingsPerActiveUser.hint', {
-        meetings: formatCount(kpis.meetingsAttended),
-      }),
+      value: figureOrWithheld(kpis.meetingsPerActiveUser, formatDecimal, withheld),
+      hint:
+        kpis.meetingsAttended == null
+          ? withheldHint
+          : t('teamsExplorer.overview.kpi.meetingsPerActiveUser.hint', {
+              meetings: formatCount(kpis.meetingsAttended),
+            }),
       info: {
         what: t('teamsExplorer.overview.kpi.meetingsPerActiveUser.what'),
         how:
@@ -244,11 +279,14 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
     {
       key: 'audio-hours',
       label: t('teamsExplorer.overview.kpi.audioHours.label'),
-      value: formatHours(kpis.audioHours),
-      hint: t('teamsExplorer.overview.kpi.audioHours.hint', {
-        video: formatPct(kpis.videoSharePct),
-        sharing: formatPct(kpis.screenShareSharePct),
-      }),
+      value: figureOrWithheld(kpis.audioHours, formatHours, withheld),
+      hint:
+        kpis.videoSharePct == null || kpis.screenShareSharePct == null
+          ? withheldHint
+          : t('teamsExplorer.overview.kpi.audioHours.hint', {
+              video: formatPct(kpis.videoSharePct),
+              sharing: formatPct(kpis.screenShareSharePct),
+            }),
       info: {
         what: t('teamsExplorer.overview.kpi.audioHours.what'),
         how:
@@ -311,33 +349,53 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
     },
   ];
 
-  const segmentCategories = data.segmentMix.map((slice) => ({
+  // A segment withheld from a reader without See PII is not drawn: the note says so, and each shown segment keeps its colour.
+  const shownSlices = data.segmentMix.flatMap((slice, index) => (slice.users == null ? [] : [{ slice, index, users: slice.users }]));
+  const segmentCategories = shownSlices.map(({ slice, users }) => ({
     label: segmentLabel(t, slice.segment, slice.label),
-    value: slice.users,
+    value: users,
   }));
-  const measuredUsers = data.segmentMix.reduce((sum, slice) => sum + slice.users, 0);
+  const segmentsWithheld = data.segmentMix.some((slice) => slice.withheld === true);
+  const measuredUsers = shownSlices.reduce((sum, { users }) => sum + users, 0);
   // Licensed people with no recorded activity are dormant only when the server could prove it; otherwise they are
-  // left out of the mix, and the card says why and how many.
+  // left out of the mix, and the card says why and how many - or, for a reader without See PII, that it is a handful.
   const dormancyNote = dormancyText(t, data.dormancy);
-  const unmeasuredUsers = data.dormancy?.unmeasuredUsers ?? 0;
-  const mixNote = dormancyNote
-    ? [
-        dormancyNote,
-        unmeasuredUsers > 0 ? t('teamsExplorer.dormancy.unmeasured', { count: formatCount(unmeasuredUsers) }) : null,
-      ].filter(Boolean).join(' ')
+  const unmeasuredUsers = data.dormancy?.unmeasuredUsers;
+  const unmeasuredNote =
+    data.dormancy && unmeasuredUsers === null
+      ? t('teamsExplorer.dormancy.unmeasuredWithheld', { count: minimumText })
+      : unmeasuredUsers != null && unmeasuredUsers > 0
+        ? t('teamsExplorer.dormancy.unmeasured', { count: formatCount(unmeasuredUsers) })
+        : null;
+  const mixNote =
+    [
+      dormancyNote ? [dormancyNote, unmeasuredNote].filter(Boolean).join(' ') : null,
+      segmentsWithheld && segmentCategories.length > 0
+        ? t('teamsExplorer.overview.engagementMix.withheldNote', { count: minimumText })
+        : null,
+    ]
+      .filter(Boolean)
+      .join(' ') || undefined;
+  const mixWithheldWhole = segmentsWithheld && measuredUsers === 0;
+
+  const weeksWithheldNote = data.trend.some((p) => p.withheld)
+    ? t('teamsExplorer.overview.weeksWithheldNote', { count: minimumText })
     : undefined;
+  const reachWithheld = kpis.reachPct == null || kpis.activeUsers == null || kpis.knownUsers == null;
+  const judgements = data.judgements.filter((judgement) => !judgementFiguresWithheld(judgement, kpis));
 
   return (
     <div>
       <WindowNote window={data.window} />
+      <PrivacyReaderNote minimumGroupSize={minimumGroupSize} />
 
       <div style={{ marginTop: '16px' }}>
         <KpiGrid items={kpiItems} />
       </div>
 
-      {data.judgements.length > 0 && (
+      {judgements.length > 0 && (
         <div className={styles.judgements}>
-          {data.judgements.map((judgement) => {
+          {judgements.map((judgement) => {
             const text = translatedJudgement(judgement, kpis, t);
             return (
             <Card
@@ -360,16 +418,16 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
           title={t('teamsExplorer.overview.reachAgainstDirectory.title')}
           description={t('teamsExplorer.overview.reachAgainstDirectory.description')}
           query={queryFor(data.queries, 'overview-usage')}
-          isEmpty={kpis.knownUsers === 0}
-          emptyMessage={t('teamsExplorer.overview.reachAgainstDirectory.empty')}
+          isEmpty={reachWithheld || kpis.knownUsers === 0}
+          emptyMessage={reachWithheld ? usageWithheldText : t('teamsExplorer.overview.reachAgainstDirectory.empty')}
         >
           <div className={styles.gaugeRow}>
             <GaugeRing
-              value={kpis.reachPct}
-              label={formatPct(kpis.reachPct)}
+              value={kpis.reachPct ?? 0}
+              label={formatPct(kpis.reachPct ?? 0)}
               sublabel={t('teamsExplorer.overview.reachAgainstDirectory.sublabel', {
-                active: formatCount(kpis.activeUsers),
-                known: formatCount(kpis.knownUsers),
+                active: formatCount(kpis.activeUsers ?? 0),
+                known: formatCount(kpis.knownUsers ?? 0),
               })}
             />
           </div>
@@ -380,13 +438,19 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
           description={t('teamsExplorer.overview.engagementMix.description')}
           query={segmentQuery}
           isEmpty={measuredUsers === 0}
-          emptyMessage={t('teamsExplorer.overview.engagementMix.empty')}
+          emptyMessage={
+            mixWithheldWhole
+              ? data.usageWithheld
+                ? usageWithheldText
+                : t('teamsExplorer.overview.engagementMix.allWithheld')
+              : t('teamsExplorer.overview.engagementMix.empty')
+          }
           note={mixNote}
         >
           <DonutChart
             categories={segmentCategories}
-            colours={segmentCategories.map((_, i) => seriesColor(i))}
-            centreValue={formatCount(measuredUsers)}
+            colours={shownSlices.map(({ index }) => seriesColor(index))}
+            centreValue={segmentsWithheld ? '\u2014' : formatCount(measuredUsers)}
             centreLabel={t('teamsExplorer.overview.engagementMix.centreLabel')}
           />
           <Text size={200} className={styles.muted}>
@@ -403,6 +467,7 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
           description={t('teamsExplorer.overview.weeklyActiveUsers.description')}
           query={trendQuery}
           isEmpty={data.trend.length === 0}
+          note={weeksWithheldNote}
         >
           <TimeSeriesChart series={activitySeries} valueLabel={t('teamsExplorer.overview.valueLabel.users')} height={240} />
         </SectionCard>
@@ -412,12 +477,13 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
           description={t('teamsExplorer.overview.whatPeopleAreDoing.description')}
           query={trendQuery}
           isEmpty={data.trend.length === 0}
+          note={weeksWithheldNote}
         >
           <TimeSeriesChart series={messageSeries} valueLabel={t('teamsExplorer.overview.valueLabel.count')} height={260} />
         </SectionCard>
       </div>
 
-      {kpis.knownUsers > 0 && kpis.activeUsers === 0 && (
+      {kpis.knownUsers != null && kpis.knownUsers > 0 && kpis.activeUsers === 0 && (
         <MessageBar intent="warning" style={{ marginTop: '16px' }}>
           <MessageBarBody>
             {t('teamsExplorer.overview.noActiveUsersWarning')}
