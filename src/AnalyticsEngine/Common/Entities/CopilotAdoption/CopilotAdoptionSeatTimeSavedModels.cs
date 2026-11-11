@@ -57,6 +57,9 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("byDepartment")]
         public List<SeatHolderTimeSavedSegment> ByDepartment { get; set; } = new List<SeatHolderTimeSavedSegment>();
+
+        /// <summary>A shallow copy, so a reader's trimmed summary can replace a list without editing the cached estimate.</summary>
+        internal SeatHolderTimeSavedEstimate ShallowCopy() => (SeatHolderTimeSavedEstimate)MemberwiseClone();
     }
 
     public class SeatHolderTimeSavedCredits

@@ -1062,6 +1062,57 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void DepartmentSheet_WithoutSeePii_LeavesOutTheDepartmentTheScreenDoes_AndSaysWhy_AndWithItWritesEveryOne()
+        {
+            // #844: three of Finance's fifteen seat holders move to a department of their own, too small to list, so the
+            // tenant's sixty less the departments listed would be their three. For a reader without See PII the smallest
+            // listed department, Finance's twelve, goes from every table too - in the file exactly as on screen.
+            var analysis = SyntheticAnalysis();
+            foreach (var user in analysis.LicensedUsers.Where(u => u.Department == "Finance").Take(3).ToList())
+            {
+                user.Department = "Tiny";
+            }
+
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            var screen = analysis.Summary.WithoutIndividualData();
+            Assert.IsFalse(screen.AdoptionByDepartment.Any(r => r.Segment == "Finance"));
+            CollectionAssert.Contains(screen.SmallestGroupsWithheld, CopilotAdoptionWithheldBreakdowns.Departments);
+
+            // Every row of the sheet, keyed by column letter, for the rows whose first column names a department.
+            List<Dictionary<string, string>> Rows(byte[] workbook, string department)
+            {
+                string Text(XElement c) => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
+                string RowOf(XElement c) => Regex.Match((string)c.Attribute("r"), @"\d+$").Value;
+                var cells = SheetCellElements(workbook, "Departments and apps");
+                return cells.Where(c => Text(c) == department && ((string)c.Attribute("r")).StartsWith("A", StringComparison.Ordinal))
+                    .Select(c => cells.Where(other => RowOf(other) == RowOf(c))
+                        .ToDictionary(other => Regex.Match((string)other.Attribute("r"), "^[A-Z]+").Value, Text))
+                    .ToList();
+            }
+
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            var finance = Rows(trimmed, "Finance").Where(r => r.Count >= 4).ToList();
+            Assert.AreEqual(1, finance.Count, "Only the side-by-side table still names Finance, for its unlicensed side.");
+            Assert.IsFalse(finance.Single().ContainsKey("B"), "Its seat-holder columns are blank, never 0.");
+            foreach (var department in screen.AdoptionByDepartment)
+            {
+                Assert.IsTrue(Rows(trimmed, department.Segment).Any(r => r.TryGetValue("B", out var seats)
+                        && seats == department.LicensedUsers.ToString(CultureInfo.InvariantCulture)),
+                    $"{department.Segment}: the workbook lists every department the screen does.");
+            }
+
+            var text = SheetCells(trimmed, "Departments and apps");
+            Assert.IsTrue(text.Any(c => c.Contains("the smallest department it lists is left out too")), "The sheet says why.");
+
+            var full = CopilotAdoptionWorkbook.Build(analysis);
+            Assert.IsTrue(Rows(full, "Finance").Any(r => r.TryGetValue("B", out var seats) && seats == "12"),
+                "With See PII every department is written, as before.");
+            Assert.IsFalse(SheetCells(full, "Departments and apps").Any(c => c.Contains("is left out too")));
+            Assert.IsTrue(analysis.Summary.AdoptionByDepartment.Any(r => r.Segment == "Finance"),
+                "The cached analysis must never be edited for one reader.");
+        }
+
+        [TestMethod]
         public void Workbook_SaysWhenItHasBeenNarrowedToOneEmailDomain()
         {
             // A spreadsheet outlives the screen it came from and gets forwarded without that context.

@@ -3385,7 +3385,7 @@ namespace Common.Entities.CopilotAdoption
             unlicensed.UsageByDepartment = rows
                 .GroupBy(r => string.IsNullOrWhiteSpace(r.Department) ? "(no department)" : r.Department.Trim())
                 .Where(g => g.Count() >= _options.MinSeatsPerSegment)
-                .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Sum(r => (double)r.Interactions) })
+                .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Sum(r => (double)r.Interactions), People = g.Count() })
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
                 .ToList();

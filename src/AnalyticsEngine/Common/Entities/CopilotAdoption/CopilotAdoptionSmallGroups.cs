@@ -19,6 +19,317 @@ namespace Common.Entities.CopilotAdoption
     /// </remarks>
     internal static class CopilotAdoptionSmallGroups
     {
+        #region Breakdowns that leave a group out
+
+        /// <summary>
+        /// The department, country and accountability breakdowns for a reader without See PII: whenever one leaves a group
+        /// out, it also withholds the smallest group it lists - chosen by people, then by name - from every view of it, so
+        /// that its total less the groups shown always holds a group of five or more as well as the one left out, and no
+        /// view shows a group another view hides (#844). The licensed and unlicensed sides of the side-by-side table, its
+        /// agent figures and its agent builders, which are floored first, follow the same rule.
+        /// </summary>
+        /// <remarks>
+        /// <para><b>What leaves a group out.</b> Every reader is spared a group of fewer than
+        /// <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> people, and each view lists at most
+        /// <see cref="CopilotAdoptionOptions.TopSegments"/>. A breakdown leaves a group out when the groups its views list
+        /// between them hold fewer people than the total published beside them - the scored seat holders, the unlicensed
+        /// users counted, the active users seen in the audit log, the builders. That total less the groups shown is then
+        /// the groups left out together, and with only one left out, that group's own figures.</para>
+        /// <para><b>The breakdowns, and the views each must agree in.</b></para>
+        /// <list type="bullet">
+        /// <item>Seat holders by department: adoption and habit by department (the league table), the licensed side of the
+        /// side-by-side table, the manager columns and an accountability roll-up by department. Intensity and time saved
+        /// by department count the seat holders scored from the audit log, and Cowork rollout by department those scored
+        /// for Cowork - subsets of the same people, each against its own total - so each is checked as well, and a
+        /// department withheld for any of them is withheld from all of them: a subset's count can equal the whole's, and
+        /// would give a withheld department's back.</item>
+        /// <item>Seat holders by country: adoption by country and an accountability roll-up by country.</item>
+        /// <item>An accountability roll-up by office or company.</item>
+        /// <item>Unlicensed Copilot Chat users by department: the side-by-side table's unlicensed side and unlicensed use
+        /// by department.</item>
+        /// <item>The side-by-side table's agent figures, over the active users seen in the audit log.</item>
+        /// <item>Agent builders, whose count of 1-4 is withheld first.</item>
+        /// </list>
+        /// <para>Every group is one person's only group - a person has one department, country, office or company - so the
+        /// smallest-shown rule is enough: the overlapping variant is for the manager figures
+        /// (<see cref="ManagerDepartmentsWithoutComplements"/>), where a manager is counted in each department they lead.
+        /// The totals stay. A withheld side or agent figure on the side-by-side table is null with
+        /// <see cref="SmallGroupWithheldReasons.RevealsSmallerGroup"/>; a withheld row of any other view is left out, as
+        /// the groups below the floor already are. <see cref="CopilotAdoptionSummary.SmallestGroupsWithheld"/> names the
+        /// breakdowns that withheld one more, so the page and the workbook can say so.</para>
+        /// </remarks>
+        /// <param name="summary">The reader's summary so far, read only.</param>
+        /// <param name="writable">The reader's own copy, made on first call, which the replaced lists are written to.</param>
+        internal static void WithholdSmallestListedGroups(CopilotAdoptionSummary summary, Func<CopilotAdoptionSummary> writable, int minPeople)
+        {
+            if (summary == null) return;
+
+            var dimension = CopilotAdoptionService.NormaliseAccountabilityDimension(summary.AccountabilityDimension);
+            var rollupByDepartment = dimension == CopilotAdoptionAccountabilityDimensions.Department;
+            var rollupByCountry = dimension == CopilotAdoptionAccountabilityDimensions.Country;
+            var rollup = summary.AccountabilityRollup ?? new List<AccountabilityRollupRow>();
+            var combined = (summary.CombinedByDepartment ?? new List<AdoptionCombinedSegmentRow>()).ToList();
+            var timeSaved = summary.SeatHolderTimeSavedEstimate;
+            var unlicensed = summary.Unlicensed;
+            var named = new List<string>();
+
+            // Seat holders by department, with the two subsets of them that count their own totals: those scored from the
+            // audit log rather than Microsoft's usage report (intensity, and time saved), and those scored for Cowork.
+            var seatViews = Groups(summary.AdoptionByDepartment, r => r.Segment, r => r.LicensedUsers)
+                .Concat(Groups(summary.HabitByDepartment, r => r.Segment, r => r.LicensedUsers))
+                .Concat(Groups(combined, r => r.Segment, r => r.LicensedUsers ?? 0))
+                .Concat(Groups(summary.ManagerModellingByDepartment, r => r.Segment, r => r.LicensedUsers))
+                .Concat(rollupByDepartment ? Groups(rollup, r => r.Segment, r => r.LicensedUsers) : Enumerable.Empty<(string, int)>());
+            var departments = SmallestListedGroups(
+                minPeople,
+                (summary.ScoredUsers, seatViews),
+                (summary.ScoredUsers - summary.UsageReportSourcedUsers,
+                    Groups(summary.IntensityByDepartment, r => r.Segment, r => r.LicensedUsers)
+                        .Concat(Groups(timeSaved?.ByDepartment, r => r.Segment, r => r.CohortUsers))),
+                (summary.CoworkScoredUsers, Groups(summary.CoworkByDepartment, r => r.Segment, r => r.LicensedUsers)
+                    .Concat(Groups(summary.CoworkQuadrant, r => r.Segment, r => r.LicensedUsers))));
+
+            var countries = SmallestListedGroups(minPeople, (summary.ScoredUsers,
+                Groups(summary.AdoptionByCountry, r => r.Segment, r => r.LicensedUsers)
+                    .Concat(rollupByCountry ? Groups(rollup, r => r.Segment, r => r.LicensedUsers) : Enumerable.Empty<(string, int)>())));
+
+            var units = rollupByDepartment ? departments
+                : rollupByCountry ? countries
+                : dimension == CopilotAdoptionAccountabilityDimensions.DirectManager ? Withheld()
+                : SmallestListedGroups(minPeople, (summary.ScoredUsers, Groups(rollup, r => r.Segment, r => r.LicensedUsers)));
+
+            if (departments.Count > 0)
+            {
+                named.Add(CopilotAdoptionWithheldBreakdowns.Departments);
+                var copy = writable();
+                copy.AdoptionByDepartment = Without(summary.AdoptionByDepartment, r => r.Segment, departments);
+                copy.HabitByDepartment = Without(summary.HabitByDepartment, r => r.Segment, departments);
+                copy.IntensityByDepartment = Without(summary.IntensityByDepartment, r => r.Segment, departments);
+                copy.ManagerModellingByDepartment = Without(summary.ManagerModellingByDepartment, r => r.Segment, departments);
+                copy.CoworkByDepartment = Without(summary.CoworkByDepartment, r => r.Segment, departments);
+                copy.CoworkQuadrant = Without(summary.CoworkQuadrant, r => r.Segment, departments);
+                if (timeSaved?.ByDepartment != null && timeSaved.ByDepartment.Any(r => departments.Contains(Key(r.Segment))))
+                {
+                    var estimate = timeSaved.ShallowCopy();
+                    estimate.ByDepartment = Without(timeSaved.ByDepartment, r => r.Segment, departments);
+                    copy.SeatHolderTimeSavedEstimate = estimate;
+                }
+
+                for (var i = 0; i < combined.Count; i++)
+                {
+                    if (combined[i]?.LicensedUsers.HasValue == true && departments.Contains(Key(combined[i].Segment)))
+                    {
+                        combined[i] = WithoutLicensedSide(combined[i], minPeople);
+                    }
+                }
+            }
+
+            if (countries.Count > 0)
+            {
+                named.Add(CopilotAdoptionWithheldBreakdowns.Countries);
+                writable().AdoptionByCountry = Without(summary.AdoptionByCountry, r => r.Segment, countries);
+            }
+
+            if (units.Count > 0 && rollup.Any(r => units.Contains(Key(r.Segment))))
+            {
+                named.Add(CopilotAdoptionWithheldBreakdowns.Accountability);
+                writable().AccountabilityRollup = Without(rollup, r => r.Segment, units);
+            }
+
+            // Unlicensed Copilot Chat users by department: the unlicensed side, and unlicensed use by department, whose
+            // bars sum interactions and so carry their people unpublished.
+            var chatTotal = (unlicensed?.ActiveUsers ?? 0) > 0 ? unlicensed.ActiveUsers : summary.UnlicensedActiveUsers;
+            var chatDepartments = SmallestListedGroups(minPeople, (chatTotal,
+                Groups(combined, r => r.Segment, r => r.UnlicensedActiveUsers ?? 0)
+                    .Concat(Groups(unlicensed?.UsageByDepartment, r => r.Label, r => r.People))));
+            if (chatDepartments.Count > 0)
+            {
+                named.Add(CopilotAdoptionWithheldBreakdowns.UnlicensedDepartments);
+                for (var i = 0; i < combined.Count; i++)
+                {
+                    if (combined[i]?.UnlicensedActiveUsers.HasValue == true && chatDepartments.Contains(Key(combined[i].Segment)))
+                    {
+                        combined[i] = WithoutUnlicensedSide(combined[i], minPeople);
+                    }
+                }
+
+                if (unlicensed?.UsageByDepartment != null && unlicensed.UsageByDepartment.Any(c => chatDepartments.Contains(Key(c.Label))))
+                {
+                    var copy = unlicensed.ShallowCopy();
+                    copy.UsageByDepartment = Without(unlicensed.UsageByDepartment, c => c.Label, chatDepartments);
+                    writable().Unlicensed = copy;
+                }
+            }
+
+            // The agent figures, over the department's active users seen in the audit log - read after the sides, whose
+            // withholding takes them too.
+            if (summary.AgentActiveUsers.HasValue)
+            {
+                var agentDepartments = SmallestListedGroups(minPeople, (summary.AgentActiveUsers.Value,
+                    Groups(combined.Where(r => r != null && !r.AgentFiguresWithheld), r => r.Segment, r => r.AgentActiveUsers ?? 0)));
+                if (agentDepartments.Count > 0)
+                {
+                    named.Add(CopilotAdoptionWithheldBreakdowns.AgentDepartments);
+                    for (var i = 0; i < combined.Count; i++)
+                    {
+                        if (combined[i] != null && !combined[i].AgentFiguresWithheld && agentDepartments.Contains(Key(combined[i].Segment)))
+                        {
+                            combined[i] = WithoutAgentFigures(combined[i].Clone(), minPeople);
+                        }
+                    }
+                }
+            }
+
+            // Agent builders: a count of one to four is withheld; then, beside the tenant's builders, the smallest shown.
+            if (summary.AgentBuilders.HasValue)
+            {
+                for (var i = 0; i < combined.Count; i++)
+                {
+                    if (combined[i]?.AgentBuilders is int builders && SmallPopulations.IsSmall(builders, minPeople))
+                    {
+                        combined[i] = WithoutBuilders(combined[i], SmallGroupWithheldReasons.FewPeople, minPeople);
+                    }
+                }
+
+                var builderDepartments = SmallestListedGroups(minPeople, (summary.AgentBuilders.Value,
+                    Groups(combined, r => r.Segment, r => r.AgentBuilders ?? 0)));
+                if (builderDepartments.Count > 0)
+                {
+                    named.Add(CopilotAdoptionWithheldBreakdowns.BuilderDepartments);
+                    for (var i = 0; i < combined.Count; i++)
+                    {
+                        if (combined[i]?.AgentBuilders.HasValue == true && builderDepartments.Contains(Key(combined[i].Segment)))
+                        {
+                            combined[i] = WithoutBuilders(combined[i], SmallGroupWithheldReasons.RevealsSmallerGroup, minPeople);
+                        }
+                    }
+                }
+            }
+
+            if (summary.CombinedByDepartment != null
+                && combined.Where((row, i) => !ReferenceEquals(row, summary.CombinedByDepartment[i])).Any())
+            {
+                writable().CombinedByDepartment = combined;
+            }
+
+            if (named.Count > 0) writable().SmallestGroupsWithheld = named;
+        }
+
+        /// <summary>
+        /// The groups to withhold from every view of one breakdown. For each population in turn - the breakdown's own, then
+        /// any subset of it counted against its own total - whose views list fewer people than that total, the group they
+        /// list with the fewest people is withheld too (the first by name on a tie), unless one they list is withheld
+        /// already; and while the total less the groups still shown is one to <paramref name="minPeople"/> - 1 people, the
+        /// next smallest goes as well. With every listed group at least <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/>
+        /// (five or more), one is always enough; the loop keeps the rule true for a smaller setting.
+        /// </summary>
+        internal static HashSet<string> SmallestListedGroups(int minPeople, params (int Total, IEnumerable<(string Name, int People)> Listed)[] populations)
+        {
+            var withheld = Withheld();
+            foreach (var (total, listed) in populations)
+            {
+                var groups = new Dictionary<string, (string Name, int People)>(StringComparer.OrdinalIgnoreCase);
+                foreach (var (name, people) in listed ?? Enumerable.Empty<(string, int)>())
+                {
+                    if (name == null || people <= 0) continue;
+                    var key = Key(name);
+                    if (!groups.TryGetValue(key, out var group) || people > group.People) groups[key] = (key, people);
+                }
+
+                var shown = groups.Values
+                    .Where(g => !withheld.Contains(g.Name))
+                    .OrderBy(g => g.People)
+                    .ThenBy(g => g.Name, StringComparer.Ordinal)
+                    .ToList();
+                var leftOver = total - shown.Sum(g => g.People);
+                if (shown.Count == 0 || leftOver <= 0) continue;
+
+                var next = 0;
+                if (shown.Count == groups.Count)
+                {
+                    withheld.Add(shown[next].Name);
+                    leftOver += shown[next++].People;
+                }
+
+                while (leftOver < minPeople && next < shown.Count)
+                {
+                    withheld.Add(shown[next].Name);
+                    leftOver += shown[next++].People;
+                }
+            }
+
+            return withheld;
+        }
+
+        private static HashSet<string> Withheld() => new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>A group's name as the breakdowns match it: trimmed, and compared without case.</summary>
+        private static string Key(string name) => (name ?? string.Empty).Trim();
+
+        private static IEnumerable<(string Name, int People)> Groups<T>(IEnumerable<T> rows, Func<T, string> name, Func<T, int> people)
+        {
+            return (rows ?? Enumerable.Empty<T>()).Where(r => r != null).Select(r => (name(r), people(r)));
+        }
+
+        private static List<T> Without<T>(List<T> rows, Func<T, string> name, HashSet<string> withheld)
+        {
+            if (rows == null || !rows.Any(r => r != null && withheld.Contains(Key(name(r))))) return rows;
+            return rows.Where(r => r == null || !withheld.Contains(Key(name(r)))).ToList();
+        }
+
+        private static AdoptionCombinedSegmentRow WithoutLicensedSide(AdoptionCombinedSegmentRow row, int minPeople)
+        {
+            var copy = row.Clone();
+            copy.LicensedUsers = null;
+            copy.LicensedActiveUsers = null;
+            copy.InteractionsPerLicensedUser = null;
+            copy.LicensedAgentUserPct = null;
+            copy.LicensedWithheld = SmallGroupWithheldReasons.RevealsSmallerGroup;
+            return WithoutAgentFigures(copy, minPeople);
+        }
+
+        private static AdoptionCombinedSegmentRow WithoutUnlicensedSide(AdoptionCombinedSegmentRow row, int minPeople)
+        {
+            var copy = row.Clone();
+            copy.UnlicensedActiveUsers = null;
+            copy.InteractionsPerUnlicensedUser = null;
+            copy.UnlicensedAgentUserPct = null;
+            copy.UnlicensedWithheld = SmallGroupWithheldReasons.RevealsSmallerGroup;
+            return WithoutAgentFigures(copy, minPeople);
+        }
+
+        /// <summary>
+        /// The agent figures withheld on a copy already made: they count both sides together, so withholding either side
+        /// takes them too, as it does for every reader. Figures that were never measured stay unmeasured.
+        /// </summary>
+        private static AdoptionCombinedSegmentRow WithoutAgentFigures(AdoptionCombinedSegmentRow copy, int minPeople)
+        {
+            if (copy.AgentFiguresWithheld || !copy.AgentActiveUsers.HasValue) return copy;
+
+            copy.AgentFiguresWithheld = true;
+            copy.AgentFiguresWithheldReason = SmallGroupWithheldReasons.RevealsSmallerGroup;
+            copy.MinimumPeople = minPeople;
+            copy.AgentActiveUsers = null;
+            copy.AgentUsers = null;
+            copy.AgentUserPct = null;
+            copy.DistinctAgents = null;
+            copy.AgentsPer100ActiveUsers = null;
+            copy.AgentInteractions = null;
+            copy.InteractionsPerActiveAgent = null;
+            return copy;
+        }
+
+        private static AdoptionCombinedSegmentRow WithoutBuilders(AdoptionCombinedSegmentRow row, string reason, int minPeople)
+        {
+            var copy = row.Clone();
+            copy.AgentBuilders = null;
+            copy.AgentBuildersWithheld = reason;
+            copy.MinimumPeople = minPeople;
+            return copy;
+        }
+
+        #endregion
+
         #region Email domains
 
         /// <summary>

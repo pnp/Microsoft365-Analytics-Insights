@@ -596,13 +596,16 @@ namespace Tests.UnitTests
             Assert.IsTrue(summary.ManagerModellingByDepartment.All(d => d.ManagersActive.HasValue), "The control: nothing listed is withheld.");
 
             var trimmed = summary.WithoutIndividualData();
-            var withheld = trimmed.ManagerModellingByDepartment.Where(d => !d.ManagersActive.HasValue).ToList();
 
-            Assert.AreEqual(1, withheld.Count,
-                "With nothing withheld, everyone's figures less the two departments shown would be the unlisted manager's own use.");
-            Assert.AreEqual("Contoso Sales", withheld[0].Segment, "The smallest department shown goes, so the difference holds eleven managers.");
-            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, withheld[0].ManagersWithheld);
+            // The department breakdown leaves Tiny out, so for a reader without See PII it leaves out its smallest listed
+            // department as well - Sales - from every view of it, this table included (#844). Everyone's figures less the
+            // department shown then hold eleven managers.
+            CollectionAssert.AreEqual(new[] { "Contoso Finance" }, trimmed.ManagerModellingByDepartment.Select(d => d.Segment).ToList(),
+                "With nothing more withheld, everyone's figures less the two departments shown would be the unlisted manager's own use.");
+            Assert.IsTrue(trimmed.ManagerModellingByDepartment.All(d => d.ManagersActive.HasValue), "Finance stays whole.");
+            Assert.AreEqual(11, trimmed.ManagersStatusKnown - trimmed.ManagerModellingByDepartment.Sum(d => d.ManagersStatusKnown));
             Assert.AreEqual(summary.ManagersActive, trimmed.ManagersActive, "The headline stays.");
+            Assert.AreEqual(2, summary.ManagerModellingByDepartment.Count, "The cached summary must never be edited for one reader.");
         }
 
         [TestMethod]

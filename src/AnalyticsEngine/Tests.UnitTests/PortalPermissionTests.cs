@@ -1824,6 +1824,83 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CopilotAdoptionDepartmentsLeftOut_AreComplementedWithoutSeePii_OnTheSummaryAndTheWorkbook_AndUnchangedWithIt()
+        {
+            // #844: Legal's three seat holders are too few to list, so the scored seat holders less the departments listed
+            // are theirs; and Sales' two agent builders are too few to show, so the tenant's builders less the counts shown
+            // are theirs. Both reach a reader through the summary and the workbook.
+            var now = new DateTime(2026, 8, 23, 0, 0, 0, DateTimeKind.Utc);
+            var options = CopilotAdoptionOptions.Default;
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.Options = options;
+            analysis.Summary.GeneratedUtc = now;
+            analysis.Summary.WindowDays = options.WindowDays;
+            analysis.Summary.FromUtc = now.AddDays(-options.WindowDays);
+            analysis.Summary.ToUtc = now;
+            foreach (var (department, people) in new[] { ("Sales", 12), ("Support", 8), ("Finance", 6), ("Legal", 3) })
+            {
+                for (var i = 0; i < people; i++)
+                {
+                    analysis.LicensedUsers.Add(CopilotAdoptionScoring.Score(
+                        new LicensedUserUsageRow { UserId = analysis.LicensedUsers.Count + 1, UserPrincipalName = $"seat{analysis.LicensedUsers.Count}@contoso.com", Department = department, Interactions = 5 + i, ActiveDays = 1 + i % 4 },
+                        analysis.Summary.FromUtc, now, true, options));
+                }
+            }
+
+            analysis.AgentBuildersAssessed = true;
+            foreach (var (department, builders) in new[] { ("Sales", 2), ("Support", 6), ("Finance", 5) })
+            {
+                for (var i = 0; i < builders; i++)
+                {
+                    analysis.AgentBuilders.Add(new AgentBuilderRow { UserId = 3000 + analysis.AgentBuilders.Count, Department = department });
+                }
+            }
+
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            JObject Combined(JObject summary, string name) => (JObject)((JArray)summary["combinedByDepartment"]).Single(d => (string)d["segment"] == name);
+            List<string> Departments(JObject summary, string list) => ((JArray)summary[list]).Select(d => (string)d["segment"]).ToList();
+
+            using (var host = CopilotAdoptionHost(analysis, PortalTestHost.SignedIn()))
+            {
+                var summary = JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"));
+                foreach (var list in new[] { "adoptionByDepartment", "habitByDepartment", "intensityByDepartment" })
+                {
+                    CollectionAssert.AreEquivalent(new[] { "Sales", "Support" }, Departments(summary, list),
+                        $"{list}: Finance, the smallest listed, goes from every view, so Legal's three cannot be worked back.");
+                }
+
+                Assert.AreEqual(JTokenType.Null, Combined(summary, "Finance")["licensedUsers"].Type, "Withheld, never 0.");
+                Assert.AreEqual("revealsSmallerGroup", (string)Combined(summary, "Finance")["licensedWithheld"]);
+                Assert.AreEqual(JTokenType.Null, Combined(summary, "Sales")["agentBuilders"].Type);
+                Assert.AreEqual("fewPeople", (string)Combined(summary, "Sales")["agentBuildersWithheld"]);
+                Assert.AreEqual("revealsSmallerGroup", (string)Combined(summary, "Finance")["agentBuildersWithheld"],
+                    "The tenant's 13 builders less Support's 6 and Finance's 5 would be Sales' two.");
+                Assert.AreEqual(6, (int)Combined(summary, "Support")["agentBuilders"]);
+                Assert.AreEqual(13, (int)summary["agentBuilders"], "The headline stays.");
+                Assert.AreEqual(29, (int)summary["scoredUsers"]);
+                CollectionAssert.IsSubsetOf(new[] { "departments", "builderDepartments" }, ((JArray)summary["smallestGroupsWithheld"]).Select(v => (string)v).ToList());
+
+                var workbook = WorkbookText(await (await host.Client.GetAsync("api/CopilotAdoption/export/workbook")).Content.ReadAsByteArrayAsync());
+                StringAssert.Contains(workbook, "the smallest department it lists is left out too");
+                StringAssert.Contains(workbook, "Agent builders are blank for a department with fewer than 5 of them");
+
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                var full = JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"));
+                CollectionAssert.AreEquivalent(new[] { "Sales", "Support", "Finance" }, Departments(full, "habitByDepartment"),
+                    "A reader with See PII is given every department, as before.");
+                Assert.AreEqual(6, (int?)Combined(full, "Finance")["licensedUsers"]);
+                Assert.AreEqual(2, (int?)Combined(full, "Sales")["agentBuilders"]);
+                Assert.IsNull(Combined(full, "Sales")["agentBuildersWithheld"], "Nothing is withheld from a reader with See PII.");
+                Assert.IsNull(full["smallestGroupsWithheld"]);
+                var fullWorkbook = WorkbookText(await (await host.Client.GetAsync("api/CopilotAdoption/export/workbook")).Content.ReadAsByteArrayAsync());
+                Assert.IsFalse(fullWorkbook.Contains("is left out too"));
+                Assert.IsFalse(fullWorkbook.Contains("Agent builders are blank for a department"));
+                Assert.AreEqual(3, analysis.Summary.HabitByDepartment.Count, "The shared analysis must never be edited for one reader.");
+            }
+        }
+
+        [TestMethod]
         public async Task CopilotAdoptionPastRange_RefusesNamedListsButKeepsSummaryCounts()
         {
             var analysis = SmallAnalysis();
