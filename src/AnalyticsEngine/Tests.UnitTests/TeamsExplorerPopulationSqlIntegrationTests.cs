@@ -21,7 +21,9 @@ namespace Tests.UnitTests
     /// window. Read as written - as a reader with See PII is served - the overview's totals and trend, the rhythm, the
     /// lifecycle, the engagement trend and the people per platform count the disabled account; the department breakdown,
     /// built from the directory, never did, so the overview less the breakdown's rows was that one account's activity. Read
-    /// over the directory population, every one of them leaves it out, and the two agree. All data is synthetic.
+    /// over the directory population, every one of them leaves it out, and the two agree. A week before the 28-day window, in
+    /// which one person was active on two days, checks the per-person shape the trends take over a wider window. All data is
+    /// synthetic.
     /// </remarks>
     [TestClass]
     [TestCategory("SqlIntegration")]
@@ -36,11 +38,15 @@ namespace Tests.UnitTests
         private static string _database;
         private static string _connectionString;
         private static TeamsExplorerQuery _window;
+        private static DateTime _earlierWeek;
 
         [ClassInitialize]
         public static void CreateMigratedDatabase(TestContext context)
         {
             _window = TeamsExplorerQuery.Create(28, DateTime.UtcNow);
+            // The Monday (TeamsExplorerSql.WeekBucket) of a week inside a 90-day window and wholly before the 28-day one.
+            var earlier = _window.UsageToExclusiveUtc.AddDays(-45);
+            _earlierWeek = earlier.AddDays(-((earlier - new DateTime(1900, 1, 1)).Days % 7));
             _database = "TeamsExplorerPopulation_" + Guid.NewGuid().ToString("N").Substring(0, 12);
             _connectionString =
                 $@"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog={_database};Integrated Security=true;MultipleActiveResultSets=True;TrustServerCertificate=True";
@@ -109,6 +115,14 @@ namespace Tests.UnitTests
                     MeetingsAttendedCount = 7,
                 });
                 db.TeamsUserDeviceUsageLog.Add(new GlobalTeamsUserDeviceUsageLog { UserID = disabled.ID, Date = day, UsedWindows = true, UsedLinux = true });
+
+                // A week well before the 28-day window, for the wider one: the first person was active on two of its days,
+                // the second has a row with no activity in it, and the disabled account was active too.
+                var monday = _earlierWeek;
+                db.TeamUserActivityLogs.Add(new GlobalTeamsUserUsageLog { UserID = enabled[0].ID, Date = monday, LastActivityDate = monday, TeamChatMessageCount = 5, PrivateChatMessageCount = 1, MeetingsAttendedCount = 1 });
+                db.TeamUserActivityLogs.Add(new GlobalTeamsUserUsageLog { UserID = enabled[0].ID, Date = monday.AddDays(1), LastActivityDate = monday.AddDays(1), TeamChatMessageCount = 3 });
+                db.TeamUserActivityLogs.Add(new GlobalTeamsUserUsageLog { UserID = enabled[1].ID, Date = monday.AddDays(2), LastActivityDate = monday.AddDays(2) });
+                db.TeamUserActivityLogs.Add(new GlobalTeamsUserUsageLog { UserID = disabled.ID, Date = monday, LastActivityDate = monday, TeamChatMessageCount = 100 });
                 db.SaveChanges();
             }
         }
@@ -175,6 +189,46 @@ namespace Tests.UnitTests
                 StringAssert.Contains(adoption.Queries.Single(q => q.Key == key).Sql, "pop.account_enabled", key + " shows the narrowing it ran with.");
             }
         }
+
+        [TestMethod]
+        public async Task OverAWiderWindow_TheDirectoryTrends_AddEachPersonsWeekUp_AndLeaveTheDisabledAccountOut()
+        {
+            var wide = TeamsExplorerQuery.Create(90, DateTime.UtcNow);
+            var store = NewStore();
+            var asWritten = await store.GetOverviewAsync(wide, new TeamsExplorerSources());
+            var directory = await store.GetOverviewAsync(wide.WithDirectoryPopulation(), new TeamsExplorerSources());
+            var adoptionAsWritten = await store.GetAdoptionAsync(wide);
+            var adoptionDirectory = await store.GetAdoptionAsync(wide.WithDirectoryPopulation());
+            AssertNoQueryFailed(asWritten, directory, adoptionAsWritten, adoptionDirectory);
+
+            // A reader with See PII: the first person and the disabled account were active that week; a row with no
+            // activity in it is nobody's.
+            var seePiiWeek = asWritten.Trend.Single(p => p.WeekStart == _earlierWeek);
+            Assert.AreEqual(2, seePiiWeek.ActiveUsers);
+            Assert.AreEqual(108L, seePiiWeek.ChannelMessages);
+            Assert.AreEqual(2, SegmentsOf(adoptionAsWritten.SegmentTrend.Single(p => p.WeekStart == _earlierWeek)));
+
+            // Over the directory: the first person once, though active on two days, with both days' messages.
+            var directoryWeek = directory.Trend.Single(p => p.WeekStart == _earlierWeek);
+            Assert.AreEqual(1, directoryWeek.ActiveUsers);
+            Assert.AreEqual(8L, directoryWeek.ChannelMessages);
+            Assert.AreEqual(1L, directoryWeek.PrivateMessages);
+            Assert.AreEqual(1L, directoryWeek.MeetingsAttended);
+            Assert.AreEqual(1, SegmentsOf(adoptionDirectory.SegmentTrend.Single(p => p.WeekStart == _earlierWeek)));
+
+            // Every week adds up to the period's totals for each reader, and the two differ by the disabled account alone.
+            Assert.AreEqual(asWritten.Kpis.ChannelMessages, asWritten.Trend.Sum(p => p.ChannelMessages));
+            Assert.AreEqual(directory.Kpis.ChannelMessages, directory.Trend.Sum(p => p.ChannelMessages));
+            Assert.AreEqual(DisabledChannelMessages + 100, asWritten.Kpis.ChannelMessages.Value - directory.Kpis.ChannelMessages.Value);
+            CollectionAssert.AreEqual(
+                asWritten.Trend.Select(p => p.WeekStart).ToList(),
+                directory.Trend.Select(p => p.WeekStart).ToList(),
+                "The same weeks: each also had an enabled person's row.");
+            StringAssert.Contains(directory.Queries.Single(q => q.Key == "overview-trend").Sql, "pop.account_enabled");
+            Assert.IsFalse(asWritten.Queries.Single(q => q.Key == "overview-trend").Sql.Contains("pop."));
+        }
+
+        private static int SegmentsOf(TeamsSegmentTrendPoint week) => (week.Power ?? 0) + (week.Regular ?? 0) + (week.Light ?? 0);
 
         private static double BreakdownMessages(TeamsAdoption adoption) =>
             adoption.Breakdown.Sum(r => r.MessagesPerActiveUser * r.ActiveUsers);

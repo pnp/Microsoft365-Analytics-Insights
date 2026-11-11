@@ -168,7 +168,9 @@ namespace Common.Entities.TeamsExplorer
             var usageTask = RunAsync<OverviewUsageRow>("overview-usage", TeamsExplorerSql.OverviewUsage, query, championDays);
             var callsTask = RunAsync<CallCountRow>("overview-calls", TeamsExplorerSql.OverviewCalls(), query, championDays);
             var teamsTask = RunAsync<CollaborationKpiRow>("overview-teams", TeamsExplorerSql.CollaborationKpis, query, championDays);
-            var trendTask = RunAsync<UsageTrendRow>("overview-trend", TeamsExplorerSql.OverviewTrend(), query, championDays);
+            // A reader without See PII is served the trend over the directory population, in the shape that measured cheaper.
+            var trendSql = query.DirectoryPopulation ? TeamsExplorerSql.OverviewTrendOverDirectory() : TeamsExplorerSql.OverviewTrend();
+            var trendTask = RunAsync<UsageTrendRow>("overview-trend", trendSql, query, championDays);
             var callTrendTask = RunAsync<WeekCallCountRow>("overview-call-trend", TeamsExplorerSql.OverviewCallTrend(), query, championDays);
             var segmentTask = RunAsync<ActiveDayHistogramRow>("overview-segments", TeamsExplorerSql.SegmentHistogram, query, championDays);
             var coverageTask = RunAsync<UsageCoverageRow>("overview-coverage", TeamsExplorerSql.UsageCoverage, query, championDays);

@@ -180,8 +180,8 @@ namespace Tests.UnitTests
             ["TeamsAuthAPIController.Put"] = Admin,
 
             ["TeamsExplorerAPIController.Availability"] = Any,
-            ["TeamsExplorerAPIController.Overview"] = Any,
-            ["TeamsExplorerAPIController.Adoption"] = Any,             // folds breakdown groups of fewer than 5 people without See PII
+            ["TeamsExplorerAPIController.Overview"] = Any,             // reads the breakdown's population without See PII; withholds weeks, segments and KPIs of 1-4 people
+            ["TeamsExplorerAPIController.Adoption"] = Any,             // folds breakdown groups of fewer than 5 people without See PII, reads its population, withholds rhythm, lifecycle, segments and platforms of 1-4
             ["TeamsExplorerAPIController.Meetings"] = Any,             // trims the named leaderboards; withholds weeks, distributions and modalities of fewer than 5 people
             ["TeamsExplorerAPIController.Collaboration"] = Any,        // drops teams and channels of teams with fewer than 5 members, withholds reactions of 1-4 people and the tab list, folds rare reactions
             ["TeamsExplorerAPIController.Conversations"] = Any,        // withholds key phrases and languages; drops the sentiment of teams with fewer than 5 members

@@ -350,7 +350,6 @@ namespace Tests.UnitTests
             var marked = new Dictionary<string, string>
             {
                 ["overview-usage"] = TeamsExplorerSql.OverviewUsage,
-                ["overview-trend"] = TeamsExplorerSql.OverviewTrend(),
                 ["adoption-rhythm"] = TeamsExplorerSql.AdoptionRhythm(),
                 ["adoption-segment-trend"] = TeamsExplorerSql.SegmentTrendHistogram(),
                 ["adoption-lifecycle"] = TeamsExplorerSql.AdoptionLifecycle,
@@ -367,6 +366,11 @@ namespace Tests.UnitTests
                 Assert.IsFalse(directory.Contains("/*population:"), statement.Key);
             }
 
+            // The trend has a statement of its own for the directory population, which adds each person's week up first; a
+            // reader with See PII runs the one they always did.
+            Assert.IsFalse(TeamsExplorerSql.OverviewTrend().Contains("population") || TeamsExplorerSql.OverviewTrend().Contains("pop."));
+            StringAssert.Contains(TeamsExplorerSql.OverviewTrendOverDirectory(), "FROM dbo.users AS pop WHERE pop.id = p.user_id");
+
             // The breakdown and the engagement mix are built from the directory already.
             Assert.IsFalse(TeamsExplorerSql.AdoptionBreakdown("department").Contains("/*population:"));
             Assert.IsFalse(TeamsExplorerSql.SegmentHistogram.Contains("/*population:"));
@@ -375,6 +379,8 @@ namespace Tests.UnitTests
             var enabled = TeamsExplorerSql.EnabledUsersPredicate.Replace("u.", "pop.");
             StringAssert.Contains(TeamsExplorerSql.UsagePopulation, enabled);
             StringAssert.Contains(TeamsExplorerSql.DevicePopulation, enabled);
+            StringAssert.Contains(TeamsExplorerSql.PerPersonPopulation, enabled);
+            StringAssert.Contains(TeamsExplorerSql.OverviewTrendOverDirectory(), enabled);
         }
 
         [TestMethod]

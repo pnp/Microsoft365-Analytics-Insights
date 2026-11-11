@@ -1,7 +1,9 @@
+using Common.Entities.SpoWebActivity;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 
 namespace Common.Entities.TeamsExplorer
@@ -201,8 +203,9 @@ namespace Common.Entities.TeamsExplorer
         /// Which of <paramref name="people"/> - the people behind each part of a total the page publishes beside them - a reader
         /// without See PII is not shown: every part of 1 to <paramref name="minimumPeople"/> - 1 people and, whenever there is
         /// one, the smallest part still shown as well. The total less the parts shown is then a combined figure of at least the
-        /// minimum people, never one small part's - <see cref="FoldBuckets"/>' rule, for parts that are withheld in place
-        /// rather than folded into a row. When no part is big enough to join them, only the small parts are withheld.
+        /// minimum people, never one small part's. It is <see cref="WebActivitySmallGroups.WithoutSmallRows{T}"/>' rule (and
+        /// <see cref="FoldBuckets"/>'), for parts withheld in place rather than left out or folded into a row; a part of nobody
+        /// takes no part in it and is shown as the zero it is. Ties go to the first part.
         /// </summary>
         /// <returns>The indexes of the parts to withhold.</returns>
         internal static HashSet<int> WithheldParts(IReadOnlyList<long> people, int minimumPeople)
@@ -210,17 +213,14 @@ namespace Common.Entities.TeamsExplorer
             if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
 
             var parts = people ?? new List<long>();
-            var withheld = new HashSet<int>(Enumerable.Range(0, parts.Count).Where(i => IsFew(parts[i], minimumPeople)));
-            if (withheld.Count == 0) return withheld;
-
-            var smallestShown = Enumerable.Range(0, parts.Count)
-                .Where(i => !withheld.Contains(i) && parts[i] >= minimumPeople)
-                .OrderBy(i => parts[i])
-                .ThenBy(i => i)
-                .Select(i => (int?)i)
-                .FirstOrDefault();
-            if (smallestShown.HasValue) withheld.Add(smallestShown.Value);
-            return withheld;
+            var somebody = Enumerable.Range(0, parts.Count).Where(i => parts[i] > 0).ToList();
+            var shown = WebActivitySmallGroups.WithoutSmallRows(
+                somebody,
+                i => (int?)Math.Min(parts[i], int.MaxValue),
+                i => i.ToString("D10", CultureInfo.InvariantCulture),
+                minimumPeople,
+                out _);
+            return new HashSet<int>(somebody.Except(shown));
         }
 
         /// <summary>

@@ -165,6 +165,14 @@ namespace Common.Entities.TeamsExplorer
         // accounts' own activity, one person's when one account was disabled. Like the scope markers these are comments, and
         // unless the query asks for the directory population (TeamsExplorerQuery.WithDirectoryPopulation) they are removed:
         // a reader with See PII runs exactly the statement they always did. The predicate is EnabledUsersPredicate's.
+        //
+        // Measured at synthetic scale (200,000 people, 5% of them disabled, 20 million usage and 20 million device rows over
+        // 400 days; LocalDB, serial plans; medians of five runs): each statement reads dbo.users once more (6,076 pages, about
+        // 1.5% more logical reads) and is within noise on the 28-day window. On a 365-day window the statements that add each
+        // person's usage up first - the totals, the lifecycle, the platforms and, narrowed after that, the engagement trend -
+        // stay within 7%; the weekly trend, in OverviewTrendOverDirectory's per-person shape, takes about 1.3 s more (7.5 s to
+        // 8.8 s, where narrowing every row took 3-4 s more); and the rhythm, which still narrows every row, about 2 s more
+        // (7.8 s to 9.8 s). NOT EXISTS against the disabled accounts measured no better row by row and worse per person.
 
         private const string PopulationMarkerOpen = "/*population:";
         private const string PopulationMarkerClose = "*/";
@@ -176,6 +184,16 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>Narrows <c>dbo.teams_user_device_usage_log</c>, aliased <c>d</c>, to the directory population.</summary>
         public const string DevicePopulation =
             "/*population: AND EXISTS (SELECT 1 FROM dbo.users AS pop WHERE pop.id = d.user_id AND (pop.account_enabled IS NULL OR pop.account_enabled = 1))*/";
+
+        /// <summary>A per-person row aliased <c>p</c> - usage already added up by <c>user_id</c> - is in the directory population.</summary>
+        private const string DirectoryPerson =
+            "EXISTS (SELECT 1 FROM dbo.users AS pop WHERE pop.id = p.user_id AND (pop.account_enabled IS NULL OR pop.account_enabled = 1))";
+
+        /// <summary>
+        /// Narrows a per-person row aliased <c>p</c> to the directory population, once each person's usage is added up rather
+        /// than row by row: the same people, and measurably cheaper where the rows are added up per person and week.
+        /// </summary>
+        public const string PerPersonPopulation = "/*population: AND " + DirectoryPerson + "*/";
 
         /// <summary>
         /// The statement read over the directory population when <paramref name="directoryPopulation"/> is true - each
@@ -370,9 +388,46 @@ SELECT
     ISNULL(SUM(CAST(t.private_chat_count AS bigint)), 0)           AS PrivateMessages,
     ISNULL(SUM(CAST(t.meetings_attended_count AS bigint)), 0)      AS MeetingsAttended
 FROM dbo.teams_user_activity_log AS t
-WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation}
+WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
 GROUP BY {week}
 ORDER BY WeekStart
+OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
+        /// <see cref="OverviewTrend"/> over the directory population, for a reader without See PII (#844, S4-1): the same
+        /// weekly figures, for the people the Adoption breakdown is made of. Each person's week is added up first and only
+        /// then matched to the directory: matching every usage row instead cost 3-4 s more CPU on a 365-day window at
+        /// synthetic scale, this about 1.5 s (see the population markers' note). A reader with See PII still runs
+        /// <see cref="OverviewTrend"/>, unchanged.
+        /// </summary>
+        public static string OverviewTrendOverDirectory()
+        {
+            var week = WeekBucket("t.[date]");
+
+            return $@"
+WITH PerPersonWeek AS (
+    SELECT
+        {week} AS WeekStart,
+        t.user_id,
+        MAX(CASE WHEN {ActivitySum} > 0 THEN 1 ELSE 0 END) AS Active,
+        SUM(CAST({ChannelMessageSum} AS bigint))         AS ChannelMessages,
+        SUM(CAST(t.private_chat_count AS bigint))        AS PrivateMessages,
+        SUM(CAST(t.meetings_attended_count AS bigint))   AS MeetingsAttended
+    FROM dbo.teams_user_activity_log AS t
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
+    GROUP BY {week}, t.user_id
+)
+SELECT
+    p.WeekStart,
+    SUM(p.Active)                         AS ActiveUsers,
+    ISNULL(SUM(p.ChannelMessages), 0)     AS ChannelMessages,
+    ISNULL(SUM(p.PrivateMessages), 0)     AS PrivateMessages,
+    ISNULL(SUM(p.MeetingsAttended), 0)    AS MeetingsAttended
+FROM PerPersonWeek AS p
+WHERE {DirectoryPerson}
+GROUP BY p.WeekStart
+ORDER BY p.WeekStart
 OPTION (RECOMPILE);";
         }
 
@@ -472,12 +527,12 @@ WITH PerUserWeek AS (
     SELECT {week} AS WeekStart, t.user_id,
            SUM(CASE WHEN {ActivitySum} > 0 THEN 1 ELSE 0 END) AS ActiveDays
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation}
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
     GROUP BY {week}, t.user_id
 )
 SELECT p.WeekStart, p.ActiveDays, COUNT_BIG(*) AS Users
 FROM PerUserWeek AS p
-WHERE p.ActiveDays > 0
+WHERE p.ActiveDays > 0{PerPersonPopulation}
 GROUP BY p.WeekStart, p.ActiveDays
 ORDER BY p.WeekStart, p.ActiveDays
 OPTION (RECOMPILE);";
