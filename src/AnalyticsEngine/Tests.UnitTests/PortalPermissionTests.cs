@@ -1811,9 +1811,9 @@ namespace Tests.UnitTests
 
                 host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
                 var full = JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"));
-                Assert.AreEqual(3, (int)DomainRow(full, "contoso.com")["unlicensedActiveUsers"]);
+                Assert.AreEqual(3, (int?)DomainRow(full, "contoso.com")["unlicensedActiveUsers"], "A reader with See PII is given every figure, as before.");
                 Assert.IsNull(DomainRow(full, "contoso.com")["unlicensedUsersWithheld"], "Nothing is withheld from a reader with See PII.");
-                Assert.AreEqual(7, (int)DepartmentRow(full, "Sales")["recommendedCandidates"]);
+                Assert.AreEqual(7, (int?)DepartmentRow(full, "Sales")["recommendedCandidates"]);
                 Assert.AreEqual("Sales", (string)((JArray)full["opportunityByDepartment"]).Single()["label"]);
                 Assert.IsNull(full["opportunityByDepartmentWithheld"]);
                 var fullWorkbook = WorkbookText(await (await host.Client.GetAsync("api/CopilotAdoption/export/workbook")).Content.ReadAsByteArrayAsync());

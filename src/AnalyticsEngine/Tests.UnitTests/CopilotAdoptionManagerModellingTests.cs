@@ -598,8 +598,10 @@ namespace Tests.UnitTests
             var trimmed = summary.WithoutIndividualData();
             var withheld = trimmed.ManagerModellingByDepartment.Where(d => !d.ManagersActive.HasValue).ToList();
 
-            Assert.AreEqual("Contoso Sales", withheld.Single().Segment, "The smallest department shown goes, so the difference holds eleven managers.");
-            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, withheld.Single().ManagersWithheld);
+            Assert.AreEqual(1, withheld.Count,
+                "With nothing withheld, everyone's figures less the two departments shown would be the unlisted manager's own use.");
+            Assert.AreEqual("Contoso Sales", withheld[0].Segment, "The smallest department shown goes, so the difference holds eleven managers.");
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, withheld[0].ManagersWithheld);
             Assert.AreEqual(summary.ManagersActive, trimmed.ManagersActive, "The headline stays.");
         }
 

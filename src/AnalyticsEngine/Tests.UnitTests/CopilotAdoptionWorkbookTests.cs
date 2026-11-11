@@ -1053,8 +1053,9 @@ namespace Tests.UnitTests
             }
 
             var full = CopilotAdoptionWorkbook.Build(analysis);
-            Assert.AreEqual("3", Row(full, "fabrikam.example")["J"], "With See PII every figure is written, as before.");
-            Assert.AreEqual("17", Row(full, "contoso.com")["J"]);
+            string Cell(Dictionary<string, string> row, string column) => row.TryGetValue(column, out var cell) ? cell : null;
+            Assert.AreEqual("3", Cell(Row(full, "fabrikam.example"), "J"), "With See PII every figure is written, as before.");
+            Assert.AreEqual("17", Cell(Row(full, "contoso.com"), "J"));
             Assert.IsFalse(SheetCells(full, "Email domains").Any(c => c.Contains("left blank")));
             Assert.AreEqual(3, analysis.Summary.EmailDomains.Single(d => d.Segment == "fabrikam.example").UnlicensedActiveUsers,
                 "The cached analysis must never be edited for one reader.");
