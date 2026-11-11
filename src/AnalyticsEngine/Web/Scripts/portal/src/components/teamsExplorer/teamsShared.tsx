@@ -124,7 +124,7 @@ export function PrivacyReaderNote({ minimumGroupSize }: { minimumGroupSize: numb
   const t = useT();
   if (minimumGroupSize == null) return null;
   return (
-    <Text as="p" size={200} className={styles.muted} data-testid="teams-privacy-note">
+    <Text as="p" block size={200} className={styles.muted} style={{ marginTop: '4px' }} data-testid="teams-privacy-note">
       {t('teamsExplorer.privacy.readerNote', { count: formatCount(minimumGroupSize) })}
     </Text>
   );

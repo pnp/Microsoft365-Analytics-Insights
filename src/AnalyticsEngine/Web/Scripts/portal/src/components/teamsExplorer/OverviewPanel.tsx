@@ -452,6 +452,7 @@ export default function OverviewPanel({ data }: { data: TeamsOverview }) {
             colours={shownSlices.map(({ index }) => seriesColor(index))}
             centreValue={segmentsWithheld ? '\u2014' : formatCount(measuredUsers)}
             centreLabel={t('teamsExplorer.overview.engagementMix.centreLabel')}
+            showShares={!segmentsWithheld && shownSlices.every(({ slice }) => slice.sharePct != null)}
           />
           <Text size={200} className={styles.muted}>
             {data.segmentMix

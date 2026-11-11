@@ -138,6 +138,10 @@ describe('Teams Explorer overview for a reader without See PII', () => {
     expect(screen.getByText(/left out of this mix: fewer than 5\./)).toBeInTheDocument();
     // The donut's total would be the measured people less the withheld segments: a dash, not a misleading sum.
     expect(container.querySelector('svg[aria-label="measured users"]')?.textContent).toContain('\u2014');
+    // Nor does a shown segment get a share of the segments shown, which is not its share of the measured people.
+    expect(screen.getAllByText('25').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^25 \(/)).not.toBeInTheDocument();
+    expect(container.querySelector('svg[aria-label="measured users"] title')?.textContent).not.toContain('%');
     // The KPIs about forty people stand.
     expect(screen.getAllByText('33.3%').length).toBeGreaterThan(0);
     expect(screen.queryAllByRole('img', { name: WITHHELD_EN })).toHaveLength(0);
@@ -190,6 +194,8 @@ describe('Teams Explorer overview for a reader without See PII', () => {
     expect(screen.queryByText(/are hidden to protect privacy/)).not.toBeInTheDocument();
     expect(screen.getByText(/left out of this mix: 2\./)).toBeInTheDocument();
     expect(screen.queryAllByRole('img', { name: WITHHELD_EN })).toHaveLength(0);
+    // Every segment is drawn, each with its share, as before.
+    expect(screen.getByText('25 (22.9%)')).toBeInTheDocument();
   });
 });
 

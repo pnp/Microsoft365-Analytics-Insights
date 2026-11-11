@@ -411,10 +411,11 @@ namespace Tests.UnitTests
                     Test<TeamsExplorerPopulationSqlIntegrationTests>(nameof(TeamsExplorerPopulationSqlIntegrationTests.OverTheDirectoryPopulation_EveryUsageFigureLeavesItOut_AndTheOverviewLessTheBreakdownIsNothing)),
                     Test<TeamsExplorerPopulationSqlIntegrationTests>(nameof(TeamsExplorerPopulationSqlIntegrationTests.OverAWiderWindow_TheDirectoryTrends_AddEachPersonsWeekUp_AndLeaveTheDisabledAccountOut)))
                 .WithKnownGap("#844 (G5): counts of people that nest are each floored, but not their differences - the people in "
-                    + "the larger count and not the smaller: active in the period and not in a week, and in the directory and not "
+                    + "the larger count and not the smaller: active in the period and not in a week; in the directory and not "
                     + "active (known less active users), which is the Dormant segment's count when everyone in view holds a Teams "
-                    + "licence and every day was imported. Such a difference counts people with no activity, never what anyone "
-                    + "did, and flooring it would blank most weeks, and reach, of any stable population.")
+                    + "licence and every day was imported; licensed and not in the engagement mix, the unmeasured count. Such a "
+                    + "difference counts people with no activity, never what anyone did, and flooring it would blank most weeks, "
+                    + "and reach, of any stable population.")
                 .WithKnownGap("#866: the calls KPI and the call judgements are the Meetings tab's figures, with its residuals: a view "
                     + "of 1-4 attendees still shows them, and organiser concentration is the busiest tenth of organisers' share of "
                     + "meetings - fewer than 5 organisers whenever there are fewer than 41."),
@@ -447,9 +448,10 @@ namespace Tests.UnitTests
                 .WithKnownGap("#844 (G5): counts of people that nest are each floored, but not their differences - the people in "
                     + "the larger count and not the smaller: active in the month and not the last week; in a breakdown group and "
                     + "not active, which summed over the groups is the Dormant segment's count when everyone in view holds a Teams "
-                    + "licence and every day was imported; and, while the platform shares are shown, seen on any device and not on "
-                    + "one platform. Such a difference counts people with no activity of some kind, never what anyone did, and "
-                    + "flooring it would blank most weeks, and reach, of any stable population."),
+                    + "licence and every day was imported; licensed and not in the engagement mix, the unmeasured count; and, "
+                    + "while the platform shares are shown, seen on any device and not on one platform. Such a difference counts "
+                    + "people with no activity of some kind, never what anyone did, and flooring it would blank most weeks, and "
+                    + "reach, of any stable population."),
             ["TeamsExplorerAPIController.Meetings"] = Floored(
                     "A copy without the named organiser and attendee lists; a week of fewer than 5 attendees withheld, every "
                     + "distribution withheld when fewer than 5 people attended in the view, and modalities of fewer than 5 people folded.")
