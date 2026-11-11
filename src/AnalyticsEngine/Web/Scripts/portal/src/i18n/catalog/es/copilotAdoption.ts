@@ -792,6 +792,12 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.combinedViews.segment.agentBuilders': 'Creadores de agentes',
   'copilotAdoption.combinedViews.segment.agentBuilders.help': 'Personas de este departamento que crearon, publicaron o compartieron un agente de Copilot Studio en el periodo. Solo un recuento, nunca un nombre.',
   'copilotAdoption.combinedViews.segment.notMeasured': 'No se midió para este periodo.',
+  // Un lado, las cifras de agentes o los creadores de un departamento ocultos a un lector sin See PII (#844)
+  'copilotAdoption.combinedViews.segment.withheld.revealsSmallerGroup':
+    'Oculto: con las cifras del inquilino, las de este departamento revelarían las de un departamento demasiado pequeño para mostrarse',
+  'copilotAdoption.combinedViews.segment.builders.fewPeople': 'Oculto: menos de {count} creadores de agentes en este departamento',
+  'copilotAdoption.combinedViews.segment.builders.revealsSmallerGroup':
+    'Oculto: con los creadores de agentes del inquilino, este recuento revelaría un departamento con menos de {count}',
   'copilotAdoption.combinedViews.agents.title': 'Amplitud y profundidad de los agentes',
   'copilotAdoption.combinedViews.agents.scope': 'Agentes contabilizados: {scope}. La amplitud indica lo extendido que está el uso de agentes; la profundidad, en cuántos agentes se apoyan las personas.',
   'copilotAdoption.combinedViews.agents.scope.allAgents': 'todos los agentes, los de Microsoft y los propios',
@@ -828,6 +834,19 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.shared.segmentTable.withheld': 'Demasiado pocas personas para mostrarlo sin señalar a nadie',
   'copilotAdoption.shared.segmentTable.withheldRevealsSmallerGroup':
     'Oculto: con las cifras de todos que aparecen sobre la tabla, las de este departamento revelarían las de otro con demasiado pocos responsables de equipo para mostrarlas',
+  // Un desglose que, para un lector sin See PII, omite su grupo más pequeño de la lista además de los demasiado pequeños (#844)
+  'copilotAdoption.shared.smallestGroupWithheld.departments':
+    'También se omite un departamento más, el más pequeño de la lista, en todas las vistas por departamento, para que las cifras del inquilino menos los departamentos mostrados no revelen uno demasiado pequeño para mostrarse.',
+  'copilotAdoption.shared.smallestGroupWithheld.countries':
+    'También se omite un país más, el más pequeño de la lista, para que las cifras del inquilino menos los países mostrados no revelen uno demasiado pequeño para mostrarse.',
+  'copilotAdoption.shared.smallestGroupWithheld.accountability':
+    'También se omite un grupo más, el más pequeño de la lista, para que las cifras del inquilino menos los grupos mostrados no revelen uno demasiado pequeño para mostrarse.',
+  'copilotAdoption.shared.smallestGroupWithheld.unlicensedDepartments':
+    'También se ocultan los usuarios sin licencia de un departamento más, el más pequeño de la lista, para que los usuarios sin licencia del inquilino menos los departamentos mostrados no revelen un departamento demasiado pequeño para mostrarse.',
+  'copilotAdoption.shared.smallestGroupWithheld.agentDepartments':
+    'También se ocultan las cifras de agentes de un departamento más, el más pequeño de los mostrados, para que los usuarios activos del inquilino menos los departamentos mostrados no revelen uno demasiado pequeño para mostrarse.',
+  'copilotAdoption.shared.smallestGroupWithheld.builderDepartments':
+    'Los creadores de agentes se ocultan en un departamento con demasiado pocos para mostrarse, y en uno más, el más pequeño de los mostrados, para que los creadores del inquilino menos los departamentos mostrados no revelen un recuento menor.',
   'copilotAdoption.shared.expandableUser.hideAssessment': 'Ocultar la evaluación completa de {user}',
   'copilotAdoption.shared.expandableUser.showAssessment': 'Mostrar la evaluación completa de {user}',
   'copilotAdoption.shared.expandAll.expand': 'Expandir todo',

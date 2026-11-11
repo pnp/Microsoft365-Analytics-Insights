@@ -7,9 +7,9 @@ import {
 } from '@fluentui/react-icons';
 import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useT, type TFunction } from '../../i18n';
+import { useT, type TFunction, type TranslationKey } from '../../i18n';
 import { AdoptionBand } from '../../types/copilotAdoption';
-import type { AdoptionSegmentRow, ManagerModellingSegmentRow } from '../../types/copilotAdoption';
+import type { AdoptionSegmentRow, ManagerModellingSegmentRow, WithheldBreakdown } from '../../types/copilotAdoption';
 import { ADOPTION_BANDS } from '../charts/GaugeRing';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 import InfoTip from '../shared/InfoTip';
@@ -352,7 +352,51 @@ const useStyles = makeStyles({
     paddingLeft: '10px',
     marginBottom: '12px',
   },
+  /** Why a breakdown leaves out one more group than its floor, below the view it applies to (#844). */
+  smallestGroupNote: {
+    display: 'block',
+    marginTop: '8px',
+    color: tokens.colorNeutralForeground3,
+  },
 });
+
+/**
+ * The sentence for each breakdown the server can name in `smallestGroupsWithheld` - the C#
+ * `CopilotAdoptionWithheldBreakdowns` constants. A test reads the C# so a new one cannot ship unworded.
+ */
+export const SMALLEST_GROUP_WITHHELD_KEYS: Record<WithheldBreakdown, TranslationKey> = {
+  departments: 'copilotAdoption.shared.smallestGroupWithheld.departments',
+  countries: 'copilotAdoption.shared.smallestGroupWithheld.countries',
+  accountability: 'copilotAdoption.shared.smallestGroupWithheld.accountability',
+  unlicensedDepartments: 'copilotAdoption.shared.smallestGroupWithheld.unlicensedDepartments',
+  agentDepartments: 'copilotAdoption.shared.smallestGroupWithheld.agentDepartments',
+  builderDepartments: 'copilotAdoption.shared.smallestGroupWithheld.builderDepartments',
+};
+
+/**
+ * Says, below a department, country or accountability view, that a reader without See PII is shown one group fewer than
+ * the floor alone would leave: whenever a breakdown leaves a group out, its smallest listed group goes from every view of
+ * it too, so the tenant's figures less the groups shown cannot give back a small one (#844). Nothing when the server
+ * withheld nothing more, which is always the case for a reader with See PII.
+ */
+export function SmallestGroupWithheldNote({
+  withheld,
+  breakdowns,
+}: {
+  withheld: readonly string[] | null | undefined;
+  breakdowns: readonly WithheldBreakdown[];
+}) {
+  const styles = useStyles();
+  const t = useT();
+  const named = breakdowns.filter((breakdown) => withheld?.includes(breakdown));
+  if (named.length === 0) return null;
+
+  return (
+    <Text size={200} className={styles.smallestGroupNote}>
+      {named.map((breakdown) => t(SMALLEST_GROUP_WITHHELD_KEYS[breakdown])).join(' ')}
+    </Text>
+  );
+}
 
 /** The engagement band as a coloured pill. */
 export function BandBadge({ band, name }: { band: AdoptionBand; name: string }) {

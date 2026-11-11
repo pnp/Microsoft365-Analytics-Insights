@@ -706,6 +706,51 @@ describe('CopilotAdoptionPage view split', () => {
     expect(await screen.findByText(chartNote, {}, { timeout: 5000 })).toBeVisible();
   });
 
+  it.each([
+    {
+      language: 'en' as const,
+      analyst: 'Analyst view',
+      departments: /^One more department, the smallest listed, is left out of every department view too/,
+      countries: /^One more country, the smallest listed, is left out too/,
+      builders: /Agent builders are hidden for a department with too few of them to show/,
+    },
+    {
+      language: 'es' as const,
+      analyst: 'Vista de analista',
+      departments: /^También se omite un departamento más, el más pequeño de la lista, en todas las vistas por departamento/,
+      countries: /^También se omite un país más, el más pequeño de la lista/,
+      builders: /Los creadores de agentes se ocultan en un departamento con demasiado pocos para mostrarse/,
+    },
+  ])('says in $language, under each view, that one more group is left out for a reader without See PII', async ({ language, analyst, departments, countries, builders }) => {
+    // #844: the server left out the smallest listed department and country, and one more department's builders, so that
+    // the tenant's figures less the groups shown cannot give back a group too small to list.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      smallestGroupsWithheld: ['departments', 'countries', 'builderDepartments'],
+    }));
+    if (language === 'es') await loadCatalog('es');
+    await renderPage({ language });
+
+    expect(await screen.findByText(departments, {}, { timeout: 5000 })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('tab', { name: analyst }));
+    await screen.findByRole('tab', { name: analyst, selected: true });
+    // The adoption, intensity and side-by-side cards are each a view of the departments.
+    expect((await screen.findAllByText(departments, {}, { timeout: 5000 })).length).toBeGreaterThanOrEqual(3);
+    expect(screen.getByText(countries)).toBeVisible();
+    expect(screen.getByText(builders)).toBeVisible();
+  });
+
+  it('says nothing more is left out when the server withheld nothing more, as for a reader with See PII', async () => {
+    await renderPage();
+    await screen.findByRole('table', { name: 'Department league table' }, { timeout: 5000 });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+    await screen.findByRole('tab', { name: 'Analyst view', selected: true });
+    await screen.findByText('Usage frequency and intensity', {}, { timeout: 5000 });
+    expect(screen.queryByText(/is left out of every department view too/)).toBeNull();
+    expect(screen.queryByText(/One more country/)).toBeNull();
+  });
+
   it('shows Microsoft’s tenant prompt figures on the executive view, named and dated, beside the audit figures', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
       microsoftReportDate: '2026-10-05T00:00:00Z',

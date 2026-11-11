@@ -30,6 +30,15 @@ export type SeatIdleWithheldReason = 'fewHolders' | 'revealsSmallerSeat';
  */
 export type SmallGroupWithheldReason = 'fewPeople' | 'revealsSmallerGroup';
 
+/** A breakdown `CopilotAdoptionSummary.smallestGroupsWithheld` names (#844); the server's CopilotAdoptionWithheldBreakdowns. */
+export type WithheldBreakdown =
+  | 'departments'
+  | 'countries'
+  | 'accountability'
+  | 'unlicensedDepartments'
+  | 'agentDepartments'
+  | 'builderDepartments';
+
 /** A licence type and whether the tool counted it as a Microsoft 365 Copilot seat. */
 export interface LicenceTypeClassification {
   id: number;
@@ -501,6 +510,18 @@ export interface AdoptionCombinedSegmentRow {
   agentInteractions?: number | null;
   interactionsPerActiveAgent?: number | null;
   agentBuilders?: number | null;
+  /**
+   * Set, for a reader without See PII, when that side's figures are null although enough people are on it: with the
+   * tenant's figures beside the table, they would give back a department too small to list (#844).
+   */
+  licensedWithheld?: SmallGroupWithheldReason | null;
+  unlicensedWithheld?: SmallGroupWithheldReason | null;
+  /** Why the agent figures are withheld, when it is to protect a smaller department rather than this one's size (#844). */
+  agentFiguresWithheldReason?: SmallGroupWithheldReason | null;
+  /** Set when `agentBuilders` is null for a reader without See PII: too few builders, or it would give back such a count (#844). */
+  agentBuildersWithheld?: SmallGroupWithheldReason | null;
+  /** The floor a reader without See PII is held to, sent with any of the reasons above. */
+  minimumPeople?: number | null;
 }
 
 /** Adoption, reclaim and next-action counts for one accountable unit. */
@@ -781,6 +802,12 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
    * See PII: with the tenant's recommended candidates, its count would give back a smaller department's (#844).
    */
   opportunityByDepartmentWithheld?: SmallGroupWithheldReason | null;
+  /**
+   * The breakdowns that, for a reader without See PII, left out their smallest listed group from every view of them as
+   * well as the groups too small to list, so that the tenant's figures less the groups shown cannot give back a small one
+   * (#844). Absent when none did.
+   */
+  smallestGroupsWithheld?: WithheldBreakdown[] | null;
   weeklyTrend: ReportSeries[];
   weeklyVolumeTrend: ReportSeries[];
   scoreProfiles: AdoptionScoreProfile[];

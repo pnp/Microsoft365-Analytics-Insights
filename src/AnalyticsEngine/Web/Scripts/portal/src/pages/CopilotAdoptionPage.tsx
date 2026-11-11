@@ -76,7 +76,7 @@ import DismissibleWarnings from '../components/shared/DismissibleWarnings';
 import AdoptionPeriodControl, { periodLabel, type FixedPeriod } from '../components/copilotAdoption/AdoptionPeriodControl';
 import SeatHolderTimeSavedModel from '../components/copilotAdoption/SeatHolderTimeSavedModel';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
-import { SegmentTable, BAND_COLOUR_LIST } from '../components/copilotAdoption/adoptionShared';
+import { SegmentTable, BAND_COLOUR_LIST, SmallestGroupWithheldNote } from '../components/copilotAdoption/adoptionShared';
 import { ManagerModellingLine, hasManagerModelling } from '../components/copilotAdoption/ManagerModelling';
 import { KpiGrid, formatCount, formatDate, formatPct, weightSharePct } from '../components/shared/KpiGrid';
 import type { KpiDefinition } from '../components/shared/KpiGrid';
@@ -1017,6 +1017,7 @@ function CopilotAdoptionView({
                   options={summary.options}
                   sql={sql}
                   usageByAppWithheld={isWithheld(summary, UNSCOPED_SECTIONS.usageByApp)}
+                  smallestGroupsWithheld={summary.smallestGroupsWithheld}
                 />
               )}
 
@@ -1541,6 +1542,7 @@ function ExecutiveDepartmentTable({ summary }: { summary: CopilotAdoptionSummary
           {t('copilotAdoption.page.candidatesWithheldNote', { count: floor })}
         </Text>
       )}
+      <SmallestGroupWithheldNote withheld={summary.smallestGroupsWithheld} breakdowns={['departments']} />
     </>
   );
 }
@@ -1776,10 +1778,13 @@ function AnalystTab({
         </div>
         <div className={styles.cardBody}>
           {summary.accountabilityDimension !== 'directManager' || (canSeePii && !o.usesExplicitDates) ? (
-            <AccountabilityRollupTable
-              rows={summary.accountabilityRollup}
-              segmentLabel={accountabilityCopy.label}
-            />
+            <>
+              <AccountabilityRollupTable
+                rows={summary.accountabilityRollup}
+                segmentLabel={accountabilityCopy.label}
+              />
+              <SmallestGroupWithheldNote withheld={summary.smallestGroupsWithheld} breakdowns={['accountability']} />
+            </>
           ) : !canSeePii ? (
             // Grouped by direct manager, every row is labelled with a manager's sign-in name. The server
             // sends none of them to a reader without the See PII permission; say so rather than showing
@@ -1827,6 +1832,7 @@ function AnalystTab({
             bands={bandThresholds}
             managerModelling={summary.managerModellingByDepartment}
           />
+          <SmallestGroupWithheldNote withheld={summary.smallestGroupsWithheld} breakdowns={['departments']} />
         </div>
       </Card>
 
@@ -2039,6 +2045,7 @@ function AnalystTab({
           </div>
           <div className={styles.cardBody}>
             <IntensityScatter points={summary.intensityByDepartment} options={o} />
+            <SmallestGroupWithheldNote withheld={summary.smallestGroupsWithheld} breakdowns={['departments']} />
           </div>
         </Card>
       )}
@@ -2205,6 +2212,10 @@ function AnalystTab({
               agentTotals={summary}
               minSeatsPerSegment={o.minSeatsPerSegment}
             />
+            <SmallestGroupWithheldNote
+              withheld={summary.smallestGroupsWithheld}
+              breakdowns={['departments', 'unlicensedDepartments', 'agentDepartments', 'builderDepartments']}
+            />
           </div>
         </Card>
       )}
@@ -2215,6 +2226,7 @@ function AnalystTab({
           <Text size={200} block className={styles.muted}>{t('copilotAdoption.page.theSameMeasuresDepartmentTableOrganisationsRunEnablementRegionally')}</Text>
           <div className={styles.cardBody}>
             <SegmentTable rows={summary.adoptionByCountry} segmentLabel={t('copilotAdoption.page.country')} bands={bandThresholds} />
+            <SmallestGroupWithheldNote withheld={summary.smallestGroupsWithheld} breakdowns={['countries']} />
           </div>
         </Card>
       )}
