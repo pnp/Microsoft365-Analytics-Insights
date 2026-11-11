@@ -1113,6 +1113,80 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void CoworkSheet_WithoutSeePii_ListsOnlyTheDepartmentsTheScreenDoes_AndSaysWhy_AndWithItListsEveryOne()
+        {
+            // #844, found in the final review of #884: the Cowork sheet read the cached summary instead of the reader's, so the
+            // department the screen leaves out came back in the export. Three of Finance's seat holders move to a department of
+            // their own, too small to list, in the licence and the Cowork data alike: 30 seat holders scored for Cowork - Legal
+            // 8, the Greek and ampersand departments 7 each, Finance 5, Tiny 3. For a reader without See PII, Finance - the
+            // smallest department listed - goes from every view, so 30 less the 22 shown hold Finance's five and Tiny's three;
+            // with Finance in the file they would be Tiny's three alone.
+            var analysis = SyntheticAnalysis();
+            var moved = new HashSet<int>(analysis.LicensedUsers.Where(u => u.Department == "Finance").Take(3).Select(u => u.UserId));
+            foreach (var user in analysis.LicensedUsers.Where(u => moved.Contains(u.UserId))) user.Department = "Tiny";
+            foreach (var signal in analysis.CoworkSignals.Where(s => moved.Contains(s.UserId))) signal.Department = "Tiny";
+
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            var cached = analysis.Summary;
+            var screen = cached.WithoutIndividualData();
+            Assert.AreEqual(5, cached.CoworkByDepartment.Single(r => r.Segment == "Finance").LicensedUsers, "The control: the cached summary lists Finance.");
+            Assert.IsFalse(screen.CoworkByDepartment.Any(r => r.Segment == "Finance"), "The control: the screen does not.");
+            Assert.IsFalse(screen.CoworkQuadrant.Any(p => p.Segment == "Finance"));
+            Assert.AreEqual(8, screen.CoworkScoredUsers - screen.CoworkByDepartment.Sum(r => r.LicensedUsers));
+
+            // The Cowork sheet's rows whose first column holds the text, keyed by column letter. A department heads a row of
+            // the rollout order and one of the quadrant; the named list, written only with See PII, starts with a sign-in name.
+            List<Dictionary<string, string>> Rows(byte[] workbook, string first)
+            {
+                string Text(XElement c) => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
+                string RowOf(XElement c) => Regex.Match((string)c.Attribute("r"), @"\d+$").Value;
+                var cells = SheetCellElements(workbook, "Cowork readiness");
+                return cells.Where(c => Text(c) == first && ((string)c.Attribute("r")).StartsWith("A", StringComparison.Ordinal))
+                    .Select(c => cells.Where(other => RowOf(other) == RowOf(c))
+                        .ToDictionary(other => Regex.Match((string)other.Attribute("r"), "^[A-Z]+").Value, Text))
+                    .ToList();
+            }
+
+            string Count(int value) => value.ToString(CultureInfo.InvariantCulture);
+
+            // Without See PII: the scored seat holders, the rollout order (department, seats, prime candidates) and the quadrant
+            // (department, seats, ..., prime candidates in E) are the screen's, and Finance is in neither table.
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            Assert.AreEqual(0, Rows(trimmed, "Finance").Count, "The file must not list a department the screen leaves out.");
+            Assert.AreEqual(0, Rows(trimmed, "Tiny").Count);
+            Assert.AreEqual(Count(screen.CoworkScoredUsers), Rows(trimmed, "Seat holders scored").Single()["B"]);
+            foreach (var department in screen.CoworkByDepartment)
+            {
+                var rows = Rows(trimmed, department.Segment);
+                Assert.AreEqual(2, rows.Count, $"{department.Segment}: one row in the rollout order and one in the quadrant.");
+                Assert.IsTrue(rows.Any(r => r["B"] == Count(department.LicensedUsers) && r["C"] == Count(department.PrimeCandidates)),
+                    $"{department.Segment}: the rollout order agrees with the screen.");
+            }
+
+            foreach (var point in screen.CoworkQuadrant)
+            {
+                Assert.IsTrue(Rows(trimmed, point.Segment).Any(r => r["B"] == Count(point.LicensedUsers) && r.TryGetValue("E", out var prime) && prime == Count(point.PrimeCandidates)),
+                    $"{point.Segment}: the quadrant agrees with the screen.");
+            }
+
+            Assert.AreEqual(2, SheetCells(trimmed, "Cowork readiness").Count(c => c.Contains("one more department is left out - the smallest listed")),
+                "The rollout order and the quadrant each say why a department is missing.");
+
+            // With See PII nothing changes: Finance's five are in both tables, and nothing says a department is left out.
+            var full = CopilotAdoptionWorkbook.Build(analysis);
+            Assert.AreEqual(2, Rows(full, "Finance").Count(r => r["B"] == "5"), "With See PII the rollout order and the quadrant list Finance, as before.");
+            foreach (var department in cached.CoworkByDepartment)
+            {
+                Assert.IsTrue(Rows(full, department.Segment).Any(r => r["B"] == Count(department.LicensedUsers) && r["C"] == Count(department.PrimeCandidates)),
+                    $"{department.Segment}: the full file lists every department the cached summary does.");
+            }
+
+            Assert.IsFalse(SheetCells(full, "Cowork readiness").Any(c => c.Contains("one more department is left out")));
+            Assert.AreEqual(5, cached.CoworkByDepartment.Single(r => r.Segment == "Finance").LicensedUsers,
+                "The cached analysis must never be edited for one reader.");
+        }
+
+        [TestMethod]
         public void Workbook_SaysWhenItHasBeenNarrowedToOneEmailDomain()
         {
             // A spreadsheet outlives the screen it came from and gets forwarded without that context.

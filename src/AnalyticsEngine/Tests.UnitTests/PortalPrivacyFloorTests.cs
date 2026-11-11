@@ -218,9 +218,10 @@ namespace Tests.UnitTests
             ["CopilotAdoptionAPIController.ExportWorkbook"] = Floored(
                     "The summary's figures, floored as on screen, without the per-person sheets or named lists; under the "
                     + "administrator's filter the tenant sections it withholds are written blank, never 0. The licence "
-                    + "classification says why a withheld idle count is not shown, never 0. The department, country and "
-                    + "accountability tables, the side-by-side table, the email domains, the habit table's candidate counts, the "
-                    + "candidate chart and the department manager table are the summary's copy for this reader: a withheld "
+                    + "classification says why a withheld idle count is not shown, never 0. Every sheet's figures, the Cowork "
+                    + "sheet's tiers, rollout order and quadrant included, are the summary's copy for this reader - the "
+                    + "department, country and accountability tables, the side-by-side table, the email domains, the habit "
+                    + "table's candidate counts, the candidate chart and the department manager table among them: a withheld "
                     + "group is left out of every sheet the screen leaves it out of, a withheld cell is blank, never 0, and each "
                     + "sheet says why.")
                 .By(typeof(CopilotAdoptionService), nameof(CopilotAdoptionService.FinaliseSummary))
@@ -237,6 +238,7 @@ namespace Tests.UnitTests
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSeatIdle_OfACopilotSeatHeldByOneToFourPeople_IsWithheldWithoutSeePii_OnEveryEndpoint)),
                     Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.EmailDomainSheet_WithoutSeePii_LeavesAFewPeoplesFiguresBlank_AsTheScreenDoes_AndWithItWritesThem)),
                     Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.DepartmentSheet_WithoutSeePii_LeavesOutTheDepartmentTheScreenDoes_AndSaysWhy_AndWithItWritesEveryOne)),
+                    Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.CoworkSheet_WithoutSeePii_ListsOnlyTheDepartmentsTheScreenDoes_AndSaysWhy_AndWithItListsEveryOne)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionRowsBesideTotals_AreFlooredWithoutSeePii_OnTheSummaryAndTheWorkbook_AndUnchangedWithIt)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionDepartmentsLeftOut_AreComplementedWithoutSeePii_OnTheSummaryAndTheWorkbook_AndUnchangedWithIt)))
                 .Refusing("emailDomain, userFilter, seatLicenceTypeIds",
