@@ -188,6 +188,59 @@ V AS (
     GROUP BY h.session_id
 )";
 
+        /// <summary>
+        /// The distinct people behind a group of page views, each joined to its visit as <c>s</c> with a LEFT JOIN on the
+        /// visit's key - which adds a column and never adds or drops a row, so every other figure is computed from the same
+        /// rows: the count the <c>Visitors</c> CTEs make. A page view with no visit is in the row's figures but adds no one -
+        /// its user is NULL, which COUNT(DISTINCT) skips - as those CTEs, which join the visit with an INNER JOIN, leave it
+        /// out. <c>sessions.user_id</c> is NOT NULL, so every visit has its person.
+        /// </summary>
+        /// <remarks>
+        /// Only decides what a reader without See PII is shown (<see cref="WebActivitySmallGroups.WithoutSmallRows"/>); the
+        /// models carry it as a <c>[JsonIgnore]</c> property, so no reader is sent it.
+        /// </remarks>
+        public const string PeopleOfHits = "COUNT(DISTINCT s.user_id) AS People";
+
+        /// <summary>
+        /// Per page in the window, the visits that saw it (<c>UniquePageViews</c>) and the distinct people behind them
+        /// (<c>People</c>, #844), in a CTE named <c>PageVisitors</c>, for the page lists that rank by something else.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// From the distinct (page, visit) pairs, each joined once to its visit and so to its person, then counted per
+        /// (page, person) and per page - plain counts all the way, with no COUNT(DISTINCT). Taking the visits out of a list's
+        /// main pass removes the spool its COUNT(DISTINCT session_id) used to need, and leaves that pass reading the page
+        /// views in the same order as before, so its averages come out bit for bit as they did.
+        /// </para>
+        /// <para>
+        /// <b>Read on its own, and only by a hash join.</b> The pairs are a second read of the clustered index
+        /// (<c>INDEX(1)</c>): left to itself the optimizer read them through an intersection of <c>IX_hits_hit_timestamp</c>
+        /// with a full scan of <c>IX_FK_hits_urls</c>, or once per row shown. The statements join this CTE with
+        /// <c>LEFT HASH JOIN</c> after their own <c>TOP</c>: a nested-loops join would count the people of each page shown
+        /// from all of its history (<c>IX_FK_hits_urls</c> is not by date), which on a busy page reads millions of rows.
+        /// The hint also fixes the join order as written, which these statements are written for. Measured on #844's
+        /// synthetic 200,000-user tenant; see the PR for the numbers.
+        /// </para>
+        /// </remarks>
+        public const string PageVisitorsCtes = @"
+PageVisits AS (
+    SELECT h.url_id, h.session_id
+    FROM dbo.hits AS h WITH (INDEX(1))
+    WHERE h.hit_timestamp >= @from AND h.hit_timestamp < @to AND h.session_id IS NOT NULL" + HitScope + @"
+    GROUP BY h.url_id, h.session_id
+),
+PagePersonVisits AS (
+    SELECT v.url_id, s.user_id, COUNT_BIG(*) AS Visits
+    FROM PageVisits AS v
+    LEFT JOIN dbo.sessions AS s ON s.id = v.session_id
+    GROUP BY v.url_id, s.user_id
+),
+PageVisitors AS (
+    SELECT p.url_id, SUM(p.Visits) AS UniquePageViews, COUNT(p.user_id) AS People
+    FROM PagePersonVisits AS p
+    GROUP BY p.url_id
+)";
+
         /// <summary>Buckets a datetime column to the Monday on or before it.</summary>
         public static string WeekBucket(string column)
         {
@@ -485,7 +538,8 @@ SELECT TOP (@top)
        g.VisitPageViews,
        ISNULL(up.UniquePageViews, 0)                      AS UniquePageViews,
        CAST(g.Visits AS bigint)                           AS Visits,
-       ISNULL(vi.Visitors, 0)                             AS Visitors
+       ISNULL(vi.Visitors, 0)                             AS Visitors,
+       g.web_id                                           AS WebId
 FROM Grouped AS g
 INNER JOIN dbo.webs AS w ON w.id = g.web_id
 LEFT JOIN Upv AS up ON up.web_id = g.web_id
@@ -506,6 +560,10 @@ OPTION (RECOMPILE);";
         /// Banding is keyed on web_id, not on the title: SharePoint web titles are not unique, and
         /// grouping by title merges two unrelated "Team Site" webs into a single series. The title is
         /// resolved once per band for display, and disambiguated with the URL when it repeats.
+        /// </para>
+        /// <para>
+        /// <c>WebId</c> is the band's web, NULL for the two catch-all bands, so that the series of a site a reader without
+        /// See PII is not shown can be folded by the site itself rather than by a title another site may share (#844).
         /// </para>
         /// </remarks>
         public const string SiteOverTime = @"
@@ -533,11 +591,12 @@ Banded AS (
                 WHEN h.web_id IS NULL THEN '(unknown site)'
                 WHEN n.web_id IS NULL THEN '(other sites)'
                 ELSE n.Name
-           END AS nvarchar(300)) AS Name
+           END AS nvarchar(300)) AS Name,
+           n.web_id AS WebId
     FROM H AS h
     LEFT JOIN TopNames AS n ON n.web_id = h.web_id
 )
-SELECT b.WeekStart, b.Name, COUNT_BIG(*) AS Count
+SELECT b.WeekStart, b.Name, COUNT_BIG(*) AS Count, MAX(b.WebId) AS WebId
 FROM Banded AS b
 GROUP BY b.WeekStart, b.Name
 ORDER BY b.WeekStart, b.Name
@@ -563,19 +622,40 @@ FROM V AS v
 OPTION (RECOMPILE);";
 
         /// <summary>Visits, visitors and page views per page, for the Visits tab's page leaderboard.</summary>
+        /// <remarks>
+        /// One pass, and no COUNT(DISTINCT): the page views are grouped by (page, visit), the pairs joined once to their
+        /// visit, counted per (page, person) and then per page, so the visits (pairs with a visit), the page views and
+        /// <c>People</c> (#844, as <see cref="PeopleOfHits"/> counts it) are plain sums. Every figure is an integer, and the
+        /// latest-title "max by" is a MAX, so nothing depends on the order the rows are summed in.
+        /// </remarks>
         public const string VisitsByPage = @"
 WITH" + HitWindowCte + @",
-Grouped AS (
-    SELECT h.url_id,
-           " + LatestTitleId + @" AS TitleId,
-           COUNT(DISTINCT h.session_id) AS Visits,
-           COUNT_BIG(*)                 AS PageViews
+Pairs AS (
+    SELECT h.url_id, h.session_id,
+           MAX(CASE WHEN h.page_title_id IS NOT NULL THEN CAST(h.hit_timestamp AS binary(8)) + CAST(h.page_title_id AS binary(4)) END) AS TitleKey,
+           COUNT_BIG(*) AS PageViews
     FROM H AS h
-    GROUP BY h.url_id
+    GROUP BY h.url_id, h.session_id
+),
+ByPerson AS (
+    SELECT p.url_id, s.user_id, MAX(p.TitleKey) AS TitleKey, COUNT_BIG(p.session_id) AS Visits, SUM(p.PageViews) AS PageViews
+    FROM Pairs AS p
+    LEFT JOIN dbo.sessions AS s ON s.id = p.session_id
+    GROUP BY p.url_id, s.user_id
+),
+Grouped AS (
+    SELECT b.url_id,
+           CAST(SUBSTRING(MAX(b.TitleKey), 9, 4) AS int) AS TitleId,
+           SUM(b.Visits)     AS Visits,
+           SUM(b.PageViews)  AS PageViews,
+           COUNT(b.user_id)  AS People
+    FROM ByPerson AS b
+    GROUP BY b.url_id
 )
 SELECT TOP (@top)
        CAST(ISNULL(pt.title, u.full_url) AS nvarchar(300)) AS Name,
-       CAST(g.Visits AS bigint)                            AS Count
+       g.Visits                                            AS Count,
+       g.People
 FROM Grouped AS g
 INNER JOIN dbo.urls AS u ON u.id = g.url_id
 LEFT JOIN dbo.page_titles AS pt ON pt.id = g.TitleId
@@ -653,6 +733,11 @@ OPTION (RECOMPILE);";
         /// here. The importer sets one on every hit it writes, so this only affects rows that arrived
         /// without a session id - and those genuinely cannot be placed in a journey.
         /// </para>
+        /// <para>
+        /// The unique page views and <c>People</c> (#844) of the pages shown come from <see cref="PageVisitorsCtes"/>, which
+        /// counts the same visits; the ordered pass no longer counts distinct visits itself. <c>Visitors</c> stays a
+        /// constant zero, so what a See PII reader is sent does not change.
+        /// </para>
         /// </remarks>
         public const string PageStats = @"
 WITH" + HitWindowCte + @",
@@ -663,37 +748,43 @@ Ordered AS (
            COUNT(*) OVER (PARTITION BY h.session_id)                                              AS VisitPages
     FROM H AS h
     WHERE h.session_id IS NOT NULL
-)
-SELECT TOP (@top)
-       CAST(ISNULL(pt.title, u.full_url) AS nvarchar(300)) AS Title,
+),
+Ranked AS (
+    SELECT TOP (@top) g.*
+    FROM (
+        SELECT o.url_id,
+               " + LatestTitleIdOrdered + @"                                    AS TitleId,
+               MAX(o.web_id)                                                     AS WebId,
+               COUNT_BIG(*)                                                      AS PageViews,
+               AVG(o.seconds_on_page)                                            AS AverageSecondsOnPage,
+               AVG(CASE WHEN o.page_load_time > 0 THEN o.page_load_time END)    AS AverageLoadSeconds,
+               CAST(SUM(CASE WHEN o.FirstSeq = 1 THEN 1 ELSE 0 END) AS bigint)   AS Entries,
+               CAST(SUM(CASE WHEN o.LastSeq  = 1 THEN 1 ELSE 0 END) AS bigint)   AS Exits,
+               CAST(SUM(CASE WHEN o.FirstSeq = 1 AND o.VisitPages = 1 THEN 1 ELSE 0 END) AS bigint) AS Bounces
+        FROM Ordered AS o
+        GROUP BY o.url_id
+    ) AS g
+    ORDER BY g.PageViews DESC, g.url_id ASC
+),
+" + PageVisitorsCtes + @"
+SELECT CAST(ISNULL(pt.title, u.full_url) AS nvarchar(300)) AS Title,
        CAST(u.full_url AS nvarchar(850))                   AS Url,
        CAST(ISNULL(w.title, w.url_base) AS nvarchar(300))  AS Site,
-       g.PageViews,
-       g.UniquePageViews,
+       r.PageViews,
+       ISNULL(vi.UniquePageViews, 0)                       AS UniquePageViews,
        0                                                   AS Visitors,
-       g.AverageSecondsOnPage,
-       g.AverageLoadSeconds,
-       g.Entries,
-       g.Exits,
-       g.Bounces
-FROM (
-    SELECT o.url_id,
-           " + LatestTitleIdOrdered + @"                                        AS TitleId,
-           MAX(o.web_id)                                                         AS WebId,
-           COUNT_BIG(*)                                                          AS PageViews,
-           CAST(COUNT(DISTINCT o.session_id) AS bigint)                           AS UniquePageViews,
-           AVG(o.seconds_on_page)                                                AS AverageSecondsOnPage,
-           AVG(CASE WHEN o.page_load_time > 0 THEN o.page_load_time END)        AS AverageLoadSeconds,
-           CAST(SUM(CASE WHEN o.FirstSeq = 1 THEN 1 ELSE 0 END) AS bigint)       AS Entries,
-           CAST(SUM(CASE WHEN o.LastSeq  = 1 THEN 1 ELSE 0 END) AS bigint)       AS Exits,
-           CAST(SUM(CASE WHEN o.FirstSeq = 1 AND o.VisitPages = 1 THEN 1 ELSE 0 END) AS bigint) AS Bounces
-    FROM Ordered AS o
-    GROUP BY o.url_id
-) AS g
-INNER JOIN dbo.urls AS u ON u.id = g.url_id
-LEFT JOIN dbo.page_titles AS pt ON pt.id = g.TitleId
-LEFT JOIN dbo.webs AS w ON w.id = g.WebId
-ORDER BY g.PageViews DESC, g.url_id ASC
+       r.AverageSecondsOnPage,
+       r.AverageLoadSeconds,
+       r.Entries,
+       r.Exits,
+       r.Bounces,
+       ISNULL(vi.People, 0)                                AS People
+FROM Ranked AS r
+INNER JOIN dbo.urls AS u ON u.id = r.url_id
+LEFT JOIN dbo.page_titles AS pt ON pt.id = r.TitleId
+LEFT JOIN dbo.webs AS w ON w.id = r.WebId
+LEFT HASH JOIN PageVisitors AS vi ON vi.url_id = r.url_id
+ORDER BY r.PageViews DESC, r.url_id ASC
 OPTION (RECOMPILE);";
 
         /// <summary>The same page statistics, ranked so the slowest qualifying pages come first.</summary>
@@ -702,6 +793,11 @@ OPTION (RECOMPILE);";
         /// is optional telemetry, so a page opened fifty times with one timed 20-second load would
         /// otherwise clear a floor of five on its untimed views and top the table on a single
         /// measurement - exactly the "noise presented as a finding" the floor exists to prevent.
+        /// <para>
+        /// The unique page views and <c>People</c> (#844) of the pages shown come from <see cref="PageVisitorsCtes"/>. Counted
+        /// in this statement's own pass instead, the join to the visits reordered the page views reaching its averages, which
+        /// came out a bit differently in their last place.
+        /// </para>
         /// </remarks>
         public const string SlowestPages = @"
 WITH" + HitWindowCte + @",
@@ -711,36 +807,46 @@ Grouped AS (
            MAX(h.web_id)          AS WebId,
            COUNT_BIG(*)           AS PageViews,
            SUM(CASE WHEN h.page_load_time > 0 THEN 1 ELSE 0 END) AS MeasuredPageViews,
-           COUNT(DISTINCT h.session_id) AS UniquePageViews,
            AVG(h.seconds_on_page) AS AverageSecondsOnPage,
            AVG(CASE WHEN h.page_load_time > 0 THEN h.page_load_time END) AS AverageLoadSeconds
     FROM H AS h
     GROUP BY h.url_id
-)
-SELECT TOP (@top)
-       CAST(ISNULL(pt.title, u.full_url) AS nvarchar(300)) AS Title,
+),
+Ranked AS (
+    SELECT TOP (@top) g.url_id, g.TitleId, g.WebId, g.PageViews, g.AverageSecondsOnPage, g.AverageLoadSeconds
+    FROM Grouped AS g
+    WHERE g.MeasuredPageViews >= @minViews AND g.AverageLoadSeconds IS NOT NULL
+    ORDER BY g.AverageLoadSeconds DESC, g.url_id ASC
+),
+" + PageVisitorsCtes + @"
+SELECT CAST(ISNULL(pt.title, u.full_url) AS nvarchar(300)) AS Title,
        CAST(u.full_url AS nvarchar(850))                   AS Url,
        CAST(ISNULL(w.title, w.url_base) AS nvarchar(300))  AS Site,
-       g.PageViews,
-       CAST(g.UniquePageViews AS bigint)                   AS UniquePageViews,
+       r.PageViews,
+       ISNULL(vi.UniquePageViews, 0)                       AS UniquePageViews,
        0                                                   AS Visitors,
-       g.AverageSecondsOnPage,
-       g.AverageLoadSeconds,
+       r.AverageSecondsOnPage,
+       r.AverageLoadSeconds,
        CAST(0 AS bigint)                                   AS Entries,
        CAST(0 AS bigint)                                   AS Exits,
-       CAST(0 AS bigint)                                   AS Bounces
-FROM Grouped AS g
-INNER JOIN dbo.urls AS u ON u.id = g.url_id
-LEFT JOIN dbo.page_titles AS pt ON pt.id = g.TitleId
-LEFT JOIN dbo.webs AS w ON w.id = g.WebId
-WHERE g.MeasuredPageViews >= @minViews AND g.AverageLoadSeconds IS NOT NULL
-ORDER BY g.AverageLoadSeconds DESC, g.url_id ASC
+       CAST(0 AS bigint)                                   AS Bounces,
+       ISNULL(vi.People, 0)                                AS People
+FROM Ranked AS r
+INNER JOIN dbo.urls AS u ON u.id = r.url_id
+LEFT JOIN dbo.page_titles AS pt ON pt.id = r.TitleId
+LEFT JOIN dbo.webs AS w ON w.id = r.WebId
+LEFT HASH JOIN PageVisitors AS vi ON vi.url_id = r.url_id
+ORDER BY r.AverageLoadSeconds DESC, r.url_id ASC
 OPTION (RECOMPILE);";
 
         /// <summary>The least-viewed pages, and how many pages fall under the quiet-page ceiling.</summary>
         /// <remarks>
         /// Ordered by page views ascending and then by URL so the list is stable between refreshes -
         /// a pruning backlog that reshuffles every time it is opened is not a backlog.
+        /// <para>
+        /// The unique page views and <c>People</c> (#844) of the pages shown come from <see cref="PageVisitorsCtes"/>. A
+        /// quiet page has at most <c>@quietMax</c> page views, so at most that many people behind it.
+        /// </para>
         /// </remarks>
         public const string QuietPages = @"
 WITH" + HitWindowCte + @",
@@ -749,30 +855,36 @@ Grouped AS (
            " + LatestTitleId + @" AS TitleId,
            MAX(h.web_id)          AS WebId,
            COUNT_BIG(*)           AS PageViews,
-           COUNT(DISTINCT h.session_id) AS UniquePageViews,
            AVG(h.seconds_on_page) AS AverageSecondsOnPage,
            AVG(CASE WHEN h.page_load_time > 0 THEN h.page_load_time END) AS AverageLoadSeconds
     FROM H AS h
     GROUP BY h.url_id
-)
-SELECT TOP (@top)
-       CAST(ISNULL(pt.title, u.full_url) AS nvarchar(300)) AS Title,
-       CAST(u.full_url AS nvarchar(850))                   AS Url,
+),
+Ranked AS (
+    SELECT TOP (@top) g.url_id, g.TitleId, g.WebId, g.PageViews, g.AverageSecondsOnPage, g.AverageLoadSeconds, u.full_url
+    FROM Grouped AS g
+    INNER JOIN dbo.urls AS u ON u.id = g.url_id
+    WHERE g.PageViews <= @quietMax
+    ORDER BY g.PageViews ASC, u.full_url ASC
+),
+" + PageVisitorsCtes + @"
+SELECT CAST(ISNULL(pt.title, r.full_url) AS nvarchar(300)) AS Title,
+       CAST(r.full_url AS nvarchar(850))                   AS Url,
        CAST(ISNULL(w.title, w.url_base) AS nvarchar(300))  AS Site,
-       g.PageViews,
-       CAST(g.UniquePageViews AS bigint)                   AS UniquePageViews,
+       r.PageViews,
+       ISNULL(vi.UniquePageViews, 0)                       AS UniquePageViews,
        0                                                   AS Visitors,
-       g.AverageSecondsOnPage,
-       g.AverageLoadSeconds,
+       r.AverageSecondsOnPage,
+       r.AverageLoadSeconds,
        CAST(0 AS bigint)                                   AS Entries,
        CAST(0 AS bigint)                                   AS Exits,
-       CAST(0 AS bigint)                                   AS Bounces
-FROM Grouped AS g
-INNER JOIN dbo.urls AS u ON u.id = g.url_id
-LEFT JOIN dbo.page_titles AS pt ON pt.id = g.TitleId
-LEFT JOIN dbo.webs AS w ON w.id = g.WebId
-WHERE g.PageViews <= @quietMax
-ORDER BY g.PageViews ASC, u.full_url ASC
+       CAST(0 AS bigint)                                   AS Bounces,
+       ISNULL(vi.People, 0)                                AS People
+FROM Ranked AS r
+LEFT JOIN dbo.page_titles AS pt ON pt.id = r.TitleId
+LEFT JOIN dbo.webs AS w ON w.id = r.WebId
+LEFT HASH JOIN PageVisitors AS vi ON vi.url_id = r.url_id
+ORDER BY r.PageViews ASC, r.full_url ASC
 OPTION (RECOMPILE);";
 
         /// <summary>
@@ -852,6 +964,11 @@ OPTION (RECOMPILE);";
         /// most-viewed-pages table uses, and showing it under a "Page views" heading would invite a
         /// reader to compare two numbers that count different things.
         /// </para>
+        /// <para>
+        /// <c>People</c> (#844) is the people whose visits started (or ended) on the page: each of those visits' one
+        /// first (or last) page view joined to its visit (<see cref="PeopleOfHits"/>), after the filter, so only one row
+        /// per visit is joined.
+        /// </para>
         /// </remarks>
         private static string EndpointPages(
             string sequenceColumn,
@@ -879,7 +996,8 @@ SELECT TOP (@top)
        CAST(NULL AS float)                                 AS AverageLoadSeconds,
        g.Entries,
        g.Exits,
-       g.Bounces
+       g.Bounces,
+       g.People
 FROM (
     SELECT o.url_id,
            " + LatestTitleIdOrdered + @" AS TitleId,
@@ -888,8 +1006,10 @@ FROM (
            AVG(o.seconds_on_page) AS AverageSecondsOnPage,
            CAST(SUM(CASE WHEN o.FirstSeq = 1 THEN 1 ELSE 0 END) AS bigint) AS Entries,
            CAST(SUM(CASE WHEN o.LastSeq  = 1 THEN 1 ELSE 0 END) AS bigint) AS Exits,
-           CAST(SUM(CASE WHEN o.VisitPages = 1 THEN 1 ELSE 0 END) AS bigint) AS Bounces
+           CAST(SUM(CASE WHEN o.VisitPages = 1 THEN 1 ELSE 0 END) AS bigint) AS Bounces,
+           " + PeopleOfHits + @"
     FROM Ordered AS o
+    LEFT JOIN dbo.sessions AS s ON s.id = o.session_id
     WHERE o." + sequenceColumn + @" = 1
     GROUP BY o.url_id
     " + havingSql + @"
@@ -905,6 +1025,10 @@ OPTION (RECOMPILE);";
         /// <remarks>
         /// A step to the SAME page is excluded. A refresh, or the tracker firing twice on a page that
         /// re-renders, would otherwise dominate this list with "Home to Home" and bury the real paths.
+        /// <para>
+        /// <c>People</c> (#844) is the people who took the step, counted from the visits it was taken in, joined after
+        /// the steps are found (<see cref="PeopleOfHits"/>).
+        /// </para>
         /// </remarks>
         public const string Transitions = @"
 WITH" + HitWindowCte + @",
@@ -915,8 +1039,10 @@ Ordered AS (
     WHERE h.session_id IS NOT NULL
 ),
 Steps AS (
-    SELECT o.url_id AS FromUrlId, o.NextUrlId AS ToUrlId, COUNT_BIG(*) AS Count
+    SELECT o.url_id AS FromUrlId, o.NextUrlId AS ToUrlId, COUNT_BIG(*) AS Count,
+           " + PeopleOfHits + @"
     FROM Ordered AS o
+    LEFT JOIN dbo.sessions AS s ON s.id = o.session_id
     WHERE o.NextUrlId IS NOT NULL AND o.NextUrlId <> o.url_id
     GROUP BY o.url_id, o.NextUrlId
 ),
@@ -932,7 +1058,8 @@ SELECT TOP (@top)
        CAST(tu.full_url AS nvarchar(850))                    AS ToUrl,
        s.Count,
        CAST(s.Count AS float) * 100.0
-           / NULLIF(SUM(s.Count) OVER (PARTITION BY s.FromUrlId), 0) AS SharePct
+           / NULLIF(SUM(s.Count) OVER (PARTITION BY s.FromUrlId), 0) AS SharePct,
+       s.People
 FROM Steps AS s
 INNER JOIN dbo.urls AS fu ON fu.id = s.FromUrlId
 INNER JOIN dbo.urls AS tu ON tu.id = s.ToUrlId
@@ -964,6 +1091,11 @@ OPTION (RECOMPILE);";
         /// The pairing joins the ranked set to itself on the session rather than using two window
         /// functions on one row, because first and last need different ORDER BY directions.
         /// </para>
+        /// <para>
+        /// <c>People</c> (#844) is the people whose visits made the flow: one row per visit, joined to the visit after the
+        /// pairing (<see cref="PeopleOfHits"/>). A LEFT JOIN on the visit's key, so the share's denominator - the same
+        /// CTE, read again - needs no join at all.
+        /// </para>
         /// </remarks>
         public const string StartEndFlows = @"
 WITH" + HitWindowCte + @",
@@ -976,7 +1108,7 @@ Ranked AS (
     WHERE h.session_id IS NOT NULL
 ),
 Pairs AS (
-    SELECT f.url_id AS StartUrlId, l.url_id AS EndUrlId, f.VisitPages
+    SELECT f.session_id, f.url_id AS StartUrlId, l.url_id AS EndUrlId, f.VisitPages
     FROM Ranked AS f
     INNER JOIN Ranked AS l ON l.session_id = f.session_id AND l.LastSeq = 1
     WHERE f.FirstSeq = 1
@@ -986,8 +1118,10 @@ Flows AS (
            p.EndUrlId,
            COUNT_BIG(*)                                                        AS Visits,
            CAST(SUM(CASE WHEN p.VisitPages = 1 THEN 1 ELSE 0 END) AS bigint)   AS SinglePageVisits,
-           AVG(CAST(p.VisitPages AS float))                                    AS AveragePages
+           AVG(CAST(p.VisitPages AS float))                                    AS AveragePages,
+           " + PeopleOfHits + @"
     FROM Pairs AS p
+    LEFT JOIN dbo.sessions AS s ON s.id = p.session_id
     GROUP BY p.StartUrlId, p.EndUrlId
 ),
 Titles AS (
@@ -1007,7 +1141,8 @@ SELECT TOP (@top)
        -- Share of ALL paired visits, not of the truncated top N, so the diagram can honestly say
        -- how much of the traffic it is showing.
        CAST(fl.Visits AS float) * 100.0
-           / NULLIF((SELECT SUM(f2.Visits) FROM Flows AS f2), 0)               AS SharePct
+           / NULLIF((SELECT SUM(f2.Visits) FROM Flows AS f2), 0)               AS SharePct,
+       fl.People
 FROM Flows AS fl
 INNER JOIN dbo.urls AS su ON su.id = fl.StartUrlId
 INNER JOIN dbo.urls AS eu ON eu.id = fl.EndUrlId
@@ -1019,12 +1154,21 @@ ORDER BY fl.Visits DESC, fl.StartUrlId ASC, fl.EndUrlId ASC
 OPTION (RECOMPILE);";
 
         /// <summary>What visitors clicked, when the tracker's element-click capture is switched on.</summary>
+        /// <remarks>
+        /// <c>People</c> (#844) is the people who clicked: each click's page view, and that page view's visit, looked up by
+        /// key (<see cref="PeopleOfHits"/>). LEFT JOINs, so every click is counted as before; a click on a page view with no
+        /// visit adds no one. <c>LOOP</c>, because the clicks in a window are few beside the page views: left to choose, the
+        /// optimizer hash-joined them to a scan of every page view's index and every visit, which took a second longer.
+        /// </remarks>
         public const string ClickedElements = @"
 SELECT TOP (@top)
        CAST(ISNULL(t.name, N'(untitled element)') AS nvarchar(200)) AS Name,
-       COUNT_BIG(*) AS Count
+       COUNT_BIG(*) AS Count,
+       " + PeopleOfHits + @"
 FROM dbo.hits_clicked_elements AS c
 LEFT JOIN dbo.hits_clicked_element_titles AS t ON t.id = c.element_title_id
+LEFT LOOP JOIN dbo.hits AS h ON h.id = c.hit_id
+LEFT LOOP JOIN dbo.sessions AS s ON s.id = h.session_id
 WHERE c.[timestamp] >= @from AND c.[timestamp] < @to" + ClickScope + @"
 GROUP BY CAST(ISNULL(t.name, N'(untitled element)') AS nvarchar(200))
 ORDER BY COUNT_BIG(*) DESC, CAST(ISNULL(t.name, N'(untitled element)') AS nvarchar(200)) ASC
@@ -1043,9 +1187,17 @@ OPTION (RECOMPILE);";
 
         /// <summary>Traffic per place, for the country, city and province leaderboards.</summary>
         /// <remarks>
+        /// <para>
         /// <paramref name="keyColumn"/>, <paramref name="lookupTable"/> and
         /// <paramref name="nameColumn"/> are supplied from a fixed set at the call site and never come
         /// from a request.
+        /// </para>
+        /// <para>
+        /// <c>Visitors</c> is joined with <c>LEFT HASH JOIN</c>, so it is counted once for every place (#844). Left to choose,
+        /// the optimizer counted the visitors of each row shown again from the window's page views - a seek of the place's
+        /// foreign-key index intersected with the window's whole range of <c>IX_hits_hit_timestamp</c>, per row - which a
+        /// reader without See PII, whose lists are floored over <see cref="WebActivityQuery.MaximumTop"/> rows, pays 500 times.
+        /// </para>
         /// </remarks>
         public static string ByPlace(string keyColumn, string lookupTable, string nameColumn, bool withCountry)
         {
@@ -1096,7 +1248,7 @@ SELECT TOP (@top)
 FROM Grouped AS g
 INNER JOIN dbo." + lookupTable + @" AS lk ON lk.id = g.PlaceId
 " + countryJoin + @"
-LEFT JOIN Visitors AS vi " + visitorJoin + @"
+LEFT HASH JOIN Visitors AS vi " + visitorJoin + @"
 ORDER BY g.PageViews DESC, g.PlaceId ASC, ISNULL(g.CountryId, -1) ASC
 OPTION (RECOMPILE);";
         }

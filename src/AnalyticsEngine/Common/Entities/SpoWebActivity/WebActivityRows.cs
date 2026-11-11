@@ -116,6 +116,9 @@ namespace Common.Entities.SpoWebActivity
             public long UniquePageViews { get; set; }
             public long Visits { get; set; }
             public int Visitors { get; set; }
+
+            /// <summary>The site's web id, so its series over time can be matched to it by more than its title (#844).</summary>
+            public int WebId { get; set; }
         }
 
         public class VisitKpiRow
@@ -135,12 +138,25 @@ namespace Common.Entities.SpoWebActivity
             public long Count { get; set; }
         }
 
+        /// <summary>A "name and count" leaderboard row with the distinct people behind it (#844).</summary>
+        public class NamedPeopleCountRow : NamedCountRow
+        {
+            /// <summary><see cref="WebActivitySql.PeopleOfHits"/>: <c>COUNT(DISTINCT ...)</c>, an int.</summary>
+            public int People { get; set; }
+        }
+
         /// <summary>A weekly value for one named series.</summary>
         public class StackRow
         {
             public DateTime WeekStart { get; set; }
             public string Name { get; set; }
             public long Count { get; set; }
+        }
+
+        /// <summary>A weekly value for one site's series, with the site's web id; NULL for the catch-all bands (#844).</summary>
+        public class SiteStackRow : StackRow
+        {
+            public int? WebId { get; set; }
         }
 
         /// <summary>A weekly value bucketed by hour of day, stacked into periods of the day in C#.</summary>
@@ -171,6 +187,9 @@ namespace Common.Entities.SpoWebActivity
             public long Entries { get; set; }
             public long Exits { get; set; }
             public long Bounces { get; set; }
+
+            /// <summary>The distinct people behind the row (#844), unlike <see cref="Visitors"/>, which is a constant zero.</summary>
+            public int People { get; set; }
         }
 
         public class PageViewDistributionRow
@@ -190,6 +209,9 @@ namespace Common.Entities.SpoWebActivity
             public string ToUrl { get; set; }
             public long Count { get; set; }
             public double? SharePct { get; set; }
+
+            /// <summary>The distinct people who took the step (#844).</summary>
+            public int People { get; set; }
         }
 
         public class StartEndFlowRow
@@ -202,6 +224,9 @@ namespace Common.Entities.SpoWebActivity
             public long SinglePageVisits { get; set; }
             public double? AveragePages { get; set; }
             public double? SharePct { get; set; }
+
+            /// <summary>The distinct people whose visits made the flow (#844).</summary>
+            public int People { get; set; }
         }
 
         public class ClickCountRow

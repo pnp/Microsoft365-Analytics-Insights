@@ -585,6 +585,128 @@ namespace Tests.UnitTests
             Assert.IsNull(april.Kpis.AverageVisitSeconds, "No visit was measured, which is not a zero-second average.");
         }
 
+        /// <summary>
+        /// Every page, step, flow and clicked-element list counts the distinct people behind each row (#844): a person who
+        /// did the same thing twice is one person, and a page view with no visit - which the figures still count - adds no
+        /// one, as the <c>Visitors</c> CTEs count it. <c>sessions.user_id</c> is NOT NULL, so a visit always has its person;
+        /// a page view with no visit is the case the schema allows.
+        /// </summary>
+        /// <remarks>
+        /// Seeded in June 2020 and read through a window that covers only that week, so no other test sees these visits.
+        /// Ada visits twice (Home, News, HR policies; Home, News), Grace once (Home, News), Alan once (Home, and leaves);
+        /// one more page view of News, and one of the archive page, arrive with no visit, and three clicks are on one
+        /// element - Ada's, Grace's and the one with no visit.
+        /// </remarks>
+        [TestMethod]
+        public async Task EveryPageAndPathList_CountsEachPersonOnce_AndAPageViewWithNoVisitAddsNoOne()
+        {
+            var day = new DateTime(2020, 6, 9, 9, 0, 0, DateTimeKind.Utc);
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                var people = db.users.Where(u => new[] { "ada@contoso.com", "grace@contoso.com", "alan@contoso.com" }.Contains(u.UserPrincipalName))
+                    .ToDictionary(u => u.UserPrincipalName);
+                var pages = db.urls.Where(u => new[] { _homeUrlId, _newsUrlId, _policyUrlId, _quietUrlId }.Contains(u.ID)).ToDictionary(u => u.ID);
+                var titleIds = pages.Keys.ToDictionary(id => id, id => Titles[id].ID);
+                var titles = pages.Keys.ToDictionary(id => id, id => db.page_titles.Find(titleIds[id]));
+                var button = new ClickedElementTitle { Name = "Contoso desk booking" };
+
+                Hit View(UserSession session, int page, DateTime when)
+                {
+                    var hit = new Hit
+                    {
+                        url = pages[page],
+                        page_title = titles[page],
+                        session = session,
+                        hit_timestamp = when,
+                        seconds_on_page = 30,
+                        page_load_time = 1.5,
+                        page_request_id = Guid.NewGuid(),
+                    };
+                    db.hits.Add(hit);
+                    return hit;
+                }
+
+                void Visit(string user, string id, DateTime start, params int[] visited)
+                {
+                    var session = NewSession(db, people[user], id);
+                    for (var i = 0; i < visited.Length; i++) View(session, visited[i], start.AddMinutes(i));
+                }
+
+                Visit("ada@contoso.com", "s-2020-06-ada-1", day, _homeUrlId, _newsUrlId, _policyUrlId);
+                Visit("ada@contoso.com", "s-2020-06-ada-2", day.AddHours(2), _homeUrlId, _newsUrlId);
+                Visit("grace@contoso.com", "s-2020-06-grace", day.AddHours(3), _homeUrlId, _newsUrlId);
+                Visit("alan@contoso.com", "s-2020-06-alan", day.AddHours(4), _homeUrlId);
+                var noVisit = View(null, _newsUrlId, day.AddHours(5));
+                View(null, _quietUrlId, day.AddHours(6));
+                db.SaveChanges();
+
+                var adaHome = db.hits.Single(h => h.session.ai_session_id == "s-2020-06-ada-1" && h.url.ID == _homeUrlId);
+                var graceHome = db.hits.Single(h => h.session.ai_session_id == "s-2020-06-grace" && h.url.ID == _homeUrlId);
+                foreach (var (hit, page) in new[] { (adaHome, _homeUrlId), (graceHome, _homeUrlId), (noVisit, _newsUrlId) })
+                {
+                    db.Clicks.Add(new Clicks { UrlId = page, HitID = hit.ID, Title = button, TimeStamp = hit.hit_timestamp.AddSeconds(5) });
+                }
+
+                db.SaveChanges();
+            }
+
+            var store = NewStore();
+            var week = WebActivityQuery.Create(7, new DateTime(2020, 6, 12, 12, 0, 0, DateTimeKind.Utc), minimumViews: 1);
+            var pagesTab = await store.GetPagesAsync(week);
+            var journeys = await store.GetJourneysAsync(week);
+            var visits = await store.GetVisitsAsync(week);
+            var failures = pagesTab.Queries.Concat(journeys.Queries).Concat(visits.Queries).Where(q => q.Error != null).Select(q => q.Key + ": " + q.Error).ToList();
+            Assert.AreEqual(0, failures.Count, string.Join(Environment.NewLine, failures));
+
+            // Pages: four people's visits opened Home, Ada twice - and she is one person.
+            var home = pagesTab.TopPages.Single(p => p.Url == HomeUrl);
+            Assert.AreEqual(4, home.PageViews);
+            Assert.AreEqual(3, home.People, "Ada, Grace and Alan.");
+            Assert.AreEqual(0, home.Visitors, "Visitors stays the zero it always was, so a See PII reader's answer does not change.");
+            Assert.AreEqual(2, pagesTab.TopPages.Single(p => p.Url == NewsUrl).People);
+
+            // The slowest list counts every page view, visit or not: News has four page views and two people.
+            var slowNews = pagesTab.SlowestPages.Single(p => p.Url == NewsUrl);
+            Assert.AreEqual(4, slowNews.PageViews, "The page view with no visit is in the figures...");
+            Assert.AreEqual(2, slowNews.People, "...and adds no one.");
+            var quiet = pagesTab.QuietPages.ToDictionary(p => p.Url);
+            Assert.AreEqual(1, quiet[PolicyUrl].People);
+            Assert.AreEqual(0, quiet[QuietUrl].People, "A page only ever viewed outside a visit has no one behind it.");
+
+            // Visits by page: Ada's two visits are one person.
+            var byPage = visits.ByPage.ToDictionary(p => p.Name);
+            Assert.AreEqual(4, byPage["Contoso intranet - Home"].Count);
+            Assert.AreEqual(3, byPage["Contoso intranet - Home"].People);
+            Assert.AreEqual(3, byPage["Contoso news"].Count, "Three visits; the page view with no visit is not one.");
+            Assert.AreEqual(2, byPage["Contoso news"].People);
+
+            // Journeys: entries, exits and bounces are the people whose visits started or ended there.
+            Assert.AreEqual(4, journeys.EntryPages.Single(p => p.Url == HomeUrl).Entries);
+            Assert.AreEqual(3, journeys.EntryPages.Single(p => p.Url == HomeUrl).People);
+            var exits = journeys.ExitPages.ToDictionary(p => p.Url);
+            Assert.AreEqual(2, exits[NewsUrl].People, "Ada's second visit and Grace's ended on News.");
+            Assert.AreEqual(1, exits[PolicyUrl].People);
+            Assert.AreEqual(1, exits[HomeUrl].People, "Alan's.");
+            Assert.AreEqual(3, journeys.BouncePages.Single(p => p.Url == HomeUrl).People, "The bounce list counts who entered.");
+
+            // Ada stepped from Home to News twice and Grace once: three steps, two people.
+            var step = journeys.Transitions.Single(t => t.FromUrl == HomeUrl && t.ToUrl == NewsUrl);
+            Assert.AreEqual(3, step.Count);
+            Assert.AreEqual(2, step.People);
+            Assert.AreEqual(1, journeys.Transitions.Single(t => t.FromUrl == NewsUrl && t.ToUrl == PolicyUrl).People);
+
+            var flows = journeys.Flows.ToDictionary(f => f.StartUrl + " > " + f.EndUrl);
+            Assert.AreEqual(2, flows[HomeUrl + " > " + NewsUrl].Visits);
+            Assert.AreEqual(2, flows[HomeUrl + " > " + NewsUrl].People, "Ada's second visit and Grace's.");
+            Assert.AreEqual(1, flows[HomeUrl + " > " + PolicyUrl].People);
+            Assert.AreEqual(1, flows[HomeUrl + " > " + HomeUrl].People);
+
+            // Three clicks, one of them on a page view with no visit: two people.
+            var click = journeys.ClickedElements.Single(c => c.Name == "Contoso desk booking");
+            Assert.AreEqual(3, click.Count);
+            Assert.AreEqual(2, click.People);
+        }
+
         [TestMethod]
         public async Task Search_CountsADeadEndOnlyWhenNothingFollowedOutsideTheGraceWindow()
         {
