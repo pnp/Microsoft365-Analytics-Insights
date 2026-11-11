@@ -9,7 +9,7 @@ import type {
 } from '../../types/licenceActivity';
 import { WORKLOADS } from '../../types/licenceActivity';
 import { compareStrings, useT } from '../../i18n';
-import { DASH, formatCount, formatPct, licenceName } from './format';
+import { DASH, formatCount, formatPct, licenceName, withheldText } from './format';
 import { activeRatePct } from './bands';
 import { useLaTableStyles } from './tableStyles';
 import { MiniDistribution, BandLegend } from './MiniDistribution';
@@ -170,8 +170,9 @@ interface LicenceComparisonTableProps {
   selected: LicenceScope;
   onSelect: (scope: LicenceScope) => void;
   /**
-   * For a reader without See PII, the fewest people a figure describes: a licence held by fewer comes back
-   * `withheld`, and its row says so instead of showing those few people's activity. Null for every other reader.
+   * For a reader without See PII, the fewest people a figure describes: a licence held by fewer comes back `withheld`,
+   * as does one whose figures would give such a group back with the rest of the table, and its row says why instead of
+   * showing any activity. Null for every other reader.
    */
   minimumGroupSize?: number | null;
 }
@@ -396,7 +397,7 @@ function LicenceComparisonTable({ licences, allLicences, selected, onSelect, min
                 {sku.withheld ? (
                   <td className={table.td} colSpan={1 + WORKLOADS.length}>
                     <Text size={200} className={styles.muted}>
-                      {t('licenceActivity.withheld.cell', { count: formatCount(minimumGroupSize ?? 0) })}
+                      {withheldText(t, sku, minimumGroupSize, false)}
                     </Text>
                   </td>
                 ) : (

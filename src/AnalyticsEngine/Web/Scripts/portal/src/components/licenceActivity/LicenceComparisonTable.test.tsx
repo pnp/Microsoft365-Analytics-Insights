@@ -66,6 +66,70 @@ describe('LicenceComparisonTable', () => {
     expect(within(e5).queryByText(/Hidden/)).not.toBeInTheDocument();
   });
 
+  /** A reader without See PII: a licence of three, and a larger one that with the rest of the table would give it back. */
+  const complement: LicenceActivitySku[] = [
+    ...licences,
+    { licenceTypeId: 30, name: 'Contoso B', skuId: 'CONTOSO_B', assignedUsers: 3, withheld: true, withheldReason: 'fewHolders', workloads: [] },
+    { licenceTypeId: 40, name: 'Contoso C', skuId: 'CONTOSO_C', assignedUsers: 1234, withheld: true, withheldReason: 'revealsFewPeople', workloads: [] },
+  ];
+
+  /** The one cell spanning a withheld licence's score and services. */
+  function withheldCell(name: string): HTMLElement {
+    const row = screen.getAllByRole('row').find((r) => within(r).queryByText(name))!;
+    const cells = within(row).getAllByRole('cell');
+    expect(cells).toHaveLength(3);
+    return cells[2];
+  }
+
+  it('says why a licence enough people hold is hidden too, never showing 0 for it', () => {
+    renderWithProvider(
+      <LicenceComparisonTable licences={complement} allLicences={everyone} selected="all" onSelect={vi.fn()} minimumGroupSize={5} />,
+    );
+
+    expect(withheldCell('Contoso C')).toHaveTextContent(
+      /^Hidden: with the other figures in this table, it would reveal the activity of fewer than 5 people$/,
+    );
+    expect(withheldCell('Contoso B')).toHaveTextContent(/^Hidden: fewer than 5 people hold this licence$/);
+    // How many hold it stays.
+    const c = screen.getAllByRole('row').find((r) => within(r).queryByText('Contoso C'))!;
+    expect(within(c).getByText('1,234')).toBeInTheDocument();
+    // Everyone holding a licence keeps its figures.
+    expect(within(screen.getAllByRole('row')[1]).getByText('66.7%')).toBeInTheDocument();
+  });
+
+  it('says the same in Spanish, with the number formatted for Spanish', async () => {
+    renderWithProvider(
+      <LicenceComparisonTable licences={complement} allLicences={everyone} selected="all" onSelect={vi.fn()} minimumGroupSize={5} />,
+      { language: 'es' },
+    );
+
+    // The Spanish catalog arrives after the first render.
+    expect(
+      await screen.findByText(
+        'Oculto: junto con las demás cifras de esta tabla, revelaría la actividad de menos de 5 personas',
+        undefined,
+        { timeout: 5000 },
+      ),
+    ).toBeInTheDocument();
+    expect(withheldCell('Contoso C')).toHaveTextContent(
+      /^Oculto: junto con las demás cifras de esta tabla, revelaría la actividad de menos de 5 personas$/,
+    );
+    expect(withheldCell('Contoso B')).toHaveTextContent(/^Oculto: menos de 5 personas tienen esta licencia$/);
+    const c = screen.getAllByRole('row').find((r) => within(r).queryByText('Contoso C'))!;
+    expect(within(c).getByText('1234')).toBeInTheDocument();
+  });
+
+  it('claims no reason it was not given when the server withholds a licence for a reason this build does not know', () => {
+    const unknown: LicenceActivitySku = {
+      licenceTypeId: 50, name: 'Contoso D', skuId: 'CONTOSO_D', assignedUsers: 40, withheld: true, withheldReason: 'someFutureReason', workloads: [],
+    };
+    renderWithProvider(
+      <LicenceComparisonTable licences={[...licences, unknown]} allLicences={everyone} selected="all" onSelect={vi.fn()} minimumGroupSize={5} />,
+    );
+
+    expect(withheldCell('Contoso D')).toHaveTextContent(/^Hidden to protect the privacy of the people who hold it$/);
+  });
+
   it('leads with everyone holding a licence, then each licence with its people, score and service shares', () => {
     renderWithProvider(<LicenceComparisonTable licences={licences} allLicences={everyone} selected="all" onSelect={vi.fn()} />);
 

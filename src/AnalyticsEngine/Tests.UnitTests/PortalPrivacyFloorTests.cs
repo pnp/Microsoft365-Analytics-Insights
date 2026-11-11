@@ -54,9 +54,12 @@ namespace Tests.UnitTests
             "#844: the tenant-wide pool balances and the per-agent ledger in a tenant with only a few consumers; #866: the Studio "
             + "note's unmatchedCredits (charges no user matched) is not withheld.";
 
-        private const string EveryoneHoldingALicence =
-            "#844: 'Everyone holding a licence' is published beside the per-licence figures without complementary withholding "
-            + "across licences, so a withheld small licence can be worked back.";
+        private const string LicenceActivityAddedOrAcrossBreakdowns =
+            "#844: the licence table is checked for every figure taken away from everyone or from a licence. Not covered: "
+            + "combinations that add a figure back - for example two licences shown that between them hold everyone in view, "
+            + "added together less everyone, are the people who hold both, which can be 1-4 - and rows of different breakdowns "
+            + "set against each other: a department or country row and a licence row, or a department row and a country row, "
+            + "when one's people all fall inside the other's, differ by the people in one but not the other.";
 
         /// <summary>
         /// Every Web API action a reader without See PII can call, and how it stands against the floor. Adding such an
@@ -298,28 +301,40 @@ namespace Tests.UnitTests
             ["LicenceActivityAPIController.Availability"] = NoGroupedFigures(
                 "Whether the user metadata import is switched on, and fixed guidance."),
             ["LicenceActivityAPIController.Overview"] = Floored(
-                    "Built with a minimum group of 5: a licence of 1-4 holders keeps its count but withholds its activity, "
-                    + "departments and countries of fewer than 5 are folded, and when 1-4 people are in view every figure but the "
-                    + "counts is withheld. Cached apart from a See PII reader's.")
+                    "Built with a minimum group of 5: a licence of 1-4 holders keeps its count but withholds its activity, and so "
+                    + "does any licence through which everyone holding a licence, or another licence, less licences shown would be "
+                    + "1-4 people's activity, decided on the memberships themselves; departments and countries of fewer than 5 are "
+                    + "folded, and when 1-4 people are in view every figure but the counts is withheld. Cached apart from a See PII "
+                    + "reader's.")
                 .By(typeof(LicenceActivityQuery), nameof(LicenceActivityQuery.WithMinimumGroupSize))
                 .By(typeof(LicenceActivityReadModel), nameof(LicenceActivityReadModel.BuildOverview))
+                .By(typeof(LicenceActivityComplements), nameof(LicenceActivityComplements.Withhold))
                 .ProvenBy(
                     Test<LicenceActivityApiTests>(nameof(LicenceActivityApiTests.WithoutSeePii_DepartmentAndCountryNarrowingIsRefused_AndTheOverviewWithholdsSmallGroups)),
+                    Test<LicenceActivityApiTests>(nameof(LicenceActivityApiTests.WithoutSeePii_ALicenceThatWouldGiveASmallOneBack_IsWithheldOnScreenAndInTheWorkbook_AndSeePiiSeesIt)),
                     Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WithoutSeePii_GroupsOfOneToFourAreFoldedOrWithheld_AndAGroupOfFiveIsShown)),
-                    Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WithoutSeePii_FewerThanFivePeopleWithALicence_WithholdsEveryFigure_ButFiveDoNot)))
+                    Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WithoutSeePii_FewerThanFivePeopleWithALicence_WithholdsEveryFigure_ButFiveDoNot)),
+                    Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WithoutSeePii_ASmallLicence_IsWithheldWithTheSmallestLicenceThatWouldOtherwiseGiveItBack)),
+                    Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WithoutSeePii_OverlappingLicences_TheLicenceWithheldIsOneThatActuallyHidesTheSmallOne)),
+                    Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WithoutSeePii_ALicenceNearlyEveryoneHolds_IsWithheldWhenEveryoneLessItIsAHandfulOfPeople)),
+                    Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WithoutSeePii_ALicenceLessTheLicencesInsideIt_NeverGivesBackASmallOne)),
+                    Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WhenTheSearchRunsOutOfBudget_TheLicencesInsideTheFigureAreWithheld_NeverShownUnchecked)),
+                    Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WithSeePii_NoLicenceIsWithheld_AsBefore)))
                 .Refusing("departmentId, countryId",
                     Test<LicenceActivityApiTests>(nameof(LicenceActivityApiTests.WithoutSeePii_DepartmentAndCountryNarrowingIsRefused_AndTheOverviewWithholdsSmallGroups)))
-                .WithKnownGap(EveryoneHoldingALicence),
+                .WithKnownGap(LicenceActivityAddedOrAcrossBreakdowns),
             ["LicenceActivityAPIController.Export"] = Floored(
                     "The overview the reader was served, refused if it was built with a smaller minimum group, so the workbook "
-                    + "folds and withholds what the screen does.")
+                    + "folds and withholds what the screen does, and says why each licence is withheld.")
                 .By(typeof(LicenceActivityWorkbook), nameof(LicenceActivityWorkbook.Build))
                 .ProvenBy(
                     Test<LicenceActivityApiTests>(nameof(LicenceActivityApiTests.WithoutSeePii_TheScreenAndTheWorkbookFoldTheSameSmallGroups_AndSeePiiSeesThemAll)),
-                    Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WithoutSeePii_TheWorkbookIsTheSameFoldedFigures)))
+                    Test<LicenceActivityApiTests>(nameof(LicenceActivityApiTests.WithoutSeePii_ALicenceThatWouldGiveASmallOneBack_IsWithheldOnScreenAndInTheWorkbook_AndSeePiiSeesIt)),
+                    Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WithoutSeePii_TheWorkbookIsTheSameFoldedFigures)),
+                    Test<LicenceActivityReadModelTests>(nameof(LicenceActivityReadModelTests.WithoutSeePii_TheWorkbookSaysWhyEachLicenceIsWithheld_AsTheScreenDoes)))
                 .Refusing("usersId",
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.EveryRestrictedEndpoint_RefusesASignedInUserWithoutThePermission)))
-                .WithKnownGap(EveryoneHoldingALicence),
+                .WithKnownGap(LicenceActivityAddedOrAcrossBreakdowns),
 
             ["PortalAccessAPIController.Get"] = NoGroupedFigures(
                     "Which permissions the signed-in user holds, and the app roles that grant them.")

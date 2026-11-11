@@ -676,6 +676,242 @@ namespace Tests.UnitTests
             Assert.IsFalse(fullXml.Contains("Not shown"));
         }
 
+        // --- Complementary withholding across licences (#844): "Everyone holding a licence" is the union of the licences'
+        // holders, published beside them, so withholding a small licence has to hold against it -----------------------
+
+        [TestMethod]
+        public void WithoutSeePii_ASmallLicence_IsWithheldWithTheSmallestLicenceThatWouldOtherwiseGiveItBack()
+        {
+            // A, B and C are held by different people, and only B's three are active: everyone less A less C is B.
+            var overview = ComplementModel(Query()).BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+            AssertNoDifferenceGivesBackFewerThanFive(overview);
+
+            var a = overview.Licences.Single(sku => sku.Name == "Contoso A");
+            var b = overview.Licences.Single(sku => sku.Name == "Contoso B");
+            var c = overview.Licences.Single(sku => sku.Name == "Contoso C");
+            Assert.IsTrue(b.Withheld);
+            Assert.AreEqual(LicenceActivityWithheldReasons.FewHolders, b.WithheldReason);
+            Assert.IsTrue(c.Withheld, "With C shown, everyone less A less C would be B's three people.");
+            Assert.AreEqual(LicenceActivityWithheldReasons.RevealsFewPeople, c.WithheldReason);
+            Assert.AreEqual(0, c.Workloads.Count, "Withheld, never 0.");
+            Assert.IsNull(c.AdoptionScore);
+            Assert.IsFalse(a.Withheld);
+            Assert.IsNull(a.WithheldReason);
+            CollectionAssert.AreEqual(new[] { 12, 3, 6 }, new[] { a, b, c }.Select(sku => sku.AssignedUsers).ToArray(),
+                "How many hold each licence stays.");
+            Assert.AreEqual(21, overview.AllLicences.AssignedUsers, "Everyone holding a licence stays, with its figures.");
+            Assert.AreEqual(5, overview.AllLicences.Workloads.Count);
+
+            // All the reader can now take away from everyone is A: B's three and C's six together.
+            var teams = Difference(overview.AllLicences.Workloads, a.Workloads, "teams");
+            Assert.AreEqual(9, teams.Sum());
+            Assert.AreEqual(3, teams[0], "B's three active people, among nine.");
+        }
+
+        [TestMethod]
+        public void WithoutSeePii_OverlappingLicences_TheLicenceWithheldIsOneThatActuallyHidesTheSmallOne()
+        {
+            // C's six holders all hold A as well. Withholding C - the smallest other licence - would hide nobody: everyone
+            // less A would still be B's three. A has to go instead, and C, inside A, can stay.
+            var nested = Licensed(new[] { 13, 14, 15 },
+                (1, "Contoso A", People(1, 12)), (2, "Contoso B", People(13, 15)), (3, "Contoso C", People(1, 6)))
+                .BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+            AssertNoDifferenceGivesBackFewerThanFive(nested);
+            Assert.AreEqual(LicenceActivityWithheldReasons.RevealsFewPeople, Licence(nested, "Contoso A").WithheldReason);
+            Assert.AreEqual(LicenceActivityWithheldReasons.FewHolders, Licence(nested, "Contoso B").WithheldReason);
+            Assert.IsFalse(Licence(nested, "Contoso C").Withheld);
+            Assert.AreEqual(9, Difference(nested.AllLicences.Workloads, Licence(nested, "Contoso C").Workloads, "teams").Sum());
+
+            // Two small licences held by the same three people are still three people: one licence goes with them.
+            var same = Licensed(new[] { 13, 14, 15 },
+                (1, "Contoso A", People(1, 12)), (2, "Contoso B1", People(13, 15)), (3, "Contoso B2", People(13, 15)),
+                (4, "Contoso C", People(16, 21)))
+                .BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+            AssertNoDifferenceGivesBackFewerThanFive(same);
+            CollectionAssert.AreEqual(
+                new[] { null, LicenceActivityWithheldReasons.FewHolders, LicenceActivityWithheldReasons.FewHolders, LicenceActivityWithheldReasons.RevealsFewPeople },
+                same.Licences.Select(sku => sku.WithheldReason).ToArray());
+
+            // Two small licences of three different people each are six people together: nothing else needs to go.
+            var six = Licensed(new[] { 13, 14, 15 },
+                (1, "Contoso A", People(1, 12)), (2, "Contoso B1", People(13, 15)), (3, "Contoso B2", People(16, 18)))
+                .BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+            AssertNoDifferenceGivesBackFewerThanFive(six);
+            Assert.IsFalse(Licence(six, "Contoso A").Withheld);
+            Assert.AreEqual(6, Difference(six.AllLicences.Workloads, Licence(six, "Contoso A").Workloads, "teams").Sum());
+        }
+
+        [TestMethod]
+        public void WithoutSeePii_ALicenceNearlyEveryoneHolds_IsWithheldWhenEveryoneLessItIsAHandfulOfPeople()
+        {
+            // Everyone holds Phone, so leaving out the people with no licence shown proves nothing: everyone less E5 is
+            // still E3's three.
+            var small = Licensed(new[] { 13, 14, 15 },
+                (1, "Contoso E3", People(13, 15)), (2, "Contoso E5", People(1, 12)), (3, "Contoso Phone", People(1, 15)))
+                .BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+            AssertNoDifferenceGivesBackFewerThanFive(small);
+            Assert.AreEqual(LicenceActivityWithheldReasons.FewHolders, Licence(small, "Contoso E3").WithheldReason);
+            Assert.AreEqual(LicenceActivityWithheldReasons.RevealsFewPeople, Licence(small, "Contoso E5").WithheldReason);
+            Assert.IsFalse(Licence(small, "Contoso Phone").Withheld);
+
+            // The same three people with no licence of their own beside Phone: no licence is small, but E5 still goes.
+            var none = Licensed(new[] { 13, 14, 15 },
+                (1, "Contoso E5", People(1, 12)), (2, "Contoso Phone", People(1, 15)))
+                .BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+            AssertNoDifferenceGivesBackFewerThanFive(none);
+            Assert.AreEqual(LicenceActivityWithheldReasons.RevealsFewPeople, Licence(none, "Contoso E5").WithheldReason);
+            Assert.IsFalse(Licence(none, "Contoso Phone").Withheld);
+        }
+
+        [TestMethod]
+        public void WithoutSeePii_ALicenceLessTheLicencesInsideIt_NeverGivesBackASmallOne()
+        {
+            // X (4, small) and Y (6) are both inside E5; nothing taken from everyone isolates X, but E5 less Y is X.
+            var overview = Licensed(new[] { 1, 2, 3, 4 },
+                (1, "Contoso E5", People(1, 10)), (2, "Contoso W", new[] { 5 }.Concat(People(11, 20)).ToArray()),
+                (3, "Contoso X", People(1, 4)), (4, "Contoso Y", People(5, 10)))
+                .BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+            AssertNoDifferenceGivesBackFewerThanFive(overview);
+
+            Assert.AreEqual(LicenceActivityWithheldReasons.FewHolders, Licence(overview, "Contoso X").WithheldReason);
+            Assert.AreEqual(LicenceActivityWithheldReasons.RevealsFewPeople, Licence(overview, "Contoso Y").WithheldReason,
+                "The smaller of E5 and Y.");
+            Assert.IsFalse(Licence(overview, "Contoso E5").Withheld);
+            Assert.IsFalse(Licence(overview, "Contoso W").Withheld);
+        }
+
+        [TestMethod]
+        public void WithSeePii_NoLicenceIsWithheld_AsBefore()
+        {
+            var models = new[]
+            {
+                ComplementModel(Query()),
+                Licensed(new[] { 13, 14, 15 },
+                    (1, "Contoso A", People(1, 12)), (2, "Contoso B", People(13, 15)), (3, "Contoso C", People(1, 6))),
+                Licensed(new[] { 13, 14, 15 }, (1, "Contoso E5", People(1, 12)), (2, "Contoso Phone", People(1, 15))),
+            };
+            foreach (var model in models)
+            {
+                var overview = model.BuildOverview(Query(), CancellationToken.None);
+                Assert.IsTrue(overview.Licences.All(sku => !sku.Withheld && sku.WithheldReason == null && sku.Workloads.Count == 5));
+                Assert.IsTrue(overview.Licences.All(sku => sku.AdoptionScore != null));
+            }
+
+            var b = ComplementModel(Query()).BuildOverview(Query(), CancellationToken.None).Licences.Single(sku => sku.Name == "Contoso B");
+            Assert.AreEqual(3, b.Workloads.Single(item => item.Workload == "teams").High, "B's three people's own activity.");
+        }
+
+        [TestMethod]
+        public void WithoutSeePii_TheWorkbookSaysWhyEachLicenceIsWithheld_AsTheScreenDoes()
+        {
+            var overview = ComplementModel(Query()).BuildOverview(Query().WithMinimumGroupSize(5), CancellationToken.None);
+            overview.SnapshotId = "synthetic-overview";
+
+            var xml = WorksheetXml(LicenceActivityWorkbook.Build(overview));
+
+            StringAssert.Contains(xml, "Not shown: fewer than 5 people hold this licence");
+            StringAssert.Contains(xml,
+                "and the other licences, it would reveal the activity of fewer than 5 people");
+            Assert.AreEqual(1, Occurrences(xml, "it would reveal the activity of fewer than 5 people"), "C's row, once.");
+            Assert.AreEqual(2, Occurrences(xml, "Not shown: "), "B's and C's rows, each without a figure.");
+
+            var full = ComplementModel(Query()).BuildOverview(Query(), CancellationToken.None);
+            full.SnapshotId = "synthetic-overview";
+            Assert.IsFalse(WorksheetXml(LicenceActivityWorkbook.Build(full)).Contains("Not shown"));
+        }
+
+        [TestMethod]
+        public void WhenTheSearchRunsOutOfBudget_TheLicencesInsideTheFigureAreWithheld_NeverShownUnchecked()
+        {
+            // Suite (slot 0) is everyone's; C (slot 1) five of them. Nothing leaks, and a finished search withholds nothing.
+            var profiles = new List<ulong[]> { new[] { 3UL }, new[] { 1UL } };
+            var people = new[] { 5, 15 };
+            var holders = new[] { 20, 5 };
+
+            var withheld = new bool[2];
+            var complement = LicenceActivityComplements.Withhold(profiles, people, holders, withheld, 5, CancellationToken.None);
+            CollectionAssert.AreEqual(new[] { false, false }, complement);
+
+            // A search that can't finish proves nothing, so the licences it could not clear are withheld, smallest first,
+            // until enough people hold none of those left: here, all of them.
+            withheld = new bool[2];
+            complement = LicenceActivityComplements.Withhold(profiles, people, holders, withheld, 5, CancellationToken.None, searchBudget: 0);
+            CollectionAssert.AreEqual(new[] { true, true }, complement);
+            CollectionAssert.AreEqual(new[] { true, true }, withheld);
+        }
+
+        /// <summary>
+        /// What a reader without See PII can work out from the licence table alone: each figure shown - a licence, or
+        /// everyone - less any selection of the other licences shown. Fails on a difference that is 1-4 people: every band
+        /// of every service at least 0, and 1-4 people in it. A selection that overlaps can come out non-negative by
+        /// coincidence, so the data these tests use keeps that from happening.
+        /// </summary>
+        private static void AssertNoDifferenceGivesBackFewerThanFive(LicenceActivityOverview overview)
+        {
+            var shown = overview.Licences.Where(sku => !sku.Withheld && sku.AssignedUsers > 0).ToList();
+            var figures = shown.Select(sku => (sku.Name, sku.Workloads)).ToList();
+            figures.Add(("Everyone holding a licence", overview.AllLicences.Workloads));
+            foreach (var figure in figures)
+            {
+                var others = shown.Where(sku => sku.Name != figure.Name).ToList();
+                for (var selection = 1; selection < 1 << others.Count; selection++)
+                {
+                    var taken = others.Where((sku, index) => (selection & (1 << index)) != 0).ToList();
+                    var bands = LicenceActivityQuery.Workloads.Select(workload =>
+                        taken.Aggregate(Bands(figure.Workloads, workload),
+                            (left, sku) => left.Zip(Bands(sku.Workloads, workload), (x, y) => x - y).ToArray())).ToList();
+                    var people = bands[0].Sum();
+                    Assert.IsFalse(people > 0 && people < 5 && bands.All(service => service.All(count => count >= 0)),
+                        figure.Name + " less " + string.Join(", ", taken.Select(sku => sku.Name)) + " is " + people + " people's activity.");
+                }
+            }
+        }
+
+        private static int[] Bands(List<LicenceActivityDistribution> workloads, string workload)
+        {
+            var item = workloads.Single(distribution => distribution.Workload == workload);
+            return new[] { item.High, item.Moderate, item.Low, item.Zero, item.Unknown };
+        }
+
+        private static int[] Difference(List<LicenceActivityDistribution> from, List<LicenceActivityDistribution> less, string workload) =>
+            Bands(from, workload).Zip(Bands(less, workload), (x, y) => x - y).ToArray();
+
+        private static LicenceActivitySku Licence(LicenceActivityOverview overview, string name) =>
+            overview.Licences.Single(sku => sku.Name == name);
+
+        private static int Occurrences(string text, string value)
+        {
+            var count = 0;
+            for (var at = text.IndexOf(value, StringComparison.Ordinal); at >= 0; at = text.IndexOf(value, at + value.Length, StringComparison.Ordinal))
+                count++;
+            return count;
+        }
+
+        private static int[] People(int from, int to) => Enumerable.Range(from, to - from + 1).ToArray();
+
+        /// <summary>
+        /// People holding the licences listed, everyone fully measured; only <paramref name="active"/> used Teams, every week.
+        /// </summary>
+        private static LicenceActivityReadModel Licensed(int[] active, params (int Id, string Name, int[] Holders)[] licences) =>
+            Licensed(Query(), active, licences);
+
+        private static LicenceActivityReadModel Licensed(
+            LicenceActivityQuery range, int[] active, params (int Id, string Name, int[] Holders)[] licences) =>
+            new LicenceActivityReadModel(
+                range,
+                licences.Select(licence => Sku(licence.Id, licence.Name)).ToArray(),
+                Users(licences.SelectMany(licence => licence.Holders).Distinct().OrderBy(id => id).ToArray()),
+                licences.SelectMany(licence => licence.Holders.Select(id => Member(id, licence.Id))).ToArray(),
+                AvailableCoverage(),
+                Scores(active.Select(id => ("teams", id, Score(4, 4))).ToArray()));
+
+        /// <summary>
+        /// Licences A, B and C, held by 12, 3 and 6 different people; B's three are the only ones with any Teams activity.
+        /// </summary>
+        internal static LicenceActivityReadModel ComplementModel(LicenceActivityQuery range) =>
+            Licensed(range, new[] { 13, 14, 15 },
+                (1, "Contoso A", People(1, 12)), (2, "Contoso B", People(13, 15)), (3, "Contoso C", People(16, 21)));
+
         private static string WorksheetXml(byte[] workbook)
         {
             using (var archive = new System.IO.Compression.ZipArchive(new System.IO.MemoryStream(workbook)))

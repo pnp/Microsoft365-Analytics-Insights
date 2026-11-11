@@ -291,6 +291,57 @@ namespace Tests.UnitTests
                     .Select(e => new StreamReader(e.Open()).ReadToEnd()));
         }
 
+        [TestMethod]
+        public async Task WithoutSeePii_ALicenceThatWouldGiveASmallOneBack_IsWithheldOnScreenAndInTheWorkbook_AndSeePiiSeesIt()
+        {
+            var sources = new LicenceActivitySources { UserMetadata = true, UsageReports = true, NowUtc = LicenceActivityTests.Now };
+            var store = new CachedLicenceActivityStore(
+                new ComplementLoader(), new LicenceActivityReadModelCache(utcNow: () => LicenceActivityTests.Now), "synthetic-scope");
+            IPrincipal principal = SignedIn();
+            using (var host = new LicenceActivityHttpHost(store, sources, () => LicenceActivityTests.Now, () => principal))
+            {
+                const string url = "api/LicenceActivity/overview?from=2000-05-01&to=2000-06-25";
+                JToken Licence(JObject overview, string name) => overview["licences"].Single(sku => (string)sku["name"] == name);
+
+                var json = JObject.Parse(await host.Client.GetStringAsync(url));
+                Assert.AreEqual("fewHolders", (string)Licence(json, "Contoso B")["withheldReason"]);
+                var c = Licence(json, "Contoso C");
+                Assert.IsTrue((bool)c["withheld"]);
+                Assert.AreEqual("revealsFewPeople", (string)c["withheldReason"]);
+                Assert.AreEqual(0, c["workloads"].Count(), "Withheld, never 0.");
+                Assert.AreEqual(JTokenType.Null, c["adoptionScore"].Type);
+                Assert.AreEqual(6, (int)c["assignedUsers"]);
+                Assert.IsFalse((bool)Licence(json, "Contoso A")["withheld"]);
+                Assert.AreEqual(5, json["allLicences"]["workloads"].Count(), "Everyone holding a licence stays.");
+
+                var export = await host.Client.GetAsync("api/LicenceActivity/export?overviewId=" + json["snapshotId"]);
+                Assert.AreEqual(HttpStatusCode.OK, export.StatusCode);
+                var workbook = Worksheets(await export.Content.ReadAsByteArrayAsync());
+                StringAssert.Contains(workbook, "Not shown: fewer than 5 people hold this licence");
+                StringAssert.Contains(workbook, "and the other licences, it would reveal the activity of fewer than 5 people");
+
+                principal = SignedIn(PortalRoles.SeePii);
+                var full = JObject.Parse(await host.Client.GetStringAsync(url));
+                foreach (var name in new[] { "Contoso A", "Contoso B", "Contoso C" })
+                {
+                    Assert.IsFalse((bool)Licence(full, name)["withheld"], name);
+                    Assert.AreEqual(JTokenType.Null, Licence(full, name)["withheldReason"].Type, name);
+                    Assert.AreEqual(5, Licence(full, name)["workloads"].Count(), name);
+                }
+                var fullWorkbook = Worksheets(await (await host.Client.GetAsync(
+                    "api/LicenceActivity/export?overviewId=" + full["snapshotId"])).Content.ReadAsByteArrayAsync());
+                Assert.IsFalse(fullWorkbook.Contains("Not shown"));
+            }
+        }
+
+        private sealed class ComplementLoader : ILicenceActivityReadModelLoader
+        {
+            public Task<LicenceActivityReadModel> LoadReadModelAsync(
+                LicenceActivityQuery range, LicenceActivitySources sources,
+                ILicenceActivityDiagnostics diagnostics, CancellationToken cancellationToken) =>
+                Task.FromResult(LicenceActivityReadModelTests.ComplementModel(range));
+        }
+
         private sealed class SmallGroupsLoader : ILicenceActivityReadModelLoader
         {
             public Task<LicenceActivityReadModel> LoadReadModelAsync(
