@@ -1991,6 +1991,103 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, analysis.Summary.SeatLicenceTypes.Single(l => l.SkuPartNumber == "Microsoft_365_Copilot_EDU").AssignedIdleUsers);
         }
 
+        /// <summary>
+        /// #844 G4: the SKU table must not tell a reader without See PII how many of a Copilot seat's one to four holders
+        /// left it unused - nor let the reclaimable headline, less the counts shown, give that figure back.
+        /// </summary>
+        [TestMethod]
+        public void SeatIdleCounts_OfACopilotSeatHeldByOneToFourPeople_AreWithheldWithoutSeePii_AndShownWithIt()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.SeatLicenceTypes.AddRange(new[]
+            {
+                new LicenceTypeClassification { Id = 1, Name = "Microsoft 365 Copilot", SkuPartNumber = "Microsoft_365_Copilot", AssignedUsers = 12, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 2, Name = "Contoso Copilot pilot", SkuPartNumber = "CONTOSO_COPILOT_PILOT", AssignedUsers = 3, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 3, Name = "Microsoft 365 Copilot EDU", SkuPartNumber = "Microsoft_365_Copilot_EDU", AssignedUsers = 5, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 4, Name = "Office 365 E3", SkuPartNumber = "ENTERPRISEPACK", AssignedUsers = 2, IsCopilotSeat = false },
+            });
+            void Holders(int licenceId, int idle, int active)
+            {
+                for (var i = 0; i < idle + active; i++)
+                {
+                    var user = i < idle
+                        ? ScoredUser($"idle{licenceId}-{i}@contoso.com", 0, AdoptionBand.NeverUsed)
+                        : ScoredUser($"active{licenceId}-{i}@contoso.com", 60, AdoptionBand.Established);
+                    user.SeatLicenceTypeIds.Add(licenceId);
+                    analysis.LicensedUsers.Add(user);
+                }
+            }
+            Holders(1, idle: 4, active: 8);
+            Holders(2, idle: 2, active: 1);
+            Holders(3, idle: 1, active: 4);
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+            Assert.AreEqual(7, summary.ReclaimableSeats, "fixture: every idle holder counts towards the headline");
+
+            var trimmed = summary.WithoutIndividualData();
+            LicenceTypeClassification Row(CopilotAdoptionSummary s, int id) => s.SeatLicenceTypes.Single(l => l.Id == id);
+
+            var pilot = Row(trimmed, 2);
+            Assert.IsNull(pilot.AssignedIdleUsers, "Withheld is withheld - never a 0 standing in for it.");
+            Assert.IsTrue(pilot.AssignedIdleWithheld);
+            Assert.AreEqual(SeatIdleWithheldReasons.FewHolders, pilot.AssignedIdleWithheldReason);
+            Assert.AreEqual(5, pilot.MinimumHolders);
+            Assert.AreEqual(3, pilot.AssignedUsers, "How many hold it stays, as Licence activity keeps it.");
+
+            // Five holders are not too few: the EDU seat is withheld only because the headline would give the pilot back.
+            var edu = Row(trimmed, 3);
+            Assert.IsNull(edu.AssignedIdleUsers);
+            Assert.AreEqual(SeatIdleWithheldReasons.RevealsSmallerSeat, edu.AssignedIdleWithheldReason);
+            Assert.AreEqual(4, Row(trimmed, 1).AssignedIdleUsers);
+            Assert.IsFalse(Row(trimmed, 1).AssignedIdleWithheld);
+            Assert.AreEqual(0, Row(trimmed, 4).AssignedIdleUsers, "A licence that is not a Copilot seat has no idle count to withhold.");
+            Assert.IsFalse(Row(trimmed, 4).AssignedIdleWithheld);
+
+            var shown = trimmed.SeatLicenceTypes.Where(l => l.IsCopilotSeat && !l.AssignedIdleWithheld).Sum(l => l.AssignedIdleUsers.Value);
+            Assert.AreNotEqual(Row(summary, 2).AssignedIdleUsers, trimmed.ReclaimableSeats - shown,
+                "The reclaimable headline less the counts shown must not be the pilot's own figure.");
+            Assert.IsTrue(trimmed.SeatLicenceTypes.Where(l => l.AssignedIdleWithheld).Sum(l => l.AssignedUsers) >= 5);
+            Assert.AreEqual(summary.ReclaimableSeats, trimmed.ReclaimableSeats, "The headline stays for every reader.");
+
+            // A reader with See PII is given the cached summary, which was never edited.
+            Assert.AreEqual(2, Row(summary, 2).AssignedIdleUsers);
+            Assert.AreEqual(1, Row(summary, 3).AssignedIdleUsers);
+            Assert.IsFalse(summary.SeatLicenceTypes.Any(l => l.AssignedIdleWithheld || l.AssignedIdleWithheldReason != null || l.MinimumHolders != null));
+        }
+
+        [TestMethod]
+        public void SeatIdleWithholding_WithholdsTheSmallestSeatThatWouldGiveASmallOneBack_AndNothingWhenNoSeatIsSmall()
+        {
+            LicenceTypeClassification Seat(int id, int holders, bool copilot = true) =>
+                new LicenceTypeClassification { Id = id, AssignedUsers = holders, AssignedIdleUsers = holders / 2, IsCopilotSeat = copilot };
+            Dictionary<int, string> Reasons(List<LicenceTypeClassification> licences) =>
+                LicenceTypeClassification.WithoutSmallSeatIdleCounts(licences, 5)
+                    .Where(l => l.AssignedIdleWithheld)
+                    .ToDictionary(l => l.Id, l => l.AssignedIdleWithheldReason);
+
+            // Two small seats: one person can hold both, so their counts together prove nothing about how many different
+            // people they cover. The next seat of at least five holders is withheld with them, the smallest of those.
+            CollectionAssert.AreEquivalent(
+                new Dictionary<int, string>
+                {
+                    [1] = SeatIdleWithheldReasons.FewHolders,
+                    [2] = SeatIdleWithheldReasons.FewHolders,
+                    [4] = SeatIdleWithheldReasons.RevealsSmallerSeat,
+                },
+                Reasons(new List<LicenceTypeClassification> { Seat(1, 3), Seat(2, 4), Seat(3, 40), Seat(4, 9), Seat(5, 1, copilot: false) }));
+
+            // The only Copilot seat, held by few: withheld, with nothing else that could give it back.
+            CollectionAssert.AreEquivalent(
+                new Dictionary<int, string> { [1] = SeatIdleWithheldReasons.FewHolders },
+                Reasons(new List<LicenceTypeClassification> { Seat(1, 4), Seat(2, 300, copilot: false) }));
+
+            // Five holders, and nobody, are not a handful of people: the same list comes back.
+            var noneSmall = new List<LicenceTypeClassification> { Seat(1, 5), Seat(2, 0), Seat(3, 40) };
+            Assert.AreSame(noneSmall, LicenceTypeClassification.WithoutSmallSeatIdleCounts(noneSmall, 5));
+        }
+
         [TestMethod]
         public void Funnel_NarrowsMonotonically()
         {

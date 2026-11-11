@@ -634,6 +634,15 @@ export const copilotAdoption = {
   'copilotAdoption.page.unassigned': 'Unassigned',
   'copilotAdoption.page.assignedIdle': 'Assigned idle',
   'copilotAdoption.page.countedCopilotLicence': 'Counted as a Copilot licence',
+  // What a reader without See PII sees in place of a few seat holders' idle count (#844)
+  'copilotAdoption.page.skuIdle.withheld.fewHolders': 'Hidden: fewer than {count} people hold this licence',
+  'copilotAdoption.page.skuIdle.withheld.revealsSmallerSeat':
+    'Hidden: with the reclaimable total, it would reveal the figure for a licence fewer than {count} people hold',
+  'copilotAdoption.page.skuIdle.withheld.other': 'Hidden: it could single out fewer than {count} people',
+  'copilotAdoption.page.skuIdle.withheldNote':
+    'Idle seats are hidden for a Copilot licence that fewer than {count} people hold, so that nobody can be singled out.',
+  'copilotAdoption.page.skuIdle.withheldNoteComplement':
+    'They are also hidden for one larger Copilot licence: subtracting its figure from the reclaimable total would otherwise reveal the hidden one.',
   'copilotAdoption.page.unknown': 'Unknown',
   'copilotAdoption.page.unknown2': 'Unknown',
   'copilotAdoption.page.yes': 'Yes',

@@ -73,17 +73,29 @@ namespace Common.Entities.CopilotAdoption
         /// The leadership comparison the page showed (#654), or null when none was produced. Aggregates only, already
         /// suppressed below its minimum, so it is written for every reader.
         /// </param>
+        /// <param name="readerSeesPii">
+        /// Whether the reader holds See PII, or null to read it from <paramref name="includeIndividualData"/>. Without it the
+        /// figures are the summary's <see cref="CopilotAdoptionSummary.WithoutIndividualData"/> copy, as on screen - which also
+        /// withholds the idle count of a Copilot seat one to four people hold (#844). With it, a file whose individual rows are
+        /// left out because the period does not end today still has every figure.
+        /// </param>
         public static byte[] Build(
             CopilotAdoptionAnalysis analysis,
             TimeSavedOverrides timeSaved = null,
             bool includeIndividualData = true,
-            LeadershipCohort.LeadershipAdoptionComparison leadership = null)
+            LeadershipCohort.LeadershipAdoptionComparison leadership = null,
+            bool? readerSeesPii = null)
         {
             if (analysis == null) throw new ArgumentNullException(nameof(analysis));
 
+            var seesPii = readerSeesPii ?? includeIndividualData;
+            includeIndividualData &= seesPii;
+
             using (var workbook = new XlsxWriter())
             {
-                var summary = includeIndividualData ? analysis.Summary : analysis.Summary.WithoutIndividualData();
+                var summary = !seesPii
+                    ? analysis.Summary.WithoutIndividualData()
+                    : includeIndividualData ? analysis.Summary : analysis.Summary.WithoutNamedLists();
                 var configured = summary.Options ?? CopilotAdoptionOptions.Default;
                 var modelOptions = timeSaved != null && timeSaved.Any ? timeSaved.ApplyTo(configured) : configured;
 
@@ -2993,7 +3005,12 @@ namespace Common.Entities.CopilotAdoption
             AddMethod(sheet, "Licence classification",
                 "Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot licence (Copilot Studio, "
                 + "Copilot for Sales), and ships new licence SKUs regularly. Everything found is listed below, "
-                + "including what was excluded, so the licensed population can be checked rather than trusted.");
+                + "including what was excluded, so the licensed population can be checked rather than trusted."
+                + (summary.SeatLicenceTypes.Any(l => l.AssignedIdleWithheld)
+                    ? " This file was exported without the See PII permission, so 'Assigned idle' is not shown for a Copilot "
+                      + "licence that so few people hold that it would describe them, nor for the licence that, with the "
+                      + "reclaimable total, would give that figure back."
+                    : string.Empty));
 
             if (summary.SeatLicenceTypes.Count > 0)
             {
@@ -3004,7 +3021,7 @@ namespace Common.Entities.CopilotAdoption
                     sheet.AddRow(licence.Name, licence.SkuPartNumber, licence.AssignedUsers,
                         licence.PurchasedUnits.HasValue ? (object)licence.PurchasedUnits.Value : "Unknown",
                         licence.UnassignedUnits.HasValue ? (object)licence.UnassignedUnits.Value : "Unknown",
-                        licence.AssignedIdleUsers,
+                        AssignedIdleCell(licence),
                         licence.PurchasedUnitsRefreshedUtc.HasValue ? licence.PurchasedUnitsRefreshedUtc.Value.ToString("yyyy-MM-dd HH:mm:ss") : "",
                         licence.IsCopilotSeat ? "Yes" : "No");
                 }
@@ -3031,6 +3048,21 @@ namespace Common.Entities.CopilotAdoption
             }
 
             sheet.FreezeTopRows(3);
+        }
+
+        /// <summary>
+        /// The licence classification's "Assigned idle" cell: the count, or why it is withheld from a reader without See PII
+        /// (#844) - never a 0 standing in for it.
+        /// </summary>
+        internal static object AssignedIdleCell(LicenceTypeClassification licence)
+        {
+            if (!licence.AssignedIdleWithheld) return licence.AssignedIdleUsers;
+
+            var minimum = licence.MinimumHolders ?? CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii;
+            return string.Equals(licence.AssignedIdleWithheldReason, SeatIdleWithheldReasons.RevealsSmallerSeat, StringComparison.Ordinal)
+                ? string.Format(CultureInfo.InvariantCulture,
+                    "Not shown: with the reclaimable total, it would reveal the figure for a licence fewer than {0} people hold", minimum)
+                : string.Format(CultureInfo.InvariantCulture, "Not shown: fewer than {0} people hold this licence", minimum);
         }
 
         private static string SourceComparisonSummary(LicensedUserAdoptionRow user, CopilotAdoptionSummary summary)

@@ -1277,6 +1277,39 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void LicenceClassification_WithoutSeePii_SaysWhyASmallSeatsIdleCountIsNotShown_NeverZero()
+        {
+            // #844 G4: the workbook's licence classification is the SKU table on screen, and an export is never less
+            // redacted than the screen.
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.SeatLicenceTypes = new List<LicenceTypeClassification>
+            {
+                new LicenceTypeClassification { Id = 1, Name = "Microsoft 365 Copilot", SkuPartNumber = "Microsoft_365_Copilot", AssignedUsers = 40, AssignedIdleUsers = 7, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 2, Name = "Contoso Copilot pilot", SkuPartNumber = "CONTOSO_COPILOT_PILOT", AssignedUsers = 3, AssignedIdleUsers = 2, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 3, Name = "Microsoft 365 Copilot EDU", SkuPartNumber = "Microsoft_365_Copilot_EDU", AssignedUsers = 9, AssignedIdleUsers = 6, IsCopilotSeat = true },
+            };
+            string Idle(byte[] workbook, string sku)
+            {
+                var cells = SheetCells(workbook, "How this is calculated");
+                var at = cells.IndexOf(sku);
+                Assert.AreNotEqual(-1, at, sku + " is missing from the licence classification.");
+                return cells[at + 4]; // SKU, then assigned, purchased, unassigned, and assigned idle.
+            }
+
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            Assert.AreEqual("Not shown: fewer than 5 people hold this licence", Idle(trimmed, "CONTOSO_COPILOT_PILOT"));
+            Assert.AreEqual("Not shown: with the reclaimable total, it would reveal the figure for a licence fewer than 5 people hold",
+                Idle(trimmed, "Microsoft_365_Copilot_EDU"));
+            Assert.AreEqual("7", Idle(trimmed, "Microsoft_365_Copilot"));
+            Assert.IsTrue(SheetCells(trimmed, "How this is calculated").Any(c => c.Contains("exported without the See PII permission, so 'Assigned idle' is not shown")));
+
+            Assert.AreEqual("2", Idle(CopilotAdoptionWorkbook.Build(analysis), "CONTOSO_COPILOT_PILOT"));
+            Assert.AreEqual("2", Idle(CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false, readerSeesPii: true), "CONTOSO_COPILOT_PILOT"),
+                "A reader with See PII whose named lists are left out for a past period still has every figure.");
+            Assert.AreEqual(2, analysis.Summary.SeatLicenceTypes[1].AssignedIdleUsers, "The cached analysis must never be edited for one reader.");
+        }
+
+        [TestMethod]
         public void Workbook_SaysWhatEachResourceTypeValueActuallyDescribes()
         {
             // Issue #468: the workbook used to introduce these rows as "what Copilot grounded its

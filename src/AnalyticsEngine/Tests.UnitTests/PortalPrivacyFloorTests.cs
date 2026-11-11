@@ -37,13 +37,6 @@ namespace Tests.UnitTests
     [TestClass]
     public class PortalPrivacyFloorTests
     {
-        private const string SeatSkuIdleCounts =
-            "a Copilot seat SKU held by one to four people shows assignedIdleUsers, how many of those few left their seat unused "
-            + "(CopilotAdoptionService.PopulateAssignedIdleBySku). Licence activity withholds that kind of figure for a licence "
-            + "of fewer than five holders (LicenceActivitySku.Withheld).";
-
-        private const string SeatSkuTable = "The SKU table (seatLicenceTypes; in the workbook, the licence classification): " + SeatSkuIdleCounts;
-
         private const string AdoptionRowsAndTotals =
             "#844: the email-domain table floors a row's combined population rather than each population on it, and totals "
             + "published beside rows (the whole-tenant figures beside the manager rows, the league table's candidates beside "
@@ -147,25 +140,38 @@ namespace Tests.UnitTests
                 "Which of the imports the tool needs are switched on, and what is missing."),
             ["CopilotAdoptionAPIController.Summary"] = Floored(
                     "Every breakdown leaves out groups of fewer than MinSeatsPerSegment (5) people, for every reader; a reader "
-                    + "without See PII gets a copy without the manager roll-up or the heaviest agent users.")
+                    + "without See PII gets a copy without the manager roll-up or the heaviest agent users, and without the idle "
+                    + "count of a Copilot seat 1-4 people hold or of the smallest seat that, with the reclaimable total, would give "
+                    + "it back.")
                 .By(typeof(CopilotAdoptionService), nameof(CopilotAdoptionService.FinaliseSummary))
                 .By(typeof(CopilotAdoptionSummary), nameof(CopilotAdoptionSummary.WithoutIndividualData))
+                .By(typeof(LicenceTypeClassification), nameof(LicenceTypeClassification.WithoutSmallSeatIdleCounts))
                 .ProvenBy(
                     Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.DepartmentBreakdowns_LeaveOutDepartmentsWithFewerPeopleThanTheMinimum)),
                     Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.AccountabilityRollup_SuppressesSmallLeaderGroupsLikeSegments)),
-                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSummary_WithoutSeePii_LosesTheManagerRollup_AndTheCachedAnalysisKeepsIt)))
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSummary_WithoutSeePii_LosesTheManagerRollup_AndTheCachedAnalysisKeepsIt)),
+                    Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.SeatIdleCounts_OfACopilotSeatHeldByOneToFourPeople_AreWithheldWithoutSeePii_AndShownWithIt)),
+                    Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.SeatIdleWithholding_WithholdsTheSmallestSeatThatWouldGiveASmallOneBack_AndNothingWhenNoSeatIsSmall)),
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSeatIdle_OfACopilotSeatHeldByOneToFourPeople_IsWithheldWithoutSeePii_OnEveryEndpoint)))
                 .Refusing("emailDomain, userFilter, seatLicenceTypeIds",
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoption_NarrowedAggregates_RequireSeePii)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoption_SeatLicenceOverride_NarrowsThePopulation_SoNeedsSeePii)))
-                .WithKnownGap(SeatSkuTable)
                 .WithKnownGap(AdoptionRowsAndTotals),
             ["CopilotAdoptionAPIController.Rebuild"] = NoGroupedFigures(
                     "Starts or joins a rebuild of the analysis, and answers with its generation id and progress only.")
                 .ProvenBy(Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionRebuild_RejectsInvalidTokens_AndStaleTokensReturnOnlyGenerationMetadata)))
                 .Refusing("emailDomain, userFilter, seatLicenceTypeIds",
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionRebuild_NarrowedRequestsRequireSeePiiBeforeStartingWork))),
-            ["CopilotAdoptionAPIController.LicenceTypes"] = KnownGap(
-                    "Every licence type with its assigned count, inventory that Licence activity keeps too; but " + SeatSkuIdleCounts)
+            ["CopilotAdoptionAPIController.LicenceTypes"] = Floored(
+                    "Every licence type with its assigned count, inventory that Licence activity keeps too. A reader without See "
+                    + "PII is given the summary's list: without the idle count of a Copilot seat 1-4 people hold, or of the "
+                    + "smallest seat that, with the reclaimable total, would give it back.")
+                .By(typeof(CopilotAdoptionSummary), nameof(CopilotAdoptionSummary.WithoutIndividualData))
+                .By(typeof(LicenceTypeClassification), nameof(LicenceTypeClassification.WithoutSmallSeatIdleCounts))
+                .ProvenBy(
+                    Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.SeatIdleCounts_OfACopilotSeatHeldByOneToFourPeople_AreWithheldWithoutSeePii_AndShownWithIt)),
+                    Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.SeatIdleWithholding_WithholdsTheSmallestSeatThatWouldGiveASmallOneBack_AndNothingWhenNoSeatIsSmall)),
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSeatIdle_OfACopilotSeatHeldByOneToFourPeople_IsWithheldWithoutSeePii_OnEveryEndpoint)))
                 .Refusing("seatLicenceTypeIds",
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoption_SeatLicenceOverride_NarrowsThePopulation_SoNeedsSeePii))),
             ["CopilotAdoptionAPIController.Sql"] = NoGroupedFigures(
@@ -179,16 +185,19 @@ namespace Tests.UnitTests
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoption_SeatLicenceOverride_NarrowsThePopulation_SoNeedsSeePii))),
             ["CopilotAdoptionAPIController.ExportWorkbook"] = Floored(
                     "The summary's figures, floored as on screen, without the per-person sheets or named lists; under the "
-                    + "administrator's filter the tenant sections it withholds are written blank, never 0.")
+                    + "administrator's filter the tenant sections it withholds are written blank, never 0. The licence "
+                    + "classification says why a withheld idle count is not shown, never 0.")
                 .By(typeof(CopilotAdoptionService), nameof(CopilotAdoptionService.FinaliseSummary))
                 .By(typeof(CopilotAdoptionWorkbook), nameof(CopilotAdoptionWorkbook.Build))
+                .By(typeof(LicenceTypeClassification), nameof(LicenceTypeClassification.WithoutSmallSeatIdleCounts))
                 .ProvenBy(
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionWorkbook_WithoutSeePii_NamesNobody_AndWithItStillDoes)),
-                    Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.SnapshotFacts_WriteTheSectionsTheGlobalFilterWithholdsBlank_NeverZero)))
+                    Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.SnapshotFacts_WriteTheSectionsTheGlobalFilterWithholdsBlank_NeverZero)),
+                    Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.LicenceClassification_WithoutSeePii_SaysWhyASmallSeatsIdleCountIsNotShown_NeverZero)),
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSeatIdle_OfACopilotSeatHeldByOneToFourPeople_IsWithheldWithoutSeePii_OnEveryEndpoint)))
                 .Refusing("emailDomain, userFilter, seatLicenceTypeIds",
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoption_NarrowedAggregates_RequireSeePii)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoption_SeatLicenceOverride_NarrowsThePopulation_SoNeedsSeePii)))
-                .WithKnownGap(SeatSkuTable)
                 .WithKnownGap(AdoptionRowsAndTotals),
 
             ["CopilotCostHealthAPIController.Get"] = NoGroupedFigures(
