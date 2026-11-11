@@ -135,19 +135,21 @@ namespace Common.Entities.SpoWebActivity
         /// asked for, a short list with no small row would show a row that a longer list leaves out as its smallest shown,
         /// and that row's figures, taken off the longer list's remainder, would leave the small rows'.
         /// </summary>
-        /// <param name="leftOutInView">
-        /// How many of the first <paramref name="top"/> rows of <paramref name="all"/> were left out: the rows missing from
-        /// what the reader sees, not those that would have ranked below it anyway.
+        /// <param name="leftOut">
+        /// How many rows of the list the floor decides over - the first <see cref="WebActivityQuery.MaximumTop"/> rows of
+        /// <paramref name="all"/> - it left out: the same whatever <paramref name="top"/> is asked for. A count of only the
+        /// rows missing from the first <paramref name="top"/> would change, top by top, exactly at the rank of each row left
+        /// out, and a list ranked by its figure would then bracket that row's figure between its shown neighbours (#844, the
+        /// final review of #881).
         /// </param>
-        public static List<T> FirstRows<T>(IList<T> all, IList<T> shown, int top, out int leftOutInView)
+        public static List<T> FirstRows<T>(IList<T> all, IList<T> shown, int top, out int leftOut)
             where T : class
         {
             if (top < 1) throw new ArgumentOutOfRangeException(nameof(top));
 
-            var rows = all ?? new List<T>();
             var floored = shown ?? new List<T>();
             var shownRows = new HashSet<T>(floored, ReferenceComparer<T>.Instance);
-            leftOutInView = rows.Take(top).Count(r => !shownRows.Contains(r));
+            leftOut = WithinCap(all).Count(r => !shownRows.Contains(r));
             return floored.Take(top).ToList();
         }
 

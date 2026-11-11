@@ -385,9 +385,9 @@ export const webActivity = {
     'Hidden to protect privacy: search terms are text people typed, which can name a person or say what they were looking for.',
   'webActivity.privacy.noPeopleCount':
     'Hidden to protect privacy: nothing recorded says how many people are behind each row, so a row could be one person’s browsing.',
-  'webActivity.privacy.leftOut.one': 'One row is left out to protect privacy: fewer than {minimum} people are behind it.',
+  'webActivity.privacy.leftOut.one': 'One row is left out to protect privacy, so that no group of fewer than {minimum} people can be seen or worked out from the totals.',
   'webActivity.privacy.leftOut.other':
-    '{count} rows are left out to protect privacy: those with fewer than {minimum} people behind them, together with enough of the smallest other rows that none can be worked out from the totals.',
+    '{count} rows are left out to protect privacy, so that no group of fewer than {minimum} people can be seen or worked out from the totals.',
   'webActivity.privacy.leftOutSlice': 'Left out to protect privacy',
   'webActivity.shared.failedQuery.one': 'One query on this tab could not be loaded, so some figures below may read as zero when they are in fact unknown. The affected sections show the error.',
   'webActivity.shared.failedQuery.other': '{count} queries on this tab could not be loaded, so some figures below may read as zero when they are in fact unknown. The affected sections show the error.',

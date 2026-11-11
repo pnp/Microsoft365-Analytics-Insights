@@ -387,9 +387,9 @@ const webActivity: Record<keyof typeof en, string> = {
     'Oculto para proteger la privacidad: los términos de búsqueda son texto que escribieron las personas, y pueden nombrar a alguien o revelar lo que buscaba.',
   'webActivity.privacy.noPeopleCount':
     'Oculto para proteger la privacidad: nada de lo registrado indica cuántas personas hay detrás de cada fila, así que una fila podría ser la navegación de una sola persona.',
-  'webActivity.privacy.leftOut.one': 'Se omite una fila para proteger la privacidad: hay menos de {minimum} personas detrás de ella.',
+  'webActivity.privacy.leftOut.one': 'Se omite una fila para proteger la privacidad, de modo que ningún grupo de menos de {minimum} personas pueda verse ni deducirse de los totales.',
   'webActivity.privacy.leftOut.other':
-    'Se omiten {count} filas para proteger la privacidad: las que tienen menos de {minimum} personas detrás, junto con las filas más pequeñas necesarias para que ninguna pueda deducirse de los totales.',
+    'Se omiten {count} filas para proteger la privacidad, de modo que ningún grupo de menos de {minimum} personas pueda verse ni deducirse de los totales.',
   'webActivity.privacy.leftOutSlice': 'Omitido para proteger la privacidad',
   'webActivity.shared.failedQuery.one': 'No se pudo cargar una consulta de esta pestaña, por lo que algunas cifras inferiores pueden aparecer como cero cuando en realidad son desconocidas. Las secciones afectadas muestran el error.',
   'webActivity.shared.failedQuery.other': 'No se pudieron cargar {count} consultas de esta pestaña, por lo que algunas cifras inferiores pueden aparecer como cero cuando en realidad son desconocidas. Las secciones afectadas muestran el error.',
