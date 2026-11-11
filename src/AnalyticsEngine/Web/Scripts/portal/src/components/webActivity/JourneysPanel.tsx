@@ -26,6 +26,7 @@ import {
   formatDecimal,
   formatDuration,
   formatPct,
+  flooredCard,
   queryFor,
   shortenUrl,
   toCategories,
@@ -60,18 +61,33 @@ export default function JourneysPanel({
   const t = useT();
   const kpis = data.kpis;
 
-  // Without See PII the page lists, paths and clicked elements come back withheld: none of their queries counts the
-  // people behind a row. Each card says so instead of reading as "nothing happened", and offers no export.
-  const pagesWithheld = data.pageListsWithheld === true;
-  const pathsWithheld = data.pathsWithheld === true;
-  const clicksWithheld = data.clickedElementsWithheld === true;
-  const noPeopleCount = t('webActivity.privacy.noPeopleCount');
-  const exportButton = (withheld: boolean, onClick: () => void) =>
-    withheld ? undefined : (
+  // Without See PII, a page, step, flow or clicked element of too few people is left out of each list, with the smallest
+  // row shown. Each card says so - and when every row is left out, says that instead of "nothing happened".
+  const floored = (leftOut: number | undefined, rows: number, own: { note?: string; empty?: string } = {}) =>
+    flooredCard(t, data.minimumGroupSize, leftOut, rows, own);
+  const entry = floored(data.withheldEntryPages, data.entryPages.length);
+  const bounce = floored(data.withheldBouncePages, data.bouncePages.length, {
+    note: t('webActivity.journeys.bounce.note'),
+    empty: t('webActivity.journeys.bouncePages.empty'),
+  });
+  const exit = floored(data.withheldExitPages, data.exitPages.length, { note: t('webActivity.journeys.exit.note') });
+  const flows = floored(data.withheldFlows, data.flows.length, {
+    note: t('webActivity.journeys.flows.note'),
+    empty: t('webActivity.journeys.flows.empty'),
+  });
+  const routes = floored(data.withheldTransitions, data.transitions.length, {
+    note: t('webActivity.journeys.transitions.note'),
+    empty: t('webActivity.journeys.routes.empty'),
+  });
+  const clicks = floored(data.withheldClickedElements, data.clickedElements.length, {
+    empty: clickTrackingAvailable ? t('webActivity.journeys.clicks.emptyThisPeriod') : t('webActivity.journeys.clicks.emptyEver'),
+  });
+  const exportButton = (exportable: boolean, onClick: () => void) =>
+    exportable ? (
       <Button appearance="subtle" size="small" icon={<ArrowDownload16Regular />} onClick={onClick} disabled={exporting}>
         {t('webActivity.common.export')}
       </Button>
-    );
+    ) : undefined;
 
   const items: KpiDefinition[] = [
     {
@@ -142,10 +158,11 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.entry.title')}
           description={t('webActivity.journeys.entry.description')}
+          note={entry.note}
           query={queryFor(data.queries, 'journeys-entry')}
-          isEmpty={pagesWithheld || data.entryPages.length === 0}
-          emptyMessage={pagesWithheld ? noPeopleCount : undefined}
-          actions={exportButton(pagesWithheld, onExportEntry)}
+          isEmpty={data.entryPages.length === 0}
+          emptyMessage={entry.emptyMessage}
+          actions={exportButton(entry.exportable, onExportEntry)}
         >
           <PageTable
             rows={data.entryPages}
@@ -159,10 +176,10 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.bouncePages.title')}
           description={t('webActivity.journeys.bouncePages.description', { minimumViews: data.window.minimumViews })}
-          note={t('webActivity.journeys.bounce.note')}
+          note={bounce.note}
           query={queryFor(data.queries, 'journeys-bounce')}
-          isEmpty={pagesWithheld || data.bouncePages.length === 0}
-          emptyMessage={pagesWithheld ? noPeopleCount : t('webActivity.journeys.bouncePages.empty')}
+          isEmpty={data.bouncePages.length === 0}
+          emptyMessage={bounce.emptyMessage}
         >
           <PageTable
             rows={data.bouncePages}
@@ -175,11 +192,11 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.exit.title')}
           description={t('webActivity.journeys.exit.description')}
-          note={t('webActivity.journeys.exit.note')}
+          note={exit.note}
           query={queryFor(data.queries, 'journeys-exit')}
-          isEmpty={pagesWithheld || data.exitPages.length === 0}
-          emptyMessage={pagesWithheld ? noPeopleCount : undefined}
-          actions={exportButton(pagesWithheld, onExportExit)}
+          isEmpty={data.exitPages.length === 0}
+          emptyMessage={exit.emptyMessage}
+          actions={exportButton(exit.exportable, onExportExit)}
         >
           <PageTable
             rows={data.exitPages}
@@ -192,11 +209,11 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.flows.title')}
           description={t('webActivity.journeys.flows.description')}
-          note={t('webActivity.journeys.flows.note')}
+          note={flows.note}
           query={queryFor(data.queries, 'journeys-flows')}
-          isEmpty={pathsWithheld || data.flows.length === 0}
-          emptyMessage={pathsWithheld ? noPeopleCount : t('webActivity.journeys.flows.empty')}
-          actions={exportButton(pathsWithheld, onExportFlows)}
+          isEmpty={data.flows.length === 0}
+          emptyMessage={flows.emptyMessage}
+          actions={exportButton(flows.exportable, onExportFlows)}
         >
           <SankeyChart
             flows={data.flows.map((f) => ({
@@ -225,11 +242,11 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.routes.title')}
           description={t('webActivity.journeys.routes.description')}
-          note={t('webActivity.journeys.transitions.note')}
+          note={routes.note}
           query={queryFor(data.queries, 'journeys-transitions')}
-          isEmpty={pathsWithheld || data.transitions.length === 0}
-          emptyMessage={pathsWithheld ? noPeopleCount : t('webActivity.journeys.routes.empty')}
-          actions={exportButton(pathsWithheld, onExportTransitions)}
+          isEmpty={data.transitions.length === 0}
+          emptyMessage={routes.emptyMessage}
+          actions={exportButton(routes.exportable, onExportTransitions)}
         >
           <div className={styles.tableWrap}>
             <Table size="small" aria-label={t('webActivity.journeys.routes.aria')}>
@@ -283,15 +300,10 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.clicks.title')}
           description={t('webActivity.journeys.clicks.description')}
+          note={clicks.note}
           query={queryFor(data.queries, 'journeys-clicks')}
-          isEmpty={clicksWithheld || data.clickedElements.length === 0}
-          emptyMessage={
-            clicksWithheld
-              ? noPeopleCount
-              : clickTrackingAvailable
-                ? t('webActivity.journeys.clicks.emptyThisPeriod')
-                : t('webActivity.journeys.clicks.emptyEver')
-          }
+          isEmpty={data.clickedElements.length === 0}
+          emptyMessage={clicks.emptyMessage}
         >
           <CategoryBarChart categories={toCategories(data.clickedElements)} valueLabel={t('webActivity.journeys.clicks.valueLabel')} />
         </SectionCard>

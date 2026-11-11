@@ -4,11 +4,13 @@ using AnalyticsWeb::Web.AnalyticsWeb.Controllers;
 using AnalyticsWeb::Web.AnalyticsWeb.Security;
 using Common.Entities.SpoWebActivity;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Net.Http.Formatting;
 using System.Runtime.Caching;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,9 +18,10 @@ using System.Threading.Tasks;
 namespace Tests.UnitTests
 {
     /// <summary>
-    /// The privacy floor on the SharePoint web activity page (#844, G2): a reader without the portal's See PII permission is
-    /// never sent search terms, a list that counts no people, or a site, place, platform or technology row of fewer than five
-    /// visitors - on screen or in a file - while a See PII reader is sent the cached section exactly as it was built.
+    /// The privacy floor on the SharePoint web activity page (#844): a reader without the portal's See PII permission is
+    /// never sent search terms, or a site, page, step, flow, clicked element, place, platform or technology row of fewer
+    /// than five people - on screen or in a file - nor the smallest row still shown beside a row left out; a See PII reader
+    /// is sent the cached section exactly as it was built.
     /// </summary>
     [TestClass]
     public class WebActivityPrivacyFloorTests
@@ -112,15 +115,16 @@ namespace Tests.UnitTests
         {
             var store = new FakeWebActivityStore();
             var query = WebActivityQuery.Create(28, DateTime.UtcNow, 43);
-            await WithHost(store, new[] { query.CacheKey("technology") }, async host =>
+            await WithHost(store, new[] { query.CacheKey("technology"), query.CacheKey("geography") }, async host =>
             {
                 var trimmed = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/technology?days=28&top=43"));
                 Assert.AreEqual(Minimum, (int)trimmed["minimumGroupSize"]);
                 CollectionAssert.AreEqual(
                     new[] { "Edge/London", "Chrome/London" },
                     trimmed["detail"].Select(r => (string)r["browser"] + "/" + (string)r["city"]).ToArray(),
-                    "Firefox in Lisbon was one person; Chrome in Madrid, the smallest row shown, goes with it.");
-                Assert.AreEqual(2, (int)trimmed["withheldDetailRows"]);
+                    "Firefox in Lisbon was one person, Madrid is a city Geography does not show, and Safari in London, the smallest "
+                    + "row shown, goes with them.");
+                Assert.AreEqual(3, (int)trimmed["withheldDetailRows"]);
                 CollectionAssert.AreEqual(new[] { "Edge" }, trimmed["browsers"].Select(r => (string)r["name"]).ToArray());
                 Assert.AreEqual(2, (int)trimmed["withheldBrowsers"]);
                 CollectionAssert.AreEquivalent(
@@ -130,44 +134,116 @@ namespace Tests.UnitTests
 
                 host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
                 var full = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/technology?days=28&top=43"));
-                Assert.AreEqual(4, ((JArray)full["detail"]).Count);
-                Assert.AreEqual("Lisbon", (string)full["detail"][3]["city"]);
+                Assert.AreEqual(5, ((JArray)full["detail"]).Count);
+                Assert.AreEqual("Lisbon", (string)full["detail"][4]["city"]);
                 Assert.AreEqual(3, ((JArray)full["browsers"]).Count);
                 Assert.AreEqual(1, store.TechnologyCalls, "The second reader must have been served from the cache.");
             });
         }
 
+        /// <summary>
+        /// The #876 cross-tab residual: Geography leaves Madrid out as the smallest city it still shows (8 visitors), so the
+        /// cities' page views less the cities shown are Madrid and the small cities together. Chrome in Madrid (8 visitors) is
+        /// big enough on its own, and its page views would take Madrid back out of that remainder, leaving the small cities'.
+        /// </summary>
         [TestMethod]
-        public async Task PagesJourneysVisitsAndOverview_WithoutSeePii_WithholdTheListsThatCountNoPeople_AndLeaveOutSmallSites()
+        public async Task Technology_WithoutSeePii_NamesOnlyCitiesGeographyShows_OnScreenAndInTheExport()
+        {
+            var store = new FakeWebActivityStore();
+            var query = WebActivityQuery.Create(28, DateTime.UtcNow, 49);
+            var export = WebActivityQuery.Create(28, DateTime.UtcNow, 50);
+            var keys = new[] { query.CacheKey("technology"), query.CacheKey("geography"), export.CacheKey("geography") }
+                .Concat(new[] { "export::technology", "export::technology::without-see-pii" }.Select(export.CacheKey));
+            await WithHost(store, keys, async host =>
+            {
+                var geography = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/geography?days=28&top=49"));
+                CollectionAssert.AreEqual(new[] { "London" }, geography["cities"].Select(c => (string)c["name"]).ToArray());
+
+                var trimmed = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/technology?days=28&top=49"));
+                Assert.IsFalse(trimmed["detail"].Any(r => (string)r["city"] == "Madrid"), "Geography left Madrid out.");
+                Assert.AreEqual(1, store.GeographyCalls, "Technology is floored against Geography's own cached section.");
+
+                var file = await host.Client.GetStringAsync("api/WebActivity/export/technology?days=28&top=50");
+                Assert.IsFalse(file.Contains("Madrid"), "The file is floored the same way.");
+                StringAssert.Contains(file, "London");
+
+                // A See PII reader still sees every city, Madrid included.
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                StringAssert.Contains(await host.Client.GetStringAsync("api/WebActivity/export/technology?days=28&top=50"), "Madrid");
+                var full = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/technology?days=28&top=49"));
+                Assert.IsTrue(full["detail"].Any(r => (string)r["city"] == "Madrid"));
+            });
+        }
+
+        [TestMethod]
+        public void SiteOverTime_WithoutSeePii_IsFoldedBySite_NotByATitleTwoSitesShare()
+        {
+            var week = new DateTime(2026, 1, 5, 0, 0, 0, DateTimeKind.Utc);
+            var visits = new WebActivityVisits
+            {
+                BySite = new List<WebActivityNamedCount>
+                {
+                    new WebActivityNamedCount { Name = "Contoso Intranet", Count = 250, People = 50, Key = 1 },
+                    new WebActivityNamedCount { Name = "Contoso Team Site", Count = 40, People = 9, Key = 2 },
+                    new WebActivityNamedCount { Name = "Contoso HR", Count = 30, People = 7, Key = 3 },
+                    new WebActivityNamedCount { Name = "Contoso Legal", Count = 5, People = 3, Key = 5 },
+                },
+
+                // Ranked by page views, the chart's busiest sites are not the list's: another site called Contoso Team Site,
+                // of two visitors, made the chart, and the list's Contoso Team Site did not.
+                SiteOverTime = new List<WebActivityStackPoint>
+                {
+                    new WebActivityStackPoint { WeekStart = week, Name = "Contoso Intranet", Count = 400, Key = 1 },
+                    new WebActivityStackPoint { WeekStart = week, Name = "Contoso Team Site", Count = 60, Key = 4 },
+                    new WebActivityStackPoint { WeekStart = week, Name = "Contoso HR", Count = 30, Key = 3 },
+                    new WebActivityStackPoint { WeekStart = week, Name = "(other sites)", Count = 10 },
+                    new WebActivityStackPoint { WeekStart = week, Name = "(unknown site)", Count = 2 },
+                },
+            };
+
+            var trimmed = visits.WithoutSmallGroups(Minimum);
+
+            CollectionAssert.AreEqual(new[] { "Contoso Intranet", "Contoso Team Site" }, trimmed.BySite.Select(s => s.Name).ToArray());
+            CollectionAssert.AreEquivalent(
+                new[] { "Contoso Intranet", "(other sites)", "(unknown site)" },
+                trimmed.SiteOverTime.Select(p => p.Name).ToArray(),
+                "The Contoso Team Site on the chart is not the one the list shows.");
+            Assert.AreEqual(60 + 30 + 10, trimmed.SiteOverTime.Single(p => p.Name == "(other sites)").Count);
+            Assert.AreEqual(visits.SiteOverTime.Sum(p => p.Count), trimmed.SiteOverTime.Sum(p => p.Count), "Each week's total is unchanged.");
+            Assert.AreEqual(5, visits.SiteOverTime.Count, "The cached series are never edited.");
+        }
+
+        [TestMethod]
+        public async Task PagesVisitsAndOverview_WithoutSeePii_LeaveOutPagesAndSitesOfFewerThanFivePeople_WithTheSmallestShown()
         {
             var store = new FakeWebActivityStore();
             var query = WebActivityQuery.Create(28, DateTime.UtcNow, 44);
-            var keys = new[] { "pages", "journeys", "visits" }.Select(query.CacheKey)
+            var keys = new[] { "pages", "visits" }.Select(query.CacheKey)
                 .Concat(new[] { WebActivityQuery.Create(28, DateTime.UtcNow).CacheKey("overview") })
                 .ToArray();
             await WithHost(store, keys, async host =>
             {
                 var pages = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/pages?days=28&top=44"));
-                Assert.IsTrue((bool)pages["pageListsWithheld"]);
-                foreach (var list in new[] { "topPages", "slowestPages", "quietPages" })
-                    Assert.AreEqual(0, ((JArray)pages[list]).Count, list + " counts no people.");
+                Assert.AreEqual(Minimum, (int)pages["minimumGroupSize"]);
+
+                // Grievances had two visitors; HR policies, the smallest page still shown, goes with it, so the page views
+                // less the pages shown are never one small page's.
+                CollectionAssert.AreEqual(new[] { "Home", "News" }, Titles(pages["topPages"]));
+                Assert.AreEqual(2, (int)pages["withheldTopPages"]);
+                CollectionAssert.AreEqual(new[] { "Expenses" }, Titles(pages["slowestPages"]), "Archive had three people, and Forms goes with it.");
+                Assert.AreEqual(2, (int)pages["withheldSlowestPages"]);
+                Assert.AreEqual(0, ((JArray)pages["quietPages"]).Count, "A quiet page is viewed three times or fewer: never five people.");
+                Assert.AreEqual(2, (int)pages["withheldQuietPages"]);
                 CollectionAssert.AreEqual(new[] { "Contoso Intranet" }, pages["bySite"].Select(s => (string)s["name"]).ToArray());
                 Assert.AreEqual(2, (int)pages["withheldSites"], "Contoso Legal's three visitors, and Contoso HR beside them.");
-                Assert.IsFalse(pages.ToString().Contains("https://contoso.sharepoint.com/sites/legal/SitePages/Quiet.aspx"));
-                Assert.AreEqual(1000, (long)pages["kpis"]["pageViews"]);
-
-                var journeys = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/journeys?days=28&top=44"));
-                Assert.IsTrue((bool)journeys["pageListsWithheld"]);
-                Assert.IsTrue((bool)journeys["pathsWithheld"]);
-                Assert.IsTrue((bool)journeys["clickedElementsWithheld"]);
-                foreach (var list in new[] { "entryPages", "exitPages", "bouncePages", "transitions", "flows", "clickedElements" })
-                    Assert.AreEqual(0, ((JArray)journeys[list]).Count, list + " counts no people.");
-                Assert.AreEqual(300, (long)journeys["kpis"]["visits"]);
-                Assert.AreEqual(2, ((JArray)journeys["depth"]).Count);
+                foreach (var hidden in new[] { "Grievances", "HR policies", "Archive", "Forms", "Quiet" })
+                    Assert.IsFalse(pages.ToString().Contains(PageUrl(hidden)), hidden);
+                Assert.AreEqual(1000, (long)pages["kpis"]["pageViews"], "The scope's own totals are still there.");
+                Assert.IsNull(pages["topPages"][0]["people"], "The people count only decides; it is never sent.");
 
                 var visits = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/visits?days=28&top=44"));
-                Assert.IsTrue((bool)visits["pagesWithheld"]);
-                Assert.AreEqual(0, ((JArray)visits["byPage"]).Count);
+                CollectionAssert.AreEqual(new[] { "Home" }, visits["byPage"].Select(p => (string)p["name"]).ToArray());
+                Assert.AreEqual(2, (int)visits["withheldPages"], "Grievances, and News beside it.");
                 CollectionAssert.AreEqual(new[] { "Contoso Intranet" }, visits["bySite"].Select(s => (string)s["name"]).ToArray());
                 Assert.AreEqual(2, (int)visits["withheldSites"]);
                 CollectionAssert.AreEqual(new[] { "Desktop" }, visits["byDevice"].Select(s => (string)s["name"]).ToArray());
@@ -182,61 +258,186 @@ namespace Tests.UnitTests
                 Assert.AreEqual(2, (int)overview["withheldSites"]);
                 Assert.AreEqual(1000, (long)overview["kpis"]["pageViews"]);
 
+                // The engagement mix: three occasional visitors, and the rare ones, the smallest segment shown, go with them -
+                // the visitors less the segments shown are both segments together. An empty segment is not listed either, so
+                // the segments listed never say which ones were left out.
+                CollectionAssert.AreEqual(new[] { "Daily", "Regular" }, overview["visitorSegments"].Select(b => (string)b["key"]).ToArray());
+                Assert.AreEqual(2, (int)overview["withheldSegments"]);
+                Assert.AreEqual(3 + 8, (long)overview["kpis"]["visitors"] - overview["visitorSegments"].Sum(b => (long)b["count"]));
+
+                // The next reader holds See PII and is served the complete sections from the same cache entries.
                 host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
                 var fullPages = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/pages?days=28&top=44"));
-                Assert.AreEqual(1, ((JArray)fullPages["quietPages"]).Count);
-                Assert.IsFalse((bool)fullPages["pageListsWithheld"]);
+                CollectionAssert.AreEqual(new[] { "Home", "News", "HR policies", "Grievances" }, Titles(fullPages["topPages"]));
+                Assert.AreEqual(2, ((JArray)fullPages["quietPages"]).Count);
+                Assert.AreEqual(0, (int)fullPages["withheldTopPages"]);
                 Assert.AreEqual(3, ((JArray)fullPages["bySite"]).Count);
-                var fullJourneys = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/journeys?days=28&top=44"));
-                Assert.AreEqual(1, ((JArray)fullJourneys["transitions"]).Count);
-                Assert.AreEqual(1, ((JArray)fullJourneys["clickedElements"]).Count);
+                var fullVisits = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/visits?days=28&top=44"));
+                Assert.AreEqual(3, ((JArray)fullVisits["byPage"]).Count);
                 var fullOverview = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/overview?days=28"));
                 Assert.AreEqual(3, ((JArray)fullOverview["topSites"]).Count);
+                Assert.AreEqual(5, ((JArray)fullOverview["visitorSegments"]).Count);
+                Assert.AreEqual(0, (int)fullOverview["withheldSegments"]);
                 Assert.AreEqual(1, store.PagesCalls);
-                Assert.AreEqual(1, store.JourneysCalls);
+                Assert.AreEqual(1, store.VisitsCalls);
                 Assert.AreEqual(1, store.OverviewCalls);
             });
         }
 
         [TestMethod]
-        public async Task Export_WithoutSeePii_RefusesEveryFileItsScreenWithholds_AndTheTechnologyFileCarriesTheScreensRows()
+        public async Task Journeys_WithoutSeePii_LeaveOutSmallRows_WithTheSmallestShown_AndASmallStepWithTheSmallestStepOutOfItsPage()
+        {
+            var store = new FakeWebActivityStore();
+            var query = WebActivityQuery.Create(28, DateTime.UtcNow, 46);
+            await WithHost(store, new[] { query.CacheKey("journeys") }, async host =>
+            {
+                var journeys = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/journeys?days=28&top=46"));
+                Assert.AreEqual(Minimum, (int)journeys["minimumGroupSize"]);
+                CollectionAssert.AreEqual(new[] { "Home" }, Titles(journeys["entryPages"]), "Grievances, and News beside it.");
+                Assert.AreEqual(2, (int)journeys["withheldEntryPages"]);
+                CollectionAssert.AreEqual(new[] { "Home" }, Titles(journeys["exitPages"]), "Grievances, and HR policies beside it.");
+                Assert.AreEqual(2, (int)journeys["withheldExitPages"]);
+                Assert.AreEqual(0, ((JArray)journeys["bouncePages"]).Count, "With one page big enough, it would be the bounces less the small one.");
+                Assert.AreEqual(2, (int)journeys["withheldBouncePages"]);
+
+                // A step's share gives away the steps out of its page. The one-person step out of Home goes with the smallest
+                // step out of Home (seven people) - not with News to HR policies (six), the smallest step overall, which
+                // would leave Home's steps less the steps shown as that one person's.
+                CollectionAssert.AreEqual(
+                    new[] { "Home>News", "News>Home", "News>HR policies" },
+                    journeys["transitions"].Select(s => (string)s["fromTitle"] + ">" + (string)s["toTitle"]).ToArray());
+                Assert.AreEqual(2, (int)journeys["withheldTransitions"]);
+
+                CollectionAssert.AreEqual(
+                    new[] { "Home>Home", "Home>News" },
+                    journeys["flows"].Select(f => (string)f["startTitle"] + ">" + (string)f["endTitle"]).ToArray(),
+                    "Home to Grievances was two people, and News to News, the smallest flow shown, goes with it.");
+                Assert.AreEqual(2, (int)journeys["withheldFlows"]);
+                Assert.AreEqual(40 + 20, (double)journeys["flowsCoveragePct"], 1e-9, "The coverage is of the flows shown.");
+
+                CollectionAssert.AreEqual(new[] { "Book a desk" }, journeys["clickedElements"].Select(c => (string)c["name"]).ToArray());
+                Assert.AreEqual(2, (int)journeys["withheldClickedElements"], "Report a colleague, and Search beside it.");
+                Assert.IsFalse(journeys.ToString().Contains("Report a colleague"));
+                Assert.IsFalse(journeys.ToString().Contains("Grievances"));
+                Assert.AreEqual(300, (long)journeys["kpis"]["visits"], "The scope's own totals are still there.");
+                Assert.AreEqual(2, ((JArray)journeys["depth"]).Count);
+
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                var full = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/journeys?days=28&top=46"));
+                Assert.AreEqual(5, ((JArray)full["transitions"]).Count);
+                Assert.AreEqual(4, ((JArray)full["flows"]).Count);
+                Assert.AreEqual(71.33, (double)full["flowsCoveragePct"], 1e-9);
+                Assert.AreEqual(3, ((JArray)full["clickedElements"]).Count);
+                Assert.AreEqual(1, store.JourneysCalls, "The second reader must have been served from the cache.");
+            });
+        }
+
+        [TestMethod]
+        public async Task SeePii_IsSentEveryPageAndPathListAsBuilt_AndNeverAPeopleCount()
+        {
+            var store = new FakeWebActivityStore();
+            var query = WebActivityQuery.Create(28, DateTime.UtcNow, 47);
+            var keys = new[] { "pages", "journeys", "visits" }.Select(query.CacheKey).ToArray();
+            await WithHost(store, keys, async host =>
+            {
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                var settings = new JsonMediaTypeFormatter().SerializerSettings;
+                foreach (var (tab, built) in new (string, object)[] { ("pages", store.Pages), ("journeys", store.Journeys), ("visits", store.Visits) })
+                {
+                    var sent = await host.Client.GetStringAsync("api/WebActivity/" + tab + "?days=28&top=47");
+                    Assert.IsTrue(
+                        JToken.DeepEquals(JObject.Parse(JsonConvert.SerializeObject(built, settings)), JObject.Parse(sent)),
+                        tab + ": a See PII reader is sent the section exactly as it was built.");
+                    Assert.IsFalse(sent.IndexOf("\"people\"", StringComparison.OrdinalIgnoreCase) >= 0, tab + " never carries a people count.");
+                    Assert.IsTrue(sent.Contains("\"minimumGroupSize\":null"), tab);
+                }
+
+                // And the cache entry a See PII reader filled is trimmed for the next reader, not sent whole.
+                host.Principal = PortalTestHost.SignedIn();
+                var trimmed = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/journeys?days=28&top=47"));
+                Assert.AreEqual(3, ((JArray)trimmed["transitions"]).Count);
+                Assert.AreEqual(1, store.JourneysCalls);
+            });
+        }
+
+        [TestMethod]
+        public async Task Export_WithoutSeePii_EveryFileCarriesItsScreensFlooredRows_AndOnlyTheSearchTermsAreRefused()
         {
             var store = new FakeWebActivityStore();
             var query = WebActivityQuery.Create(28, DateTime.UtcNow, 45);
             var keys = WebActivityExports.Sections
                 .SelectMany(s => new[] { query.CacheKey("export::" + s), query.CacheKey("export::" + s + "::without-see-pii") })
+                .Concat(new[] { query.CacheKey("geography") })
                 .ToArray();
             await WithHost(store, keys, async host =>
             {
-                foreach (var section in WebActivityExports.Sections.Where(s => s != "technology"))
-                {
-                    var refused = await host.Client.GetAsync("api/WebActivity/export/" + section + "?days=28&top=45");
-                    Assert.AreEqual(HttpStatusCode.Forbidden, refused.StatusCode, section + " is withheld on screen, so the file is too.");
-                    var body = JObject.Parse(await refused.Content.ReadAsStringAsync());
-                    Assert.AreEqual("portalPermissionRequired", (string)body["code"], section);
-                }
-                Assert.AreEqual(0, store.SearchCalls + store.PagesCalls + store.JourneysCalls, "A refused file runs no query.");
+                var refused = await host.Client.GetAsync("api/WebActivity/export/search-terms?days=28&top=45");
+                Assert.AreEqual(HttpStatusCode.Forbidden, refused.StatusCode, "A search term is text a person typed, however many searched.");
+                Assert.AreEqual("portalPermissionRequired", (string)JObject.Parse(await refused.Content.ReadAsStringAsync())["code"]);
+                Assert.AreEqual(0, store.SearchCalls, "A refused file runs no query.");
                 Assert.IsTrue(WebActivityExports.WithheldWithoutSeePii("SEARCH-TERMS"));
-                Assert.IsFalse(WebActivityExports.WithheldWithoutSeePii("technology"));
+                foreach (var section in WebActivityExports.Sections.Where(s => s != "search-terms"))
+                    Assert.IsFalse(WebActivityExports.WithheldWithoutSeePii(section), section);
 
-                var floored = await host.Client.GetStringAsync("api/WebActivity/export/technology?days=28&top=45");
-                StringAssert.Contains(floored, "London");
-                Assert.IsFalse(floored.Contains("Lisbon"), "A row of one visitor is left out of the file as it is on the screen.");
-                Assert.IsFalse(floored.Contains("Madrid"));
+                // Each file is the screen's rows: the small ones left out, with the smallest row shown beside them.
+                async Task<string[]> Lines(string section) =>
+                    (await host.Client.GetStringAsync("api/WebActivity/export/" + section + "?days=28&top=45"))
+                        .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries).Skip(1).ToArray();
 
+                CollectionAssert.AreEqual(new[] { "Home", "News" }, (await Lines("pages")).Select(FirstField).ToArray());
+                CollectionAssert.AreEqual(new[] { "Expenses" }, (await Lines("slow-pages")).Select(FirstField).ToArray());
+                Assert.AreEqual(0, (await Lines("quiet-pages")).Length, "Every quiet page is a page of fewer than five people.");
+                CollectionAssert.AreEqual(new[] { "Home" }, (await Lines("entry-pages")).Select(FirstField).ToArray());
+                CollectionAssert.AreEqual(new[] { "Home" }, (await Lines("exit-pages")).Select(FirstField).ToArray());
+                var steps = await Lines("transitions");
+                Assert.AreEqual(3, steps.Length);
+                Assert.IsFalse(steps.Any(s => s.Contains("Grievances") || s.StartsWith("Home," + PageUrl("Home") + ",HR policies,", StringComparison.Ordinal)));
+                var flows = await Lines("flows");
+                Assert.AreEqual(2, flows.Length);
+                Assert.IsFalse(flows.Any(f => f.Contains("Grievances")));
+                var technology = string.Join("\n", await Lines("technology"));
+                StringAssert.Contains(technology, "London");
+                Assert.IsFalse(technology.Contains("Lisbon"), "A row of one visitor is left out of the file as it is on the screen.");
+                Assert.IsFalse(technology.Contains("Madrid"));
+
+                // A See PII reader next: the floored files must not have been cached for them.
                 host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
-                var full = await host.Client.GetStringAsync("api/WebActivity/export/technology?days=28&top=45");
-                StringAssert.Contains(full, "Lisbon", "The floored file must not be cached for a See PII reader.");
-                StringAssert.Contains(full, "Madrid");
-                var terms = await host.Client.GetStringAsync("api/WebActivity/export/search-terms?days=28&top=45");
-                StringAssert.Contains(terms, "Alex Contoso");
-
-                // And the other way round: the full file must not be served to the next reader without See PII.
-                host.Principal = PortalTestHost.SignedIn();
-                var again = await host.Client.GetStringAsync("api/WebActivity/export/technology?days=28&top=45");
-                Assert.IsFalse(again.Contains("Lisbon"));
+                CollectionAssert.AreEqual(new[] { "Home", "News", "HR policies", "Grievances" }, (await Lines("pages")).Select(FirstField).ToArray());
+                Assert.AreEqual(2, (await Lines("quiet-pages")).Length);
+                Assert.AreEqual(5, (await Lines("transitions")).Length);
+                Assert.AreEqual(4, (await Lines("flows")).Length);
+                StringAssert.Contains(string.Join("\n", await Lines("technology")), "Lisbon");
+                StringAssert.Contains(await host.Client.GetStringAsync("api/WebActivity/export/search-terms?days=28&top=45"), "Alex Contoso");
             });
         }
+
+        [TestMethod]
+        public async Task Export_ASeePiiReadersFile_IsNeverServedToTheNextReaderWithoutSeePii()
+        {
+            var store = new FakeWebActivityStore();
+            var query = WebActivityQuery.Create(28, DateTime.UtcNow, 48);
+            var keys = WebActivityExports.Sections
+                .SelectMany(s => new[] { query.CacheKey("export::" + s), query.CacheKey("export::" + s + "::without-see-pii") })
+                .ToArray();
+            await WithHost(store, keys, async host =>
+            {
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                foreach (var section in new[] { "pages", "entry-pages", "transitions", "flows" })
+                    StringAssert.Contains(await host.Client.GetStringAsync("api/WebActivity/export/" + section + "?days=28&top=48"), "Grievances", section);
+
+                host.Principal = PortalTestHost.SignedIn();
+                foreach (var section in new[] { "pages", "entry-pages", "transitions", "flows" })
+                    Assert.IsFalse(
+                        (await host.Client.GetStringAsync("api/WebActivity/export/" + section + "?days=28&top=48")).Contains("Grievances"),
+                        section + ": the See PII reader's file is cached apart.");
+            });
+        }
+
+        private static string FirstField(string csvLine) => csvLine.Split(',')[0];
+
+        private static string[] Titles(JToken rows) => rows.Select(r => (string)r["title"]).ToArray();
+
+        private static string PageUrl(string title) => "https://contoso.sharepoint.com/sites/intranet/SitePages/" + title.Replace(' ', '-') + ".aspx";
 
         [TestMethod]
         public void WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut()
@@ -276,6 +477,31 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void WithoutSmallRowsInEachGroup_LeavesOutTheSmallestShownRowOfTheSmallRowsOwnGroup_AndKeepsTheOrder()
+        {
+            var store = new FakeWebActivityStore();
+            var steps = store.Journeys.Transitions;
+
+            var shown = WebActivitySmallGroups.WithoutSmallRowsInEachGroup(
+                steps, s => s.FromUrl, s => s.People, s => s.ToTitle + "\u0000" + s.ToUrl, Minimum, out var leftOut);
+
+            // Out of Home: Grievances (one person) and HR policies (seven, the smallest step out of Home shown). Out of News,
+            // where nothing is small, both steps stay - HR policies there too, although six people is the fewest overall.
+            CollectionAssert.AreEqual(new[] { steps[0], steps[3], steps[4] }, shown);
+            Assert.AreEqual(2, leftOut);
+            Assert.AreEqual(5, steps.Count, "The cached list is never edited.");
+
+            // Out of Home, the steps less the steps shown are Grievances and HR policies together, never Grievances alone.
+            var outOfHome = steps.Where(s => s.FromUrl == steps[0].FromUrl).Sum(s => s.Count);
+            Assert.AreEqual(steps[1].Count + steps[2].Count, outOfHome - shown.Where(s => s.FromUrl == steps[0].FromUrl).Sum(s => s.Count));
+
+            // The rule over the whole list would have taken News to HR policies instead, leaving Home's remainder one person's.
+            var wholeList = WebActivitySmallGroups.WithoutSmallRows(steps, s => s.People, s => s.ToTitle + "\u0000" + s.ToUrl, Minimum, out _);
+            CollectionAssert.DoesNotContain(wholeList, steps[4]);
+            CollectionAssert.Contains(wholeList, steps[1]);
+        }
+
+        [TestMethod]
         public void WithoutSmallGroups_ReturnsACopy_AndLeavesTheCachedSectionAsItWasBuilt()
         {
             var store = new FakeWebActivityStore();
@@ -291,16 +517,25 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, store.Geography.WithheldCountries);
             Assert.IsTrue(store.Geography.CountryOverTime.Any(p => p.Name == "Portugal"));
 
-            store.Technology.WithoutSmallGroups(Minimum);
-            Assert.AreEqual(4, store.Technology.Detail.Count);
+            store.Technology.WithoutSmallGroups(Minimum, new HashSet<string> { "London" });
+            Assert.AreEqual(5, store.Technology.Detail.Count);
             store.Pages.WithoutSmallGroups(Minimum);
-            Assert.AreEqual(1, store.Pages.QuietPages.Count);
-            store.Journeys.WithoutSmallGroups(Minimum);
-            Assert.AreEqual(1, store.Journeys.Flows.Count);
+            Assert.AreEqual(4, store.Pages.TopPages.Count);
+            Assert.AreEqual(2, store.Pages.QuietPages.Count);
+            Assert.AreEqual(0, store.Pages.WithheldTopPages);
+            var journeys = store.Journeys.WithoutSmallGroups(Minimum);
+            Assert.AreEqual(4, store.Journeys.Flows.Count);
+            Assert.AreEqual(71.33, store.Journeys.FlowsCoveragePct, 1e-9);
+            Assert.AreEqual(5, store.Journeys.Transitions.Count);
+            Assert.AreEqual(3, store.Journeys.ClickedElements.Count);
+            Assert.AreNotSame(store.Journeys.Flows, journeys.Flows);
             store.Visits.WithoutSmallGroups(Minimum);
             Assert.AreEqual(3, store.Visits.BySite.Count);
+            Assert.AreEqual(3, store.Visits.ByPage.Count);
             store.Overview.WithoutSmallGroups(Minimum);
             Assert.AreEqual(3, store.Overview.TopSites.Count);
+            Assert.AreEqual(5, store.Overview.VisitorSegments.Count);
+            Assert.AreEqual(0, store.Overview.WithheldSegments);
         }
 
         private static async Task WithHost(FakeWebActivityStore store, IEnumerable<string> cacheKeys, Func<PortalTestHost, Task> test)
@@ -342,15 +577,28 @@ namespace Tests.UnitTests
 
             internal WebActivityOverview Overview { get; } = new WebActivityOverview
             {
-                Kpis = new WebActivityOverviewKpis { PageViews = 1000, Visits = 300, Visitors = 60 },
+                Kpis = new WebActivityOverviewKpis { PageViews = 1000, Visits = 300, Visitors = 53 },
                 TopSites = Sites().Select(s => new WebActivityNamedCount { Name = s.Name, Count = s.PageViews, People = s.Visitors }).ToList(),
+                VisitorSegments = new List<WebActivityBucket>
+                {
+                    new WebActivityBucket { Key = "Daily", Label = "Daily", Count = 30, SharePct = 56.6 },
+                    new WebActivityBucket { Key = "Regular", Label = "Regular", Count = 12, SharePct = 22.6 },
+                    new WebActivityBucket { Key = "Occasional", Label = "Occasional", Count = 3, SharePct = 5.7 },
+                    new WebActivityBucket { Key = "Rare", Label = "Rare", Count = 8, SharePct = 15.1 },
+                    new WebActivityBucket { Key = "One-off", Label = "One-off", Count = 0, SharePct = 0 },
+                },
             };
 
             internal WebActivityVisits Visits { get; } = new WebActivityVisits
             {
                 Kpis = new WebActivityVisitKpis { Visits = 300, Visitors = 60 },
-                BySite = Sites().Select(s => new WebActivityNamedCount { Name = s.Name, Count = s.Visits, People = s.Visitors }).ToList(),
-                ByPage = new List<WebActivityNamedCount> { new WebActivityNamedCount { Name = "Contoso quiet page", Count = 1 } },
+                BySite = Sites().Select((s, i) => new WebActivityNamedCount { Name = s.Name, Count = s.Visits, People = s.Visitors, Key = i + 1 }).ToList(),
+                ByPage = new List<WebActivityNamedCount>
+                {
+                    new WebActivityNamedCount { Name = "Home", Count = 250, SharePct = 83.3, People = 40 },
+                    new WebActivityNamedCount { Name = "News", Count = 80, SharePct = 26.7, People = 12 },
+                    new WebActivityNamedCount { Name = "Grievances", Count = 3, SharePct = 1, People = 2 },
+                },
                 ByDevice = new List<WebActivityNamedCount>
                 {
                     new WebActivityNamedCount { Name = "Desktop", Count = 250, People = 50 },
@@ -359,39 +607,75 @@ namespace Tests.UnitTests
                 },
                 SiteOverTime = new List<WebActivityStackPoint>
                 {
-                    new WebActivityStackPoint { WeekStart = Week1, Name = "Contoso Intranet", Count = 400 },
-                    new WebActivityStackPoint { WeekStart = Week1, Name = "Contoso Legal", Count = 30 },
-                    new WebActivityStackPoint { WeekStart = Week1, Name = "Contoso HR", Count = 70 },
+                    new WebActivityStackPoint { WeekStart = Week1, Name = "Contoso Intranet", Count = 400, Key = 1 },
+                    new WebActivityStackPoint { WeekStart = Week1, Name = "Contoso Legal", Count = 30, Key = 3 },
+                    new WebActivityStackPoint { WeekStart = Week1, Name = "Contoso HR", Count = 70, Key = 2 },
                 },
             };
 
             internal WebActivityPages Pages { get; } = new WebActivityPages
             {
-                Kpis = new WebActivityPageKpis { PageViews = 1000 },
-                TopPages = new List<WebActivityPageRow> { Page("Home") },
-                SlowestPages = new List<WebActivityPageRow> { Page("Slow") },
-                QuietPages = new List<WebActivityPageRow> { Page("Quiet") },
+                Kpis = new WebActivityPageKpis { PageViews = 1000, UniquePageViews = 600 },
+                TopPages = new List<WebActivityPageRow>
+                {
+                    Page("Home", 500, people: 40),
+                    Page("News", 200, people: 12),
+                    Page("HR policies", 60, people: 6),
+                    Page("Grievances", 9, people: 2),
+                },
+                SlowestPages = new List<WebActivityPageRow>
+                {
+                    Page("Expenses", 40, people: 9),
+                    Page("Archive", 7, people: 3),
+                    Page("Forms", 30, people: 7),
+                },
+                QuietPages = new List<WebActivityPageRow> { Page("Quiet", 2, people: 2), Page("Older quiet", 1, people: 1) },
                 BySite = Sites(),
             };
 
             internal WebActivityJourneys Journeys { get; } = new WebActivityJourneys
             {
-                Kpis = new WebActivityJourneyKpis { Visits = 300, Clicks = 12 },
-                EntryPages = new List<WebActivityPageRow> { Page("Home") },
-                ExitPages = new List<WebActivityPageRow> { Page("Home") },
-                BouncePages = new List<WebActivityPageRow> { Page("Home") },
+                Kpis = new WebActivityJourneyKpis { Visits = 300, Clicks = 20 },
+                EntryPages = new List<WebActivityPageRow>
+                {
+                    Page("Home", 300, people: 30),
+                    Page("News", 40, people: 8),
+                    Page("Grievances", 3, people: 2),
+                },
+                ExitPages = new List<WebActivityPageRow>
+                {
+                    Page("Home", 100, people: 25),
+                    Page("HR policies", 50, people: 20),
+                    Page("Grievances", 2, people: 1),
+                },
+                BouncePages = new List<WebActivityPageRow> { Page("News", 40, people: 8), Page("Grievances", 3, people: 2) },
                 Transitions = new List<WebActivityTransitionRow>
                 {
-                    new WebActivityTransitionRow { FromTitle = "Home", ToTitle = "Quiet", Count = 1, SharePct = 1 },
+                    Step("Home", "News", 60, 60, people: 20),
+                    Step("Home", "HR policies", 30, 30, people: 7),
+                    Step("Home", "Grievances", 10, 10, people: 1),
+                    Step("News", "Home", 15, 60, people: 9),
+                    Step("News", "HR policies", 10, 40, people: 6),
                 },
-                Flows = new List<WebActivityFlowRow> { new WebActivityFlowRow { StartTitle = "Home", EndTitle = "Quiet", Visits = 1, SharePct = 1 } },
-                FlowsCoveragePct = 1,
+                Flows = new List<WebActivityFlowRow>
+                {
+                    Flow("Home", "Home", 120, 40, people: 50),
+                    Flow("Home", "News", 60, 20, people: 10),
+                    Flow("News", "News", 30, 10, people: 6),
+                    Flow("Home", "Grievances", 4, 1.33, people: 2),
+                },
+                FlowsCoveragePct = 71.33,
                 Depth = new List<WebActivityBucket>
                 {
                     new WebActivityBucket { Key = "1", Label = "1", Count = 200 },
                     new WebActivityBucket { Key = "2-3", Label = "2-3", Count = 100 },
                 },
-                ClickedElements = new List<WebActivityNamedCount> { new WebActivityNamedCount { Name = "Book a desk", Count = 12 } },
+                ClickedElements = new List<WebActivityNamedCount>
+                {
+                    new WebActivityNamedCount { Name = "Book a desk", Count = 12, SharePct = 60, People = 9 },
+                    new WebActivityNamedCount { Name = "Search", Count = 6, SharePct = 30, People = 5 },
+                    new WebActivityNamedCount { Name = "Report a colleague", Count = 2, SharePct = 10, People = 1 },
+                },
             };
 
             internal WebActivityGeography Geography { get; } = new WebActivityGeography
@@ -471,7 +755,8 @@ namespace Tests.UnitTests
                 {
                     Detail("Edge", "London", 25),
                     Detail("Chrome", "London", 9),
-                    Detail("Chrome", "Madrid", 6),
+                    Detail("Chrome", "Madrid", 8),
+                    Detail("Safari", "London", 6),
                     Detail("Firefox", "Lisbon", 1),
                 },
             };
@@ -483,12 +768,40 @@ namespace Tests.UnitTests
                 new WebActivitySiteRow { Name = "Contoso Legal", Url = "https://contoso.sharepoint.com/sites/legal", PageViews = 50, Visits = 10, Visitors = 3 },
             };
 
-            private static WebActivityPageRow Page(string title) => new WebActivityPageRow
+            private static WebActivityPageRow Page(string title, long views, int people) => new WebActivityPageRow
             {
                 Title = title,
-                Url = "https://contoso.sharepoint.com/sites/legal/SitePages/" + title + ".aspx",
-                Site = "Contoso Legal",
-                PageViews = 2,
+                Url = PageUrl(title),
+                Site = "Contoso Intranet",
+                PageViews = views,
+                UniquePageViews = views / 2,
+                Entries = views,
+                Exits = views / 3,
+                Bounces = views / 4,
+                People = people,
+            };
+
+            private static WebActivityTransitionRow Step(string from, string to, long count, double share, int people) => new WebActivityTransitionRow
+            {
+                FromTitle = from,
+                FromUrl = PageUrl(from),
+                ToTitle = to,
+                ToUrl = PageUrl(to),
+                Count = count,
+                SharePct = share,
+                People = people,
+            };
+
+            private static WebActivityFlowRow Flow(string start, string end, long visits, double share, int people) => new WebActivityFlowRow
+            {
+                StartTitle = start,
+                StartUrl = PageUrl(start),
+                EndTitle = end,
+                EndUrl = PageUrl(end),
+                Visits = visits,
+                SharePct = share,
+                EndedWhereItStarted = start == end,
+                People = people,
             };
 
             private static WebActivityTechnologyDetailRow Detail(string browser, string city, int visitors) => new WebActivityTechnologyDetailRow

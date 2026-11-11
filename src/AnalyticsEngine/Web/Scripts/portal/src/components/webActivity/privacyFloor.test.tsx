@@ -5,18 +5,22 @@ import { loadCatalog } from '../../i18n';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import GeographyPanel from './GeographyPanel';
 import JourneysPanel from './JourneysPanel';
+import OverviewPanel from './OverviewPanel';
 import PagesPanel from './PagesPanel';
 import SearchPanel from './SearchPanel';
 import type {
   WebActivityGeography,
   WebActivityJourneys,
+  WebActivityOverview,
+  WebActivityPageRow,
   WebActivityPages,
   WebActivitySearch,
   WebActivityWindow,
 } from '../../types/webActivity';
 
-// What a reader without See PII is sent (#844): lists withheld, and rows of too few people left out. Every card must say
-// so, in the reader's language, rather than read as "nothing happened" - and a withheld list offers no export.
+// What a reader without See PII is sent (#844): search terms withheld, and rows of too few people left out of every other
+// list. Every card must say so, in the reader's language, rather than read as "nothing happened" - and a list that lost
+// every row, or is withheld, offers no export.
 
 const window: WebActivityWindow = {
   days: 28,
@@ -89,6 +93,21 @@ function geography(overrides: Partial<WebActivityGeography> = {}): WebActivityGe
   };
 }
 
+const page = (title: string, pageViews: number): WebActivityPageRow => ({
+  title,
+  url: `https://contoso.sharepoint.com/sites/intranet/SitePages/${title}.aspx`,
+  site: 'Contoso HR',
+  pageViews,
+  uniquePageViews: pageViews,
+  visitors: 0,
+  averageSecondsOnPage: 30,
+  averageLoadSeconds: 1.2,
+  entries: pageViews,
+  exits: pageViews,
+  bounces: 0,
+  bouncePct: 0,
+});
+
 function journeys(overrides: Partial<WebActivityJourneys> = {}): WebActivityJourneys {
   return {
     window,
@@ -103,18 +122,30 @@ function journeys(overrides: Partial<WebActivityJourneys> = {}): WebActivityJour
       measuredVisits: 200,
       clicks: 12,
     },
-    entryPages: [],
-    exitPages: [],
+    entryPages: [page('Home', 300)],
+    exitPages: [page('Home', 120)],
     bouncePages: [],
-    transitions: [],
+    transitions: [
+      {
+        fromTitle: 'Home',
+        fromUrl: 'https://contoso.sharepoint.com/sites/intranet/SitePages/Home.aspx',
+        toTitle: 'News',
+        toUrl: 'https://contoso.sharepoint.com/sites/intranet/SitePages/News.aspx',
+        count: 60,
+        sharePct: 60,
+      },
+    ],
     flows: [],
     flowsCoveragePct: 0,
     depth: [],
     clickedElements: [],
     minimumGroupSize: 5,
-    pageListsWithheld: true,
-    pathsWithheld: true,
-    clickedElementsWithheld: true,
+    withheldEntryPages: 2,
+    withheldExitPages: 2,
+    withheldBouncePages: 2,
+    withheldTransitions: 2,
+    withheldFlows: 3,
+    withheldClickedElements: 1,
     ...overrides,
   };
 }
@@ -134,8 +165,8 @@ function pages(overrides: Partial<WebActivityPages> = {}): WebActivityPages {
       quietPages: 12,
       topDecilePagePct: 55,
     },
-    topPages: [],
-    slowestPages: [],
+    topPages: [page('Home', 500), page('News', 200)],
+    slowestPages: [page('Expenses', 40)],
     quietPages: [],
     bySite: [
       {
@@ -151,13 +182,55 @@ function pages(overrides: Partial<WebActivityPages> = {}): WebActivityPages {
     periodOverTime: [],
     minimumGroupSize: 5,
     withheldSites: 2,
-    pageListsWithheld: true,
+    withheldTopPages: 2,
+    withheldSlowestPages: 2,
+    withheldQuietPages: 12,
+    ...overrides,
+  };
+}
+
+function overview(overrides: Partial<WebActivityOverview> = {}): WebActivityOverview {
+  return {
+    window,
+    queries: [],
+    kpis: {
+      pageViews: 1000,
+      uniquePageViews: 600,
+      visits: 300,
+      visitors: 53,
+      knownUsers: 200,
+      reachPct: 26.5,
+      directoryImported: true,
+      uniquePages: 40,
+      sites: 3,
+      pagesPerVisit: 3.3,
+      bouncePct: 30,
+      averageSecondsOnPage: 40,
+      averageLoadSeconds: 1.2,
+      newVisitors: 5,
+      returningVisitors: 40,
+      mobilePageViewPct: 10,
+    },
+    trend: [],
+    // Three occasional visitors were left out, with the rare ones, the smallest segment shown, beside them.
+    visitorSegments: [
+      { key: 'Daily', label: 'Daily', count: 30, sharePct: 56.6 },
+      { key: 'Regular', label: 'Regular', count: 12, sharePct: 22.6 },
+    ],
+    visitDepth: [],
+    heatmap: [],
+    topSites: [{ name: 'Contoso Intranet', count: 800, sharePct: 80 }],
+    judgements: [],
+    minimumGroupSize: 5,
+    withheldSites: 0,
+    withheldSegments: 2,
     ...overrides,
   };
 }
 
 const SEARCH_TERMS_WITHHELD_EN = /^Hidden to protect privacy: search terms are text people typed/;
 const NO_PEOPLE_COUNT_EN = /^Hidden to protect privacy: nothing recorded says how many people are behind each row/;
+const TWO_LEFT_OUT_EN = /\b2 rows are left out to protect privacy: those with fewer than 5 people behind them/;
 
 describe('Web activity for a reader without See PII', () => {
   it('says search terms and searches by site are withheld, and offers no export of them', () => {
@@ -203,7 +276,7 @@ describe('Web activity for a reader without See PII', () => {
     expect(screen.getByText('Se omite una fila para proteger la privacidad: hay menos de 5 personas detrás de ella.')).toBeInTheDocument();
   });
 
-  it('says the page lists, paths and clicked elements are withheld, and offers no export of them', () => {
+  it('shows the floored journeys with how many rows were left out, and says so in place of a list that lost every row', () => {
     renderWithProvider(
       <JourneysPanel
         data={journeys()}
@@ -216,20 +289,88 @@ describe('Web activity for a reader without See PII', () => {
       />,
     );
 
-    // Entry, bounce and exit pages, the flows, the routes and the clicked elements.
-    expect(screen.getAllByText(NO_PEOPLE_COUNT_EN)).toHaveLength(6);
-    expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
+    // Entry and exit pages, the bounce pages (whose every row was left out) and the routes.
+    expect(screen.getAllByText(TWO_LEFT_OUT_EN)).toHaveLength(4);
+    expect(screen.getByText(/^3 rows are left out to protect privacy/)).toBeInTheDocument();
+    expect(screen.getByText('One row is left out to protect privacy: fewer than 5 people are behind it.')).toBeInTheDocument();
+    expect(screen.queryByText(NO_PEOPLE_COUNT_EN)).not.toBeInTheDocument();
+    // A list that lost every row does not claim the period had none.
+    expect(screen.queryByText('No entry page had enough entries to rank by bounce rate.')).not.toBeInTheDocument();
+    expect(screen.queryByText('No visit in this period could be paired to a start and an end page.')).not.toBeInTheDocument();
+    expect(screen.queryByText('No element clicks were recorded in this period.')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Home').length).toBeGreaterThan(0);
+    // Entry pages, exit pages and routes can be exported; the flows, every one of them left out, cannot.
+    expect(screen.getAllByRole('button', { name: 'Export' })).toHaveLength(3);
   });
 
-  it('withholds the page lists and says how many sites were left out', () => {
+  it('shows the floored page lists with how many pages were left out, and every quiet page left out', () => {
     renderWithProvider(
       <PagesPanel data={pages()} onExportPages={noop} onExportQuiet={noop} onExportSlow={noop} exporting={false} />,
     );
 
-    expect(screen.getAllByText(NO_PEOPLE_COUNT_EN)).toHaveLength(3);
-    expect(screen.getByText(/^2 rows are left out to protect privacy/)).toBeInTheDocument();
+    // Most viewed, slowest and the sites.
+    expect(screen.getAllByText(TWO_LEFT_OUT_EN)).toHaveLength(3);
+    expect(screen.getByText(/^12 rows are left out to protect privacy/)).toBeInTheDocument();
+    expect(screen.queryByText('Every page that was viewed at all was viewed more than three times.')).not.toBeInTheDocument();
+    expect(screen.queryByText(NO_PEOPLE_COUNT_EN)).not.toBeInTheDocument();
+    expect(screen.getByText('Expenses')).toBeInTheDocument();
     expect(screen.getByText('Contoso Intranet')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
+    // Most viewed and slowest can be exported; the quiet pages, every one left out, cannot.
+    expect(screen.getAllByRole('button', { name: 'Export' })).toHaveLength(2);
+  });
+
+  it('says the pages and journeys left out in Spanish', async () => {
+    await loadCatalog('es');
+    const { unmount } = renderWithProvider(
+      <PagesPanel data={pages({ withheldQuietPages: 12345 })} onExportPages={noop} onExportQuiet={noop} onExportSlow={noop} exporting={false} />,
+      { language: 'es' },
+    );
+
+    expect(
+      await screen.findByText(/^Se omiten 12\.345 filas para proteger la privacidad: las que tienen menos de 5 personas detrás/, undefined, {
+        timeout: 5000,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/Se omiten 2 filas para proteger la privacidad/)).toHaveLength(3);
+    expect(screen.queryByText('Todas las páginas que se vieron al menos una vez se vieron más de tres veces.')).not.toBeInTheDocument();
+    expect(screen.queryByText(TWO_LEFT_OUT_EN)).not.toBeInTheDocument();
+    unmount();
+
+    renderWithProvider(
+      <JourneysPanel
+        data={journeys()}
+        clickTrackingAvailable
+        onExportEntry={noop}
+        onExportExit={noop}
+        onExportTransitions={noop}
+        onExportFlows={noop}
+        exporting={false}
+      />,
+      { language: 'es' },
+    );
+    expect(
+      await screen.findByText('Se omite una fila para proteger la privacidad: hay menos de 5 personas detrás de ella.', undefined, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/^Se omiten 3 filas para proteger la privacidad/)).toBeInTheDocument();
+    expect(screen.queryByText('No se pudo emparejar ninguna visita de este periodo con una página de inicio y otra de fin.')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Exportar' })).toHaveLength(3);
+  });
+
+  it('draws the engagement segments left out as one slice of the visitors, and says how many, in English and Spanish', async () => {
+    const { unmount } = renderWithProvider(<OverviewPanel data={overview()} directoryImported />);
+
+    expect(screen.getByText(TWO_LEFT_OUT_EN)).toBeInTheDocument();
+    // The ring is still all 53 visitors: the 11 in the segments left out are one slice, not shared among the others.
+    const slice = screen.getByText('Left out to protect privacy');
+    expect(slice.nextElementSibling).toHaveTextContent('11 (20.8%)');
+    unmount();
+
+    await loadCatalog('es');
+    renderWithProvider(<OverviewPanel data={overview()} directoryImported />, { language: 'es' });
+    expect(await screen.findByText('Omitido para proteger la privacidad', undefined, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByText(/Se omiten 2 filas para proteger la privacidad/)).toBeInTheDocument();
+    expect(screen.queryByText('Left out to protect privacy')).not.toBeInTheDocument();
+    expect(screen.queryByText(TWO_LEFT_OUT_EN)).not.toBeInTheDocument();
   });
 });
 
@@ -237,7 +378,13 @@ describe('Web activity for a reader with See PII', () => {
   it('shows no privacy note and keeps every export', () => {
     renderWithProvider(
       <PagesPanel
-        data={pages({ minimumGroupSize: null, withheldSites: 0, pageListsWithheld: false })}
+        data={pages({
+          minimumGroupSize: null,
+          withheldSites: 0,
+          withheldTopPages: 0,
+          withheldSlowestPages: 0,
+          withheldQuietPages: 0,
+        })}
         onExportPages={noop}
         onExportQuiet={noop}
         onExportSlow={noop}
@@ -247,7 +394,30 @@ describe('Web activity for a reader with See PII', () => {
 
     expect(screen.queryByText(NO_PEOPLE_COUNT_EN)).not.toBeInTheDocument();
     expect(screen.queryByText(/left out to protect privacy/)).not.toBeInTheDocument();
+    // An empty quiet list says why, as it always did.
+    expect(screen.getByText('Every page that was viewed at all was viewed more than three times.')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Export' })).toHaveLength(3);
+  });
+
+  it('draws every engagement segment with no slice left out', () => {
+    renderWithProvider(
+      <OverviewPanel
+        data={overview({
+          minimumGroupSize: null,
+          withheldSegments: 0,
+          visitorSegments: [
+            { key: 'Daily', label: 'Daily', count: 30, sharePct: 56.6 },
+            { key: 'Regular', label: 'Regular', count: 12, sharePct: 22.6 },
+            { key: 'Occasional', label: 'Occasional', count: 3, sharePct: 5.7 },
+            { key: 'Rare', label: 'Rare', count: 8, sharePct: 15.1 },
+          ],
+        })}
+        directoryImported
+      />,
+    );
+
+    expect(screen.queryByText('Left out to protect privacy')).not.toBeInTheDocument();
+    expect(screen.queryByText(/left out to protect privacy/)).not.toBeInTheDocument();
   });
 
   it('shows no note on a section sent before the floor existed', () => {

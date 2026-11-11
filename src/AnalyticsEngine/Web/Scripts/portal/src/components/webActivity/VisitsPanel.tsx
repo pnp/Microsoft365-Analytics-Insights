@@ -16,6 +16,7 @@ import {
   formatDecimal,
   formatHour,
   formatPct,
+  flooredCard,
   leftOutNote,
   queryFor,
   toCategories,
@@ -41,10 +42,10 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
   // every visit when the device list was truncated.
   const deviceCategories = withRemainder(toCategories(data.byDevice), kpis.visits, t('webActivity.common.otherUnknown'));
 
-  // Without See PII, sites, devices and browsers of too few visitors are left out, and the page list - which counts no
-  // people - is withheld. Each card says so.
+  // Without See PII, sites, pages, devices and browsers of too few visitors are left out, each list with its smallest row
+  // shown. Each card says so.
   const sitesLeftOut = leftOutNote(t, data.minimumGroupSize, data.withheldSites);
-  const pagesWithheld = data.pagesWithheld === true;
+  const pages = flooredCard(t, data.minimumGroupSize, data.withheldPages, data.byPage.length);
 
   const items: KpiDefinition[] = [
     {
@@ -149,9 +150,10 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
         <SectionCard
           title={t('webActivity.visits.byPage.title')}
           description={t('webActivity.visits.byPage.description')}
+          note={pages.note}
           query={queryFor(data.queries, 'visits-pages')}
-          isEmpty={pagesWithheld || data.byPage.length === 0}
-          emptyMessage={pagesWithheld ? t('webActivity.privacy.noPeopleCount') : undefined}
+          isEmpty={data.byPage.length === 0}
+          emptyMessage={pages.emptyMessage}
         >
           <CategoryBarChart categories={toCategories(data.byPage)} valueLabel={t('webActivity.common.visits')} />
         </SectionCard>

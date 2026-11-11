@@ -154,6 +154,8 @@ export interface WebActivityOverview extends WebActivitySection {
   minimumGroupSize?: number | null;
   /** Sites left out of `topSites` for a reader without See PII. */
   withheldSites?: number;
+  /** Engagement segments left out of `visitorSegments` for a reader without See PII. */
+  withheldSegments?: number;
 }
 
 export interface WebActivityVisitKpis {
@@ -182,8 +184,8 @@ export interface WebActivityVisits extends WebActivitySection {
   withheldSites?: number;
   withheldDevices?: number;
   withheldBrowsers?: number;
-  /** For a reader without See PII, `byPage` is empty: nothing counts the people behind a page. */
-  pagesWithheld?: boolean;
+  /** Pages left out of `byPage` for a reader without See PII. */
+  withheldPages?: number;
 }
 
 /** A page and everything the report knows about how it performed. */
@@ -234,8 +236,11 @@ export interface WebActivityPages extends WebActivitySection {
   periodOverTime: WebActivityStackPoint[];
   minimumGroupSize?: number | null;
   withheldSites?: number;
-  /** For a reader without See PII, the top, slowest and quiet pages are empty: their queries count no people. */
-  pageListsWithheld?: boolean;
+  /** Pages left out of `topPages`, `slowestPages` and `quietPages` for a reader without See PII. */
+  withheldTopPages?: number;
+  withheldSlowestPages?: number;
+  /** Every quiet page has fewer people than the minimum, so for that reader every row is left out. */
+  withheldQuietPages?: number;
 }
 
 export interface WebActivityTransitionRow {
@@ -287,12 +292,13 @@ export interface WebActivityJourneys extends WebActivitySection {
   depth: WebActivityBucket[];
   clickedElements: WebActivityNamedCount[];
   minimumGroupSize?: number | null;
-  /** For a reader without See PII, the entry, exit and bounce pages are empty: their queries count no people. */
-  pageListsWithheld?: boolean;
-  /** For a reader without See PII, the transitions and flows are empty. */
-  pathsWithheld?: boolean;
-  /** For a reader without See PII, the clicked elements are empty. */
-  clickedElementsWithheld?: boolean;
+  /** Rows left out of each list for a reader without See PII. */
+  withheldEntryPages?: number;
+  withheldExitPages?: number;
+  withheldBouncePages?: number;
+  withheldTransitions?: number;
+  withheldFlows?: number;
+  withheldClickedElements?: number;
 }
 
 export interface WebActivityGeographyKpis {

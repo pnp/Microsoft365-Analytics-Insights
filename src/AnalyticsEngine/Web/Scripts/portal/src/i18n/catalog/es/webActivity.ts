@@ -388,6 +388,7 @@ const webActivity: Record<keyof typeof en, string> = {
   'webActivity.privacy.leftOut.one': 'Se omite una fila para proteger la privacidad: hay menos de {minimum} personas detrás de ella.',
   'webActivity.privacy.leftOut.other':
     'Se omiten {count} filas para proteger la privacidad: las que tienen menos de {minimum} personas detrás, junto con las filas más pequeñas necesarias para que ninguna pueda deducirse de los totales.',
+  'webActivity.privacy.leftOutSlice': 'Omitido para proteger la privacidad',
   'webActivity.shared.failedQuery.one': 'No se pudo cargar una consulta de esta pestaña, por lo que algunas cifras inferiores pueden aparecer como cero cuando en realidad son desconocidas. Las secciones afectadas muestran el error.',
   'webActivity.shared.failedQuery.other': 'No se pudieron cargar {count} consultas de esta pestaña, por lo que algunas cifras inferiores pueden aparecer como cero cuando en realidad son desconocidas. Las secciones afectadas muestran el error.',
   'webActivity.overview.kpi.visitsHow': 'Una visita es una sesión de Application Insights que tuvo al menos una página vista en el intervalo, medida desde su primera página vista dentro de ese intervalo. Por tanto, las visitas son locales al intervalo: una sesión que cruza el límite se cuenta en ambos periodos, así que los totales de visitas de periodos adyacentes no son aditivos.',

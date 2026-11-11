@@ -386,6 +386,7 @@ export const webActivity = {
   'webActivity.privacy.leftOut.one': 'One row is left out to protect privacy: fewer than {minimum} people are behind it.',
   'webActivity.privacy.leftOut.other':
     '{count} rows are left out to protect privacy: those with fewer than {minimum} people behind them, together with enough of the smallest other rows that none can be worked out from the totals.',
+  'webActivity.privacy.leftOutSlice': 'Left out to protect privacy',
   'webActivity.shared.failedQuery.one': 'One query on this tab could not be loaded, so some figures below may read as zero when they are in fact unknown. The affected sections show the error.',
   'webActivity.shared.failedQuery.other': '{count} queries on this tab could not be loaded, so some figures below may read as zero when they are in fact unknown. The affected sections show the error.',
   'webActivity.overview.kpi.visitsHow': 'One visit is one Application Insights session that had at least one page view in the window, measured from its first page view inside that window. Visits are therefore window-local: a session straddling the boundary is counted in both periods, so visit totals from adjacent periods are not additive.',
