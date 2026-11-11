@@ -4,8 +4,9 @@ import { screen } from '@testing-library/react';
 import { loadCatalog } from '../../i18n';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import AdoptionPanel from './AdoptionPanel';
+import MeetingsPanel from './MeetingsPanel';
 import OverviewPanel from './OverviewPanel';
-import type { TeamsAdoption, TeamsOverview, TeamsWindow } from '../../types/teamsExplorer';
+import type { TeamsAdoption, TeamsMeetings, TeamsOverview, TeamsWindow } from '../../types/teamsExplorer';
 
 // What a reader without See PII is sent on the overview and adoption tabs (#844, S4-1): figures counted over the people the
 // adoption breakdown is made of, and a figure about one to four people withheld. Withheld is drawn as a dash that says why,
@@ -253,5 +254,92 @@ describe('Teams Explorer adoption for a reader without See PII', () => {
     expect(screen.queryAllByRole('img', { name: WITHHELD_EN })).toHaveLength(0);
     expect(screen.queryByText(/left blank to protect privacy/)).not.toBeInTheDocument();
     expect(screen.queryByText(/not shown to protect privacy/)).not.toBeInTheDocument();
+  });
+});
+
+/** Four weeks of calls: the second, three people's, is withheld, and the quietest other week shown (the third) with it. */
+function meetings(over: Partial<TeamsMeetings> = {}): TeamsMeetings {
+  return {
+    window: window28,
+    queries: [],
+    workingDayStartHour: 8,
+    workingDayEndHour: 18,
+    kpis: {
+      calls: 94,
+      groupCalls: 60,
+      peerToPeerCalls: 34,
+      attendees: 30,
+      callHours: 47,
+      attendeeHours: 120,
+      meanDurationMinutes: 30,
+      meanAttendees: 4.2,
+      afterHoursPct: 10,
+      weekendPct: 2,
+      organiserConcentrationPct: 40,
+      attendeeEngagementPct: 80,
+    },
+    trend: [
+      { weekStart: '2026-02-23T00:00:00Z', calls: 40, minutes: 1200, attendees: 25 },
+      { weekStart: '2026-03-02T00:00:00Z', calls: null, minutes: null, attendees: null, withheld: true },
+      { weekStart: '2026-03-09T00:00:00Z', calls: null, minutes: null, attendees: null, withheld: true },
+      { weekStart: '2026-03-16T00:00:00Z', calls: 30, minutes: 900, attendees: 15 },
+    ],
+    sizeDistribution: [{ key: '3-5', label: '3-5', count: 94, sharePct: 100 }],
+    durationDistribution: [{ key: '15-30', label: '15-30 minutes', count: 94, sharePct: 100 }],
+    heatmap: [{ dayOfWeek: 1, hour: 10, calls: 94 }],
+    periodOfDay: [{ key: 'late-morning', label: 'Late morning (09:00-12:00)', count: 94, sharePct: 100 }],
+    modalityMix: [{ key: 'audio', label: 'audio', count: 94, sharePct: 100 }],
+    topOrganisers: [],
+    topAttendees: [],
+    quality: { feedbackCount: 0, failureCount: 0, ratings: [], failureReasons: [], failureStages: [] },
+    minimumGroupSize: 5,
+    distributionsWithheld: false,
+    otherModalities: 0,
+    ...over,
+  };
+}
+
+const MEETINGS_WEEKS_NOTE_EN =
+  'Weeks in which fewer than 5 people attended calls are left blank so that nobody can be singled out, together with the quietest other week, so that none can be worked out from the totals.';
+const MEETINGS_WEEKS_NOTE_ES =
+  'Las semanas en las que menos de 5 personas asistieron a llamadas se dejan en blanco para que no se pueda identificar a nadie, junto con la semana más tranquila de las demás, para que ninguna pueda deducirse de los totales.';
+
+describe('Teams Explorer meetings for a reader without See PII', () => {
+  it('blanks a small week and the quietest other week, and says why both are blank', () => {
+    const { container } = renderWithProvider(<MeetingsPanel data={meetings()} callsAvailable showPii={false} />);
+
+    // On the weekly calls and the weekly minutes alike.
+    expect(screen.getAllByText(MEETINGS_WEEKS_NOTE_EN)).toHaveLength(2);
+    // Two blank weeks split each weekly line in two, rather than dipping to zero.
+    const lines = Array.from(container.querySelectorAll('path[fill="none"][stroke-width="2.5"]')).map((path) => path.getAttribute('d') ?? '');
+    expect(lines.length).toBeGreaterThanOrEqual(3);
+    expect(lines.every((d) => (d.match(/M/g) ?? []).length === 2 && !d.includes('L'))).toBe(true);
+  });
+
+  it('says so in Spanish', async () => {
+    await loadCatalog('es');
+    renderWithProvider(<MeetingsPanel data={meetings()} callsAvailable showPii={false} />, { language: 'es' });
+
+    expect(await screen.findAllByText(MEETINGS_WEEKS_NOTE_ES, undefined, { timeout: 5000 })).toHaveLength(2);
+    expect(screen.queryByText(MEETINGS_WEEKS_NOTE_EN)).not.toBeInTheDocument();
+  });
+
+  it('says nothing about blank weeks to a reader with See PII', () => {
+    renderWithProvider(
+      <MeetingsPanel
+        data={meetings({
+          minimumGroupSize: null,
+          trend: [
+            { weekStart: '2026-02-23T00:00:00Z', calls: 40, minutes: 1200, attendees: 25 },
+            { weekStart: '2026-03-02T00:00:00Z', calls: 6, minutes: 180, attendees: 3 },
+          ],
+        })}
+        callsAvailable
+        showPii
+      />,
+    );
+
+    expect(screen.queryByText(MEETINGS_WEEKS_NOTE_EN)).not.toBeInTheDocument();
+    expect(screen.queryByText(/left blank/)).not.toBeInTheDocument();
   });
 });

@@ -268,6 +268,31 @@ namespace Common.Entities.TeamsExplorer
         }
 
         /// <summary>
+        /// The Meetings tab's weekly trend for a reader without See PII: a week whose calls 1 to
+        /// <paramref name="minimumPeople"/> - 1 people attended, or whose attendees were not counted, is withheld
+        /// (<see cref="TeamsCallTrendPoint.DescribesFewerThan"/>), and whenever one is, so is the week with the fewest attendees
+        /// still shown. The weeks add up to the calls and call hours the tab publishes beside them (and the mean length times
+        /// the calls), so with the small week alone withheld, those totals less the weeks shown would be its calls and minutes.
+        /// <see cref="WebActivitySmallGroups.WithoutSmallRows{T}"/>' rule; ties go to the earliest week. A week without calls is
+        /// nobody's: it is shown as it is and is never the one that goes with a small week, since withholding it would hide
+        /// nothing. New points: the trend is cached and shared between readers.
+        /// </summary>
+        internal static List<TeamsCallTrendPoint> WithoutSmallCallWeeks(List<TeamsCallTrendPoint> trend, int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var points = trend ?? new List<TeamsCallTrendPoint>();
+            var withCalls = points.Where(p => (p.Calls ?? 0) > 0).ToList();
+            var shown = new HashSet<TeamsCallTrendPoint>(WebActivitySmallGroups.WithoutSmallRows(
+                withCalls,
+                p => p.DescribesFewerThan(minimumPeople) ? 0 : p.Attendees,
+                p => p.WeekStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                minimumPeople,
+                out _));
+            return points.Select(p => (p.Calls ?? 0) > 0 && !shown.Contains(p) ? p.AsWithheld() : p).ToList();
+        }
+
+        /// <summary>
         /// The people per platform for a reader without See PII: a platform 1 to <paramref name="minimumPeople"/> - 1 people
         /// used is withheld, and so is <see cref="TeamsDeviceRow.AnyMobile"/> whenever iOS or Android is, since it less the
         /// other would bound the withheld one. Once anything is withheld every share is too: a share is a fraction of the
@@ -1004,7 +1029,9 @@ namespace Common.Entities.TeamsExplorer
 
         /// <summary>
         /// True when, for a reader without See PII, the week's figures are null: one to four people attended its calls, or
-        /// none was counted, so its calls and minutes are those few people's own (#844). Sent only when true.
+        /// none was counted, so its calls and minutes are those few people's own - or it is the week that keeps such a week
+        /// from being worked out from the totals (<see cref="TeamsSmallGroups.WithoutSmallCallWeeks"/>) (#844). Sent only when
+        /// true.
         /// </summary>
         [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
         public bool Withheld { get; set; }
@@ -1100,7 +1127,9 @@ namespace Common.Entities.TeamsExplorer
         /// This section with no figure of fewer than <paramref name="minimumPeople"/> people, for a reader who does not hold
         /// the portal's See PII permission (#844). Applied where the data says how many people a figure describes:
         /// <list type="bullet">
-        /// <item>a week of the trend with calls but fewer attendees than that is withheld;</item>
+        /// <item>a week of the trend with calls but fewer attendees than that is withheld, and with it the week with the
+        /// fewest attendees still shown, so that the calls and call hours less the weeks shown are never one week's
+        /// (<see cref="TeamsSmallGroups.WithoutSmallCallWeeks"/>);</item>
         /// <item>when fewer than that attended every call in view, the distributions are withheld, since each of their
         /// buckets describes some of those few people;</item>
         /// <item>modalities are counted in distinct people each, and those used by fewer are folded
@@ -1116,9 +1145,7 @@ namespace Common.Entities.TeamsExplorer
 
             var copy = (TeamsMeetings)MemberwiseClone();
             copy.MinimumGroupSize = minimumPeople;
-            copy.Trend = (Trend ?? new List<TeamsCallTrendPoint>())
-                .Select(p => p.DescribesFewerThan(minimumPeople) ? p.AsWithheld() : p)
-                .ToList();
+            copy.Trend = TeamsSmallGroups.WithoutSmallCallWeeks(Trend, minimumPeople);
 
             if ((Kpis?.Calls ?? 0) > 0 && (Kpis?.Attendees ?? 0) < minimumPeople)
             {

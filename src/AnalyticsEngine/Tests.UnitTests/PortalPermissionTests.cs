@@ -182,7 +182,7 @@ namespace Tests.UnitTests
             ["TeamsExplorerAPIController.Availability"] = Any,
             ["TeamsExplorerAPIController.Overview"] = Any,             // reads the breakdown's population without See PII; withholds weeks, segments and KPIs of 1-4 people
             ["TeamsExplorerAPIController.Adoption"] = Any,             // folds breakdown groups of fewer than 5 people without See PII, reads its population, withholds rhythm, lifecycle, segments and platforms of 1-4
-            ["TeamsExplorerAPIController.Meetings"] = Any,             // trims the named leaderboards; withholds weeks, distributions and modalities of fewer than 5 people
+            ["TeamsExplorerAPIController.Meetings"] = Any,             // trims the named leaderboards; withholds weeks of fewer than 5 attendees with the quietest week shown, distributions and modalities of fewer than 5 people
             ["TeamsExplorerAPIController.Collaboration"] = Any,        // drops teams and channels of teams with fewer than 5 members, withholds reactions of 1-4 people and the tab list, folds rare reactions
             ["TeamsExplorerAPIController.Conversations"] = Any,        // withholds key phrases and languages; drops the sentiment of teams with fewer than 5 members
             ["TeamsExplorerAPIController.People"] = Any,               // trims the champion and dormant lists; folds departments of fewer than 5 power users
@@ -1057,6 +1057,10 @@ namespace Tests.UnitTests
                     Assert.AreEqual(JTokenType.Null, small["calls"].Type, "Withheld, never 0.");
                     Assert.AreEqual(JTokenType.Null, small["minutes"].Type);
                     Assert.AreEqual(JTokenType.Null, small["attendees"].Type);
+                    // The quietest week shown (seven attendees) goes with it, so the calls less the weeks shown are 25 - the
+                    // two weeks together - and never the two people's 10.
+                    Assert.IsTrue((bool)trimmed["trend"][2]["withheld"]);
+                    Assert.AreEqual(25, 45 - (long)trimmed["trend"][0]["calls"]);
 
                     // Screen sharing was one person's: it is folded with the least-used modality shown, so it cannot be
                     // worked out as the difference either.
@@ -1075,6 +1079,7 @@ namespace Tests.UnitTests
                     var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/meetings?days=28&top=38"));
                     Assert.AreEqual(10, (long)full["trend"][1]["calls"]);
                     Assert.AreEqual(2, (int)full["trend"][1]["attendees"]);
+                    Assert.AreEqual(15, (long)full["trend"][2]["calls"]);
                     Assert.AreEqual(3, ((JArray)full["modalityMix"]).Count);
                     Assert.AreEqual(JTokenType.Null, full["minimumGroupSize"].Type);
                     Assert.AreEqual(1, store.MeetingsCalls, "The second reader must have been served from the cache.");
@@ -2038,10 +2043,11 @@ namespace Tests.UnitTests
                 var meetings = new TeamsMeetings { WorkingDayStartHour = 42 };
                 meetings.TopOrganisers.Add(new TeamsNamedCountRow { Name = "organiser@contoso.com", Count = 5 });
                 meetings.TopAttendees.Add(new TeamsNamedCountRow { Name = "attendee@contoso.com", Count = 7 });
-                // Twelve people in all; one week only two of them met; screen sharing was one person's.
-                meetings.Kpis = new TeamsCallKpis { Calls = 30, Attendees = 12 };
+                // Twelve people in all; one week only two of them met, another seven; screen sharing was one person's.
+                meetings.Kpis = new TeamsCallKpis { Calls = 45, Attendees = 12 };
                 meetings.Trend.Add(new TeamsCallTrendPoint { WeekStart = new DateTime(2026, 10, 5), Calls = 20, Minutes = 600, Attendees = 12 });
                 meetings.Trend.Add(new TeamsCallTrendPoint { WeekStart = new DateTime(2026, 10, 12), Calls = 10, Minutes = 300, Attendees = 2 });
+                meetings.Trend.Add(new TeamsCallTrendPoint { WeekStart = new DateTime(2026, 10, 19), Calls = 15, Minutes = 450, Attendees = 7 });
                 meetings.SizeDistribution.Add(new TeamsBucketRow { Key = "2", Label = "2", Count = 10, SharePct = 100 });
                 meetings.ModalityMix.AddRange(new[]
                 {

@@ -352,7 +352,7 @@ export const teamsExplorer = {
   'teamsExplorer.meetings.modalities.allSmall':
     'Every modality was used by fewer than {count} people, so this chart is hidden to protect their privacy.',
   'teamsExplorer.meetings.withheld.weeksNote':
-    'Weeks in which fewer than {count} people attended calls are left blank so that nobody can be singled out.',
+    'Weeks in which fewer than {count} people attended calls are left blank so that nobody can be singled out, together with the quietest other week, so that none can be worked out from the totals.',
   'teamsExplorer.meetings.withheld.distributions':
     'Fewer than {count} people attended the calls in this view, so how their meetings break down is hidden to protect their privacy.',
   'teamsExplorer.meetings.topOrganisers.title': 'Top organisers',

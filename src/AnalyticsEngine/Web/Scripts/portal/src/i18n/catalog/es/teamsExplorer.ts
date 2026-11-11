@@ -354,7 +354,7 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.meetings.modalities.allSmall':
     'Cada modalidad la usaron menos de {count} personas, así que este gráfico se oculta para proteger su privacidad.',
   'teamsExplorer.meetings.withheld.weeksNote':
-    'Las semanas en las que menos de {count} personas asistieron a llamadas se dejan en blanco para que no se pueda identificar a nadie.',
+    'Las semanas en las que menos de {count} personas asistieron a llamadas se dejan en blanco para que no se pueda identificar a nadie, junto con la semana más tranquila de las demás, para que ninguna pueda deducirse de los totales.',
   'teamsExplorer.meetings.withheld.distributions':
     'Menos de {count} personas asistieron a las llamadas de esta vista, así que el desglose de sus reuniones se oculta para proteger su privacidad.',
   'teamsExplorer.meetings.topOrganisers.title': 'Principales organizadores',

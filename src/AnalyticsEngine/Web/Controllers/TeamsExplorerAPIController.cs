@@ -52,7 +52,8 @@ namespace Web.AnalyticsWeb.Controllers
     /// </para>
     /// <para>
     /// The same reader is held to that floor in the other sections too (#844): meetings withholds a week of fewer than
-    /// five attendees, the distributions when fewer than five people attended at all, and folds modalities used by fewer;
+    /// five attendees - with the week of fewest attendees still shown, so that the calls and call hours less the weeks shown
+    /// are never one week's - the distributions when fewer than five people attended at all, and folds modalities used by fewer;
     /// collaboration leaves out teams - and the channels of teams - with fewer than five members, withholds reactions one
     /// to four people made, folds rarely-used reactions and withholds the tab list; conversations withholds the key phrases
     /// and languages and leaves out the sentiment of teams with fewer than five members. The team and channel exports

@@ -416,6 +416,9 @@ namespace Tests.UnitTests
                     + "licence and every day was imported; licensed and not in the engagement mix, the unmeasured count. Such a "
                     + "difference counts people with no activity, never what anyone did, and flooring it would blank most weeks, "
                     + "and reach, of any stable population.")
+                .WithKnownGap("#844 (S3-3): the withholding holds within one response, not across the 7-, 28-, 90-, 180- and "
+                    + "365-day windows a reader can request, which all end today: where one window withholds a small week with a "
+                    + "week that another window shows, the small week can be worked out from the two.")
                 .WithKnownGap("#866: the calls KPI and the call judgements are the Meetings tab's figures, with its residuals: a view "
                     + "of 1-4 attendees still shows them, and organiser concentration is the busiest tenth of organisers' share of "
                     + "meetings - fewer than 5 organisers whenever there are fewer than 41."),
@@ -453,16 +456,27 @@ namespace Tests.UnitTests
                     + "people with no activity of some kind, never what anyone did, and flooring it would blank most weeks, and "
                     + "reach, of any stable population."),
             ["TeamsExplorerAPIController.Meetings"] = Floored(
-                    "A copy without the named organiser and attendee lists; a week of fewer than 5 attendees withheld, every "
+                    "A copy without the named organiser and attendee lists; a week of fewer than 5 attendees withheld with the week "
+                    + "of fewest attendees still shown, so the calls and call hours less the weeks shown are never one week's; every "
                     + "distribution withheld when fewer than 5 people attended in the view, and modalities of fewer than 5 people folded.")
                 .By(typeof(TeamsMeetings), nameof(TeamsMeetings.WithoutIndividualData))
                 .By(typeof(TeamsMeetings), nameof(TeamsMeetings.WithoutSmallGroups))
+                .By(typeof(TeamsSmallGroups), nameof(TeamsSmallGroups.WithoutSmallCallWeeks))
                 .ProvenBy(
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsMeetings_WithoutSeePii_LoseTheNamedLeaderboards_AndTheCachedSectionKeepsThem)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsMeetings_WithoutSeePii_WithholdAWeekOfFewerThanFiveAttendees_AndFoldRareModalities)),
-                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsMeetings_WithoutSmallGroups_WithholdsEveryDistribution_WhenFewerThanFivePeopleAttended)))
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsMeetings_WithoutSmallGroups_WithholdsEveryDistribution_WhenFewerThanFivePeopleAttended)),
+                    Test<TeamsExplorerMeetingsFloorTests>(nameof(TeamsExplorerMeetingsFloorTests.Meetings_WithoutSeePii_NoTotalLessTheWeeksShown_IsASingleWithheldWeek)),
+                    Test<TeamsExplorerMeetingsFloorTests>(nameof(TeamsExplorerMeetingsFloorTests.Meetings_ASeePiiReader_IsServedEveryWeekAsItWas_AndTheCachedSectionIsNeverTrimmed_InEitherOrder)),
+                    Test<TeamsExplorerMeetingsFloorTests>(nameof(TeamsExplorerMeetingsFloorTests.WithoutSmallCallWeeks_WithholdsTheQuietestWeekShown_WheneverAWeekIsWithheld)))
                 .WithKnownGap("#866: the size, length, heatmap, time-of-day and call-experience buckets have no people count, so the "
-                    + "floor applies to the view as a whole; the headline KPIs of a view of 1-4 attendees are shown."),
+                    + "floor applies to the view as a whole; the headline KPIs of a view of 1-4 attendees are shown.")
+                .WithKnownGap("#844, accepted under #872's judgement call 3: the window's distinct attendees less a week's - the people "
+                    + "who attended calls in other weeks and not that one - is not floored; it counts people without activity in that "
+                    + "week, never what anyone did. Attendees are distinct people, so the weeks' do not add up to the window's.")
+                .WithKnownGap("#844 (S3-3): the withholding holds within one response, not across the 7-, 28-, 90-, 180- and "
+                    + "365-day windows a reader can request, which all end today: where one window withholds a small week with a "
+                    + "week that another window shows, the small week can be worked out from the two."),
             ["TeamsExplorerAPIController.Collaboration"] = Floored(
                     "Teams of fewer than 5 members, and their channels, are left out; reactions of 1-4 people withheld; rare "
                     + "reactions folded; the tab list withheld.")

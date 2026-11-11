@@ -307,7 +307,10 @@ export type TeamsCallTrendPoint = {
   minutes: number | null;
   /** Null when `withheld`. */
   attendees: number | null;
-  /** For a reader without See PII: one to four people attended the week's calls, so its figures are withheld. */
+  /**
+   * For a reader without See PII: one to four people attended the week's calls, or it is the quietest other week, withheld
+   * with it so that neither can be worked out from the totals; its figures are null.
+   */
   withheld?: boolean;
 };
 
