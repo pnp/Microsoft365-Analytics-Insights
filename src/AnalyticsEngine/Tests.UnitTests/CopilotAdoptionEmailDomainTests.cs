@@ -369,7 +369,7 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public void WithoutSeePii_NoDomainTotalLessTheRowsShown_GivesBackAFewPeople_AndWithSeePiiNothingChanges()
+        public void WithoutSeePii_NoDomainTotalLessTheRowsShown_GivesBackAFewPeople_AndTheCachedRowsAreNeverEdited()
         {
             // Every column a reader without See PII is given answers to a total published beside it: the scored seat
             // holders, the unlicensed users counted and the recommended candidates. Whatever the tenant, that total less

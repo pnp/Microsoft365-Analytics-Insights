@@ -164,7 +164,7 @@ namespace Tests.UnitTests
                     Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.SeatIdleWithholding_WithholdsTheSmallestSeatThatWouldGiveASmallOneBack_AndNothingWhenNoSeatIsSmall)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSeatIdle_OfACopilotSeatHeldByOneToFourPeople_IsWithheldWithoutSeePii_OnEveryEndpoint)),
                     Test<CopilotAdoptionEmailDomainTests>(nameof(CopilotAdoptionEmailDomainTests.WithoutSeePii_ADomainOf20SeatHoldersAnd3ChatUsers_WithholdsTheChatCount_AndKeepsTheSeatHolders)),
-                    Test<CopilotAdoptionEmailDomainTests>(nameof(CopilotAdoptionEmailDomainTests.WithoutSeePii_NoDomainTotalLessTheRowsShown_GivesBackAFewPeople_AndWithSeePiiNothingChanges)),
+                    Test<CopilotAdoptionEmailDomainTests>(nameof(CopilotAdoptionEmailDomainTests.WithoutSeePii_NoDomainTotalLessTheRowsShown_GivesBackAFewPeople_AndTheCachedRowsAreNeverEdited)),
                     Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.DepartmentCandidateCounts_WithoutSeePii_NeverLetTheTotalLessTheCountsShownGiveBackAWithheldDepartment)),
                     Test<CopilotAdoptionManagerModellingTests>(nameof(CopilotAdoptionManagerModellingTests.WithoutSeePii_TheWholePopulationLessTheDepartmentsShown_NeverGivesBackAWithheldDepartment_AndWithSeePiiNothingChanges)),
                     Test<CopilotAdoptionManagerModellingTests>(nameof(CopilotAdoptionManagerModellingTests.WithoutSeePii_TheManagerOfADepartmentTooSmallToList_IsNotGivenBackByTheWholeLessTheDepartmentsShown)),
