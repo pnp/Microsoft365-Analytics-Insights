@@ -45,6 +45,13 @@ namespace Common.Entities.SpoWebActivity
         public const int MaximumTop = 500;
 
         /// <summary>
+        /// Rows per ranked table in the section a reader without See PII is served from (#844): one more than
+        /// <see cref="MaximumTop"/>, the most any reader is shown. The row past the cap is never shown; it only tells a list
+        /// that holds every row from one cut short at the cap (<see cref="WebActivitySmallGroups.WithoutSmallRowsWithinCap"/>).
+        /// </summary>
+        public const int FloorTop = MaximumTop + 1;
+
+        /// <summary>
         /// Page views a page needs before it is allowed into a quality ranking (slowest pages, longest
         /// dwell, highest bounce).
         /// </summary>
@@ -98,6 +105,18 @@ namespace Common.Entities.SpoWebActivity
         {
             var copy = (WebActivityQuery)MemberwiseClone();
             copy.Top = NormaliseTop(top);
+            return copy;
+        }
+
+        /// <summary>
+        /// This window, returning <see cref="FloorTop"/> rows per ranked table - one past <see cref="MaximumTop"/> - for the
+        /// section a reader without See PII is floored from (#844). Never used to serve a section as built: its last row is
+        /// past the cap. Cached under its own key, apart from any reader's <see cref="WithTop"/>.
+        /// </summary>
+        public WebActivityQuery ForFloor()
+        {
+            var copy = (WebActivityQuery)MemberwiseClone();
+            copy.Top = FloorTop;
             return copy;
         }
 

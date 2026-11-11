@@ -57,10 +57,11 @@ export default function PagesPanel({
 
   // Without See PII, pages and sites of too few visitors are left out of each list, with the smallest row shown - and a
   // quiet page is by design one that one, two or three people opened, so every quiet page is. Each card says so. Nor
-  // does this reader get any page's entries, exits or bounces here: they are the Journeys tab's figures.
-  const endpointFiguresWithheld = data.endpointFiguresWithheld === true;
+  // does this reader get any page's figures counted in visits here - unique page views, entries, exits and bounces: they
+  // are the Visits and Journeys tabs' figures.
+  const visitFiguresWithheld = data.visitFiguresWithheld === true;
   const top = flooredCard(t, data.minimumGroupSize, data.withheldTopPages, data.topPages.length, {
-    note: endpointFiguresWithheld ? t('webActivity.pages.mostViewed.endpointFiguresWithheld') : undefined,
+    note: visitFiguresWithheld ? t('webActivity.pages.mostViewed.visitFiguresWithheld') : undefined,
   });
   const slowest = flooredCard(t, data.minimumGroupSize, data.withheldSlowestPages, data.slowestPages.length, {
     note: t('webActivity.pages.slowest.note'),
@@ -165,11 +166,11 @@ export default function PagesPanel({
             label={t('webActivity.pages.mostViewed.title')}
             columns={{
               site: true,
-              uniquePageViews: true,
+              uniquePageViews: !visitFiguresWithheld,
               dwell: true,
               load: true,
-              entries: !endpointFiguresWithheld,
-              bounce: !endpointFiguresWithheld,
+              entries: !visitFiguresWithheld,
+              bounce: !visitFiguresWithheld,
             }}
             dwellFootnote
           />
@@ -203,7 +204,7 @@ export default function PagesPanel({
           <PageTable
             rows={data.quietPages}
             label={t('webActivity.pages.quiet.title')}
-            columns={{ site: true, uniquePageViews: true, dwell: true, load: false }}
+            columns={{ site: true, uniquePageViews: !visitFiguresWithheld, dwell: true, load: false }}
             dwellFootnote
           />
         </SectionCard>

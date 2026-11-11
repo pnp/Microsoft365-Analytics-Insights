@@ -243,12 +243,12 @@ namespace Tests.UnitTests
                 Assert.AreEqual(1000, (long)pages["kpis"]["pageViews"], "The scope's own totals are still there.");
                 Assert.IsNull(pages["topPages"][0]["people"], "The people count only decides; it is never sent.");
 
-                // No page on this tab carries its entries, exits or bounces: they are the Journeys tab's figures, and its
-                // entry, exit and bounce pages leave out one combined set of pages.
-                Assert.IsTrue((bool)pages["endpointFiguresWithheld"]);
+                // No page on this tab carries a figure counted in visits: its unique page views are the Visits tab's visits by
+                // page, and its entries, exits and bounces the Journeys tab's, each floored on its own tab.
+                Assert.IsTrue((bool)pages["visitFiguresWithheld"]);
                 foreach (var row in pages["topPages"].Concat(pages["slowestPages"]))
                 {
-                    foreach (var figure in new[] { "entries", "exits", "bounces", "bouncePct" })
+                    foreach (var figure in new[] { "uniquePageViews", "entries", "exits", "bounces", "bouncePct" })
                         Assert.IsNull(row[figure], (string)row["title"] + " carries no " + figure + ".");
                 }
 
@@ -281,7 +281,8 @@ namespace Tests.UnitTests
                 var fullPages = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/pages?days=28&top=44"));
                 CollectionAssert.AreEqual(new[] { "Home", "News", "HR policies", "Grievances" }, Titles(fullPages["topPages"]));
                 Assert.AreEqual(500, (long)fullPages["topPages"][0]["entries"]);
-                Assert.IsNull(fullPages["endpointFiguresWithheld"], "Sent only to a reader whose figures are left out.");
+                Assert.IsNotNull(fullPages["topPages"][0]["uniquePageViews"]);
+                Assert.IsNull(fullPages["visitFiguresWithheld"], "Sent only to a reader whose figures are left out.");
                 Assert.AreEqual(2, ((JArray)fullPages["quietPages"]).Count);
                 Assert.AreEqual(0, (int)fullPages["withheldTopPages"]);
                 Assert.AreEqual(3, ((JArray)fullPages["bySite"]).Count);
@@ -401,7 +402,14 @@ namespace Tests.UnitTests
 
                 CollectionAssert.AreEqual(new[] { "Home", "News" }, (await Lines("pages")).Select(FirstField).ToArray());
                 var pagesHeader = (await host.Client.GetStringAsync("api/WebActivity/export/pages?days=28&top=45")).Split('\n')[0];
-                Assert.IsFalse(pagesHeader.Contains("Visits entering here") || pagesHeader.Contains("Bounces"), "No page's entries, exits or bounces: " + pagesHeader);
+                Assert.IsFalse(
+                    pagesHeader.Contains("Unique page views") || pagesHeader.Contains("Visits entering here") || pagesHeader.Contains("Bounces"),
+                    "No figure counted in visits: " + pagesHeader);
+                foreach (var file in new[] { "slow-pages", "quiet-pages" })
+                {
+                    var header = (await host.Client.GetStringAsync("api/WebActivity/export/" + file + "?days=28&top=45")).Split('\n')[0];
+                    Assert.IsFalse(header.Contains("Unique page views"), file + ": " + header);
+                }
                 CollectionAssert.AreEqual(new[] { "Expenses" }, (await Lines("slow-pages")).Select(FirstField).ToArray());
                 Assert.AreEqual(0, (await Lines("quiet-pages")).Length, "Every quiet page is a page of fewer than five people.");
                 CollectionAssert.AreEqual(new[] { "Home" }, (await Lines("entry-pages")).Select(FirstField).ToArray());
@@ -420,7 +428,10 @@ namespace Tests.UnitTests
                 // A See PII reader next: the floored files must not have been cached for them.
                 host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
                 CollectionAssert.AreEqual(new[] { "Home", "News", "HR policies", "Grievances" }, (await Lines("pages")).Select(FirstField).ToArray());
-                StringAssert.Contains((await host.Client.GetStringAsync("api/WebActivity/export/pages?days=28&top=45")).Split('\n')[0], "Visits entering here");
+                var fullHeader = (await host.Client.GetStringAsync("api/WebActivity/export/pages?days=28&top=45")).Split('\n')[0];
+                StringAssert.Contains(fullHeader, "Unique page views");
+                StringAssert.Contains(fullHeader, "Visits entering here");
+                StringAssert.Contains((await host.Client.GetStringAsync("api/WebActivity/export/slow-pages?days=28&top=45")).Split('\n')[0], "Unique page views");
                 Assert.AreEqual(2, (await Lines("quiet-pages")).Length);
                 Assert.AreEqual(5, (await Lines("transitions")).Length);
                 Assert.AreEqual(4, (await Lines("flows")).Length);
@@ -561,7 +572,7 @@ namespace Tests.UnitTests
                 CollectionAssert.AreEqual(new[] { "Home", "News" }, Titles(pages["topPages"]));
                 Assert.IsNull(pages["topPages"][1]["entries"]);
                 Assert.IsNull(pages["topPages"][1]["bounces"]);
-                Assert.IsTrue((bool)pages["endpointFiguresWithheld"]);
+                Assert.IsTrue((bool)pages["visitFiguresWithheld"]);
 
                 host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
                 var full = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/journeys?days=28&top=15"));
@@ -629,6 +640,178 @@ namespace Tests.UnitTests
             });
         }
 
+        /// <summary>
+        /// A page's unique page views are its visits - the Visits tab's visits by page - and each tab floors its own list
+        /// (#881's decision 2). News is the visits by page's smallest page shown beside Grievances (two people); the most
+        /// viewed pages have no small page, so they show News, and with its unique page views they would give News's visits
+        /// back - and the unique page views less the visits shown, Grievances'. A reader without See PII is sent no page's
+        /// unique page views on the Pages tab, on screen or in a file.
+        /// </summary>
+        [TestMethod]
+        public async Task UniquePageViews_WithoutSeePii_AreLeftOffThePagesTab_SoAPageTheVisitsTabLeavesOutCannotBeReadThere()
+        {
+            WebActivityPageRow Viewed(string title, long views, long visits, int people) =>
+                new WebActivityPageRow { Title = title, Url = PageUrl(title), PageViews = views, UniquePageViews = visits, People = people };
+
+            var store = new SectionStore
+            {
+                Visits = q => new WebActivityVisits
+                {
+                    Window = WebActivityWindow.From(q),
+                    ByPage = new List<WebActivityNamedCount>
+                    {
+                        new WebActivityNamedCount { Name = "Home", Count = 300, People = 40 },
+                        new WebActivityNamedCount { Name = "News", Count = 40, People = 8 },
+                        new WebActivityNamedCount { Name = "Grievances", Count = 3, People = 2 },
+                    },
+                },
+                Pages = q => new WebActivityPages
+                {
+                    Window = WebActivityWindow.From(q),
+                    Kpis = new WebActivityPageKpis { PageViews = 1024, UniquePageViews = 343 },
+                    TopPages = new List<WebActivityPageRow> { Viewed("Home", 900, 300, 40), Viewed("News", 120, 40, 8) },
+                    SlowestPages = new List<WebActivityPageRow> { Viewed("News", 120, 40, 8) },
+                },
+            };
+            await WithHost(store, Enumerable.Empty<string>(), async host =>
+            {
+                var visits = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/visits?days=28&top=15"));
+                CollectionAssert.AreEqual(new[] { "Home" }, visits["byPage"].Select(p => (string)p["name"]).ToArray(), "Grievances, and News beside it.");
+
+                var pages = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/pages?days=28&top=15"));
+                CollectionAssert.AreEqual(new[] { "Home", "News" }, Titles(pages["topPages"]), "News had eight viewers: shown, by its page views.");
+                Assert.IsTrue((bool)pages["visitFiguresWithheld"]);
+                foreach (var row in pages["topPages"].Concat(pages["slowestPages"]))
+                    Assert.IsNull(row["uniquePageViews"], (string)row["title"] + " carries no unique page views.");
+                Assert.AreEqual(
+                    40 + 3,
+                    (long)pages["kpis"]["uniquePageViews"] - visits["byPage"].Sum(p => (long)p["count"]),
+                    "The unique page views less every page's visits shown are News's and Grievances' together.");
+                foreach (var file in new[] { "pages", "slow-pages" })
+                {
+                    var csv = await host.Client.GetStringAsync("api/WebActivity/export/" + file + "?days=28&top=15");
+                    Assert.IsFalse(csv.Split('\n')[0].Contains("Unique page views"), file);
+                    StringAssert.Contains(csv, "News," + PageUrl("News") + ",,120,", file + ": News with its page views and no visits.");
+                }
+
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                var full = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/pages?days=28&top=15"));
+                Assert.AreEqual(40, (long)full["topPages"][1]["uniquePageViews"]);
+                Assert.IsNull(full["visitFiguresWithheld"]);
+                StringAssert.Contains(
+                    (await host.Client.GetStringAsync("api/WebActivity/export/pages?days=28&top=15")).Split('\n')[0], "Unique page views");
+            });
+        }
+
+        /// <summary>
+        /// #881's decision 4, the cap: every list ranks 501 rows - one more than any reader is shown - and the 501st, past the
+        /// cap, is two people's. None of the 500 a reader can be shown is small, and rank 7 has the fewest people among them
+        /// (six). Without the cap rule nothing would be left out of those 500, and the total less them would be the 501st
+        /// row's figures alone.
+        /// </summary>
+        [TestMethod]
+        public async Task EveryFlooredList_WithoutSeePii_WithOneSmallRowPastTheCap_LeavesOutItsSmallestShownToo()
+        {
+            var ranks = Enumerable.Range(1, WebActivityQuery.FloorTop).ToArray();
+            int People(int r) => r == WebActivityQuery.FloorTop ? 2 : r == 7 ? 6 : 20 + r % 7;
+            long Figure(int r) => 10000 - 10 * r;
+            var total = ranks.Sum(r => Figure(r));
+            var store = RankedStore(ranks, People, Figure, r => Figure(r) * 100.0 / total);
+            await WithHost(store, Enumerable.Empty<string>(), async host =>
+            {
+                var expected = ranks.Where(r => r != 7 && r != WebActivityQuery.FloorTop).ToArray();
+                foreach (var tab in TwentyRowLists.GroupBy(l => l.Tab))
+                {
+                    var path = "api/WebActivity/" + tab.Key + "?days=28";
+                    var shortAnswer = JObject.Parse(await host.Client.GetStringAsync(path + (tab.Key == "overview" ? string.Empty : "&top=15")));
+                    var longAnswer = tab.Key == "overview" ? null : JObject.Parse(await host.Client.GetStringAsync(path + "&top=500"));
+                    foreach (var list in tab)
+                    {
+                        var label = tab.Key + "." + list.List;
+                        CollectionAssert.AreEqual(
+                            expected.Take(15).Select(r => list.Prefix + " " + r.ToString("00")).ToArray(),
+                            Names(shortAnswer[list.List], list.NameField),
+                            label + ": rank 7 is left out with the row past the cap.");
+                        Assert.AreEqual(1, (int)shortAnswer[list.Withheld], label);
+                        if (longAnswer == null) continue;
+
+                        CollectionAssert.AreEqual(
+                            expected.Select(r => list.Prefix + " " + r.ToString("00")).ToArray(),
+                            Names(longAnswer[list.List], list.NameField),
+                            label + ": 499 of the 500 rows a reader can be shown, and never the row past them.");
+                        Assert.AreEqual(1, (int)longAnswer[list.Withheld], label + ": rank 7; the row past the cap was never in view.");
+                        var shown = longAnswer[list.List].Sum(r => (long)r[list.Figure]);
+                        Assert.AreEqual(Figure(7) + Figure(WebActivityQuery.FloorTop), total - shown, label + ": what is left is never the row past the cap alone.");
+                    }
+                }
+
+                // The file is floored the same way: 499 rows, and neither rank 7 nor the row past the cap.
+                var file = (await host.Client.GetStringAsync("api/WebActivity/export/pages?days=28&top=500"))
+                    .Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries).Skip(1).ToArray();
+                Assert.AreEqual(499, file.Length);
+                Assert.IsFalse(file.Any(l => l.StartsWith("Viewed page 07,", StringComparison.Ordinal) || l.StartsWith("Viewed page 501,", StringComparison.Ordinal)));
+
+                // A See PII reader is sent the 500 rows they asked for, as built: their section never holds the row past the cap.
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                var full = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/pages?days=28&top=500"));
+                CollectionAssert.AreEqual(ranks.Take(500).Select(r => "Viewed page " + r.ToString("00")).ToArray(), Names(full["topPages"], "title"));
+            });
+        }
+
+        [TestMethod]
+        public void WithoutSmallRowsWithinCap_TakesNoRowWhenNoneLiesPastTheCap_AndNoSecondRowWhenOneIsLeftOutAlready()
+        {
+            var rows = Enumerable.Range(1, WebActivityQuery.MaximumTop)
+                .Select(r => new WebActivityNamedCount { Name = "Site " + r.ToString("000"), Count = 1000 - r, People = r == 7 ? 6 : 20 })
+                .ToList();
+            var pastTheCap = new WebActivityNamedCount { Name = "Site 501", Count = 1, People = 2 };
+
+            // A list that ends at the cap holds every row: there is nothing past it to count as left out.
+            Assert.AreEqual(500, WebActivitySmallGroups.WithoutSmallRowsWithinCap(rows, s => s.People, s => s.Name, 5).Count);
+
+            // A small row inside the cap already takes the smallest shown with it; the row past the cap takes no second one.
+            rows[99].People = 3;
+            var shown = WebActivitySmallGroups.WithoutSmallRowsWithinCap(rows.Concat(new[] { pastTheCap }).ToList(), s => s.People, s => s.Name, 5);
+            CollectionAssert.AreEquivalent(
+                new[] { "Site 007", "Site 100", "Site 501" },
+                rows.Concat(new[] { pastTheCap }).Except(shown).Select(s => s.Name).ToArray());
+        }
+
+        /// <summary>
+        /// A step's share is of every step out of its page, so the steps a list holds tell whether their page has more past
+        /// the cap. The list below is cut at the cap: Home's steps go on past it, so Home loses its smallest step shown; News's
+        /// two steps are all of News's, so News loses none.
+        /// </summary>
+        [TestMethod]
+        public void StepsOutOfAPage_LoseTheirSmallestShownOnlyWhenThatPagesStepsGoOnPastTheCap()
+        {
+            WebActivityTransitionRow Step(string from, string to, long count, long ofSteps, int people) => new WebActivityTransitionRow
+            {
+                FromTitle = from,
+                FromUrl = PageUrl(from),
+                ToTitle = to,
+                ToUrl = PageUrl(to),
+                Count = count,
+                SharePct = count * 100.0 / ofSteps,
+                People = people,
+            };
+
+            var homeCounts = Enumerable.Range(1, 499).Select(r => (long)(5000 - 10 * r)).ToList();
+            var homeSteps = homeCounts.Sum();
+            var steps = homeCounts.Take(498)
+                .Select((count, i) => Step("Home", "Page " + (i + 1).ToString("000"), count, homeSteps, i + 1 == 7 ? 6 : 20))
+                .Concat(new[] { Step("News", "Home", 90, 150, 9), Step("News", "Forms", 60, 150, 8) })
+                .Concat(new[] { Step("Home", "Page 499", homeCounts[498], homeSteps, 2) })
+                .ToList();
+
+            var floored = new WebActivityJourneys { Transitions = steps }.WithoutSmallGroups(5, WebActivityQuery.MaximumTop);
+
+            Assert.AreEqual(499, floored.Transitions.Count, "500 steps in the list, less Home's smallest shown; the 501st is past the cap.");
+            Assert.IsFalse(floored.Transitions.Any(s => s.ToTitle == "Page 007" || s.ToTitle == "Page 499"));
+            CollectionAssert.AreEqual(new[] { "Home", "Forms" }, floored.Transitions.Where(s => s.FromTitle == "News").Select(s => s.ToTitle).ToArray());
+            Assert.AreEqual(1, floored.WithheldTransitions);
+        }
+
         private static readonly int[] Ranks = Enumerable.Range(1, 20).ToArray();
 
         private static int PeopleAt(int rank) => rank == 10 ? 5 : rank == 18 ? 2 : 20 + rank % 7;
@@ -664,14 +847,20 @@ namespace Tests.UnitTests
         private static string[] Names(JToken rows, string field) => rows.Select(r => (string)r[field]).ToArray();
 
         /// <summary>A store whose every floored list ranks 20 rows and returns as many as the query asks for, as SQL's TOP does.</summary>
-        private static SectionStore TwentyRowStore()
+        private static SectionStore TwentyRowStore() => RankedStore(Ranks, PeopleAt, FigureAt, null);
+
+        /// <summary>
+        /// A store whose every floored list ranks <paramref name="ranks"/> and returns as many as the query asks for, as SQL's
+        /// TOP does. A step's share is <paramref name="shareAt"/>'s, or none.
+        /// </summary>
+        private static SectionStore RankedStore(IReadOnlyList<int> ranks, Func<int, int> peopleAt, Func<int, long> figureAt, Func<int, double> shareAt)
         {
             List<T> Rows<T>(WebActivityQuery q, Func<int, string, T> row, string prefix) =>
-                Ranks.Take(q.Top).Select(r => row(r, prefix + " " + r.ToString("00"))).ToList();
-            WebActivityNamedCount Named(int r, string name) => new WebActivityNamedCount { Name = name, Count = FigureAt(r), People = PeopleAt(r), Key = r };
-            WebActivityPageRow PageAt(int r, string name) => new WebActivityPageRow { Title = name, Url = PageUrl(name), PageViews = FigureAt(r), People = PeopleAt(r) };
-            WebActivityPlaceRow Place(int r, string name) => new WebActivityPlaceRow { Name = name, Country = "Contoso", PageViews = FigureAt(r), Visitors = PeopleAt(r) };
-            WebActivityPlatformRow Platform(int r, string name) => new WebActivityPlatformRow { Name = name, PageViews = FigureAt(r), Visitors = PeopleAt(r) };
+                ranks.Take(q.Top).Select(r => row(r, prefix + " " + r.ToString("00"))).ToList();
+            WebActivityNamedCount Named(int r, string name) => new WebActivityNamedCount { Name = name, Count = figureAt(r), People = peopleAt(r), Key = r };
+            WebActivityPageRow PageAt(int r, string name) => new WebActivityPageRow { Title = name, Url = PageUrl(name), PageViews = figureAt(r), People = peopleAt(r) };
+            WebActivityPlaceRow Place(int r, string name) => new WebActivityPlaceRow { Name = name, Country = "Contoso", PageViews = figureAt(r), Visitors = peopleAt(r) };
+            WebActivityPlatformRow Platform(int r, string name) => new WebActivityPlatformRow { Name = name, PageViews = figureAt(r), Visitors = peopleAt(r) };
 
             return new SectionStore
             {
@@ -690,7 +879,7 @@ namespace Tests.UnitTests
                     TopPages = Rows(q, PageAt, "Viewed page"),
                     SlowestPages = Rows(q, PageAt, "Slow page"),
                     QuietPages = Rows(q, PageAt, "Quiet page"),
-                    BySite = Rows(q, (r, name) => new WebActivitySiteRow { Name = name, PageViews = FigureAt(r), Visitors = PeopleAt(r) }, "Site"),
+                    BySite = Rows(q, (r, name) => new WebActivitySiteRow { Name = name, PageViews = figureAt(r), Visitors = peopleAt(r) }, "Site"),
                 },
                 Journeys = q => new WebActivityJourneys
                 {
@@ -700,9 +889,15 @@ namespace Tests.UnitTests
                     BouncePages = Rows(q, PageAt, "Bounce page"),
                     Transitions = Rows(q, (r, name) => new WebActivityTransitionRow
                     {
-                        FromTitle = "Home", FromUrl = PageUrl("Home"), ToTitle = name, ToUrl = PageUrl(name), Count = FigureAt(r), People = PeopleAt(r),
+                        FromTitle = "Home",
+                        FromUrl = PageUrl("Home"),
+                        ToTitle = name,
+                        ToUrl = PageUrl(name),
+                        Count = figureAt(r),
+                        SharePct = shareAt?.Invoke(r) ?? 0,
+                        People = peopleAt(r),
                     }, "Step"),
-                    Flows = Rows(q, (r, name) => FlowRow(name, "End of " + name, FigureAt(r), 1, PeopleAt(r)), "Flow"),
+                    Flows = Rows(q, (r, name) => FlowRow(name, "End of " + name, figureAt(r), 1, peopleAt(r)), "Flow"),
                     ClickedElements = Rows(q, Named, "Button"),
                 },
                 Geography = q => new WebActivityGeography
@@ -720,7 +915,7 @@ namespace Tests.UnitTests
                     Devices = Rows(q, Platform, "Device"),
                     Detail = Rows(q, (r, name) => new WebActivityTechnologyDetailRow
                     {
-                        Browser = name, Device = "Desktop", OperatingSystem = "Windows", City = "(unknown)", PageViews = FigureAt(r), Visitors = PeopleAt(r),
+                        Browser = name, Device = "Desktop", OperatingSystem = "Windows", City = "(unknown)", PageViews = figureAt(r), Visitors = peopleAt(r),
                     }, "Detail"),
                 },
             };

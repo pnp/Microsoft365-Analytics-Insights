@@ -194,14 +194,14 @@ export interface WebActivityPageRow {
   url: string;
   site: string | null;
   pageViews: number;
+  /**
+   * With the four endpoint figures below, the figures counted in visits. Absent from a Pages-tab row sent to a reader
+   * without See PII (`WebActivityPages.visitFiguresWithheld`), whose tables then do not show those columns.
+   */
   uniquePageViews: number;
   visitors: number;
   averageSecondsOnPage: number | null;
   averageLoadSeconds: number | null;
-  /**
-   * The four endpoint figures. Absent from a Pages-tab row sent to a reader without See PII
-   * (`WebActivityPages.endpointFiguresWithheld`), whose tables then do not show those columns.
-   */
   entries: number;
   exits: number;
   bounces: number;
@@ -246,10 +246,11 @@ export interface WebActivityPages extends WebActivitySection {
   /** Every quiet page has fewer people than the minimum, so for that reader every row is left out. */
   withheldQuietPages?: number;
   /**
-   * For a reader without See PII: no page row on this tab carries `entries`, `exits`, `bounces` or `bouncePct` - the server
-   * omits them, because they are the Journeys tab's figures. Absent for a See PII reader.
+   * For a reader without See PII: no page row on this tab carries a figure counted in visits - `uniquePageViews`, `entries`,
+   * `exits`, `bounces` or `bouncePct`. The server omits them, because they are the Visits tab's visits by page and the
+   * Journeys tab's entries, exits and bounces, which those tabs floor on their own. Absent for a See PII reader.
    */
-  endpointFiguresWithheld?: boolean;
+  visitFiguresWithheld?: boolean;
 }
 
 export interface WebActivityTransitionRow {

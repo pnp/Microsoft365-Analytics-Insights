@@ -41,6 +41,40 @@ namespace Common.Entities.SpoWebActivity
         }
 
         /// <summary>
+        /// <see cref="WithoutSmallRows"/> over the first <see cref="WebActivityQuery.MaximumTop"/> rows of a list - the most
+        /// any reader is shown - fetched with one row more (<see cref="WebActivityQuery.ForFloor"/>) to tell whether rows lie
+        /// beyond them (#844). Rows past the cap are never shown. When there are any, they are in the section's total but not
+        /// in the list, just as a row left out is, and they can be one small row's, so they count as a row left out: when
+        /// nothing else is, the smallest row shown goes too, and the total less the rows shown always includes a row of at
+        /// least <paramref name="minimumPeople"/>. A list that ends inside the cap is floored as
+        /// <see cref="WithoutSmallRows"/> floors it. A new list.
+        /// </summary>
+        public static List<T> WithoutSmallRowsWithinCap<T>(
+            IList<T> rows, Func<T, int?> people, Func<T, string> name, int minimumPeople)
+            where T : class
+        {
+            var all = rows ?? new List<T>();
+            var shown = WithoutSmallRows(all.Take(WebActivityQuery.MaximumTop), people, name, minimumPeople, out var leftOut);
+            if (leftOut == 0 && all.Count > WebActivityQuery.MaximumTop) RemoveSmallest(shown, people, name);
+            return shown;
+        }
+
+        /// <summary>The first <see cref="WebActivityQuery.MaximumTop"/> rows of <paramref name="rows"/>: those a floor decides over.</summary>
+        public static IEnumerable<T> WithinCap<T>(IEnumerable<T> rows) =>
+            (rows ?? Enumerable.Empty<T>()).Take(WebActivityQuery.MaximumTop);
+
+        /// <summary>Leaves out the smallest row of <paramref name="shown"/>, chosen as <see cref="WithoutSmallRows"/> chooses it.</summary>
+        private static void RemoveSmallest<T>(List<T> shown, Func<T, int?> people, Func<T, string> name)
+            where T : class
+        {
+            if (shown.Count == 0) return;
+            shown.Remove(shown
+                .OrderBy(r => people(r) ?? 0)
+                .ThenBy(r => name(r) ?? string.Empty, StringComparer.Ordinal)
+                .First());
+        }
+
+        /// <summary>
         /// <see cref="WithoutSmallRows"/> within each <paramref name="group"/> of <paramref name="rows"/> separately, for a
         /// list whose shares are each against their own group's total - the steps out of one page, as a share of all the
         /// steps out of it. A row's share and count give its group's total away, so what a group leaves out has to include
@@ -49,7 +83,23 @@ namespace Common.Entities.SpoWebActivity
         /// </summary>
         /// <param name="leftOut">How many rows were left out, over every group.</param>
         public static List<T> WithoutSmallRowsInEachGroup<T>(
-            IEnumerable<T> rows, Func<T, string> group, Func<T, int?> people, Func<T, string> name, int minimumPeople, out int leftOut)
+            IEnumerable<T> rows, Func<T, string> group, Func<T, int?> people, Func<T, string> name, int minimumPeople, out int leftOut) =>
+            WithoutSmallRowsInEachGroup(rows, group, people, name, minimumPeople, _ => false, out leftOut);
+
+        /// <summary>
+        /// The same floor within each group, over a list that may stop before some group's last row (#844): a group whose
+        /// rows <paramref name="goesOnPastTheList"/> says continue beyond the list counts those rows as a row left out, so
+        /// when none of its own rows is, its smallest row shown goes too - as <see cref="WithoutSmallRowsWithinCap"/> does
+        /// for a whole list.
+        /// </summary>
+        public static List<T> WithoutSmallRowsInEachGroup<T>(
+            IEnumerable<T> rows,
+            Func<T, string> group,
+            Func<T, int?> people,
+            Func<T, string> name,
+            int minimumPeople,
+            Func<IReadOnlyList<T>, bool> goesOnPastTheList,
+            out int leftOut)
         {
             if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
 
@@ -59,6 +109,12 @@ namespace Common.Entities.SpoWebActivity
             foreach (var rowsOfGroup in all.GroupBy(r => group(r.Row) ?? string.Empty, StringComparer.Ordinal))
             {
                 var kept = WithoutSmallRows(rowsOfGroup, r => people(r.Row), r => name(r.Row), minimumPeople, out var groupLeftOut);
+                if (groupLeftOut == 0 && kept.Count > 0 && goesOnPastTheList(rowsOfGroup.Select(r => r.Row).ToList()))
+                {
+                    RemoveSmallest(kept, r => people(r.Row), r => name(r.Row));
+                    groupLeftOut = 1;
+                }
+
                 leftOut += groupLeftOut;
                 foreach (var row in kept) shown.Add(row.Index);
             }
@@ -492,12 +548,14 @@ namespace Common.Entities.SpoWebActivity
         /// listed never say which ones were left out. The headline figures, trend, heatmap and visit depth are over the
         /// reader's whole scope and stay. A shallow copy: the section is cached and shared between readers.
         /// </summary>
-        public WebActivityOverview WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, int.MaxValue);
+        public WebActivityOverview WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, WebActivityQuery.MaximumTop);
 
         /// <summary>
-        /// <see cref="WithoutSmallGroups(int)"/>, with the busiest sites floored over every site the section holds and then
-        /// cut to the first <paramref name="top"/> (<see cref="WebActivitySmallGroups.FirstRows"/>), so the list a reader
-        /// sees is the first rows of the same floored list whatever <paramref name="top"/> they asked for.
+        /// <see cref="WithoutSmallGroups(int)"/>, with the busiest sites floored over the first
+        /// <see cref="WebActivityQuery.MaximumTop"/> sites the section holds - any site past them counting as one left out
+        /// (<see cref="WebActivitySmallGroups.WithoutSmallRowsWithinCap"/>) - and then cut to the first <paramref name="top"/>
+        /// (<see cref="WebActivitySmallGroups.FirstRows"/>), so the list a reader sees is the first rows of the same floored
+        /// list whatever <paramref name="top"/> they asked for.
         /// </summary>
         public WebActivityOverview WithoutSmallGroups(int minimumPeople, int top)
         {
@@ -505,7 +563,7 @@ namespace Common.Entities.SpoWebActivity
             copy.Window = WindowFor(top);
             copy.MinimumGroupSize = minimumPeople;
             copy.TopSites = WebActivitySmallGroups.FirstRows(
-                TopSites, WebActivitySmallGroups.WithoutSmallRows(TopSites, s => s.People, s => s.Name, minimumPeople, out _), top, out var sites);
+                TopSites, WebActivitySmallGroups.WithoutSmallRowsWithinCap(TopSites, s => s.People, s => s.Name, minimumPeople), top, out var sites);
             copy.WithheldSites = sites;
             copy.VisitorSegments = WebActivitySmallGroups.WithoutSmallRows(
                 VisitorSegments.Where(b => b.Count > 0), b => (int)Math.Min(b.Count, int.MaxValue), b => b.Key, minimumPeople, out var segments);
@@ -592,12 +650,13 @@ namespace Common.Entities.SpoWebActivity
         /// "(other sites)" over time. The headline figures, trend and time-of-day buckets are over the reader's whole scope
         /// and stay. A shallow copy: the section is cached and shared between readers.
         /// </summary>
-        public WebActivityVisits WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, int.MaxValue);
+        public WebActivityVisits WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, WebActivityQuery.MaximumTop);
 
         /// <summary>
-        /// <see cref="WithoutSmallGroups(int)"/>, with each list floored over every row the section holds and then cut to its
-        /// first <paramref name="top"/> rows (<see cref="WebActivitySmallGroups.FirstRows"/>); the sites over time are folded
-        /// to the sites the cut list shows.
+        /// <see cref="WithoutSmallGroups(int)"/>, with each list floored over the first <see cref="WebActivityQuery.MaximumTop"/>
+        /// rows the section holds - any row past them counting as one left out
+        /// (<see cref="WebActivitySmallGroups.WithoutSmallRowsWithinCap"/>) - and then cut to its first <paramref name="top"/>
+        /// rows (<see cref="WebActivitySmallGroups.FirstRows"/>); the sites over time are folded to the sites the cut list shows.
         /// </summary>
         public WebActivityVisits WithoutSmallGroups(int minimumPeople, int top)
         {
@@ -605,16 +664,16 @@ namespace Common.Entities.SpoWebActivity
             copy.Window = WindowFor(top);
             copy.MinimumGroupSize = minimumPeople;
             copy.BySite = WebActivitySmallGroups.FirstRows(
-                BySite, WebActivitySmallGroups.WithoutSmallRows(BySite, s => s.People, s => s.Name, minimumPeople, out _), top, out var sites);
+                BySite, WebActivitySmallGroups.WithoutSmallRowsWithinCap(BySite, s => s.People, s => s.Name, minimumPeople), top, out var sites);
             copy.WithheldSites = sites;
             copy.ByDevice = WebActivitySmallGroups.FirstRows(
-                ByDevice, WebActivitySmallGroups.WithoutSmallRows(ByDevice, d => d.People, d => d.Name, minimumPeople, out _), top, out var devices);
+                ByDevice, WebActivitySmallGroups.WithoutSmallRowsWithinCap(ByDevice, d => d.People, d => d.Name, minimumPeople), top, out var devices);
             copy.WithheldDevices = devices;
             copy.ByBrowser = WebActivitySmallGroups.FirstRows(
-                ByBrowser, WebActivitySmallGroups.WithoutSmallRows(ByBrowser, b => b.People, b => b.Name, minimumPeople, out _), top, out var browsers);
+                ByBrowser, WebActivitySmallGroups.WithoutSmallRowsWithinCap(ByBrowser, b => b.People, b => b.Name, minimumPeople), top, out var browsers);
             copy.WithheldBrowsers = browsers;
             copy.ByPage = WebActivitySmallGroups.FirstRows(
-                ByPage, WebActivitySmallGroups.WithoutSmallRows(ByPage, p => p.People, p => p.Name, minimumPeople, out _), top, out var pages);
+                ByPage, WebActivitySmallGroups.WithoutSmallRowsWithinCap(ByPage, p => p.People, p => p.Name, minimumPeople), top, out var pages);
             copy.WithheldPages = pages;
             copy.SiteOverTime = WebActivitySmallGroups.WithSeriesFoldedByKey(
                 SiteOverTime, copy.BySite.Select(s => s.Key), OtherSites, UnknownSite);
@@ -662,21 +721,23 @@ namespace Common.Entities.SpoWebActivity
         public double? BouncePct { get; set; }
 
         /// <summary>
-        /// True on a copy of the row made for a reader without See PII (#844): its entries, exits and bounces are left
-        /// out, zeroed here and never sent. Those figures are the Journeys tab's, whose entry, exit and bounce pages leave
-        /// out one combined set of pages; shown beside a page's other figures on the Pages tab, they would give back the
-        /// pages that set leaves out.
+        /// True on a copy of the row made for a reader without See PII (#844): its figures counted in visits are left out,
+        /// zeroed here and never sent - its unique page views (the visits that saw it, which are the Visits tab's visits by
+        /// page) and its entries, exits and bounces (the Journeys tab's). Those tabs floor their own lists of the same
+        /// figures, so shown beside a page's other figures here they could give back a page one of them leaves out.
         /// </summary>
         [JsonIgnore]
-        public bool EndpointFiguresWithheld { get; private set; }
+        public bool VisitFiguresWithheld { get; private set; }
 
-        public bool ShouldSerializeEntries() => !EndpointFiguresWithheld;
+        public bool ShouldSerializeUniquePageViews() => !VisitFiguresWithheld;
 
-        public bool ShouldSerializeExits() => !EndpointFiguresWithheld;
+        public bool ShouldSerializeEntries() => !VisitFiguresWithheld;
 
-        public bool ShouldSerializeBounces() => !EndpointFiguresWithheld;
+        public bool ShouldSerializeExits() => !VisitFiguresWithheld;
 
-        public bool ShouldSerializeBouncePct() => !EndpointFiguresWithheld;
+        public bool ShouldSerializeBounces() => !VisitFiguresWithheld;
+
+        public bool ShouldSerializeBouncePct() => !VisitFiguresWithheld;
 
         /// <summary>
         /// Distinct people behind the row: who viewed the page, or whose visits started or ended on it. Only decides what a
@@ -686,15 +747,19 @@ namespace Common.Entities.SpoWebActivity
         [JsonIgnore]
         public int? People { get; set; }
 
-        /// <summary>A copy of this row without its entries, exits and bounces (see <see cref="EndpointFiguresWithheld"/>).</summary>
-        internal WebActivityPageRow WithoutEndpointFigures()
+        /// <summary>
+        /// A copy of this row without its unique page views, entries, exits and bounces (see
+        /// <see cref="VisitFiguresWithheld"/>).
+        /// </summary>
+        internal WebActivityPageRow WithoutVisitFigures()
         {
             var copy = (WebActivityPageRow)MemberwiseClone();
+            copy.UniquePageViews = 0;
             copy.Entries = 0;
             copy.Exits = 0;
             copy.Bounces = 0;
             copy.BouncePct = null;
-            copy.EndpointFiguresWithheld = true;
+            copy.VisitFiguresWithheld = true;
             return copy;
         }
     }
@@ -769,42 +834,48 @@ namespace Common.Entities.SpoWebActivity
         public int WithheldQuietPages { get; set; }
 
         /// <summary>
-        /// True for a reader without See PII (#844): no page row on this tab carries its entries, exits or bounces
-        /// (<see cref="WebActivityPageRow.EndpointFiguresWithheld"/>). Sent only when true, so a See PII reader's answer is
-        /// as it was.
+        /// True for a reader without See PII (#844): no page row on this tab carries a figure counted in visits - its unique
+        /// page views, entries, exits or bounces (<see cref="WebActivityPageRow.VisitFiguresWithheld"/>). Sent only when true,
+        /// so a See PII reader's answer is as it was.
         /// </summary>
         [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
-        public bool EndpointFiguresWithheld { get; set; }
+        public bool VisitFiguresWithheld { get; set; }
 
         /// <summary>
         /// This section for a reader who does not hold the portal's See PII permission (#844): pages and sites of fewer
         /// than <paramref name="minimumPeople"/> visitors are left out, each list with its smallest row shown
-        /// (<see cref="WebActivitySmallGroups.WithoutSmallRows"/>), so that no total on the tab - the page views, the unique
-        /// page views - less the rows shown is ever one small page's or site's. The most viewed, slowest and quiet pages
-        /// share each page's page views and unique page views, so they leave out one combined set of pages - every page any
-        /// of the three leaves out - and no page is left out of one and shown with those figures in another. No page carries
-        /// its entries, exits or bounces (<see cref="EndpointFiguresWithheld"/>). The headline figures and the
+        /// (<see cref="WebActivitySmallGroups.WithoutSmallRowsWithinCap"/>), so that no total on the tab - the page views,
+        /// the unique page views - less the rows shown is ever one small page's or site's. The most viewed, slowest and quiet
+        /// pages share each page's page views, so they leave out one combined set of pages - every page any of the three
+        /// leaves out - and no page is left out of one and shown with its page views in another. No page carries a figure
+        /// counted in visits (<see cref="VisitFiguresWithheld"/>): its unique page views are the Visits tab's visits by page,
+        /// and its entries, exits and bounces the Journeys tab's, each floored on its own tab. The headline figures and the
         /// period-of-day trend are over the reader's whole scope and stay. A shallow copy: the section is cached and shared
         /// between readers.
         /// </summary>
-        public WebActivityPages WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, int.MaxValue);
+        public WebActivityPages WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, WebActivityQuery.MaximumTop);
 
         /// <summary>
-        /// <see cref="WithoutSmallGroups(int)"/>, with each list floored over every row the section holds and then cut to its
-        /// first <paramref name="top"/> rows (<see cref="WebActivitySmallGroups.FirstRows"/>).
+        /// <see cref="WithoutSmallGroups(int)"/>, with each list floored over the first <see cref="WebActivityQuery.MaximumTop"/>
+        /// rows the section holds - any row past them counting as one left out
+        /// (<see cref="WebActivitySmallGroups.WithoutSmallRowsWithinCap"/>) - and then cut to its first <paramref name="top"/>
+        /// rows (<see cref="WebActivitySmallGroups.FirstRows"/>).
         /// </summary>
         public WebActivityPages WithoutSmallGroups(int minimumPeople, int top)
         {
             var copy = (WebActivityPages)MemberwiseClone();
             copy.Window = WindowFor(top);
             copy.MinimumGroupSize = minimumPeople;
-            copy.EndpointFiguresWithheld = true;
+            copy.VisitFiguresWithheld = true;
 
             var topPages = FlooredPages(TopPages, minimumPeople);
             var slowest = FlooredPages(SlowestPages, minimumPeople);
             var quiet = FlooredPages(QuietPages, minimumPeople);
             var leftOut = new HashSet<string>(
-                TopPages.Except(topPages).Concat(SlowestPages.Except(slowest)).Concat(QuietPages.Except(quiet)).Select(p => p.Url),
+                WebActivitySmallGroups.WithinCap(TopPages).Except(topPages)
+                    .Concat(WebActivitySmallGroups.WithinCap(SlowestPages).Except(slowest))
+                    .Concat(WebActivitySmallGroups.WithinCap(QuietPages).Except(quiet))
+                    .Select(p => p.Url),
                 StringComparer.Ordinal);
             copy.TopPages = FirstPages(TopPages, topPages, leftOut, top, out var withheldTop);
             copy.WithheldTopPages = withheldTop;
@@ -813,18 +884,18 @@ namespace Common.Entities.SpoWebActivity
             copy.QuietPages = FirstPages(QuietPages, quiet, leftOut, top, out var withheldQuiet);
             copy.WithheldQuietPages = withheldQuiet;
             copy.BySite = WebActivitySmallGroups.FirstRows(
-                BySite, WebActivitySmallGroups.WithoutSmallRows(BySite, s => s.Visitors, s => s.Name, minimumPeople, out _), top, out var sites);
+                BySite, WebActivitySmallGroups.WithoutSmallRowsWithinCap(BySite, s => s.Visitors, s => s.Name, minimumPeople), top, out var sites);
             copy.WithheldSites = sites;
             return copy;
         }
 
         private static List<WebActivityPageRow> FlooredPages(List<WebActivityPageRow> pages, int minimumPeople) =>
-            WebActivitySmallGroups.WithoutSmallRows(pages, p => p.People, WebActivitySmallGroups.PageName, minimumPeople, out _);
+            WebActivitySmallGroups.WithoutSmallRowsWithinCap(pages, p => p.People, WebActivitySmallGroups.PageName, minimumPeople);
 
         private static List<WebActivityPageRow> FirstPages(
             List<WebActivityPageRow> pages, List<WebActivityPageRow> floored, ISet<string> leftOut, int top, out int withheld) =>
             WebActivitySmallGroups.FirstRows(pages, floored.Where(p => !leftOut.Contains(p.Url)).ToList(), top, out withheld)
-                .Select(p => p.WithoutEndpointFigures())
+                .Select(p => p.WithoutVisitFigures())
                 .ToList();
     }
 
@@ -998,22 +1069,25 @@ namespace Common.Entities.SpoWebActivity
         /// <summary>
         /// This section for a reader who does not hold the portal's See PII permission (#844): an entry, exit or bounce
         /// page, a flow or a clicked element of fewer than <paramref name="minimumPeople"/> people is left out, each list
-        /// with its smallest row shown (<see cref="WebActivitySmallGroups.WithoutSmallRows"/>), so that the visits, bounces
-        /// and clicks less the rows shown are never one small row's. The entry, exit and bounce pages share each page's
-        /// entries, exits and bounces, so they leave out one combined set of pages - every page any of the three leaves
-        /// out - and no page is left out of one and shown with those figures in another (the Pages tab sends this reader
-        /// none of them: <see cref="WebActivityPages.EndpointFiguresWithheld"/>). Nor is a flow that starts or ends on such
-        /// a page shown, because a page's flows add up to its entries and exits. A step is left out the same way among the
-        /// steps out of its own page (<see cref="WebActivitySmallGroups.WithoutSmallRowsInEachGroup"/>), because its share is
-        /// of that page's steps. The flows' coverage is of the flows shown. The headline figures and the visit-depth
-        /// buckets are over the reader's whole scope and stay. A shallow copy: the section is cached and shared between
-        /// readers.
+        /// with its smallest row shown (<see cref="WebActivitySmallGroups.WithoutSmallRowsWithinCap"/>, which also counts
+        /// the rows past the cap as one left out), so that the visits, bounces and clicks less the rows shown are never one
+        /// small row's. The entry, exit and bounce pages share each page's entries, exits and bounces, so they leave out one
+        /// combined set of pages - every page any of the three leaves out - and no page is left out of one and shown with
+        /// those figures in another (the Pages tab sends this reader none of them:
+        /// <see cref="WebActivityPages.VisitFiguresWithheld"/>). Nor is a flow that starts or ends on such a page shown,
+        /// because a page's flows add up to its entries and exits. A step is left out the same way among the steps out of
+        /// its own page (<see cref="WebActivitySmallGroups.WithoutSmallRowsInEachGroup"/>), because its share is of that
+        /// page's steps - and so are the steps of a page whose steps go on past the list
+        /// (<see cref="StepsGoOnPastTheList"/>). The flows' coverage is of the flows shown. The headline figures and the
+        /// visit-depth buckets are over the reader's whole scope and stay. A shallow copy: the section is cached and shared
+        /// between readers.
         /// </summary>
-        public WebActivityJourneys WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, int.MaxValue);
+        public WebActivityJourneys WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, WebActivityQuery.MaximumTop);
 
         /// <summary>
-        /// <see cref="WithoutSmallGroups(int)"/>, with each list floored over every row the section holds and then cut to its
-        /// first <paramref name="top"/> rows (<see cref="WebActivitySmallGroups.FirstRows"/>).
+        /// <see cref="WithoutSmallGroups(int)"/>, with each list floored over the first <see cref="WebActivityQuery.MaximumTop"/>
+        /// rows the section holds - any row past them counting as one left out - and then cut to its first
+        /// <paramref name="top"/> rows (<see cref="WebActivitySmallGroups.FirstRows"/>).
         /// </summary>
         public WebActivityJourneys WithoutSmallGroups(int minimumPeople, int top)
         {
@@ -1023,11 +1097,14 @@ namespace Common.Entities.SpoWebActivity
             copy.Window = WindowFor(top);
             copy.MinimumGroupSize = minimumPeople;
 
-            var entry = WebActivitySmallGroups.WithoutSmallRows(EntryPages, p => p.People, WebActivitySmallGroups.PageName, minimumPeople, out _);
-            var exit = WebActivitySmallGroups.WithoutSmallRows(ExitPages, p => p.People, WebActivitySmallGroups.PageName, minimumPeople, out _);
-            var bounce = WebActivitySmallGroups.WithoutSmallRows(BouncePages, p => p.People, WebActivitySmallGroups.PageName, minimumPeople, out _);
+            var entry = WebActivitySmallGroups.WithoutSmallRowsWithinCap(EntryPages, p => p.People, WebActivitySmallGroups.PageName, minimumPeople);
+            var exit = WebActivitySmallGroups.WithoutSmallRowsWithinCap(ExitPages, p => p.People, WebActivitySmallGroups.PageName, minimumPeople);
+            var bounce = WebActivitySmallGroups.WithoutSmallRowsWithinCap(BouncePages, p => p.People, WebActivitySmallGroups.PageName, minimumPeople);
             var leftOut = new HashSet<string>(
-                EntryPages.Except(entry).Concat(ExitPages.Except(exit)).Concat(BouncePages.Except(bounce)).Select(p => p.Url),
+                WebActivitySmallGroups.WithinCap(EntryPages).Except(entry)
+                    .Concat(WebActivitySmallGroups.WithinCap(ExitPages).Except(exit))
+                    .Concat(WebActivitySmallGroups.WithinCap(BouncePages).Except(bounce))
+                    .Select(p => p.Url),
                 StringComparer.Ordinal);
             copy.EntryPages = WebActivitySmallGroups.FirstRows(EntryPages, entry.Where(p => !leftOut.Contains(p.Url)).ToList(), top, out var entries);
             copy.WithheldEntryPages = entries;
@@ -1036,16 +1113,24 @@ namespace Common.Entities.SpoWebActivity
             copy.BouncePages = WebActivitySmallGroups.FirstRows(BouncePages, bounce.Where(p => !leftOut.Contains(p.Url)).ToList(), top, out var bounces);
             copy.WithheldBouncePages = bounces;
 
+            var steps = WebActivitySmallGroups.WithinCap(Transitions).ToList();
+            var stepsCut = Transitions.Count > steps.Count;
             copy.Transitions = WebActivitySmallGroups.FirstRows(
-                Transitions,
+                steps,
                 WebActivitySmallGroups.WithoutSmallRowsInEachGroup(
-                    Transitions, t => t.FromUrl, t => t.People, t => t.ToTitle + "\u0000" + t.ToUrl, minimumPeople, out _),
+                    steps,
+                    t => t.FromUrl,
+                    t => t.People,
+                    t => t.ToTitle + "\u0000" + t.ToUrl,
+                    minimumPeople,
+                    stepsOutOfAPage => StepsGoOnPastTheList(stepsOutOfAPage, stepsCut),
+                    out _),
                 top,
                 out var transitions);
             copy.WithheldTransitions = transitions;
             copy.Flows = WebActivitySmallGroups.FirstRows(
                 Flows,
-                WebActivitySmallGroups.WithoutSmallRows(Flows, f => f.People, f => f.StartUrl + "\u0000" + f.EndUrl, minimumPeople, out _)
+                WebActivitySmallGroups.WithoutSmallRowsWithinCap(Flows, f => f.People, f => f.StartUrl + "\u0000" + f.EndUrl, minimumPeople)
                     .Where(f => !leftOut.Contains(f.StartUrl) && !leftOut.Contains(f.EndUrl))
                     .ToList(),
                 top,
@@ -1054,11 +1139,25 @@ namespace Common.Entities.SpoWebActivity
             copy.FlowsCoveragePct = Math.Min(100, copy.Flows.Sum(f => f.SharePct));
             copy.ClickedElements = WebActivitySmallGroups.FirstRows(
                 ClickedElements,
-                WebActivitySmallGroups.WithoutSmallRows(ClickedElements, c => c.People, c => c.Name, minimumPeople, out _),
+                WebActivitySmallGroups.WithoutSmallRowsWithinCap(ClickedElements, c => c.People, c => c.Name, minimumPeople),
                 top,
                 out var clicks);
             copy.WithheldClickedElements = clicks;
             return copy;
+        }
+
+        /// <summary>
+        /// True when the steps out of one page go on past the list (#844). A step's share is of every step out of its page,
+        /// so any step's count and share give that page's total away: steps that add up to less leave some out beyond the
+        /// cap, which count as a step left out. Without a share to tell by, a list cut at the cap is taken to go on.
+        /// </summary>
+        internal static bool StepsGoOnPastTheList(IReadOnlyList<WebActivityTransitionRow> stepsOutOfAPage, bool listCut)
+        {
+            var widest = stepsOutOfAPage.Where(s => s.SharePct > 0).OrderByDescending(s => s.Count).FirstOrDefault();
+            if (widest == null) return listCut;
+
+            var stepsOfThePage = Math.Round(widest.Count * 100.0 / widest.SharePct);
+            return stepsOutOfAPage.Sum(s => s.Count) < stepsOfThePage;
         }
     }
 
@@ -1166,12 +1265,14 @@ namespace Common.Entities.SpoWebActivity
         /// "(other countries)" over time. The headline figures are over the reader's whole scope and stay. A shallow copy:
         /// the section is cached and shared between readers.
         /// </summary>
-        public WebActivityGeography WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, int.MaxValue);
+        public WebActivityGeography WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, WebActivityQuery.MaximumTop);
 
         /// <summary>
-        /// <see cref="WithoutSmallGroups(int)"/>, with each list floored over every place the section holds and then cut to
-        /// its first <paramref name="top"/> rows (<see cref="WebActivitySmallGroups.FirstRows"/>); the countries over time are
-        /// folded to the countries the cut list shows.
+        /// <see cref="WithoutSmallGroups(int)"/>, with each list floored over the first <see cref="WebActivityQuery.MaximumTop"/>
+        /// places the section holds - any place past them counting as one left out
+        /// (<see cref="WebActivitySmallGroups.WithoutSmallRowsWithinCap"/>) - and then cut to its first <paramref name="top"/>
+        /// rows (<see cref="WebActivitySmallGroups.FirstRows"/>); the countries over time are folded to the countries the cut
+        /// list shows.
         /// </summary>
         public WebActivityGeography WithoutSmallGroups(int minimumPeople, int top)
         {
@@ -1179,13 +1280,13 @@ namespace Common.Entities.SpoWebActivity
             copy.Window = WindowFor(top);
             copy.MinimumGroupSize = minimumPeople;
             copy.Countries = WebActivitySmallGroups.FirstRows(
-                Countries, WebActivitySmallGroups.WithoutSmallRows(Countries, p => p.Visitors, PlaceName, minimumPeople, out _), top, out var countries);
+                Countries, WebActivitySmallGroups.WithoutSmallRowsWithinCap(Countries, p => p.Visitors, PlaceName, minimumPeople), top, out var countries);
             copy.WithheldCountries = countries;
             copy.Cities = WebActivitySmallGroups.FirstRows(
-                Cities, WebActivitySmallGroups.WithoutSmallRows(Cities, p => p.Visitors, PlaceName, minimumPeople, out _), top, out var cities);
+                Cities, WebActivitySmallGroups.WithoutSmallRowsWithinCap(Cities, p => p.Visitors, PlaceName, minimumPeople), top, out var cities);
             copy.WithheldCities = cities;
             copy.Provinces = WebActivitySmallGroups.FirstRows(
-                Provinces, WebActivitySmallGroups.WithoutSmallRows(Provinces, p => p.Visitors, PlaceName, minimumPeople, out _), top, out var provinces);
+                Provinces, WebActivitySmallGroups.WithoutSmallRowsWithinCap(Provinces, p => p.Visitors, PlaceName, minimumPeople), top, out var provinces);
             copy.WithheldProvinces = provinces;
             copy.CountryOverTime = WebActivitySmallGroups.WithSeriesFolded(
                 CountryOverTime, copy.Countries.Select(c => c.Name), OtherCountries, UnknownCountry);
@@ -1196,7 +1297,8 @@ namespace Common.Entities.SpoWebActivity
 
         /// <summary>
         /// The city names a reader without See PII is shown on this section (#844) - <see cref="WithoutSmallGroups(int)"/>'s
-        /// cities, over every city the section holds - less any name a city it leaves out also has. Technology's detail rows
+        /// cities, floored over the first <see cref="WebActivityQuery.MaximumTop"/> cities the section holds as the tab floors
+        /// them - less any name a city it leaves out or holds past the cap also has. Technology's detail rows
         /// name a city and nothing else (the city lookup is keyed on its name alone), so a detail row may carry only a city
         /// this reader can already see, or it would give back a city Geography left out as the smallest shown, and the
         /// remaining small cities with it.
@@ -1461,7 +1563,7 @@ namespace Common.Entities.SpoWebActivity
         /// measures are over the reader's whole scope and stay. A shallow copy: the section is cached and shared between
         /// readers.
         /// </summary>
-        public WebActivityTechnology WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, null, int.MaxValue);
+        public WebActivityTechnology WithoutSmallGroups(int minimumPeople) => WithoutSmallGroups(minimumPeople, null, WebActivityQuery.MaximumTop);
 
         /// <summary>
         /// <see cref="WithoutSmallGroups(int)"/>, where a detail row may also name only a city in
@@ -1470,12 +1572,14 @@ namespace Common.Entities.SpoWebActivity
         /// Null allows every city.
         /// </summary>
         public WebActivityTechnology WithoutSmallGroups(int minimumPeople, ISet<string> citiesShown) =>
-            WithoutSmallGroups(minimumPeople, citiesShown, int.MaxValue);
+            WithoutSmallGroups(minimumPeople, citiesShown, WebActivityQuery.MaximumTop);
 
         /// <summary>
-        /// <see cref="WithoutSmallGroups(int, ISet{string})"/>, with each list floored over every row the section holds and
-        /// then cut to its first <paramref name="top"/> rows (<see cref="WebActivitySmallGroups.FirstRows"/>); the devices over
-        /// time are folded to the devices the cut list shows.
+        /// <see cref="WithoutSmallGroups(int, ISet{string})"/>, with each list floored over the first
+        /// <see cref="WebActivityQuery.MaximumTop"/> rows the section holds - any row past them counting as one left out
+        /// (<see cref="WebActivitySmallGroups.WithoutSmallRowsWithinCap"/>) - and then cut to its first <paramref name="top"/>
+        /// rows (<see cref="WebActivitySmallGroups.FirstRows"/>); the devices over time are folded to the devices the cut list
+        /// shows.
         /// </summary>
         public WebActivityTechnology WithoutSmallGroups(int minimumPeople, ISet<string> citiesShown, int top)
         {
@@ -1483,24 +1587,23 @@ namespace Common.Entities.SpoWebActivity
             copy.Window = WindowFor(top);
             copy.MinimumGroupSize = minimumPeople;
             copy.Browsers = WebActivitySmallGroups.FirstRows(
-                Browsers, WebActivitySmallGroups.WithoutSmallRows(Browsers, p => p.Visitors, p => p.Name, minimumPeople, out _), top, out var browsers);
+                Browsers, WebActivitySmallGroups.WithoutSmallRowsWithinCap(Browsers, p => p.Visitors, p => p.Name, minimumPeople), top, out var browsers);
             copy.WithheldBrowsers = browsers;
             copy.OperatingSystems = WebActivitySmallGroups.FirstRows(
-                OperatingSystems, WebActivitySmallGroups.WithoutSmallRows(OperatingSystems, p => p.Visitors, p => p.Name, minimumPeople, out _), top, out var systems);
+                OperatingSystems, WebActivitySmallGroups.WithoutSmallRowsWithinCap(OperatingSystems, p => p.Visitors, p => p.Name, minimumPeople), top, out var systems);
             copy.WithheldOperatingSystems = systems;
             copy.Devices = WebActivitySmallGroups.FirstRows(
-                Devices, WebActivitySmallGroups.WithoutSmallRows(Devices, p => p.Visitors, p => p.Name, minimumPeople, out _), top, out var devices);
+                Devices, WebActivitySmallGroups.WithoutSmallRowsWithinCap(Devices, p => p.Visitors, p => p.Name, minimumPeople), top, out var devices);
             copy.WithheldDevices = devices;
             copy.DeviceOverTime = WebActivitySmallGroups.WithSeriesFolded(
                 DeviceOverTime, copy.Devices.Select(d => d.Name), OtherDevices, UnknownDevice);
             copy.Detail = WebActivitySmallGroups.FirstRows(
                 Detail,
-                WebActivitySmallGroups.WithoutSmallRows(
+                WebActivitySmallGroups.WithoutSmallRowsWithinCap(
                     Detail,
                     r => citiesShown == null || r.City == UnknownCity || citiesShown.Contains(r.City) ? r.Visitors : 0,
                     r => string.Join("\u0000", r.Browser, r.Device, r.OperatingSystem, r.City),
-                    minimumPeople,
-                    out _),
+                    minimumPeople),
                 top,
                 out var detail);
             copy.WithheldDetailRows = detail;
