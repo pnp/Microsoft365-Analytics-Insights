@@ -98,6 +98,17 @@ namespace Common.Entities.TeamsExplorer
         public TeamsExplorerWindow Window { get; set; }
 
         public List<TeamsExplorerQueryInfo> Queries { get; set; } = new List<TeamsExplorerQueryInfo>();
+
+        /// <summary>
+        /// The most rows the section's floored lists were read with (the statements' <c>@top</c>); 0 when not set. A list that
+        /// came back with that many rows may have been cut short, so a reader without See PII's floor treats what lies beyond
+        /// as left out (<see cref="TeamsSmallGroups.WithoutSmallRowsOfList{T}"/>). Never sent.
+        /// </summary>
+        [JsonIgnore]
+        public int ReadTop { get; set; }
+
+        /// <summary>True when <paramref name="rows"/> filled <see cref="ReadTop"/>: the list may have been cut short, and more rows may exist.</summary>
+        internal bool MayBeCutShort(int rows) => ReadTop > 0 && rows >= ReadTop;
     }
 
     /// <summary>A named value in a ranked list.</summary>
@@ -290,6 +301,74 @@ namespace Common.Entities.TeamsExplorer
                 minimumPeople,
                 out _));
             return points.Select(p => (p.Calls ?? 0) > 0 && !shown.Contains(p) ? p.AsWithheld() : p).ToList();
+        }
+
+        /// <summary>
+        /// The rows of a ranked list - teams, channels, their sentiment - a reader without See PII is shown. Decided over the
+        /// export-sized list (the first <see cref="TeamsExplorerQuery.MaximumTop"/> rows) before any cut to the rows asked for,
+        /// so that a longer answer only ever adds rows to a shorter one: two requests with different tops never leave out
+        /// different rows (#844). A row of fewer than <paramref name="minimumPeople"/> people is left out. Then, whenever what
+        /// is left out adds to the totals published beside the list - a left-out row that <paramref name="adds"/>, or rows
+        /// beyond a list that <paramref name="mayBeCutShort"/> (or runs past the export size), unseen - so is the smallest row
+        /// still shown that adds to them, so that those totals less the rows shown are never one small row's or the unseen
+        /// rows' alone. It is <see cref="WebActivitySmallGroups.WithoutSmallRows{T}"/>' rule, except that a row adding nothing
+        /// (a team with no messages) is never the one that goes with them, since leaving it out would hide nothing. Ties go to
+        /// the first by <paramref name="name"/>. The list's order is kept. A new list: the rows are cached and shared between
+        /// readers, and are never edited.
+        /// </summary>
+        /// <param name="leftOut">How many of the export-sized list's rows were left out.</param>
+        internal static List<T> WithoutSmallRowsOfList<T>(
+            IEnumerable<T> rows, Func<T, int?> people, Func<T, bool> adds, Func<T, string> name, int minimumPeople, bool mayBeCutShort,
+            out int leftOut)
+            where T : class
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var all = rows?.ToList() ?? new List<T>();
+            var cutShort = mayBeCutShort || all.Count > TeamsExplorerQuery.MaximumTop;
+            var list = all.Take(TeamsExplorerQuery.MaximumTop).ToList();
+            var shown = list.Where(r => (people(r) ?? 0) >= minimumPeople).ToList();
+            if (cutShort || list.Any(r => (people(r) ?? 0) < minimumPeople && adds(r)))
+            {
+                var smallest = shown
+                    .Where(adds)
+                    .OrderBy(r => people(r) ?? 0)
+                    .ThenBy(r => name(r) ?? string.Empty, StringComparer.Ordinal)
+                    .FirstOrDefault();
+                if (smallest != null) shown.Remove(smallest);
+            }
+            leftOut = list.Count - shown.Count;
+            return shown;
+        }
+
+        /// <summary>
+        /// Which of the <paramref name="shown"/> rows of a list have their reactions withheld from a reader without See PII:
+        /// every row whose reactions 1 to <paramref name="minimumPeople"/> - 1 people made; and, when the rows whose reactions
+        /// are not shown - those <paramref name="leftOut"/>, those withheld and, when the list <paramref name="mayBeCutShort"/>,
+        /// those beyond it - hold somebody's reactions but no row's that the minimum or more people made, the shown row whose
+        /// reactions the fewest people made, of the minimum or more (ties to the first by <paramref name="name"/>). The
+        /// reactions total published beside the list less the reactions shown is then never a handful of people's.
+        /// </summary>
+        internal static HashSet<T> ReactionsWithheld<T>(
+            IReadOnlyList<T> shown, IEnumerable<T> leftOut, Func<T, int> reactors, Func<T, string> name, int minimumPeople, bool mayBeCutShort)
+            where T : class
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var rows = shown ?? new List<T>();
+            var withheld = new HashSet<T>(rows.Where(r => IsFew(reactors(r), minimumPeople)));
+            var hidden = (leftOut ?? Enumerable.Empty<T>()).Concat(withheld).ToList();
+            var somebodyHidden = mayBeCutShort || hidden.Any(r => reactors(r) > 0);
+            if (somebodyHidden && !hidden.Any(r => reactors(r) >= minimumPeople))
+            {
+                var complement = rows
+                    .Where(r => !withheld.Contains(r) && reactors(r) >= minimumPeople)
+                    .OrderBy(reactors)
+                    .ThenBy(r => name(r) ?? string.Empty, StringComparer.Ordinal)
+                    .FirstOrDefault();
+                if (complement != null) withheld.Add(complement);
+            }
+            return withheld;
         }
 
         /// <summary>
@@ -1206,7 +1285,8 @@ namespace Common.Entities.TeamsExplorer
 
         /// <summary>
         /// True when, for a reader without See PII, <see cref="Reactions"/> is null: one to four people reacted in the
-        /// team's channels, so the count is those few people's own (#844). Sent only when true.
+        /// team's channels, so the count is those few people's own - or it keeps such a count from being worked out from the
+        /// tenant's reactions (<see cref="TeamsSmallGroups.ReactionsWithheld{T}"/>) (#844). Sent only when true.
         /// </summary>
         [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
         public bool ReactionsWithheld { get; set; }
@@ -1227,10 +1307,9 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>False when the team has never been authorised, so silence means "not measured".</summary>
         public bool Authorised { get; set; }
 
-        /// <summary>This row with its reactions withheld when one to four people are behind them. A new row when it changes.</summary>
-        internal TeamsTeamRow WithoutFewReactors(int minimumPeople)
+        /// <summary>This row with its reactions withheld. A new row: the list is cached and shared between readers.</summary>
+        internal TeamsTeamRow AsReactionsWithheld()
         {
-            if (ReactingUsers <= 0 || ReactingUsers >= minimumPeople) return this;
             var copy = (TeamsTeamRow)MemberwiseClone();
             copy.Reactions = null;
             copy.ReactionsWithheld = true;
@@ -1264,7 +1343,9 @@ namespace Common.Entities.TeamsExplorer
 
         /// <summary>
         /// True when, for a reader without See PII, <see cref="Reactions"/> and <see cref="ReactingUsers"/> are null: one
-        /// to four people reacted in the channel, so the count is those few people's own (#844). Sent only when true.
+        /// to four people reacted in the channel, so the count is those few people's own - or it keeps such a count from being
+        /// worked out from the tenant's reactions (<see cref="TeamsSmallGroups.ReactionsWithheld{T}"/>) (#844). Sent only when
+        /// true.
         /// </summary>
         [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
         public bool ReactionsWithheld { get; set; }
@@ -1282,11 +1363,9 @@ namespace Common.Entities.TeamsExplorer
 
         public int ActiveDays { get; set; }
 
-        /// <summary>This row with its reactions withheld when one to four people are behind them. A new row when it changes.</summary>
-        internal TeamsChannelRow WithoutFewReactors(int minimumPeople)
+        /// <summary>This row with its reactions withheld. A new row: the list is cached and shared between readers.</summary>
+        internal TeamsChannelRow AsReactionsWithheld()
         {
-            var reacting = ReactingUsers ?? 0;
-            if (reacting <= 0 || reacting >= minimumPeople) return this;
             var copy = (TeamsChannelRow)MemberwiseClone();
             copy.Reactions = null;
             copy.ReactingUsers = null;
@@ -1313,10 +1392,10 @@ namespace Common.Entities.TeamsExplorer
         /// </summary>
         public int? MinimumGroupSize { get; set; }
 
-        /// <summary>Teams left out of <see cref="Teams"/> for a reader without See PII: fewer than the minimum members.</summary>
+        /// <summary>Teams left out of <see cref="Teams"/> for a reader without See PII: fewer than the minimum members, or left out with them so that none can be worked out from the totals.</summary>
         public int WithheldTeams { get; set; }
 
-        /// <summary>Channels left out of <see cref="Channels"/> for a reader without See PII: their team has fewer than the minimum members.</summary>
+        /// <summary>Channels left out of <see cref="Channels"/> for a reader without See PII: their team has fewer than the minimum members, or they are left out with such channels so that none can be worked out from the totals.</summary>
         public int WithheldChannels { get; set; }
 
         /// <summary>
@@ -1336,11 +1415,17 @@ namespace Common.Entities.TeamsExplorer
         /// portal's See PII permission (#844):
         /// <list type="bullet">
         /// <item>a team with fewer members is left out of the team leaderboard, and a channel whose team has fewer members
-        /// out of the channel leaderboard - their messages, reactions and sentiment are those few people's own;</item>
-        /// <item>a team's or channel's reactions are withheld when one to four people reacted;</item>
+        /// out of the channel leaderboard - their messages, reactions and sentiment are those few people's own - with the
+        /// smallest row shown that has messages, so that the channel messages published beside each list less its rows are
+        /// never one small team's (<see cref="TeamsSmallGroups.WithoutSmallRowsOfList{T}"/>);</item>
+        /// <item>a team's or channel's reactions are withheld when one to four people reacted, with whatever would give them
+        /// back from the reactions published beside the list (<see cref="TeamsSmallGroups.ReactionsWithheld{T}"/>);</item>
         /// <item>reactions used by fewer people are folded (<see cref="TeamsSmallGroups.FoldBuckets"/>);</item>
         /// <item>the tab list is withheld, since nothing stored counts the people behind a tab.</item>
         /// </list>
+        /// The two leaderboards are decided over the export-sized list, the rows beyond it counted as left out; the controller
+        /// reads one row more than that (<see cref="TeamsExplorerQuery.WithListProbe"/>) and then cuts each to the rows asked for
+        /// (<see cref="WithFirstRows"/>), so that what is left out never depends on the top asked for (#844, P4-1).
         /// A shallow copy: the section is cached and shared between readers.
         /// </summary>
         public TeamsCollaboration WithoutSmallGroups(int minimumPeople)
@@ -1349,18 +1434,62 @@ namespace Common.Entities.TeamsExplorer
 
             var teams = Teams ?? new List<TeamsTeamRow>();
             var channels = Channels ?? new List<TeamsChannelRow>();
+            var teamsCutShort = MayBeCutShort(teams.Count) || teams.Count > TeamsExplorerQuery.MaximumTop;
+            var channelsCutShort = MayBeCutShort(channels.Count) || channels.Count > TeamsExplorerQuery.MaximumTop;
+
+            var shownTeams = TeamsSmallGroups.WithoutSmallRowsOfList(
+                teams, t => t.Members, t => t.Messages > 0, TeamKey, minimumPeople, teamsCutShort, out var withheldTeams);
+            var teamReactions = TeamsSmallGroups.ReactionsWithheld(
+                shownTeams, LeftOut(teams, shownTeams), t => t.ReactingUsers, TeamKey, minimumPeople, teamsCutShort);
+
+            var shownChannels = TeamsSmallGroups.WithoutSmallRowsOfList(
+                channels, c => c.TeamMembers, c => c.Messages > 0, ChannelKey, minimumPeople, channelsCutShort, out var withheldChannels);
+            var channelReactions = TeamsSmallGroups.ReactionsWithheld(
+                shownChannels, LeftOut(channels, shownChannels), c => c.ReactingUsers ?? 0, ChannelKey, minimumPeople, channelsCutShort);
 
             var copy = (TeamsCollaboration)MemberwiseClone();
             copy.MinimumGroupSize = minimumPeople;
-            copy.Teams = teams.Where(t => t.Members >= minimumPeople).Select(t => t.WithoutFewReactors(minimumPeople)).ToList();
-            copy.WithheldTeams = teams.Count - copy.Teams.Count;
-            copy.Channels = channels.Where(c => c.TeamMembers >= minimumPeople).Select(c => c.WithoutFewReactors(minimumPeople)).ToList();
-            copy.WithheldChannels = channels.Count - copy.Channels.Count;
+            copy.Teams = shownTeams.Select(t => teamReactions.Contains(t) ? t.AsReactionsWithheld() : t).ToList();
+            copy.WithheldTeams = withheldTeams;
+            copy.Channels = shownChannels.Select(c => channelReactions.Contains(c) ? c.AsReactionsWithheld() : c).ToList();
+            copy.WithheldChannels = withheldChannels;
             copy.ReactionMix = TeamsSmallGroups.FoldBuckets(ReactionMix, minimumPeople, out var folded);
             copy.OtherReactions = folded;
             copy.TabUsage = new List<TeamsNamedCountRow>();
             copy.TabUsageWithheld = true;
             return copy;
+        }
+
+        /// <summary>
+        /// This section with each ranked list cut to its first <paramref name="top"/> rows: for a reader without See PII, after
+        /// <see cref="WithoutSmallGroups"/> has decided what is left out over the export-sized list, so that a shorter answer is
+        /// always the start of a longer one. A shallow copy.
+        /// </summary>
+        public TeamsCollaboration WithFirstRows(int top)
+        {
+            if (top < 1) throw new ArgumentOutOfRangeException(nameof(top));
+
+            var copy = (TeamsCollaboration)MemberwiseClone();
+            copy.Teams = (Teams ?? new List<TeamsTeamRow>()).Take(top).ToList();
+            copy.Channels = (Channels ?? new List<TeamsChannelRow>()).Take(top).ToList();
+            copy.OwnerlessTeams = (OwnerlessTeams ?? new List<TeamsNamedCountRow>()).Take(top).ToList();
+            copy.DormantTeams = (DormantTeams ?? new List<TeamsNamedCountRow>()).Take(top).ToList();
+            return copy;
+        }
+
+        private static string TeamKey(TeamsTeamRow team) =>
+            (team.Name ?? string.Empty) + "\u0001" + team.Id.ToString("D10", CultureInfo.InvariantCulture);
+
+        private static string ChannelKey(TeamsChannelRow channel) =>
+            (channel.TeamName ?? string.Empty) + "\u0001" + (channel.Name ?? string.Empty) + "\u0001"
+            + channel.Id.ToString("D10", CultureInfo.InvariantCulture);
+
+        /// <summary>The export-sized list's rows that <paramref name="shown"/> does not hold.</summary>
+        internal static List<T> LeftOut<T>(IEnumerable<T> rows, IEnumerable<T> shown)
+            where T : class
+        {
+            var kept = new HashSet<T>(shown);
+            return rows.Take(TeamsExplorerQuery.MaximumTop).Where(r => !kept.Contains(r)).ToList();
         }
     }
 
@@ -1430,18 +1559,21 @@ namespace Common.Entities.TeamsExplorer
         /// </summary>
         public bool LanguagesWithheld { get; set; }
 
-        /// <summary>Teams left out of <see cref="SentimentByTeam"/> for a reader without See PII: fewer than the minimum members.</summary>
+        /// <summary>Teams left out of <see cref="SentimentByTeam"/> for a reader without See PII: fewer than the minimum members, or left out with them so that none can be worked out from the totals.</summary>
         public int WithheldSentimentTeams { get; set; }
 
-        /// <summary>Channels left out of <see cref="SentimentByChannel"/> for a reader without See PII: their team has fewer than the minimum members.</summary>
+        /// <summary>Channels left out of <see cref="SentimentByChannel"/> for a reader without See PII: their team has fewer than the minimum members, or they are left out with such channels so that none can be worked out from the totals.</summary>
         public int WithheldSentimentChannels { get; set; }
 
         /// <summary>
         /// This section with no row of fewer than <paramref name="minimumPeople"/> people, for a reader who does not hold the
         /// portal's See PII permission (#844). The key phrases and languages are withheld, because the stored scores count
         /// mentions and channel-days, never the people behind them; a team's or channel's sentiment is left out when the
-        /// team has fewer members, since its sentiment is then those few people's mood. The weekly sentiment is the whole
-        /// tenant's and stays. A shallow copy: the section is cached and shared between readers.
+        /// team has fewer members, since its sentiment is then those few people's mood - and so is the smallest row still
+        /// shown, so that the weekly messages less the rows shown are never one small team's
+        /// (<see cref="TeamsSmallGroups.WithoutSmallRowsOfList{T}"/>). Both lists are decided over the export-sized list, the
+        /// rows beyond it counted as left out, and only then cut to the rows asked for (<see cref="WithFirstRows"/>; #844, P4-1).
+        /// The weekly sentiment is the whole tenant's and stays. A shallow copy: the section is cached and shared between readers.
         /// </summary>
         public TeamsConversations WithoutSmallGroups(int minimumPeople)
         {
@@ -1456,10 +1588,27 @@ namespace Common.Entities.TeamsExplorer
             copy.KeywordsWithheld = true;
             copy.Languages = new List<TeamsNamedCountRow>();
             copy.LanguagesWithheld = true;
-            copy.SentimentByTeam = byTeam.Where(r => r.Members >= minimumPeople).ToList();
-            copy.WithheldSentimentTeams = byTeam.Count - copy.SentimentByTeam.Count;
-            copy.SentimentByChannel = byChannel.Where(r => r.Members >= minimumPeople).ToList();
-            copy.WithheldSentimentChannels = byChannel.Count - copy.SentimentByChannel.Count;
+            copy.SentimentByTeam = TeamsSmallGroups.WithoutSmallRowsOfList(
+                byTeam, r => r.Members, r => r.Messages > 0, r => r.Name, minimumPeople, MayBeCutShort(byTeam.Count), out var withheldTeams);
+            copy.WithheldSentimentTeams = withheldTeams;
+            copy.SentimentByChannel = TeamsSmallGroups.WithoutSmallRowsOfList(
+                byChannel, r => r.Members, r => r.Messages > 0, r => r.Name, minimumPeople, MayBeCutShort(byChannel.Count), out var withheldChannels);
+            copy.WithheldSentimentChannels = withheldChannels;
+            return copy;
+        }
+
+        /// <summary>
+        /// This section with the sentiment per team and per channel cut to their first <paramref name="top"/> rows: for a reader
+        /// without See PII, after <see cref="WithoutSmallGroups"/> has decided what is left out over the export-sized list. A
+        /// shallow copy.
+        /// </summary>
+        public TeamsConversations WithFirstRows(int top)
+        {
+            if (top < 1) throw new ArgumentOutOfRangeException(nameof(top));
+
+            var copy = (TeamsConversations)MemberwiseClone();
+            copy.SentimentByTeam = (SentimentByTeam ?? new List<TeamsSentimentRow>()).Take(top).ToList();
+            copy.SentimentByChannel = (SentimentByChannel ?? new List<TeamsSentimentRow>()).Take(top).ToList();
             return copy;
         }
     }
@@ -1523,6 +1672,15 @@ namespace Common.Entities.TeamsExplorer
         public int OtherChampionDepartments { get; set; }
 
         /// <summary>
+        /// For a reader without See PII, the engagement mix the Overview and Adoption tabs publish over the same people
+        /// (<see cref="TeamsExplorerSql.SegmentHistogram"/>): the departments add up to its Power segment, so they must not
+        /// give back a Power segment those tabs withhold (<see cref="WithoutIndividualData"/>). Null when it was not read;
+        /// empty when reading it failed. Only decides what is withheld, so it is never sent.
+        /// </summary>
+        [JsonIgnore]
+        public List<TeamsSegmentSlice> SegmentMix { get; set; }
+
+        /// <summary>
         /// This section without the two lists that name people, for a reader who does not hold the portal's
         /// See PII permission (#661). The power users per department stay - they are a count, and every reader sees
         /// aggregates - except that a department with fewer than <paramref name="minimumPeople"/> of them is folded
@@ -1530,16 +1688,29 @@ namespace Common.Entities.TeamsExplorer
         /// is itself too few people, the smallest named department goes into it too, so that it cannot be worked
         /// out as the difference either. A shallow copy, because the section is cached and shared between readers.
         /// </summary>
+        /// <remarks>
+        /// The departments add up to the Power segment the Overview and Adoption tabs publish, so they must be every
+        /// department: the controller reads them all, over the same population as that segment
+        /// (<see cref="TeamsExplorerQuery.WithEveryGroup"/>, <see cref="TeamsExplorerSql.JoinedUserPopulation"/>), and only
+        /// then cuts the named ones to the top asked for (<see cref="WithFirstDepartments"/>; #844, P4-1). Their total must not
+        /// be published when those tabs withhold the Power segment - with a Regular or Light segment of 1 to 4 people
+        /// (<see cref="TeamsSmallGroups.WithoutSmallSegments"/>), or when this section could not tell (<see cref="SegmentMix"/>)
+        /// - nor when the list still filled the rows it was read with (<see cref="TeamsExplorerSection.ReadTop"/>), since the
+        /// departments beyond it are unread. Then the folded departments are left out with no combined row - the smallest named
+        /// department too, when they are too few people - and so is every share, which would give the total away: the Power
+        /// segment less the departments shown is a group of at least <paramref name="minimumPeople"/>, never one known figure.
+        /// </remarks>
         public TeamsPeople WithoutIndividualData(int minimumPeople)
         {
             if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
 
             var rows = ChampionsByDepartment ?? new List<TeamsNamedCountRow>();
+            var totalWithheld = MayBeCutShort(rows.Count) || PowerSegmentWithheld(minimumPeople);
             var total = rows.Sum(r => r.Count);
             var shown = rows.Where(r => r.Count >= minimumPeople).ToList();
             var folded = rows.Where(r => r.Count < minimumPeople).ToList();
-            // A named row counts the minimum or more, so one is always enough.
-            if (folded.Count > 0 && folded.Sum(r => r.Count) < minimumPeople && shown.Count > 0)
+            // A named row counts the minimum or more, so one is always enough. A total withheld needs one too.
+            if ((folded.Count > 0 || totalWithheld) && folded.Sum(r => r.Count) < minimumPeople && shown.Count > 0)
             {
                 var smallest = shown.OrderBy(r => r.Count).ThenBy(r => r.Name, StringComparer.Ordinal).First();
                 shown.Remove(smallest);
@@ -1547,7 +1718,11 @@ namespace Common.Entities.TeamsExplorer
             }
 
             var otherCount = folded.Sum(r => r.Count);
-            if (folded.Count > 0 && otherCount >= minimumPeople)
+            if (totalWithheld)
+            {
+                shown = shown.Select(r => new TeamsNamedCountRow { Name = r.Name, Count = r.Count }).ToList();
+            }
+            else if (folded.Count > 0 && otherCount >= minimumPeople)
             {
                 shown.Add(new TeamsNamedCountRow
                 {
@@ -1565,6 +1740,21 @@ namespace Common.Entities.TeamsExplorer
             copy.MinimumGroupSize = minimumPeople;
             copy.OtherChampionDepartments = folded.Count;
             return copy;
+        }
+
+        /// <summary>
+        /// True when the Overview and Adoption tabs withhold, from a reader without See PII, the Power segment these
+        /// departments add up to (<see cref="TeamsSmallGroups.WithoutSmallSegments"/>), or when <see cref="SegmentMix"/> was
+        /// read and failed, so nothing says they show it. False when it was not read: a reader with See PII.
+        /// </summary>
+        internal bool PowerSegmentWithheld(int minimumPeople)
+        {
+            if (SegmentMix == null) return false;
+            if (SegmentMix.Count == 0) return true;
+
+            var power = TeamsUserSegment.Power.ToString();
+            return TeamsSmallGroups.WithoutSmallSegments(SegmentMix, minimumPeople, hideShares: false)
+                .Any(s => s.Segment == power && s.Withheld);
         }
 
         /// <summary>

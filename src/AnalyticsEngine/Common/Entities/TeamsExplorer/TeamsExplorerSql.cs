@@ -196,6 +196,13 @@ namespace Common.Entities.TeamsExplorer
         public const string PerPersonPopulation = "/*population: AND " + DirectoryPerson + "*/";
 
         /// <summary>
+        /// Narrows a row already joined to <c>dbo.users</c>, aliased <c>u</c>, to the directory population - the same people as
+        /// <see cref="PerPersonPopulation"/>, without reading <c>dbo.users</c> again. On <see cref="ChampionsByDepartment"/>, whose
+        /// departments add up to the Power segment the Overview and Adoption tabs publish over that population (#844, P4-1).
+        /// </summary>
+        public const string JoinedUserPopulation = "/*population: AND " + EnabledUsersPredicate + "*/";
+
+        /// <summary>
         /// The statement read over the directory population when <paramref name="directoryPopulation"/> is true - each
         /// population marker's text uncommented - and otherwise with the markers removed, exactly as it was written before them.
         /// </summary>
@@ -1325,7 +1332,11 @@ WHERE " + EnabledUsersPredicate + DirectoryScope + @"
 ORDER BY p.LastActivity, u.user_name
 OPTION (RECOMPILE);";
 
-        /// <summary>Where the champions are - the departments already carrying Teams adoption.</summary>
+        /// <summary>
+        /// Where the champions are - the departments already carrying Teams adoption. For a reader without See PII, every
+        /// department, over the directory population (<see cref="JoinedUserPopulation"/>), since they add up to the Power segment
+        /// published beside them and are folded before any cut (<c>TeamsPeople.WithoutIndividualData</c>).
+        /// </summary>
         public const string ChampionsByDepartment = @"
 WITH PerUser AS (
     SELECT t.user_id, SUM(CASE WHEN " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS ActiveDays
@@ -1337,7 +1348,7 @@ SELECT TOP (@top) ISNULL(dep.[name], N'(not set)') AS Name, COUNT_BIG(*) AS [Cou
 FROM PerUser AS p
 INNER JOIN dbo.users AS u ON u.id = p.user_id
 LEFT JOIN dbo.user_departments AS dep ON dep.id = u.department_id
-WHERE p.ActiveDays >= @championDays
+WHERE p.ActiveDays >= @championDays" + JoinedUserPopulation + @"
 GROUP BY ISNULL(dep.[name], N'(not set)')
 ORDER BY [Count] DESC
 OPTION (RECOMPILE);";

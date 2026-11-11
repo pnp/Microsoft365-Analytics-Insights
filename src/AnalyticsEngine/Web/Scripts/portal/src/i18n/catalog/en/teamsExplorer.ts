@@ -429,10 +429,10 @@ export const teamsExplorer = {
   'teamsExplorer.collaboration.reactionsUsed.allSmall':
     'Every reaction was used by fewer than {count} people, so this chart is hidden to protect their privacy.',
   'teamsExplorer.collaboration.teamLeaderboard.withheldNote':
-    'Teams with fewer than {count} members are not listed, and reactions made by fewer than {count} people are shown as a dash, so that nobody can be singled out.',
+    'Teams with fewer than {count} members are not listed. When any are left out, or there are more teams than can be listed, the smallest team that would otherwise be listed is left out too, so that no small team can be worked out from the totals. Reactions made by fewer than {count} people are shown as a dash, and so, where that is needed for the same reason, are one more team\u2019s.',
   'teamsExplorer.collaboration.channelLeaderboard.withheldNote':
-    'Channels of teams with fewer than {count} members are not listed, and reactions made by fewer than {count} people are shown as a dash, so that nobody can be singled out.',
-  'teamsExplorer.collaboration.reactionsWithheld': 'Withheld: fewer than {count} people reacted',
+    'Channels of teams with fewer than {count} members are not listed. When any are left out, or there are more channels than can be listed, the channel of the smallest team that would otherwise be listed is left out too, so that no small team can be worked out from the totals. Reactions made by fewer than {count} people are shown as a dash, and so, where that is needed for the same reason, are one more channel\u2019s.',
+  'teamsExplorer.collaboration.reactionsWithheld': 'Withheld: fewer than {count} people reacted, or showing it would let such a count be worked out',
   'teamsExplorer.collaboration.appsTabs.withheld':
     'Hidden to protect privacy: a tab can be named anything a member typed, and nothing recorded says how many people use it.',
   'teamsExplorer.collaboration.membership.title': 'Membership activity',
@@ -457,12 +457,12 @@ export const teamsExplorer = {
   'teamsExplorer.conversations.sentimentByTeam.description': 'Where the conversation is positive, and where it is not.',
   'teamsExplorer.conversations.sentimentByTeam.aria': 'Sentiment by team',
   'teamsExplorer.conversations.sentimentByTeam.withheldNote':
-    'Teams with fewer than {count} members are not listed so that nobody can be singled out.',
+    'Teams with fewer than {count} members are not listed. When any are left out, or there are more teams than can be listed, the smallest team that would otherwise be listed is left out too, so that no small team can be singled out or worked out from the totals.',
   'teamsExplorer.conversations.sentimentByChannel.title': 'Sentiment by channel',
   'teamsExplorer.conversations.sentimentByChannel.description': 'The same read, one level down.',
   'teamsExplorer.conversations.sentimentByChannel.aria': 'Sentiment by channel',
   'teamsExplorer.conversations.sentimentByChannel.withheldNote':
-    'Channels of teams with fewer than {count} members are not listed so that nobody can be singled out.',
+    'Channels of teams with fewer than {count} members are not listed. When any are left out, or there are more channels than can be listed, the channel of the smallest team that would otherwise be listed is left out too, so that no small team can be singled out or worked out from the totals.',
   'teamsExplorer.conversations.scoredChannelDays': '{count} channel-days in this period carry a sentiment score. Scoring only covers teams authorised for deep analytics.',
 
   'teamsExplorer.people.usageReportsOff': 'The Microsoft 365 usage reports import is switched off, so there is no per-user Teams activity and nobody can be ranked. Enable {importName} in the installer and grant the runtime app {permission}.',
@@ -482,6 +482,8 @@ export const teamsExplorer = {
   'teamsExplorer.people.championDepartments.note': 'A power user is active on more than 60% of the period\u2019s working days. Departments with many are where a champions programme already has a foothold.',
   'teamsExplorer.people.championDepartments.otherNote':
     'Departments with fewer than {count} power users are combined into one row so that nobody can be singled out.',
+  'teamsExplorer.people.championDepartments.leftOutNote':
+    'Departments with fewer than {count} power users are left out, with the smallest other department where needed and no combined row, so that none of them can be worked out from the power users counted elsewhere.',
   'teamsExplorer.people.championDepartments.allSmall':
     'Every department has fewer than {count} power users, so this chart is hidden to protect their privacy.',
   'teamsExplorer.people.championDepartments.other.one': '1 smaller department, combined',

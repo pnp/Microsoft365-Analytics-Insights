@@ -431,10 +431,10 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.collaboration.reactionsUsed.allSmall':
     'Cada reacción la usaron menos de {count} personas, así que este gráfico se oculta para proteger su privacidad.',
   'teamsExplorer.collaboration.teamLeaderboard.withheldNote':
-    'Los equipos con menos de {count} miembros no se muestran, y las reacciones de menos de {count} personas aparecen como un guion, para que no se pueda identificar a nadie.',
+    'Los equipos con menos de {count} miembros no se muestran. Cuando se omite alguno, o hay más equipos de los que se pueden mostrar, también se omite el equipo más pequeño que se mostraría, para que ningún equipo pequeño se pueda deducir de los totales. Las reacciones de menos de {count} personas aparecen como un guion, y, cuando hace falta por el mismo motivo, también las de un equipo más.',
   'teamsExplorer.collaboration.channelLeaderboard.withheldNote':
-    'Los canales de equipos con menos de {count} miembros no se muestran, y las reacciones de menos de {count} personas aparecen como un guion, para que no se pueda identificar a nadie.',
-  'teamsExplorer.collaboration.reactionsWithheld': 'Oculto: reaccionaron menos de {count} personas',
+    'Los canales de equipos con menos de {count} miembros no se muestran. Cuando se omite alguno, o hay más canales de los que se pueden mostrar, también se omite el canal del equipo más pequeño que se mostraría, para que ningún equipo pequeño se pueda deducir de los totales. Las reacciones de menos de {count} personas aparecen como un guion, y, cuando hace falta por el mismo motivo, también las de un canal más.',
+  'teamsExplorer.collaboration.reactionsWithheld': 'Oculto: reaccionaron menos de {count} personas, o mostrarlo permitiría deducir un recuento así',
   'teamsExplorer.collaboration.appsTabs.withheld':
     'Oculto para proteger la privacidad: una pestaña puede llamarse como la haya escrito un miembro, y nada de lo registrado indica cuántas personas la usan.',
   'teamsExplorer.collaboration.membership.title': 'Actividad de pertenencia',
@@ -459,12 +459,12 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.conversations.sentimentByTeam.description': 'Dónde la conversación es positiva y dónde no.',
   'teamsExplorer.conversations.sentimentByTeam.aria': 'Sentimiento por equipo',
   'teamsExplorer.conversations.sentimentByTeam.withheldNote':
-    'Los equipos con menos de {count} miembros no se muestran para que no se pueda identificar a nadie.',
+    'Los equipos con menos de {count} miembros no se muestran. Cuando se omite alguno, o hay más equipos de los que se pueden mostrar, también se omite el equipo más pequeño que se mostraría, para que ningún equipo pequeño se pueda identificar ni deducir de los totales.',
   'teamsExplorer.conversations.sentimentByChannel.title': 'Sentimiento por canal',
   'teamsExplorer.conversations.sentimentByChannel.description': 'La misma lectura, un nivel más abajo.',
   'teamsExplorer.conversations.sentimentByChannel.aria': 'Sentimiento por canal',
   'teamsExplorer.conversations.sentimentByChannel.withheldNote':
-    'Los canales de equipos con menos de {count} miembros no se muestran para que no se pueda identificar a nadie.',
+    'Los canales de equipos con menos de {count} miembros no se muestran. Cuando se omite alguno, o hay más canales de los que se pueden mostrar, también se omite el canal del equipo más pequeño que se mostraría, para que ningún equipo pequeño se pueda identificar ni deducir de los totales.',
   'teamsExplorer.conversations.scoredChannelDays': '{count} días de canal de este periodo tienen una puntuación de sentimiento. La puntuación solo cubre equipos autorizados para análisis profundos.',
 
   'teamsExplorer.people.usageReportsOff': 'La importación de informes de uso de Microsoft 365 está desactivada, por lo que no hay actividad de Teams por usuario y nadie se puede clasificar. Active {importName} en el instalador y conceda a la aplicación en tiempo de ejecución {permission}.',
@@ -484,6 +484,8 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.people.championDepartments.note': 'Un usuario avanzado está activo en más del 60% de los días laborables del periodo. Los departamentos con muchos son donde un programa de promotores ya tiene base.',
   'teamsExplorer.people.championDepartments.otherNote':
     'Los departamentos con menos de {count} usuarios avanzados se combinan en una sola fila para que no se pueda identificar a nadie.',
+  'teamsExplorer.people.championDepartments.leftOutNote':
+    'Los departamentos con menos de {count} usuarios avanzados se omiten, junto con el departamento más pequeño de los demás cuando hace falta y sin una fila combinada, para que ninguno se pueda deducir de los usuarios avanzados contados en otras partes.',
   'teamsExplorer.people.championDepartments.allSmall':
     'Todos los departamentos tienen menos de {count} usuarios avanzados, así que este gráfico se oculta para proteger su privacidad.',
   'teamsExplorer.people.championDepartments.other.one': '1 departamento más pequeño, combinado',

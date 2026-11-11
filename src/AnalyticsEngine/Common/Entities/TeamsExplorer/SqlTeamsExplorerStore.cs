@@ -747,7 +747,7 @@ namespace Common.Entities.TeamsExplorer
             await Task.WhenAll(kpiTask, teamTask, channelTask, ownerlessTask, dormantTask, reactionTask, tabTask, membershipTask)
                 .ConfigureAwait(false);
 
-            var model = new TeamsCollaboration { Window = window };
+            var model = new TeamsCollaboration { Window = window, ReadTop = query.Top };
             model.Queries.AddRange(new[]
             {
                 kpiTask.Result.Info, teamTask.Result.Info, channelTask.Result.Info,
@@ -837,6 +837,7 @@ namespace Common.Entities.TeamsExplorer
             var model = new TeamsConversations
             {
                 Window = window,
+                ReadTop = query.Top,
                 CognitiveAvailable = cognitiveAvailable,
                 ScoredChannelDays = scoredTask.Result.Rows.FirstOrDefault()?.ScoredChannelDays ?? 0,
             };
@@ -876,13 +877,22 @@ namespace Common.Entities.TeamsExplorer
 
             var championTask = RunAsync<PersonRow>("people-champions", TeamsExplorerSql.Champions, query, championDays);
             var dormantTask = RunAsync<PersonRow>("people-dormant", TeamsExplorerSql.DormantUsers, query, championDays);
-            var departmentTask = RunAsync<NameCountRow>("people-departments", TeamsExplorerSql.ChampionsByDepartment, query, championDays);
+            // Every department when the query asks for every group (a reader without See PII, whose departments are folded
+            // before any cut: TeamsPeople.WithoutIndividualData); the lists of people keep the query's top.
+            var departmentQuery = query.EveryGroup ? query.WithEveryRow() : query;
+            var departmentTask = RunAsync<NameCountRow>("people-departments", TeamsExplorerSql.ChampionsByDepartment, departmentQuery, championDays);
             var obfuscationTask = RunAsync<ObfuscationProbeRow>("people-obfuscation", TeamsExplorerSql.ObfuscationProbe, query, championDays);
             var coverageTask = RunAsync<UsageCoverageRow>("people-coverage", TeamsExplorerSql.UsageCoverage, query, championDays);
+            // Read over the directory population - for a reader without See PII - the departments add up to the Power segment
+            // the Overview and Adoption tabs publish over the same people, so this section reads the engagement mix too, and
+            // never gives back a Power segment those tabs withhold (TeamsPeople.PowerSegmentWithheld).
+            var segmentTask = query.DirectoryPopulation
+                ? RunAsync<ActiveDayHistogramRow>("people-segments", TeamsExplorerSql.SegmentHistogram, query, championDays)
+                : Task.FromResult<QueryResult<ActiveDayHistogramRow>>(null);
 
-            await Task.WhenAll(championTask, dormantTask, departmentTask, obfuscationTask, coverageTask).ConfigureAwait(false);
+            await Task.WhenAll(championTask, dormantTask, departmentTask, obfuscationTask, coverageTask, segmentTask).ConfigureAwait(false);
 
-            var model = new TeamsPeople { Window = window };
+            var model = new TeamsPeople { Window = window, ReadTop = departmentQuery.Top };
             model.Queries.AddRange(new[]
             {
                 championTask.Result.Info, dormantTask.Result.Info,
@@ -900,6 +910,16 @@ namespace Common.Entities.TeamsExplorer
                 .ToList();
 
             model.ChampionsByDepartment = ToNamedRows(departmentTask.Result.Rows);
+
+            var segments = segmentTask.Result;
+            if (segments != null)
+            {
+                model.Queries.Add(segments.Info);
+                // A copy of the dormancy answer: building the mix counts the unmeasured people into it, which this tab never shows.
+                model.SegmentMix = segments.Info.Error == null
+                    ? BuildSegmentMix(segments.Rows, window.WorkingDays, model.Dormancy?.Copy())
+                    : new List<TeamsSegmentSlice>();
+            }
 
             var probe = obfuscationTask.Result.Rows.FirstOrDefault();
             // Only conclude obfuscation from a real sample. A tenant with no reported users at all

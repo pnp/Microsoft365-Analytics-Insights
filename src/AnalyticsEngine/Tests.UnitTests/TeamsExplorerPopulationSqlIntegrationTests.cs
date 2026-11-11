@@ -22,8 +22,9 @@ namespace Tests.UnitTests
     /// lifecycle, the engagement trend and the people per platform count the disabled account; the department breakdown,
     /// built from the directory, never did, so the overview less the breakdown's rows was that one account's activity. Read
     /// over the directory population, every one of them leaves it out, and the two agree. A week before the 28-day window, in
-    /// which one person was active on two days, checks the per-person shape the trends take over a wider window. All data is
-    /// synthetic.
+    /// which one person was active on two days, checks the per-person shape the trends take over a wider window; and a week
+    /// long before both, in which three analysts and the disabled account were active every day, the People tab's power users
+    /// per department. All data is synthetic.
     /// </remarks>
     [TestClass]
     [TestCategory("SqlIntegration")]
@@ -38,12 +39,14 @@ namespace Tests.UnitTests
         private static string _database;
         private static string _connectionString;
         private static TeamsExplorerQuery _window;
+        private static TeamsExplorerQuery _powerWeek;
         private static DateTime _earlierWeek;
 
         [ClassInitialize]
         public static void CreateMigratedDatabase(TestContext context)
         {
             _window = TeamsExplorerQuery.Create(28, DateTime.UtcNow);
+            _powerWeek = TeamsExplorerQuery.Create(7, DateTime.UtcNow.AddDays(-200));
             // The Monday (TeamsExplorerSql.WeekBucket) of a week inside a 90-day window and wholly before the 28-day one.
             var earlier = _window.UsageToExclusiveUtc.AddDays(-45);
             _earlierWeek = earlier.AddDays(-((earlier - new DateTime(1900, 1, 1)).Days % 7));
@@ -123,6 +126,16 @@ namespace Tests.UnitTests
                 db.TeamUserActivityLogs.Add(new GlobalTeamsUserUsageLog { UserID = enabled[0].ID, Date = monday.AddDays(1), LastActivityDate = monday.AddDays(1), TeamChatMessageCount = 3 });
                 db.TeamUserActivityLogs.Add(new GlobalTeamsUserUsageLog { UserID = enabled[1].ID, Date = monday.AddDays(2), LastActivityDate = monday.AddDays(2) });
                 db.TeamUserActivityLogs.Add(new GlobalTeamsUserUsageLog { UserID = disabled.ID, Date = monday, LastActivityDate = monday, TeamChatMessageCount = 100 });
+
+                // A week long before either window, for the People tab's departments: three enabled analysts and the disabled
+                // account active on every day of it - power users, read on a 7-day window that ends with it.
+                for (var date = _powerWeek.UsageFromUtc; date < _powerWeek.UsageToExclusiveUtc; date = date.AddDays(1))
+                {
+                    foreach (var person in enabled.Take(3).Append(disabled))
+                    {
+                        db.TeamUserActivityLogs.Add(new GlobalTeamsUserUsageLog { UserID = person.ID, Date = date, LastActivityDate = date, TeamChatMessageCount = 1 });
+                    }
+                }
                 db.SaveChanges();
             }
         }
@@ -229,6 +242,35 @@ namespace Tests.UnitTests
         }
 
         private static int SegmentsOf(TeamsSegmentTrendPoint week) => (week.Power ?? 0) + (week.Regular ?? 0) + (week.Light ?? 0);
+
+        [TestMethod]
+        public async Task People_OverTheDirectoryPopulation_EveryDepartmentsPowerUsersAddUpToThePowerSegment_AndLeaveTheDisabledAccountOut()
+        {
+            var store = NewStore();
+            var asWritten = await store.GetPeopleAsync(_powerWeek);
+            var directory = await store.GetPeopleAsync(_powerWeek.WithEveryGroup().WithDirectoryPopulation());
+            var overview = await store.GetOverviewAsync(_powerWeek.WithDirectoryPopulation(), new TeamsExplorerSources());
+            AssertNoQueryFailed(asWritten, directory, overview);
+
+            // A reader with See PII, as before: the department counts the disabled account, whom the Power segment - read
+            // over the directory for every reader - never did, so Power less the departments was that one account.
+            Assert.AreEqual(4, asWritten.ChampionsByDepartment.Single(d => d.Name == "Contoso Analysts").Count);
+            Assert.IsFalse(asWritten.Queries.Single(q => q.Key == "people-departments").Sql.Contains("account_enabled"),
+                "A reader with See PII runs the statement as it was written.");
+
+            // Over the directory population, every department read whole adds up to the Power segment the overview publishes.
+            var power = overview.SegmentMix.Single(s => s.Segment == TeamsUserSegment.Power.ToString()).Users;
+            Assert.AreEqual(3, power);
+            Assert.AreEqual(power, (int)directory.ChampionsByDepartment.Sum(d => d.Count));
+            Assert.AreEqual(int.MaxValue, directory.ReadTop, "Every department, whatever the top the people lists are read with.");
+            StringAssert.Contains(directory.Queries.Single(q => q.Key == "people-departments").Sql, "u.account_enabled");
+
+            // ...and the section reads the same engagement mix, so it never gives back a Power segment that tab withholds.
+            Assert.AreEqual(power, directory.SegmentMix.Single(s => s.Segment == TeamsUserSegment.Power.ToString()).Users);
+            Assert.IsNull(asWritten.SegmentMix, "A reader with See PII is not read the mix: nothing of theirs is withheld.");
+            Assert.IsFalse(asWritten.Queries.Any(q => q.Key == "people-segments"));
+            Assert.AreEqual(0, directory.Dormancy.UnmeasuredUsers, "The People tab never counts the unmeasured people.");
+        }
 
         private static double BreakdownMessages(TeamsAdoption adoption) =>
             adoption.Breakdown.Sum(r => r.MessagesPerActiveUser * r.ActiveUsers);
