@@ -46,13 +46,13 @@ namespace Tests.UnitTests
             var known = new TeamsDormancy { Known = true };
             var measured = SqlTeamsExplorerStore.BuildSegmentMix(histogram, 20, known).ToDictionary(s => s.Segment);
             Assert.AreEqual(4, measured["Dormant"].Users, "No row in a fully imported window is no activity.");
-            Assert.AreEqual(50, measured["Dormant"].SharePct, 0.001);
+            Assert.AreEqual(50, measured["Dormant"].SharePct.Value, 0.001);
             Assert.AreEqual(0, known.UnmeasuredUsers);
 
             var unknown = new TeamsDormancy { Known = false, Reason = TeamsDormancy.IncompleteImport };
             var partial = SqlTeamsExplorerStore.BuildSegmentMix(histogram, 20, unknown).ToDictionary(s => s.Segment);
             Assert.AreEqual(1, partial["Dormant"].Users, "Only the person the report saw doing nothing counted.");
-            Assert.AreEqual(20, partial["Dormant"].SharePct, 0.001, "Shares are of the people actually measured.");
+            Assert.AreEqual(20, partial["Dormant"].SharePct.Value, 0.001, "Shares are of the people actually measured.");
             Assert.AreEqual(3, unknown.UnmeasuredUsers, "The rest are reported as unmeasured, not dropped silently.");
         }
 

@@ -1296,8 +1296,9 @@ namespace Tests.UnitTests
             // A job title held by one person is that person: their messages per active user are their own message count.
             var store = new FakeTeamsStore();
             var query = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 37);
-            // A reader without See PII is served from the breakdown read with every row, whatever top they asked for.
-            var shared = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 37).WithEveryRow();
+            // A reader without See PII is served from the breakdown read with every row, whatever top they asked for, over
+            // the directory population.
+            var shared = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 37).WithEveryRow().WithDirectoryPopulation();
             var small = new[] { "Contoso Chief Explorer", "Contoso Four Title", "Contoso Night Office" };
             MemoryCache.Default.Remove(query.CacheKey("adoption"));
             MemoryCache.Default.Remove(shared.CacheKey("adoption"));
@@ -1368,7 +1369,7 @@ namespace Tests.UnitTests
                 .SelectMany(top => new[]
                 {
                     TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", top).CacheKey("adoption"),
-                    TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", top).WithEveryRow().CacheKey("adoption"),
+                    TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", top).WithEveryRow().WithDirectoryPopulation().CacheKey("adoption"),
                     TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, top).CacheKey("people"),
                 })
                 .Distinct()
@@ -1432,7 +1433,7 @@ namespace Tests.UnitTests
             // 500 job titles of five active people, and a 501st held by one. Read at the 500-row cap, the 501st never
             // reached the fold; the tab's tenant-wide totals less every row shown was then that one person's figures.
             var store = new ManyGroupsTeamsStore(500, tail: 1);
-            var key = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 3).WithEveryRow().CacheKey("adoption");
+            var key = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 3).WithEveryRow().WithDirectoryPopulation().CacheKey("adoption");
             MemoryCache.Default.Remove(key);
             try
             {

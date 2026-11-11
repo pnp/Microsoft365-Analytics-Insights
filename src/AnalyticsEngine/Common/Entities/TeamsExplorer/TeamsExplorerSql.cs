@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 
 namespace Common.Entities.TeamsExplorer
 {
@@ -155,6 +156,60 @@ namespace Common.Entities.TeamsExplorer
 
         #endregion
 
+        #region Population markers
+
+        // For a reader without See PII, the usage-report figures are read over the directory population (#844, S4-1): the
+        // enabled (or unknown) directory users that reach is measured against and the Adoption breakdown is made of. A usage
+        // or device row of an account disabled since is otherwise counted in the totals, the trend, the rhythm, the
+        // lifecycle and the people per platform, but never in the breakdown - so a total less the breakdown's rows was those
+        // accounts' own activity, one person's when one account was disabled. Like the scope markers these are comments, and
+        // unless the query asks for the directory population (TeamsExplorerQuery.WithDirectoryPopulation) they are removed:
+        // a reader with See PII runs exactly the statement they always did. The predicate is EnabledUsersPredicate's.
+
+        private const string PopulationMarkerOpen = "/*population:";
+        private const string PopulationMarkerClose = "*/";
+
+        /// <summary>Narrows <c>dbo.teams_user_activity_log</c>, aliased <c>t</c>, to the directory population.</summary>
+        public const string UsagePopulation =
+            "/*population: AND EXISTS (SELECT 1 FROM dbo.users AS pop WHERE pop.id = t.user_id AND (pop.account_enabled IS NULL OR pop.account_enabled = 1))*/";
+
+        /// <summary>Narrows <c>dbo.teams_user_device_usage_log</c>, aliased <c>d</c>, to the directory population.</summary>
+        public const string DevicePopulation =
+            "/*population: AND EXISTS (SELECT 1 FROM dbo.users AS pop WHERE pop.id = d.user_id AND (pop.account_enabled IS NULL OR pop.account_enabled = 1))*/";
+
+        /// <summary>
+        /// The statement read over the directory population when <paramref name="directoryPopulation"/> is true - each
+        /// population marker's text uncommented - and otherwise with the markers removed, exactly as it was written before them.
+        /// </summary>
+        public static string ApplyPopulation(string sql, bool directoryPopulation)
+        {
+            if (sql == null) throw new ArgumentNullException(nameof(sql));
+
+            var builder = new StringBuilder(sql.Length);
+            var position = 0;
+            while (true)
+            {
+                var open = sql.IndexOf(PopulationMarkerOpen, position, StringComparison.Ordinal);
+                if (open < 0) break;
+
+                var close = sql.IndexOf(PopulationMarkerClose, open + PopulationMarkerOpen.Length, StringComparison.Ordinal);
+                if (close < 0) throw new ArgumentException("A population marker is not closed.", nameof(sql));
+
+                builder.Append(sql, position, open - position);
+                if (directoryPopulation)
+                {
+                    builder.Append(sql, open + PopulationMarkerOpen.Length, close - open - PopulationMarkerOpen.Length);
+                }
+
+                position = close + PopulationMarkerClose.Length;
+            }
+
+            builder.Append(sql, position, sql.Length - position);
+            return builder.ToString();
+        }
+
+        #endregion
+
         /// <summary>Buckets a datetime column to the Monday on or before it.</summary>
         public static string WeekBucket(string column)
         {
@@ -200,7 +255,7 @@ WITH PerUser AS (
         SUM(CAST(t.video_duration_seconds AS bigint))            AS VideoSeconds,
         SUM(CAST(t.screenshare_duration_seconds AS bigint))      AS ScreenShareSeconds
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + UsagePopulation + @"
     GROUP BY t.user_id
 )
 SELECT
@@ -315,7 +370,7 @@ SELECT
     ISNULL(SUM(CAST(t.private_chat_count AS bigint)), 0)           AS PrivateMessages,
     ISNULL(SUM(CAST(t.meetings_attended_count AS bigint)), 0)      AS MeetingsAttended
 FROM dbo.teams_user_activity_log AS t
-WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
+WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation}
 GROUP BY {week}
 ORDER BY WeekStart
 OPTION (RECOMPILE);";
@@ -389,7 +444,7 @@ OPTION (RECOMPILE);";
 WITH Daily AS (
     SELECT t.[date] AS D, COUNT(DISTINCT CASE WHEN {ActivitySum} > 0 THEN t.user_id END) AS Dau
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation}
     GROUP BY t.[date]
 )
 SELECT
@@ -397,12 +452,12 @@ SELECT
     (
         SELECT COUNT(DISTINCT t.user_id)
         FROM dbo.teams_user_activity_log AS t
-        WHERE t.[date] >= @wauFrom AND t.[date] < @usageTo{UsageScope} AND {ActivitySum} > 0
+        WHERE t.[date] >= @wauFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation} AND {ActivitySum} > 0
     ) AS WeeklyActiveUsers,
     (
         SELECT COUNT(DISTINCT t.user_id)
         FROM dbo.teams_user_activity_log AS t
-        WHERE t.[date] >= @mauFrom AND t.[date] < @usageTo{UsageScope} AND {ActivitySum} > 0
+        WHERE t.[date] >= @mauFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation} AND {ActivitySum} > 0
     ) AS MonthlyActiveUsers
 OPTION (RECOMPILE);";
         }
@@ -417,7 +472,7 @@ WITH PerUserWeek AS (
     SELECT {week} AS WeekStart, t.user_id,
            SUM(CASE WHEN {ActivitySum} > 0 THEN 1 ELSE 0 END) AS ActiveDays
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation}
     GROUP BY {week}, t.user_id
 )
 SELECT p.WeekStart, p.ActiveDays, COUNT_BIG(*) AS Users
@@ -475,7 +530,7 @@ WITH PerUser AS (
         MAX(CASE WHEN d.used_linux     = 1 THEN 1 ELSE 0 END) AS UsedLinux,
         MAX(CASE WHEN d.used_chrome_os = 1 THEN 1 ELSE 0 END) AS UsedChromeOs
     FROM dbo.teams_user_device_usage_log AS d
-    WHERE d.[date] >= @usageFrom AND d.[date] < @usageTo" + DeviceScope + @"
+    WHERE d.[date] >= @usageFrom AND d.[date] < @usageTo" + DeviceScope + DevicePopulation + @"
     GROUP BY d.user_id
 )
 SELECT
@@ -499,7 +554,7 @@ WITH PerUser AS (
         MAX(CASE WHEN t.[date] <  @midpoint AND " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS FirstHalf,
         MAX(CASE WHEN t.[date] >= @midpoint AND " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS SecondHalf
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + UsagePopulation + @"
     GROUP BY t.user_id
 )
 SELECT

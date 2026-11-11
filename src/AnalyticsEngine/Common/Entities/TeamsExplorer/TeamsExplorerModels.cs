@@ -190,51 +190,163 @@ namespace Common.Entities.TeamsExplorer
             });
             return shown;
         }
+
+        /// <summary>
+        /// True for a figure about 1 to <paramref name="minimumPeople"/> - 1 people: too few to show. Nobody (0) is not a
+        /// group, so a zero is shown as it is; null is a figure already withheld.
+        /// </summary>
+        internal static bool IsFew(long? people, int minimumPeople) => people.HasValue && people.Value > 0 && people.Value < minimumPeople;
+
+        /// <summary>
+        /// Which of <paramref name="people"/> - the people behind each part of a total the page publishes beside them - a reader
+        /// without See PII is not shown: every part of 1 to <paramref name="minimumPeople"/> - 1 people and, whenever there is
+        /// one, the smallest part still shown as well. The total less the parts shown is then a combined figure of at least the
+        /// minimum people, never one small part's - <see cref="FoldBuckets"/>' rule, for parts that are withheld in place
+        /// rather than folded into a row. When no part is big enough to join them, only the small parts are withheld.
+        /// </summary>
+        /// <returns>The indexes of the parts to withhold.</returns>
+        internal static HashSet<int> WithheldParts(IReadOnlyList<long> people, int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var parts = people ?? new List<long>();
+            var withheld = new HashSet<int>(Enumerable.Range(0, parts.Count).Where(i => IsFew(parts[i], minimumPeople)));
+            if (withheld.Count == 0) return withheld;
+
+            var smallestShown = Enumerable.Range(0, parts.Count)
+                .Where(i => !withheld.Contains(i) && parts[i] >= minimumPeople)
+                .OrderBy(i => parts[i])
+                .ThenBy(i => i)
+                .Select(i => (int?)i)
+                .FirstOrDefault();
+            if (smallestShown.HasValue) withheld.Add(smallestShown.Value);
+            return withheld;
+        }
+
+        /// <summary>
+        /// The engagement mix for a reader without See PII: a segment of 1 to <paramref name="minimumPeople"/> - 1 people is
+        /// withheld. Power, Regular and Light add up to the active people the page publishes, so withholding one of them
+        /// withholds the smallest of them shown too (<see cref="WithheldParts"/>). Dormant is the rest of the measured people,
+        /// so once anything is withheld - or <paramref name="hideShares"/> says a figure beside the mix was - every share is
+        /// withheld too: a share is a fraction of the measured total, which less the active people would give Dormant back.
+        /// New slices: the mix is cached and shared between readers.
+        /// </summary>
+        internal static List<TeamsSegmentSlice> WithoutSmallSegments(List<TeamsSegmentSlice> slices, int minimumPeople, bool hideShares)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var all = slices ?? new List<TeamsSegmentSlice>();
+            var dormant = TeamsUserSegment.Dormant.ToString();
+            var active = Enumerable.Range(0, all.Count).Where(i => all[i].Segment != dormant).ToList();
+            var withheld = new HashSet<int>(
+                WithheldParts(active.Select(i => (long)(all[i].Users ?? 0)).ToList(), minimumPeople).Select(j => active[j]));
+            foreach (var i in Enumerable.Range(0, all.Count).Where(i => all[i].Segment == dormant && IsFew(all[i].Users, minimumPeople)))
+            {
+                withheld.Add(i);
+            }
+
+            var sharesWithheld = hideShares || withheld.Count > 0;
+            return all
+                .Select((slice, i) => withheld.Contains(i) ? slice.AsWithheld() : sharesWithheld ? slice.WithoutShare() : slice)
+                .ToList();
+        }
+
+        /// <summary>
+        /// The weekly trend for a reader without See PII: a week in which 1 to <paramref name="minimumPeople"/> - 1 people were
+        /// active is withheld - its messages and meetings are those few people's - and so is the week with the fewest active
+        /// people still shown, since the weeks add up to the period's totals published beside them
+        /// (<see cref="WithheldParts"/>). Every week's calls are withheld: they are the Meetings tab's weekly calls, which that
+        /// tab floors on the attendees this query does not count. New points: the trend is cached and shared between readers.
+        /// </summary>
+        internal static List<TeamsTrendPoint> WithoutSmallWeeks(List<TeamsTrendPoint> trend, int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var points = trend ?? new List<TeamsTrendPoint>();
+            var withheld = WithheldParts(points.Select(p => (long)(p.ActiveUsers ?? 0)).ToList(), minimumPeople);
+            return points.Select((p, i) => withheld.Contains(i) ? p.AsWithheld() : p.WithoutCalls()).ToList();
+        }
+
+        /// <summary>
+        /// The people per platform for a reader without See PII: a platform 1 to <paramref name="minimumPeople"/> - 1 people
+        /// used is withheld, and so is <see cref="TeamsDeviceRow.AnyMobile"/> whenever iOS or Android is, since it less the
+        /// other would bound the withheld one. Once anything is withheld every share is too: a share is a fraction of the
+        /// people with any device row, a total the withheld platforms are part of. New rows: the list is cached and shared.
+        /// </summary>
+        internal static List<TeamsDeviceRow> WithoutSmallPlatforms(List<TeamsDeviceRow> rows, int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var all = rows ?? new List<TeamsDeviceRow>();
+            var withheld = new HashSet<string>(all.Where(r => IsFew(r.Users, minimumPeople)).Select(r => r.Platform), StringComparer.Ordinal);
+            if (withheld.Contains(TeamsDeviceRow.Ios) || withheld.Contains(TeamsDeviceRow.Android)) withheld.Add(TeamsDeviceRow.AnyMobile);
+            if (withheld.Count == 0) return all.ToList();
+
+            return all.Select(r => withheld.Contains(r.Platform) ? r.AsWithheld() : r.WithoutShare()).ToList();
+        }
+
+        /// <summary>
+        /// <paramref name="dormancy"/> for a reader without See PII: licensed people left out of the engagement mix are, like a
+        /// Dormant segment, people with no recorded activity, so a count of 1 to <paramref name="minimumPeople"/> - 1 of them is
+        /// withheld. A copy when it changes: the answer is cached and shared between readers.
+        /// </summary>
+        internal static TeamsDormancy WithoutFewUnmeasured(TeamsDormancy dormancy, int minimumPeople)
+        {
+            if (dormancy == null || !IsFew(dormancy.UnmeasuredUsers, minimumPeople)) return dormancy;
+            var copy = dormancy.Copy();
+            copy.UnmeasuredUsers = null;
+            return copy;
+        }
     }
 
     #region Overview
 
     /// <summary>The Overview tab's headline figures.</summary>
+    /// <remarks>
+    /// The usage-report figures - everything but the calls, teams and channels - are null for a reader without See PII when
+    /// they would describe fewer than <see cref="TeamsOverview.MinimumGroupSize"/> people (<see cref="TeamsOverview.WithoutSmallGroups"/>):
+    /// withheld, never 0. Every other reader is always sent a number, so they default to 0 rather than null.
+    /// </remarks>
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class TeamsOverviewKpis
     {
         /// <summary>Directory users the reach percentage is measured against.</summary>
-        public int KnownUsers { get; set; }
+        public int? KnownUsers { get; set; } = 0;
 
         /// <summary>
         /// Enabled (or unknown) directory users with any Teams activity in the usage-report window - the same
         /// population as <see cref="KnownUsers"/>, so reach can never count a since-disabled account on one side
         /// only.
         /// </summary>
-        public int ActiveUsers { get; set; }
+        public int? ActiveUsers { get; set; } = 0;
 
-        public double ReachPct { get; set; }
+        public double? ReachPct { get; set; } = 0;
 
         /// <summary>Messages posted in channels (posts + replies + team chat).</summary>
-        public long ChannelMessages { get; set; }
+        public long? ChannelMessages { get; set; } = 0;
 
         /// <summary>Messages sent in private chats.</summary>
-        public long PrivateMessages { get; set; }
+        public long? PrivateMessages { get; set; } = 0;
 
         /// <summary>Channel share of all chat messages, 0-100.</summary>
-        public double OpenCollaborationPct { get; set; }
+        public double? OpenCollaborationPct { get; set; } = 0;
 
-        public long MeetingsAttended { get; set; }
-        public long MeetingsOrganised { get; set; }
-        public double MeetingsPerActiveUser { get; set; }
+        public long? MeetingsAttended { get; set; } = 0;
+        public long? MeetingsOrganised { get; set; } = 0;
+        public double? MeetingsPerActiveUser { get; set; } = 0;
 
         /// <summary>
         /// Hours of audio in calls. Audio is used as the wall-clock proxy on purpose: audio, video and
         /// screenshare durations OVERLAP inside a single meeting, so adding them together would
         /// produce a number larger than the meeting itself.
         /// </summary>
-        public double AudioHours { get; set; }
+        public double? AudioHours { get; set; } = 0;
 
         /// <summary>Video hours as a share of audio hours, 0-100.</summary>
-        public double VideoSharePct { get; set; }
+        public double? VideoSharePct { get; set; } = 0;
 
         /// <summary>Screenshare hours as a share of audio hours, 0-100.</summary>
-        public double ScreenShareSharePct { get; set; }
+        public double? ScreenShareSharePct { get; set; } = 0;
 
         /// <summary>Calls recorded by the call-records webhook in the live window.</summary>
         public long Calls { get; set; }
@@ -243,18 +355,75 @@ namespace Common.Entities.TeamsExplorer
         public int ActiveTeams { get; set; }
         public int TotalChannels { get; set; }
         public int ActiveChannels { get; set; }
+
+        /// <summary>These figures with every usage-report figure withheld. A copy: the section is cached and shared.</summary>
+        internal TeamsOverviewKpis WithoutUsageFigures()
+        {
+            var copy = (TeamsOverviewKpis)MemberwiseClone();
+            copy.KnownUsers = null;
+            copy.ActiveUsers = null;
+            copy.ReachPct = null;
+            copy.ChannelMessages = null;
+            copy.PrivateMessages = null;
+            copy.OpenCollaborationPct = null;
+            copy.MeetingsAttended = null;
+            copy.MeetingsOrganised = null;
+            copy.MeetingsPerActiveUser = null;
+            copy.AudioHours = null;
+            copy.VideoSharePct = null;
+            copy.ScreenShareSharePct = null;
+            return copy;
+        }
     }
 
-    /// <summary>One week of the Overview trend.</summary>
+    /// <summary>One week of the Overview trend - and, with only <see cref="ActiveUsers"/> set, of the membership trend.</summary>
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class TeamsTrendPoint
     {
         public DateTime WeekStart { get; set; }
-        public int ActiveUsers { get; set; }
-        public long ChannelMessages { get; set; }
-        public long PrivateMessages { get; set; }
-        public long MeetingsAttended { get; set; }
-        public long Calls { get; set; }
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public int? ActiveUsers { get; set; } = 0;
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public long? ChannelMessages { get; set; } = 0;
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public long? PrivateMessages { get; set; } = 0;
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public long? MeetingsAttended { get; set; } = 0;
+
+        /// <summary>Null for a reader without See PII: see <see cref="TeamsOverview.WeeklyCallsWithheld"/>.</summary>
+        public long? Calls { get; set; } = 0;
+
+        /// <summary>
+        /// True when, for a reader without See PII, the week's figures are null: 1 to 4 people were active in it, or it is the
+        /// week that keeps such a week from being worked out from the period's totals (<see cref="TeamsSmallGroups.WithoutSmallWeeks"/>).
+        /// Sent only when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Withheld { get; set; }
+
+        /// <summary>This week with every figure withheld. A new point: the trend is cached and shared between readers.</summary>
+        internal TeamsTrendPoint AsWithheld() => new TeamsTrendPoint
+        {
+            WeekStart = WeekStart,
+            ActiveUsers = null,
+            ChannelMessages = null,
+            PrivateMessages = null,
+            MeetingsAttended = null,
+            Calls = null,
+            Withheld = true,
+        };
+
+        /// <summary>This week without its calls. A copy.</summary>
+        internal TeamsTrendPoint WithoutCalls()
+        {
+            var copy = (TeamsTrendPoint)MemberwiseClone();
+            copy.Calls = null;
+            return copy;
+        }
     }
 
     /// <summary>One slice of the engagement mix.</summary>
@@ -264,8 +433,42 @@ namespace Common.Entities.TeamsExplorer
         public string Segment { get; set; }
         public string Label { get; set; }
         public string Description { get; set; }
-        public int Users { get; set; }
-        public double SharePct { get; set; }
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public int? Users { get; set; } = 0;
+
+        /// <summary>
+        /// Share of the measured people, 0-100. Null when <see cref="Withheld"/>, and on every slice when, for a reader without
+        /// See PII, any slice is (<see cref="TeamsSmallGroups.WithoutSmallSegments"/>).
+        /// </summary>
+        public double? SharePct { get; set; } = 0;
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Users"/> and <see cref="SharePct"/> are null: 1 to 4 people are in
+        /// the segment, or it keeps such a segment from being worked out from the active people published beside it. Sent only
+        /// when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Withheld { get; set; }
+
+        /// <summary>This slice with its figures withheld. A new slice: the mix is cached and shared between readers.</summary>
+        internal TeamsSegmentSlice AsWithheld() => new TeamsSegmentSlice
+        {
+            Segment = Segment,
+            Label = Label,
+            Description = Description,
+            Users = null,
+            SharePct = null,
+            Withheld = true,
+        };
+
+        /// <summary>This slice without its share. A copy.</summary>
+        internal TeamsSegmentSlice WithoutShare()
+        {
+            var copy = (TeamsSegmentSlice)MemberwiseClone();
+            copy.SharePct = null;
+            return copy;
+        }
     }
 
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
@@ -278,6 +481,65 @@ namespace Common.Entities.TeamsExplorer
 
         /// <summary>Whether the engagement mix's Dormant share could be measured, and why not.</summary>
         public TeamsDormancy Dormancy { get; set; } = new TeamsDormancy();
+
+        /// <summary>
+        /// The fewest people a figure of this section describes, for a reader without See PII; <c>null</c> when nothing is held
+        /// back for the reader. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, every usage-report KPI is null: 1 to 4 people were active in the period,
+        /// or are in the directory at all, so each of those figures is theirs. Sent only when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool UsageWithheld { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, the trend's weekly calls are null: they are the Meetings tab's weekly
+        /// calls, which that tab withholds by the attendees a week had, and this tab does not count them. Sent only when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool WeeklyCallsWithheld { get; set; }
+
+        /// <summary>
+        /// This section for a reader who does not hold the portal's See PII permission (#844, S4-1). It must have been built
+        /// over the directory population (<see cref="TeamsExplorerQuery.WithDirectoryPopulation"/>) - the enabled people the
+        /// Adoption breakdown is made of - so that no total here less that breakdown's rows leaves a since-disabled account's
+        /// activity. Then no figure describes fewer than <paramref name="minimumPeople"/> people:
+        /// <list type="bullet">
+        /// <item>when 1 to 4 people were active, or are in the directory, every usage-report KPI is withheld, and with it
+        /// the judgements worded from them (<see cref="TeamsExplorerScoring.UsageJudgementKeys"/>);</item>
+        /// <item>a week of 1 to 4 active people is withheld, with the week that keeps it from being worked out from the
+        /// totals, and every week's calls (<see cref="TeamsSmallGroups.WithoutSmallWeeks"/>);</item>
+        /// <item>an engagement segment of 1 to 4 people is withheld, with the segment that keeps it from being worked out
+        /// from the active people, and the shares (<see cref="TeamsSmallGroups.WithoutSmallSegments"/>);</item>
+        /// <item>a count of 1 to 4 licensed people left out of the mix is withheld (<see cref="TeamsSmallGroups.WithoutFewUnmeasured"/>).</item>
+        /// </list>
+        /// The calls KPI, the call judgements and the team counts are the Meetings and Collaboration tabs' own figures, and
+        /// are left as those tabs show them. A shallow copy: the section is cached and shared between readers.
+        /// </summary>
+        public TeamsOverview WithoutSmallGroups(int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var kpis = Kpis ?? new TeamsOverviewKpis();
+            var usageWithheld = TeamsSmallGroups.IsFew(kpis.KnownUsers, minimumPeople) || TeamsSmallGroups.IsFew(kpis.ActiveUsers, minimumPeople);
+
+            var copy = (TeamsOverview)MemberwiseClone();
+            copy.MinimumGroupSize = minimumPeople;
+            copy.UsageWithheld = usageWithheld;
+            copy.Kpis = usageWithheld ? kpis.WithoutUsageFigures() : kpis;
+            copy.Trend = TeamsSmallGroups.WithoutSmallWeeks(Trend, minimumPeople);
+            copy.WeeklyCallsWithheld = true;
+            copy.Dormancy = TeamsSmallGroups.WithoutFewUnmeasured(Dormancy, minimumPeople);
+            var unmeasuredWithheld = !ReferenceEquals(copy.Dormancy, Dormancy);
+            copy.SegmentMix = TeamsSmallGroups.WithoutSmallSegments(SegmentMix, minimumPeople, hideShares: usageWithheld || unmeasuredWithheld);
+            copy.Judgements = (Judgements ?? new List<TeamsJudgement>())
+                .Where(j => !usageWithheld || !TeamsExplorerScoring.UsageJudgementKeys.Contains(j.Key))
+                .ToList();
+            return copy;
+        }
     }
 
     /// <summary>
@@ -327,9 +589,13 @@ namespace Common.Entities.TeamsExplorer
 
         /// <summary>
         /// Licensed people with no usage row in the window, left out of the engagement mix because
-        /// <see cref="Known"/> is false. Always 0 when it is true, and on the People tab.
+        /// <see cref="Known"/> is false. Always 0 when it is true, and on the People tab. Null when, for a reader without See
+        /// PII, it is 1 to 4 people (<see cref="TeamsSmallGroups.WithoutFewUnmeasured"/>).
         /// </summary>
-        public int UnmeasuredUsers { get; set; }
+        public int? UnmeasuredUsers { get; set; } = 0;
+
+        /// <summary>A copy, for a reader whose answer differs: the answer is cached and shared between readers.</summary>
+        internal TeamsDormancy Copy() => (TeamsDormancy)MemberwiseClone();
 
         /// <summary>The answer for the facts <see cref="TeamsExplorerSql.UsageCoverage"/> returned; null when it failed.</summary>
         public static TeamsDormancy From(TeamsExplorerRows.UsageCoverageRow row)
@@ -358,23 +624,49 @@ namespace Common.Entities.TeamsExplorer
     #region Adoption
 
     /// <summary>How habitual Teams use is across the tenant.</summary>
+    /// <remarks>
+    /// Each figure is null for a reader without See PII when it would describe fewer than
+    /// <see cref="TeamsAdoption.MinimumGroupSize"/> people (<see cref="WithoutSmallGroups"/>); every other reader is always
+    /// sent a number.
+    /// </remarks>
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class TeamsAdoptionRhythm
     {
         /// <summary>Mean daily active users across the window's working days.</summary>
-        public double MeanDailyActiveUsers { get; set; }
+        public double? MeanDailyActiveUsers { get; set; } = 0;
 
         /// <summary>Distinct active users in the last 7 days of the usage window.</summary>
-        public int WeeklyActiveUsers { get; set; }
+        public int? WeeklyActiveUsers { get; set; } = 0;
 
         /// <summary>Distinct active users in the last 28 days of the usage window.</summary>
-        public int MonthlyActiveUsers { get; set; }
+        public int? MonthlyActiveUsers { get; set; } = 0;
 
         /// <summary>
         /// Mean DAU as a share of MAU, 0-100. The standard "stickiness" measure: 100% would mean
         /// everyone who uses Teams at all uses it every working day.
         /// </summary>
-        public double StickinessPct { get; set; }
+        public double? StickinessPct { get; set; } = 0;
+
+        /// <summary>
+        /// These figures for a reader without See PII: a weekly or monthly count of 1 to <paramref name="minimumPeople"/> - 1
+        /// active people is withheld, and so is the daily mean when that few were active in the whole period - it averages
+        /// their days. <paramref name="periodActiveUsers"/> is that count, or null when it could not be read, in which case
+        /// the mean is shown only when the monthly count alone proves enough people. Stickiness is the daily mean over the
+        /// monthly count, so it goes with either. A copy: the section is cached and shared between readers.
+        /// </summary>
+        internal TeamsAdoptionRhythm WithoutSmallGroups(int minimumPeople, int? periodActiveUsers)
+        {
+            var copy = (TeamsAdoptionRhythm)MemberwiseClone();
+            if (TeamsSmallGroups.IsFew(WeeklyActiveUsers, minimumPeople)) copy.WeeklyActiveUsers = null;
+            if (TeamsSmallGroups.IsFew(MonthlyActiveUsers, minimumPeople)) copy.MonthlyActiveUsers = null;
+
+            var dailyFew = (MeanDailyActiveUsers ?? 0) > 0 && (periodActiveUsers.HasValue
+                ? TeamsSmallGroups.IsFew(periodActiveUsers, minimumPeople)
+                : (MonthlyActiveUsers ?? 0) < minimumPeople);
+            if (dailyFew) copy.MeanDailyActiveUsers = null;
+            if (copy.MeanDailyActiveUsers == null || copy.MonthlyActiveUsers == null) copy.StickinessPct = null;
+            return copy;
+        }
     }
 
     /// <summary>One week's segment counts, for the segment-mix trend.</summary>
@@ -382,9 +674,35 @@ namespace Common.Entities.TeamsExplorer
     public sealed class TeamsSegmentTrendPoint
     {
         public DateTime WeekStart { get; set; }
-        public int Power { get; set; }
-        public int Regular { get; set; }
-        public int Light { get; set; }
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public int? Power { get; set; } = 0;
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public int? Regular { get; set; } = 0;
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public int? Light { get; set; } = 0;
+
+        /// <summary>
+        /// True when, for a reader without See PII, the week's segments are null: one of them had 1 to 4 people, and the
+        /// week's active people - published on the Overview's trend - less the others would give it back. Sent only when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Withheld { get; set; }
+
+        /// <summary>This week with every segment withheld when any is 1 to <paramref name="minimumPeople"/> - 1 people. A new point when it changes.</summary>
+        internal TeamsSegmentTrendPoint WithoutSmallSegments(int minimumPeople)
+        {
+            if (!TeamsSmallGroups.IsFew(Power, minimumPeople)
+                && !TeamsSmallGroups.IsFew(Regular, minimumPeople)
+                && !TeamsSmallGroups.IsFew(Light, minimumPeople))
+            {
+                return this;
+            }
+
+            return new TeamsSegmentTrendPoint { WeekStart = WeekStart, Power = null, Regular = null, Light = null, Withheld = true };
+        }
     }
 
     /// <summary>Adoption for one demographic group (department, country, office, job title, company).</summary>
@@ -411,25 +729,79 @@ namespace Common.Entities.TeamsExplorer
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class TeamsDeviceRow
     {
-        public string Platform { get; set; }
-        public int Users { get; set; }
+        /// <summary>The <see cref="Platform"/> of iOS.</summary>
+        public const string Ios = "iOS";
 
-        /// <summary>Share of users with any device row, 0-100. Shares sum above 100: people use several platforms.</summary>
-        public double SharePct { get; set; }
+        /// <summary>The <see cref="Platform"/> of Android.</summary>
+        public const string Android = "Android";
+
+        /// <summary>The <see cref="Platform"/> of the people seen on iOS or Android or both.</summary>
+        public const string AnyMobile = "Mobile (any)";
+
+        public string Platform { get; set; }
+
+        /// <summary>Null when <see cref="Withheld"/>.</summary>
+        public int? Users { get; set; } = 0;
+
+        /// <summary>
+        /// Share of users with any device row, 0-100. Shares sum above 100: people use several platforms. Null when
+        /// <see cref="Withheld"/>, and on every row when, for a reader without See PII, any row is
+        /// (<see cref="TeamsSmallGroups.WithoutSmallPlatforms"/>).
+        /// </summary>
+        public double? SharePct { get; set; } = 0;
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Users"/> and <see cref="SharePct"/> are null: 1 to 4 people used
+        /// the platform, or - for <see cref="AnyMobile"/> - iOS or Android is withheld. Sent only when true.
+        /// </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool Withheld { get; set; }
+
+        /// <summary>This row with its figures withheld. A new row: the list is cached and shared between readers.</summary>
+        internal TeamsDeviceRow AsWithheld() => new TeamsDeviceRow { Platform = Platform, Users = null, SharePct = null, Withheld = true };
+
+        /// <summary>This row without its share. A copy.</summary>
+        internal TeamsDeviceRow WithoutShare()
+        {
+            var copy = (TeamsDeviceRow)MemberwiseClone();
+            copy.SharePct = null;
+            return copy;
+        }
     }
 
     /// <summary>Movement in and out of Teams use across the window.</summary>
+    /// <remarks>
+    /// The three counts add up to the people active in the period, so for a reader without See PII a count of 1 to 4 is
+    /// null, with the smallest other count beside it (<see cref="WithoutSmallGroups"/>); every other reader is always sent a
+    /// number.
+    /// </remarks>
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public sealed class TeamsLifecycle
     {
         /// <summary>Active in the second half of the window but not the first - newly on board.</summary>
-        public int NewUsers { get; set; }
+        public int? NewUsers { get; set; } = 0;
 
         /// <summary>Active in both halves.</summary>
-        public int ReturningUsers { get; set; }
+        public int? ReturningUsers { get; set; } = 0;
 
         /// <summary>Active in the first half but not the second - the ones to worry about.</summary>
-        public int LapsedUsers { get; set; }
+        public int? LapsedUsers { get; set; } = 0;
+
+        /// <summary>
+        /// These counts for a reader without See PII: a count of 1 to <paramref name="minimumPeople"/> - 1 people is withheld,
+        /// and so is the smallest count shown, since together they are the active people the page publishes
+        /// (<see cref="TeamsSmallGroups.WithheldParts"/>). A copy: the section is cached and shared between readers.
+        /// </summary>
+        internal TeamsLifecycle WithoutSmallGroups(int minimumPeople)
+        {
+            var withheld = TeamsSmallGroups.WithheldParts(new long[] { NewUsers ?? 0, ReturningUsers ?? 0, LapsedUsers ?? 0 }, minimumPeople);
+            return new TeamsLifecycle
+            {
+                NewUsers = withheld.Contains(0) ? null : NewUsers,
+                ReturningUsers = withheld.Contains(1) ? null : ReturningUsers,
+                LapsedUsers = withheld.Contains(2) ? null : LapsedUsers,
+            };
+        }
     }
 
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
@@ -449,7 +821,15 @@ namespace Common.Entities.TeamsExplorer
         public TeamsDormancy Dormancy { get; set; } = new TeamsDormancy();
 
         /// <summary>
-        /// The fewest people a breakdown row describes, for a reader without See PII; <c>null</c> when every group is
+        /// The people active in the period - the lifecycle's three counts together - or null when that query failed. Only
+        /// decides what a reader without See PII is shown (<see cref="TeamsAdoptionRhythm.WithoutSmallGroups"/>), so it is
+        /// never sent.
+        /// </summary>
+        [JsonIgnore]
+        public int? PeriodActiveUsers { get; set; }
+
+        /// <summary>
+        /// The fewest people a figure of this section describes, for a reader without See PII; <c>null</c> when every group is
         /// shown. See <see cref="WithoutSmallGroups"/>.
         /// </summary>
         public int? MinimumGroupSize { get; set; }
@@ -461,12 +841,26 @@ namespace Common.Entities.TeamsExplorer
         public int OtherGroups { get; set; }
 
         /// <summary>
-        /// This section for a reader who does not hold the portal's See PII permission (#661, #680): no breakdown row
-        /// describes fewer than <paramref name="minimumPeople"/> people. A group is too small when it has fewer people,
-        /// or when fewer than that - but some - of them were active, since its messages and meetings per active user
-        /// are then those few people's own. Small groups are folded into one unnamed row; when that row is itself too
-        /// small, the smallest shown group goes into it too, so that it cannot be worked out as the difference
-        /// either. A shallow copy: the section is cached and shared between readers.
+        /// This section for a reader who does not hold the portal's See PII permission (#661, #680, #844): no figure describes
+        /// fewer than <paramref name="minimumPeople"/> people.
+        /// <para>
+        /// The breakdown: a group is too small when it has fewer people, or when fewer than that - but some - of them were
+        /// active, since its messages and meetings per active user are then those few people's own. Small groups are folded
+        /// into one unnamed row; when that row is itself too small, the smallest shown group goes into it too, so that it
+        /// cannot be worked out as the difference either.
+        /// </para>
+        /// <para>
+        /// The rest (#844, S4-1) must have been read over the breakdown's own population
+        /// (<see cref="TeamsExplorerQuery.WithDirectoryPopulation"/>), so that a total here less the breakdown's rows never
+        /// leaves a since-disabled account's activity. Then the rhythm (<see cref="TeamsAdoptionRhythm.WithoutSmallGroups"/>),
+        /// the lifecycle (<see cref="TeamsLifecycle.WithoutSmallGroups"/>), the engagement mix
+        /// (<see cref="TeamsSmallGroups.WithoutSmallSegments"/>) and its weekly trend
+        /// (<see cref="TeamsSegmentTrendPoint.WithoutSmallSegments"/>), the people per platform
+        /// (<see cref="TeamsSmallGroups.WithoutSmallPlatforms"/>) and the licensed people left out of the mix
+        /// (<see cref="TeamsSmallGroups.WithoutFewUnmeasured"/>) withhold what 1 to 4 people are behind, and what would give it
+        /// back.
+        /// </para>
+        /// A shallow copy: the section is cached and shared between readers.
         /// </summary>
         public TeamsAdoption WithoutSmallGroups(int minimumPeople)
         {
@@ -504,6 +898,13 @@ namespace Common.Entities.TeamsExplorer
             copy.Breakdown = shown;
             copy.MinimumGroupSize = minimumPeople;
             copy.OtherGroups = folded.Count;
+
+            copy.Rhythm = (Rhythm ?? new TeamsAdoptionRhythm()).WithoutSmallGroups(minimumPeople, PeriodActiveUsers);
+            copy.Lifecycle = (Lifecycle ?? new TeamsLifecycle()).WithoutSmallGroups(minimumPeople);
+            copy.Dormancy = TeamsSmallGroups.WithoutFewUnmeasured(Dormancy, minimumPeople);
+            copy.SegmentMix = TeamsSmallGroups.WithoutSmallSegments(SegmentMix, minimumPeople, hideShares: !ReferenceEquals(copy.Dormancy, Dormancy));
+            copy.SegmentTrend = (SegmentTrend ?? new List<TeamsSegmentTrendPoint>()).Select(p => p.WithoutSmallSegments(minimumPeople)).ToList();
+            copy.Devices = TeamsSmallGroups.WithoutSmallPlatforms(Devices, minimumPeople);
             return copy;
         }
 

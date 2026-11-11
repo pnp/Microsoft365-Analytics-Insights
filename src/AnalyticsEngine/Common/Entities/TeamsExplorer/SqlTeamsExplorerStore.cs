@@ -194,6 +194,10 @@ namespace Common.Entities.TeamsExplorer
 
             var chatTotal = usageRow.ChannelMessages + usageRow.PrivateMessages;
             var audioHours = usageRow.AudioSeconds / 3600.0;
+            var openCollaborationPct = TeamsExplorerScoring.Percentage(usageRow.ChannelMessages, chatTotal);
+            var meetingsPerActiveUser = usageRow.ActiveUsers > 0
+                ? (double)usageRow.ActiveUserMeetingsAttended / usageRow.ActiveUsers
+                : 0;
 
             model.Kpis = new TeamsOverviewKpis
             {
@@ -202,12 +206,10 @@ namespace Common.Entities.TeamsExplorer
                 ReachPct = TeamsExplorerScoring.Percentage(usageRow.ActiveUsers, usageRow.KnownUsers),
                 ChannelMessages = usageRow.ChannelMessages,
                 PrivateMessages = usageRow.PrivateMessages,
-                OpenCollaborationPct = TeamsExplorerScoring.Percentage(usageRow.ChannelMessages, chatTotal),
+                OpenCollaborationPct = openCollaborationPct,
                 MeetingsAttended = usageRow.MeetingsAttended,
                 MeetingsOrganised = usageRow.MeetingsOrganised,
-                MeetingsPerActiveUser = usageRow.ActiveUsers > 0
-                    ? (double)usageRow.ActiveUserMeetingsAttended / usageRow.ActiveUsers
-                    : 0,
+                MeetingsPerActiveUser = meetingsPerActiveUser,
                 AudioHours = audioHours,
                 VideoSharePct = TeamsExplorerScoring.Percentage(usageRow.VideoSeconds, usageRow.AudioSeconds),
                 ScreenShareSharePct = TeamsExplorerScoring.Percentage(usageRow.ScreenShareSeconds, usageRow.AudioSeconds),
@@ -226,8 +228,8 @@ namespace Common.Entities.TeamsExplorer
             {
                 ActiveUsers = usageRow.ActiveUsers,
                 KnownUsers = usageRow.KnownUsers,
-                OpenCollaborationPct = model.Kpis.OpenCollaborationPct,
-                MeetingsPerActiveUser = model.Kpis.MeetingsPerActiveUser,
+                OpenCollaborationPct = openCollaborationPct,
+                MeetingsPerActiveUser = meetingsPerActiveUser,
                 AfterHoursPct = TeamsExplorerScoring.Percentage(callRow.OutOfHoursCalls, callRow.Calls),
                 OrganiserConcentrationPct =
                     TeamsExplorerScoring.TopDecileShare(organiserTask.Result.Rows.Select(r => r.Calls)),
@@ -403,6 +405,9 @@ namespace Common.Entities.TeamsExplorer
                 ReturningUsers = lifecycle.ReturningUsers,
                 LapsedUsers = lifecycle.LapsedUsers,
             };
+            model.PeriodActiveUsers = lifecycleTask.Result.Info.Error == null
+                ? lifecycle.NewUsers + lifecycle.ReturningUsers + lifecycle.LapsedUsers
+                : (int?)null;
 
             return model;
         }
@@ -463,11 +468,11 @@ namespace Common.Entities.TeamsExplorer
                 new { Platform = "Windows", Users = row.UsedWindows },
                 new { Platform = "Mac", Users = row.UsedMac },
                 new { Platform = "Web", Users = row.UsedWeb },
-                new { Platform = "iOS", Users = row.UsedIos },
-                new { Platform = "Android", Users = row.UsedAndroid },
+                new { Platform = TeamsDeviceRow.Ios, Users = row.UsedIos },
+                new { Platform = TeamsDeviceRow.Android, Users = row.UsedAndroid },
                 new { Platform = "Linux", Users = row.UsedLinux },
                 new { Platform = "Chrome OS", Users = row.UsedChromeOs },
-                new { Platform = "Mobile (any)", Users = row.UsedMobile },
+                new { Platform = TeamsDeviceRow.AnyMobile, Users = row.UsedMobile },
             };
 
             return platforms
@@ -948,9 +953,11 @@ namespace Common.Entities.TeamsExplorer
 
             var result = new QueryResult<T> { Info = info };
 
-            // Narrowed to the people the report's scope covers, or - with no filter - exactly as written. A
-            // statement that cannot be narrowed is refused and reported as this section's error, never run
+            // Read over the directory population for a reader without See PII, and otherwise exactly as written
+            // (TeamsExplorerSql.ApplyPopulation). Then narrowed to the people the report's scope covers, or - with no filter -
+            // as it stands. A statement that cannot be narrowed is refused and reported as this section's error, never run
             // tenant-wide for a reader whose figures must be filtered.
+            sql = TeamsExplorerSql.ApplyPopulation(sql, query.DirectoryPopulation);
             string scopedSql;
             try
             {

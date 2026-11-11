@@ -133,6 +133,26 @@ namespace Common.Entities.TeamsExplorer
             return copy;
         }
 
+        /// <summary>
+        /// True when the usage-report figures are read over the directory population only. See <see cref="WithDirectoryPopulation"/>.
+        /// </summary>
+        public bool DirectoryPopulation { get; private set; }
+
+        /// <summary>
+        /// This window with every usage-report figure read over the directory population - the enabled (or unknown) directory
+        /// users that reach is measured against and the Adoption breakdown is made of - for a reader without See PII (#844,
+        /// S4-1). Read as written, the overview's totals and trend, the rhythm, the lifecycle, the engagement trend and the
+        /// people per platform also count the activity of accounts disabled since, which the breakdown never contains, so a
+        /// total less the breakdown's rows was those accounts' own: one person's, when one was disabled. A reader with See PII
+        /// keeps the figures as they always were, and the two are cached apart (<see cref="CacheKey"/>).
+        /// </summary>
+        public TeamsExplorerQuery WithDirectoryPopulation()
+        {
+            var copy = (TeamsExplorerQuery)MemberwiseClone();
+            copy.DirectoryPopulation = true;
+            return copy;
+        }
+
         /// <summary>Inclusive last UTC date of the live-data window, for display.</summary>
         public DateTime ToInclusiveUtc => ToExclusiveUtc.AddDays(-1);
 
@@ -213,7 +233,8 @@ namespace Common.Entities.TeamsExplorer
         /// Cache key for one section of the page. Includes the UTC date rather than the full
         /// timestamp, so a cached entry is reused across a day but can never be served after the
         /// window has rolled over to a new day - and, when the report is narrowed, the scope, so two
-        /// readers the global filter treats differently never share an entry.
+        /// readers the global filter treats differently never share an entry; and the population, so a section read over the
+        /// directory population for a reader without See PII is never served to a reader with it, or the other way round.
         /// </summary>
         public string CacheKey(string section)
         {
@@ -227,7 +248,8 @@ namespace Common.Entities.TeamsExplorer
                 NowUtc.Date);
 
             return key + "::scope=" + (UserScope.IsRestricted ? UserScope.Key : "all")
-                + (UsageReportsGroupFiltered ? "::groupFiltered" : string.Empty);
+                + (UsageReportsGroupFiltered ? "::groupFiltered" : string.Empty)
+                + (DirectoryPopulation ? "::population=directory" : string.Empty);
         }
     }
 }

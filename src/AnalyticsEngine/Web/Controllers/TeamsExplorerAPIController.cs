@@ -58,6 +58,13 @@ namespace Web.AnalyticsWeb.Controllers
     /// and languages and leaves out the sentiment of teams with fewer than five members. The team and channel exports
     /// match the page.
     /// </para>
+    /// <para>
+    /// The overview and the rest of the adoption tab are read, for that reader, over the people the adoption breakdown is
+    /// made of - the enabled directory users reach is measured against - so that no total less the breakdown's rows leaves
+    /// the activity of an account disabled since (#844, S4-1); that section is cached apart from a See PII reader's, whose
+    /// figures are unchanged. Then a week, an engagement segment, a lifecycle count or a platform of one to four people is
+    /// withheld, with whatever would give it back, and the KPIs when one to four people were active at all.
+    /// </para>
     /// </remarks>
     [Authorize]
     [RoutePrefix("api/TeamsExplorer")]
@@ -131,7 +138,14 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> Overview(int days = TeamsExplorerQuery.DefaultWindowDays)
         {
             var query = await BuildQueryAsync(days).ConfigureAwait(false);
-            return await CachedAsync("overview", query, () => _store.GetOverviewAsync(query, ReadSources())).ConfigureAwait(false);
+            Func<TeamsOverview, TeamsOverview> forReader = null;
+            if (!PortalAccess.Evaluate(Request, User).SeePii)
+            {
+                // Read over the people the Adoption breakdown is made of, and cached apart from a See PII reader's section.
+                query = query.WithDirectoryPopulation();
+                forReader = o => o.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
+            }
+            return await CachedAsync("overview", query, () => _store.GetOverviewAsync(query, ReadSources()), forReader).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/adoption?days=28&groupBy=department
@@ -144,9 +158,10 @@ namespace Web.AnalyticsWeb.Controllers
         {
             var seePii = PortalAccess.Evaluate(Request, User).SeePii;
             // Without See PII, small groups are folded over every group, whatever top was asked for, and only then cut to
-            // it: see TeamsAdoption.WithFirstGroups and TeamsExplorerQuery.WithEveryRow.
+            // it: see TeamsAdoption.WithFirstGroups and TeamsExplorerQuery.WithEveryRow. The rest of the section is read over
+            // the breakdown's own population (TeamsExplorerQuery.WithDirectoryPopulation), and cached apart.
             var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
-            if (!seePii) query = query.WithEveryRow();
+            if (!seePii) query = query.WithEveryRow().WithDirectoryPopulation();
             Func<TeamsAdoption, TeamsAdoption> forReader = null;
             if (!seePii)
             {
