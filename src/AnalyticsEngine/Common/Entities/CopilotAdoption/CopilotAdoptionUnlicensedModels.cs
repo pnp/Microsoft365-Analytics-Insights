@@ -70,5 +70,8 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>True when the row cap was hit, so the figures are a floor rather than a total.</summary>
         [JsonProperty("truncated")]
         public bool Truncated { get; set; }
+
+        /// <summary>A shallow copy, so a reader's trimmed summary can replace a list without editing the cached one.</summary>
+        internal UnlicensedPopulationSummary ShallowCopy() => (UnlicensedPopulationSummary)MemberwiseClone();
     }
 }

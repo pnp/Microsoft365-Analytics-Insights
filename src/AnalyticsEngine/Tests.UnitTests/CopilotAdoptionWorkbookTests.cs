@@ -1001,6 +1001,118 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void EmailDomainSheet_WithoutSeePii_LeavesAFewPeoplesFiguresBlank_AsTheScreenDoes_AndWithItWritesThem()
+        {
+            // #844: each population on a domain row is floored on its own for a reader without See PII, and an export is
+            // never less redacted than the screen. Twenty seat holders and three of the twenty unlicensed Copilot Chat users
+            // are on fabrikam.example: its Chat count is about three people. Contoso's seventeen go too, because the
+            // tenant's unlicensed total less them would be fabrikam's three.
+            var analysis = SyntheticAnalysis();
+            for (var i = 0; i < 20; i++)
+            {
+                analysis.LicensedUsers[i].UserPrincipalName = "user" + i + "@fabrikam.example";
+                analysis.LicensedUsers[i].EmailDomain = "fabrikam.example";
+            }
+
+            for (var i = 0; i < 3; i++)
+            {
+                analysis.UnlicensedUsers[i].UserPrincipalName = "unlicensed" + i + "@fabrikam.example";
+                analysis.UnlicensedUsers[i].EmailDomain = "fabrikam.example";
+            }
+
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+
+            Dictionary<string, string> Row(byte[] workbook, string domain)
+            {
+                string Text(XElement c) => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
+                string RowOf(XElement c) => Regex.Match((string)c.Attribute("r"), @"\d+$").Value;
+                var cells = SheetCellElements(workbook, "Email domains");
+                var row = RowOf(cells.First(c => Text(c) == domain));
+                return cells.Where(c => RowOf(c) == row)
+                    .ToDictionary(c => Regex.Match((string)c.Attribute("r"), "^[A-Z]+").Value, Text);
+            }
+
+            // Columns: A domain, B seats, C active, ..., J unlicensed users, K licence candidates, L external.
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            var fabrikam = Row(trimmed, "fabrikam.example");
+            Assert.IsFalse(fabrikam.ContainsKey("J"), "Three Chat users: blank, never 0.");
+            Assert.AreEqual("20", fabrikam["B"], "Twenty seat holders are enough on their own.");
+            Assert.IsFalse(Row(trimmed, "contoso.com").ContainsKey("J"), "The count that would give the three back is blank too.");
+            Assert.IsTrue(SheetCells(trimmed, "Email domains").Any(c => c.Contains("a group of fewer than 5 people has its figures left blank")));
+
+            // The file says exactly what the screen does: blank wherever the summary served without See PII is null.
+            var screen = analysis.Summary.WithoutIndividualData().EmailDomains;
+            foreach (var domain in screen)
+            {
+                var cells = Row(trimmed, domain.Segment);
+                foreach (var (column, value) in new[] { ("B", domain.LicensedUsers), ("J", domain.UnlicensedActiveUsers), ("K", domain.RecommendedForLicence) })
+                {
+                    Assert.AreEqual(value?.ToString(CultureInfo.InvariantCulture), cells.TryGetValue(column, out var cell) ? cell : null,
+                        $"{domain.Segment}, column {column}: the workbook and the screen must agree.");
+                }
+            }
+
+            var full = CopilotAdoptionWorkbook.Build(analysis);
+            string Cell(Dictionary<string, string> row, string column) => row.TryGetValue(column, out var cell) ? cell : null;
+            Assert.AreEqual("3", Cell(Row(full, "fabrikam.example"), "J"), "With See PII every figure is written, as before.");
+            Assert.AreEqual("17", Cell(Row(full, "contoso.com"), "J"));
+            Assert.IsFalse(SheetCells(full, "Email domains").Any(c => c.Contains("left blank")));
+            Assert.AreEqual(3, analysis.Summary.EmailDomains.Single(d => d.Segment == "fabrikam.example").UnlicensedActiveUsers,
+                "The cached analysis must never be edited for one reader.");
+        }
+
+        [TestMethod]
+        public void DepartmentSheet_WithoutSeePii_LeavesOutTheDepartmentTheScreenDoes_AndSaysWhy_AndWithItWritesEveryOne()
+        {
+            // #844: three of Finance's fifteen seat holders move to a department of their own, too small to list, so the
+            // tenant's sixty less the departments listed would be their three. For a reader without See PII the smallest
+            // listed department, Finance's twelve, goes from every table too - in the file exactly as on screen.
+            var analysis = SyntheticAnalysis();
+            foreach (var user in analysis.LicensedUsers.Where(u => u.Department == "Finance").Take(3).ToList())
+            {
+                user.Department = "Tiny";
+            }
+
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            var screen = analysis.Summary.WithoutIndividualData();
+            Assert.IsFalse(screen.AdoptionByDepartment.Any(r => r.Segment == "Finance"));
+            CollectionAssert.Contains(screen.SmallestGroupsWithheld, CopilotAdoptionWithheldBreakdowns.Departments);
+
+            // Every row of the sheet, keyed by column letter, for the rows whose first column names a department.
+            List<Dictionary<string, string>> Rows(byte[] workbook, string department)
+            {
+                string Text(XElement c) => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
+                string RowOf(XElement c) => Regex.Match((string)c.Attribute("r"), @"\d+$").Value;
+                var cells = SheetCellElements(workbook, "Departments and apps");
+                return cells.Where(c => Text(c) == department && ((string)c.Attribute("r")).StartsWith("A", StringComparison.Ordinal))
+                    .Select(c => cells.Where(other => RowOf(other) == RowOf(c))
+                        .ToDictionary(other => Regex.Match((string)other.Attribute("r"), "^[A-Z]+").Value, Text))
+                    .ToList();
+            }
+
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            var finance = Rows(trimmed, "Finance").Where(r => r.Count >= 4).ToList();
+            Assert.AreEqual(1, finance.Count, "Only the side-by-side table still names Finance, for its unlicensed side.");
+            Assert.IsFalse(finance.Single().ContainsKey("B"), "Its seat-holder columns are blank, never 0.");
+            foreach (var department in screen.AdoptionByDepartment)
+            {
+                Assert.IsTrue(Rows(trimmed, department.Segment).Any(r => r.TryGetValue("B", out var seats)
+                        && seats == department.LicensedUsers.ToString(CultureInfo.InvariantCulture)),
+                    $"{department.Segment}: the workbook lists every department the screen does.");
+            }
+
+            var text = SheetCells(trimmed, "Departments and apps");
+            Assert.IsTrue(text.Any(c => c.Contains("the smallest department it lists is left out too")), "The sheet says why.");
+
+            var full = CopilotAdoptionWorkbook.Build(analysis);
+            Assert.IsTrue(Rows(full, "Finance").Any(r => r.TryGetValue("B", out var seats) && seats == "12"),
+                "With See PII every department is written, as before.");
+            Assert.IsFalse(SheetCells(full, "Departments and apps").Any(c => c.Contains("is left out too")));
+            Assert.IsTrue(analysis.Summary.AdoptionByDepartment.Any(r => r.Segment == "Finance"),
+                "The cached analysis must never be edited for one reader.");
+        }
+
+        [TestMethod]
         public void Workbook_SaysWhenItHasBeenNarrowedToOneEmailDomain()
         {
             // A spreadsheet outlives the screen it came from and gets forwarded without that context.

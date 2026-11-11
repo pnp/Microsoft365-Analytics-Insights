@@ -566,6 +566,79 @@ namespace Tests.UnitTests
             Assert.IsTrue(analysis.Summary.CombinedByDepartment.All(r => r.AgentBuilders == null));
         }
 
+        [TestMethod]
+        public void Builders_WithoutSeePii_AreWithheldForOneToFour_AndForTheSmallestShown_WhenTheTenantsWouldGiveOneBack()
+        {
+            // #844: Finance has 6 builders, Sales 5, Legal 2, and Tiny - too small a department to list - 1. With See PII
+            // every count is shown, as before. Without it, Legal's two are withheld for being fewer than five, and Sales'
+            // five too: the tenant's 14 less Finance's 6 and Sales' 5 would be Legal's two and Tiny's one.
+            var analysis = PopulationWithPairs();
+            analysis.AgentBuildersAssessed = true;
+            var id = 100;
+            foreach (var (department, builders) in new[] { ("Finance", 6), ("Sales", 5), ("Legal", 2), ("Tiny", 1) })
+            {
+                analysis.AgentBuilders.AddRange(Enumerable.Range(0, builders).Select(i => Builder(id++, department)));
+            }
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+            AdoptionCombinedSegmentRow Row(CopilotAdoptionSummary s, string department) => s.CombinedByDepartment.Single(r => r.Segment == department);
+
+            Assert.AreEqual(14, summary.AgentBuilders);
+            Assert.AreEqual(2, Row(summary, "Legal").AgentBuilders, "The control: with See PII every count is shown, as before.");
+            Assert.AreEqual(5, Row(summary, "Sales").AgentBuilders);
+            Assert.IsNull(Row(summary, "Legal").AgentBuildersWithheld);
+
+            var trimmed = summary.WithoutIndividualData();
+
+            Assert.IsNull(Row(trimmed, "Legal").AgentBuilders, "Two builders: withheld, never 0.");
+            Assert.AreEqual(SmallGroupWithheldReasons.FewPeople, Row(trimmed, "Legal").AgentBuildersWithheld);
+            Assert.IsNull(Row(trimmed, "Sales").AgentBuilders, "With the tenant's builders it would give Legal's two and Tiny's one back.");
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, Row(trimmed, "Sales").AgentBuildersWithheld);
+            Assert.AreEqual(5, Row(trimmed, "Sales").MinimumPeople);
+            Assert.AreEqual(6, Row(trimmed, "Finance").AgentBuilders);
+            Assert.AreEqual(14, trimmed.AgentBuilders, "The headline stays.");
+            Assert.AreEqual(8, trimmed.AgentBuilders - trimmed.CombinedByDepartment.Sum(r => r.AgentBuilders ?? 0),
+                "The tenant's builders less the counts shown now hold Sales' five as well.");
+            CollectionAssert.Contains(trimmed.SmallestGroupsWithheld, CopilotAdoptionWithheldBreakdowns.BuilderDepartments);
+
+            Assert.AreEqual(2, Row(summary, "Legal").AgentBuilders, "The cached summary must never be edited for one reader.");
+            Assert.AreEqual(5, Row(summary, "Sales").AgentBuilders);
+        }
+
+        [TestMethod]
+        public void AgentFigures_WithoutSeePii_TheTenantsActiveUsersLessTheDepartmentsShown_NeverGiveBackAWithheldOne()
+        {
+            // #844: Sales' agent figures are withheld for every reader - two of its people were active. Finance's 6 and
+            // Legal's 5 active users are shown beside the tenant's 13, which less them is Sales' two. For a reader without
+            // See PII the smallest shown, Legal's, are withheld too.
+            var analysis = PopulationWithPairs();
+            analysis.LicensedUsers.RemoveAll(u => u.Department == "Tiny");
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+            AdoptionCombinedSegmentRow Row(CopilotAdoptionSummary s, string department) => s.CombinedByDepartment.Single(r => r.Segment == department);
+
+            Assert.AreEqual(13, summary.AgentActiveUsers);
+            Assert.IsTrue(Row(summary, "Sales").AgentFiguresWithheld);
+            Assert.AreEqual(5, Row(summary, "Legal").AgentActiveUsers, "The control: with See PII, as before.");
+            Assert.AreEqual(2, summary.AgentActiveUsers - summary.CombinedByDepartment.Sum(r => r.AgentActiveUsers ?? 0), "Sales' two, given back.");
+
+            var trimmed = summary.WithoutIndividualData();
+
+            var legal = Row(trimmed, "Legal");
+            Assert.IsTrue(legal.AgentFiguresWithheld);
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, legal.AgentFiguresWithheldReason);
+            Assert.IsNull(legal.AgentActiveUsers, "Withheld, never 0.");
+            Assert.IsNull(legal.AgentUsers);
+            Assert.IsNull(legal.AgentInteractions);
+            Assert.AreEqual(5, legal.UnlicensedActiveUsers, "Its unlicensed side is another population, and stays.");
+            Assert.AreEqual(6, Row(trimmed, "Finance").AgentActiveUsers);
+            Assert.AreEqual(7, trimmed.AgentActiveUsers - trimmed.CombinedByDepartment.Sum(r => r.AgentActiveUsers ?? 0));
+            CollectionAssert.Contains(trimmed.SmallestGroupsWithheld, CopilotAdoptionWithheldBreakdowns.AgentDepartments);
+            Assert.AreEqual(5, Row(summary, "Legal").AgentActiveUsers, "The cached summary must never be edited for one reader.");
+        }
+
         #endregion
 
         #region Filtered views

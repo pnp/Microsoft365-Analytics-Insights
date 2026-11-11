@@ -37,10 +37,16 @@ namespace Tests.UnitTests
     [TestClass]
     public class PortalPrivacyFloorTests
     {
-        private const string AdoptionRowsAndTotals =
-            "#844: the email-domain table floors a row's combined population rather than each population on it, and totals "
-            + "published beside rows (the whole-tenant figures beside the manager rows, the league table's candidates beside "
-            + "the tenant's) are not complementarily withheld.";
+        private const string AdoptionFurtherFindings =
+            "#844: found while closing the department breakdowns, and left for a decision. The side-by-side table's agent "
+            + "figures are floored on a department's active users, not on its agent users, so a department where one to four "
+            + "people used an agent publishes those people's agent interactions, distinct agents and interactions per agent; "
+            + "and the tenant's count of departments with an agent user counts departments whose agent figures are withheld, "
+            + "so with the rows shown it says whether a withheld one has any. The agent estate's interactions by department "
+            + "(agents.usageByDepartment) leave out departments of fewer than MinSeatsPerSegment users beside the estate's "
+            + "total interactions, which less them are the departments left out. Seat holders' time saved by engagement band "
+            + "has no floor, and the usage-concentration bands of a tenant with fewer than 45 active users put one to four "
+            + "people in a band: both then publish figures for those few.";
 
         private const string CreditWindows =
             "#844 (S3-3): the withholding holds within one response, not across the 7-, 28-, 90- and 180-day windows a reader "
@@ -145,21 +151,44 @@ namespace Tests.UnitTests
                     "Every breakdown leaves out groups of fewer than MinSeatsPerSegment (5) people, for every reader; a reader "
                     + "without See PII gets a copy without the manager roll-up or the heaviest agent users, and without the idle "
                     + "count of a Copilot seat 1-4 people hold or of the smallest seat that, with the reclaimable total, would give "
-                    + "it back.")
+                    + "it back. In the copy, the department, country and accountability breakdowns, the side-by-side table's "
+                    + "unlicensed side and agent figures, and the agent builders (each count of 1-4 withheld first) leave out "
+                    + "their smallest listed group from every view whenever they leave a group out; each population on an "
+                    + "email-domain row - seat holders, unlicensed Chat users, licence candidates - is floored on its own; and "
+                    + "rows published beside a total (the domains' columns, the departments' candidate counts in the league "
+                    + "table and chart, the departments' manager figures) are withheld, smallest first, until the total less "
+                    + "the rows shown can no longer give back 1-4 people.")
                 .By(typeof(CopilotAdoptionService), nameof(CopilotAdoptionService.FinaliseSummary))
                 .By(typeof(CopilotAdoptionSummary), nameof(CopilotAdoptionSummary.WithoutIndividualData))
                 .By(typeof(LicenceTypeClassification), nameof(LicenceTypeClassification.WithoutSmallSeatIdleCounts))
+                .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.WithholdSmallestListedGroups))
+                .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.EmailDomainsWithoutSmallPopulations))
+                .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.CandidateCountsWithoutComplements))
+                .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.ManagerDepartmentsWithoutComplements))
                 .ProvenBy(
                     Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.DepartmentBreakdowns_LeaveOutDepartmentsWithFewerPeopleThanTheMinimum)),
                     Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.AccountabilityRollup_SuppressesSmallLeaderGroupsLikeSegments)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSummary_WithoutSeePii_LosesTheManagerRollup_AndTheCachedAnalysisKeepsIt)),
                     Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.SeatIdleCounts_OfACopilotSeatHeldByOneToFourPeople_AreWithheldWithoutSeePii_AndShownWithIt)),
                     Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.SeatIdleWithholding_WithholdsTheSmallestSeatThatWouldGiveASmallOneBack_AndNothingWhenNoSeatIsSmall)),
-                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSeatIdle_OfACopilotSeatHeldByOneToFourPeople_IsWithheldWithoutSeePii_OnEveryEndpoint)))
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSeatIdle_OfACopilotSeatHeldByOneToFourPeople_IsWithheldWithoutSeePii_OnEveryEndpoint)),
+                    Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.DepartmentBreakdowns_WithoutSeePii_LeaveOutTheSmallestListedDepartmentFromEveryView_WhenTheyLeaveOneOut)),
+                    Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.CountryAndOfficeBreakdowns_WithoutSeePii_LeaveOutTheirSmallestListedGroup_WhenTheyLeaveOneOut)),
+                    Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.UnlicensedSide_WithoutSeePii_LeavesOutTheSmallestListedDepartment_InTheTableAndTheUseByDepartmentChart)),
+                    Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.Breakdowns_WithoutSeePii_NeverLetATotalLessTheGroupsShownIsolateASmallGroup_AndEveryViewAgrees)),
+                    Test<CopilotAdoptionAgentBreadthReachTests>(nameof(CopilotAdoptionAgentBreadthReachTests.Builders_WithoutSeePii_AreWithheldForOneToFour_AndForTheSmallestShown_WhenTheTenantsWouldGiveOneBack)),
+                    Test<CopilotAdoptionAgentBreadthReachTests>(nameof(CopilotAdoptionAgentBreadthReachTests.AgentFigures_WithoutSeePii_TheTenantsActiveUsersLessTheDepartmentsShown_NeverGiveBackAWithheldOne)),
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionDepartmentsLeftOut_AreComplementedWithoutSeePii_OnTheSummaryAndTheWorkbook_AndUnchangedWithIt)),
+                    Test<CopilotAdoptionEmailDomainTests>(nameof(CopilotAdoptionEmailDomainTests.WithoutSeePii_ADomainOf20SeatHoldersAnd3ChatUsers_WithholdsTheChatCount_AndKeepsTheSeatHolders)),
+                    Test<CopilotAdoptionEmailDomainTests>(nameof(CopilotAdoptionEmailDomainTests.WithoutSeePii_NoDomainTotalLessTheRowsShown_GivesBackAFewPeople_AndTheCachedRowsAreNeverEdited)),
+                    Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.DepartmentCandidateCounts_WithoutSeePii_NeverLetTheTotalLessTheCountsShownGiveBackAWithheldDepartment)),
+                    Test<CopilotAdoptionManagerModellingTests>(nameof(CopilotAdoptionManagerModellingTests.WithoutSeePii_TheWholePopulationLessTheDepartmentsShown_NeverGivesBackAWithheldDepartment_AndWithSeePiiNothingChanges)),
+                    Test<CopilotAdoptionManagerModellingTests>(nameof(CopilotAdoptionManagerModellingTests.WithoutSeePii_TheManagerOfADepartmentTooSmallToList_IsNotGivenBackByTheWholeLessTheDepartmentsShown)),
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionRowsBesideTotals_AreFlooredWithoutSeePii_OnTheSummaryAndTheWorkbook_AndUnchangedWithIt)))
                 .Refusing("emailDomain, userFilter, seatLicenceTypeIds",
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoption_NarrowedAggregates_RequireSeePii)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoption_SeatLicenceOverride_NarrowsThePopulation_SoNeedsSeePii)))
-                .WithKnownGap(AdoptionRowsAndTotals),
+                .WithKnownGap(AdoptionFurtherFindings),
             ["CopilotAdoptionAPIController.Rebuild"] = NoGroupedFigures(
                     "Starts or joins a rebuild of the analysis, and answers with its generation id and progress only.")
                 .ProvenBy(Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionRebuild_RejectsInvalidTokens_AndStaleTokensReturnOnlyGenerationMetadata)))
@@ -189,19 +218,31 @@ namespace Tests.UnitTests
             ["CopilotAdoptionAPIController.ExportWorkbook"] = Floored(
                     "The summary's figures, floored as on screen, without the per-person sheets or named lists; under the "
                     + "administrator's filter the tenant sections it withholds are written blank, never 0. The licence "
-                    + "classification says why a withheld idle count is not shown, never 0.")
+                    + "classification says why a withheld idle count is not shown, never 0. The department, country and "
+                    + "accountability tables, the side-by-side table, the email domains, the habit table's candidate counts, the "
+                    + "candidate chart and the department manager table are the summary's copy for this reader: a withheld "
+                    + "group is left out of every sheet the screen leaves it out of, a withheld cell is blank, never 0, and each "
+                    + "sheet says why.")
                 .By(typeof(CopilotAdoptionService), nameof(CopilotAdoptionService.FinaliseSummary))
                 .By(typeof(CopilotAdoptionWorkbook), nameof(CopilotAdoptionWorkbook.Build))
                 .By(typeof(LicenceTypeClassification), nameof(LicenceTypeClassification.WithoutSmallSeatIdleCounts))
+                .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.WithholdSmallestListedGroups))
+                .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.EmailDomainsWithoutSmallPopulations))
+                .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.CandidateCountsWithoutComplements))
+                .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.ManagerDepartmentsWithoutComplements))
                 .ProvenBy(
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionWorkbook_WithoutSeePii_NamesNobody_AndWithItStillDoes)),
                     Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.SnapshotFacts_WriteTheSectionsTheGlobalFilterWithholdsBlank_NeverZero)),
                     Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.LicenceClassification_WithoutSeePii_SaysWhyASmallSeatsIdleCountIsNotShown_NeverZero)),
-                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSeatIdle_OfACopilotSeatHeldByOneToFourPeople_IsWithheldWithoutSeePii_OnEveryEndpoint)))
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSeatIdle_OfACopilotSeatHeldByOneToFourPeople_IsWithheldWithoutSeePii_OnEveryEndpoint)),
+                    Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.EmailDomainSheet_WithoutSeePii_LeavesAFewPeoplesFiguresBlank_AsTheScreenDoes_AndWithItWritesThem)),
+                    Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.DepartmentSheet_WithoutSeePii_LeavesOutTheDepartmentTheScreenDoes_AndSaysWhy_AndWithItWritesEveryOne)),
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionRowsBesideTotals_AreFlooredWithoutSeePii_OnTheSummaryAndTheWorkbook_AndUnchangedWithIt)),
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionDepartmentsLeftOut_AreComplementedWithoutSeePii_OnTheSummaryAndTheWorkbook_AndUnchangedWithIt)))
                 .Refusing("emailDomain, userFilter, seatLicenceTypeIds",
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoption_NarrowedAggregates_RequireSeePii)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoption_SeatLicenceOverride_NarrowsThePopulation_SoNeedsSeePii)))
-                .WithKnownGap(AdoptionRowsAndTotals),
+                .WithKnownGap(AdoptionFurtherFindings),
 
             ["CopilotCostHealthAPIController.Get"] = NoGroupedFigures(
                 "Connection outcomes and timestamps of the two Copilot cost sources; no account or tenant identifiers."),

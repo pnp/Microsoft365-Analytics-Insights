@@ -293,6 +293,13 @@ export const copilotAdoption = {
   'copilotAdoption.page.moreCandidatesNeverUsedSeats': '{v0} more candidates than never-used seats',
   'copilotAdoption.page.moreNeverUsedSeatsCandidates': '{v0} more never-used seats than candidates',
   'copilotAdoption.page.balanced': 'Balanced',
+  // A department's candidate count withheld from a reader without See PII because, with the total, it would reveal a smaller one (#844)
+  'copilotAdoption.page.candidatesWithheld.revealsSmallerGroup':
+    'Hidden: with the tenant\u2019s recommended candidates, this count would reveal a department with fewer than {count} candidates',
+  'copilotAdoption.page.candidatesWithheldNote':
+    'A larger count can be hidden too, when subtracting the counts shown from the tenant\u2019s recommended candidates would otherwise reveal a department with fewer than {count}.',
+  'copilotAdoption.page.opportunityByDepartmentWithheldNote':
+    'A department is also left out when subtracting the departments shown from the tenant\u2019s recommended candidates would otherwise reveal one with fewer than {count} candidates.',
   'copilotAdoption.page.whereStand': 'Where you stand',  'copilotAdoption.page.analyst.whereStandBlurb': 'The headline position: how many licences are earning their keep, and where the drop-off is.',
   'copilotAdoption.page.population.analysed': 'analysed',
   'copilotAdoption.page.population.licensed': 'licensed',
@@ -784,6 +791,12 @@ export const copilotAdoption = {
   'copilotAdoption.combinedViews.segment.agentBuilders': 'Agent builders',
   'copilotAdoption.combinedViews.segment.agentBuilders.help': 'People in this department who created, published or shared a Copilot Studio agent in the period. A count, never a name.',
   'copilotAdoption.combinedViews.segment.notMeasured': 'Not measured for this period.',
+  // A side, the agent figures or the builders of a department withheld from a reader without See PII (#844)
+  'copilotAdoption.combinedViews.segment.withheld.revealsSmallerGroup':
+    'Hidden: with the tenant\u2019s figures, this department\u2019s would reveal those of a department too small to list',
+  'copilotAdoption.combinedViews.segment.builders.fewPeople': 'Hidden: fewer than {count} agent builders in this department',
+  'copilotAdoption.combinedViews.segment.builders.revealsSmallerGroup':
+    'Hidden: with the tenant\u2019s agent builders, this count would reveal a department with fewer than {count}',
   'copilotAdoption.combinedViews.agents.title': 'Agent breadth and depth',
   'copilotAdoption.combinedViews.agents.scope': 'Agents counted: {scope}. Breadth is how widely agents are used; depth is how many agents people rely on.',
   'copilotAdoption.combinedViews.agents.scope.allAgents': 'all agents, Microsoft\'s and your own',
@@ -818,6 +831,21 @@ export const copilotAdoption = {
   'copilotAdoption.shared.segmentTable.habitManagerDoesNot': 'Habit: manager does not',
   'copilotAdoption.shared.segmentTable.managersUnknown': 'Unknown: {count}',
   'copilotAdoption.shared.segmentTable.withheld': 'Too few people to show without singling someone out',
+  'copilotAdoption.shared.segmentTable.withheldRevealsSmallerGroup':
+    'Hidden: with the figures for everyone above the table, this department\u2019s would reveal those of a department with too few people managers to show',
+  // A breakdown that, for a reader without See PII, leaves out its smallest listed group as well as those too small to list (#844)
+  'copilotAdoption.shared.smallestGroupWithheld.departments':
+    'One more department, the smallest listed, is left out of every department view too, so that the tenant\u2019s figures less the departments shown cannot reveal one too small to list.',
+  'copilotAdoption.shared.smallestGroupWithheld.countries':
+    'One more country, the smallest listed, is left out too, so that the tenant\u2019s figures less the countries shown cannot reveal one too small to list.',
+  'copilotAdoption.shared.smallestGroupWithheld.accountability':
+    'One more group, the smallest listed, is left out too, so that the tenant\u2019s figures less the groups shown cannot reveal one too small to list.',
+  'copilotAdoption.shared.smallestGroupWithheld.unlicensedDepartments':
+    'The unlicensed users of one more department, the smallest listed, are hidden too, so that the tenant\u2019s unlicensed users less the departments shown cannot reveal a department too small to list.',
+  'copilotAdoption.shared.smallestGroupWithheld.agentDepartments':
+    'The agent figures of one more department, the smallest shown, are hidden too, so that the tenant\u2019s active users less the departments shown cannot reveal one too small to list.',
+  'copilotAdoption.shared.smallestGroupWithheld.builderDepartments':
+    'Agent builders are hidden for a department with too few of them to show, and for one more, the smallest shown, so that the tenant\u2019s builders less the departments shown cannot reveal a smaller count.',
   'copilotAdoption.shared.expandableUser.hideAssessment': 'Hide the full assessment for {user}',
   'copilotAdoption.shared.expandableUser.showAssessment': 'Show the full assessment for {user}',
   'copilotAdoption.shared.expandAll.expand': 'Expand all',

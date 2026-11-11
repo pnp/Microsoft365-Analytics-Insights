@@ -9,6 +9,7 @@ import { KpiGrid, formatCount } from '../shared/KpiGrid';
 import type { KpiDefinition } from '../shared/KpiGrid';
 import { useT, type TFunction } from '../../i18n';
 import { explicitPeriodDates } from './AdoptionPeriodControl';
+import { SmallestGroupWithheldNote } from './adoptionShared';
 
 const useStyles = makeStyles({
   stack: {
@@ -59,6 +60,7 @@ export default function UnlicensedPanel({
   options,
   sql,
   usageByAppWithheld = false,
+  smallestGroupsWithheld,
 }: {
   unlicensed: UnlicensedPopulationSummary;
   /** The analysed period comes from here - its length, and its dates when it has them - never from the selector. */
@@ -66,6 +68,8 @@ export default function UnlicensedPanel({
   sql: Record<string, string> | null;
   /** True when the server left the by-app breakdown out because the administrator's report filter applies. */
   usageByAppWithheld?: boolean;
+  /** The summary's `smallestGroupsWithheld`: whether the by-department chart leaves out one more department (#844). */
+  smallestGroupsWithheld?: readonly string[] | null;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -192,6 +196,7 @@ export default function UnlicensedPanel({
             ) : (
               <div className={styles.empty}>{t('copilotAdoptionUsers.unlicensed.noDepartment')}</div>
             )}
+            <SmallestGroupWithheldNote withheld={smallestGroupsWithheld} breakdowns={['unlicensedDepartments']} />
           </div>
         </Card>
       </div>

@@ -55,6 +55,7 @@ import {
   PartialPrintNote,
   PrintedFilters,
   ScoreBar,
+  SmallestGroupWithheldNote,
   printedSearch,
   revealElement,
   useAdoptionTableStyles,
@@ -673,6 +674,7 @@ export default function CoworkPanel({
           {t('copilotAdoptionCowork.departmentReadiness.guidance')}
         </Text>
         <CoworkQuadrant points={summary.coworkQuadrant} options={options} />
+        <SmallestGroupWithheldNote withheld={summary.smallestGroupsWithheld} breakdowns={['departments']} />
       </Card>
       </div>
 
@@ -733,6 +735,7 @@ export default function CoworkPanel({
               </tbody>
             </table>
           </div>
+          <SmallestGroupWithheldNote withheld={summary.smallestGroupsWithheld} breakdowns={['departments']} />
         </Card>
       )}
 

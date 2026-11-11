@@ -1017,6 +1017,16 @@ namespace Common.Entities.CopilotAdoption
                 "Guests are attributed to their HOME organisation, not to this tenant, so an invited "
                 + "partner appears under its own domain and is flagged External. Interactions per licence "
                 + "divides by every licence including idle ones, and is normalised to a month."));
+            if (domains.Any(d => d.SeatHoldersWithheld != null || d.UnlicensedUsersWithheld != null || d.LicenceCandidatesWithheld != null))
+            {
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "This file was exported without the See PII permission. Each row holds three groups of people - its "
+                    + "seat holders, its unlicensed Copilot Chat users and its licence candidates - and a group of fewer "
+                    + $"than {MinimumPeople(domains)} people has its figures left blank: for the seat holders, every column "
+                    + "from Seats to Interactions per licence, and the Cowork prime candidates. So does the smallest other "
+                    + "group of the same kind when the tenant's total, less the figures shown, would otherwise give a blank "
+                    + "one back. Blank means not shown, never 0."));
+            }
             sheet.AddBlankRow();
 
             sheet.AddHeaderRow("Email domain", "Seats", "Active", "Habitual", "Never used", "Adoption rate %",
@@ -1060,6 +1070,52 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
+        /// <summary>The floor a reader without See PII was held to on these rows, or the portal's when none says.</summary>
+        private static int MinimumPeople(IEnumerable<AdoptionDomainRow> domains)
+        {
+            return domains.Select(d => d.MinimumPeople).FirstOrDefault(m => m.HasValue)
+                ?? CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii;
+        }
+
+        /// <summary>
+        /// What the department, country and accountability tables left out for a reader without See PII, beyond their own
+        /// floor (#844), in one paragraph for the sheet that holds them - or null when nothing more was left out.
+        /// </summary>
+        private static string SmallestGroupsWithheldNote(CopilotAdoptionSummary summary)
+        {
+            var withheld = summary.SmallestGroupsWithheld ?? new List<string>();
+            if (withheld.Count == 0) return null;
+
+            var groups = new List<string>();
+            if (withheld.Contains(CopilotAdoptionWithheldBreakdowns.Departments)) groups.Add("department");
+            if (withheld.Contains(CopilotAdoptionWithheldBreakdowns.Countries)) groups.Add("country");
+            if (withheld.Contains(CopilotAdoptionWithheldBreakdowns.Accountability)) groups.Add("accountability group");
+
+            var text = "This file was exported without the See PII permission. ";
+            if (groups.Count > 0)
+            {
+                text += "Where a table leaves out a group too small to list, the smallest " + string.Join(", ", groups)
+                    + " it lists is left out too, from every table here and on the other sheets that show it, so that the "
+                    + "tenant's figures less the rows shown cannot reveal the small one. ";
+            }
+
+            if (withheld.Contains(CopilotAdoptionWithheldBreakdowns.UnlicensedDepartments)
+                || withheld.Contains(CopilotAdoptionWithheldBreakdowns.AgentDepartments))
+            {
+                text += "For the same reason, in the licensed and unlicensed table the unlicensed side or the agent figures "
+                    + "of one more department can be blank, and so are its unlicensed users on the Unlicensed users sheet. ";
+            }
+
+            if (withheld.Contains(CopilotAdoptionWithheldBreakdowns.BuilderDepartments))
+            {
+                text += "Agent builders are blank for one more department, the smallest shown, so that the tenant's builders "
+                    + "less the counts shown cannot reveal a department with fewer than "
+                    + CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii + ". ";
+            }
+
+            return text + "Blank means not shown, never 0.";
+        }
+
         #endregion
 
         #region Departments
@@ -1087,6 +1143,13 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddTitle("Where Copilot is used");
             sheet.AddBlankRow();
+
+            var smallestWithheld = SmallestGroupsWithheldNote(summary);
+            if (smallestWithheld != null)
+            {
+                sheet.AddRow(XlsxCell.Wrapped(smallestWithheld));
+                sheet.AddBlankRow();
+            }
 
             if (summary.AdoptionByDepartment.Count > 0)
             {
@@ -1130,7 +1193,12 @@ namespace Common.Entities.CopilotAdoption
                     + "department's unlicensed people recommended for a licence: a department with never-used seats "
                     + "AND candidates can reassign rather than buy. Blank means fewer than "
                     + $"{summary.Options.MinSeatsPerSegment} candidates, left out so that no one is singled out, or "
-                    + "none found in a candidate list that stopped at its limit."));
+                    + "none found in a candidate list that stopped at its limit."
+                    + (summary.HabitByDepartment.Any(r => r.RecommendedCandidatesWithheld != null)
+                        ? " This file was exported without the See PII permission, so a blank can also be a larger count, "
+                          + "left out because the tenant's recommended candidates less the counts shown would otherwise "
+                          + "reveal a smaller one."
+                        : string.Empty)));
                 sheet.AddHeaderRow("Department", "Seats", "Active", "Habitual", "Never used", "Habit rate %", "Adoption rate %", "Avg. score", "Licence candidates");
 
                 foreach (var row in summary.HabitByDepartment)
@@ -1177,6 +1245,18 @@ namespace Common.Entities.CopilotAdoption
                     + "depth is how many distinct agents they used per 100 of them, and how many interactions each of "
                     + "those agents had. Builders are people who created, published or shared a Copilot Studio agent. "
                     + "Blank means not measured, or too few people to report on. Definitions are on 'How this is calculated'."));
+                if (summary.CombinedByDepartment.Any(r => r != null
+                        && (r.AgentBuildersWithheld != null || r.LicensedWithheld != null || r.UnlicensedWithheld != null
+                            || r.AgentFiguresWithheldReason != null)))
+                {
+                    sheet.AddRow(XlsxCell.Wrapped(
+                        "This file was exported without the See PII permission. Agent builders are blank for a department "
+                        + "with fewer than " + CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii + " of them. A side, "
+                        + "the agent figures or the builders of one more department - the smallest shown - can be blank too, so "
+                        + "that the tenant's figures less the departments shown cannot reveal a smaller group. Blank means not "
+                        + "shown, never 0."));
+                }
+
                 sheet.AddHeaderRow("Department", "Seats", "Active licences", "Interactions per licence",
                     "Licences using agents %", "Unlicensed users", "Interactions per unlicensed user",
                     "Unlicensed using agents %", "Active users (audit)", "Using customer-built agents %",
@@ -1246,7 +1326,13 @@ namespace Common.Entities.CopilotAdoption
                 sheet.AddRow(XlsxCell.Wrapped(
                     "Licence candidates by department - unlicensed people whose business case clears the "
                     + "recommendation bar. Read against the adoption table above: a department with idle "
-                    + "licences AND candidates here does not need a purchase, it needs its seats reallocated."));
+                    + "licences AND candidates here does not need a purchase, it needs its seats reallocated."
+                    + (summary.OpportunityByDepartmentWithheld != null
+                        ? " This file was exported without the See PII permission, so a department is also left out when "
+                          + "the tenant's recommended candidates less the departments shown would otherwise reveal a "
+                          + "department with fewer than " + CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii
+                          + " candidates."
+                        : string.Empty)));
                 sheet.AddHeaderRow("Department", "Licence candidates");
                 foreach (var row in summary.OpportunityByDepartment)
                 {
@@ -1346,6 +1432,11 @@ namespace Common.Entities.CopilotAdoption
                 + "determined is counted as unknown and left out of both sides of the comparison. Each department "
                 + $"is the report's own. Figures for fewer than {summary.Options.MinSeatsPerSegment} people managers - "
                 + "in all, or on either side of a comparison - or a rate over fewer reports than that, are left blank. "
+                + (departments.Any(d => d.ManagersWithheld != null || d.ComparisonWithheld != null || d.SeatSplitWithheld != null)
+                    ? "This file was exported without the See PII permission, so a department's figures are also left blank "
+                      + "when the figures for the whole population, less the departments shown, would otherwise reveal those of "
+                      + "a department left blank for having too few people managers. "
+                    : string.Empty)
                 + "This is an association, not a cause: teams "
                 + "whose manager uses Copilot may differ in function, seniority or seat coverage."));
             sheet.AddHeaderRow(
@@ -1717,12 +1808,28 @@ namespace Common.Entities.CopilotAdoption
             if (unlicensed.UsageByDepartment.Count > 0)
             {
                 sheet.AddBlankRow();
+                if (summary.SmallestGroupsWithheld?.Contains(CopilotAdoptionWithheldBreakdowns.UnlicensedDepartments) == true)
+                {
+                    sheet.AddRow(XlsxCell.Wrapped(DepartmentLeftOutNote("unlicensed users")));
+                }
+
                 sheet.AddHeaderRow("Department", "Interactions");
                 foreach (var dept in unlicensed.UsageByDepartment)
                 {
                     sheet.AddRow(dept.Label, dept.Value);
                 }
             }
+        }
+
+        /// <summary>
+        /// One sentence for a department table that, for a reader without See PII, leaves out the smallest department it
+        /// lists as well as the departments below its floor (#844).
+        /// </summary>
+        private static string DepartmentLeftOutNote(string people)
+        {
+            return "This file was exported without the See PII permission, so one more department is left out - the "
+                + "smallest listed - so that the tenant's " + people + " less the departments shown cannot reveal one too "
+                + "small to list.";
         }
 
         #endregion
@@ -1960,7 +2067,10 @@ namespace Common.Entities.CopilotAdoption
                 sheet.AddTitle("Rollout order by department");
                 sheet.AddRow(XlsxCell.Wrapped(
                     "Ordered by the NUMBER of prime candidates, not the rate. A three-person team where "
-                    + "everyone qualifies is a 100% rate and not where a rollout should start."));
+                    + "everyone qualifies is a 100% rate and not where a rollout should start."
+                    + (summary.SmallestGroupsWithheld?.Contains(CopilotAdoptionWithheldBreakdowns.Departments) == true
+                        ? " " + DepartmentLeftOutNote("seat holders")
+                        : string.Empty)));
                 sheet.AddHeaderRow(
                     "Department", "Copilot seats", "Prime candidates", "Prime candidate %",
                     "Regular Cowork users", "Avg coordination load", "Avg fluency");
@@ -2488,6 +2598,11 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddBlankRow();
             sheet.AddTitle("By department");
+            if (summary.SmallestGroupsWithheld?.Contains(CopilotAdoptionWithheldBreakdowns.Departments) == true)
+            {
+                sheet.AddRow(XlsxCell.Wrapped(DepartmentLeftOutNote("seat holders")));
+            }
+
             sheet.AddHeaderRow("Department", "Hours high", "People");
             foreach (var row in estimate.ByDepartment)
                 sheet.AddRow(row.Segment, XlsxCell.Number(row.HoursPerMonthHigh), XlsxCell.Number(row.CohortUsers));
@@ -2660,6 +2775,31 @@ namespace Common.Entities.CopilotAdoption
                   + " Reset to defaults on that page restores them."
                 : "The engagement-score weights and band thresholds are the defaults. " + defaults
                   + " An administrator can change them on Administration > Copilot Adoption settings.";
+        }
+
+        /// <summary>
+        /// What else differs from a full export's Snapshot facts when the departments' candidate chart left out a department
+        /// for a reader without See PII (#844), or nothing.
+        /// </summary>
+        private static string WithheldFactsNote(CopilotAdoptionSummary summary)
+        {
+            var note = string.Empty;
+            if ((summary.SmallestGroupsWithheld?.Count ?? 0) > 0)
+            {
+                note += " smallestGroupsWithheld.count and the row counts of the breakdowns it names differ too: a department, "
+                    + "country or accountability table that leaves out a group too small to list leaves out its smallest listed "
+                    + "group as well, on every sheet that shows it, so that the tenant's figures less the rows shown cannot reveal "
+                    + "a group with fewer than " + CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii + ".";
+            }
+
+            if (summary.OpportunityByDepartmentWithheld != null)
+            {
+                note += " opportunityByDepartmentWithheld and opportunityByDepartment.count differ too: the departments' licence candidates "
+                    + "leave out a department whose count, with the tenant's recommended candidates, would reveal a department with "
+                    + "fewer than " + CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii + ".";
+            }
+
+            return note;
         }
 
         /// <summary>
@@ -2997,10 +3137,12 @@ namespace Common.Entities.CopilotAdoption
                         ? "Per-user movement cannot be read from this file: historical exports hide named lists, "
                           + "so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full export's except "
                           + "accountabilityRollup.count, which is 0 when the roll-up is grouped by manager, because those rows name managers."
+                          + WithheldFactsNote(summary)
                         : "Per-user movement cannot be read from this file: it was exported without the See PII "
                           + "permission, so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full "
                           + "export's except accountabilityRollup.count, which is 0 when the roll-up is grouped by "
-                          + "manager, because those rows name managers."));
+                          + "manager, because those rows name managers."
+                          + WithheldFactsNote(summary)));
 
             AddMethod(sheet, "Licence classification",
                 "Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot licence (Copilot Studio, "

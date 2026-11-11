@@ -663,6 +663,94 @@ describe('CopilotAdoptionPage view split', () => {
     expect(operations.queryByText('\u2014')).toBeNull();
   });
 
+  it.each([
+    {
+      language: 'en' as const,
+      analyst: 'Analyst view',
+      table: 'Department league table',
+      reason: 'Hidden: with the tenant\u2019s recommended candidates, this count would reveal a department with fewer than 5 candidates',
+      tableNote: /A larger count can be hidden too/,
+      chartNote: /A department is also left out when subtracting the departments shown/,
+    },
+    {
+      language: 'es' as const,
+      analyst: 'Vista de analista',
+      table: 'Tabla comparativa de departamentos',
+      reason: 'Oculto: con los candidatos recomendados del inquilino, este recuento revelaría un departamento con menos de 5 candidatos',
+      tableNote: /También se puede ocultar un recuento mayor/,
+      chartNote: /También se omite un departamento/,
+    },
+  ])('says in $language why a larger candidate count is hidden from a reader without See PII, never as 0', async ({ language, analyst, table, reason, tableNote, chartNote }) => {
+    // #844: Legal's two candidates are withheld for every reader. Finance's six went too, for a reader without See PII,
+    // because the tenant's recommended candidates less the counts shown would otherwise give Legal's two back.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      habitByDepartment: [
+        { segment: 'Legal', licensedUsers: 20, activeUsers: 10, habitualUsers: 1, neverUsedUsers: 2, adoptionRatePct: 50, averageAdoptionScore: 20, recommendedCandidates: null },
+        { segment: 'Finance', licensedUsers: 30, activeUsers: 10, habitualUsers: 3, neverUsedUsers: 15, adoptionRatePct: 33.3, averageAdoptionScore: 22, recommendedCandidates: null, recommendedCandidatesWithheld: 'revealsSmallerGroup' },
+      ],
+      opportunityByDepartment: [{ label: 'Sales', value: 8 }],
+      opportunityByDepartmentWithheld: 'revealsSmallerGroup',
+    }));
+    if (language === 'es') await loadCatalog('es');
+    await renderPage({ language });
+
+    const league = await screen.findByRole('table', { name: table }, { timeout: 5000 });
+    const finance = within(within(league).getByText('Finance').closest('tr') as HTMLElement);
+    expect(finance.getByLabelText(reason)).toHaveTextContent('\u2014');
+    const legal = within(within(league).getByText('Legal').closest('tr') as HTMLElement);
+    expect(legal.queryByLabelText(reason)).toBeNull();
+    expect(screen.getByText(tableNote)).toBeVisible();
+
+    fireEvent.click(screen.getByRole('tab', { name: analyst }));
+    await screen.findByRole('tab', { name: analyst, selected: true });
+    expect(await screen.findByText(chartNote, {}, { timeout: 5000 })).toBeVisible();
+  });
+
+  it.each([
+    {
+      language: 'en' as const,
+      analyst: 'Analyst view',
+      departments: /^One more department, the smallest listed, is left out of every department view too/,
+      countries: /^One more country, the smallest listed, is left out too/,
+      builders: /Agent builders are hidden for a department with too few of them to show/,
+    },
+    {
+      language: 'es' as const,
+      analyst: 'Vista de analista',
+      departments: /^También se omite un departamento más, el más pequeño de la lista, en todas las vistas por departamento/,
+      countries: /^También se omite un país más, el más pequeño de la lista/,
+      builders: /Los creadores de agentes se ocultan en un departamento con demasiado pocos para mostrarse/,
+    },
+  ])('says in $language, under each view, that one more group is left out for a reader without See PII', async ({ language, analyst, departments, countries, builders }) => {
+    // #844: the server left out the smallest listed department and country, and one more department's builders, so that
+    // the tenant's figures less the groups shown cannot give back a group too small to list.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      smallestGroupsWithheld: ['departments', 'countries', 'builderDepartments'],
+    }));
+    if (language === 'es') await loadCatalog('es');
+    await renderPage({ language });
+
+    expect(await screen.findByText(departments, {}, { timeout: 5000 })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('tab', { name: analyst }));
+    await screen.findByRole('tab', { name: analyst, selected: true });
+    // The adoption, intensity and side-by-side cards are each a view of the departments.
+    expect((await screen.findAllByText(departments, {}, { timeout: 5000 })).length).toBeGreaterThanOrEqual(3);
+    expect(screen.getByText(countries)).toBeVisible();
+    expect(screen.getByText(builders)).toBeVisible();
+  });
+
+  it('says nothing more is left out when the server withheld nothing more, as for a reader with See PII', async () => {
+    await renderPage();
+    await screen.findByRole('table', { name: 'Department league table' }, { timeout: 5000 });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+    await screen.findByRole('tab', { name: 'Analyst view', selected: true });
+    await screen.findByText('Usage frequency and intensity', {}, { timeout: 5000 });
+    expect(screen.queryByText(/is left out of every department view too/)).toBeNull();
+    expect(screen.queryByText(/One more country/)).toBeNull();
+  });
+
   it('shows Microsoft’s tenant prompt figures on the executive view, named and dated, beside the audit figures', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
       microsoftReportDate: '2026-10-05T00:00:00Z',
