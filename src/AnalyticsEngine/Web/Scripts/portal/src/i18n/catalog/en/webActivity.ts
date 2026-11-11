@@ -250,6 +250,8 @@ export const webActivity = {
   'webActivity.pages.kpi.quietPagesWhat': 'Pages viewed three times or fewer in the whole period.',
   'webActivity.pages.mostViewed.title': 'Most viewed pages',
   'webActivity.pages.mostViewed.description': 'Top {top} by page views, with how long people stayed and how many entered the site there.',
+  'webActivity.pages.mostViewed.endpointFiguresWithheld':
+    'Entries, exits and bounces are left out of this table to protect privacy. The Journeys tab shows them for the pages enough people started or ended their visits on.',
   'webActivity.pages.slowest.title': 'Slowest pages',
   'webActivity.pages.slowest.description': 'Pages with at least {minimumViews} views with a recorded load time, ranked by average load time.',
   'webActivity.pages.slowest.empty': 'No page has enough views with a recorded load time to rank.',

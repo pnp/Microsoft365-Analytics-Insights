@@ -252,6 +252,8 @@ const webActivity: Record<keyof typeof en, string> = {
   'webActivity.pages.kpi.quietPagesWhat': 'Páginas vistas tres veces o menos en todo el periodo.',
   'webActivity.pages.mostViewed.title': 'Páginas más vistas',
   'webActivity.pages.mostViewed.description': 'Las {top} principales por páginas vistas, con cuánto tiempo permaneció la gente y cuántas entraron al sitio por ahí.',
+  'webActivity.pages.mostViewed.endpointFiguresWithheld':
+    'Las entradas, salidas y rebotes se omiten de esta tabla para proteger la privacidad. La pestaña Recorridos los muestra para las páginas en las que suficientes personas iniciaron o terminaron sus visitas.',
   'webActivity.pages.slowest.title': 'Páginas más lentas',
   'webActivity.pages.slowest.description': 'Páginas con al menos {minimumViews} vistas con un tiempo de carga registrado, ordenadas por tiempo medio de carga.',
   'webActivity.pages.slowest.empty': 'Ninguna página tiene suficientes vistas con tiempo de carga registrado para aparecer en la clasificación.',

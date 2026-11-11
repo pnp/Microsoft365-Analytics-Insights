@@ -1187,9 +1187,17 @@ OPTION (RECOMPILE);";
 
         /// <summary>Traffic per place, for the country, city and province leaderboards.</summary>
         /// <remarks>
+        /// <para>
         /// <paramref name="keyColumn"/>, <paramref name="lookupTable"/> and
         /// <paramref name="nameColumn"/> are supplied from a fixed set at the call site and never come
         /// from a request.
+        /// </para>
+        /// <para>
+        /// <c>Visitors</c> is joined with <c>LEFT HASH JOIN</c>, so it is counted once for every place (#844). Left to choose,
+        /// the optimizer counted the visitors of each row shown again from the window's page views - a seek of the place's
+        /// foreign-key index intersected with the window's whole range of <c>IX_hits_hit_timestamp</c>, per row - which a
+        /// reader without See PII, whose lists are floored over <see cref="WebActivityQuery.MaximumTop"/> rows, pays 500 times.
+        /// </para>
         /// </remarks>
         public static string ByPlace(string keyColumn, string lookupTable, string nameColumn, bool withCountry)
         {
@@ -1240,7 +1248,7 @@ SELECT TOP (@top)
 FROM Grouped AS g
 INNER JOIN dbo." + lookupTable + @" AS lk ON lk.id = g.PlaceId
 " + countryJoin + @"
-LEFT JOIN Visitors AS vi " + visitorJoin + @"
+LEFT HASH JOIN Visitors AS vi " + visitorJoin + @"
 ORDER BY g.PageViews DESC, g.PlaceId ASC, ISNULL(g.CountryId, -1) ASC
 OPTION (RECOMPILE);";
         }

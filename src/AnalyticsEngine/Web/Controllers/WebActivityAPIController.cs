@@ -47,8 +47,10 @@ namespace Web.AnalyticsWeb.Controllers
     /// people, are withheld, and a row of any other list - a site, page, step, flow, clicked element,
     /// place, platform or technology row - of fewer than
     /// <see cref="ReportScopeResolver.MinimumPeopleWithoutSeePii"/> people is left out, with the
-    /// smallest row shown. Each export is the same rows as its screen, or refused when its screen
-    /// withholds them.
+    /// smallest row shown. That reader's copy is cut from the section built for every row a list can
+    /// hold (<see cref="WebActivityQuery.MaximumTop"/>), floored over all of them, so the rows left out
+    /// never depend on how many rows were asked for. Each export is the same rows as its screen, or
+    /// refused when its screen withholds them.
     /// </para>
     /// </remarks>
     [Authorize]
@@ -123,8 +125,8 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> Overview(int days = WebActivityQuery.DefaultWindowDays)
         {
             var query = await BuildQueryAsync(days).ConfigureAwait(false);
-            return await CachedAsync("overview", query, () => _store.GetOverviewAsync(query, ReadSources()),
-                ForReader<WebActivityOverview>(o => o.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
+            return await ForReaderAsync("overview", query, q => _store.GetOverviewAsync(q, ReadSources()),
+                (o, rows) => o.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii, rows)).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/visits?days=28
@@ -135,8 +137,8 @@ namespace Web.AnalyticsWeb.Controllers
             int top = WebActivityQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
-            return await CachedAsync("visits", query, () => _store.GetVisitsAsync(query),
-                ForReader<WebActivityVisits>(v => v.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
+            return await ForReaderAsync("visits", query, q => _store.GetVisitsAsync(q),
+                (v, rows) => v.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii, rows)).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/pages?days=28
@@ -147,8 +149,8 @@ namespace Web.AnalyticsWeb.Controllers
             int top = WebActivityQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
-            return await CachedAsync("pages", query, () => _store.GetPagesAsync(query),
-                ForReader<WebActivityPages>(p => p.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
+            return await ForReaderAsync("pages", query, q => _store.GetPagesAsync(q),
+                (p, rows) => p.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii, rows)).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/journeys?days=28
@@ -159,8 +161,8 @@ namespace Web.AnalyticsWeb.Controllers
             int top = WebActivityQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
-            return await CachedAsync("journeys", query, () => _store.GetJourneysAsync(query),
-                ForReader<WebActivityJourneys>(j => j.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
+            return await ForReaderAsync("journeys", query, q => _store.GetJourneysAsync(q),
+                (j, rows) => j.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii, rows)).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/geography?days=28
@@ -171,8 +173,8 @@ namespace Web.AnalyticsWeb.Controllers
             int top = WebActivityQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
-            return await CachedAsync("geography", query, () => _store.GetGeographyAsync(query),
-                ForReader<WebActivityGeography>(g => g.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
+            return await ForReaderAsync("geography", query, q => _store.GetGeographyAsync(q),
+                (g, rows) => g.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii, rows)).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/search?days=28
@@ -202,8 +204,8 @@ namespace Web.AnalyticsWeb.Controllers
 
             // A detail row names a city, so it may name only one Geography shows this reader (#844).
             var cities = await CitiesShownWithoutSeePiiAsync(query).ConfigureAwait(false);
-            return await CachedAsync("technology", query, () => _store.GetTechnologyAsync(query),
-                t => t.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii, cities)).ConfigureAwait(false);
+            return await ForReaderAsync("technology", query, q => _store.GetTechnologyAsync(q),
+                (t, rows) => t.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii, cities, rows)).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -224,7 +226,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// <para>
         /// A file is never less redacted than its screen (#844). For a reader without See PII, the search
         /// terms, which the screen withholds, are refused with the permission they need, for the same
-        /// reason a failure is not an empty file; every other file carries the screen's floored rows.
+        /// reason a failure is not an empty file; every other file carries the screen's floored rows,
+        /// floored over every row the section holds and cut to <paramref name="top"/>, exactly as the screen
+        /// is - so a file of <c>top</c> rows is the first rows of the file of every row.
         /// </para>
         /// </remarks>
         // GET: api/WebActivity/export/quiet-pages?days=28&top=500
@@ -272,34 +276,38 @@ namespace Web.AnalyticsWeb.Controllers
             string failure;
 
             // Never less redacted than the page: for a reader without See PII, every file carries the rows the page shows
-            // them, with the same rows of too few people left out.
+            // them - floored over every row the section holds, then cut to the rows asked for - with the same rows of too few
+            // people left out.
             var minimum = ReportScopeResolver.MinimumPeopleWithoutSeePii;
+            var everyRow = query.WithTop(WebActivityQuery.MaximumTop);
+            Task<T> SectionAsync<T>(string name, Func<WebActivityQuery, Task<T>> build) where T : class =>
+                seePii ? build(query) : CachedModelAsync(name, everyRow, () => build(everyRow));
 
             switch (normalised)
             {
                 case "quiet-pages":
                 {
-                    var pages = await _store.GetPagesAsync(query).ConfigureAwait(false);
+                    var pages = await SectionAsync("pages", q => _store.GetPagesAsync(q)).ConfigureAwait(false);
                     failure = ErrorFor(pages, "pages-quiet");
-                    if (!seePii) pages = pages.WithoutSmallGroups(minimum);
+                    if (!seePii) pages = pages.WithoutSmallGroups(minimum, query.Top);
                     csv = CsvSerialiser.ToBytes(pages.QuietPages, WebActivityExports.PageTrafficColumns());
                     break;
                 }
 
                 case "slow-pages":
                 {
-                    var pages = await _store.GetPagesAsync(query).ConfigureAwait(false);
+                    var pages = await SectionAsync("pages", q => _store.GetPagesAsync(q)).ConfigureAwait(false);
                     failure = ErrorFor(pages, "pages-slowest");
-                    if (!seePii) pages = pages.WithoutSmallGroups(minimum);
+                    if (!seePii) pages = pages.WithoutSmallGroups(minimum, query.Top);
                     csv = CsvSerialiser.ToBytes(pages.SlowestPages, WebActivityExports.PageTrafficColumns());
                     break;
                 }
 
                 case "entry-pages":
                 {
-                    var journeys = await _store.GetJourneysAsync(query).ConfigureAwait(false);
+                    var journeys = await SectionAsync("journeys", q => _store.GetJourneysAsync(q)).ConfigureAwait(false);
                     failure = ErrorFor(journeys, "journeys-entry");
-                    if (!seePii) journeys = journeys.WithoutSmallGroups(minimum);
+                    if (!seePii) journeys = journeys.WithoutSmallGroups(minimum, query.Top);
                     csv = CsvSerialiser.ToBytes(
                         journeys.EntryPages,
                         WebActivityExports.EndpointPageColumns("Visits entering here", includeBounce: true));
@@ -308,9 +316,9 @@ namespace Web.AnalyticsWeb.Controllers
 
                 case "exit-pages":
                 {
-                    var journeys = await _store.GetJourneysAsync(query).ConfigureAwait(false);
+                    var journeys = await SectionAsync("journeys", q => _store.GetJourneysAsync(q)).ConfigureAwait(false);
                     failure = ErrorFor(journeys, "journeys-exit");
-                    if (!seePii) journeys = journeys.WithoutSmallGroups(minimum);
+                    if (!seePii) journeys = journeys.WithoutSmallGroups(minimum, query.Top);
                     csv = CsvSerialiser.ToBytes(
                         journeys.ExitPages,
                         WebActivityExports.EndpointPageColumns("Visits ending here", includeBounce: false));
@@ -319,18 +327,18 @@ namespace Web.AnalyticsWeb.Controllers
 
                 case "transitions":
                 {
-                    var journeys = await _store.GetJourneysAsync(query).ConfigureAwait(false);
+                    var journeys = await SectionAsync("journeys", q => _store.GetJourneysAsync(q)).ConfigureAwait(false);
                     failure = ErrorFor(journeys, "journeys-transitions");
-                    if (!seePii) journeys = journeys.WithoutSmallGroups(minimum);
+                    if (!seePii) journeys = journeys.WithoutSmallGroups(minimum, query.Top);
                     csv = CsvSerialiser.ToBytes(journeys.Transitions, WebActivityExports.TransitionColumns());
                     break;
                 }
 
                 case "flows":
                 {
-                    var journeys = await _store.GetJourneysAsync(query).ConfigureAwait(false);
+                    var journeys = await SectionAsync("journeys", q => _store.GetJourneysAsync(q)).ConfigureAwait(false);
                     failure = ErrorFor(journeys, "journeys-flows");
-                    if (!seePii) journeys = journeys.WithoutSmallGroups(minimum);
+                    if (!seePii) journeys = journeys.WithoutSmallGroups(minimum, query.Top);
                     csv = CsvSerialiser.ToBytes(journeys.Flows, WebActivityExports.FlowColumns());
                     break;
                 }
@@ -345,19 +353,24 @@ namespace Web.AnalyticsWeb.Controllers
 
                 case "technology":
                 {
-                    var technology = await _store.GetTechnologyAsync(query).ConfigureAwait(false);
+                    var technology = await SectionAsync("technology", q => _store.GetTechnologyAsync(q)).ConfigureAwait(false);
                     failure = ErrorFor(technology, "tech-detail");
-                    if (!seePii) technology = technology.WithoutSmallGroups(minimum, await CitiesShownWithoutSeePiiAsync(query).ConfigureAwait(false));
+                    if (!seePii)
+                    {
+                        var cities = await CitiesShownWithoutSeePiiAsync(query).ConfigureAwait(false);
+                        technology = technology.WithoutSmallGroups(minimum, cities, query.Top);
+                    }
+
                     csv = CsvSerialiser.ToBytes(technology.Detail, WebActivityExports.TechnologyColumns());
                     break;
                 }
 
                 default:
                 {
-                    var pages = await _store.GetPagesAsync(query).ConfigureAwait(false);
+                    var pages = await SectionAsync("pages", q => _store.GetPagesAsync(q)).ConfigureAwait(false);
                     failure = ErrorFor(pages, "pages-top");
-                    if (!seePii) pages = pages.WithoutSmallGroups(minimum);
-                    csv = CsvSerialiser.ToBytes(pages.TopPages, WebActivityExports.PageColumns());
+                    if (!seePii) pages = pages.WithoutSmallGroups(minimum, query.Top);
+                    csv = CsvSerialiser.ToBytes(pages.TopPages, WebActivityExports.PageColumns(includeEndpointFigures: seePii));
                     break;
                 }
             }
@@ -493,13 +506,40 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>
         /// The cities a reader without See PII is shown on the Geography tab for <paramref name="query"/> (#844): its cached
-        /// section, floored as that tab floors it, so the two tabs cannot disagree. A Geography query that failed shows no
-        /// city, so no detail row may name one.
+        /// section for every row (<see cref="WebActivityQuery.MaximumTop"/>), floored as that tab floors it, so the two tabs
+        /// cannot disagree whatever row count either is asked for. A Geography query that failed shows no city, so no detail
+        /// row may name one.
         /// </summary>
         private async Task<ISet<string>> CitiesShownWithoutSeePiiAsync(WebActivityQuery query)
         {
-            var geography = await CachedModelAsync("geography", query, () => _store.GetGeographyAsync(query)).ConfigureAwait(false);
+            var everyRow = query.WithTop(WebActivityQuery.MaximumTop);
+            var geography = await CachedModelAsync("geography", everyRow, () => _store.GetGeographyAsync(everyRow)).ConfigureAwait(false);
             return geography.CityNamesShownWithoutSeePii(ReportScopeResolver.MinimumPeopleWithoutSeePii);
+        }
+
+        /// <summary>
+        /// A section as this reader is sent it (#844). A See PII reader is sent the section built for the rows they asked for,
+        /// as it was built. A reader without See PII is sent the section built for every row a list can hold
+        /// (<see cref="WebActivityQuery.MaximumTop"/>, cached under its own key), floored over all of them and then cut to the
+        /// rows they asked for by <paramref name="withoutSmallGroups"/>: so a shorter answer is always the first rows of a
+        /// longer one, never a list floored again over fewer rows - which would show a row the longer list leaves out as its
+        /// smallest shown, and give back the small rows' figures with it.
+        /// </summary>
+        private async Task<IHttpActionResult> ForReaderAsync<T>(
+            string section,
+            WebActivityQuery query,
+            Func<WebActivityQuery, Task<T>> build,
+            Func<T, int, T> withoutSmallGroups)
+            where T : class
+        {
+            if (PortalAccess.Evaluate(Request, User).SeePii)
+            {
+                return Ok(await CachedModelAsync(section, query, () => build(query)).ConfigureAwait(false));
+            }
+
+            var everyRow = query.WithTop(WebActivityQuery.MaximumTop);
+            var model = await CachedModelAsync(section, everyRow, () => build(everyRow)).ConfigureAwait(false);
+            return Ok(withoutSmallGroups(model, query.Top));
         }
 
         /// <summary>

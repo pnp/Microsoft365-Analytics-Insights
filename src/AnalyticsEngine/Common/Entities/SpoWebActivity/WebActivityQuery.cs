@@ -90,6 +90,17 @@ namespace Common.Entities.SpoWebActivity
             return copy;
         }
 
+        /// <summary>
+        /// This window, returning <paramref name="top"/> rows per ranked table (clamped as <see cref="Create"/> clamps it).
+        /// Everything else - the days, the "now", the scope - is the same, so the two share a reporting window exactly.
+        /// </summary>
+        public WebActivityQuery WithTop(int top)
+        {
+            var copy = (WebActivityQuery)MemberwiseClone();
+            copy.Top = NormaliseTop(top);
+            return copy;
+        }
+
         /// <summary>Inclusive last UTC date of the window, for display.</summary>
         public DateTime ToInclusiveUtc => ToExclusiveUtc.AddDays(-1);
 

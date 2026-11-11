@@ -452,85 +452,129 @@ namespace Tests.UnitTests
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.EveryRestrictedEndpoint_RefusesASignedInUserWithoutThePermission))),
 
             // WebActivityAPIController: the cache holds the complete section, and a reader without See PII is sent a trimmed copy
-            // of it (#844, G2). Every list is floored on the distinct people behind each row; only the search terms are withheld.
+            // of it (#844, G2). Every list is floored on the distinct people behind each row, over every row it can hold
+            // (WebActivityQuery.MaximumTop) and then cut to the rows asked for; only the search terms are withheld.
             ["WebActivityAPIController.Availability"] = NoGroupedFigures(
                 "Whether the tracker is collecting, when it last saw a page view, and whether search and click tracking are in use."),
             ["WebActivityAPIController.Overview"] = Floored(
                     "Sites visited by fewer than 5 people are left out of the busiest sites, and engagement segments of fewer than 5 "
                     + "people out of the segment mix, each with the smallest one shown, so none can be worked out from the page-view "
-                    + "or visitor total.")
+                    + "or visitor total. The sites are floored over every site the list can hold and then cut to the rows shown, so "
+                    + "the rows left out never depend on how many were asked for.")
                 .By(typeof(WebActivityOverview), nameof(WebActivityOverview.WithoutSmallGroups))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.FirstRows))
                 .ProvenBy(
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesVisitsAndOverview_WithoutSeePii_LeaveOutPagesAndSitesOfFewerThanFivePeople_WithTheSmallestShown)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut)))
                 .WithKnownGap("The headline figures, weekly trend, heatmap and visit depth are over the reader's whole scope with no "
-                    + "people count (judgement call 1)."),
+                    + "people count (judgement call 1).")
+                .WithKnownGap("#881 decision, not fixed: a list is floored over the first 500 rows it ranks, so when it fills all 500 and "
+                    + "leaves none of them out, its total less the rows shown is what lies beyond them, which can be fewer than 5 "
+                    + "people's."),
             ["WebActivityAPIController.Visits"] = Floored(
                     "Sites, pages, devices and browsers of fewer than 5 visitors are left out, each list with its smallest row shown, "
-                    + "and a site the list leaves out is folded into '(other sites)' over time - matched by the site's id, so another "
-                    + "site with the same title is folded too.")
+                    + "floored over every row it can hold and then cut to the rows asked for; a site the list leaves out is folded "
+                    + "into '(other sites)' over time - matched by the site's id, so another site with the same title is folded too.")
                 .By(typeof(WebActivityVisits), nameof(WebActivityVisits.WithoutSmallGroups))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.FirstRows))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithSeriesFolded))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithSeriesFoldedByKey))
                 .By(typeof(WebActivitySql), nameof(WebActivitySql.VisitsByPage))
                 .By(typeof(WebActivitySql), nameof(WebActivitySql.SiteOverTime))
                 .ProvenBy(
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesVisitsAndOverview_WithoutSeePii_LeaveOutPagesAndSitesOfFewerThanFivePeople_WithTheSmallestShown)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.SiteOverTime_WithoutSeePii_IsFoldedBySite_NotByATitleTwoSitesShare)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut)),
                     Test<WebActivitySqlIntegrationTests>(nameof(WebActivitySqlIntegrationTests.EveryPageAndPathList_CountsEachPersonOnce_AndAPageViewWithNoVisitAddsNoOne)))
                 .WithKnownGap("The visit trend and the day, hour and period-of-day buckets are over the reader's whole scope with no "
-                    + "people count (judgement call 1)."),
+                    + "people count (judgement call 1). The visits by page are floored apart from the Pages tab's lists, whose unique "
+                    + "page views are the same figure (see WebActivityAPIController.Pages; #881 decision, not fixed).")
+                .WithKnownGap("#881 decision, not fixed: a list is floored over the first 500 rows it ranks, so when it fills all 500 and "
+                    + "leaves none of them out, its total less the rows shown is what lies beyond them, which can be fewer than 5 "
+                    + "people's."),
             ["WebActivityAPIController.Pages"] = Floored(
                     "Top, slowest and quiet pages and sites of fewer than 5 people are left out, each list with its smallest row shown, "
-                    + "so neither the page views nor the unique page views less the rows shown are one small page's. A quiet page has "
-                    + "at most three page views, so every quiet page is left out.")
+                    + "floored over every row it can hold and then cut to the rows asked for, so neither the page views nor the unique "
+                    + "page views less the rows shown are one small page's. A quiet page has at most three page views, so every quiet "
+                    + "page is left out. The most viewed, slowest and quiet pages share each page's page views and unique page views, "
+                    + "so they leave out one combined set of pages. No page carries its entries, exits or bounces: they are the "
+                    + "Journeys tab's figures, whose entry, exit and bounce pages leave out one combined set of pages.")
                 .By(typeof(WebActivityPages), nameof(WebActivityPages.WithoutSmallGroups))
+                .By(typeof(WebActivityPageRow), nameof(WebActivityPageRow.EndpointFiguresWithheld))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.FirstRows))
                 .By(typeof(WebActivitySql), nameof(WebActivitySql.PageStats))
                 .By(typeof(WebActivitySql), nameof(WebActivitySql.SlowestPages))
                 .By(typeof(WebActivitySql), nameof(WebActivitySql.QuietPages))
                 .ProvenBy(
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesVisitsAndOverview_WithoutSeePii_LeaveOutPagesAndSitesOfFewerThanFivePeople_WithTheSmallestShown)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EntryExitAndBouncePages_WithoutSeePii_LeaveOutOneCombinedSetOfPages_SoNoPageIsShownWhereAnotherListHidesIt)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.MostViewedSlowestAndQuietPages_WithoutSeePii_LeaveOutOneCombinedSetOfPages_SoNoPageIsShownWhereAnotherListHidesIt)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallGroups_ReturnsACopy_AndLeavesTheCachedSectionAsItWasBuilt)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.SeePii_IsSentEveryPageAndPathListAsBuilt_AndNeverAPeopleCount)),
                     Test<WebActivitySqlIntegrationTests>(nameof(WebActivitySqlIntegrationTests.EveryPageAndPathList_CountsEachPersonOnce_AndAPageViewWithNoVisitAddsNoOne)))
                 .WithKnownGap("The weekly period-of-day chart is over the reader's whole scope with no people count (judgement call 1). "
-                    + "Each page list picks its own smallest row shown, so a page left out of one list for that reason can still be "
-                    + "shown by a differently filtered list beside it (most viewed, slowest, visits by page); its figures there "
-                    + "narrow the first list's remainder only when that list holds every page with traffic."),
+                    + "The Visits tab's visits by page are floored apart from this tab's lists, though a page's visits there are its "
+                    + "unique page views here: a page one tab leaves out as its smallest shown can be shown by the other, and narrows "
+                    + "the first list's remainder when that list holds every page with traffic (#881 decision, not fixed: one combined "
+                    + "set across the two tabs means either tab loads the other's section).")
+                .WithKnownGap("#881 decision, not fixed: a row is floored on its own people, but a figure inside a shown row can describe "
+                    + "fewer than 5 of them - a page's average time on page and load time are over the page views that reported one. "
+                    + "Flooring those needs a people count per figure, in SQL, and a product decision.")
+                .WithKnownGap("#881 decision, not fixed: a list is floored over the first 500 rows it ranks, so when it fills all 500 and "
+                    + "leaves none of them out, its total less the rows shown is what lies beyond them, which can be fewer than 5 "
+                    + "people's."),
             ["WebActivityAPIController.Journeys"] = Floored(
                     "Entry, exit and bounce pages, flows and clicked elements of fewer than 5 people are left out, each list with its "
-                    + "smallest row shown, so the visits, bounces and clicks less the rows shown are never one small row's; a step "
-                    + "of fewer than 5 people is left out with the smallest step out of the same page, whose share it is of.")
+                    + "smallest row shown, floored over every row it can hold and then cut to the rows asked for, so the visits, "
+                    + "bounces and clicks less the rows shown are never one small row's. The entry, exit and bounce pages, which share "
+                    + "each page's entries, exits and bounces, leave out one combined set of pages, and no flow that starts or ends on "
+                    + "one is shown; a step of fewer than 5 people is left out with the smallest step out of the same page, whose "
+                    + "share it is of.")
                 .By(typeof(WebActivityJourneys), nameof(WebActivityJourneys.WithoutSmallGroups))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRowsInEachGroup))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.FirstRows))
                 .By(typeof(WebActivitySql), nameof(WebActivitySql.Transitions))
                 .By(typeof(WebActivitySql), nameof(WebActivitySql.StartEndFlows))
                 .By(typeof(WebActivitySql), nameof(WebActivitySql.ClickedElements))
                 .ProvenBy(
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Journeys_WithoutSeePii_LeaveOutSmallRows_WithTheSmallestShown_AndASmallStepWithTheSmallestStepOutOfItsPage)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EntryExitAndBouncePages_WithoutSeePii_LeaveOutOneCombinedSetOfPages_SoNoPageIsShownWhereAnotherListHidesIt)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRowsInEachGroup_LeavesOutTheSmallestShownRowOfTheSmallRowsOwnGroup_AndKeepsTheOrder)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.SeePii_IsSentEveryPageAndPathListAsBuilt_AndNeverAPeopleCount)),
                     Test<WebActivitySqlIntegrationTests>(nameof(WebActivitySqlIntegrationTests.EveryPageAndPathList_CountsEachPersonOnce_AndAPageViewWithNoVisitAddsNoOne)))
                 .WithKnownGap("The visit-depth buckets and the click total are over the reader's whole scope with no people count "
                     + "(judgement call 1). The flows are floored against all paired visits, not against each start or end page: "
-                    + "an entry page's entries less its flows shown can be a small flow's visits, without naming where it ended. "
-                    + "Each list picks its own smallest row shown, so a page left out of the entry pages for that reason can still "
-                    + "be shown, with its entries, by the bounce pages or the Pages tab's most viewed pages."),
+                    + "an entry page's entries less its flows shown can be a small flow's visits, without naming where it ended.")
+                .WithKnownGap("#881 decision, not fixed: a row is floored on its own people, but a figure inside a shown row can describe "
+                    + "fewer than 5 of them - an entry or exit page's bounces (its single-page visits), a flow's single-page visits "
+                    + "and average pages, and the average time on page (over the page views that reported one). Flooring those needs a "
+                    + "people count per figure, in SQL, and a product decision.")
+                .WithKnownGap("#881 decision, not fixed: a list is floored over the first 500 rows it ranks, so when it fills all 500 and "
+                    + "leaves none of them out, its total less the rows shown is what lies beyond them, which can be fewer than 5 "
+                    + "people's."),
             ["WebActivityAPIController.Geography"] = Floored(
                     "Countries, provinces and cities fewer than 5 people visited from are left out, each list with its smallest place "
-                    + "shown, so no place can be worked out from the located page views; a country the list leaves out is folded into "
-                    + "'(other countries)' over time.")
+                    + "shown, floored over every place it can hold and then cut to the rows asked for, so no place can be worked out "
+                    + "from the located page views; a country the list leaves out is folded into '(other countries)' over time.")
                 .By(typeof(WebActivityGeography), nameof(WebActivityGeography.WithoutSmallGroups))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.FirstRows))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithSeriesFolded))
                 .ProvenBy(
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Geography_WithoutSeePii_LeavesOutPlacesOfFewerThanFiveVisitors_AndWhatIsLeftOutIsNeverOneSmallPlace)),
-                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut))),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut)))
+                .WithKnownGap("#881 decision, not fixed: a list is floored over the first 500 rows it ranks, so when it fills all 500 and "
+                    + "leaves none of them out, its total less the rows shown is what lies beyond them, which can be fewer than 5 "
+                    + "people's."),
             ["WebActivityAPIController.Search"] = Floored(
                     "Search terms and dead-end terms are withheld, as Teams key phrases are: they are text people typed. Searches by "
                     + "site count no people and are withheld too.")
@@ -542,29 +586,45 @@ namespace Tests.UnitTests
                     + "people count (judgement call 1)."),
             ["WebActivityAPIController.Technology"] = Floored(
                     "Browsers, operating systems, devices and the browser x device x operating system x city detail are left out below "
-                    + "5 visitors, each list with its smallest row shown; a device the list leaves out is folded into '(other devices)' "
-                    + "over time. The detail names only the cities Geography shows for the same window and scope, so a city "
-                    + "Geography leaves out cannot be taken back out of its remainder.")
+                    + "5 visitors, each list with its smallest row shown, floored over every row it can hold and then cut to the rows "
+                    + "asked for; a device the list leaves out is folded into '(other devices)' over time. The detail names only the "
+                    + "cities Geography shows for the same window and scope, so a city Geography leaves out cannot be taken back out "
+                    + "of its remainder.")
                 .By(typeof(WebActivityTechnology), nameof(WebActivityTechnology.WithoutSmallGroups))
                 .By(typeof(WebActivityGeography), nameof(WebActivityGeography.CityNamesShownWithoutSeePii))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.FirstRows))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithSeriesFolded))
                 .ProvenBy(
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Technology_WithoutSeePii_LeavesOutDetailRowsAndPlatformsOfFewerThanFiveVisitors)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Technology_WithoutSeePii_NamesOnlyCitiesGeographyShows_OnScreenAndInTheExport)),
-                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut))),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut)))
+                .WithKnownGap("#881 decision, not fixed: a row is floored on its own people, but a figure inside a shown row can describe "
+                    + "fewer than 5 of them - a platform's or detail row's average load time and time on page are over the page views "
+                    + "that reported one. Flooring those needs a people count per figure, in SQL, and a product decision.")
+                .WithKnownGap("#881 decision, not fixed: a list is floored over the first 500 rows it ranks, so when it fills all 500 and "
+                    + "leaves none of them out, its total less the rows shown is what lies beyond them, which can be fewer than 5 "
+                    + "people's."),
             ["WebActivityAPIController.Export"] = Floored(
                     "Every file carries its screen's floored rows - pages, quiet and slow pages, entry and exit pages, steps, flows "
-                    + "and the technology detail, which names only the cities Geography shows - cached apart from a See PII "
-                    + "reader's file. The search terms are refused.")
+                    + "and the technology detail, which names only the cities Geography shows - floored over every row and cut to the "
+                    + "rows asked for, and cached apart from a See PII reader's file. The pages file carries no entries, exits or "
+                    + "bounces. The search terms are refused.")
                 .By(typeof(WebActivityPages), nameof(WebActivityPages.WithoutSmallGroups))
                 .By(typeof(WebActivityJourneys), nameof(WebActivityJourneys.WithoutSmallGroups))
                 .By(typeof(WebActivityTechnology), nameof(WebActivityTechnology.WithoutSmallGroups))
                 .By(typeof(WebActivityGeography), nameof(WebActivityGeography.CityNamesShownWithoutSeePii))
+                .By(typeof(WebActivityExports), nameof(WebActivityExports.PageColumns))
                 .ProvenBy(
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Export_WithoutSeePii_EveryFileCarriesItsScreensFlooredRows_AndOnlyTheSearchTermsAreRefused)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Export_ASeePiiReadersFile_IsNeverServedToTheNextReaderWithoutSeePii)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.MostViewedSlowestAndQuietPages_WithoutSeePii_LeaveOutOneCombinedSetOfPages_SoNoPageIsShownWhereAnotherListHidesIt)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Technology_WithoutSeePii_NamesOnlyCitiesGeographyShows_OnScreenAndInTheExport)))
+                .WithKnownGap("#881 decision, not fixed: a list is floored over the first 500 rows it ranks, so when it fills all 500 and "
+                    + "leaves none of them out, its total less the rows shown is what lies beyond them, which can be fewer than 5 "
+                    + "people's.")
                 .Refusing("section search-terms",
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Export_WithoutSeePii_EveryFileCarriesItsScreensFlooredRows_AndOnlyTheSearchTermsAreRefused))),
         };

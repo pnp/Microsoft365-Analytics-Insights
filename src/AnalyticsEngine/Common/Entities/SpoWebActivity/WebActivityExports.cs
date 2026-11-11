@@ -57,9 +57,9 @@ namespace Common.Entities.SpoWebActivity
         /// exporting a placeholder zero under a heading like "Bounces" states a fact the query never
         /// established.
         /// </remarks>
-        public static IReadOnlyList<CsvColumn<WebActivityPageRow>> PageColumns()
+        public static IReadOnlyList<CsvColumn<WebActivityPageRow>> PageColumns(bool includeEndpointFigures = true)
         {
-            return new List<CsvColumn<WebActivityPageRow>>
+            var columns = new List<CsvColumn<WebActivityPageRow>>
             {
                 new CsvColumn<WebActivityPageRow>("Page title", r => r.Title),
                 new CsvColumn<WebActivityPageRow>("URL", r => r.Url),
@@ -68,11 +68,19 @@ namespace Common.Entities.SpoWebActivity
                 new CsvColumn<WebActivityPageRow>("Unique page views (once per visit)", r => r.UniquePageViews),
                 new CsvColumn<WebActivityPageRow>("Average seconds on page", r => r.AverageSecondsOnPage),
                 new CsvColumn<WebActivityPageRow>("Average load seconds", r => r.AverageLoadSeconds),
-                new CsvColumn<WebActivityPageRow>("Visits entering here", r => r.Entries),
-                new CsvColumn<WebActivityPageRow>("Visits ending here", r => r.Exits),
-                new CsvColumn<WebActivityPageRow>("Bounces (entered and left without going further)", r => r.Bounces),
-                new CsvColumn<WebActivityPageRow>("Bounce rate (% of entries)", r => r.BouncePct),
             };
+
+            // A reader without See PII is sent no page's entries, exits or bounces from this list (#844): they are the
+            // entry, exit and bounce pages' figures, and those lists leave out one combined set of pages.
+            if (includeEndpointFigures)
+            {
+                columns.Add(new CsvColumn<WebActivityPageRow>("Visits entering here", r => r.Entries));
+                columns.Add(new CsvColumn<WebActivityPageRow>("Visits ending here", r => r.Exits));
+                columns.Add(new CsvColumn<WebActivityPageRow>("Bounces (entered and left without going further)", r => r.Bounces));
+                columns.Add(new CsvColumn<WebActivityPageRow>("Bounce rate (% of entries)", r => r.BouncePct));
+            }
+
+            return columns;
         }
 
         /// <summary>

@@ -56,8 +56,12 @@ export default function PagesPanel({
   const kpis = data.kpis;
 
   // Without See PII, pages and sites of too few visitors are left out of each list, with the smallest row shown - and a
-  // quiet page is by design one that one, two or three people opened, so every quiet page is. Each card says so.
-  const top = flooredCard(t, data.minimumGroupSize, data.withheldTopPages, data.topPages.length);
+  // quiet page is by design one that one, two or three people opened, so every quiet page is. Each card says so. Nor
+  // does this reader get any page's entries, exits or bounces here: they are the Journeys tab's figures.
+  const endpointFiguresWithheld = data.endpointFiguresWithheld === true;
+  const top = flooredCard(t, data.minimumGroupSize, data.withheldTopPages, data.topPages.length, {
+    note: endpointFiguresWithheld ? t('webActivity.pages.mostViewed.endpointFiguresWithheld') : undefined,
+  });
   const slowest = flooredCard(t, data.minimumGroupSize, data.withheldSlowestPages, data.slowestPages.length, {
     note: t('webActivity.pages.slowest.note'),
     empty: t('webActivity.pages.slowest.empty'),
@@ -159,7 +163,14 @@ export default function PagesPanel({
           <PageTable
             rows={data.topPages}
             label={t('webActivity.pages.mostViewed.title')}
-            columns={{ site: true, uniquePageViews: true, dwell: true, load: true, entries: true, bounce: true }}
+            columns={{
+              site: true,
+              uniquePageViews: true,
+              dwell: true,
+              load: true,
+              entries: !endpointFiguresWithheld,
+              bounce: !endpointFiguresWithheld,
+            }}
             dwellFootnote
           />
         </SectionCard>

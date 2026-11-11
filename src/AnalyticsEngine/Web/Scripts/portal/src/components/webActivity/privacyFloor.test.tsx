@@ -185,6 +185,7 @@ function pages(overrides: Partial<WebActivityPages> = {}): WebActivityPages {
     withheldTopPages: 2,
     withheldSlowestPages: 2,
     withheldQuietPages: 12,
+    endpointFiguresWithheld: true,
     ...overrides,
   };
 }
@@ -317,6 +318,10 @@ describe('Web activity for a reader without See PII', () => {
     expect(screen.getByText('Contoso Intranet')).toBeInTheDocument();
     // Most viewed and slowest can be exported; the quiet pages, every one left out, cannot.
     expect(screen.getAllByRole('button', { name: 'Export' })).toHaveLength(2);
+    // No page carries its entries, exits or bounces here: the most viewed table drops those columns and says why.
+    expect(screen.getByText(/^Entries, exits and bounces are left out of this table to protect privacy\. The Journeys tab shows them/)).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Entries' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Bounce' })).not.toBeInTheDocument();
   });
 
   it('says the pages and journeys left out in Spanish', async () => {
@@ -334,6 +339,8 @@ describe('Web activity for a reader without See PII', () => {
     expect(screen.getAllByText(/Se omiten 2 filas para proteger la privacidad/)).toHaveLength(3);
     expect(screen.queryByText('Todas las páginas que se vieron al menos una vez se vieron más de tres veces.')).not.toBeInTheDocument();
     expect(screen.queryByText(TWO_LEFT_OUT_EN)).not.toBeInTheDocument();
+    expect(screen.getByText(/^Las entradas, salidas y rebotes se omiten de esta tabla para proteger la privacidad\. La pestaña Recorridos/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Entries, exits and bounces are left out/)).not.toBeInTheDocument();
     unmount();
 
     renderWithProvider(
@@ -384,6 +391,7 @@ describe('Web activity for a reader with See PII', () => {
           withheldTopPages: 0,
           withheldSlowestPages: 0,
           withheldQuietPages: 0,
+          endpointFiguresWithheld: undefined,
         })}
         onExportPages={noop}
         onExportQuiet={noop}
@@ -394,6 +402,8 @@ describe('Web activity for a reader with See PII', () => {
 
     expect(screen.queryByText(NO_PEOPLE_COUNT_EN)).not.toBeInTheDocument();
     expect(screen.queryByText(/left out to protect privacy/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Entries, exits and bounces are left out/)).not.toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Entries' })).toBeInTheDocument();
     // An empty quiet list says why, as it always did.
     expect(screen.getByText('Every page that was viewed at all was viewed more than three times.')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Export' })).toHaveLength(3);
