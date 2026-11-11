@@ -1786,7 +1786,8 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     // 2,000 x 16 + 100,000 + 24,000 = 156,000 minutes = 2,600 hours, 1,300 conservative.
     expect(within(await tile('Time back from licensing')).getByText('1,300\u20132,600 h')).toBeVisible();
     expect(within(await tile('Time back from Cowork')).getByText('15\u201330 h')).toBeVisible();
-    const url = new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href);
+    // The link has no href until the filters and SQL have loaded too (reportBusy), which can be after the tiles.
+    const url = await waitFor(() => new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href), { timeout: 5000 });
     expect(url.searchParams.get('copilotMinutesSavedPerMeeting')).toBe('16');
     expect(url.searchParams.has('copilotMinutesSavedPerMailThread')).toBe(false);
     // The name before the split is gone: the server no longer reads it.
@@ -1802,7 +1803,8 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     // 6,000 emails x 10% = 600 handed over x 6 = 3,600 minutes = 60 hours, 30 conservative.
     expect(within(await tile('Time back from Cowork')).getByText('30\u201360 h')).toBeVisible();
     expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
-    const url = new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href);
+    // The link has no href until the filters and SQL have loaded too (reportBusy), which can be after the tiles.
+    const url = await waitFor(() => new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href), { timeout: 5000 });
     expect(url.searchParams.get('coworkSendEmailShare')).toBe('0.1');
     // The minutes per Cowork task is gone with the tasks it applied to (#692): the server no longer reads it.
     expect(url.searchParams.has('coworkMinutesSavedPerTask')).toBe(false);
