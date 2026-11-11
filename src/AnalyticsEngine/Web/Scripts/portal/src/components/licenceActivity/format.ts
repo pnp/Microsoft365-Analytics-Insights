@@ -131,3 +131,27 @@ export function formatAge(
   if (days === 1) return t('common.time.yesterday');
   return t('common.time.daysAgo', { days: formatNumber(days) });
 }
+
+/**
+ * Why a withheld licence shows no activity, for its table cell (`detail` false) or its service detail (`detail` true).
+ * An older server sends no reason, and then a withheld licence always meant too few holders; a reason this build
+ * doesn't know gets a sentence that claims nothing about why.
+ */
+export function withheldText(
+  t: TFunction,
+  sku: LicenceActivitySku,
+  minimumGroupSize: number | null | undefined,
+  detail: boolean,
+): string {
+  const count = formatCount(minimumGroupSize ?? 0);
+  switch (sku.withheldReason ?? 'fewHolders') {
+    case 'fewHolders':
+      return detail ? t('licenceActivity.withheld.detail', { count }) : t('licenceActivity.withheld.cell', { count });
+    case 'revealsFewPeople':
+      return detail
+        ? t('licenceActivity.withheld.revealsFewPeople.detail', { count })
+        : t('licenceActivity.withheld.revealsFewPeople.cell', { count });
+    default:
+      return detail ? t('licenceActivity.withheld.other.detail') : t('licenceActivity.withheld.other.cell');
+  }
+}

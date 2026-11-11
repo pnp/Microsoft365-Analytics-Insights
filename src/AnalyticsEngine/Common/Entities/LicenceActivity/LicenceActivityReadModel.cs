@@ -211,9 +211,11 @@ namespace Common.Entities.LicenceActivity
         /// <summary>
         /// The overview of one selection. With a <see cref="LicenceActivityQuery.MinimumGroupSize"/> - a reader
         /// without See PII - no figure describes fewer people than that minimum: a licence held by fewer has its
-        /// activity withheld (<see cref="LicenceActivitySku.Withheld"/>), smaller departments and countries are
-        /// folded into one row, and a selection of fewer people has every figure withheld
-        /// (<see cref="LicenceActivityOverview.Suppressed"/>). Without one, every group is shown.
+        /// activity withheld (<see cref="LicenceActivitySku.Withheld"/>), and so does any licence through which
+        /// "Everyone holding a licence", or a licence its holders all hold, would give a handful of people back
+        /// (<see cref="LicenceActivityComplements"/>); smaller departments and countries are folded into one row, and a
+        /// selection of fewer people has every figure withheld (<see cref="LicenceActivityOverview.Suppressed"/>).
+        /// Without one, every group is shown.
         /// </summary>
         public LicenceActivityOverview BuildOverview(
             LicenceActivityQuery query, CancellationToken cancellationToken)
@@ -288,6 +290,7 @@ namespace Common.Entities.LicenceActivity
                 if (IsSmall(result.AssignedUsers, minimum))
                 {
                     result.Withheld = true;
+                    result.WithheldReason = LicenceActivityWithheldReasons.FewHolders;
                 }
                 else
                 {
@@ -296,6 +299,10 @@ namespace Common.Entities.LicenceActivity
                 }
                 overview.Licences.Add(result);
             }
+
+            // "Everyone holding a licence" stays beside the licences, so it must not give back what was just withheld.
+            if (minimum.HasValue && !overview.Suppressed)
+                WithholdComplements(overview.Licences, included, minimum.Value, cancellationToken);
 
             if (!overview.Suppressed)
             {
@@ -543,6 +550,50 @@ namespace Common.Entities.LicenceActivity
         /// </summary>
         private static bool IsSmall(int people, int? minimum) =>
             minimum.HasValue && people > 0 && people < minimum.Value;
+
+        /// <summary>
+        /// Withholds, for a reader without See PII, every licence through which the figures shown beside it would give back
+        /// the activity of fewer than <paramref name="minimum"/> people (<see cref="LicenceActivityComplements"/>), with
+        /// <see cref="LicenceActivityWithheldReasons.RevealsFewPeople"/>.
+        /// </summary>
+        /// <param name="licences">The overview's licences, in slot order.</param>
+        private void WithholdComplements(
+            List<LicenceActivitySku> licences, bool[] included, int minimum, CancellationToken cancellationToken)
+        {
+            if (licences.Count == 0) return;
+            var withheld = licences.Select(licence => licence.Withheld).ToArray();
+            var holders = licences.Select(licence => licence.AssignedUsers).ToArray();
+
+            // The people in view, grouped by which of the licences shown they hold.
+            var words = (licences.Count + 63) >> 6;
+            var groups = new Dictionary<ulong[], int>(LicenceActivityComplements.ProfileComparer.Instance);
+            var profile = new ulong[words];
+            for (var user = 0; user < _users.Length; user++)
+            {
+                if ((user & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
+                if (!included[user]) continue;
+                Array.Clear(profile, 0, words);
+                for (var next = _licenceOffsetsByUser[user]; next < _licenceOffsetsByUser[user + 1]; next++)
+                {
+                    var slot = _licenceSlotsByUser[next];
+                    if (!withheld[slot]) profile[slot >> 6] |= 1UL << (slot & 63);
+                }
+                int people;
+                if (groups.TryGetValue(profile, out people)) groups[profile] = people + 1;
+                else groups.Add((ulong[])profile.Clone(), 1);
+            }
+
+            var complement = LicenceActivityComplements.Withhold(
+                groups.Keys.ToList(), groups.Values.ToList(), holders, withheld, minimum, cancellationToken);
+            for (var slot = 0; slot < licences.Count; slot++)
+            {
+                if (!complement[slot]) continue;
+                licences[slot].Withheld = true;
+                licences[slot].WithheldReason = LicenceActivityWithheldReasons.RevealsFewPeople;
+                licences[slot].AdoptionScore = null;
+                licences[slot].Workloads = new List<LicenceActivityDistribution>();
+            }
+        }
 
         /// <summary>The most department or country rows an overview lists.</summary>
         private const int MaximumDemographicRows = 50;

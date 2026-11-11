@@ -85,13 +85,36 @@ namespace Common.Entities.LicenceActivity
         public double? AdoptionScore { get; set; }
 
         /// <summary>
-        /// True when fewer people hold this licence than a reader without See PII may see
+        /// True when a reader without See PII may not see this licence's activity
         /// (<see cref="LicenceActivityQuery.MinimumGroupSize"/>): <see cref="AssignedUsers"/> stays, but the
-        /// activity distributions and the adoption score - those few people's own activity - are withheld.
+        /// activity distributions and the adoption score are withheld. Why is <see cref="WithheldReason"/>.
         /// </summary>
         public bool Withheld { get; set; }
 
+        /// <summary>
+        /// Why <see cref="Withheld"/> is set: one of <see cref="LicenceActivityWithheldReasons"/>, or null when the
+        /// licence's activity is shown. A stable key, not text - the portal writes the sentence.
+        /// </summary>
+        public string WithheldReason { get; set; }
+
         public List<LicenceActivityDistribution> Workloads { get; set; } = new List<LicenceActivityDistribution>();
+    }
+
+    /// <summary>
+    /// Why a licence's activity is withheld from a reader without See PII (#844). Part of the API contract: the portal
+    /// maps each to a translated sentence, and the workbook writes its own.
+    /// </summary>
+    public static class LicenceActivityWithheldReasons
+    {
+        /// <summary>Fewer people hold the licence than <see cref="LicenceActivityQuery.MinimumGroupSize"/>.</summary>
+        public const string FewHolders = "fewHolders";
+
+        /// <summary>
+        /// Enough people hold the licence, but "Everyone holding a licence", or a licence its holders all hold, less
+        /// this licence and others shown beside it would be the activity of fewer people than the minimum - typically the
+        /// holders of a licence withheld for <see cref="FewHolders"/>. See <see cref="LicenceActivityComplements"/>.
+        /// </summary>
+        public const string RevealsFewPeople = "revealsFewPeople";
     }
 
     /// <summary>Everyone holding any licence, each counted once. See <see cref="LicenceActivityOverview.AllLicences"/>.</summary>

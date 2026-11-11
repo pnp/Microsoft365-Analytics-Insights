@@ -188,6 +188,13 @@ const licenceActivity: Record<keyof typeof en, string> = {
   'licenceActivity.withheld.cell': 'Oculto: menos de {count} personas tienen esta licencia',
   'licenceActivity.withheld.detail':
     'Menos de {count} personas tienen esta licencia, así que su uso de los servicios se oculta para proteger su privacidad.',
+  'licenceActivity.withheld.revealsFewPeople.cell':
+    'Oculto: junto con las demás cifras de esta tabla, revelaría la actividad de menos de {count} personas',
+  'licenceActivity.withheld.revealsFewPeople.detail':
+    'Suficientes personas tienen esta licencia, pero junto con las demás cifras de este informe sus cifras revelarían cuánto usan sus servicios menos de {count} personas, así que se ocultan para proteger la privacidad de esas personas.',
+  'licenceActivity.withheld.other.cell': 'Oculto para proteger la privacidad de las personas que la tienen',
+  'licenceActivity.withheld.other.detail':
+    'El uso que hacen de sus servicios las personas con esta licencia se oculta para proteger su privacidad.',
   'licenceActivity.suppressed.title': 'Cifras ocultas',
   'licenceActivity.suppressed.body':
     'Tan pocas personas tienen una licencia en esta selección que cada cifra describiría a individuos, así que las cifras se ocultan para proteger su privacidad.',
