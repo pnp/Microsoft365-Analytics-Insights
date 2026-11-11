@@ -321,12 +321,29 @@ namespace Tests.UnitTests
                 "Which DLP sources are switched on, and why not."),
             ["DlpAPIController.Summary"] = Floored(
                     "Agent, policy, sensitivity-label and tenant DLP policy rows, and the policies under a listed agent, that "
-                    + "affected fewer than 5 people are left out of the anonymous build; the top-users query is not run.")
+                    + "affected fewer than 5 people are left out of the anonymous build. Whenever a table or an agent's policies "
+                    + "leave one out, or a table goes on past the 20 rows it lists (each ranking is read one row longer to tell), "
+                    + "the smallest row listed goes too, so the KPI totals, or the agent's own figures, less the rows listed always "
+                    + "hold a row of 5 or more people. The top-users query is not run.")
                 .By(typeof(DlpAPIController), nameof(DlpAPIController.WithoutSmallGroups))
+                .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
                 .ProvenBy(
-                    Test<DlpApiSqlIntegrationTests>(nameof(DlpApiSqlIntegrationTests.WithoutSmallGroups_LeavesOutRowsOfFewerThanFivePeople_AndKeepsFiveOrMore)),
+                    Test<DlpApiSqlIntegrationTests>(nameof(DlpApiSqlIntegrationTests.WithoutSmallGroups_LeavesOutTheSmallestRowListedBesideASmallOne_SoNoTotalLessTheRowsListedIsOneSmallRow)),
+                    Test<DlpApiSqlIntegrationTests>(nameof(DlpApiSqlIntegrationTests.WithoutSmallGroups_ATableThatGoesOnPastTheRowsItLists_LeavesOutItsSmallestRowListed)),
+                    Test<DlpApiSqlIntegrationTests>(nameof(DlpApiSqlIntegrationTests.Summary_WithoutSeePii_NoTotalLessTheRowsListedIsOneSmallRow_AndWithSeePiiEveryRowIsListed)),
+                    Test<DlpApiSqlIntegrationTests>(nameof(DlpApiSqlIntegrationTests.Summary_WithoutSeePii_ATableWithOneSmallRowPastItsTwentyRows_LeavesOutItsSmallestRowListed)),
                     Test<DlpApiSqlIntegrationTests>(nameof(DlpApiSqlIntegrationTests.SummaryExecutesEveryQueryAndCountsBlockedSeparatelyFromAudited)))
-                .WithKnownGap("#866: a row left out is not protected against the KPI totals beside the tables (complementary withholding, #844 S4)."),
+                .WithKnownGap("#866 review, not fixed: each table, and each listed agent's policies, is held against its own total, "
+                    + "but the policies table and the agents' policies are two views of one agent x policy table. When every Copilot "
+                    + "match in a period carries an agent, a policy's figures less its rows under the other listed agents can give "
+                    + "back a row an agent's policies leave out, or the row left out beside it; and two tables that split the "
+                    + "matches alike (one label per policy) can leave out different smallest rows. Closing it is a "
+                    + "disclosure-control design, not a per-table rule.")
+                .WithKnownGap("The KPI totals and the daily trend are over the reader's whole scope with no people count (judgement "
+                    + "call 1): in a period, or on a day, when only one to four people were affected, they are those people's figures.")
+                .WithKnownGap("#844 (S3-3): the withholding holds within one response, not across the 7-, 28-, 90- and 180-day "
+                    + "windows a reader can request, which all end today: a row two windows list differs between them by the days "
+                    + "between, which can be one to four people's."),
             ["DlpAPIController.Governance"] = NoGroupedFigures(
                 "Jailbreak and XPIA rates and the labelled share of resources over the reader's whole scope, and interactions per "
                 + "Microsoft AI model and system plugin: Microsoft's catalogue, not a group of people."),
