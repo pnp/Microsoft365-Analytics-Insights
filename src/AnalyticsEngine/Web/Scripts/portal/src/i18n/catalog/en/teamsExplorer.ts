@@ -289,6 +289,14 @@ export const teamsExplorer = {
   'teamsExplorer.adoption.devices.note': 'Shares add up to more than 100% on purpose: most people use more than one platform. Mobile reach is the one to watch for frontline and deskless staff.',
   'teamsExplorer.adoption.devices.withheldNote':
     'Platforms used by fewer than {count} people are not shown to protect privacy, and neither is the mobile total when one of the mobile platforms is hidden.',
+  'teamsExplorer.adoption.devices.platform.windows': 'Windows',
+  'teamsExplorer.adoption.devices.platform.mac': 'Mac',
+  'teamsExplorer.adoption.devices.platform.web': 'Web',
+  'teamsExplorer.adoption.devices.platform.ios': 'iOS',
+  'teamsExplorer.adoption.devices.platform.android': 'Android',
+  'teamsExplorer.adoption.devices.platform.linux': 'Linux',
+  'teamsExplorer.adoption.devices.platform.chromeOs': 'Chrome OS',
+  'teamsExplorer.adoption.devices.platform.mobile': 'Mobile (any)',
   'teamsExplorer.adoption.valueLabel.usersLower': 'users',
 
   'teamsExplorer.meetings.utcCaveat': 'Call times are recorded in UTC and the database holds no per-user timezone, so a genuinely global organisation will read high on out-of-hours activity. Compare departments against each other rather than against an absolute target.',

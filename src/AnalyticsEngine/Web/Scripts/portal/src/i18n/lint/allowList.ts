@@ -127,6 +127,14 @@ export const ALLOWED_LITERALS = new Set<string>([
   // and Microsoft 365 usage-report platform "Web".
   'Audio',
   'Web',
+  // The client platforms of the Teams device usage report. Operating-system brand names, not English
+  // words: Microsoft's Spanish edition of that report names them the same ("Teléfono Android" is its
+  // column for Android phones), so a Spanish reader writes the same characters.
+  'Mac',
+  'iOS',
+  'Android',
+  'Linux',
+  'Chrome OS',
   // A bootstrap failure thrown before React mounts, so there is no UI it could ever be shown in -
   // it reaches a developer through the console and nowhere else. Every other thrown message in
   // this portal IS shown (the api layer's errors are rendered in an error bar), which is why this

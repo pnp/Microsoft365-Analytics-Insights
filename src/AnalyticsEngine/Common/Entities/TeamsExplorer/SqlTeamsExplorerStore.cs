@@ -461,20 +461,25 @@ namespace Common.Entities.TeamsExplorer
             return byWeek.Values.ToList();
         }
 
-        private static List<TeamsDeviceRow> BuildDevices(DevicesRow row)
+        /// <summary>
+        /// The people seen on each platform, most first. Each row carries a stable key the portal words in the reader's
+        /// language; the English name is only its fallback for a key it does not know (#850). serverAuthoredText.test.ts reads
+        /// these keys and names, and fails when the portal's catalog and this list disagree.
+        /// </summary>
+        internal static List<TeamsDeviceRow> BuildDevices(DevicesRow row)
         {
             row = row ?? new DevicesRow();
 
             var platforms = new[]
             {
-                new { Platform = "Windows", Users = row.UsedWindows },
-                new { Platform = "Mac", Users = row.UsedMac },
-                new { Platform = "Web", Users = row.UsedWeb },
-                new { Platform = TeamsDeviceRow.Ios, Users = row.UsedIos },
-                new { Platform = TeamsDeviceRow.Android, Users = row.UsedAndroid },
-                new { Platform = "Linux", Users = row.UsedLinux },
-                new { Platform = "Chrome OS", Users = row.UsedChromeOs },
-                new { Platform = TeamsDeviceRow.AnyMobile, Users = row.UsedMobile },
+                new { Key = "windows", Platform = "Windows", Users = row.UsedWindows },
+                new { Key = "mac", Platform = "Mac", Users = row.UsedMac },
+                new { Key = "web", Platform = "Web", Users = row.UsedWeb },
+                new { Key = "ios", Platform = TeamsDeviceRow.Ios, Users = row.UsedIos },
+                new { Key = "android", Platform = TeamsDeviceRow.Android, Users = row.UsedAndroid },
+                new { Key = "linux", Platform = "Linux", Users = row.UsedLinux },
+                new { Key = "chromeOs", Platform = "Chrome OS", Users = row.UsedChromeOs },
+                new { Key = "mobile", Platform = TeamsDeviceRow.AnyMobile, Users = row.UsedMobile },
             };
 
             return platforms
@@ -483,6 +488,7 @@ namespace Common.Entities.TeamsExplorer
                 .Select(p => new TeamsDeviceRow
                 {
                     Platform = p.Platform,
+                    PlatformKey = p.Key,
                     Users = p.Users,
                     SharePct = TeamsExplorerScoring.Percentage(p.Users, row.MeasuredUsers),
                 })

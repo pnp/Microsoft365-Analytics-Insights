@@ -6,6 +6,7 @@ import { reportQueryFailureText } from '../shared/reportQueryFailure';
 import { formatDateParts, formatNumber, parseApiDate, useT, type TFunction, type TranslationKey } from '../../i18n';
 import type {
   TeamsBucket,
+  TeamsDeviceRow,
   TeamsDormancy,
   TeamsNamedCount,
   TeamsQueryInfo,
@@ -170,6 +171,29 @@ export function translatedCodeBucketsToCategories(
     label: bucket.other ? otherLabel : translatedCodeLabel(t, group, bucket.key),
     value: bucket.count,
   }));
+}
+
+/**
+ * The Adoption tab's platforms, by the stable key the server sends beside each English name
+ * (`SqlTeamsExplorerStore.BuildDevices`). serverAuthoredText.test.ts fails when the two lists disagree.
+ */
+export const TEAMS_PLATFORM_LABEL_KEYS = {
+  windows: 'teamsExplorer.adoption.devices.platform.windows',
+  mac: 'teamsExplorer.adoption.devices.platform.mac',
+  web: 'teamsExplorer.adoption.devices.platform.web',
+  ios: 'teamsExplorer.adoption.devices.platform.ios',
+  android: 'teamsExplorer.adoption.devices.platform.android',
+  linux: 'teamsExplorer.adoption.devices.platform.linux',
+  chromeOs: 'teamsExplorer.adoption.devices.platform.chromeOs',
+  mobile: 'teamsExplorer.adoption.devices.platform.mobile',
+} as const satisfies Record<string, TranslationKey>;
+
+/** A platform's name in the reader's language, or the server's English for a key this build does not know. */
+export function platformLabel(t: TFunction, row: Pick<TeamsDeviceRow, 'platform' | 'platformKey'>): string {
+  const key = row.platformKey;
+  return key && Object.prototype.hasOwnProperty.call(TEAMS_PLATFORM_LABEL_KEYS, key)
+    ? t(TEAMS_PLATFORM_LABEL_KEYS[key as keyof typeof TEAMS_PLATFORM_LABEL_KEYS])
+    : row.platform;
 }
 
 export const TEAMS_SEGMENT_TEXT_KEYS: Record<string, { labelKey: TranslationKey; descriptionKey: TranslationKey }> = {
