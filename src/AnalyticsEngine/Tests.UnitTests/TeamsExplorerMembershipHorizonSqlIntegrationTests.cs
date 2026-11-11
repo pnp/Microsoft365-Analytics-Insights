@@ -127,14 +127,15 @@ namespace Tests.UnitTests
             var trimmedConversations = conversations.WithoutSmallGroups(floor);
 
             // Five people were members, but on a day older than the horizon, so nothing read says who the members are now.
-            // Fail safe: that counts as below the floor.
+            // Fail safe: that counts as below the floor. The current team goes with it: the only other team, so the tenant's
+            // figures less its rows would be the lapsed team's (TeamsSmallGroups.WithoutSmallRowsOfList).
             Assert.IsFalse(trimmedCollaboration.Channels.Any(c => c.TeamName == LapsedTeam), "The lapsed team's channel is withheld.");
-            Assert.AreEqual(1, trimmedCollaboration.WithheldChannels);
+            Assert.AreEqual(2, trimmedCollaboration.WithheldChannels);
             Assert.IsFalse(trimmedConversations.SentimentByTeam.Any(r => r.Name == LapsedTeam), "The lapsed team's sentiment is withheld.");
-            Assert.AreEqual(1, trimmedConversations.WithheldSentimentTeams);
+            Assert.AreEqual(2, trimmedConversations.WithheldSentimentTeams);
             Assert.IsFalse(trimmedConversations.SentimentByChannel.Any(r => r.Name == LapsedTeam + " / General"),
                 "The lapsed team's channel sentiment is withheld.");
-            Assert.AreEqual(1, trimmedConversations.WithheldSentimentChannels);
+            Assert.AreEqual(2, trimmedConversations.WithheldSentimentChannels);
             Assert.AreEqual(0, channel.TeamMembers, "No snapshot inside the horizon counts as no members.");
         }
 
@@ -146,10 +147,19 @@ namespace Tests.UnitTests
             Assert.AreEqual(ReportScopeResolver.MinimumPeopleWithoutSeePii,
                 collaboration.Channels.Single(c => c.TeamName == CurrentTeam).TeamMembers,
                 "The oldest day the horizon reaches still counts.");
+            Assert.AreEqual(ReportScopeResolver.MinimumPeopleWithoutSeePii, conversations.SentimentByTeam.Single(r => r.Name == CurrentTeam).Members);
 
+            // Read on its own - beside the lapsed team it goes with it, so that the lapsed team cannot be worked out.
             var floor = ReportScopeResolver.MinimumPeopleWithoutSeePii;
-            var trimmedCollaboration = collaboration.WithoutSmallGroups(floor);
-            var trimmedConversations = conversations.WithoutSmallGroups(floor);
+            var trimmedCollaboration = new TeamsCollaboration
+            {
+                Channels = collaboration.Channels.Where(c => c.TeamName != LapsedTeam).ToList(),
+            }.WithoutSmallGroups(floor);
+            var trimmedConversations = new TeamsConversations
+            {
+                SentimentByTeam = conversations.SentimentByTeam.Where(r => r.Name != LapsedTeam).ToList(),
+                SentimentByChannel = conversations.SentimentByChannel.Where(r => r.Name != LapsedTeam + " / General").ToList(),
+            }.WithoutSmallGroups(floor);
 
             Assert.IsTrue(trimmedCollaboration.Channels.Any(c => c.TeamName == CurrentTeam), "The current team's channel is shown.");
             Assert.IsTrue(trimmedConversations.SentimentByTeam.Any(r => r.Name == CurrentTeam), "The current team's sentiment is shown.");

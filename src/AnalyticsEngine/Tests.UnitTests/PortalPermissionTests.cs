@@ -180,9 +180,9 @@ namespace Tests.UnitTests
             ["TeamsAuthAPIController.Put"] = Admin,
 
             ["TeamsExplorerAPIController.Availability"] = Any,
-            ["TeamsExplorerAPIController.Overview"] = Any,
-            ["TeamsExplorerAPIController.Adoption"] = Any,             // folds breakdown groups of fewer than 5 people without See PII
-            ["TeamsExplorerAPIController.Meetings"] = Any,             // trims the named leaderboards; withholds weeks, distributions and modalities of fewer than 5 people
+            ["TeamsExplorerAPIController.Overview"] = Any,             // reads the breakdown's population without See PII; withholds weeks, segments and KPIs of 1-4 people
+            ["TeamsExplorerAPIController.Adoption"] = Any,             // folds breakdown groups of fewer than 5 people without See PII, reads its population, withholds rhythm, lifecycle, segments and platforms of 1-4
+            ["TeamsExplorerAPIController.Meetings"] = Any,             // trims the named leaderboards; withholds weeks of fewer than 5 attendees with the quietest week shown, distributions and modalities of fewer than 5 people
             ["TeamsExplorerAPIController.Collaboration"] = Any,        // drops teams and channels of teams with fewer than 5 members, withholds reactions of 1-4 people and the tab list, folds rare reactions
             ["TeamsExplorerAPIController.Conversations"] = Any,        // withholds key phrases and languages; drops the sentiment of teams with fewer than 5 members
             ["TeamsExplorerAPIController.People"] = Any,               // trims the champion and dormant lists; folds departments of fewer than 5 power users
@@ -1057,6 +1057,10 @@ namespace Tests.UnitTests
                     Assert.AreEqual(JTokenType.Null, small["calls"].Type, "Withheld, never 0.");
                     Assert.AreEqual(JTokenType.Null, small["minutes"].Type);
                     Assert.AreEqual(JTokenType.Null, small["attendees"].Type);
+                    // The quietest week shown (seven attendees) goes with it, so the calls less the weeks shown are 25 - the
+                    // two weeks together - and never the two people's 10.
+                    Assert.IsTrue((bool)trimmed["trend"][2]["withheld"]);
+                    Assert.AreEqual(25, 45 - (long)trimmed["trend"][0]["calls"]);
 
                     // Screen sharing was one person's: it is folded with the least-used modality shown, so it cannot be
                     // worked out as the difference either.
@@ -1075,6 +1079,7 @@ namespace Tests.UnitTests
                     var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/meetings?days=28&top=38"));
                     Assert.AreEqual(10, (long)full["trend"][1]["calls"]);
                     Assert.AreEqual(2, (int)full["trend"][1]["attendees"]);
+                    Assert.AreEqual(15, (long)full["trend"][2]["calls"]);
                     Assert.AreEqual(3, ((JArray)full["modalityMix"]).Count);
                     Assert.AreEqual(JTokenType.Null, full["minimumGroupSize"].Type);
                     Assert.AreEqual(1, store.MeetingsCalls, "The second reader must have been served from the cache.");
@@ -1119,7 +1124,10 @@ namespace Tests.UnitTests
         {
             var store = new FakeTeamsStore();
             var query = TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, 39);
-            MemoryCache.Default.Remove(query.CacheKey("collaboration"));
+            // A reader without See PII is served from the section read with one row more than the longest list, whatever top
+            // they asked for; a See PII reader from the one read at their own top.
+            var keys = new[] { query.CacheKey("collaboration"), query.WithListProbe().CacheKey("collaboration") };
+            foreach (var key in keys) MemoryCache.Default.Remove(key);
             try
             {
                 using (var host = new PortalTestHost(
@@ -1132,8 +1140,8 @@ namespace Tests.UnitTests
                     CollectionAssert.AreEqual(
                         new[] { "Contoso Big Team", "Contoso One Reactor" },
                         trimmed["teams"].Select(row => (string)row["name"]).ToArray(),
-                        "A team of two is those two people.");
-                    Assert.AreEqual(1, (int)trimmed["withheldTeams"]);
+                        "A team of two is those two people; the team of eight, the smallest shown, goes with it.");
+                    Assert.AreEqual(2, (int)trimmed["withheldTeams"]);
                     Assert.AreEqual(120, (long)trimmed["teams"][0]["reactions"]);
                     Assert.IsTrue((bool)trimmed["teams"][1]["reactionsWithheld"], "One person made every reaction in the team.");
                     Assert.AreEqual(JTokenType.Null, trimmed["teams"][1]["reactions"].Type, "Withheld, never 0.");
@@ -1142,8 +1150,8 @@ namespace Tests.UnitTests
                     CollectionAssert.AreEqual(
                         new[] { "General", "Ideas" },
                         trimmed["channels"].Select(row => (string)row["name"]).ToArray(),
-                        "The channel of a team of two is left out with its team.");
-                    Assert.AreEqual(1, (int)trimmed["withheldChannels"]);
+                        "The channel of a team of two is left out with its team, and the smallest team's channel shown with it.");
+                    Assert.AreEqual(2, (int)trimmed["withheldChannels"]);
                     Assert.IsTrue((bool)trimmed["channels"][1]["reactionsWithheld"]);
                     Assert.AreEqual(JTokenType.Null, trimmed["channels"][1]["reactions"].Type);
                     Assert.AreEqual(JTokenType.Null, trimmed["channels"][1]["reactingUsers"].Type);
@@ -1158,34 +1166,38 @@ namespace Tests.UnitTests
                     Assert.AreEqual(0, ((JArray)trimmed["tabUsage"]).Count);
                     Assert.IsTrue((bool)trimmed["tabUsageWithheld"]);
                     Assert.IsFalse(trimmed.ToString().Contains("Contoso Pair") || trimmed.ToString().Contains("Contoso private notes"));
+                    Assert.IsFalse(trimmed.ToString().Contains("Contoso Mid") || trimmed.ToString().Contains("Plans"));
 
                     // The exports are never less redacted than the page.
                     var teamsCsv = await host.Client.GetStringAsync("api/TeamsExplorer/export/teams?days=28");
                     StringAssert.Contains(teamsCsv, "Contoso One Reactor");
-                    Assert.IsFalse(teamsCsv.Contains("Contoso Pair"));
+                    Assert.IsFalse(teamsCsv.Contains("Contoso Pair") || teamsCsv.Contains("Contoso Mid"));
                     Assert.IsFalse(teamsCsv.Contains(",37,"), "The withheld reactions are a blank cell, not their count.");
                     var channelsCsv = await host.Client.GetStringAsync("api/TeamsExplorer/export/channels?days=28");
                     StringAssert.Contains(channelsCsv, "Ideas");
-                    Assert.IsFalse(channelsCsv.Contains("Πωλήσεις"));
+                    Assert.IsFalse(channelsCsv.Contains("Πωλήσεις") || channelsCsv.Contains("Plans"));
                     Assert.IsFalse(channelsCsv.Contains(",37,"));
 
-                    // A See PII reader is served the cached section, and the exports, as before.
+                    // A See PII reader is served every row, as before, from a section of their own - read once, then cached.
                     var built = store.CollaborationCalls;
                     host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
-                    var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/collaboration?days=28&top=39"));
-                    Assert.AreEqual(3, ((JArray)full["teams"]).Count);
-                    Assert.AreEqual(37, (long)full["teams"][1]["reactions"]);
-                    Assert.AreEqual(3, ((JArray)full["channels"]).Count);
-                    Assert.AreEqual(3, ((JArray)full["reactionMix"]).Count);
-                    Assert.AreEqual("Contoso private notes", (string)full["tabUsage"][0]["name"]);
-                    Assert.AreEqual(built, store.CollaborationCalls, "The second reader must have been served from the cache.");
+                    for (var request = 0; request < 2; request++)
+                    {
+                        var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/collaboration?days=28&top=39"));
+                        Assert.AreEqual(4, ((JArray)full["teams"]).Count);
+                        Assert.AreEqual(37, (long)full["teams"].Single(t => (string)t["name"] == "Contoso One Reactor")["reactions"]);
+                        Assert.AreEqual(4, ((JArray)full["channels"]).Count);
+                        Assert.AreEqual(3, ((JArray)full["reactionMix"]).Count);
+                        Assert.AreEqual("Contoso private notes", (string)full["tabUsage"][0]["name"]);
+                    }
+                    Assert.AreEqual(built + 1, store.CollaborationCalls, "Never the trimmed reader's section; then cached.");
                     StringAssert.Contains(await host.Client.GetStringAsync("api/TeamsExplorer/export/teams?days=28"), "Contoso Pair");
                     StringAssert.Contains(await host.Client.GetStringAsync("api/TeamsExplorer/export/channels?days=28"), "Πωλήσεις");
                 }
             }
             finally
             {
-                MemoryCache.Default.Remove(query.CacheKey("collaboration"));
+                foreach (var key in keys) MemoryCache.Default.Remove(key);
             }
         }
 
@@ -1194,7 +1206,8 @@ namespace Tests.UnitTests
         {
             var store = new FakeTeamsStore();
             var query = TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, 41);
-            MemoryCache.Default.Remove(query.CacheKey("conversations"));
+            var keys = new[] { query.CacheKey("conversations"), query.WithListProbe().CacheKey("conversations") };
+            foreach (var key in keys) MemoryCache.Default.Remove(key);
             try
             {
                 using (var host = new PortalTestHost(
@@ -1208,29 +1221,33 @@ namespace Tests.UnitTests
                     Assert.IsTrue((bool)trimmed["keywordsWithheld"]);
                     Assert.AreEqual(0, ((JArray)trimmed["languages"]).Count);
                     Assert.IsTrue((bool)trimmed["languagesWithheld"]);
-                    CollectionAssert.AreEqual(new[] { "Contoso Big Team" }, trimmed["sentimentByTeam"].Select(r => (string)r["name"]).ToArray());
-                    Assert.AreEqual(1, (int)trimmed["withheldSentimentTeams"]);
+                    CollectionAssert.AreEqual(
+                        new[] { "Contoso Big Team" },
+                        trimmed["sentimentByTeam"].Select(r => (string)r["name"]).ToArray(),
+                        "The team of two is left out, and the team of eight with it: the week's messages less the rows shown are both.");
+                    Assert.AreEqual(2, (int)trimmed["withheldSentimentTeams"]);
                     CollectionAssert.AreEqual(
                         new[] { "Contoso Big Team / General" },
                         trimmed["sentimentByChannel"].Select(r => (string)r["name"]).ToArray());
-                    Assert.AreEqual(1, (int)trimmed["withheldSentimentChannels"]);
+                    Assert.AreEqual(2, (int)trimmed["withheldSentimentChannels"]);
                     Assert.AreEqual(1, ((JArray)trimmed["sentimentTrend"]).Count, "The whole tenant's weekly sentiment stays.");
                     Assert.IsNull(trimmed["sentimentByTeam"][0]["members"]);
                     Assert.IsFalse(trimmed.ToString().Contains("contoso secret project") || trimmed.ToString().Contains("Contoso Pair"));
+                    Assert.IsFalse(trimmed.ToString().Contains("Contoso Mid"));
 
                     host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
                     var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/conversations?days=28&top=41"));
                     Assert.AreEqual("contoso secret project", (string)full["keywords"][0]["name"]);
                     Assert.AreEqual("Ελληνικά", (string)full["languages"][0]["name"]);
-                    Assert.AreEqual(2, ((JArray)full["sentimentByTeam"]).Count);
-                    Assert.AreEqual(2, ((JArray)full["sentimentByChannel"]).Count);
+                    Assert.AreEqual(3, ((JArray)full["sentimentByTeam"]).Count);
+                    Assert.AreEqual(3, ((JArray)full["sentimentByChannel"]).Count);
                     Assert.IsFalse((bool)full["keywordsWithheld"]);
-                    Assert.AreEqual(1, store.ConversationsCalls, "The second reader must have been served from the cache.");
+                    Assert.AreEqual(2, store.ConversationsCalls, "A See PII reader is never served the trimmed reader's section.");
                 }
             }
             finally
             {
-                MemoryCache.Default.Remove(query.CacheKey("conversations"));
+                foreach (var key in keys) MemoryCache.Default.Remove(key);
             }
         }
 
@@ -1240,10 +1257,11 @@ namespace Tests.UnitTests
             // Power users per department is a count, so every reader sees it; only the lists that name people go.
             var store = new FakeTeamsStore();
             var query = TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, 37);
-            // A reader without See PII is served from the section read at the maximum top, whatever top they asked for.
-            var shared = TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, TeamsExplorerQuery.MaximumTop);
-            MemoryCache.Default.Remove(query.CacheKey("people"));
-            MemoryCache.Default.Remove(shared.CacheKey("people"));
+            // A reader without See PII is served from the section read at the maximum top with every department, over the
+            // Power segment's population, whatever top they asked for; a See PII reader from one of their own.
+            var max = TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, TeamsExplorerQuery.MaximumTop);
+            var keys = new[] { query.CacheKey("people"), max.CacheKey("people"), max.WithEveryGroup().WithDirectoryPopulation().CacheKey("people") };
+            foreach (var key in keys) MemoryCache.Default.Remove(key);
             try
             {
                 using (var host = new PortalTestHost(
@@ -1270,7 +1288,7 @@ namespace Tests.UnitTests
                     Assert.AreEqual(5, (int)trimmed["minimumGroupSize"]);
                     Assert.IsFalse(trimmed.ToString().Contains("Contoso Four") || trimmed.ToString().Contains("Contoso One"));
 
-                    // The next reader holds the permission and is served from the same cache entry.
+                    // The next reader holds the permission and is served a section of their own, as before.
                     host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
                     var full = JObject.Parse(await host.Client.GetStringAsync("api/TeamsExplorer/people?days=28&top=" + TeamsExplorerQuery.MaximumTop));
                     Assert.AreEqual("champion@contoso.com", (string)full["champions"][0]["userPrincipalName"]);
@@ -1280,13 +1298,12 @@ namespace Tests.UnitTests
                         full["championsByDepartment"].Select(row => (string)row["name"]).ToArray(),
                         "A See PII reader sees every department, as before.");
                     Assert.IsNull(full["championsByDepartment"][0]["other"], "The flag is only sent on the folded row.");
-                    Assert.AreEqual(1, store.PeopleCalls, "The second reader must have been served from the cache.");
+                    Assert.AreEqual(2, store.PeopleCalls, "A See PII reader is never served the trimmed reader's section.");
                 }
             }
             finally
             {
-                MemoryCache.Default.Remove(query.CacheKey("people"));
-                MemoryCache.Default.Remove(shared.CacheKey("people"));
+                foreach (var key in keys) MemoryCache.Default.Remove(key);
             }
         }
 
@@ -1296,8 +1313,9 @@ namespace Tests.UnitTests
             // A job title held by one person is that person: their messages per active user are their own message count.
             var store = new FakeTeamsStore();
             var query = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 37);
-            // A reader without See PII is served from the breakdown read with every row, whatever top they asked for.
-            var shared = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 37).WithEveryRow();
+            // A reader without See PII is served from the breakdown read with every row, whatever top they asked for, over
+            // the directory population.
+            var shared = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 37).WithEveryRow().WithDirectoryPopulation();
             var small = new[] { "Contoso Chief Explorer", "Contoso Four Title", "Contoso Night Office" };
             MemoryCache.Default.Remove(query.CacheKey("adoption"));
             MemoryCache.Default.Remove(shared.CacheKey("adoption"));
@@ -1368,8 +1386,9 @@ namespace Tests.UnitTests
                 .SelectMany(top => new[]
                 {
                     TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", top).CacheKey("adoption"),
-                    TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", top).WithEveryRow().CacheKey("adoption"),
+                    TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", top).WithEveryRow().WithDirectoryPopulation().CacheKey("adoption"),
                     TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, top).CacheKey("people"),
+                    TeamsExplorerQuery.Create(28, DateTime.UtcNow, TeamsExplorerQuery.DefaultGrouping, top).WithEveryGroup().WithDirectoryPopulation().CacheKey("people"),
                 })
                 .Distinct()
                 .ToArray();
@@ -1432,7 +1451,7 @@ namespace Tests.UnitTests
             // 500 job titles of five active people, and a 501st held by one. Read at the 500-row cap, the 501st never
             // reached the fold; the tab's tenant-wide totals less every row shown was then that one person's figures.
             var store = new ManyGroupsTeamsStore(500, tail: 1);
-            var key = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 3).WithEveryRow().CacheKey("adoption");
+            var key = TeamsExplorerQuery.Create(28, DateTime.UtcNow, "jobTitle", 3).WithEveryRow().WithDirectoryPopulation().CacheKey("adoption");
             MemoryCache.Default.Remove(key);
             try
             {
@@ -2037,10 +2056,11 @@ namespace Tests.UnitTests
                 var meetings = new TeamsMeetings { WorkingDayStartHour = 42 };
                 meetings.TopOrganisers.Add(new TeamsNamedCountRow { Name = "organiser@contoso.com", Count = 5 });
                 meetings.TopAttendees.Add(new TeamsNamedCountRow { Name = "attendee@contoso.com", Count = 7 });
-                // Twelve people in all; one week only two of them met; screen sharing was one person's.
-                meetings.Kpis = new TeamsCallKpis { Calls = 30, Attendees = 12 };
+                // Twelve people in all; one week only two of them met, another seven; screen sharing was one person's.
+                meetings.Kpis = new TeamsCallKpis { Calls = 45, Attendees = 12 };
                 meetings.Trend.Add(new TeamsCallTrendPoint { WeekStart = new DateTime(2026, 10, 5), Calls = 20, Minutes = 600, Attendees = 12 });
                 meetings.Trend.Add(new TeamsCallTrendPoint { WeekStart = new DateTime(2026, 10, 12), Calls = 10, Minutes = 300, Attendees = 2 });
+                meetings.Trend.Add(new TeamsCallTrendPoint { WeekStart = new DateTime(2026, 10, 19), Calls = 15, Minutes = 450, Attendees = 7 });
                 meetings.SizeDistribution.Add(new TeamsBucketRow { Key = "2", Label = "2", Count = 10, SharePct = 100 });
                 meetings.ModalityMix.AddRange(new[]
                 {
@@ -2052,26 +2072,28 @@ namespace Tests.UnitTests
             }
 
             /// <summary>
-            /// A team of 40, a team of 12 where one person made every reaction, and a team of two; a reaction one person
-            /// used; and a tab whose name a member typed.
+            /// A team of 40, a team of 12 where one person made every reaction, a team of 8 and a team of two; a reaction one
+            /// person used; and a tab whose name a member typed.
             /// </summary>
             public Task<TeamsCollaboration> GetCollaborationAsync(TeamsExplorerQuery query)
             {
                 Interlocked.Increment(ref CollaborationCalls);
-                var collaboration = new TeamsCollaboration();
-                collaboration.Kpis = new TeamsCollaborationKpis { TotalTeams = 3, Reactions = 146 };
+                var collaboration = new TeamsCollaboration { ReadTop = query.Top };
+                collaboration.Kpis = new TeamsCollaborationKpis { TotalTeams = 4, Reactions = 196 };
                 collaboration.Teams.AddRange(new[]
                 {
                     new TeamsTeamRow { Id = 1, Name = "Contoso Big Team", Members = 40, Messages = 900, Reactions = 120, ReactingUsers = 25 },
-                    new TeamsTeamRow { Id = 2, Name = "Contoso One Reactor", Members = 12, Messages = 300, Reactions = 37, ReactingUsers = 1 },
                     new TeamsTeamRow { Id = 3, Name = "Contoso Pair", Members = 2, Messages = 500, Reactions = 9, ReactingUsers = 2 },
-                });
+                    new TeamsTeamRow { Id = 2, Name = "Contoso One Reactor", Members = 12, Messages = 300, Reactions = 37, ReactingUsers = 1 },
+                    new TeamsTeamRow { Id = 4, Name = "Contoso Mid", Members = 8, Messages = 200, Reactions = 30, ReactingUsers = 9 },
+                }.Take(query.Top));
                 collaboration.Channels.AddRange(new[]
                 {
                     new TeamsChannelRow { Id = 10, Name = "General", TeamName = "Contoso Big Team", TeamMembers = 40, Messages = 600, Reactions = 80, ReactingUsers = 20 },
-                    new TeamsChannelRow { Id = 11, Name = "Ideas", TeamName = "Contoso Big Team", TeamMembers = 40, Messages = 50, Reactions = 37, ReactingUsers = 1 },
                     new TeamsChannelRow { Id = 12, Name = "Πωλήσεις", TeamName = "Contoso Pair", TeamMembers = 2, Messages = 500, Reactions = 9, ReactingUsers = 2 },
-                });
+                    new TeamsChannelRow { Id = 13, Name = "Plans", TeamName = "Contoso Mid", TeamMembers = 8, Messages = 200, Reactions = 30, ReactingUsers = 9 },
+                    new TeamsChannelRow { Id = 11, Name = "Ideas", TeamName = "Contoso Big Team", TeamMembers = 40, Messages = 50, Reactions = 37, ReactingUsers = 1 },
+                }.Take(query.Top));
                 collaboration.ReactionMix.AddRange(new[]
                 {
                     new TeamsBucketRow { Key = "like", Label = "like", Count = 100, SharePct = 68.5, People = 30 },
@@ -2086,28 +2108,35 @@ namespace Tests.UnitTests
             public Task<TeamsConversations> GetConversationsAsync(TeamsExplorerQuery query, bool cognitiveAvailable)
             {
                 Interlocked.Increment(ref ConversationsCalls);
-                var conversations = new TeamsConversations { CognitiveAvailable = true, ScoredChannelDays = 12 };
+                var conversations = new TeamsConversations { CognitiveAvailable = true, ScoredChannelDays = 12, ReadTop = query.Top };
                 conversations.Keywords.Add(new TeamsNamedCountRow { Name = "contoso secret project", Count = 3 });
                 conversations.Languages.Add(new TeamsNamedCountRow { Name = "Ελληνικά", Count = 2 });
-                conversations.SentimentTrend.Add(new TeamsSentimentPoint { WeekStart = new DateTime(2026, 10, 5), Sentiment = 0.6, Messages = 40 });
+                conversations.SentimentTrend.Add(new TeamsSentimentPoint { WeekStart = new DateTime(2026, 10, 5), Sentiment = 0.6, Messages = 1600 });
                 conversations.SentimentByTeam.AddRange(new[]
                 {
                     new TeamsSentimentRow { Name = "Contoso Big Team", Sentiment = 0.7, Messages = 900, Members = 40 },
                     new TeamsSentimentRow { Name = "Contoso Pair", Sentiment = 0.1, Messages = 500, Members = 2 },
-                });
+                    new TeamsSentimentRow { Name = "Contoso Mid", Sentiment = 0.5, Messages = 200, Members = 8 },
+                }.Take(query.Top));
                 conversations.SentimentByChannel.AddRange(new[]
                 {
                     new TeamsSentimentRow { Name = "Contoso Big Team / General", Sentiment = 0.7, Messages = 600, Members = 40 },
                     new TeamsSentimentRow { Name = "Contoso Pair / Πωλήσεις", Sentiment = 0.1, Messages = 500, Members = 2 },
-                });
+                    new TeamsSentimentRow { Name = "Contoso Mid / Plans", Sentiment = 0.5, Messages = 200, Members = 8 },
+                }.Take(query.Top));
                 return Task.FromResult(conversations);
             }
 
+            /// <summary>
+            /// Departments of 9, 7, 4 and 1 power users, cut to <c>top</c> as the SQL is - unless the query reads every group,
+            /// as it does for a reader without See PII.
+            /// </summary>
             public Task<TeamsPeople> GetPeopleAsync(TeamsExplorerQuery query)
             {
                 Interlocked.Increment(ref PeopleCalls);
                 LastPeopleTop = query.Top;
-                var people = new TeamsPeople();
+                var departmentTop = query.EveryGroup ? int.MaxValue : query.Top;
+                var people = new TeamsPeople { ReadTop = departmentTop };
                 people.Champions.Add(new TeamsPersonRow { UserPrincipalName = "champion@contoso.com", Department = "Ventes" });
                 people.Dormant.Add(new TeamsPersonRow { UserPrincipalName = "dormant@contoso.com", Department = "Ventes" });
                 people.ChampionsByDepartment.AddRange(new[]
@@ -2116,7 +2145,7 @@ namespace Tests.UnitTests
                         new TeamsNamedCountRow { Name = "Contoso Seven", Count = 7 },
                         new TeamsNamedCountRow { Name = "Contoso Four", Count = 4 },
                         new TeamsNamedCountRow { Name = "Contoso One", Count = 1 },
-                    }.Take(query.Top));
+                    }.Take(departmentTop));
                 return Task.FromResult(people);
             }
         }

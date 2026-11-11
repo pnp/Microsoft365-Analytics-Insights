@@ -102,6 +102,34 @@ export function WithheldDash({ reason }: { reason: string }) {
   );
 }
 
+/** Why a figure is withheld, for a section's minimum group size: "Withheld: fewer than 5 people". */
+export function withheldReason(t: TFunction, minimumGroupSize: number | null | undefined): string {
+  return t('teamsExplorer.privacy.withheld', { count: formatCount(minimumGroupSize ?? 5) });
+}
+
+/**
+ * A figure a reader without See PII may be sent withheld (null): the figure formatted, or a dash that says why. Null is
+ * never drawn as a zero (#844).
+ */
+export function figureOrWithheld(value: number | null | undefined, format: (value: number) => string, reason: string): ReactNode {
+  return value == null ? <WithheldDash reason={reason} /> : format(value);
+}
+
+/**
+ * The note a tab shows a reader without See PII, whose figures count only people with an enabled account and leave out
+ * groups smaller than `minimumGroupSize`; undefined for a reader with See PII, whose sections carry no minimum.
+ */
+export function PrivacyReaderNote({ minimumGroupSize }: { minimumGroupSize: number | null | undefined }) {
+  const styles = useStyles();
+  const t = useT();
+  if (minimumGroupSize == null) return null;
+  return (
+    <Text as="p" block size={200} className={styles.muted} style={{ marginTop: '4px' }} data-testid="teams-privacy-note">
+      {t('teamsExplorer.privacy.readerNote', { count: formatCount(minimumGroupSize) })}
+    </Text>
+  );
+}
+
 // Graph callRecord modality and userFeedback rating values. Each code has its OWN label: two codes sharing
 // one would draw two slices with the same legend text, and the charts key their rows on the label.
 export const TEAMS_CALL_CODE_LABEL_KEYS = {

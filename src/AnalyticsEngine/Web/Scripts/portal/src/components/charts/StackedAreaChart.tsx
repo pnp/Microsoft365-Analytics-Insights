@@ -60,9 +60,15 @@ const useStyles = makeStyles({
 export default function StackedAreaChart({
   series,
   valueLabel,
+  withheldLabel,
 }: {
   series: ReportSeries[];
   valueLabel: string;
+  /**
+   * Opt-in: a week a series reports as null is withheld rather than zero (#844). It is drawn as a gap in every band, and its
+   * tooltip reads this label instead of a total. Without it, a null counts as zero, as a missing week does.
+   */
+  withheldLabel?: string;
 }) {
   const t = useT();
   const styles = useStyles();
@@ -74,13 +80,22 @@ export default function StackedAreaChart({
 
   // Series can have different week coverage, so build a shared spine and treat a missing week as
   // zero. Interpolating instead would invent activity that did not happen. Nulls are treated the
-  // same way for the same reason - a gap in the import must not be smoothed over.
+  // same way for the same reason - a gap in the import must not be smoothed over - unless the caller
+  // says a null is a withheld figure, which is never drawn as a zero.
   const weeks = Array.from(new Set(withPoints.flatMap((s) => s.points.map((p) => p.weekStart)))).sort();
 
   const valueAt = (s: ReportSeries, week: string) =>
     s.points.find((p) => p.weekStart === week)?.value ?? 0;
 
-  const totals = weeks.map((week) => withPoints.reduce((sum, s) => sum + valueAt(s, week), 0));
+  const withheldWeeks = new Set(
+    withheldLabel
+      ? weeks.filter((week) => withPoints.some((s) => s.points.some((p) => p.weekStart === week && p.value === null)))
+      : [],
+  );
+
+  const totals = weeks.map((week) =>
+    withheldWeeks.has(week) ? 0 : withPoints.reduce((sum, s) => sum + valueAt(s, week), 0),
+  );
   const { max, ticks } = niceTicks(Math.max(...totals, 1));
 
   const plotW = W - MARGIN.left - MARGIN.right;
@@ -97,6 +112,21 @@ export default function StackedAreaChart({
     baseline = upper;
     return { series: s, lower, upper };
   });
+
+  // The runs of consecutive weeks drawn: every week, unless some are withheld. A run of a single week between two
+  // withheld ones is drawn a few pixels wide, so it can be seen.
+  const runs: number[][] = [];
+  let run: number[] = [];
+  weeks.forEach((week, i) => {
+    if (withheldWeeks.has(week)) {
+      if (run.length > 0) runs.push(run);
+      run = [];
+    } else {
+      run.push(i);
+    }
+  });
+  if (run.length > 0) runs.push(run);
+  const pad = withheldWeeks.size > 0 ? 3 : 0;
 
   const labelEvery = Math.max(1, Math.ceil(weeks.length / 12));
 
@@ -128,21 +158,34 @@ export default function StackedAreaChart({
           </g>
         ))}
 
-        {bands.map((band, i) => {
-          const forward = band.upper.map((v, idx) => `${xOf(idx)},${yOf(v)}`);
-          const back = band.lower.map((v, idx) => `${xOf(idx)},${yOf(v)}`).reverse();
-          return (
-            <polygon
-              key={band.series.name}
-              points={[...forward, ...back].join(' ')}
-              fill={`url(#area-grad-${i})`}
-              stroke={seriesColor(i)}
-              strokeWidth={1}
-            >
-              <title>{serverPlaceholderText(t, band.series.name)}</title>
-            </polygon>
-          );
-        })}
+        {bands.map((band, i) =>
+          runs.map((indexes, r) => {
+            const single = indexes.length === 1 ? pad : 0;
+            const forward = indexes.flatMap((idx) =>
+              single > 0
+                ? [`${xOf(idx) - single},${yOf(band.upper[idx])}`, `${xOf(idx) + single},${yOf(band.upper[idx])}`]
+                : [`${xOf(idx)},${yOf(band.upper[idx])}`],
+            );
+            const back = indexes
+              .flatMap((idx) =>
+                single > 0
+                  ? [`${xOf(idx) - single},${yOf(band.lower[idx])}`, `${xOf(idx) + single},${yOf(band.lower[idx])}`]
+                  : [`${xOf(idx)},${yOf(band.lower[idx])}`],
+              )
+              .reverse();
+            return (
+              <polygon
+                key={runs.length === 1 ? band.series.name : `${band.series.name}-${r}`}
+                points={[...forward, ...back].join(' ')}
+                fill={`url(#area-grad-${i})`}
+                stroke={seriesColor(i)}
+                strokeWidth={1}
+              >
+                <title>{serverPlaceholderText(t, band.series.name)}</title>
+              </polygon>
+            );
+          }),
+        )}
 
         {weeks.map((week, i) =>
           i % labelEvery === 0 ? (
@@ -170,9 +213,11 @@ export default function StackedAreaChart({
             fill="transparent"
           >
             <title>
-              {t('charts.stackedArea.weekOf', { week: formatWeek(week) }) + '\n' +
-                withPoints.map((s) => `${serverPlaceholderText(t, s.name)}: ${formatValue(valueAt(s, week))}`).join('\n') +
-                `\n${t('charts.stackedArea.total', { value: formatValue(totals[i]) })}`}
+              {withheldWeeks.has(week)
+                ? t('charts.stackedArea.weekOf', { week: formatWeek(week) }) + '\n' + withheldLabel
+                : t('charts.stackedArea.weekOf', { week: formatWeek(week) }) + '\n' +
+                  withPoints.map((s) => `${serverPlaceholderText(t, s.name)}: ${formatValue(valueAt(s, week))}`).join('\n') +
+                  `\n${t('charts.stackedArea.total', { value: formatValue(totals[i]) })}`}
             </title>
           </rect>
         ))}

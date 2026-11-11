@@ -99,36 +99,61 @@ export type TeamsSegmentSlice = {
   segment: 'Power' | 'Regular' | 'Light' | 'Dormant';
   label: string;
   description: string;
-  users: number;
-  sharePct: number;
+  /** Null when `withheld`. */
+  users: number | null;
+  /**
+   * Null when `withheld`, and on every slice when, for a reader without See PII, any slice is - a share of the measured
+   * total would give the withheld slice back.
+   */
+  sharePct: number | null;
+  /**
+   * For a reader without See PII: one to four people are in the segment, or it is the segment shown beside such a one so
+   * that it cannot be worked out from the active users. Its figures are null - withheld, never 0.
+   */
+  withheld?: boolean;
 };
 
+/** One week of the Overview trend - or, with only `activeUsers`, of the Teams & channels membership trend. */
 export type TeamsTrendPoint = {
   weekStart: string;
-  activeUsers: number;
-  channelMessages: number;
-  privateMessages: number;
-  meetingsAttended: number;
-  calls: number;
+  /** Null when `withheld`. */
+  activeUsers: number | null;
+  /** Null when `withheld`. */
+  channelMessages: number | null;
+  /** Null when `withheld`. */
+  privateMessages: number | null;
+  /** Null when `withheld`. */
+  meetingsAttended: number | null;
+  /** Null for a reader without See PII: see `TeamsOverview.weeklyCallsWithheld`. */
+  calls: number | null;
+  /**
+   * For a reader without See PII: one to four people were active in the week, or it is the week withheld beside such a
+   * one so that it cannot be worked out from the period's totals.
+   */
+  withheld?: boolean;
 };
 
+/**
+ * The Overview's headline figures. The usage-report figures - everything but the calls, teams and channels - are null for
+ * a reader without See PII when one to four people were active, or are in the directory (`TeamsOverview.usageWithheld`).
+ */
 export type TeamsOverviewKpis = {
-  knownUsers: number;
-  activeUsers: number;
-  reachPct: number;
-  channelMessages: number;
-  privateMessages: number;
-  openCollaborationPct: number;
-  meetingsAttended: number;
-  meetingsOrganised: number;
-  meetingsPerActiveUser: number;
+  knownUsers: number | null;
+  activeUsers: number | null;
+  reachPct: number | null;
+  channelMessages: number | null;
+  privateMessages: number | null;
+  openCollaborationPct: number | null;
+  meetingsAttended: number | null;
+  meetingsOrganised: number | null;
+  meetingsPerActiveUser: number | null;
   /**
    * Audio hours. Used as the wall-clock proxy because audio, video and screenshare durations
    * overlap within one meeting - they must never be added together.
    */
-  audioHours: number;
-  videoSharePct: number;
-  screenShareSharePct: number;
+  audioHours: number | null;
+  videoSharePct: number | null;
+  screenShareSharePct: number | null;
   calls: number;
   totalTeams: number;
   activeTeams: number;
@@ -143,6 +168,15 @@ export type TeamsOverview = TeamsSection & {
   judgements: TeamsJudgement[];
   /** Whether the engagement mix's Dormant share could be measured. Absent from an older API. */
   dormancy?: TeamsDormancy;
+  /**
+   * For a reader without See PII, the fewest people a figure here describes: the figures count only the people the
+   * Adoption breakdown is made of, and leave out groups smaller than this. Null or absent otherwise.
+   */
+  minimumGroupSize?: number | null;
+  /** For a reader without See PII: one to four people were active, so every usage-report KPI is withheld. */
+  usageWithheld?: boolean;
+  /** For a reader without See PII: the trend's weekly calls are withheld (the Meetings tab floors them). */
+  weeklyCallsWithheld?: boolean;
 };
 
 /** Why a licensed person with no Teams activity can or cannot be called dormant (mirrors TeamsDormancy). */
@@ -166,22 +200,31 @@ export type TeamsDormancy = {
   expectedDays: number;
   importedDays: number;
   teamsLicensedUsers: number;
-  /** Licensed people with no activity left out of the engagement mix because dormancy is not known. */
-  unmeasuredUsers: number;
+  /**
+   * Licensed people with no activity left out of the engagement mix because dormancy is not known. Null when, for a reader
+   * without See PII, it is one to four people - like a dormant segment of that few.
+   */
+  unmeasuredUsers: number | null;
 };
 
+/** Each figure is null for a reader without See PII when it would describe one to four people. */
 export type TeamsAdoptionRhythm = {
-  meanDailyActiveUsers: number;
-  weeklyActiveUsers: number;
-  monthlyActiveUsers: number;
-  stickinessPct: number;
+  meanDailyActiveUsers: number | null;
+  weeklyActiveUsers: number | null;
+  monthlyActiveUsers: number | null;
+  stickinessPct: number | null;
 };
 
 export type TeamsSegmentTrendPoint = {
   weekStart: string;
-  power: number;
-  regular: number;
-  light: number;
+  /** Null when `withheld`. */
+  power: number | null;
+  /** Null when `withheld`. */
+  regular: number | null;
+  /** Null when `withheld`. */
+  light: number | null;
+  /** For a reader without See PII: one of the week's segments had one to four people, so the week is withheld whole. */
+  withheld?: boolean;
 };
 
 export type TeamsDemographicRow = {
@@ -198,15 +241,22 @@ export type TeamsDemographicRow = {
 
 export type TeamsDeviceRow = {
   platform: string;
-  users: number;
-  /** Shares intentionally sum above 100: one person uses several platforms. */
-  sharePct: number;
+  /** Null when `withheld`. */
+  users: number | null;
+  /** Shares intentionally sum above 100: one person uses several platforms. Null when any platform is withheld. */
+  sharePct: number | null;
+  /**
+   * For a reader without See PII: one to four people used the platform - or, for "Mobile (any)", iOS or Android is
+   * withheld, which it would bound.
+   */
+  withheld?: boolean;
 };
 
+/** The three counts add up to the period's active people; for a reader without See PII, one of one to four is null. */
 export type TeamsLifecycle = {
-  newUsers: number;
-  returningUsers: number;
-  lapsedUsers: number;
+  newUsers: number | null;
+  returningUsers: number | null;
+  lapsedUsers: number | null;
 };
 
 export type TeamsGrouping = 'department' | 'country' | 'office' | 'jobTitle' | 'company';
@@ -222,8 +272,9 @@ export type TeamsAdoption = TeamsSection & {
   /** Whether the segment mix's Dormant share could be measured. Absent from an older API. */
   dormancy?: TeamsDormancy;
   /**
-   * For a reader without See PII, the fewest people - and active people - a breakdown row describes. Null or
-   * absent when every group is shown.
+   * For a reader without See PII, the fewest people - and active people - a figure here describes: the breakdown folds
+   * smaller groups, and the rest of the tab counts only the people the breakdown is made of and withholds what fewer are
+   * behind. Null or absent when every group is shown.
    */
   minimumGroupSize?: number | null;
   /**
@@ -256,7 +307,10 @@ export type TeamsCallTrendPoint = {
   minutes: number | null;
   /** Null when `withheld`. */
   attendees: number | null;
-  /** For a reader without See PII: one to four people attended the week's calls, so its figures are withheld. */
+  /**
+   * For a reader without See PII: one to four people attended the week's calls, or it is the quietest other week, withheld
+   * with it so that neither can be worked out from the totals; its figures are null.
+   */
   withheld?: boolean;
 };
 

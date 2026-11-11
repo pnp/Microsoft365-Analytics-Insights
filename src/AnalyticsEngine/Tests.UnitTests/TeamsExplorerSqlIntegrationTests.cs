@@ -479,7 +479,7 @@ namespace Tests.UnitTests
 
             // Four users are in the directory, so reach is 2 of 4.
             Assert.AreEqual(4, overview.Kpis.KnownUsers);
-            Assert.AreEqual(50, overview.Kpis.ReachPct, 0.001);
+            Assert.AreEqual(50, overview.Kpis.ReachPct.Value, 0.001);
         }
 
         [TestMethod]
@@ -498,7 +498,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(8, overview.Kpis.MeetingsAttended);
 
             // 3600 audio seconds x 2 days = 2 hours.
-            Assert.AreEqual(2, overview.Kpis.AudioHours, 0.001);
+            Assert.AreEqual(2, overview.Kpis.AudioHours.Value, 0.001);
         }
 
         [TestMethod]
@@ -507,8 +507,8 @@ namespace Tests.UnitTests
             var overview = await NewStore().GetOverviewAsync(NewQuery(), new TeamsExplorerSources());
 
             // 1800s video against 3600s audio, and 900s of sharing against the same.
-            Assert.AreEqual(50, overview.Kpis.VideoSharePct, 0.001);
-            Assert.AreEqual(25, overview.Kpis.ScreenShareSharePct, 0.001);
+            Assert.AreEqual(50, overview.Kpis.VideoSharePct.Value, 0.001);
+            Assert.AreEqual(25, overview.Kpis.ScreenShareSharePct.Value, 0.001);
         }
 
         [TestMethod]
@@ -517,7 +517,7 @@ namespace Tests.UnitTests
             var overview = await NewStore().GetOverviewAsync(NewQuery(), new TeamsExplorerSources());
 
             // 36 channel messages against 5 private ones.
-            Assert.AreEqual(36.0 / 41.0 * 100.0, overview.Kpis.OpenCollaborationPct, 0.001);
+            Assert.AreEqual(36.0 / 41.0 * 100.0, overview.Kpis.OpenCollaborationPct.Value, 0.001);
         }
 
         [TestMethod]

@@ -389,64 +389,173 @@ namespace Tests.UnitTests
 
             ["TeamsExplorerAPIController.Availability"] = NoGroupedFigures(
                 "Which Teams sources are switched on, and how many teams are authorised for deep analytics."),
-            ["TeamsExplorerAPIController.Overview"] = KnownGap(
-                "#844 (S4-1), waiting on a product decision: the headline KPIs, the weekly trend, the engagement-segment mix "
-                + "(people per segment) and the judgements are not floored, and are computed over a different population from "
-                + "the folded breakdowns."),
+            ["TeamsExplorerAPIController.Overview"] = Floored(
+                    "Read over the people the Adoption breakdown is made of - the enabled directory users reach is measured "
+                    + "against - and cached apart from a See PII reader's section (#844 S4-1), so no total less the breakdown's rows "
+                    + "leaves a since-disabled account's activity. A week of fewer than 5 active people is withheld with the week "
+                    + "that keeps it from being worked out from the totals, and every week's calls; an engagement segment of fewer "
+                    + "than 5 with the segment that keeps it from being worked out from the active people, and the shares; 1-4 "
+                    + "licensed people left out of the mix; and, when 1-4 people were active, every usage KPI and the judgements "
+                    + "worded from them.")
+                .By(typeof(TeamsExplorerQuery), nameof(TeamsExplorerQuery.WithDirectoryPopulation))
+                .By(typeof(TeamsExplorerSql), nameof(TeamsExplorerSql.UsagePopulation))
+                .By(typeof(TeamsExplorerSql), nameof(TeamsExplorerSql.OverviewTrendOverDirectory))
+                .By(typeof(TeamsOverview), nameof(TeamsOverview.WithoutSmallGroups))
+                .By(typeof(TeamsSmallGroups), nameof(TeamsSmallGroups.WithoutSmallWeeks))
+                .By(typeof(TeamsSmallGroups), nameof(TeamsSmallGroups.WithoutSmallSegments))
+                .ProvenBy(
+                    Test<TeamsExplorerOverviewFloorTests>(nameof(TeamsExplorerOverviewFloorTests.Overview_WithoutSeePii_IsReadOverTheBreakdownsPopulation_AndNoWeekOrSegmentOrTotalLessTheRowsShownIsUnderFive)),
+                    Test<TeamsExplorerOverviewFloorTests>(nameof(TeamsExplorerOverviewFloorTests.Overview_WithoutSeePii_WhenOneToFourPeopleWereActive_WithholdsEveryUsageKpi_AndTheJudgementsWordedFromThem)),
+                    Test<TeamsExplorerOverviewFloorTests>(nameof(TeamsExplorerOverviewFloorTests.Overview_ReadersWithAndWithoutSeePii_NeverShareACachedSection_InEitherOrder)),
+                    Test<TeamsExplorerOverviewFloorTests>(nameof(TeamsExplorerOverviewFloorTests.WithoutSmallSegments_ADormantSegmentOfOneToFour_IsWithheldWithEveryShare_SoTheMeasuredTotalCannotGiveItBack)),
+                    Test<TeamsExplorerPopulationSqlIntegrationTests>(nameof(TeamsExplorerPopulationSqlIntegrationTests.OverTheDirectoryPopulation_EveryUsageFigureLeavesItOut_AndTheOverviewLessTheBreakdownIsNothing)),
+                    Test<TeamsExplorerPopulationSqlIntegrationTests>(nameof(TeamsExplorerPopulationSqlIntegrationTests.OverAWiderWindow_TheDirectoryTrends_AddEachPersonsWeekUp_AndLeaveTheDisabledAccountOut)))
+                .WithKnownGap("#844 (G5), accepted under #872's judgement call 3 (counts of people without activity are kept): a "
+                    + "Dormant segment of 1-4 is withheld from the mix, but known less active users gives its count back when "
+                    + "everyone in view holds a Teams licence and every day was imported, and monthly less weekly active users "
+                    + "(Adoption) can give back part or all of it on a 7-day window. A period's active people less a week's, and "
+                    + "licensed less measured people (the unmeasured count), are differences of the same kind. Each counts people "
+                    + "with no activity, never what anyone did; flooring it would blank reach and most weeks of any stable population.")
+                .WithKnownGap("#844 (S3-3): the withholding holds within one response, not across the 7-, 28-, 90-, 180- and "
+                    + "365-day windows a reader can request, which all end today: where one window withholds a small week with a "
+                    + "week that another window shows, the small week can be worked out from the two.")
+                .WithKnownGap("#866: the calls KPI and the call judgements are the Meetings tab's figures, with its residuals: a view "
+                    + "of 1-4 attendees still shows them, and organiser concentration is the busiest tenth of organisers' share of "
+                    + "meetings - fewer than 5 organisers whenever there are fewer than 41."),
             ["TeamsExplorerAPIController.Adoption"] = Floored(
                     "Breakdown groups of fewer than 5 people, whatever groupBy is asked for, are folded into one row over every "
-                    + "group and only then cut to top, so none can be worked out from the totals.")
+                    + "group and only then cut to top, so none can be worked out from the totals. The rest of the tab is read over "
+                    + "the breakdown's own population and cached apart from a See PII reader's (#844 S4-1): a weekly or monthly "
+                    + "count of 1-4 active people is withheld, and the daily mean when 1-4 were active in the period; a lifecycle "
+                    + "count, engagement segment or platform of 1-4 people with whatever would give it back; a week whose segments "
+                    + "include 1-4 people whole.")
                 .By(typeof(TeamsAdoption), nameof(TeamsAdoption.WithoutSmallGroups))
                 .By(typeof(TeamsAdoption), nameof(TeamsAdoption.WithFirstGroups))
+                .By(typeof(TeamsExplorerQuery), nameof(TeamsExplorerQuery.WithDirectoryPopulation))
+                .By(typeof(TeamsExplorerSql), nameof(TeamsExplorerSql.UsagePopulation))
+                .By(typeof(TeamsExplorerSql), nameof(TeamsExplorerSql.DevicePopulation))
+                .By(typeof(TeamsExplorerSql), nameof(TeamsExplorerSql.PerPersonPopulation))
+                .By(typeof(TeamsAdoptionRhythm), nameof(TeamsAdoptionRhythm.WithoutSmallGroups))
+                .By(typeof(TeamsLifecycle), nameof(TeamsLifecycle.WithoutSmallGroups))
+                .By(typeof(TeamsSmallGroups), nameof(TeamsSmallGroups.WithoutSmallPlatforms))
                 .ProvenBy(
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsAdoption_WithoutSeePii_FoldsGroupsOfFewerThanFive_OnScreenAndInTheExport_AndTheCachedSectionKeepsThem)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsAdoption_WithoutSeePii_FoldsGroupsBeyondTheMaximumTop_SoNoneCanBeWorkedOutFromTheTotals)),
-                    Test<TeamsExplorerScoringTests>(nameof(TeamsExplorerScoringTests.WithoutSmallGroups_AFoldedRowShortOfPeople_TakesTheSmallestShownGroup)))
-                .WithKnownGap("#844 (S4-1), waiting on a product decision: the rhythm, the lifecycle (new, returning and lapsed "
-                    + "people), the engagement-segment mix and trend, and the people per device beside the folded breakdown are not "
-                    + "floored, and are computed over a different population from it."),
+                    Test<TeamsExplorerScoringTests>(nameof(TeamsExplorerScoringTests.WithoutSmallGroups_AFoldedRowShortOfPeople_TakesTheSmallestShownGroup)),
+                    Test<TeamsExplorerOverviewFloorTests>(nameof(TeamsExplorerOverviewFloorTests.Adoption_WithoutSeePii_IsReadOverTheBreakdownsPopulation_AndHoldsRhythmLifecycleSegmentsAndPlatformsToFivePeople)),
+                    Test<TeamsExplorerOverviewFloorTests>(nameof(TeamsExplorerOverviewFloorTests.Adoption_ASeePiiReader_IsServedTheSectionAsItWas_AndTheTwoReadersNeverShareACachedSection_InEitherOrder)),
+                    Test<TeamsExplorerOverviewFloorTests>(nameof(TeamsExplorerOverviewFloorTests.Rhythm_WithoutSmallGroups_WithholdsTheDailyMean_WhenThePeriodsActivePeopleAreFew_OrCannotBeRead)),
+                    Test<TeamsExplorerOverviewFloorTests>(nameof(TeamsExplorerOverviewFloorTests.WithoutSmallPlatforms_WithholdsAnyMobile_WhenIosOrAndroidIs)),
+                    Test<TeamsExplorerPopulationSqlIntegrationTests>(nameof(TeamsExplorerPopulationSqlIntegrationTests.OverTheDirectoryPopulation_EveryUsageFigureLeavesItOut_AndTheOverviewLessTheBreakdownIsNothing)),
+                    Test<TeamsExplorerPopulationSqlIntegrationTests>(nameof(TeamsExplorerPopulationSqlIntegrationTests.OverAWiderWindow_TheDirectoryTrends_AddEachPersonsWeekUp_AndLeaveTheDisabledAccountOut)))
+                .WithKnownGap("#844 (G5), accepted under #872's judgement call 3 (counts of people without activity are kept): "
+                    + "counts of people that nest are each floored, but not their differences - the people in the larger count and "
+                    + "not the smaller: active in the month and not the last week (on a 7-day window, part or all of the Dormant "
+                    + "segment); in a breakdown group and not active, which summed over the groups is the Dormant segment's count "
+                    + "when everyone in view holds a Teams licence and every day was imported; licensed and not in the engagement "
+                    + "mix, the unmeasured count; and, while the platform shares are shown, seen on any device and not on one "
+                    + "platform. Each counts people with no activity of some kind, never what anyone did, and flooring it would "
+                    + "blank most weeks, and reach, of any stable population."),
             ["TeamsExplorerAPIController.Meetings"] = Floored(
-                    "A copy without the named organiser and attendee lists; a week of fewer than 5 attendees withheld, every "
+                    "A copy without the named organiser and attendee lists; a week of fewer than 5 attendees withheld with the week "
+                    + "of fewest attendees still shown, so the calls and call hours less the weeks shown are never one week's; every "
                     + "distribution withheld when fewer than 5 people attended in the view, and modalities of fewer than 5 people folded.")
                 .By(typeof(TeamsMeetings), nameof(TeamsMeetings.WithoutIndividualData))
                 .By(typeof(TeamsMeetings), nameof(TeamsMeetings.WithoutSmallGroups))
+                .By(typeof(TeamsSmallGroups), nameof(TeamsSmallGroups.WithoutSmallCallWeeks))
                 .ProvenBy(
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsMeetings_WithoutSeePii_LoseTheNamedLeaderboards_AndTheCachedSectionKeepsThem)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsMeetings_WithoutSeePii_WithholdAWeekOfFewerThanFiveAttendees_AndFoldRareModalities)),
-                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsMeetings_WithoutSmallGroups_WithholdsEveryDistribution_WhenFewerThanFivePeopleAttended)))
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsMeetings_WithoutSmallGroups_WithholdsEveryDistribution_WhenFewerThanFivePeopleAttended)),
+                    Test<TeamsExplorerMeetingsFloorTests>(nameof(TeamsExplorerMeetingsFloorTests.Meetings_WithoutSeePii_NoTotalLessTheWeeksShown_IsASingleWithheldWeek)),
+                    Test<TeamsExplorerMeetingsFloorTests>(nameof(TeamsExplorerMeetingsFloorTests.Meetings_ASeePiiReader_IsServedEveryWeekAsItWas_AndTheCachedSectionIsNeverTrimmed_InEitherOrder)),
+                    Test<TeamsExplorerMeetingsFloorTests>(nameof(TeamsExplorerMeetingsFloorTests.WithoutSmallCallWeeks_WithholdsTheQuietestWeekShown_WheneverAWeekIsWithheld)))
                 .WithKnownGap("#866: the size, length, heatmap, time-of-day and call-experience buckets have no people count, so the "
-                    + "floor applies to the view as a whole; the headline KPIs of a view of 1-4 attendees are shown."),
+                    + "floor applies to the view as a whole; the headline KPIs of a view of 1-4 attendees are shown.")
+                .WithKnownGap("#844, accepted under #872's judgement call 3: the window's distinct attendees less a week's - the people "
+                    + "who attended calls in other weeks and not that one - is not floored; it counts people without activity in that "
+                    + "week, never what anyone did. Attendees are distinct people, so the weeks' do not add up to the window's.")
+                .WithKnownGap("#844 (S3-3): the withholding holds within one response, not across the 7-, 28-, 90-, 180- and "
+                    + "365-day windows a reader can request, which all end today: where one window withholds a small week with a "
+                    + "week that another window shows, the small week can be worked out from the two."),
             ["TeamsExplorerAPIController.Collaboration"] = Floored(
-                    "Teams of fewer than 5 members, and their channels, are left out; reactions of 1-4 people withheld; rare "
-                    + "reactions folded; the tab list withheld.")
+                    "Teams of fewer than 5 members, and their channels, are left out, with the smallest team (channel) shown that has "
+                    + "messages, so the channel messages less the rows shown are never one small team's; reactions of 1-4 people "
+                    + "withheld, with the fewest-reactor row of 5 or more when nothing else hidden is 5 people's; rare reactions "
+                    + "folded; the tab list withheld. Decided over the export-sized list - read with one row more, the rows beyond "
+                    + "it counted as left out - and only then cut to top, so no two tops leave out different rows (#844, P4-1).")
                 .By(typeof(TeamsCollaboration), nameof(TeamsCollaboration.WithoutSmallGroups))
+                .By(typeof(TeamsCollaboration), nameof(TeamsCollaboration.WithFirstRows))
+                .By(typeof(TeamsSmallGroups), nameof(TeamsSmallGroups.WithoutSmallRowsOfList))
+                .By(typeof(TeamsSmallGroups), nameof(TeamsSmallGroups.ReactionsWithheld))
+                .By(typeof(TeamsExplorerQuery), nameof(TeamsExplorerQuery.WithListProbe))
                 .ProvenBy(
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsCollaboration_WithoutSeePii_LeavesOutTeamsOfFewerThanFive_WithholdsFewReactors_OnScreenAndInTheExports)),
-                    Test<TeamsExplorerMembershipHorizonSqlIntegrationTests>(nameof(TeamsExplorerMembershipHorizonSqlIntegrationTests.ATeamWhoseOnlyMembershipSnapshotIsOlderThanTheHorizon_IsWithheldFromAReaderWithoutSeePii)))
-                .WithKnownGap("#866: the tenant-wide channel-message and reaction KPIs less the team rows shown give the left-out and "
-                    + "withheld teams together, which is one team when the tenant has no more teams than the leaderboard shows."),
+                    Test<TeamsExplorerMembershipHorizonSqlIntegrationTests>(nameof(TeamsExplorerMembershipHorizonSqlIntegrationTests.ATeamWhoseOnlyMembershipSnapshotIsOlderThanTheHorizon_IsWithheldFromAReaderWithoutSeePii)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.Collaboration_WithoutSeePii_LeavesOutTheSameTeamsWhateverTopIsAsked_AndNoTotalLessTheRowsShownIsASmallTeams)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.Collaboration_WithoutSeePii_ATeamBeyondTheExportSizedList_IsCountedAsLeftOut)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.Collaboration_WithoutSeePii_TheReactionsLessThoseShown_AreNeverAHandfulOfPeoples)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.CollaborationAndConversations_ASeePiiReader_IsServedTheSectionAsItWas_AndTheTwoReadersNeverShareACachedSection_InEitherOrder)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.WithoutSmallRowsOfList_LeavesOutWithTheSmallRows_TheSmallestRowShownThatAddsToTheTotals)))
+                .WithKnownGap("#844 (P4-1 review): each list is floored on its own. The team rows count members from each team's "
+                    + "latest snapshot ever, the channel rows from the last 7 days' (TeamsExplorerSql.LatestTeamMembers), so a team "
+                    + "the two measures put on either side of 5 can be left out of one list and shown in the other; and a team "
+                    + "left out to keep a small one from the totals can still be shown as its channels, or in the Conversations "
+                    + "tab's sentiment. A team's messages less its channels shown, or the two tabs' figures together, can then "
+                    + "single out a small team. When every team with messages is small, the tenant's channel messages are theirs.")
+                .WithKnownGap("#844 (S3-3): the withholding holds within one response, not across the 7-, 28-, 90-, 180- and "
+                    + "365-day windows a reader can request, which all end today."),
             ["TeamsExplorerAPIController.Conversations"] = Floored(
-                    "Key phrases and languages withheld; the sentiment of teams of fewer than 5 members, and of their channels, left out.")
+                    "Key phrases and languages withheld; the sentiment of teams of fewer than 5 members, and of their channels, "
+                    + "left out with the smallest row shown, so the weekly messages less the rows shown are never one small team's. "
+                    + "Decided over the export-sized list - read with one row more, the rows beyond it counted as left out - and "
+                    + "only then cut to top (#844, P4-1).")
                 .By(typeof(TeamsConversations), nameof(TeamsConversations.WithoutSmallGroups))
-                .ProvenBy(Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsConversations_WithoutSeePii_WithholdKeyPhrasesAndLanguages_AndTheSentimentOfTeamsOfFewerThanFive)))
+                .By(typeof(TeamsConversations), nameof(TeamsConversations.WithFirstRows))
+                .By(typeof(TeamsSmallGroups), nameof(TeamsSmallGroups.WithoutSmallRowsOfList))
+                .By(typeof(TeamsExplorerQuery), nameof(TeamsExplorerQuery.WithListProbe))
+                .ProvenBy(
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsConversations_WithoutSeePii_WithholdKeyPhrasesAndLanguages_AndTheSentimentOfTeamsOfFewerThanFive)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.Conversations_WithoutSeePii_LeavesOutTheSameSentimentWhateverTopIsAsked_AndTheWeeksMessagesLessThoseShownAreNeverOneSmallTeams)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.CollaborationAndConversations_ASeePiiReader_IsServedTheSectionAsItWas_AndTheTwoReadersNeverShareACachedSection_InEitherOrder)))
                 .WithKnownGap("#866: channel messages and the tenant-wide weekly sentiment are floored by team membership or not at "
-                    + "all, because the posters per channel are not stored."),
+                    + "all, because the posters per channel are not stored.")
+                .WithKnownGap("#844 (P4-1 review): the sentiment lists are floored apart from the Collaboration tab's team and "
+                    + "channel rows, which show each team's sentiment too, so a team one tab leaves out to protect a small one can "
+                    + "be shown by the other."),
             ["TeamsExplorerAPIController.People"] = Floored(
-                    "A copy without the champion and dormant lists; departments of fewer than 5 power users folded before the cut to top.")
+                    "A copy without the champion and dormant lists; departments of fewer than 5 power users folded over every "
+                    + "department, read over the Power segment's own population (#844, P4-1), before the cut to top. When the "
+                    + "Overview and Adoption tabs withhold that Power segment, or the list could be cut short, the departments' total "
+                    + "is withheld too: no combined row, no shares, and the smallest named department left out when needed.")
                 .By(typeof(TeamsPeople), nameof(TeamsPeople.WithoutIndividualData))
                 .By(typeof(TeamsPeople), nameof(TeamsPeople.WithFirstDepartments))
+                .By(typeof(TeamsPeople), nameof(TeamsPeople.PowerSegmentWithheld))
+                .By(typeof(TeamsExplorerQuery), nameof(TeamsExplorerQuery.WithEveryGroup))
+                .By(typeof(TeamsExplorerSql), nameof(TeamsExplorerSql.JoinedUserPopulation))
                 .ProvenBy(
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsPeople_WithoutSeePii_KeepTheDepartmentCounts_AndTheCachedSectionKeepsTheNames)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsAdoptionAndPeople_WithoutSeePii_FoldTheSameGroupsWhateverTopIsAskedFor)),
-                    Test<TeamsExplorerScoringTests>(nameof(TeamsExplorerScoringTests.PeopleWithoutIndividualData_FoldsDepartmentsWithFewerThanFivePowerUsers_AndNeverLeavesAHandfulInTheFoldedRow)))
-                .WithKnownGap("#844 (P4-1): departments beyond the first 500 rows are not folded."),
+                    Test<TeamsExplorerScoringTests>(nameof(TeamsExplorerScoringTests.PeopleWithoutIndividualData_FoldsDepartmentsWithFewerThanFivePowerUsers_AndNeverLeavesAHandfulInTheFoldedRow)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.People_WithoutSeePii_FoldsADepartmentBeyondTheMaximumTop_SoThePowerUsersLessTheDepartmentsShownAreNeverItAlone)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.People_ASeePiiReader_IsServedTheDepartmentsAsTheyWere_AndTheTwoReadersNeverShareACachedSection_InEitherOrder)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.People_ADepartmentListCutShort_TreatsWhatLiesBeyondAsLeftOut)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.People_WhenTheOverviewWithholdsThePowerSegment_TheDepartmentsNeverAddUpToIt)),
+                    Test<TeamsExplorerPopulationSqlIntegrationTests>(nameof(TeamsExplorerPopulationSqlIntegrationTests.People_OverTheDirectoryPopulation_EveryDepartmentsPowerUsersAddUpToThePowerSegment_AndLeaveTheDisabledAccountOut)))
+                .WithKnownGap("#844 (S3-3): the withholding holds within one response, not across the 7-, 28-, 90-, 180- and "
+                    + "365-day windows a reader can request, which all end today."),
             ["TeamsExplorerAPIController.Export"] = Floored(
-                    "The adoption, teams and channels files carry the same folded and floored rows as the page.")
+                    "The adoption, teams and channels files carry the same folded and floored rows as the page: the teams and "
+                    + "channels files are floored over the export-sized list read with one row more, then cut to top.")
                 .By(typeof(TeamsAdoption), nameof(TeamsAdoption.WithoutSmallGroups))
                 .By(typeof(TeamsCollaboration), nameof(TeamsCollaboration.WithoutSmallGroups))
+                .By(typeof(TeamsCollaboration), nameof(TeamsCollaboration.WithFirstRows))
+                .By(typeof(TeamsExplorerQuery), nameof(TeamsExplorerQuery.WithListProbe))
                 .ProvenBy(
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsAdoption_WithoutSeePii_FoldsGroupsOfFewerThanFive_OnScreenAndInTheExport_AndTheCachedSectionKeepsThem)),
-                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsCollaboration_WithoutSeePii_LeavesOutTeamsOfFewerThanFive_WithholdsFewReactors_OnScreenAndInTheExports)))
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsCollaboration_WithoutSeePii_LeavesOutTeamsOfFewerThanFive_WithholdsFewReactors_OnScreenAndInTheExports)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.Collaboration_WithoutSeePii_LeavesOutTheSameTeamsWhateverTopIsAsked_AndNoTotalLessTheRowsShownIsASmallTeams)),
+                    Test<TeamsExplorerListFloorTests>(nameof(TeamsExplorerListFloorTests.Collaboration_WithoutSeePii_ATeamBeyondTheExportSizedList_IsCountedAsLeftOut)))
                 .Refusing("section people, section dormant",
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.TeamsExplorerExport_OnlyThePeopleSectionsNeedSeePii)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.EveryRestrictedEndpoint_RefusesASignedInUserWithoutThePermission))),

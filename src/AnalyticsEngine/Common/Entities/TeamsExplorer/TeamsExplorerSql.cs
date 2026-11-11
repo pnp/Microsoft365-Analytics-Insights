@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 
 namespace Common.Entities.TeamsExplorer
 {
@@ -155,6 +156,85 @@ namespace Common.Entities.TeamsExplorer
 
         #endregion
 
+        #region Population markers
+
+        // For a reader without See PII, the usage-report figures are read over the directory population (#844, S4-1): the
+        // enabled (or unknown) directory users that reach is measured against and the Adoption breakdown is made of. A usage
+        // or device row of an account disabled since is otherwise counted in the totals, the trend, the rhythm, the
+        // lifecycle and the people per platform, but never in the breakdown - so a total less the breakdown's rows was those
+        // accounts' own activity, one person's when one account was disabled. Like the scope markers these are comments, and
+        // unless the query asks for the directory population (TeamsExplorerQuery.WithDirectoryPopulation) they are removed:
+        // a reader with See PII runs exactly the statement they always did. The predicate is EnabledUsersPredicate's.
+        //
+        // Measured at synthetic scale (200,000 people, 5% of them disabled, 20 million usage and 20 million device rows over
+        // 400 days; LocalDB, serial plans; medians of five runs): each statement reads dbo.users once more (6,076 pages, about
+        // 1.5% more logical reads) and is within noise on the 28-day window. On a 365-day window the statements that add each
+        // person's usage up first - the totals, the lifecycle, the platforms and, narrowed after that, the engagement trend -
+        // stay within 7%; the weekly trend, in OverviewTrendOverDirectory's per-person shape, takes about 1.3 s more (7.5 s to
+        // 8.8 s, where narrowing every row took 3-4 s more); and the rhythm, which still narrows every row, about 2 s more
+        // (7.8 s to 9.8 s). NOT EXISTS against the disabled accounts measured no better row by row and worse per person.
+
+        private const string PopulationMarkerOpen = "/*population:";
+        private const string PopulationMarkerClose = "*/";
+
+        /// <summary>Narrows <c>dbo.teams_user_activity_log</c>, aliased <c>t</c>, to the directory population.</summary>
+        public const string UsagePopulation =
+            "/*population: AND EXISTS (SELECT 1 FROM dbo.users AS pop WHERE pop.id = t.user_id AND (pop.account_enabled IS NULL OR pop.account_enabled = 1))*/";
+
+        /// <summary>Narrows <c>dbo.teams_user_device_usage_log</c>, aliased <c>d</c>, to the directory population.</summary>
+        public const string DevicePopulation =
+            "/*population: AND EXISTS (SELECT 1 FROM dbo.users AS pop WHERE pop.id = d.user_id AND (pop.account_enabled IS NULL OR pop.account_enabled = 1))*/";
+
+        /// <summary>A per-person row aliased <c>p</c> - usage already added up by <c>user_id</c> - is in the directory population.</summary>
+        private const string DirectoryPerson =
+            "EXISTS (SELECT 1 FROM dbo.users AS pop WHERE pop.id = p.user_id AND (pop.account_enabled IS NULL OR pop.account_enabled = 1))";
+
+        /// <summary>
+        /// Narrows a per-person row aliased <c>p</c> to the directory population, once each person's usage is added up rather
+        /// than row by row: the same people, and measurably cheaper where the rows are added up per person and week.
+        /// </summary>
+        public const string PerPersonPopulation = "/*population: AND " + DirectoryPerson + "*/";
+
+        /// <summary>
+        /// Narrows a row already joined to <c>dbo.users</c>, aliased <c>u</c>, to the directory population - the same people as
+        /// <see cref="PerPersonPopulation"/>, without reading <c>dbo.users</c> again. On <see cref="ChampionsByDepartment"/>, whose
+        /// departments add up to the Power segment the Overview and Adoption tabs publish over that population (#844, P4-1).
+        /// </summary>
+        public const string JoinedUserPopulation = "/*population: AND " + EnabledUsersPredicate + "*/";
+
+        /// <summary>
+        /// The statement read over the directory population when <paramref name="directoryPopulation"/> is true - each
+        /// population marker's text uncommented - and otherwise with the markers removed, exactly as it was written before them.
+        /// </summary>
+        public static string ApplyPopulation(string sql, bool directoryPopulation)
+        {
+            if (sql == null) throw new ArgumentNullException(nameof(sql));
+
+            var builder = new StringBuilder(sql.Length);
+            var position = 0;
+            while (true)
+            {
+                var open = sql.IndexOf(PopulationMarkerOpen, position, StringComparison.Ordinal);
+                if (open < 0) break;
+
+                var close = sql.IndexOf(PopulationMarkerClose, open + PopulationMarkerOpen.Length, StringComparison.Ordinal);
+                if (close < 0) throw new ArgumentException("A population marker is not closed.", nameof(sql));
+
+                builder.Append(sql, position, open - position);
+                if (directoryPopulation)
+                {
+                    builder.Append(sql, open + PopulationMarkerOpen.Length, close - open - PopulationMarkerOpen.Length);
+                }
+
+                position = close + PopulationMarkerClose.Length;
+            }
+
+            builder.Append(sql, position, sql.Length - position);
+            return builder.ToString();
+        }
+
+        #endregion
+
         /// <summary>Buckets a datetime column to the Monday on or before it.</summary>
         public static string WeekBucket(string column)
         {
@@ -200,7 +280,7 @@ WITH PerUser AS (
         SUM(CAST(t.video_duration_seconds AS bigint))            AS VideoSeconds,
         SUM(CAST(t.screenshare_duration_seconds AS bigint))      AS ScreenShareSeconds
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + UsagePopulation + @"
     GROUP BY t.user_id
 )
 SELECT
@@ -322,6 +402,43 @@ OPTION (RECOMPILE);";
         }
 
         /// <summary>
+        /// <see cref="OverviewTrend"/> over the directory population, for a reader without See PII (#844, S4-1): the same
+        /// weekly figures, for the people the Adoption breakdown is made of. Each person's week is added up first and only
+        /// then matched to the directory: matching every usage row instead cost 3-4 s more CPU on a 365-day window at
+        /// synthetic scale, this about 1.5 s (see the population markers' note). A reader with See PII still runs
+        /// <see cref="OverviewTrend"/>, unchanged.
+        /// </summary>
+        public static string OverviewTrendOverDirectory()
+        {
+            var week = WeekBucket("t.[date]");
+
+            return $@"
+WITH PerPersonWeek AS (
+    SELECT
+        {week} AS WeekStart,
+        t.user_id,
+        MAX(CASE WHEN {ActivitySum} > 0 THEN 1 ELSE 0 END) AS Active,
+        SUM(CAST({ChannelMessageSum} AS bigint))         AS ChannelMessages,
+        SUM(CAST(t.private_chat_count AS bigint))        AS PrivateMessages,
+        SUM(CAST(t.meetings_attended_count AS bigint))   AS MeetingsAttended
+    FROM dbo.teams_user_activity_log AS t
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
+    GROUP BY {week}, t.user_id
+)
+SELECT
+    p.WeekStart,
+    SUM(p.Active)                         AS ActiveUsers,
+    ISNULL(SUM(p.ChannelMessages), 0)     AS ChannelMessages,
+    ISNULL(SUM(p.PrivateMessages), 0)     AS PrivateMessages,
+    ISNULL(SUM(p.MeetingsAttended), 0)    AS MeetingsAttended
+FROM PerPersonWeek AS p
+WHERE {DirectoryPerson}
+GROUP BY p.WeekStart
+ORDER BY p.WeekStart
+OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
         /// Weekly call counts for the Overview trend.
         /// </summary>
         /// <remarks>
@@ -389,7 +506,7 @@ OPTION (RECOMPILE);";
 WITH Daily AS (
     SELECT t.[date] AS D, COUNT(DISTINCT CASE WHEN {ActivitySum} > 0 THEN t.user_id END) AS Dau
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation}
     GROUP BY t.[date]
 )
 SELECT
@@ -397,12 +514,12 @@ SELECT
     (
         SELECT COUNT(DISTINCT t.user_id)
         FROM dbo.teams_user_activity_log AS t
-        WHERE t.[date] >= @wauFrom AND t.[date] < @usageTo{UsageScope} AND {ActivitySum} > 0
+        WHERE t.[date] >= @wauFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation} AND {ActivitySum} > 0
     ) AS WeeklyActiveUsers,
     (
         SELECT COUNT(DISTINCT t.user_id)
         FROM dbo.teams_user_activity_log AS t
-        WHERE t.[date] >= @mauFrom AND t.[date] < @usageTo{UsageScope} AND {ActivitySum} > 0
+        WHERE t.[date] >= @mauFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation} AND {ActivitySum} > 0
     ) AS MonthlyActiveUsers
 OPTION (RECOMPILE);";
         }
@@ -422,7 +539,7 @@ WITH PerUserWeek AS (
 )
 SELECT p.WeekStart, p.ActiveDays, COUNT_BIG(*) AS Users
 FROM PerUserWeek AS p
-WHERE p.ActiveDays > 0
+WHERE p.ActiveDays > 0{PerPersonPopulation}
 GROUP BY p.WeekStart, p.ActiveDays
 ORDER BY p.WeekStart, p.ActiveDays
 OPTION (RECOMPILE);";
@@ -475,7 +592,7 @@ WITH PerUser AS (
         MAX(CASE WHEN d.used_linux     = 1 THEN 1 ELSE 0 END) AS UsedLinux,
         MAX(CASE WHEN d.used_chrome_os = 1 THEN 1 ELSE 0 END) AS UsedChromeOs
     FROM dbo.teams_user_device_usage_log AS d
-    WHERE d.[date] >= @usageFrom AND d.[date] < @usageTo" + DeviceScope + @"
+    WHERE d.[date] >= @usageFrom AND d.[date] < @usageTo" + DeviceScope + DevicePopulation + @"
     GROUP BY d.user_id
 )
 SELECT
@@ -499,7 +616,7 @@ WITH PerUser AS (
         MAX(CASE WHEN t.[date] <  @midpoint AND " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS FirstHalf,
         MAX(CASE WHEN t.[date] >= @midpoint AND " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS SecondHalf
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + UsagePopulation + @"
     GROUP BY t.user_id
 )
 SELECT
@@ -1215,7 +1332,11 @@ WHERE " + EnabledUsersPredicate + DirectoryScope + @"
 ORDER BY p.LastActivity, u.user_name
 OPTION (RECOMPILE);";
 
-        /// <summary>Where the champions are - the departments already carrying Teams adoption.</summary>
+        /// <summary>
+        /// Where the champions are - the departments already carrying Teams adoption. For a reader without See PII, every
+        /// department, over the directory population (<see cref="JoinedUserPopulation"/>), since they add up to the Power segment
+        /// published beside them and are folded before any cut (<c>TeamsPeople.WithoutIndividualData</c>).
+        /// </summary>
         public const string ChampionsByDepartment = @"
 WITH PerUser AS (
     SELECT t.user_id, SUM(CASE WHEN " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS ActiveDays
@@ -1227,7 +1348,7 @@ SELECT TOP (@top) ISNULL(dep.[name], N'(not set)') AS Name, COUNT_BIG(*) AS [Cou
 FROM PerUser AS p
 INNER JOIN dbo.users AS u ON u.id = p.user_id
 LEFT JOIN dbo.user_departments AS dep ON dep.id = u.department_id
-WHERE p.ActiveDays >= @championDays
+WHERE p.ActiveDays >= @championDays" + JoinedUserPopulation + @"
 GROUP BY ISNULL(dep.[name], N'(not set)')
 ORDER BY [Count] DESC
 OPTION (RECOMPILE);";

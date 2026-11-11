@@ -17,6 +17,7 @@ const charts: Record<keyof typeof en, string> = {
 
   // Donut chart
   'charts.donut.sliceTitle': '{label}: {value} ({percent} %)',
+  'charts.donut.sliceTitleWithoutShare': '{label}: {value}',
   'charts.donut.legendValue': '{value} ({percent} %)',
 
   // Gauge chart

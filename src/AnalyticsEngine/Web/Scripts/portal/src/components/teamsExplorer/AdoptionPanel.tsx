@@ -9,12 +9,15 @@ import { plural, useT, type TranslationKey } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
+  PrivacyReaderNote,
+  figureOrWithheld,
   formatCount,
   formatDecimal,
   formatPct,
   queryFor,
   reachTone,
   useTeamsStyles,
+  withheldReason,
 } from './teamsShared';
 
 /** The demographic dimensions the breakdown can group by, matching `TeamsExplorerQuery.Groupings`. */
@@ -69,11 +72,15 @@ export default function AdoptionPanel({
   const t = useT();
   const { rhythm, lifecycle } = data;
 
+  // For a reader without See PII, a figure about one to four people comes back null: a dash that says why, never a zero,
+  // and no tone worked out from it.
+  const withheld = withheldReason(t, data.minimumGroupSize);
+
   const kpis: KpiDefinition[] = [
     {
       key: 'dau',
       label: t('teamsExplorer.adoption.kpi.averageDailyUsers.label'),
-      value: formatDecimal(rhythm.meanDailyActiveUsers),
+      value: figureOrWithheld(rhythm.meanDailyActiveUsers, formatDecimal, withheld),
       hint: t('teamsExplorer.adoption.kpi.averageDailyUsers.hint', { days: formatCount(data.window.workingDays) }),
       info: {
         what: t('teamsExplorer.adoption.kpi.averageDailyUsers.what'),
@@ -86,7 +93,7 @@ export default function AdoptionPanel({
     {
       key: 'wau',
       label: t('teamsExplorer.adoption.kpi.weeklyActiveUsers.label'),
-      value: formatCount(rhythm.weeklyActiveUsers),
+      value: figureOrWithheld(rhythm.weeklyActiveUsers, formatCount, withheld),
       hint: t('teamsExplorer.adoption.kpi.weeklyActiveUsers.hint'),
       info: {
         what: t('teamsExplorer.adoption.kpi.weeklyActiveUsers.what'),
@@ -97,7 +104,7 @@ export default function AdoptionPanel({
     {
       key: 'mau',
       label: t('teamsExplorer.adoption.kpi.monthlyActiveUsers.label'),
-      value: formatCount(rhythm.monthlyActiveUsers),
+      value: figureOrWithheld(rhythm.monthlyActiveUsers, formatCount, withheld),
       hint: t('teamsExplorer.adoption.kpi.monthlyActiveUsers.hint'),
       info: {
         what: t('teamsExplorer.adoption.kpi.monthlyActiveUsers.what'),
@@ -110,9 +117,9 @@ export default function AdoptionPanel({
     {
       key: 'stickiness',
       label: t('teamsExplorer.adoption.kpi.stickiness.label'),
-      value: formatPct(rhythm.stickinessPct),
+      value: figureOrWithheld(rhythm.stickinessPct, formatPct, withheld),
       hint: t('teamsExplorer.adoption.kpi.stickiness.hint'),
-      tone: reachTone(rhythm.stickinessPct),
+      tone: rhythm.stickinessPct == null ? 'neutral' : reachTone(rhythm.stickinessPct),
       info: {
         what: t('teamsExplorer.adoption.kpi.stickiness.what'),
         how:
@@ -124,9 +131,9 @@ export default function AdoptionPanel({
     {
       key: 'new',
       label: t('teamsExplorer.adoption.kpi.newlyActive.label'),
-      value: formatCount(lifecycle.newUsers),
+      value: figureOrWithheld(lifecycle.newUsers, formatCount, withheld),
       hint: t('teamsExplorer.adoption.kpi.newlyActive.hint'),
-      tone: 'good',
+      tone: lifecycle.newUsers == null ? 'neutral' : 'good',
       info: {
         what: t('teamsExplorer.adoption.kpi.newlyActive.what'),
         how:
@@ -137,9 +144,14 @@ export default function AdoptionPanel({
     {
       key: 'lapsed',
       label: t('teamsExplorer.adoption.kpi.lapsed.label'),
-      value: formatCount(lifecycle.lapsedUsers),
+      value: figureOrWithheld(lifecycle.lapsedUsers, formatCount, withheld),
       hint: t('teamsExplorer.adoption.kpi.lapsed.hint'),
-      tone: lifecycle.lapsedUsers > lifecycle.newUsers ? 'critical' : 'warning',
+      tone:
+        lifecycle.lapsedUsers == null || lifecycle.newUsers == null
+          ? 'neutral'
+          : lifecycle.lapsedUsers > lifecycle.newUsers
+            ? 'critical'
+            : 'warning',
       info: {
         what: t('teamsExplorer.adoption.kpi.lapsed.what'),
         how:
@@ -196,16 +208,21 @@ export default function AdoptionPanel({
     value: row.activeUsers,
   }));
 
-  const deviceCategories = data.devices.map((row) => ({
-    label: row.platform,
-    value: row.users,
-  }));
+  const deviceCategories = data.devices.flatMap((row) => (row.users == null ? [] : [{ label: row.platform, value: row.users }]));
+  const minimumText = formatCount(minimumGroupSize ?? 5);
+  const devicesWithheldNote = data.devices.some((row) => row.withheld)
+    ? t('teamsExplorer.adoption.devices.withheldNote', { count: minimumText })
+    : undefined;
+  const weeksWithheldNote = data.segmentTrend.some((p) => p.withheld)
+    ? t('teamsExplorer.adoption.engagementOverTime.withheldNote', { count: minimumText })
+    : undefined;
 
   const groupLabel = t(GROUPINGS.find((g) => g.value === groupBy)?.labelKey ?? 'teamsExplorer.adoption.group.department');
 
   return (
     <div>
       <WindowNote window={data.window} includeUsage={false} />
+      <PrivacyReaderNote minimumGroupSize={minimumGroupSize} />
 
       <div style={{ marginTop: '16px' }}>
         <KpiGrid items={kpis} />
@@ -217,11 +234,13 @@ export default function AdoptionPanel({
           description={t('teamsExplorer.adoption.engagementOverTime.description')}
           query={queryFor(data.queries, 'adoption-segment-trend')}
           isEmpty={data.segmentTrend.length === 0}
-          note={
-            t('teamsExplorer.adoption.engagementOverTime.note')
-          }
+          note={[t('teamsExplorer.adoption.engagementOverTime.note'), weeksWithheldNote].filter(Boolean).join(' ')}
         >
-          <StackedAreaChart series={segmentSeries} valueLabel={t('teamsExplorer.adoption.valueLabel.users')} />
+          <StackedAreaChart
+            series={segmentSeries}
+            valueLabel={t('teamsExplorer.adoption.valueLabel.users')}
+            withheldLabel={weeksWithheldNote ? withheld : undefined}
+          />
         </SectionCard>
 
         <SectionCard
@@ -279,10 +298,8 @@ export default function AdoptionPanel({
           description={t('teamsExplorer.adoption.devices.description')}
           query={queryFor(data.queries, 'adoption-devices')}
           isEmpty={deviceCategories.length === 0}
-          emptyMessage={t('teamsExplorer.adoption.devices.empty')}
-          note={
-            t('teamsExplorer.adoption.devices.note')
-          }
+          emptyMessage={devicesWithheldNote ?? t('teamsExplorer.adoption.devices.empty')}
+          note={[t('teamsExplorer.adoption.devices.note'), deviceCategories.length > 0 ? devicesWithheldNote : undefined].filter(Boolean).join(' ')}
         >
           <CategoryBarChart categories={deviceCategories} valueLabel={t('teamsExplorer.adoption.valueLabel.usersLower')} />
         </SectionCard>

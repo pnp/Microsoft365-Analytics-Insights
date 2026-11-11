@@ -58,6 +58,11 @@ type DonutChartProps = {
   centreValue: string;
   centreLabel: string;
   size?: number;
+  /**
+   * False when some of the whole is not drawn - a slice withheld from a reader without See PII - so a slice's share of
+   * the slices shown would not be its share of the whole: the legend and tooltips then give the counts alone.
+   */
+  showShares?: boolean;
 };
 
 /**
@@ -74,6 +79,7 @@ export default function DonutChart({
   centreValue,
   centreLabel,
   size = 168,
+  showShares = true,
 }: DonutChartProps) {
   const t = useT();
   const styles = useStyles();
@@ -109,7 +115,11 @@ export default function DonutChart({
                 strokeDasharray={`${dash} ${circumference - dash}`}
                 strokeDashoffset={-offset}
               >
-                <title>{t('charts.donut.sliceTitle', { label: serverPlaceholderText(t, c.label), value: formatValue(c.value), percent: formatNumber(Math.round(share * 1000) / 10) })}</title>
+                <title>
+                  {showShares
+                    ? t('charts.donut.sliceTitle', { label: serverPlaceholderText(t, c.label), value: formatValue(c.value), percent: formatNumber(Math.round(share * 1000) / 10) })
+                    : t('charts.donut.sliceTitleWithoutShare', { label: serverPlaceholderText(t, c.label), value: formatValue(c.value) })}
+                </title>
               </circle>
             );
             offset += dash;
@@ -146,7 +156,9 @@ export default function DonutChart({
               {serverPlaceholderText(t, c.label)}
             </Text>
             <Text size={200} weight="semibold" className={styles.legendValue}>
-              {t('charts.donut.legendValue', { value: formatValue(c.value), percent: formatNumber(Math.round((c.value / total) * 1000) / 10) })}
+              {showShares
+                ? t('charts.donut.legendValue', { value: formatValue(c.value), percent: formatNumber(Math.round((c.value / total) * 1000) / 10) })
+                : formatValue(c.value)}
             </Text>
           </div>
         ))}
