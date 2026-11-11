@@ -35,6 +35,7 @@ namespace Tests.UnitTests
             var store = new CallDeadLetterRequestStore(values, isDurable: true);
             var request = Waiting(CallDeadLetterActions.Clear);
             request.ClaimedUtc = Now.AddMinutes(1);
+            request.ClaimToken = "0000000000000000000000000000000a";
             request.FinishedUtc = Now.AddMinutes(7);
             request.Outcome = CallDeadLetterOutcomes.Partial;
             request.FailureCode = CallDeadLetterFailureCodes.TimeBudget;
@@ -64,6 +65,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(Now, read.RequestedUtc);
             Assert.AreEqual(DateTimeKind.Utc, read.RequestedUtc.Kind);
             Assert.AreEqual(Now.AddMinutes(1), read.ClaimedUtc);
+            Assert.AreEqual("0000000000000000000000000000000a", read.ClaimToken);
             Assert.AreEqual(Now.AddMinutes(7), read.FinishedUtc);
             Assert.AreEqual(CallDeadLetterOutcomes.Partial, read.Outcome);
             Assert.AreEqual(CallDeadLetterFailureCodes.TimeBudget, read.FailureCode);
@@ -79,7 +81,7 @@ namespace Tests.UnitTests
 
             // The stored names are the contract between the web app and the importer, which may run different builds.
             var stored = JObject.Parse(await values.GetStringAsync(CallDeadLetterRequestStore.Key));
-            CollectionAssert.AreEquivalent(new[] { "id", "action", "requestedUtc", "claimedUtc", "finishedUtc", "outcome", "failureCode", "result" },
+            CollectionAssert.AreEquivalent(new[] { "id", "action", "requestedUtc", "claimedUtc", "claimToken", "finishedUtc", "outcome", "failureCode", "result" },
                 stored.Properties().Select(p => p.Name).ToList());
             CollectionAssert.AreEquivalent(
                 new[] { "passes", "scanned", "replayed", "replayedButNotRemoved", "deleted", "sendFailed", "deleteFailed", "skipped", "reasons", "stopCode" },

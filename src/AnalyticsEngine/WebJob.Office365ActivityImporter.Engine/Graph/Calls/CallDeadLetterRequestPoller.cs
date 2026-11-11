@@ -33,6 +33,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     /// any copy already saved.
     /// </para>
     /// <para>
+    /// The state table can apply a claim and lose its reply. The SDK then retries, and the retry fails the precondition the
+    /// first attempt changed - or every retry fails and the write throws. So a claim that isn't confirmed is read back, and
+    /// stands when the row holds this instance's claim: its <see cref="CallDeadLetterRequest.ClaimToken"/> tells it from
+    /// another instance's claim made at the same tick. A claim that can't be read back either is looked for again at the next
+    /// check. Without this, the request showed as running for two hours with nothing running it.
+    /// </para>
+    /// <para>
     /// Only a request that is waiting (<see cref="CallDeadLetterRequestStates.Waiting"/>) is claimed. One no importer picked up
     /// within <see cref="CallDeadLetterRequestRules.PickUpWithin"/> is left alone - a deletion the administrator asked for
     /// hours ago is not carried out by surprise - and so is one claimed and not finished within
@@ -63,6 +70,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         private readonly TimeSpan _budget;
         private readonly CancellationTokenSource _stop = new CancellationTokenSource();
         private DateTime? _readFailureLoggedUtc;
+
+        /// <summary>A claim this instance wrote but couldn't read back, so it doesn't know whether it landed; see <see cref="TakeUnconfirmedClaim"/>.</summary>
+        private CallDeadLetterRequest _unconfirmedClaim;
 
         /// <param name="openQueue">Opens the calls queue; called once per request carried out, and disposed after it.</param>
         /// <param name="budget">How long one request may take; <see cref="CallDeadLetterRequestRules.RunBudget"/> by default.</param>
@@ -164,8 +174,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         /// <summary>
         /// Looks for a waiting request and, when this instance claims it, carries it out and records the result. True when it
-        /// claimed one. Never throws for a store or Service Bus failure: those are logged and, where the request was claimed,
-        /// recorded.
+        /// claimed one - or found that a claim it couldn't confirm at the last check had landed. Never throws for a store or
+        /// Service Bus failure: those are logged and, where the request was claimed, recorded.
         /// </summary>
         public async Task<bool> RunOnceAsync(CancellationToken stop = default(CancellationToken))
         {
@@ -180,27 +190,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 return false;
             }
 
-            var waiting = snapshot.Request;
-            var claimedUtc = _clock.UtcNow;
-            if (waiting == null || CallDeadLetterRequestRules.StateOf(waiting, claimedUtc) != CallDeadLetterRequestStates.Waiting)
+            var nowUtc = _clock.UtcNow;
+            var claimed = TakeUnconfirmedClaim(snapshot.Request, nowUtc);
+            if (claimed == null)
             {
-                return false;
-            }
-
-            var claimed = waiting.Clone();
-            claimed.ClaimedUtc = claimedUtc;
-            try
-            {
-                if (!await _store.TryReplaceAsync(claimed, snapshot.VersionToken, stop).ConfigureAwait(false))
+                var waiting = snapshot.Request;
+                if (waiting == null || CallDeadLetterRequestRules.StateOf(waiting, nowUtc) != CallDeadLetterRequestStates.Waiting)
                 {
-                    _logger.LogDebug($"{LogPrefix} {waiting.Id}: another importer instance claimed it first, or it was replaced.");
                     return false;
                 }
-            }
-            catch (CallDeadLetterStateUnavailableException ex)
-            {
-                LogStoreFailure($"couldn't claim request {waiting.Id}", ex);
-                return false;
+
+                claimed = waiting.Clone();
+                claimed.ClaimedUtc = nowUtc;
+                claimed.ClaimToken = Guid.NewGuid().ToString("N");
+                if (!await TryClaimAsync(claimed, snapshot.VersionToken, stop).ConfigureAwait(false))
+                {
+                    return false;
+                }
             }
 
             _logger.LogInformation($"{LogPrefix}: {Describe(claimed.Action)} (request {claimed.Id}, recorded {claimed.RequestedUtc.ToString("u", CultureInfo.InvariantCulture)}), " +
@@ -216,6 +222,92 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
             await RecordAsync(claimed, finished).ConfigureAwait(false);
             return true;
+        }
+
+        /// <summary>
+        /// Writes <paramref name="claimed"/> over the row read at <paramref name="versionToken"/>. True when the claim stands: the
+        /// write was confirmed, or it wasn't but the row read back holds this instance's claim (see the remarks on the class).
+        /// When the row can't be read back, the claim is kept for <see cref="TakeUnconfirmedClaim"/> at the next check.
+        /// </summary>
+        private async Task<bool> TryClaimAsync(CallDeadLetterRequest claimed, string versionToken, CancellationToken stop)
+        {
+            CallDeadLetterStateUnavailableException writeFailure = null;
+            try
+            {
+                if (await _store.TryReplaceAsync(claimed, versionToken, stop).ConfigureAwait(false))
+                {
+                    return true;
+                }
+            }
+            catch (CallDeadLetterStateUnavailableException ex)
+            {
+                writeFailure = ex;
+            }
+
+            CallDeadLetterRequest current;
+            try
+            {
+                current = (await _store.ReadAsync(stop).ConfigureAwait(false)).Request;
+            }
+            catch (CallDeadLetterStateUnavailableException ex)
+            {
+                _unconfirmedClaim = claimed;
+                _logger.LogWarning($"{LogPrefix} {claimed.Id}: couldn't tell whether this instance's claim landed, as the runtime state table couldn't be read " +
+                    $"({DescribeFailure(ex.InnerException ?? ex)}). It looks again at the next check, and carries the request out then if the claim is its own.");
+                return false;
+            }
+
+            if (IsThisClaim(current, claimed))
+            {
+                _logger.LogInformation($"{LogPrefix} {claimed.Id}: the runtime state table didn't confirm the claim, but the row holds this instance's claim, so it stands.");
+                return true;
+            }
+
+            if (writeFailure != null)
+            {
+                LogStoreFailure($"couldn't claim request {claimed.Id}", writeFailure);
+            }
+            else
+            {
+                _logger.LogDebug($"{LogPrefix} {claimed.Id}: another importer instance claimed it first, or it was replaced.");
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The claim this instance couldn't confirm at the last check, when <paramref name="stored"/> shows it landed and the
+        /// request is still running - so the portal shows it as running, and it is carried out; otherwise null. It is
+        /// forgotten either way: a claim that didn't land leaves a request that can be claimed again.
+        /// </summary>
+        private CallDeadLetterRequest TakeUnconfirmedClaim(CallDeadLetterRequest stored, DateTime nowUtc)
+        {
+            var unconfirmed = _unconfirmedClaim;
+            _unconfirmedClaim = null;
+            if (unconfirmed == null || !IsThisClaim(stored, unconfirmed)
+                || CallDeadLetterRequestRules.StateOf(stored, nowUtc) != CallDeadLetterRequestStates.Running)
+            {
+                return null;
+            }
+
+            _logger.LogInformation($"{LogPrefix} {unconfirmed.Id}: the claim this instance couldn't confirm at the last check did land, so it carries the request out now.");
+            return unconfirmed;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="stored"/> is the claim <paramref name="claimed"/> this instance wrote, not yet finished: the
+        /// same request, claim time and claim token. The token tells it from a claim another instance wrote at the same tick.
+        /// </summary>
+        private static bool IsThisClaim(CallDeadLetterRequest stored, CallDeadLetterRequest claimed)
+        {
+            return stored != null && !stored.FinishedUtc.HasValue && stored.Id == claimed.Id && stored.ClaimedUtc == claimed.ClaimedUtc
+                && claimed.ClaimToken != null && stored.ClaimToken == claimed.ClaimToken;
+        }
+
+        /// <summary>Whether <paramref name="stored"/> is the result <paramref name="finished"/> this instance recorded over its claim.</summary>
+        private static bool IsRecorded(CallDeadLetterRequest stored, CallDeadLetterRequest finished)
+        {
+            return stored != null && stored.Id == finished.Id && finished.ClaimToken != null && stored.ClaimToken == finished.ClaimToken
+                && stored.FinishedUtc == finished.FinishedUtc;
         }
 
         /// <summary>The finished request, or null when the run was interrupted by <paramref name="stop"/> and nothing is to be recorded.</summary>
@@ -355,12 +447,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 try
                 {
                     var current = await _store.ReadAsync(CancellationToken.None).ConfigureAwait(false);
-                    if (current.Request == null || current.Request.Id != claimed.Id || current.Request.ClaimedUtc != claimed.ClaimedUtc || current.Request.FinishedUtc.HasValue)
+                    // An earlier attempt can have landed and lost its reply, as a claim can.
+                    var recorded = IsRecorded(current.Request, finished);
+                    if (!recorded && !IsThisClaim(current.Request, claimed))
                     {
                         _logger.LogWarning(summary + " The request was replaced while it ran, so this result is in this log only.");
                         return;
                     }
-                    if (await _store.TryReplaceAsync(finished, current.VersionToken, CancellationToken.None).ConfigureAwait(false))
+                    if (recorded || await _store.TryReplaceAsync(finished, current.VersionToken, CancellationToken.None).ConfigureAwait(false))
                     {
                         if (finished.Outcome == CallDeadLetterOutcomes.Succeeded)
                         {

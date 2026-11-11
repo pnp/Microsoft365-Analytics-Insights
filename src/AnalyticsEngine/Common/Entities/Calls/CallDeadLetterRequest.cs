@@ -159,6 +159,15 @@ namespace Common.Entities.Calls
         [JsonProperty("claimedUtc", NullValueHandling = NullValueHandling.Ignore)]
         public DateTime? ClaimedUtc { get; set; }
 
+        /// <summary>
+        /// A random value (a GUID, "N" format) the importer instance wrote with its claim, so it can tell its own claim from
+        /// another instance's - which may carry the same <see cref="ClaimedUtc"/> - when the state table applied the claim but
+        /// its reply was lost. Null while the request waits, and on one claimed by an importer older than this property. The
+        /// portal neither shows nor writes it.
+        /// </summary>
+        [JsonProperty("claimToken", NullValueHandling = NullValueHandling.Ignore)]
+        public string ClaimToken { get; set; }
+
         /// <summary>When the importer recorded its outcome; null until then.</summary>
         [JsonProperty("finishedUtc", NullValueHandling = NullValueHandling.Ignore)]
         public DateTime? FinishedUtc { get; set; }

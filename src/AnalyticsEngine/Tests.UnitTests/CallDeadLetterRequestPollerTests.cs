@@ -2,6 +2,7 @@ using Common.Entities.Calls;
 using Common.Entities.State;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -23,6 +24,7 @@ namespace Tests.UnitTests
     {
         private static readonly DateTime Now = CallDeadLetterReplayTests.Now;
         private const string MaxDeliveryCountExceeded = "MaxDeliveryCountExceeded";
+        private const string OtherRequestId = "00000000000000000000000000000002";
 
         private sealed class Importer
         {
@@ -37,11 +39,12 @@ namespace Tests.UnitTests
             public async Task<CallDeadLetterRequest> RecordedAsync() => (await Store.ReadAsync()).Request;
         }
 
-        private static Importer NewImporter(TimeSpan? budget = null, IConditionalKeyValueStore values = null, Func<ICallDeadLetterQueue> openQueue = null)
+        private static Importer NewImporter(TimeSpan? budget = null, IConditionalKeyValueStore values = null, Func<ICallDeadLetterQueue> openQueue = null,
+            Func<InMemoryKeyValueStore, IConditionalKeyValueStore> wrapValues = null)
         {
             var importer = new Importer { Clock = new FixedClock(Now) };
             importer.Values = new InMemoryKeyValueStore(() => importer.Clock.UtcNow);
-            importer.Store = new CallDeadLetterRequestStore(values ?? importer.Values, isDurable: true);
+            importer.Store = new CallDeadLetterRequestStore(values ?? wrapValues?.Invoke(importer.Values) ?? importer.Values, isDurable: true);
             importer.Queue = new FakeCallDeadLetterQueue(importer.Clock);
             importer.Poller = new CallDeadLetterRequestPoller(importer.Store, openQueue ?? (() =>
             {
@@ -199,6 +202,152 @@ namespace Tests.UnitTests
             Assert.AreEqual(CallDeadLetterOutcomes.Succeeded, (await new CallDeadLetterRequestStore(values, isDurable: true).ReadAsync()).Request.Outcome);
         }
 
+        /// <summary>
+        /// The state table applies the claim but its reply is lost: the SDK's retry then fails on the ETag its own first attempt
+        /// changed, so the importer is told the claim failed - or every retry fails and the write throws. Reading the row back
+        /// shows this instance's claim, so it carries the request out once and records it, rather than leaving it showing as
+        /// running for two hours with nothing running it.
+        /// </summary>
+        [TestMethod]
+        public async Task AClaimWhoseReplyIsLost_StandsWhenTheRowHoldsIt_SoTheRequestRunsOnceAndIsRecorded()
+        {
+            foreach (var throws in new[] { false, true })
+            {
+                LostReplyKeyValueStore values = null;
+                var importer = NewImporter(wrapValues: inner => values = new LostReplyKeyValueStore(inner));
+                AddEveryKind(importer.Queue);
+                await RequestAsync(importer, CallDeadLetterActions.Reprocess);
+                values.Writes.Enqueue(new LostReply { Lost = true, Throws = throws });
+
+                Assert.IsTrue(await importer.Poller.RunOnceAsync(), $"throws: {throws}");
+
+                Assert.AreEqual(1, importer.Opened);
+                Assert.AreEqual(3, importer.Queue.Sent.Count, "Each call is replayed once.");
+                var recorded = await importer.RecordedAsync();
+                Assert.AreEqual(Now, recorded.ClaimedUtc);
+                Assert.IsNotNull(recorded.ClaimToken);
+                Assert.AreEqual(CallDeadLetterOutcomes.Succeeded, recorded.Outcome);
+                var logged = importer.Logger.Entries.Select(e => e.Message).ToList();
+                Assert.AreEqual(1, logged.Count(m => m == $"Teams calls dead-letter request from the portal {CallDeadLetterRequestTests.RequestId}: the runtime state " +
+                    "table didn't confirm the claim, but the row holds this instance's claim, so it stands."));
+                Assert.AreEqual(1, logged.Count(m => m.Contains("claimed by this importer instance")));
+                Assert.IsTrue(logged.Any(m => m.EndsWith("Recorded for the portal.")));
+            }
+        }
+
+        /// <summary>
+        /// When the claim's reply is lost and the row can't be read back either, the importer can't tell whether the claim
+        /// landed, so it looks at the next check. A claim that landed is carried out then, while the portal still shows it as
+        /// running; one that went stale meanwhile is left alone, and one whose request was replaced is forgotten - the new
+        /// request is claimed as any other.
+        /// </summary>
+        [TestMethod]
+        public async Task AClaimThatCantBeReadBack_IsLookedForAtTheNextCheck_AndCarriedOutOnlyIfItLandedAndIsStillRunning()
+        {
+            foreach (var meanwhile in new[] { "nothing", "stale", "replaced" })
+            {
+                LostReplyKeyValueStore values = null;
+                var importer = NewImporter(wrapValues: inner => values = new LostReplyKeyValueStore(inner));
+                AddEveryKind(importer.Queue);
+                await RequestAsync(importer, CallDeadLetterActions.Clear);
+                values.Writes.Enqueue(new LostReply { Lost = true, Throws = true, FailingReadsAfter = 1 });
+
+                Assert.IsFalse(await importer.Poller.RunOnceAsync(), meanwhile);
+                Assert.AreEqual(0, importer.Opened, meanwhile);
+                Assert.IsTrue(importer.Logger.Entries.Any(e => e.Level == LogLevel.Warning && e.Message.StartsWith(
+                    $"Teams calls dead-letter request from the portal {CallDeadLetterRequestTests.RequestId}: couldn't tell whether this instance's claim landed")), meanwhile);
+
+                importer.Clock.Advance(meanwhile == "stale" ? CallDeadLetterRequestRules.FinishWithin + TimeSpan.FromMinutes(1) : CallDeadLetterRequestRules.PollInterval);
+                if (meanwhile == "replaced")
+                {
+                    // As when the row is deleted by hand and a new request recorded.
+                    await importer.Values.SetStringAsync(CallDeadLetterRequestStore.Key,
+                        JsonConvert.SerializeObject(CallDeadLetterRequestTests.Waiting(CallDeadLetterActions.Clear, importer.Clock.UtcNow, OtherRequestId)));
+                }
+
+                var ran = await importer.Poller.RunOnceAsync();
+
+                var recorded = await importer.RecordedAsync();
+                var resumed = importer.Logger.Entries.Any(e => e.Message.EndsWith("the claim this instance couldn't confirm at the last check did land, so it carries the request out now."));
+                switch (meanwhile)
+                {
+                    case "nothing":
+                        Assert.IsTrue(ran);
+                        Assert.IsTrue(resumed);
+                        Assert.AreEqual(CallDeadLetterRequestTests.RequestId, recorded.Id);
+                        Assert.AreEqual(Now, recorded.ClaimedUtc, "Carried out under the claim that landed.");
+                        Assert.AreEqual(CallDeadLetterOutcomes.Succeeded, recorded.Outcome);
+                        break;
+                    case "stale":
+                        Assert.IsFalse(ran, "Not carried out once the portal shows it as not finished, when it can be requested again.");
+                        Assert.IsFalse(resumed);
+                        Assert.AreEqual(CallDeadLetterRequestStates.NotFinished, CallDeadLetterRequestRules.StateOf(recorded, importer.Clock.UtcNow));
+                        break;
+                    default:
+                        Assert.IsTrue(ran);
+                        Assert.IsFalse(resumed);
+                        Assert.AreEqual(OtherRequestId, recorded.Id);
+                        Assert.AreEqual(importer.Clock.UtcNow, recorded.ClaimedUtc, "The new request is claimed as any other.");
+                        Assert.AreEqual(CallDeadLetterOutcomes.Succeeded, recorded.Outcome);
+                        break;
+                }
+                Assert.AreEqual(ran ? 1 : 0, importer.Opened, meanwhile);
+                Assert.AreEqual(ran ? 0 : 5, importer.Queue.DeadLetters.Count, meanwhile);
+            }
+        }
+
+        /// <summary>
+        /// A claim that genuinely lost still backs off once the row is read back: to another instance's claim of the same request
+        /// at the same tick - the claim token, not the time, says whose claim it is - or because the request was replaced.
+        /// </summary>
+        [TestMethod]
+        public async Task ALostClaim_StillBacksOff_ToAnotherInstancesClaimAtTheSameTick_OrAReplacedRequest()
+        {
+            var theirs = CallDeadLetterRequestTests.Waiting(CallDeadLetterActions.Clear, Now.AddMinutes(-1));
+            theirs.ClaimedUtc = Now;
+            theirs.ClaimToken = "0000000000000000000000000000000b";
+            var replacement = CallDeadLetterRequestTests.Waiting(CallDeadLetterActions.Clear, Now, OtherRequestId);
+
+            foreach (var competing in new[] { theirs, replacement })
+            {
+                LostReplyKeyValueStore values = null;
+                var importer = NewImporter(wrapValues: inner => values = new LostReplyKeyValueStore(inner));
+                AddEveryKind(importer.Queue);
+                await RequestAsync(importer, CallDeadLetterActions.Clear);
+                values.Writes.Enqueue(new LostReply { LandsFirst = competing });
+
+                Assert.IsFalse(await importer.Poller.RunOnceAsync(), competing.Id);
+
+                Assert.AreEqual(0, importer.Opened, competing.Id);
+                Assert.AreEqual(5, importer.Queue.DeadLetters.Count, "Nothing was deleted.");
+                Assert.AreEqual(JsonConvert.SerializeObject(competing), await importer.Values.GetStringAsync(CallDeadLetterRequestStore.Key),
+                    "The row is left as the other writer left it.");
+            }
+        }
+
+        /// <summary>
+        /// The result's write can lose its reply as a claim's can. The row then holds the result, so the importer says it was
+        /// recorded - not that the request was replaced while it ran, when the portal in fact shows the result.
+        /// </summary>
+        [TestMethod]
+        public async Task AResultWhoseReplyIsLost_IsLoggedAsRecorded_NotAsReplaced()
+        {
+            LostReplyKeyValueStore values = null;
+            var importer = NewImporter(wrapValues: inner => values = new LostReplyKeyValueStore(inner));
+            AddEveryKind(importer.Queue);
+            await RequestAsync(importer, CallDeadLetterActions.Reprocess);
+            values.Writes.Enqueue(new LostReply());
+            values.Writes.Enqueue(new LostReply { Lost = true });
+
+            Assert.IsTrue(await importer.Poller.RunOnceAsync());
+
+            Assert.AreEqual(CallDeadLetterOutcomes.Succeeded, (await importer.RecordedAsync()).Outcome);
+            var logged = importer.Logger.Entries.Select(e => e.Message).ToList();
+            Assert.IsTrue(logged.Any(m => m.StartsWith($"Teams calls dead-letter request from the portal {CallDeadLetterRequestTests.RequestId} (reprocess) finished: succeeded")
+                && m.EndsWith("Recorded for the portal.")));
+            Assert.IsFalse(logged.Any(m => m.Contains("replaced while it ran")));
+        }
+
         /// <summary>Only a waiting request is claimed: not a finished one, not one another instance is running, and not a stale one.</summary>
         [TestMethod]
         public async Task OnlyAWaitingRequestIsClaimed_NeverAFinishedRunningOrStaleOne()
@@ -348,6 +497,76 @@ namespace Tests.UnitTests
             public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default) => _inner.DeleteAsync(key, cancellationToken);
             public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => _inner.ExistsAsync(key, cancellationToken);
             public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default) => _inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
+            public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default) => _inner.TryDeleteAsync(key, expectedVersionToken, cancellationToken);
+        }
+
+        /// <summary>What becomes of one conditional write to <see cref="LostReplyKeyValueStore"/>.</summary>
+        private sealed class LostReply
+        {
+            /// <summary>The write lands, and the caller isn't told so.</summary>
+            public bool Lost;
+
+            /// <summary>With <see cref="Lost"/>: the caller is told by an exception, as when every retry fails, rather than by false.</summary>
+            public bool Throws;
+
+            /// <summary>With <see cref="Lost"/>: how many reads after the write fail.</summary>
+            public int FailingReadsAfter;
+
+            /// <summary>Another writer's request, landing just before this write.</summary>
+            public CallDeadLetterRequest LandsFirst;
+        }
+
+        /// <summary>
+        /// An in-memory store whose conditional writes meet what the runtime state table's can: another writer landing first, or
+        /// the reply being lost after the write landed. The SDK retries a write whose reply it didn't get, and an If-Match retry
+        /// then fails on the ETag its own first attempt changed - so the caller is told the write failed. Each write takes the
+        /// next <see cref="LostReply"/> from <see cref="Writes"/>, and is answered truthfully once there are none.
+        /// </summary>
+        private sealed class LostReplyKeyValueStore : IConditionalKeyValueStore
+        {
+            private readonly IConditionalKeyValueStore _inner;
+            private int _failingReads;
+
+            public LostReplyKeyValueStore(IConditionalKeyValueStore inner)
+            {
+                _inner = inner;
+            }
+
+            public Queue<LostReply> Writes { get; } = new Queue<LostReply>();
+
+            public string Description => _inner.Description;
+
+            private static Exception Failure() => new Azure.RequestFailedException(503, "Simulated: the state table's reply was lost.");
+
+            public Task<VersionedValue> GetVersionedAsync(string key, CancellationToken cancellationToken = default)
+            {
+                if (_failingReads > 0)
+                {
+                    _failingReads--;
+                    throw Failure();
+                }
+                return _inner.GetVersionedAsync(key, cancellationToken);
+            }
+
+            public async Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)
+            {
+                var reply = Writes.Count > 0 ? Writes.Dequeue() : new LostReply();
+                if (reply.LandsFirst != null)
+                {
+                    await _inner.SetStringAsync(key, JsonConvert.SerializeObject(reply.LandsFirst), null, cancellationToken);
+                }
+                var landed = await _inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
+                if (!reply.Lost || !landed) return landed;
+
+                _failingReads = reply.FailingReadsAfter;
+                if (reply.Throws) throw Failure();
+                return false;
+            }
+
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default) => _inner.GetStringAsync(key, cancellationToken);
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default) => _inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+            public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default) => _inner.DeleteAsync(key, cancellationToken);
+            public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => _inner.ExistsAsync(key, cancellationToken);
             public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default) => _inner.TryDeleteAsync(key, expectedVersionToken, cancellationToken);
         }
     }
