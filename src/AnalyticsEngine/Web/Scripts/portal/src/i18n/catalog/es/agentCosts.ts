@@ -11,6 +11,11 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.state.notReported': 'No informado',
   'agentCosts.state.loadFailed': 'No se han podido cargar estas cifras, así que no se muestra ninguna. Actualice para volver a intentarlo.',
   'agentCosts.unit.credits': 'créditos',
+  'agentCosts.state.withheld': 'Oculto',
+
+  // El umbral de privacidad para quien no tiene See PII (#844)
+  'agentCosts.floor.note': 'Su acceso no incluye el permiso See PII, así que todas las cifras de Copilot Studio de esta página excluyen las líneas facturadas en las que Microsoft informa de menos de {count} personas, o en las que no indica el número de personas: una cifra sobre tan pocas personas podría identificar a alguien. Por eso los totales son inferiores al gasto completo. Las tarjetas de capacidad siguen mostrando el consumo de todo el inquilino.',
+  'agentCosts.floor.allWithheld': 'Oculto. Microsoft informa de menos de {count} personas en cada línea facturada de esta selección, o no indica el número de personas, así que sus cifras podrían identificar a alguien. Solo se muestran a quienes tienen el permiso See PII.',
 
   // Valores de arnés
   'agentCosts.harness.standardOrCopilotChat': 'Estándar / Copilot Chat',
@@ -110,6 +115,7 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.trend.empty': 'No hay consumo de créditos en este periodo.',
   'agentCosts.trend.barTitle': '{day}: {credits} créditos',
   'agentCosts.trend.caption': '{from} a {to}, pico de {peak} créditos en un día',
+  'agentCosts.trend.smallDaysLeftOut': 'No se muestran los días en los que todas las líneas facturadas tenían menos de {count} personas.',
 
   // Filtros
   'agentCosts.filters.title': 'Acotar las cifras por agente',
@@ -127,6 +133,8 @@ const agentCosts: Record<keyof typeof en, string> = {
   // Desglose de créditos
   'agentCosts.breakdown.title': 'Dónde se consumieron los créditos',
   'agentCosts.breakdown.hiddenRows': 'Se muestran los {count} principales del gasto de este periodo. Los porcentajes son sobre el total de {credits} créditos, por lo que no sumarán el 100 %.',
+  'agentCosts.breakdown.withheldRow.one': 'Uno más, con menos de {min} personas en cada línea facturada',
+  'agentCosts.breakdown.withheldRow.other': '{count} más, cada uno con menos de {min} personas en cada línea facturada',
 
   // Detalle de líneas facturadas
   'agentCosts.detail.title': 'Cada línea facturada',
@@ -135,6 +143,7 @@ const agentCosts: Record<keyof typeof en, string> = {
   'agentCosts.detail.exporting': 'Exportando...',
   'agentCosts.detail.exportAllRows': 'Exportar las {rows} filas',
   'agentCosts.detail.empty': 'No hay líneas facturadas que coincidan con los filtros actuales.',
+  'agentCosts.detail.smallLinesLeftOut': 'Las líneas facturadas con menos de {count} personas, o sin número de personas, no se muestran, no se cuentan y no se exportan.',
   'agentCosts.export.pageFilename': 'creditos-agentes-{from}-a-{to}-pagina{page}.csv',
   'agentCosts.export.filteredFilename': 'creditos-agentes-{from}-a-{to}-filtrado.csv',
 

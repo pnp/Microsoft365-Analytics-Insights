@@ -87,25 +87,58 @@ namespace Tests.UnitTests
 
             ["AgentCostsAPIController.Availability"] = NoGroupedFigures(
                 "Whether the agent-cost imports are switched on, when they last ran, their last errors and which dimensions hold data."),
-            ["AgentCostsAPIController.Summary"] = KnownGap(
-                "Billed and non-billed Copilot Studio credits, and peakDistinctUsersOnASlice (Microsoft's user count for the busiest "
-                + "slice, 1-4 possible), narrowable to one agent, environment, harness, feature or agent-name search, with no "
-                + "floor: an agent or a developer's own environment that one to four people use is their consumption."),
-            ["AgentCostsAPIController.Trend"] = KnownGap(
-                "Daily billed and non-billed credits, narrowable as the summary is, with no floor: the daily credits of an agent "
-                + "or environment one to four people use are theirs."),
-            ["AgentCostsAPIController.Breakdown"] = KnownGap(
-                "Credits and active days per agent, environment, harness or feature, with peakDistinctUsers (1-4 possible), "
-                + "unfloored. A developer's own environment shows one person's charges under a name that identifies them - the "
-                + "reason Copilot spend combines small environments (CopilotSpendStudio.WithSmallEnvironmentsCombined)."),
-            ["AgentCostsAPIController.Detail"] = KnownGap(
-                "Every billed slice - day, environment, agent, harness and feature - with its distinctUsers (1 possible), "
-                + "unfloored and sortable by users: one person's daily credits for an agent."),
+            ["AgentCostsAPIController.Summary"] = Floored(
+                    "Billed and non-billed credits, counts and the busiest slice's people add up only the slices Microsoft reports "
+                    + "5 or more people on; a slice of fewer, or with no count, is in no figure, so no total less another gives one "
+                    + "back. Narrowing (agentId, environmentId, harness, feature, search) to slices that are all small gets every "
+                    + "figure withheld (null, withheld: true), never 0.")
+                .By(typeof(AgentCostsAPIController), nameof(AgentCostsAPIController.ForReader))
+                .By(typeof(Common.Entities.AgentCosts.SqlAgentCostReportStore), nameof(Common.Entities.AgentCosts.SqlAgentCostReportStore.Floored))
+                .ProvenBy(
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_IsGivenOnlySlicesOfFiveOrMorePeople_WithSmallAgentsAndEnvironmentsCombinedIntoOneRowWithoutFigures)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_NarrowingOrSearchingToAGroupOfFewerThanFivePeople_GetsItsFiguresWithheld_NeverZero)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.ForAReaderWithoutSeePii_NoTotalLessTheFiguresShown_GivesBackAWithheldSlice)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithSeePii_IsGivenEverySlice_AsBefore)))
+                .WithKnownGap("#844: the capacity tiles are the tenant's consumed credits, so in a period that matches theirs, they less the "
+                    + "figures shown give the withheld slices together with any consumption Microsoft attributes to nobody: one to four "
+                    + "people's credits in a tenant whose only small slices are theirs (few consumers)."),
+            ["AgentCostsAPIController.Trend"] = Floored(
+                    "Daily credits from slices of 5 or more people only; a day whose slices are all small is left out, never drawn "
+                    + "as 0, and narrowing is floored as the summary is.")
+                .By(typeof(AgentCostsAPIController), nameof(AgentCostsAPIController.ForReader))
+                .By(typeof(Common.Entities.AgentCosts.SqlAgentCostReportStore), nameof(Common.Entities.AgentCosts.SqlAgentCostReportStore.Floored))
+                .ProvenBy(
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_IsGivenOnlySlicesOfFiveOrMorePeople_WithSmallAgentsAndEnvironmentsCombinedIntoOneRowWithoutFigures)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_NarrowingOrSearchingToAGroupOfFewerThanFivePeople_GetsItsFiguresWithheld_NeverZero)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.ForAReaderWithoutSeePii_NoTotalLessTheFiguresShown_GivesBackAWithheldSlice)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithSeePii_IsGivenEverySlice_AsBefore))),
+            ["AgentCostsAPIController.Breakdown"] = Floored(
+                    "Rows per agent, environment, harness or feature from slices of 5 or more people only; the groups with no such "
+                    + "slice - a personal agent, a developer's own environment - are one last row with their number and no key, "
+                    + "name or figures, and are in no other figure.")
+                .By(typeof(AgentCostsAPIController), nameof(AgentCostsAPIController.ForReader))
+                .By(typeof(Common.Entities.AgentCosts.SqlAgentCostReportStore), nameof(Common.Entities.AgentCosts.SqlAgentCostReportStore.Floored))
+                .ProvenBy(
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_IsGivenOnlySlicesOfFiveOrMorePeople_WithSmallAgentsAndEnvironmentsCombinedIntoOneRowWithoutFigures)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_NarrowingOrSearchingToAGroupOfFewerThanFivePeople_GetsItsFiguresWithheld_NeverZero)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.ForAReaderWithoutSeePii_NoTotalLessTheFiguresShown_GivesBackAWithheldSlice)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithSeePii_IsGivenEverySlice_AsBefore))),
+            ["AgentCostsAPIController.Detail"] = Floored(
+                    "Only the billed slices of 5 or more people are listed, counted and exported (the page's CSV is built from "
+                    + "these rows); smallSlicesWithheld says others were left out, never how many.")
+                .By(typeof(AgentCostsAPIController), nameof(AgentCostsAPIController.ForReader))
+                .By(typeof(Common.Entities.AgentCosts.SqlAgentCostReportStore), nameof(Common.Entities.AgentCosts.SqlAgentCostReportStore.Floored))
+                .ProvenBy(
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_IsGivenOnlySlicesOfFiveOrMorePeople_WithSmallAgentsAndEnvironmentsCombinedIntoOneRowWithoutFigures)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithoutSeePii_NarrowingOrSearchingToAGroupOfFewerThanFivePeople_GetsItsFiguresWithheld_NeverZero)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.ForAReaderWithoutSeePii_NoTotalLessTheFiguresShown_GivesBackAWithheldSlice)),
+                    Test<AgentCostReportConsistencyTests>(nameof(AgentCostReportConsistencyTests.AReaderWithSeePii_IsGivenEverySlice_AsBefore))),
             ["AgentCostsAPIController.Azure"] = NoGroupedFigures(
                 "Azure Cost Management spend by meter, service, category, resource, resource group, subscription or tag: "
                 + "resource-scoped billing with no user identity on any row."),
             ["AgentCostsAPIController.Filters"] = NoGroupedFigures(
-                "The agents, environments, harnesses and features that occur in the window, for the pickers: names, no figures."),
+                "The agents, environments, harnesses and features that occur in the window, for the pickers: names, no figures. "
+                + "Without See PII, only values with a slice of 5 or more people, so no personal agent's name is offered."),
 
             ["CallRecordWebhookController.Post"] = NoGroupedFigures(
                 "Microsoft Graph's call-record change notifications: echoes the validation token or accepts a notification."),

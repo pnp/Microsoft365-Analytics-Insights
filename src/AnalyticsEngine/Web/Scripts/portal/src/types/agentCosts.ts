@@ -61,14 +61,24 @@ export interface CopilotCapacitySnapshot {
 }
 
 export interface AgentCostSummary {
-  billedCredits: number;
-  nonBilledCredits: number;
-  distinctAgents: number;
-  distinctEnvironments: number;
-  daysWithUsage: number;
+  /** Null only when `withheld`: never shown as zero. */
+  billedCredits: number | null;
+  nonBilledCredits: number | null;
+  distinctAgents: number | null;
+  distinctEnvironments: number | null;
+  daysWithUsage: number | null;
   /** Busiest single slice. NOT a tenant user total - these counts overlap and cannot be summed. */
   peakDistinctUsersOnASlice: number | null;
-  unclassifiedHarnessCredits: number;
+  unclassifiedHarnessCredits: number | null;
+  /**
+   * For a reader without See PII, the fewest people Microsoft must report on a billed line for it to count towards
+   * any Copilot Studio figure on the page (the privacy floor, #844). Null for a reader with See PII.
+   */
+  minPeoplePerSlice: number | null;
+  /** Billed lines of fewer people, or with no count, exist in this selection and are left out of every figure. */
+  smallSlicesWithheld: boolean;
+  /** Every billed line in this selection is such a line: the credit figures and counts are withheld, not zero. */
+  withheld: boolean;
   capacity: CopilotCapacitySnapshot | null;
   azureCost: AzureCostByCurrency[];
 }
@@ -80,12 +90,21 @@ export interface AgentCostDailyPoint {
 }
 
 export interface AgentCostBreakdownRow {
+  /** Null when Microsoft reported no value for the dimension - and on the `withheld` row, which names nothing. */
   key: string | null;
   label: string | null;
-  billedCredits: number;
-  nonBilledCredits: number;
-  activeDays: number;
+  /** Null only on the `withheld` row. */
+  billedCredits: number | null;
+  nonBilledCredits: number | null;
+  activeDays: number | null;
   peakDistinctUsers: number | null;
+  /** On the `withheld` row, how many agents, environments, harnesses or features it stands for; 0 otherwise. */
+  folded: number;
+  /**
+   * The one row, last, a reader without See PII is given for the values none of whose billed lines had enough people:
+   * no key, name or figures, and their credits are in no other figure on the page.
+   */
+  withheld: boolean;
 }
 
 /**
@@ -113,6 +132,10 @@ export interface AgentCostDetailPage {
   totalRows: number;
   page: number;
   pageSize: number;
+  /** As `AgentCostSummary.minPeoplePerSlice`. */
+  minPeoplePerSlice: number | null;
+  /** Billed lines of fewer people, or with no count, are not listed, counted or exported. */
+  smallSlicesWithheld: boolean;
 }
 
 export interface AzureCostBreakdownRow {
