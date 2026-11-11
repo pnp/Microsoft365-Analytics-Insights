@@ -1699,6 +1699,54 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CopilotAdoptionSeatIdle_OfACopilotSeatHeldByOneToFourPeople_IsWithheldWithoutSeePii_OnEveryEndpoint()
+        {
+            // #844 G4: the summary, the licence-type list and the workbook all carry the SKU table.
+            var analysis = SmallAnalysis();
+            analysis.Summary.SeatLicenceTypes = new List<LicenceTypeClassification>
+            {
+                new LicenceTypeClassification { Id = 1, Name = "Microsoft 365 Copilot", SkuPartNumber = "Microsoft_365_Copilot", AssignedUsers = 40, AssignedIdleUsers = 7, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 2, Name = "Contoso Copilot pilot", SkuPartNumber = "CONTOSO_COPILOT_PILOT", AssignedUsers = 3, AssignedIdleUsers = 2, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 3, Name = "Microsoft 365 Copilot EDU", SkuPartNumber = "Microsoft_365_Copilot_EDU", AssignedUsers = 9, AssignedIdleUsers = 6, IsCopilotSeat = true },
+            };
+            JObject Sku(JToken licences, int id) => (JObject)((JArray)licences).Single(l => (int)l["id"] == id);
+
+            using (var host = CopilotAdoptionHost(analysis, PortalTestHost.SignedIn()))
+            {
+                var summary = JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"));
+                var licenceTypes = JArray.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/licence-types"));
+                foreach (var licences in new JToken[] { summary["seatLicenceTypes"], licenceTypes })
+                {
+                    Assert.AreEqual(JTokenType.Null, Sku(licences, 2)["assignedIdleUsers"].Type, "Withheld, never 0.");
+                    Assert.IsTrue((bool)Sku(licences, 2)["assignedIdleWithheld"]);
+                    Assert.AreEqual("fewHolders", (string)Sku(licences, 2)["assignedIdleWithheldReason"]);
+                    Assert.AreEqual(5, (int)Sku(licences, 2)["minimumHolders"]);
+                    Assert.AreEqual(3, (int)Sku(licences, 2)["assignedUsers"]);
+                    Assert.AreEqual(JTokenType.Null, Sku(licences, 3)["assignedIdleUsers"].Type);
+                    Assert.AreEqual("revealsSmallerSeat", (string)Sku(licences, 3)["assignedIdleWithheldReason"]);
+                    Assert.AreEqual(7, (int)Sku(licences, 1)["assignedIdleUsers"]);
+                }
+
+                var workbook = WorkbookText(await (await host.Client.GetAsync("api/CopilotAdoption/export/workbook")).Content.ReadAsByteArrayAsync());
+                StringAssert.Contains(workbook, "Not shown: fewer than 5 people hold this licence");
+                StringAssert.Contains(workbook, "Not shown: with the reclaimable total, it would reveal the figure for a licence fewer than 5 people hold");
+
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                var full = JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"));
+                var fullTypes = JArray.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/licence-types"));
+                foreach (var licences in new JToken[] { full["seatLicenceTypes"], fullTypes })
+                {
+                    Assert.AreEqual(2, (int)Sku(licences, 2)["assignedIdleUsers"]);
+                    Assert.IsFalse((bool)Sku(licences, 2)["assignedIdleWithheld"]);
+                    Assert.AreEqual(6, (int)Sku(licences, 3)["assignedIdleUsers"]);
+                }
+                Assert.IsFalse(WorkbookText(await (await host.Client.GetAsync("api/CopilotAdoption/export/workbook")).Content.ReadAsByteArrayAsync())
+                    .Contains("Not shown: fewer than 5 people hold this licence"));
+                Assert.AreEqual(2, analysis.Summary.SeatLicenceTypes[1].AssignedIdleUsers, "The shared analysis must never be edited for one reader.");
+            }
+        }
+
+        [TestMethod]
         public async Task CopilotAdoptionPastRange_RefusesNamedListsButKeepsSummaryCounts()
         {
             var analysis = SmallAnalysis();

@@ -635,6 +635,15 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.page.unassigned': 'No asignadas',
   'copilotAdoption.page.assignedIdle': 'Asignadas inactivas',
   'copilotAdoption.page.countedCopilotLicence': 'Contada como licencia de Copilot',
+  // Lo que ve un lector sin el permiso See PII en lugar de los puestos sin uso de unas pocas personas (#844)
+  'copilotAdoption.page.skuIdle.withheld.fewHolders': 'Oculto: menos de {count} personas tienen esta licencia',
+  'copilotAdoption.page.skuIdle.withheld.revealsSmallerSeat':
+    'Oculto: junto con el total de licencias recuperables, revelaría la cifra de una licencia que tienen menos de {count} personas',
+  'copilotAdoption.page.skuIdle.withheld.other': 'Oculto: podría identificar a menos de {count} personas',
+  'copilotAdoption.page.skuIdle.withheldNote':
+    'Los puestos sin uso se ocultan en una licencia de Copilot que tienen menos de {count} personas, para que nadie pueda ser identificado.',
+  'copilotAdoption.page.skuIdle.withheldNoteComplement':
+    'También se ocultan en una licencia de Copilot más grande: restar su cifra del total de licencias recuperables revelaría la cifra oculta.',
   'copilotAdoption.page.unknown': 'Desconocido',
   'copilotAdoption.page.unknown2': 'Desconocido',
   'copilotAdoption.page.yes': 'Sí',

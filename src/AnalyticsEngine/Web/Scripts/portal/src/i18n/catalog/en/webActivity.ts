@@ -379,6 +379,13 @@ export const webActivity = {
   'webActivity.shared.sectionLoadFailed': 'This section could not be loaded: {error}',
   'webActivity.shared.noDataForPeriod': 'No data for this period.',
   'webActivity.shared.windowNote': 'Covering {range} ({days} days, {workingDays} working days). All times are UTC.',
+  'webActivity.privacy.searchTermsWithheld':
+    'Hidden to protect privacy: search terms are text people typed, which can name a person or say what they were looking for.',
+  'webActivity.privacy.noPeopleCount':
+    'Hidden to protect privacy: nothing recorded says how many people are behind each row, so a row could be one person’s browsing.',
+  'webActivity.privacy.leftOut.one': 'One row is left out to protect privacy: fewer than {minimum} people are behind it.',
+  'webActivity.privacy.leftOut.other':
+    '{count} rows are left out to protect privacy: those with fewer than {minimum} people behind them, together with enough of the smallest other rows that none can be worked out from the totals.',
   'webActivity.shared.failedQuery.one': 'One query on this tab could not be loaded, so some figures below may read as zero when they are in fact unknown. The affected sections show the error.',
   'webActivity.shared.failedQuery.other': '{count} queries on this tab could not be loaded, so some figures below may read as zero when they are in fact unknown. The affected sections show the error.',
   'webActivity.overview.kpi.visitsHow': 'One visit is one Application Insights session that had at least one page view in the window, measured from its first page view inside that window. Visits are therefore window-local: a session straddling the boundary is counted in both periods, so visit totals from adjacent periods are not additive.',

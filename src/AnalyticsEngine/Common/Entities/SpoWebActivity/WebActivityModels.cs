@@ -2,9 +2,69 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Common.Entities.SpoWebActivity
 {
+    /// <summary>
+    /// The small-group rules the web activity sections share, for a reader without the portal's See PII permission (#844).
+    /// </summary>
+    public static class WebActivitySmallGroups
+    {
+        /// <summary>
+        /// <paramref name="rows"/> without any row of fewer than <paramref name="minimumPeople"/> people. A row whose people
+        /// were not counted is treated as small. When a row is left out, the smallest row shown is left out with it, so what
+        /// the list leaves out - the section's total less the rows shown, which every share on the page gives away - always
+        /// includes a row of at least the minimum and is never one small row's figures. When no row is big enough, none is
+        /// shown. The smallest row is chosen by people and then by <paramref name="name"/>, never by the list's own order, so
+        /// two lists of the same rows ranked differently (by visits, by page views) leave out the same one.
+        /// A new list: the rows themselves are cached and shared between readers, and are never edited.
+        /// </summary>
+        /// <param name="leftOut">How many rows were left out.</param>
+        public static List<T> WithoutSmallRows<T>(
+            IEnumerable<T> rows, Func<T, int?> people, Func<T, string> name, int minimumPeople, out int leftOut)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var all = rows?.ToList() ?? new List<T>();
+            var shown = all.Where(r => (people(r) ?? 0) >= minimumPeople).ToList();
+            leftOut = all.Count - shown.Count;
+            if (leftOut == 0 || shown.Count == 0) return shown;
+
+            var smallest = shown
+                .OrderBy(r => people(r) ?? 0)
+                .ThenBy(r => name(r) ?? string.Empty, StringComparer.Ordinal)
+                .First();
+            shown.Remove(smallest);
+            leftOut++;
+            return shown;
+        }
+
+        /// <summary>
+        /// The weekly points of a "busiest N over time" chart, with every named series the list beside it does not show
+        /// folded into <paramref name="otherName"/> week by week. The chart still stacks to each week's total, but draws no
+        /// series of its own for a row the list left out. The query's own <paramref name="otherName"/> and
+        /// <paramref name="unknownName"/> bands are kept. New points: the section is cached and shared between readers.
+        /// </summary>
+        public static List<WebActivityStackPoint> WithSeriesFolded(
+            IEnumerable<WebActivityStackPoint> points, IEnumerable<string> shownNames, string otherName, string unknownName)
+        {
+            var shown = new HashSet<string>(shownNames.Where(n => n != null), StringComparer.Ordinal);
+            return (points ?? Enumerable.Empty<WebActivityStackPoint>())
+                .Select(p => new
+                {
+                    p.WeekStart,
+                    Name = p.Name != null && (shown.Contains(p.Name) || p.Name == otherName || p.Name == unknownName) ? p.Name : otherName,
+                    p.Count,
+                })
+                .GroupBy(p => new { p.WeekStart, p.Name })
+                .Select(g => new WebActivityStackPoint { WeekStart = g.Key.WeekStart, Name = g.Key.Name, Count = g.Sum(p => p.Count) })
+                .OrderBy(p => p.WeekStart)
+                .ThenBy(p => p.Name, StringComparer.Ordinal)
+                .ToList();
+        }
+    }
+
     /// <summary>
     /// One executed query, so the page can show the SQL behind a figure and report a failure per
     /// section rather than failing the whole tab.
@@ -152,6 +212,13 @@ namespace Common.Entities.SpoWebActivity
 
         /// <summary>Share of the section's total, 0-100. Null where a share is meaningless.</summary>
         public double? SharePct { get; set; }
+
+        /// <summary>
+        /// Distinct people behind the row, where the query counts them; null where it does not. Only decides what a reader
+        /// without See PII is shown (<see cref="WebActivitySmallGroups.WithoutSmallRows"/>), so it is never sent.
+        /// </summary>
+        [JsonIgnore]
+        public int? People { get; set; }
     }
 
     /// <summary>One bucket of a distribution (period of day, session depth, load-time band...).</summary>
@@ -284,6 +351,31 @@ namespace Common.Entities.SpoWebActivity
         public List<WebActivityNamedCount> TopSites { get; set; } = new List<WebActivityNamedCount>();
 
         public List<WebActivityJudgement> Judgements { get; set; } = new List<WebActivityJudgement>();
+
+        /// <summary>
+        /// The fewest people a row of this section describes, for a reader without See PII; <c>null</c> when nothing is held
+        /// back for the reader. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>Sites left out of <see cref="TopSites"/> for a reader without See PII.</summary>
+        public int WithheldSites { get; set; }
+
+        /// <summary>
+        /// This section for a reader who does not hold the portal's See PII permission (#844): a site visited by fewer than
+        /// <paramref name="minimumPeople"/> people is left out of the busiest sites, with the smallest site shown
+        /// (<see cref="WebActivitySmallGroups.WithoutSmallRows"/>). The headline figures, trend, heatmap, visit depth and
+        /// engagement mix are over the reader's whole scope and stay. A shallow copy: the section is cached and shared
+        /// between readers.
+        /// </summary>
+        public WebActivityOverview WithoutSmallGroups(int minimumPeople)
+        {
+            var copy = (WebActivityOverview)MemberwiseClone();
+            copy.MinimumGroupSize = minimumPeople;
+            copy.TopSites = WebActivitySmallGroups.WithoutSmallRows(TopSites, s => s.People, s => s.Name, minimumPeople, out var sites);
+            copy.WithheldSites = sites;
+            return copy;
+        }
     }
 
     #endregion
@@ -337,6 +429,58 @@ namespace Common.Entities.SpoWebActivity
 
         /// <summary>Weekly page views for each of the busiest sites, for the stacked site-over-time chart.</summary>
         public List<WebActivityStackPoint> SiteOverTime { get; set; } = new List<WebActivityStackPoint>();
+
+        /// <summary>
+        /// The fewest people a row of this section describes, for a reader without See PII; <c>null</c> when nothing is held
+        /// back for the reader. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>Sites left out of <see cref="BySite"/> for a reader without See PII.</summary>
+        public int WithheldSites { get; set; }
+
+        /// <summary>Devices left out of <see cref="ByDevice"/> for a reader without See PII.</summary>
+        public int WithheldDevices { get; set; }
+
+        /// <summary>Browsers left out of <see cref="ByBrowser"/> for a reader without See PII.</summary>
+        public int WithheldBrowsers { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="ByPage"/> is empty: nothing stored with it counts the people
+        /// behind a page, so a page one person opened would be that person's reading.
+        /// </summary>
+        public bool PagesWithheld { get; set; }
+
+        /// <summary>
+        /// This section for a reader who does not hold the portal's See PII permission (#844): sites, devices and browsers of
+        /// fewer than <paramref name="minimumPeople"/> visitors are left out, each with the smallest row shown
+        /// (<see cref="WebActivitySmallGroups.WithoutSmallRows"/>); a site the site list does not show is folded into
+        /// "(other sites)" over time; the page list, which counts no people, is withheld. The headline figures, trend and
+        /// time-of-day buckets are over the reader's whole scope and stay. A shallow copy: the section is cached and shared
+        /// between readers.
+        /// </summary>
+        public WebActivityVisits WithoutSmallGroups(int minimumPeople)
+        {
+            var copy = (WebActivityVisits)MemberwiseClone();
+            copy.MinimumGroupSize = minimumPeople;
+            copy.BySite = WebActivitySmallGroups.WithoutSmallRows(BySite, s => s.People, s => s.Name, minimumPeople, out var sites);
+            copy.WithheldSites = sites;
+            copy.ByDevice = WebActivitySmallGroups.WithoutSmallRows(ByDevice, d => d.People, d => d.Name, minimumPeople, out var devices);
+            copy.WithheldDevices = devices;
+            copy.ByBrowser = WebActivitySmallGroups.WithoutSmallRows(ByBrowser, b => b.People, b => b.Name, minimumPeople, out var browsers);
+            copy.WithheldBrowsers = browsers;
+            copy.ByPage = new List<WebActivityNamedCount>();
+            copy.PagesWithheld = true;
+            copy.SiteOverTime = WebActivitySmallGroups.WithSeriesFolded(
+                SiteOverTime, copy.BySite.Select(s => s.Name), OtherSites, UnknownSite);
+            return copy;
+        }
+
+        /// <summary>The band <see cref="WebActivitySql.SiteOverTime"/> rolls the sites beyond the busiest into.</summary>
+        internal const string OtherSites = "(other sites)";
+
+        /// <summary>The band <see cref="WebActivitySql.SiteOverTime"/> puts page views with no site into.</summary>
+        internal const string UnknownSite = "(unknown site)";
     }
 
     #endregion
@@ -419,6 +563,41 @@ namespace Common.Entities.SpoWebActivity
 
         /// <summary>Weekly page views split by period of day - the "breakdown over time" chart.</summary>
         public List<WebActivityStackPoint> PeriodOverTime { get; set; } = new List<WebActivityStackPoint>();
+
+        /// <summary>
+        /// The fewest people a row of this section describes, for a reader without See PII; <c>null</c> when nothing is held
+        /// back for the reader. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>Sites left out of <see cref="BySite"/> for a reader without See PII.</summary>
+        public int WithheldSites { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="TopPages"/>, <see cref="SlowestPages"/> and
+        /// <see cref="QuietPages"/> are empty: their queries count no people, and a quiet page is by design one that one or
+        /// two people opened.
+        /// </summary>
+        public bool PageListsWithheld { get; set; }
+
+        /// <summary>
+        /// This section for a reader who does not hold the portal's See PII permission (#844): the three page lists are
+        /// withheld, and sites of fewer than <paramref name="minimumPeople"/> visitors are left out with the smallest site
+        /// shown (<see cref="WebActivitySmallGroups.WithoutSmallRows"/>). The headline figures and the period-of-day trend are
+        /// over the reader's whole scope and stay. A shallow copy: the section is cached and shared between readers.
+        /// </summary>
+        public WebActivityPages WithoutSmallGroups(int minimumPeople)
+        {
+            var copy = (WebActivityPages)MemberwiseClone();
+            copy.MinimumGroupSize = minimumPeople;
+            copy.TopPages = new List<WebActivityPageRow>();
+            copy.SlowestPages = new List<WebActivityPageRow>();
+            copy.QuietPages = new List<WebActivityPageRow>();
+            copy.PageListsWithheld = true;
+            copy.BySite = WebActivitySmallGroups.WithoutSmallRows(BySite, s => s.Visitors, s => s.Name, minimumPeople, out var sites);
+            copy.WithheldSites = sites;
+            return copy;
+        }
     }
 
     /// <summary>A site (SharePoint web) with its total and unique page views.</summary>
@@ -549,6 +728,55 @@ namespace Common.Entities.SpoWebActivity
         public List<WebActivityBucket> Depth { get; set; } = new List<WebActivityBucket>();
 
         public List<WebActivityNamedCount> ClickedElements { get; set; } = new List<WebActivityNamedCount>();
+
+        /// <summary>
+        /// The fewest people a row of this section describes, for a reader without See PII; <c>null</c> when nothing is held
+        /// back for the reader. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="EntryPages"/>, <see cref="ExitPages"/> and
+        /// <see cref="BouncePages"/> are empty: their queries count no people.
+        /// </summary>
+        public bool PageListsWithheld { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="Transitions"/> and <see cref="Flows"/> are empty: nothing
+        /// counts the people who took a path, and a path one person took is that person's browsing.
+        /// </summary>
+        public bool PathsWithheld { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="ClickedElements"/> is empty: an element's name is whatever the
+        /// page shows, and nothing counts the people who clicked it.
+        /// </summary>
+        public bool ClickedElementsWithheld { get; set; }
+
+        /// <summary>
+        /// This section for a reader who does not hold the portal's See PII permission (#844): the entry, exit and bounce
+        /// pages, the transitions and flows, and the clicked elements are withheld, because none of their queries counts the
+        /// people behind a row. The headline figures and the visit-depth buckets are over the reader's whole scope and stay.
+        /// A shallow copy: the section is cached and shared between readers.
+        /// </summary>
+        public WebActivityJourneys WithoutSmallGroups(int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var copy = (WebActivityJourneys)MemberwiseClone();
+            copy.MinimumGroupSize = minimumPeople;
+            copy.EntryPages = new List<WebActivityPageRow>();
+            copy.ExitPages = new List<WebActivityPageRow>();
+            copy.BouncePages = new List<WebActivityPageRow>();
+            copy.PageListsWithheld = true;
+            copy.Transitions = new List<WebActivityTransitionRow>();
+            copy.Flows = new List<WebActivityFlowRow>();
+            copy.FlowsCoveragePct = 0;
+            copy.PathsWithheld = true;
+            copy.ClickedElements = new List<WebActivityNamedCount>();
+            copy.ClickedElementsWithheld = true;
+            return copy;
+        }
     }
 
     #endregion
@@ -631,6 +859,52 @@ namespace Common.Entities.SpoWebActivity
 
         /// <summary>Weekly page views for each of the busiest countries.</summary>
         public List<WebActivityStackPoint> CountryOverTime { get; set; } = new List<WebActivityStackPoint>();
+
+        /// <summary>
+        /// The fewest people a row of this section describes, for a reader without See PII; <c>null</c> when nothing is held
+        /// back for the reader. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>Countries left out of <see cref="Countries"/> for a reader without See PII.</summary>
+        public int WithheldCountries { get; set; }
+
+        /// <summary>Cities left out of <see cref="Cities"/> for a reader without See PII.</summary>
+        public int WithheldCities { get; set; }
+
+        /// <summary>Provinces left out of <see cref="Provinces"/> for a reader without See PII.</summary>
+        public int WithheldProvinces { get; set; }
+
+        /// <summary>
+        /// This section for a reader who does not hold the portal's See PII permission (#844): a country, city or province
+        /// fewer than <paramref name="minimumPeople"/> people visited from is left out, each list with its smallest place
+        /// shown, so that the located page views less the places shown are never one small place's
+        /// (<see cref="WebActivitySmallGroups.WithoutSmallRows"/>); a country the list does not show is folded into
+        /// "(other countries)" over time. The headline figures are over the reader's whole scope and stay. A shallow copy:
+        /// the section is cached and shared between readers.
+        /// </summary>
+        public WebActivityGeography WithoutSmallGroups(int minimumPeople)
+        {
+            var copy = (WebActivityGeography)MemberwiseClone();
+            copy.MinimumGroupSize = minimumPeople;
+            copy.Countries = WebActivitySmallGroups.WithoutSmallRows(Countries, p => p.Visitors, PlaceName, minimumPeople, out var countries);
+            copy.WithheldCountries = countries;
+            copy.Cities = WebActivitySmallGroups.WithoutSmallRows(Cities, p => p.Visitors, PlaceName, minimumPeople, out var cities);
+            copy.WithheldCities = cities;
+            copy.Provinces = WebActivitySmallGroups.WithoutSmallRows(Provinces, p => p.Visitors, PlaceName, minimumPeople, out var provinces);
+            copy.WithheldProvinces = provinces;
+            copy.CountryOverTime = WebActivitySmallGroups.WithSeriesFolded(
+                CountryOverTime, copy.Countries.Select(c => c.Name), OtherCountries, UnknownCountry);
+            return copy;
+        }
+
+        private static string PlaceName(WebActivityPlaceRow place) => place.Name + "\u0000" + place.Country;
+
+        /// <summary>The band <see cref="WebActivitySql.CountryOverTime"/> rolls the countries beyond the busiest into.</summary>
+        internal const string OtherCountries = "(other countries)";
+
+        /// <summary>The band <see cref="WebActivitySql.CountryOverTime"/> puts page views with no country into.</summary>
+        internal const string UnknownCountry = "(unknown country)";
     }
 
     #endregion
@@ -712,6 +986,44 @@ namespace Common.Entities.SpoWebActivity
 
         /// <summary>Which sites people were on when they searched.</summary>
         public List<WebActivityNamedCount> BySite { get; set; } = new List<WebActivityNamedCount>();
+
+        /// <summary>
+        /// The fewest people a row of this section describes, for a reader without See PII; <c>null</c> when nothing is held
+        /// back for the reader. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="TopTerms"/> and <see cref="DeadEndTerms"/> are empty: a search
+        /// term is text a person typed, which can name them or what they were looking for.
+        /// </summary>
+        public bool TermsWithheld { get; set; }
+
+        /// <summary>
+        /// True when, for a reader without See PII, <see cref="BySite"/> is empty: nothing counts the people who searched on
+        /// a site.
+        /// </summary>
+        public bool SitesWithheld { get; set; }
+
+        /// <summary>
+        /// This section for a reader who does not hold the portal's See PII permission (#844): the search terms and dead-end
+        /// terms are withheld, as Teams key phrases are, and so are the searches by site, whose query counts no people. The
+        /// headline figures, trend and time-of-day buckets are over the reader's whole scope and stay. A shallow copy: the
+        /// section is cached and shared between readers.
+        /// </summary>
+        public WebActivitySearch WithoutSmallGroups(int minimumPeople)
+        {
+            if (minimumPeople < 1) throw new ArgumentOutOfRangeException(nameof(minimumPeople));
+
+            var copy = (WebActivitySearch)MemberwiseClone();
+            copy.MinimumGroupSize = minimumPeople;
+            copy.TopTerms = new List<WebActivitySearchTermRow>();
+            copy.DeadEndTerms = new List<WebActivitySearchTermRow>();
+            copy.TermsWithheld = true;
+            copy.BySite = new List<WebActivityNamedCount>();
+            copy.SitesWithheld = true;
+            return copy;
+        }
     }
 
     #endregion
@@ -813,6 +1125,60 @@ namespace Common.Entities.SpoWebActivity
         public List<WebActivityStackPoint> DeviceOverTime { get; set; } = new List<WebActivityStackPoint>();
 
         public List<WebActivityTechnologyDetailRow> Detail { get; set; } = new List<WebActivityTechnologyDetailRow>();
+
+        /// <summary>
+        /// The fewest people a row of this section describes, for a reader without See PII; <c>null</c> when nothing is held
+        /// back for the reader. See <see cref="WithoutSmallGroups"/>.
+        /// </summary>
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>Browsers left out of <see cref="Browsers"/> for a reader without See PII.</summary>
+        public int WithheldBrowsers { get; set; }
+
+        /// <summary>Operating systems left out of <see cref="OperatingSystems"/> for a reader without See PII.</summary>
+        public int WithheldOperatingSystems { get; set; }
+
+        /// <summary>Devices left out of <see cref="Devices"/> for a reader without See PII.</summary>
+        public int WithheldDevices { get; set; }
+
+        /// <summary>Rows left out of <see cref="Detail"/> for a reader without See PII.</summary>
+        public int WithheldDetailRows { get; set; }
+
+        /// <summary>
+        /// This section for a reader who does not hold the portal's See PII permission (#844): browsers, operating systems,
+        /// devices and browser x device x operating system x city rows of fewer than <paramref name="minimumPeople"/>
+        /// visitors are left out, each list with its smallest row shown (<see cref="WebActivitySmallGroups.WithoutSmallRows"/>);
+        /// a device the list does not show is folded into "(other devices)" over time. The headline figures and load-time
+        /// measures are over the reader's whole scope and stay. A shallow copy: the section is cached and shared between
+        /// readers.
+        /// </summary>
+        public WebActivityTechnology WithoutSmallGroups(int minimumPeople)
+        {
+            var copy = (WebActivityTechnology)MemberwiseClone();
+            copy.MinimumGroupSize = minimumPeople;
+            copy.Browsers = WebActivitySmallGroups.WithoutSmallRows(Browsers, p => p.Visitors, p => p.Name, minimumPeople, out var browsers);
+            copy.WithheldBrowsers = browsers;
+            copy.OperatingSystems = WebActivitySmallGroups.WithoutSmallRows(OperatingSystems, p => p.Visitors, p => p.Name, minimumPeople, out var systems);
+            copy.WithheldOperatingSystems = systems;
+            copy.Devices = WebActivitySmallGroups.WithoutSmallRows(Devices, p => p.Visitors, p => p.Name, minimumPeople, out var devices);
+            copy.WithheldDevices = devices;
+            copy.DeviceOverTime = WebActivitySmallGroups.WithSeriesFolded(
+                DeviceOverTime, copy.Devices.Select(d => d.Name), OtherDevices, UnknownDevice);
+            copy.Detail = WebActivitySmallGroups.WithoutSmallRows(
+                Detail,
+                r => r.Visitors,
+                r => string.Join("\u0000", r.Browser, r.Device, r.OperatingSystem, r.City),
+                minimumPeople,
+                out var detail);
+            copy.WithheldDetailRows = detail;
+            return copy;
+        }
+
+        /// <summary>The band <see cref="WebActivitySql.DeviceOverTime"/> rolls the devices beyond the busiest into.</summary>
+        internal const string OtherDevices = "(other devices)";
+
+        /// <summary>The band <see cref="WebActivitySql.DeviceOverTime"/> puts page views with no device into.</summary>
+        internal const string UnknownDevice = "(unknown device)";
     }
 
     #endregion

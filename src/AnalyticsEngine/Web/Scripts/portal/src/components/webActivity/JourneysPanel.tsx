@@ -60,6 +60,19 @@ export default function JourneysPanel({
   const t = useT();
   const kpis = data.kpis;
 
+  // Without See PII the page lists, paths and clicked elements come back withheld: none of their queries counts the
+  // people behind a row. Each card says so instead of reading as "nothing happened", and offers no export.
+  const pagesWithheld = data.pageListsWithheld === true;
+  const pathsWithheld = data.pathsWithheld === true;
+  const clicksWithheld = data.clickedElementsWithheld === true;
+  const noPeopleCount = t('webActivity.privacy.noPeopleCount');
+  const exportButton = (withheld: boolean, onClick: () => void) =>
+    withheld ? undefined : (
+      <Button appearance="subtle" size="small" icon={<ArrowDownload16Regular />} onClick={onClick} disabled={exporting}>
+        {t('webActivity.common.export')}
+      </Button>
+    );
+
   const items: KpiDefinition[] = [
     {
       key: 'bounce',
@@ -130,18 +143,9 @@ export default function JourneysPanel({
           title={t('webActivity.journeys.entry.title')}
           description={t('webActivity.journeys.entry.description')}
           query={queryFor(data.queries, 'journeys-entry')}
-          isEmpty={data.entryPages.length === 0}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportEntry}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          isEmpty={pagesWithheld || data.entryPages.length === 0}
+          emptyMessage={pagesWithheld ? noPeopleCount : undefined}
+          actions={exportButton(pagesWithheld, onExportEntry)}
         >
           <PageTable
             rows={data.entryPages}
@@ -157,8 +161,8 @@ export default function JourneysPanel({
           description={t('webActivity.journeys.bouncePages.description', { minimumViews: data.window.minimumViews })}
           note={t('webActivity.journeys.bounce.note')}
           query={queryFor(data.queries, 'journeys-bounce')}
-          isEmpty={data.bouncePages.length === 0}
-          emptyMessage={t('webActivity.journeys.bouncePages.empty')}
+          isEmpty={pagesWithheld || data.bouncePages.length === 0}
+          emptyMessage={pagesWithheld ? noPeopleCount : t('webActivity.journeys.bouncePages.empty')}
         >
           <PageTable
             rows={data.bouncePages}
@@ -173,18 +177,9 @@ export default function JourneysPanel({
           description={t('webActivity.journeys.exit.description')}
           note={t('webActivity.journeys.exit.note')}
           query={queryFor(data.queries, 'journeys-exit')}
-          isEmpty={data.exitPages.length === 0}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportExit}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          isEmpty={pagesWithheld || data.exitPages.length === 0}
+          emptyMessage={pagesWithheld ? noPeopleCount : undefined}
+          actions={exportButton(pagesWithheld, onExportExit)}
         >
           <PageTable
             rows={data.exitPages}
@@ -199,19 +194,9 @@ export default function JourneysPanel({
           description={t('webActivity.journeys.flows.description')}
           note={t('webActivity.journeys.flows.note')}
           query={queryFor(data.queries, 'journeys-flows')}
-          isEmpty={data.flows.length === 0}
-          emptyMessage={t('webActivity.journeys.flows.empty')}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportFlows}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          isEmpty={pathsWithheld || data.flows.length === 0}
+          emptyMessage={pathsWithheld ? noPeopleCount : t('webActivity.journeys.flows.empty')}
+          actions={exportButton(pathsWithheld, onExportFlows)}
         >
           <SankeyChart
             flows={data.flows.map((f) => ({
@@ -242,19 +227,9 @@ export default function JourneysPanel({
           description={t('webActivity.journeys.routes.description')}
           note={t('webActivity.journeys.transitions.note')}
           query={queryFor(data.queries, 'journeys-transitions')}
-          isEmpty={data.transitions.length === 0}
-          emptyMessage={t('webActivity.journeys.routes.empty')}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportTransitions}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          isEmpty={pathsWithheld || data.transitions.length === 0}
+          emptyMessage={pathsWithheld ? noPeopleCount : t('webActivity.journeys.routes.empty')}
+          actions={exportButton(pathsWithheld, onExportTransitions)}
         >
           <div className={styles.tableWrap}>
             <Table size="small" aria-label={t('webActivity.journeys.routes.aria')}>
@@ -309,11 +284,13 @@ export default function JourneysPanel({
           title={t('webActivity.journeys.clicks.title')}
           description={t('webActivity.journeys.clicks.description')}
           query={queryFor(data.queries, 'journeys-clicks')}
-          isEmpty={data.clickedElements.length === 0}
+          isEmpty={clicksWithheld || data.clickedElements.length === 0}
           emptyMessage={
-            clickTrackingAvailable
-              ? t('webActivity.journeys.clicks.emptyThisPeriod')
-              : t('webActivity.journeys.clicks.emptyEver')
+            clicksWithheld
+              ? noPeopleCount
+              : clickTrackingAvailable
+                ? t('webActivity.journeys.clicks.emptyThisPeriod')
+                : t('webActivity.journeys.clicks.emptyEver')
           }
         >
           <CategoryBarChart categories={toCategories(data.clickedElements)} valueLabel={t('webActivity.journeys.clicks.valueLabel')} />

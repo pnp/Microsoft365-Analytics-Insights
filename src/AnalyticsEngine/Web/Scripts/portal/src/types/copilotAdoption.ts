@@ -20,6 +20,9 @@ export interface CopilotAdoptionAvailability {
   messages: string[];
 }
 
+/** Why a Copilot seat's idle count is withheld from a reader without See PII (C# SeatIdleWithheldReasons). */
+export type SeatIdleWithheldReason = 'fewHolders' | 'revealsSmallerSeat';
+
 /** A licence type and whether the tool counted it as a Microsoft 365 Copilot seat. */
 export interface LicenceTypeClassification {
   id: number;
@@ -28,7 +31,17 @@ export interface LicenceTypeClassification {
   assignedUsers: number;
   purchasedUnits: number | null;
   unassignedUnits: number | null;
-  assignedIdleUsers: number;
+  /** Null only when withheld from a reader without See PII (`assignedIdleWithheld`) - never a substitute zero. */
+  assignedIdleUsers: number | null;
+  /**
+   * True when a reader without See PII is not given `assignedIdleUsers`: the seat is held by fewer than `minimumHolders`
+   * people, or, with the reclaimable total, its count would give such a seat's back. Absent from an older server.
+   */
+  assignedIdleWithheld?: boolean;
+  /** Why `assignedIdleUsers` is withheld; null when it is shown. A key the page turns into a sentence. */
+  assignedIdleWithheldReason?: SeatIdleWithheldReason | null;
+  /** On a withheld row, the fewest holders a seat needs for its idle count to be shown to this reader. */
+  minimumHolders?: number | null;
   purchasedUnitsRefreshedUtc: string | null;
   isCopilotSeat: boolean;
 }

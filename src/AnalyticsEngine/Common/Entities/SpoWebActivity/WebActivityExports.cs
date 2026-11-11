@@ -37,6 +37,16 @@ namespace Common.Entities.SpoWebActivity
         }
 
         /// <summary>
+        /// True when the screen withholds <paramref name="section"/>'s rows from a reader without the portal's See PII
+        /// permission, so the file is refused to them too (#844): the page lists, entry and exit pages, transitions and
+        /// flows count no people, and search terms are text people typed. Only the technology detail is floored instead.
+        /// </summary>
+        public static bool WithheldWithoutSeePii(string section)
+        {
+            return IsKnownSection(section) && !string.Equals(section, "technology", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// The full page statistics, for the most-viewed export.
         /// </summary>
         /// <remarks>

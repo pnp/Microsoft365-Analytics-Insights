@@ -494,7 +494,8 @@ namespace Common.Entities.CopilotAdoption
     {
         /// <summary>
         /// This summary without the parts that name a person, for a reader who does not hold the portal's
-        /// See PII permission (#661). Never modifies this instance.
+        /// See PII permission (#661), and without a figure about fewer people than such a reader may be given (#844).
+        /// Never modifies this instance.
         /// </summary>
         /// <remarks>
         /// <para>A copy rather than an edit because summaries are cached and shared: the analysis coordinator
@@ -505,9 +506,29 @@ namespace Common.Entities.CopilotAdoption
         /// labelled with a manager's sign-in name and describes that manager's team. Grouped by department,
         /// country, office or company it is an aggregate like every other breakdown here, all of which
         /// <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> already keeps too large to single anyone
-        /// out. When neither applies the summary is returned as it is.</para>
+        /// out.</para>
+        /// <para>One table is not a breakdown that option governs: the licence types (<see cref="SeatLicenceTypes"/>).
+        /// A Copilot seat held by one to four people would say how many of those few left their seat unused, so its idle
+        /// count is withheld, with the one that would give it back (<see cref="LicenceTypeClassification.WithoutSmallSeatIdleCounts"/>).
+        /// When nothing applies the summary is returned as it is.</para>
         /// </remarks>
         public CopilotAdoptionSummary WithoutIndividualData()
+        {
+            var trimmed = WithoutNamedLists();
+            var seats = LicenceTypeClassification.WithoutSmallSeatIdleCounts(SeatLicenceTypes, CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii);
+            if (ReferenceEquals(seats, SeatLicenceTypes)) return trimmed;
+
+            var copy = ReferenceEquals(trimmed, this) ? (CopilotAdoptionSummary)MemberwiseClone() : trimmed;
+            copy.SeatLicenceTypes = seats;
+            return copy;
+        }
+
+        /// <summary>
+        /// This summary without the lists that name a person - the manager roll-up and the heaviest agent users - on a
+        /// copy, or this instance when neither does. What a period that does not end today hides from every reader; the
+        /// figures stay, so a reader with See PII is given them as they are.
+        /// </summary>
+        internal CopilotAdoptionSummary WithoutNamedLists()
         {
             var rollupNamesManagers = string.Equals(
                 CopilotAdoptionService.NormaliseAccountabilityDimension(AccountabilityDimension),
@@ -527,7 +548,7 @@ namespace Common.Entities.CopilotAdoption
 
         public CopilotAdoptionSummary WithoutPastRangeNamedLists()
         {
-            return Options?.UsesExplicitDates == true ? WithoutIndividualData() : this;
+            return Options?.UsesExplicitDates == true ? WithoutNamedLists() : this;
         }
 
         /// <summary>

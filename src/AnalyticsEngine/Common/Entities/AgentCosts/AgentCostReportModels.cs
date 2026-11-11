@@ -108,6 +108,25 @@ namespace Common.Entities.AgentCosts
         /// </summary>
         [JsonIgnore]
         public Func<int, bool> PeopleScope { get; set; }
+
+        /// <summary>
+        /// The privacy floor for a reader without See PII (#844): the fewest people Microsoft must report on a slice for it
+        /// to count towards any credit figure. <c>null</c>, every slice, for a reader with See PII.
+        /// </summary>
+        /// <remarks>
+        /// <para>Applied to each slice - one day, environment, agent and billing feature - before anything is added up,
+        /// because a slice's <c>distinct_users</c> is the only people count the source has. Microsoft reports no distinct
+        /// count for an agent or an environment over a period, and adding the per-slice counts would count anyone who used
+        /// two slices twice, so a group's count is at best the largest of its slices': a lower bound. A slice of fewer
+        /// people, or with no count, is therefore left out of every figure, rather than withheld from one figure and given
+        /// back by another.</para>
+        /// <para>That is what makes the floor hold across figures and requests. Every total, breakdown row, day, detail line
+        /// and narrowed view a reader can ask for adds up slices of at least this many people and nothing else, so no
+        /// difference of two of them - a total less the rows shown, one period less a shorter one, a filter less a narrower
+        /// one - can give back a slice of fewer. A group whose slices are all small has no figures at all, so narrowing to
+        /// it, or searching for it, gets them withheld.</para>
+        /// </remarks>
+        public int? MinPeoplePerSlice { get; set; }
     }
 
     /// <summary>Whether each agent-cost import is switched on, and how it last got on.</summary>
@@ -216,22 +235,49 @@ namespace Common.Entities.AgentCosts
     }
 
     /// <summary>Headline figures for the selected window.</summary>
+    /// <remarks>
+    /// The credit figures and counts are null only when <see cref="Withheld"/>; otherwise they are numbers, zero when
+    /// nothing was billed.
+    /// </remarks>
     public class AgentCostSummary
     {
         [JsonProperty("billedCredits")]
-        public decimal BilledCredits { get; set; }
+        public decimal? BilledCredits { get; set; } = 0m;
 
         [JsonProperty("nonBilledCredits")]
-        public decimal NonBilledCredits { get; set; }
+        public decimal? NonBilledCredits { get; set; } = 0m;
 
         [JsonProperty("distinctAgents")]
-        public int DistinctAgents { get; set; }
+        public int? DistinctAgents { get; set; } = 0;
 
         [JsonProperty("distinctEnvironments")]
-        public int DistinctEnvironments { get; set; }
+        public int? DistinctEnvironments { get; set; } = 0;
 
         [JsonProperty("daysWithUsage")]
-        public int DaysWithUsage { get; set; }
+        public int? DaysWithUsage { get; set; } = 0;
+
+        /// <summary>
+        /// For a reader without See PII, the fewest people Microsoft must report on a slice for it to count towards the
+        /// figures (<see cref="AgentCostQuery.MinPeoplePerSlice"/>); null for a reader with See PII, whose figures cover
+        /// every slice. The same on every Agent costs answer to the same reader.
+        /// </summary>
+        [JsonProperty("minPeoplePerSlice")]
+        public int? MinPeoplePerSlice { get; set; }
+
+        /// <summary>
+        /// True when the selection holds slices of fewer people than <see cref="MinPeoplePerSlice"/>, or with no people
+        /// count, which are left out of every figure on the page: its totals, trend, breakdowns and billed lines. Whether
+        /// such slices exist, never how many or what they cost.
+        /// </summary>
+        [JsonProperty("smallSlicesWithheld")]
+        public bool SmallSlicesWithheld { get; set; }
+
+        /// <summary>
+        /// True when every slice in the selection is such a slice - an agent, environment or search that only one to four
+        /// people used: the credit figures and counts are null, withheld rather than zero.
+        /// </summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
 
         /// <summary>
         /// The largest distinct-user count seen on any single slice. NOT a tenant-wide unique-user total:
@@ -243,7 +289,7 @@ namespace Common.Entities.AgentCosts
 
         /// <summary>Credits that could not be attributed to a known harness.</summary>
         [JsonProperty("unclassifiedHarnessCredits")]
-        public decimal UnclassifiedHarnessCredits { get; set; }
+        public decimal? UnclassifiedHarnessCredits { get; set; } = 0m;
 
         [JsonProperty("capacity")]
         public CopilotCapacitySnapshot Capacity { get; set; }
@@ -333,7 +379,10 @@ namespace Common.Entities.AgentCosts
     /// <summary>One grouped row of a credit breakdown.</summary>
     public class AgentCostBreakdownRow
     {
-        /// <summary>The grouping value, or null when the source reported none for this dimension.</summary>
+        /// <summary>
+        /// The grouping value, or null when the source reported none for this dimension - and on the
+        /// <see cref="Withheld"/> row, which names nothing.
+        /// </summary>
         [JsonProperty("key")]
         public string Key { get; set; }
 
@@ -341,19 +390,41 @@ namespace Common.Entities.AgentCosts
         [JsonProperty("label")]
         public string Label { get; set; }
 
+        /// <summary>Null only on the <see cref="Withheld"/> row.</summary>
         [JsonProperty("billedCredits")]
-        public decimal BilledCredits { get; set; }
+        public decimal? BilledCredits { get; set; }
 
+        /// <summary>Null only on the <see cref="Withheld"/> row.</summary>
         [JsonProperty("nonBilledCredits")]
-        public decimal NonBilledCredits { get; set; }
+        public decimal? NonBilledCredits { get; set; }
 
-        /// <summary>How many distinct usage days this group was active on.</summary>
+        /// <summary>How many distinct usage days this group was active on. Null only on the <see cref="Withheld"/> row.</summary>
         [JsonProperty("activeDays")]
-        public int ActiveDays { get; set; }
+        public int? ActiveDays { get; set; }
 
         /// <summary>Peak distinct-user count on any one slice in this group. See the summary note.</summary>
         [JsonProperty("peakDistinctUsers")]
         public int? PeakDistinctUsers { get; set; }
+
+        /// <summary>On the <see cref="Withheld"/> row, how many groups it stands for; 0 on every other row.</summary>
+        [JsonProperty("folded")]
+        public int Folded { get; set; }
+
+        /// <summary>
+        /// True on the one row a reader without See PII is given, last, for the groups none of whose slices has enough
+        /// people (<see cref="AgentCostQuery.MinPeoplePerSlice"/>): an agent or a developer's own environment that one to
+        /// four people use. It carries their number and nothing else - no key, no name and no figures, withheld rather
+        /// than zero - and their credits are in no other figure either, so nothing shown can be subtracted to give them back.
+        /// </summary>
+        [JsonProperty("withheld")]
+        public bool Withheld { get; set; }
+
+        /// <summary>The row standing for <paramref name="groups"/> groups that a reader without See PII is not shown.</summary>
+        internal static AgentCostBreakdownRow WithheldGroups(int groups) => new AgentCostBreakdownRow
+        {
+            Folded = groups,
+            Withheld = true,
+        };
     }
 
     /// <summary>One fully-granular credit row - the deepest view the source data supports.</summary>
@@ -410,6 +481,17 @@ namespace Common.Entities.AgentCosts
 
         [JsonProperty("pageSize")]
         public int PageSize { get; set; }
+
+        /// <summary>As <see cref="AgentCostSummary.MinPeoplePerSlice"/>: null for a reader with See PII.</summary>
+        [JsonProperty("minPeoplePerSlice")]
+        public int? MinPeoplePerSlice { get; set; }
+
+        /// <summary>
+        /// True when the selection holds slices of fewer people than <see cref="MinPeoplePerSlice"/>, or with no people
+        /// count: they are not listed, not counted in <see cref="TotalRows"/> and not in any export built from these rows.
+        /// </summary>
+        [JsonProperty("smallSlicesWithheld")]
+        public bool SmallSlicesWithheld { get; set; }
     }
 
     /// <summary>One grouped row of an Azure cost breakdown.</summary>
