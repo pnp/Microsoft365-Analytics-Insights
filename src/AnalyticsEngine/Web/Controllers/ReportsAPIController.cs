@@ -539,49 +539,7 @@ namespace Web.AnalyticsWeb.Controllers
             int topAgents,
             string agentName)
         {
-            var wb = WeekBucket("au.time_stamp");
-            var auditJoin = SelectCopilotAuditJoin(
-                from,
-                hasAgentFilter: !string.IsNullOrEmpty(agentName));
-            var agents =
-                "WITH EligibleAgents AS (\r\n" +
-                "    SELECT id\r\n" +
-                "    FROM dbo.copilot_agents\r\n" +
-                "    WHERE @agentName IS NULL OR CHARINDEX(@agentName, ISNULL(name, '')) > 0\r\n" +
-                "),\r\n" +
-                "AgentWeeks AS (\r\n" +
-                "    SELECT c.agent_id AS AgentKey,\r\n" +
-                $"           {wb} AS WeekStart,\r\n" +
-                "           COUNT_BIG(*) AS InteractionCount\r\n" +
-                "    FROM dbo.copilot_chats AS c\r\n" +
-                "    " + auditJoin + "\r\n" +
-                "    JOIN EligibleAgents AS eligible ON c.agent_id = eligible.id\r\n" +
-                "    WHERE au.time_stamp >= @from" + AuditUserScope + "\r\n" +
-                // One turn, one execution, and maker testing in the Copilot Studio test pane is not agent use (#699).
-                "      AND " + Common.Entities.Copilot.CopilotTurnSql.CountedTurn("c") + "\r\n" +
-                "      AND " + Common.Entities.Copilot.CopilotTurnSql.NotMakerTesting("c.app_host") + "\r\n" +
-                $"    GROUP BY c.agent_id, {wb}\r\n" +
-                "),\r\n" +
-                "AgentWeeksWithTotals AS (\r\n" +
-                "    SELECT AgentKey, WeekStart, InteractionCount,\r\n" +
-                "           SUM(InteractionCount) OVER (PARTITION BY AgentKey) AS TotalInteractions\r\n" +
-                "    FROM AgentWeeks\r\n" +
-                "),\r\n" +
-                "RankedAgentWeeks AS (\r\n" +
-                "    SELECT AgentKey, WeekStart, InteractionCount,\r\n" +
-                "           DENSE_RANK() OVER (ORDER BY TotalInteractions DESC, AgentKey) AS PopularityRank\r\n" +
-                "    FROM AgentWeeksWithTotals\r\n" +
-                ")\r\n" +
-                "SELECT ranked.AgentKey AS SeriesKey,\r\n" +
-                "       COALESCE(NULLIF(LTRIM(RTRIM(agent.name)), ''), NULLIF(LTRIM(RTRIM(agent.agent_id)), ''), '(unnamed agent)') AS SeriesName,\r\n" +
-                "       ranked.WeekStart,\r\n" +
-                "       CAST(ranked.InteractionCount AS float) AS Value\r\n" +
-                "FROM RankedAgentWeeks AS ranked\r\n" +
-                "JOIN dbo.copilot_agents AS agent ON ranked.AgentKey = agent.id\r\n" +
-                $"WHERE ranked.PopularityRank <= {topAgents}\r\n" +
-                "ORDER BY SeriesName, WeekStart\r\n" +
-                "OPTION (RECOMPILE);";
-
+            var agents = BuildCopilotAgentsQuery(from, topAgents, hasAgentFilter: !string.IsNullOrEmpty(agentName));
             var displaySql = DisplaySql(agents, from, agentName);
             var rowsTask = QueryNamedWeeksAsync(agents, from, agentName, 60);
 
@@ -594,6 +552,96 @@ namespace Web.AnalyticsWeb.Controllers
                     "Weekly interactions for the most-used Copilot agents matching the current filters.",
                     "Interactions", rowsTask, displaySql, weekSpine),
             };
+        }
+
+        /// <summary>
+        /// The Copilot agents area's one query: each charted agent's executions per week, and the distinct people who used
+        /// it across the window (<c>People</c>), so that a reader without See PII is shown only agents five or more people
+        /// used (#844) - a personal agent's figures are one person's use.
+        /// </summary>
+        /// <remarks>
+        /// <para>It returns the <paramref name="topAgents"/> most-used agents (<c>InTop</c>, today's chart for a reader with
+        /// See PII) and, beside them, the most-used agents of <c>@minimumPeople</c> or more people, so a reader without the
+        /// permission gets the top N of the agents they may see (<see cref="ReportChart.CategoriesBelowTheTop"/>). Agents
+        /// used by fewer people are ranked apart and never returned below the top N, so changing N or the name filter tells
+        /// that reader nothing about them.</para>
+        /// <para>People are counted in the same pass: the rows are grouped by agent, week and person, and a person's first
+        /// week with the agent in the window counts them once (<c>ROW_NUMBER() ... = 1</c>), so the weeks' sum is the
+        /// distinct people. An audit event with no user adds executions but nobody. A second aggregate over the join
+        /// would read <c>audit_events</c> twice.</para>
+        /// <para>MEASURED at the 200k-user design point (synthetic: 200,000 people, 3,000 agents of which 1,500 personal
+        /// and 500 team agents, 4,000,000 <c>copilot_chats</c> a year of which 1,600,000 agent turns, 6,000,000
+        /// <c>audit_events</c>; production indexes; medians of 9 warm runs after a discarded cold one, before -> after):</para>
+        /// <code>
+        ///   window                    logical reads          elapsed ms        CPU ms
+        ///   1 month                   105,808 -> 105,875     1,378 -> 1,479    1,407 -> 1,484
+        ///   3 months                  153,371 -> 153,371     2,230 -> 2,567    2,125 -> 2,515
+        ///   6 months                  236,431 -> 236,431     2,376 -> 3,002    2,390 -> 2,954
+        ///   6 months, name filter      66,509 ->  66,509     1,616 -> 1,593    1,625 -> 1,594
+        /// </code>
+        /// <para>The plan reads the same pages through the same operators; it adds one in-memory sort of the agent, week
+        /// and person groups (656,076 rows at 6 months), using 91 MB rather than 47 MB, with no spill. The query's memory
+        /// grant comes from an existing over-estimate of the join (2.2 GB granted for 47 MB used) and grows with it, to
+        /// 2.9 GB. The cost grows with the agent turns in the window, and every answer is cached for 60 seconds.</para>
+        /// </remarks>
+        internal static string BuildCopilotAgentsQuery(DateTime from, int topAgents, bool hasAgentFilter)
+        {
+            var wb = WeekBucket("au.time_stamp");
+            var auditJoin = SelectCopilotAuditJoin(from, hasAgentFilter);
+            return
+                "WITH EligibleAgents AS (\r\n" +
+                "    SELECT id\r\n" +
+                "    FROM dbo.copilot_agents\r\n" +
+                "    WHERE @agentName IS NULL OR CHARINDEX(@agentName, ISNULL(name, '')) > 0\r\n" +
+                "),\r\n" +
+                "AgentPersonWeeks AS (\r\n" +
+                "    SELECT c.agent_id AS AgentKey,\r\n" +
+                $"           {wb} AS WeekStart,\r\n" +
+                "           COUNT_BIG(*) AS InteractionCount,\r\n" +
+                "           CASE WHEN au.user_id IS NOT NULL\r\n" +
+                $"                 AND ROW_NUMBER() OVER (PARTITION BY c.agent_id, au.user_id ORDER BY {wb}) = 1\r\n" +
+                "                THEN 1 ELSE 0 END AS FirstWeekOfPerson\r\n" +
+                "    FROM dbo.copilot_chats AS c\r\n" +
+                "    " + auditJoin + "\r\n" +
+                "    JOIN EligibleAgents AS eligible ON c.agent_id = eligible.id\r\n" +
+                "    WHERE au.time_stamp >= @from" + AuditUserScope + "\r\n" +
+                // One turn, one execution, and maker testing in the Copilot Studio test pane is not agent use (#699).
+                "      AND " + Common.Entities.Copilot.CopilotTurnSql.CountedTurn("c") + "\r\n" +
+                "      AND " + Common.Entities.Copilot.CopilotTurnSql.NotMakerTesting("c.app_host") + "\r\n" +
+                $"    GROUP BY c.agent_id, {wb}, au.user_id\r\n" +
+                "),\r\n" +
+                "AgentWeeks AS (\r\n" +
+                "    SELECT AgentKey, WeekStart,\r\n" +
+                "           SUM(InteractionCount) AS InteractionCount,\r\n" +
+                "           SUM(FirstWeekOfPerson) AS FirstTimePeople\r\n" +
+                "    FROM AgentPersonWeeks\r\n" +
+                "    GROUP BY AgentKey, WeekStart\r\n" +
+                "),\r\n" +
+                "AgentWeeksWithTotals AS (\r\n" +
+                "    SELECT AgentKey, WeekStart, InteractionCount,\r\n" +
+                "           SUM(InteractionCount) OVER (PARTITION BY AgentKey) AS TotalInteractions,\r\n" +
+                "           SUM(FirstTimePeople) OVER (PARTITION BY AgentKey) AS People\r\n" +
+                "    FROM AgentWeeks\r\n" +
+                "),\r\n" +
+                "RankedAgentWeeks AS (\r\n" +
+                "    SELECT AgentKey, WeekStart, InteractionCount, People,\r\n" +
+                "           DENSE_RANK() OVER (ORDER BY TotalInteractions DESC, AgentKey) AS PopularityRank,\r\n" +
+                "           DENSE_RANK() OVER (PARTITION BY CASE WHEN People >= @minimumPeople THEN 1 ELSE 0 END\r\n" +
+                "                              ORDER BY TotalInteractions DESC, AgentKey) AS RankAmongItsSize\r\n" +
+                "    FROM AgentWeeksWithTotals\r\n" +
+                ")\r\n" +
+                "SELECT ranked.AgentKey AS SeriesKey,\r\n" +
+                "       COALESCE(NULLIF(LTRIM(RTRIM(agent.name)), ''), NULLIF(LTRIM(RTRIM(agent.agent_id)), ''), '(unnamed agent)') AS SeriesName,\r\n" +
+                "       ranked.WeekStart,\r\n" +
+                "       CAST(ranked.InteractionCount AS float) AS Value,\r\n" +
+                "       CAST(ranked.People AS int) AS People,\r\n" +
+                $"       CAST(CASE WHEN ranked.PopularityRank <= {topAgents} THEN 1 ELSE 0 END AS bit) AS InTop\r\n" +
+                "FROM RankedAgentWeeks AS ranked\r\n" +
+                "JOIN dbo.copilot_agents AS agent ON ranked.AgentKey = agent.id\r\n" +
+                $"WHERE ranked.PopularityRank <= {topAgents}\r\n" +
+                $"   OR (ranked.People >= @minimumPeople AND ranked.RankAmongItsSize <= {topAgents})\r\n" +
+                "ORDER BY SeriesName, WeekStart\r\n" +
+                "OPTION (RECOMPILE);";
         }
 
         // One line per workload, each counting the distinct people active on ANY day of the week.
@@ -1114,18 +1162,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             try
             {
-                var rows = await rowsTask;
-                chart.Series = rows
-                    .GroupBy(r => new { r.SeriesKey, r.SeriesName })
-                    .OrderByDescending(g => g.Sum(r => r.Value))
-                    .Select(g => new ReportSeries
-                    {
-                        Name = g.Key.SeriesName,
-                        Points = FillWeeks(
-                            weekSpine,
-                            g.Select(r => new WeekValueRow { WeekStart = r.WeekStart, Value = r.Value }).ToList()),
-                    })
-                    .ToList();
+                SetAgentSeries(chart, await rowsTask, weekSpine);
             }
             catch (Exception ex)
             {
@@ -1151,16 +1188,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             try
             {
-                var rows = await rowsTask;
-                chart.Categories = rows
-                    .GroupBy(r => new { r.SeriesKey, r.SeriesName })
-                    .Select(g => new ReportCategory
-                    {
-                        Label = g.Key.SeriesName,
-                        Value = g.Sum(r => r.Value),
-                    })
-                    .OrderByDescending(category => category.Value)
-                    .ToList();
+                SetAgentTotals(chart, await rowsTask);
             }
             catch (Exception ex)
             {
@@ -1168,6 +1196,54 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             return chart;
+        }
+
+        /// <summary>
+        /// One line per agent of <see cref="BuildCopilotAgentsQuery"/>'s rows, most executions first, each carrying the
+        /// agent's people: the top agents as <see cref="ReportChart.Series"/>, and the agents ranked below them for a reader
+        /// without See PII as <see cref="ReportChart.SeriesBelowTheTop"/>.
+        /// </summary>
+        internal static void SetAgentSeries(ReportChart chart, IEnumerable<NamedWeekValueRow> rows, List<DateTime> weekSpine)
+        {
+            var agents = rows
+                .GroupBy(r => new { r.SeriesKey, r.SeriesName })
+                .OrderByDescending(g => g.Sum(r => r.Value))
+                .Select(g => new
+                {
+                    g.First().InTop,
+                    Series = new ReportSeries
+                    {
+                        Name = g.Key.SeriesName,
+                        Points = FillWeeks(
+                            weekSpine,
+                            g.Select(r => new WeekValueRow { WeekStart = r.WeekStart, Value = r.Value }).ToList()),
+                        People = g.First().People,
+                    },
+                })
+                .ToList();
+            chart.Series = agents.Where(a => a.InTop).Select(a => a.Series).ToList();
+            chart.SeriesBelowTheTop = agents.Where(a => !a.InTop).Select(a => a.Series).ToList();
+        }
+
+        /// <summary>One bar per agent: the executions across the window, as <see cref="SetAgentSeries"/> does lines.</summary>
+        internal static void SetAgentTotals(ReportChart chart, IEnumerable<NamedWeekValueRow> rows)
+        {
+            var agents = rows
+                .GroupBy(r => new { r.SeriesKey, r.SeriesName })
+                .Select(g => new
+                {
+                    g.First().InTop,
+                    Category = new ReportCategory
+                    {
+                        Label = g.Key.SeriesName,
+                        Value = g.Sum(r => r.Value),
+                        People = g.First().People,
+                    },
+                })
+                .OrderByDescending(a => a.Category.Value)
+                .ToList();
+            chart.Categories = agents.Where(a => a.InTop).Select(a => a.Category).ToList();
+            chart.CategoriesBelowTheTop = agents.Where(a => !a.InTop).Select(a => a.Category).ToList();
         }
 
         private static async Task<List<NamedWeekValueRow>> QueryNamedWeeksAsync(
@@ -1180,17 +1256,24 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 db.Database.CommandTimeout = queryTimeoutSecs;
                 return await db.Database
-                    .SqlQuery<NamedWeekValueRow>(
-                        Scoped(body),
-                        ScopedParameters(
-                            new SqlParameter("@from", from),
-                            new SqlParameter("@agentName", System.Data.SqlDbType.NVarChar, 100)
-                            {
-                                Value = (object)agentName ?? DBNull.Value,
-                            }))
+                    .SqlQuery<NamedWeekValueRow>(Scoped(body), ScopedParameters(CopilotAgentsParameters(from, agentName)))
                     .ToListAsync();
             }
         }
+
+        /// <summary>The parameters of <see cref="BuildCopilotAgentsQuery"/>, before the scope's.</summary>
+        internal static SqlParameter[] CopilotAgentsParameters(DateTime from, string agentName) => new[]
+        {
+            new SqlParameter("@from", from),
+            new SqlParameter("@agentName", System.Data.SqlDbType.NVarChar, 100)
+            {
+                Value = (object)agentName ?? DBNull.Value,
+            },
+            new SqlParameter("@minimumPeople", System.Data.SqlDbType.Int)
+            {
+                Value = ReportScopeResolver.MinimumPeopleWithoutSeePii,
+            },
+        };
 
         /// <summary>Runs a categorical (bar) query - label + value rows, already ordered by the query.</summary>
         /// <param name="countsPeople">
@@ -1398,6 +1481,7 @@ namespace Web.AnalyticsWeb.Controllers
             var scoped = DisplayBody(body);
             return $"DECLARE @from datetime = '{from:yyyy-MM-dd}';\r\n" +
                    $"DECLARE @agentName nvarchar(100) = {agentNameSql};\r\n" +
+                   $"DECLARE @minimumPeople int = {ReportScopeResolver.MinimumPeopleWithoutSeePii};\r\n" +
                    ScopeDeclarations(scoped) +
                    scoped;
         }
@@ -1501,13 +1585,18 @@ namespace Web.AnalyticsWeb.Controllers
             public int ExpectedDays { get; set; }
         }
 
-        /// <summary>Shape for a named weekly series raw SQL result.</summary>
-        private sealed class NamedWeekValueRow
+        /// <summary>
+        /// One row of <see cref="BuildCopilotAgentsQuery"/>: an agent's executions in a week, the distinct people who used
+        /// the agent across the window, and whether it is one of the top agents or ranks below them.
+        /// </summary>
+        internal sealed class NamedWeekValueRow
         {
             public int SeriesKey { get; set; }
             public string SeriesName { get; set; }
             public DateTime WeekStart { get; set; }
             public double Value { get; set; }
+            public int People { get; set; }
+            public bool InTop { get; set; }
         }
 
         /// <summary>Shape for a categorical (Label, Value) raw SQL result.</summary>

@@ -334,10 +334,21 @@ namespace Tests.UnitTests
                 .ProvenBy(
                     Test<ReportsAPIControllerTests>(nameof(ReportsAPIControllerTests.WithoutSmallGroups_HoldsPhrasesLanguagesAndDepartmentGridsToFivePeople_OnACopy)),
                     Test<ReportsAPIControllerTests>(nameof(ReportsAPIControllerTests.PromptPhrasesAndLanguages_CountTheDistinctPeopleBehindEach))),
-            ["ReportsAPIController.CopilotAgents"] = KnownGap(
-                "Total and weekly executions of the top 1-20 Copilot agents, narrowable by agentName, with no count of the people "
-                + "behind an agent and no floor: an agent that one to four people use, a personal or a small team's agent, shows "
-                + "their use. DLP leaves out an agent row of fewer than 5 people (DlpAPIController.WithoutSmallGroups)."),
+            ["ReportsAPIController.CopilotAgents"] = Floored(
+                    "Each agent's distinct people are counted in SQL. For this reader the top 1-20 agents are the most used of "
+                    + "those five or more people used: an agent of fewer is left out of both charts, its total and its weekly "
+                    + "line, and the next agent takes its place. How many were left out is never said, so neither changing the "
+                    + "number of agents nor the agentName filter tells where a small agent ranks or whether one by that name exists.")
+                .By(typeof(ReportsAPIController), nameof(ReportsAPIController.BuildCopilotAgentsQuery))
+                .By(typeof(ReportAreaData), nameof(ReportAreaData.WithoutSmallGroups))
+                .By(typeof(ReportChart), nameof(ReportChart.WithoutSmallGroups))
+                .ProvenBy(
+                    Test<CopilotAgentsReportSqlTests>(nameof(CopilotAgentsReportSqlTests.TheAgentsQuery_CountsTheDistinctPeopleBehindEachAgent_AndRanksAgentsOfFewerThanFiveApart)),
+                    Test<CopilotAgentsReportSqlTests>(nameof(CopilotAgentsReportSqlTests.AReaderWithoutSeePii_GetsTheTopAgentsOfFiveOrMorePeople_AndASeePiiReaderTheTopAgents)),
+                    Test<CopilotAgentsReportSqlTests>(nameof(CopilotAgentsReportSqlTests.AReaderWithoutSeePii_NarrowingToAnAgentOfFewerThanFive_GetsWhatANameMatchingNothingGets)))
+                .WithKnownGap("#844 (S3-3): a week of an agent that five or more people used across the window can be one to four "
+                    + "people's use, and the 1- to 6-month windows all end this week, so one window's total less another's is "
+                    + "the weeks between (the few-consumers class of judgement call 1)."),
             ["ReportsAPIController.Usage"] = NoGroupedFigures(
                     "Weekly active users per Microsoft 365 workload over the reader's whole scope.")
                 .ProvenBy(ScopeIsNeverAHandful()),
