@@ -410,12 +410,12 @@ namespace Tests.UnitTests
                     Test<TeamsExplorerOverviewFloorTests>(nameof(TeamsExplorerOverviewFloorTests.WithoutSmallSegments_ADormantSegmentOfOneToFour_IsWithheldWithEveryShare_SoTheMeasuredTotalCannotGiveItBack)),
                     Test<TeamsExplorerPopulationSqlIntegrationTests>(nameof(TeamsExplorerPopulationSqlIntegrationTests.OverTheDirectoryPopulation_EveryUsageFigureLeavesItOut_AndTheOverviewLessTheBreakdownIsNothing)),
                     Test<TeamsExplorerPopulationSqlIntegrationTests>(nameof(TeamsExplorerPopulationSqlIntegrationTests.OverAWiderWindow_TheDirectoryTrends_AddEachPersonsWeekUp_AndLeaveTheDisabledAccountOut)))
-                .WithKnownGap("#844 (G5): counts of people that nest are each floored, but not their differences - the people in "
-                    + "the larger count and not the smaller: active in the period and not in a week; in the directory and not "
-                    + "active (known less active users), which is the Dormant segment's count when everyone in view holds a Teams "
-                    + "licence and every day was imported; licensed and not in the engagement mix, the unmeasured count. Such a "
-                    + "difference counts people with no activity, never what anyone did, and flooring it would blank most weeks, "
-                    + "and reach, of any stable population.")
+                .WithKnownGap("#844 (G5), accepted under #872's judgement call 3 (counts of people without activity are kept): a "
+                    + "Dormant segment of 1-4 is withheld from the mix, but known less active users gives its count back when "
+                    + "everyone in view holds a Teams licence and every day was imported, and monthly less weekly active users "
+                    + "(Adoption) can give back part or all of it on a 7-day window. A period's active people less a week's, and "
+                    + "licensed less measured people (the unmeasured count), are differences of the same kind. Each counts people "
+                    + "with no activity, never what anyone did; flooring it would blank reach and most weeks of any stable population.")
                 .WithKnownGap("#844 (S3-3): the withholding holds within one response, not across the 7-, 28-, 90-, 180- and "
                     + "365-day windows a reader can request, which all end today: where one window withholds a small week with a "
                     + "week that another window shows, the small week can be worked out from the two.")
@@ -448,13 +448,14 @@ namespace Tests.UnitTests
                     Test<TeamsExplorerOverviewFloorTests>(nameof(TeamsExplorerOverviewFloorTests.WithoutSmallPlatforms_WithholdsAnyMobile_WhenIosOrAndroidIs)),
                     Test<TeamsExplorerPopulationSqlIntegrationTests>(nameof(TeamsExplorerPopulationSqlIntegrationTests.OverTheDirectoryPopulation_EveryUsageFigureLeavesItOut_AndTheOverviewLessTheBreakdownIsNothing)),
                     Test<TeamsExplorerPopulationSqlIntegrationTests>(nameof(TeamsExplorerPopulationSqlIntegrationTests.OverAWiderWindow_TheDirectoryTrends_AddEachPersonsWeekUp_AndLeaveTheDisabledAccountOut)))
-                .WithKnownGap("#844 (G5): counts of people that nest are each floored, but not their differences - the people in "
-                    + "the larger count and not the smaller: active in the month and not the last week; in a breakdown group and "
-                    + "not active, which summed over the groups is the Dormant segment's count when everyone in view holds a Teams "
-                    + "licence and every day was imported; licensed and not in the engagement mix, the unmeasured count; and, "
-                    + "while the platform shares are shown, seen on any device and not on one platform. Such a difference counts "
-                    + "people with no activity of some kind, never what anyone did, and flooring it would blank most weeks, and "
-                    + "reach, of any stable population."),
+                .WithKnownGap("#844 (G5), accepted under #872's judgement call 3 (counts of people without activity are kept): "
+                    + "counts of people that nest are each floored, but not their differences - the people in the larger count and "
+                    + "not the smaller: active in the month and not the last week (on a 7-day window, part or all of the Dormant "
+                    + "segment); in a breakdown group and not active, which summed over the groups is the Dormant segment's count "
+                    + "when everyone in view holds a Teams licence and every day was imported; licensed and not in the engagement "
+                    + "mix, the unmeasured count; and, while the platform shares are shown, seen on any device and not on one "
+                    + "platform. Each counts people with no activity of some kind, never what anyone did, and flooring it would "
+                    + "blank most weeks, and reach, of any stable population."),
             ["TeamsExplorerAPIController.Meetings"] = Floored(
                     "A copy without the named organiser and attendee lists; a week of fewer than 5 attendees withheld with the week "
                     + "of fewest attendees still shown, so the calls and call hours less the weeks shown are never one week's; every "
