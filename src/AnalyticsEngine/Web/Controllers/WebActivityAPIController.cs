@@ -13,6 +13,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.UserFilters;
+using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
 {
@@ -38,6 +39,13 @@ namespace Web.AnalyticsWeb.Controllers
     /// largest table a busy intranet produces, and an admin flipping between tabs or nudging the
     /// period should not pay for a full re-run each time. The cache key carries the window, the row
     /// count and the UTC date, so it can never be served across a day boundary.
+    /// </para>
+    /// <para>
+    /// The cache holds the complete section, and a reader without the portal's See PII permission is
+    /// sent a trimmed copy of it (#844): search terms, and every list whose query counts no people, are
+    /// withheld, and a site, place, platform or technology row of fewer than
+    /// <see cref="ReportScopeResolver.MinimumPeopleWithoutSeePii"/> visitors is left out. Each export is
+    /// the same rows as its screen, or refused when its screen withholds them.
     /// </para>
     /// </remarks>
     [Authorize]
@@ -112,7 +120,8 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IHttpActionResult> Overview(int days = WebActivityQuery.DefaultWindowDays)
         {
             var query = await BuildQueryAsync(days).ConfigureAwait(false);
-            return await CachedAsync("overview", query, () => _store.GetOverviewAsync(query, ReadSources())).ConfigureAwait(false);
+            return await CachedAsync("overview", query, () => _store.GetOverviewAsync(query, ReadSources()),
+                ForReader<WebActivityOverview>(o => o.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/visits?days=28
@@ -123,7 +132,8 @@ namespace Web.AnalyticsWeb.Controllers
             int top = WebActivityQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
-            return await CachedAsync("visits", query, () => _store.GetVisitsAsync(query)).ConfigureAwait(false);
+            return await CachedAsync("visits", query, () => _store.GetVisitsAsync(query),
+                ForReader<WebActivityVisits>(v => v.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/pages?days=28
@@ -134,7 +144,8 @@ namespace Web.AnalyticsWeb.Controllers
             int top = WebActivityQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
-            return await CachedAsync("pages", query, () => _store.GetPagesAsync(query)).ConfigureAwait(false);
+            return await CachedAsync("pages", query, () => _store.GetPagesAsync(query),
+                ForReader<WebActivityPages>(p => p.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/journeys?days=28
@@ -145,7 +156,8 @@ namespace Web.AnalyticsWeb.Controllers
             int top = WebActivityQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
-            return await CachedAsync("journeys", query, () => _store.GetJourneysAsync(query)).ConfigureAwait(false);
+            return await CachedAsync("journeys", query, () => _store.GetJourneysAsync(query),
+                ForReader<WebActivityJourneys>(j => j.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/geography?days=28
@@ -156,7 +168,8 @@ namespace Web.AnalyticsWeb.Controllers
             int top = WebActivityQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
-            return await CachedAsync("geography", query, () => _store.GetGeographyAsync(query)).ConfigureAwait(false);
+            return await CachedAsync("geography", query, () => _store.GetGeographyAsync(query),
+                ForReader<WebActivityGeography>(g => g.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/search?days=28
@@ -167,7 +180,8 @@ namespace Web.AnalyticsWeb.Controllers
             int top = WebActivityQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
-            return await CachedAsync("search", query, () => _store.GetSearchAsync(query)).ConfigureAwait(false);
+            return await CachedAsync("search", query, () => _store.GetSearchAsync(query),
+                ForReader<WebActivitySearch>(s => s.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
         }
 
         // GET: api/WebActivity/technology?days=28
@@ -178,7 +192,8 @@ namespace Web.AnalyticsWeb.Controllers
             int top = WebActivityQuery.DefaultTop)
         {
             var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
-            return await CachedAsync("technology", query, () => _store.GetTechnologyAsync(query)).ConfigureAwait(false);
+            return await CachedAsync("technology", query, () => _store.GetTechnologyAsync(query),
+                ForReader<WebActivityTechnology>(t => t.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii))).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -195,6 +210,11 @@ namespace Web.AnalyticsWeb.Controllers
         /// error and returns no rows, so serialising them anyway would hand an admin a spreadsheet
         /// containing only a header row - which reads as "your intranet has no quiet pages" and is
         /// exactly the wrong conclusion.
+        /// </para>
+        /// <para>
+        /// A file is never less redacted than its screen (#844). For a reader without See PII, a
+        /// section the screen withholds is refused with the permission it needs, for the same reason a
+        /// failure is not an empty file; the technology file carries the screen's floored rows.
         /// </para>
         /// </remarks>
         // GET: api/WebActivity/export/quiet-pages?days=28&top=500
@@ -215,6 +235,12 @@ namespace Web.AnalyticsWeb.Controllers
                 };
             }
 
+            var seePii = PortalAccess.Evaluate(Request, User).SeePii;
+            if (!seePii && WebActivityExports.WithheldWithoutSeePii(section))
+            {
+                return PortalPermissionDenied.Response(Request, PortalPermission.SeePii);
+            }
+
             var query = await BuildQueryAsync(days, top).ConfigureAwait(false);
             var normalised = section.ToLowerInvariant();
 
@@ -224,8 +250,9 @@ namespace Web.AnalyticsWeb.Controllers
 
             // Exports rebuild a whole tab, so a repeated click - or a script - would re-run every
             // query behind it. Cached on its own key (the display cache is capped at a different row
-            // count, so the two can never be confused).
-            var cacheKey = query.CacheKey("export::" + normalised);
+            // count, so the two can never be confused), and per kind of reader, because a reader
+            // without See PII is sent fewer rows.
+            var cacheKey = query.CacheKey("export::" + normalised + (seePii ? string.Empty : "::without-see-pii"));
             if (MemoryCache.Default.Get(cacheKey) is byte[] cachedCsv)
             {
                 return CsvResponse(cachedCsv, CsvSerialiser.FileName(fileNamePrefix, DateTime.UtcNow));
@@ -300,6 +327,8 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     var technology = await _store.GetTechnologyAsync(query).ConfigureAwait(false);
                     failure = ErrorFor(technology, "tech-detail");
+                    // Never less redacted than the page: the same rows are left out for a reader without See PII.
+                    if (!seePii) technology = technology.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
                     csv = CsvSerialiser.ToBytes(technology.Detail, WebActivityExports.TechnologyColumns());
                     break;
                 }
@@ -377,6 +406,11 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>
         /// Serves a section from the short-lived cache, or builds and caches it.
         /// </summary>
+        /// <param name="forReader">
+        /// Applied to what this reader is sent, never to what is cached: the cache holds the complete
+        /// section, and <paramref name="forReader"/> returns a trimmed copy for a reader who may not see
+        /// all of it. Null sends the section as it is.
+        /// </param>
         /// <remarks>
         /// Single-flight: concurrent callers that miss the same key share ONE build rather than each
         /// starting their own batch of section queries. Without this, five admins opening the same
@@ -391,14 +425,15 @@ namespace Web.AnalyticsWeb.Controllers
         private async Task<IHttpActionResult> CachedAsync<T>(
             string section,
             WebActivityQuery query,
-            Func<Task<T>> build)
+            Func<Task<T>> build,
+            Func<T, T> forReader = null)
             where T : class
         {
             var key = query.CacheKey(section);
 
             if (MemoryCache.Default.Get(key) is T cached)
             {
-                return Ok(cached);
+                return Ok(forReader == null ? cached : forReader(cached));
             }
 
             var lazy = InFlight.GetOrAdd(
@@ -422,7 +457,16 @@ namespace Web.AnalyticsWeb.Controllers
             // diagnostic, and re-running a query that just timed out on every reload only makes a
             // struggling database worse.
             MemoryCache.Default.Set(key, model, DateTimeOffset.UtcNow.AddSeconds(CacheSeconds));
-            return Ok(model);
+            return Ok(forReader == null ? model : forReader(model));
+        }
+
+        /// <summary>
+        /// What a section is trimmed with for this reader: nothing when they hold See PII, otherwise
+        /// <paramref name="trim"/>, which returns a copy (#844).
+        /// </summary>
+        private Func<T, T> ForReader<T>(Func<T, T> trim) where T : class
+        {
+            return PortalAccess.Evaluate(Request, User).SeePii ? null : trim;
         }
 
         private static HttpResponseMessage CsvResponse(byte[] csv, string fileName)

@@ -52,6 +52,12 @@ export default function SearchPanel({
   const t = useT();
   const kpis = data.kpis;
 
+  // Without See PII the terms come back withheld - they are text people typed - and so do the searches by site, which
+  // count no people. Each card says so instead of reading as "nobody searched".
+  const termsWithheld = data.termsWithheld === true;
+  const sitesWithheld = data.sitesWithheld === true;
+  const termsWithheldText = t('webActivity.privacy.searchTermsWithheld');
+
   const items: KpiDefinition[] = [
     {
       key: 'searches',
@@ -120,11 +126,13 @@ export default function SearchPanel({
           title={t('webActivity.search.wordCloud.title')}
           description={t('webActivity.search.wordCloud.description')}
           query={queryFor(data.queries, 'search-terms')}
-          isEmpty={data.topTerms.length === 0}
+          isEmpty={termsWithheld || data.topTerms.length === 0}
           emptyMessage={
-            searchAvailable
-              ? t('webActivity.search.wordCloud.emptyThisPeriod')
-              : t('webActivity.search.wordCloud.emptyEver')
+            termsWithheld
+              ? termsWithheldText
+              : searchAvailable
+                ? t('webActivity.search.wordCloud.emptyThisPeriod')
+                : t('webActivity.search.wordCloud.emptyEver')
           }
         >
           <WordCloud
@@ -137,17 +145,20 @@ export default function SearchPanel({
           title={t('webActivity.search.topTerms.title')}
           description={t('webActivity.search.topTerms.description', { top: data.window.top })}
           query={queryFor(data.queries, 'search-terms')}
-          isEmpty={data.topTerms.length === 0}
+          isEmpty={termsWithheld || data.topTerms.length === 0}
+          emptyMessage={termsWithheld ? termsWithheldText : undefined}
           actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportTerms}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
+            termsWithheld ? undefined : (
+              <Button
+                appearance="subtle"
+                size="small"
+                icon={<ArrowDownload16Regular />}
+                onClick={onExportTerms}
+                disabled={exporting}
+              >
+                {t('webActivity.common.export')}
+              </Button>
+            )
           }
         >
           <TermTable rows={data.topTerms} label={t('webActivity.search.topTerms.title')} />
@@ -158,8 +169,8 @@ export default function SearchPanel({
           description={t('webActivity.search.deadEndTerms.description')}
           note={t('webActivity.search.deadTerms.note')}
           query={queryFor(data.queries, 'search-dead-ends')}
-          isEmpty={data.deadEndTerms.length === 0}
-          emptyMessage={t('webActivity.search.deadEndTerms.empty')}
+          isEmpty={termsWithheld || data.deadEndTerms.length === 0}
+          emptyMessage={termsWithheld ? termsWithheldText : t('webActivity.search.deadEndTerms.empty')}
         >
           <TermTable rows={data.deadEndTerms} hideSearchers label={t('webActivity.search.deadEndTerms.label')} />
         </SectionCard>
@@ -201,7 +212,8 @@ export default function SearchPanel({
           description={t('webActivity.search.bySite.description')}
           note={t('webActivity.search.bySite.note')}
           query={queryFor(data.queries, 'search-sites')}
-          isEmpty={data.bySite.length === 0}
+          isEmpty={sitesWithheld || data.bySite.length === 0}
+          emptyMessage={sitesWithheld ? t('webActivity.privacy.noPeopleCount') : undefined}
         >
           <CategoryBarChart categories={toCategories(data.bySite)} valueLabel={t('webActivity.common.searches')} />
         </SectionCard>

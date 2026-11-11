@@ -251,6 +251,29 @@ export function queryFor(
   return queries.find((q) => q.key === key);
 }
 
+/**
+ * The note a list shows a reader without See PII when the server left rows out of it (#844): rows of fewer than
+ * `minimumGroupSize` people, and the smallest of the others so none can be worked out from the totals. Undefined when
+ * nothing was left out, or for a See PII reader, whose sections carry no minimum.
+ */
+export function leftOutNote(
+  t: TFunction,
+  minimumGroupSize: number | null | undefined,
+  leftOut: number | undefined,
+): string | undefined {
+  if (minimumGroupSize == null || !leftOut) return undefined;
+  return t(plural(leftOut, 'webActivity.privacy.leftOut.one', 'webActivity.privacy.leftOut.other'), {
+    count: formatCount(leftOut),
+    minimum: formatCount(minimumGroupSize),
+  });
+}
+
+/** A card's own note and a privacy note together; undefined when there is neither. */
+export function withNote(own: string | undefined, privacy: string | undefined): string | undefined {
+  if (own && privacy) return `${own} ${privacy}`;
+  return own ?? privacy;
+}
+
 const useStyles = makeStyles({
   card: {
     display: 'flex',

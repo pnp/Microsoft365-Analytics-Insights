@@ -289,7 +289,7 @@ namespace Common.Entities.SpoWebActivity
                 .ToList();
 
             model.TopSites = WithShare(
-                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.PageViews }),
+                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.PageViews, People = r.Visitors }),
                 kpi.PageViews);
 
             var search = searchTask.Result.Rows.FirstOrDefault() ?? new SearchKpiRow();
@@ -381,16 +381,16 @@ namespace Common.Entities.SpoWebActivity
             // top N. A share recomputed over a truncated leaderboard always sums to 100% and quietly
             // hides the tail, which is the same mistake in every ranked chart on the page.
             model.BySite = WithShare(
-                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }),
+                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits, People = r.Visitors }),
                 kpi.Visits);
             model.ByPage = WithShare(
                 pageTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Count }),
                 kpi.Visits);
             model.ByDevice = WithShare(
-                deviceTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }),
+                deviceTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits, People = r.Visitors }),
                 kpi.Visits);
             model.ByBrowser = WithShare(
-                browserTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }),
+                browserTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits, People = r.Visitors }),
                 kpi.Visits);
 
             var cells = heatTask.Result.Rows;

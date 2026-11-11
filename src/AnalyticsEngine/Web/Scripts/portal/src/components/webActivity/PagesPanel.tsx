@@ -23,6 +23,7 @@ import {
   formatDuration,
   formatPct,
   formatSeconds,
+  leftOutNote,
   loadTone,
   queryFor,
   toStackedSeries,
@@ -52,6 +53,17 @@ export default function PagesPanel({
   const styles = useWebActivityStyles();
   const t = useT();
   const kpis = data.kpis;
+
+  // Without See PII the three page lists come back withheld - their queries count no people, and a quiet page is by
+  // design one that one or two people opened - and sites of too few visitors are left out. Each card says so.
+  const pagesWithheld = data.pageListsWithheld === true;
+  const noPeopleCount = t('webActivity.privacy.noPeopleCount');
+  const sitesLeftOut = leftOutNote(t, data.minimumGroupSize, data.withheldSites);
+  const exportButton = (onClick: () => void) => (
+    <Button appearance="subtle" size="small" icon={<ArrowDownload16Regular />} onClick={onClick} disabled={exporting}>
+      {t('webActivity.common.export')}
+    </Button>
+  );
 
   const items: KpiDefinition[] = [
     {
@@ -131,18 +143,9 @@ export default function PagesPanel({
           title={t('webActivity.pages.mostViewed.title')}
           description={t('webActivity.pages.mostViewed.description', { top: data.window.top })}
           query={queryFor(data.queries, 'pages-top')}
-          isEmpty={data.topPages.length === 0}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportPages}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          isEmpty={pagesWithheld || data.topPages.length === 0}
+          emptyMessage={pagesWithheld ? noPeopleCount : undefined}
+          actions={pagesWithheld ? undefined : exportButton(onExportPages)}
         >
           <PageTable
             rows={data.topPages}
@@ -157,19 +160,9 @@ export default function PagesPanel({
           description={t('webActivity.pages.slowest.description', { minimumViews: data.window.minimumViews })}
           note={t('webActivity.pages.slowest.note')}
           query={queryFor(data.queries, 'pages-slowest')}
-          isEmpty={data.slowestPages.length === 0}
-          emptyMessage={t('webActivity.pages.slowest.empty')}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportSlow}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          isEmpty={pagesWithheld || data.slowestPages.length === 0}
+          emptyMessage={pagesWithheld ? noPeopleCount : t('webActivity.pages.slowest.empty')}
+          actions={pagesWithheld ? undefined : exportButton(onExportSlow)}
         >
           <PageTable
             rows={data.slowestPages}
@@ -183,19 +176,9 @@ export default function PagesPanel({
           description={t('webActivity.pages.quiet.description')}
           note={t('webActivity.pages.quiet.note')}
           query={queryFor(data.queries, 'pages-quiet')}
-          isEmpty={data.quietPages.length === 0}
-          emptyMessage={t('webActivity.pages.quiet.empty')}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportQuiet}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          isEmpty={pagesWithheld || data.quietPages.length === 0}
+          emptyMessage={pagesWithheld ? noPeopleCount : t('webActivity.pages.quiet.empty')}
+          actions={pagesWithheld ? undefined : exportButton(onExportQuiet)}
         >
           <PageTable
             rows={data.quietPages}
@@ -207,6 +190,7 @@ export default function PagesPanel({
 
         <SectionCard
           title={t('webActivity.pages.bySite.title')}
+          note={sitesLeftOut}
           query={queryFor(data.queries, 'pages-sites')}
           isEmpty={data.bySite.length === 0}
         >

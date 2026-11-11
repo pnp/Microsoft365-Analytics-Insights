@@ -20,11 +20,13 @@ import {
   formatDuration,
   formatPct,
   formatSeconds,
+  leftOutNote,
   loadTone,
   queryFor,
   reachToneOrNeutral,
   toCategories,
   useWebActivityStyles,
+  withNote,
 } from './webActivityShared';
 
 /**
@@ -190,7 +192,7 @@ export default function OverviewPanel({
         <SectionCard
           title={t('webActivity.overview.busiestSites.title')}
           description={t('webActivity.overview.busiestSites.description')}
-          note={t('webActivity.overview.busiestSites.note', { top: data.window.top })}
+          note={withNote(t('webActivity.overview.busiestSites.note', { top: data.window.top }), leftOutNote(t, data.minimumGroupSize, data.withheldSites))}
           query={queryFor(data.queries, 'overview-sites')}
           isEmpty={data.topSites.length === 0}
           emptyMessage={t('webActivity.overview.busiestSites.empty')}
