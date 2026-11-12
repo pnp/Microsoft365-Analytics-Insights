@@ -1,6 +1,8 @@
 ﻿using Common.Entities.Config;
 using System;
+using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -17,40 +19,79 @@ namespace Web.AnalyticsWeb.Controllers
     [Route("api/ImportConfig")]
     public class ImportConfigController  : ControllerBase
     {
+        private readonly Func<(string AppInsightsConnectionString, int MetadataRefreshMinutes)> _settings;
+
+        public ImportConfigController() : this(() =>
+        {
+            var config = new AppConfig();
+            return (config.AppInsightsConnectionString, config.MetadataRefreshMinutes);
+        })
+        {
+        }
+
+        internal ImportConfigController(Func<(string AppInsightsConnectionString, int MetadataRefreshMinutes)> settings)
+        {
+            _settings = settings;
+        }
+
         // Get App Insights import config
         // POST: api/ImportConfig?appInsightsStringEncoded=base64encodedstring
+        /// <remarks>
+        /// Anonymous, so whatever anyone posts is answered without an exception: malformed input is a 400 and another
+        /// Application Insights resource's key a 403. Each used to be a 500 with an exception record in the customer's
+        /// Application Insights, which crowded real faults off the Health page (#853). A server with no key configured is
+        /// a real fault, and still throws.
+        /// </remarks>
         [AllowCorsForOrgUrls()]
         [HttpPost]
         [AllowCrossSiteRequests("The AITracker posts here from SharePoint pages, another origin, without the portal's cookie.")]
-        public ImportConfig Post(string appInsightsStringEncoded = "")
+        public IActionResult Post(string appInsightsStringEncoded = "")
         {
-            if (string.IsNullOrEmpty(appInsightsStringEncoded))
-                throw new ArgumentNullException("appInsightsStringEncoded");
-
-            // Decode the base64 encoded string
-            var bytes = Convert.FromBase64String(appInsightsStringEncoded);
-            var decodedString = Encoding.UTF8.GetString(bytes);
-
             // The App Insights connection string contains multiple GUIDs (InstrumentationKey and
             // ApplicationId). Compare the InstrumentationKey value parsed by name from both sides,
             // not "the first GUID found" - the prior regex-by-position approach matched whichever
             // GUID appeared first textually and could be tricked by reordering the keys.
-            var config = new AppConfig();
-            var paramPassedKey = ParseInstrumentationKey(decodedString);
-            var configuredKey = ParseInstrumentationKey(config.AppInsightsConnectionString);
-
+            var paramPassedKey = DecodeInstrumentationKey(appInsightsStringEncoded);
             if (paramPassedKey == Guid.Empty)
-                throw new ArgumentException("InstrumentationKey missing or invalid in supplied connection string");
+                return Refuse(HttpStatusCode.BadRequest, "Expected a base64-encoded Application Insights connection string with an InstrumentationKey.");
+
+            var config = _settings();
+            var configuredKey = ParseInstrumentationKey(config.AppInsightsConnectionString);
             if (configuredKey == Guid.Empty)
                 throw new InvalidOperationException("Server-side InstrumentationKey is not configured");
 
             if (paramPassedKey != configuredKey)
-                throw new UnauthorizedAccessException("InstrumentationKey mismatch");
+                return Refuse(HttpStatusCode.Forbidden, "That InstrumentationKey is not the one this site imports from.");
 
-            return new ImportConfig
+            return Ok(new ImportConfig
             {
                 Expiry = DateTime.UtcNow.AddMinutes(config.MetadataRefreshMinutes),
                 MetadataRefreshMinutes = config.MetadataRefreshMinutes,
+            });
+        }
+
+        private static readonly Regex Base64 = new Regex("^[A-Za-z0-9+/]+={0,2}$", RegexOptions.CultureInvariant);
+
+        /// <summary>The InstrumentationKey in a base64-encoded connection string; <see cref="Guid.Empty"/> for anything else.</summary>
+        internal static Guid DecodeInstrumentationKey(string encoded)
+        {
+            if (string.IsNullOrEmpty(encoded)) return Guid.Empty;
+
+            // The tracker doesn't URL-encode the value, so a '+' in it arrives as a space
+            encoded = encoded.Replace(' ', '+');
+            if (encoded.Length % 4 != 0 || !Base64.IsMatch(encoded)) return Guid.Empty;
+
+            return ParseInstrumentationKey(Encoding.UTF8.GetString(Convert.FromBase64String(encoded)));
+        }
+
+        private static IActionResult Refuse(HttpStatusCode status, string reason)
+        {
+            // net10: the Web API build's HttpResponseMessage, as an ASP.NET Core result with the same status, body and header.
+            return new NoSniffContentResult
+            {
+                StatusCode = (int)status,
+                Content = reason,
+                ContentType = "text/plain; charset=utf-8",
             };
         }
 

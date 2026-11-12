@@ -60,6 +60,22 @@ describe('copilotInvestmentApi', () => {
     expect(url(0).searchParams.get('hourlyCost')).toBe('99999');
   });
 
+  it('words a refused currency change as its own rule, since the general what-if message does not name it', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({ code: 'scenarioInvalid', validationErrors: ['currencyChangeNeedsPrices'] }, 400));
+
+    const english = await fetchInvestmentSummary({ windowDays: 28, scenario: { currency: 'USD', seatPrice: 30 } }).catch((e: unknown) => e);
+
+    expect(english).toBeInstanceOf(InvestmentRequestError);
+    expect((english as InvestmentRequestError).validationErrors).toEqual(['currencyChangeNeedsPrices']);
+    expect((english as Error).message).toMatch(/changes the currency/);
+    expect((english as Error).message).not.toMatch(/break a rule/);
+
+    await loadCatalog('es');
+    setActiveLanguage('es');
+    const spanish = await fetchInvestmentSummary({ windowDays: 28, scenario: { currency: 'USD', seatPrice: 30 } }).catch((e: unknown) => e);
+    expect((spanish as Error).message).toMatch(/cambia la moneda/);
+  });
+
   it('asks for the balance history without what-if figures or a grouping, which do not change it', async () => {
     mockedFetch.mockResolvedValue(jsonResponse({ points: [], snapshotDate: null, failureCode: null }));
 

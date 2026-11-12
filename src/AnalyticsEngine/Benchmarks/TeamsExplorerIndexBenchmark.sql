@@ -24,6 +24,12 @@ Scope
     4. teams_channel_stats_log, teams_user_channel_reactions, team_membership_log
                             - no date index at all.
 
+  It also carries what the Teams Explorer statements that find each team's latest membership
+  snapshot (LatestTeamMembers) need, for Invoke-TeamsExplorerIndexBenchmark.ps1 -Compare
+  MembershipHorizon: team_membership_log is seeded the way the importer writes it - every member of
+  every Team, every day (SqlTeamsPersistenceStore.SaveMembers logs one row per member per day a Team
+  is crawled) - and the channel leaderboard's teams_channel_tabs_log is here too.
+
   teams_user_activity_log is deliberately NOT covered here. Its candidate change is a DROP_EXISTING
   rebuild of the existing nonclustered COLUMNSTORE index, which must be measured against the Copilot
   Adoption licence-opportunity query as well as against this page, at a table size (13M+ rows) that
@@ -36,9 +42,11 @@ Safety
   file, a PR or a release note.
 
 SQLCMD variables
-  SyntheticUsers   - distinct synthetic users (for example 5000 or 200000)
-  SyntheticCalls   - call records to seed across the period (for example 200000)
-  SyntheticDays    - days of history to spread the data across (for example 400)
+  SyntheticUsers          - distinct synthetic users (for example 5000 or 200000)
+  SyntheticCalls          - call records to seed across the period (for example 200000)
+  SyntheticDays           - days of history to spread the data across (for example 400)
+  SyntheticMembersPerTeam - members of each of the 500 synthetic Teams, logged every day (for example
+                            40: with 2000 users, ten Team memberships per user)
 */
 SET NOCOUNT ON;
 
@@ -51,10 +59,12 @@ END
 DECLARE @SyntheticUsers int = $(SyntheticUsers);
 DECLARE @SyntheticCalls int = $(SyntheticCalls);
 DECLARE @SyntheticDays int = $(SyntheticDays);
+DECLARE @SyntheticMembersPerTeam int = $(SyntheticMembersPerTeam);
 
 PRINT CONCAT('Teams Explorer index benchmark fixture: users=', @SyntheticUsers,
              ', calls=', @SyntheticCalls,
              ', days=', @SyntheticDays,
+             ', membersPerTeam=', @SyntheticMembersPerTeam,
              ', database=', DB_NAME(),
              ', source=synthetic LocalDB/SQL Server fixture');
 
@@ -71,6 +81,8 @@ IF OBJECT_ID(N'dbo.teams_user_device_usage_log', N'U') IS NOT NULL DROP TABLE db
 IF OBJECT_ID(N'dbo.teams_user_channel_reactions', N'U') IS NOT NULL DROP TABLE dbo.teams_user_channel_reactions;
 IF OBJECT_ID(N'dbo.teams_channel_stats_log', N'U') IS NOT NULL DROP TABLE dbo.teams_channel_stats_log;
 IF OBJECT_ID(N'dbo.team_membership_log', N'U') IS NOT NULL DROP TABLE dbo.team_membership_log;
+IF OBJECT_ID(N'dbo.teams_channel_tabs_log', N'U') IS NOT NULL DROP TABLE dbo.teams_channel_tabs_log;
+IF OBJECT_ID(N'dbo.teams_tabs', N'U') IS NOT NULL DROP TABLE dbo.teams_tabs;
 IF OBJECT_ID(N'dbo.teams_channels', N'U') IS NOT NULL DROP TABLE dbo.teams_channels;
 IF OBJECT_ID(N'dbo.teams', N'U') IS NOT NULL DROP TABLE dbo.teams;
 IF OBJECT_ID(N'dbo.users', N'U') IS NOT NULL DROP TABLE dbo.users;
@@ -202,6 +214,24 @@ CREATE TABLE dbo.team_membership_log
 CREATE NONCLUSTERED INDEX IX_team_id_membership ON dbo.team_membership_log(team_id);
 CREATE NONCLUSTERED INDEX IX_user_id_membership ON dbo.team_membership_log(user_id);
 
+CREATE TABLE dbo.teams_tabs
+(
+    id int IDENTITY(1,1) NOT NULL CONSTRAINT PK_teams_tabs PRIMARY KEY CLUSTERED,
+    graph_id nvarchar(100) NOT NULL,
+    name nvarchar(100) NULL
+);
+
+CREATE TABLE dbo.teams_channel_tabs_log
+(
+    id int IDENTITY(1,1) NOT NULL CONSTRAINT PK_teams_channel_tabs_log PRIMARY KEY CLUSTERED,
+    tab_id int NOT NULL,
+    [date] datetime NOT NULL,
+    channel_id int NOT NULL
+);
+-- Only the v1 migration's foreign-key indexes.
+CREATE NONCLUSTERED INDEX IX_tab_id ON dbo.teams_channel_tabs_log(tab_id);
+CREATE NONCLUSTERED INDEX IX_channel_id_tabs ON dbo.teams_channel_tabs_log(channel_id);
+
 -- ---------------------------------------------------------------------------------------------
 -- Seed
 -- ---------------------------------------------------------------------------------------------
@@ -307,7 +337,7 @@ SELECT
     ch.id
 FROM dbo.teams_channels AS ch CROSS JOIN d;
 
-PRINT 'Seeding reactions and membership history...';
+PRINT 'Seeding reactions, tabs and membership history...';
 
 ;WITH d AS
 (
@@ -320,16 +350,36 @@ SELECT 1 + (ch.id + d.offset) % 4, 1 + (ch.id * (d.offset + 1)) % @SyntheticUser
 FROM dbo.teams_channels AS ch CROSS JOIN d
 WHERE (ch.id + d.offset) % 3 = 0;
 
+INSERT dbo.teams_tabs (graph_id, name)
+VALUES (N'synthetic-tab-1', N'Planner'), (N'synthetic-tab-2', N'Wiki'), (N'synthetic-tab-3', N'Files'), (N'synthetic-tab-4', N'Notes');
+
+-- One pinned tab per channel, logged every day the channel is crawled, as SaveChannel does.
 ;WITH d AS
 (
-    SELECT TOP (30) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1 AS offset
-    FROM sys.all_objects a
+    SELECT TOP (@SyntheticDays) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1 AS offset
+    FROM sys.all_objects a CROSS JOIN sys.all_objects b
+)
+INSERT dbo.teams_channel_tabs_log (tab_id, [date], channel_id)
+SELECT 1 + ch.id % 4, DATEADD(DAY, -d.offset, @Anchor), ch.id
+FROM dbo.teams_channels AS ch CROSS JOIN d;
+
+-- Every member of every Team, every day: SaveMembers logs one row per member per day a Team is crawled, and the
+-- default cadence crawls every Team daily. Each roster is SyntheticMembersPerTeam people and drifts by one a month.
+;WITH d AS
+(
+    SELECT TOP (@SyntheticDays) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1 AS offset
+    FROM sys.all_objects a CROSS JOIN sys.all_objects b
+),
+m AS
+(
+    SELECT TOP (@SyntheticMembersPerTeam) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n
+    FROM sys.all_objects a CROSS JOIN sys.all_objects b
 )
 INSERT dbo.team_membership_log ([date], team_id, user_id)
-SELECT DATEADD(DAY, -(d.offset * 7), @Anchor), t.id, 1 + (t.id * (d.offset + 1) + m.n) % @SyntheticUsers
+SELECT DATEADD(DAY, -d.offset, @Anchor), t.id, 1 + (t.id * @SyntheticMembersPerTeam + m.n + d.offset / 30) % @SyntheticUsers
 FROM dbo.teams AS t
 CROSS JOIN d
-CROSS APPLY (SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5) AS m;
+CROSS JOIN m;
 
 UPDATE STATISTICS dbo.call_records WITH FULLSCAN;
 UPDATE STATISTICS dbo.call_sessions WITH FULLSCAN;
@@ -338,6 +388,7 @@ UPDATE STATISTICS dbo.teams_user_device_usage_log WITH FULLSCAN;
 UPDATE STATISTICS dbo.teams_channel_stats_log WITH FULLSCAN;
 UPDATE STATISTICS dbo.teams_user_channel_reactions WITH FULLSCAN;
 UPDATE STATISTICS dbo.team_membership_log WITH FULLSCAN;
+UPDATE STATISTICS dbo.teams_channel_tabs_log WITH FULLSCAN;
 
 SELECT
     (SELECT COUNT_BIG(*) FROM dbo.users)                          AS users,
@@ -347,6 +398,7 @@ SELECT
     (SELECT COUNT_BIG(*) FROM dbo.teams_user_device_usage_log)    AS device_usage,
     (SELECT COUNT_BIG(*) FROM dbo.teams_channel_stats_log)        AS channel_stats,
     (SELECT COUNT_BIG(*) FROM dbo.teams_user_channel_reactions)   AS reactions,
+    (SELECT COUNT_BIG(*) FROM dbo.teams_channel_tabs_log)         AS tabs,
     (SELECT COUNT_BIG(*) FROM dbo.team_membership_log)            AS membership;
 
 PRINT 'Fixture ready. Run Invoke-TeamsExplorerIndexBenchmark.ps1 to measure before/after.';

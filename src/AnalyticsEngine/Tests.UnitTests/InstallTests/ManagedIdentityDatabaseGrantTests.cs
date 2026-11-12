@@ -244,6 +244,45 @@ namespace Tests.UnitTests.InstallTests
         }
 
         /// <summary>
+        /// SqlClient reports a script cancelled in flight as a SqlException ("Operation cancelled by user"). Pressing
+        /// Cancel then is the user's cancel: it must stop the install, not be logged as a failed grant with a CREATE USER
+        /// remedy for the operator to run (#852 R11-12).
+        /// </summary>
+        [TestMethod]
+        public async Task Grant_CancelledWhileTheScriptRuns_IsNotReportedAsAFailedGrant()
+        {
+            var logger = new RecordingLogger();
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var task = new SqlIdentityAccessTask(logger, null,
+                    new StubIdentitySource { Answer = new SystemAssignedIdentityIds(ObjectId, ClientId) })
+                {
+                    CancellationToken = cancellation.Token,
+                    ScriptRunner = (connectionString, sql) =>
+                    {
+                        cancellation.Cancel();
+                        throw NewSqlException();
+                    }
+                };
+
+                Exception thrown = null;
+                try
+                {
+                    await task.GrantDatabaseAccessAsync(ConnectionString, ManagedIdentityOwner.AppService,
+                        "contosoanalytics", ObjectId, SiteId, SqlContainedUserScript.AppServiceRoles);
+                }
+                catch (Exception ex)
+                {
+                    thrown = ex;
+                }
+
+                Assert.IsNotNull(thrown, "A Cancel must stop the install rather than return a grant result.");
+                Assert.IsFalse(logger.Entries.Any(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning),
+                    string.Join(Environment.NewLine, logger.Entries.Select(e => e.Message)));
+            }
+        }
+
+        /// <summary>
         /// For a user named apart, the remedy names THAT user, with the Automation account's own client ID - not the
         /// App Service's user it was kept apart from, which running the remedy as printed would otherwise collide with.
         /// </summary>

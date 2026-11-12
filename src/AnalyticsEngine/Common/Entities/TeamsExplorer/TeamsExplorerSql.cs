@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 
 namespace Common.Entities.TeamsExplorer
 {
@@ -155,6 +156,85 @@ namespace Common.Entities.TeamsExplorer
 
         #endregion
 
+        #region Population markers
+
+        // For a reader without See PII, the usage-report figures are read over the directory population (#844, S4-1): the
+        // enabled (or unknown) directory users that reach is measured against and the Adoption breakdown is made of. A usage
+        // or device row of an account disabled since is otherwise counted in the totals, the trend, the rhythm, the
+        // lifecycle and the people per platform, but never in the breakdown - so a total less the breakdown's rows was those
+        // accounts' own activity, one person's when one account was disabled. Like the scope markers these are comments, and
+        // unless the query asks for the directory population (TeamsExplorerQuery.WithDirectoryPopulation) they are removed:
+        // a reader with See PII runs exactly the statement they always did. The predicate is EnabledUsersPredicate's.
+        //
+        // Measured at synthetic scale (200,000 people, 5% of them disabled, 20 million usage and 20 million device rows over
+        // 400 days; LocalDB, serial plans; medians of five runs): each statement reads dbo.users once more (6,076 pages, about
+        // 1.5% more logical reads) and is within noise on the 28-day window. On a 365-day window the statements that add each
+        // person's usage up first - the totals, the lifecycle, the platforms and, narrowed after that, the engagement trend -
+        // stay within 7%; the weekly trend, in OverviewTrendOverDirectory's per-person shape, takes about 1.3 s more (7.5 s to
+        // 8.8 s, where narrowing every row took 3-4 s more); and the rhythm, which still narrows every row, about 2 s more
+        // (7.8 s to 9.8 s). NOT EXISTS against the disabled accounts measured no better row by row and worse per person.
+
+        private const string PopulationMarkerOpen = "/*population:";
+        private const string PopulationMarkerClose = "*/";
+
+        /// <summary>Narrows <c>dbo.teams_user_activity_log</c>, aliased <c>t</c>, to the directory population.</summary>
+        public const string UsagePopulation =
+            "/*population: AND EXISTS (SELECT 1 FROM dbo.users AS pop WHERE pop.id = t.user_id AND (pop.account_enabled IS NULL OR pop.account_enabled = 1))*/";
+
+        /// <summary>Narrows <c>dbo.teams_user_device_usage_log</c>, aliased <c>d</c>, to the directory population.</summary>
+        public const string DevicePopulation =
+            "/*population: AND EXISTS (SELECT 1 FROM dbo.users AS pop WHERE pop.id = d.user_id AND (pop.account_enabled IS NULL OR pop.account_enabled = 1))*/";
+
+        /// <summary>A per-person row aliased <c>p</c> - usage already added up by <c>user_id</c> - is in the directory population.</summary>
+        private const string DirectoryPerson =
+            "EXISTS (SELECT 1 FROM dbo.users AS pop WHERE pop.id = p.user_id AND (pop.account_enabled IS NULL OR pop.account_enabled = 1))";
+
+        /// <summary>
+        /// Narrows a per-person row aliased <c>p</c> to the directory population, once each person's usage is added up rather
+        /// than row by row: the same people, and measurably cheaper where the rows are added up per person and week.
+        /// </summary>
+        public const string PerPersonPopulation = "/*population: AND " + DirectoryPerson + "*/";
+
+        /// <summary>
+        /// Narrows a row already joined to <c>dbo.users</c>, aliased <c>u</c>, to the directory population - the same people as
+        /// <see cref="PerPersonPopulation"/>, without reading <c>dbo.users</c> again. On <see cref="ChampionsByDepartment"/>, whose
+        /// departments add up to the Power segment the Overview and Adoption tabs publish over that population (#844, P4-1).
+        /// </summary>
+        public const string JoinedUserPopulation = "/*population: AND " + EnabledUsersPredicate + "*/";
+
+        /// <summary>
+        /// The statement read over the directory population when <paramref name="directoryPopulation"/> is true - each
+        /// population marker's text uncommented - and otherwise with the markers removed, exactly as it was written before them.
+        /// </summary>
+        public static string ApplyPopulation(string sql, bool directoryPopulation)
+        {
+            if (sql == null) throw new ArgumentNullException(nameof(sql));
+
+            var builder = new StringBuilder(sql.Length);
+            var position = 0;
+            while (true)
+            {
+                var open = sql.IndexOf(PopulationMarkerOpen, position, StringComparison.Ordinal);
+                if (open < 0) break;
+
+                var close = sql.IndexOf(PopulationMarkerClose, open + PopulationMarkerOpen.Length, StringComparison.Ordinal);
+                if (close < 0) throw new ArgumentException("A population marker is not closed.", nameof(sql));
+
+                builder.Append(sql, position, open - position);
+                if (directoryPopulation)
+                {
+                    builder.Append(sql, open + PopulationMarkerOpen.Length, close - open - PopulationMarkerOpen.Length);
+                }
+
+                position = close + PopulationMarkerClose.Length;
+            }
+
+            builder.Append(sql, position, sql.Length - position);
+            return builder.ToString();
+        }
+
+        #endregion
+
         /// <summary>Buckets a datetime column to the Monday on or before it.</summary>
         public static string WeekBucket(string column)
         {
@@ -200,7 +280,7 @@ WITH PerUser AS (
         SUM(CAST(t.video_duration_seconds AS bigint))            AS VideoSeconds,
         SUM(CAST(t.screenshare_duration_seconds AS bigint))      AS ScreenShareSeconds
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + UsagePopulation + @"
     GROUP BY t.user_id
 )
 SELECT
@@ -322,6 +402,43 @@ OPTION (RECOMPILE);";
         }
 
         /// <summary>
+        /// <see cref="OverviewTrend"/> over the directory population, for a reader without See PII (#844, S4-1): the same
+        /// weekly figures, for the people the Adoption breakdown is made of. Each person's week is added up first and only
+        /// then matched to the directory: matching every usage row instead cost 3-4 s more CPU on a 365-day window at
+        /// synthetic scale, this about 1.5 s (see the population markers' note). A reader with See PII still runs
+        /// <see cref="OverviewTrend"/>, unchanged.
+        /// </summary>
+        public static string OverviewTrendOverDirectory()
+        {
+            var week = WeekBucket("t.[date]");
+
+            return $@"
+WITH PerPersonWeek AS (
+    SELECT
+        {week} AS WeekStart,
+        t.user_id,
+        MAX(CASE WHEN {ActivitySum} > 0 THEN 1 ELSE 0 END) AS Active,
+        SUM(CAST({ChannelMessageSum} AS bigint))         AS ChannelMessages,
+        SUM(CAST(t.private_chat_count AS bigint))        AS PrivateMessages,
+        SUM(CAST(t.meetings_attended_count AS bigint))   AS MeetingsAttended
+    FROM dbo.teams_user_activity_log AS t
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
+    GROUP BY {week}, t.user_id
+)
+SELECT
+    p.WeekStart,
+    SUM(p.Active)                         AS ActiveUsers,
+    ISNULL(SUM(p.ChannelMessages), 0)     AS ChannelMessages,
+    ISNULL(SUM(p.PrivateMessages), 0)     AS PrivateMessages,
+    ISNULL(SUM(p.MeetingsAttended), 0)    AS MeetingsAttended
+FROM PerPersonWeek AS p
+WHERE {DirectoryPerson}
+GROUP BY p.WeekStart
+ORDER BY p.WeekStart
+OPTION (RECOMPILE);";
+        }
+
+        /// <summary>
         /// Weekly call counts for the Overview trend.
         /// </summary>
         /// <remarks>
@@ -389,7 +506,7 @@ OPTION (RECOMPILE);";
 WITH Daily AS (
     SELECT t.[date] AS D, COUNT(DISTINCT CASE WHEN {ActivitySum} > 0 THEN t.user_id END) AS Dau
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation}
     GROUP BY t.[date]
 )
 SELECT
@@ -397,12 +514,12 @@ SELECT
     (
         SELECT COUNT(DISTINCT t.user_id)
         FROM dbo.teams_user_activity_log AS t
-        WHERE t.[date] >= @wauFrom AND t.[date] < @usageTo{UsageScope} AND {ActivitySum} > 0
+        WHERE t.[date] >= @wauFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation} AND {ActivitySum} > 0
     ) AS WeeklyActiveUsers,
     (
         SELECT COUNT(DISTINCT t.user_id)
         FROM dbo.teams_user_activity_log AS t
-        WHERE t.[date] >= @mauFrom AND t.[date] < @usageTo{UsageScope} AND {ActivitySum} > 0
+        WHERE t.[date] >= @mauFrom AND t.[date] < @usageTo{UsageScope}{UsagePopulation} AND {ActivitySum} > 0
     ) AS MonthlyActiveUsers
 OPTION (RECOMPILE);";
         }
@@ -422,7 +539,7 @@ WITH PerUserWeek AS (
 )
 SELECT p.WeekStart, p.ActiveDays, COUNT_BIG(*) AS Users
 FROM PerUserWeek AS p
-WHERE p.ActiveDays > 0
+WHERE p.ActiveDays > 0{PerPersonPopulation}
 GROUP BY p.WeekStart, p.ActiveDays
 ORDER BY p.WeekStart, p.ActiveDays
 OPTION (RECOMPILE);";
@@ -475,7 +592,7 @@ WITH PerUser AS (
         MAX(CASE WHEN d.used_linux     = 1 THEN 1 ELSE 0 END) AS UsedLinux,
         MAX(CASE WHEN d.used_chrome_os = 1 THEN 1 ELSE 0 END) AS UsedChromeOs
     FROM dbo.teams_user_device_usage_log AS d
-    WHERE d.[date] >= @usageFrom AND d.[date] < @usageTo" + DeviceScope + @"
+    WHERE d.[date] >= @usageFrom AND d.[date] < @usageTo" + DeviceScope + DevicePopulation + @"
     GROUP BY d.user_id
 )
 SELECT
@@ -499,7 +616,7 @@ WITH PerUser AS (
         MAX(CASE WHEN t.[date] <  @midpoint AND " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS FirstHalf,
         MAX(CASE WHEN t.[date] >= @midpoint AND " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS SecondHalf
     FROM dbo.teams_user_activity_log AS t
-    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + @"
+    WHERE t.[date] >= @usageFrom AND t.[date] < @usageTo" + UsageScope + UsagePopulation + @"
     GROUP BY t.user_id
 )
 SELECT
@@ -665,9 +782,12 @@ ORDER BY DayOfWeek, [Hour]
 OPTION (RECOMPILE);";
         }
 
-        /// <summary>Which modalities calls actually used - is video and sharing being exploited at all?</summary>
+        /// <summary>
+        /// Which modalities calls actually used - is video and sharing being exploited at all? - and how many people used
+        /// each, so a modality only a few people used can be folded for a reader without See PII (#844).
+        /// </summary>
         public const string CallModalities = @"
-SELECT m.[name] AS Name, COUNT_BIG(DISTINCT l.call_session_id) AS [Count]
+SELECT m.[name] AS Name, COUNT_BIG(DISTINCT l.call_session_id) AS [Count], COUNT(DISTINCT s.attendee_user_id) AS People
 FROM dbo.call_session_call_modalities AS l
 INNER JOIN dbo.call_modalities AS m ON m.id = l.call_modality_id
 INNER JOIN dbo.call_sessions AS s ON s.id = l.call_session_id
@@ -763,6 +883,66 @@ SELECT
 OPTION (RECOMPILE);" + TenantWide;
 
         /// <summary>
+        /// The days of membership snapshots, ending with the report window's last day, in which <see cref="LatestTeamMembers"/>
+        /// looks for each team's latest one. See its remarks for why seven.
+        /// </summary>
+        public const int LatestMembershipHorizonDays = 7;
+
+        /// <summary>
+        /// Each team's members at its most recent membership snapshot in the <see cref="LatestMembershipHorizonDays"/> days that
+        /// end with the report window, as the CTEs <c>LatestMembership</c> and <c>Members</c> (one row per team with a snapshot
+        /// in them: <c>team_id</c>, <c>Members</c>), for a statement's <c>WITH</c> list. The people a team's or channel's
+        /// figures describe, for the floor a reader without See PII is held to (#844). Never sent to any reader.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>The latest snapshot, as <see cref="TeamLeaderboard"/> counts.</b> <c>team_membership_log</c> is an append-only
+        /// history, so counting all of it would count everyone who has ever been a member.
+        /// </para>
+        /// <para>
+        /// <b>Bounded, unlike <see cref="TeamLeaderboard"/>.</b> <c>SqlTeamsPersistenceStore.SaveMembers</c> writes one row per
+        /// member per day a Team is crawled, so the table grows by about the tenant's number of Team memberships every day.
+        /// Unbounded, finding each team's latest date read the whole history, in each of the three statements that use this, on
+        /// every uncached request. The range below seeks <c>IX_team_membership_log_date</c> (<c>[date]</c> INCLUDE
+        /// <c>team_id</c>, <c>user_id</c>) over seven days, whatever the window's length and however long the history.
+        /// Measured by <c>Benchmarks/Invoke-TeamsExplorerIndexBenchmark.ps1 -Compare MembershipHorizon</c> at 1:100 of the
+        /// 200,000-user design point (20,000 memberships a day, 400 days): reads of <c>team_membership_log</c> per statement fell
+        /// from 36,748-59,913 pages (10-18 million index rows: a seek per team that reads every team's rows for its latest day,
+        /// and sometimes a scan of the whole index) to 391 (one seek of the last days' 120,000 rows), and each statement got
+        /// faster at both 28 and 365 days (332-1,600 ms to 116-524 ms).
+        /// </para>
+        /// <para>
+        /// <b>Why seven days.</b> Every Teams crawl logs the membership of every Team it crawls (<c>O365Team.SaveToSQL</c>), and
+        /// the crawl runs every <c>GraphTeamsImportIntervalHours</c>: 24 hours under the Balanced and Gentle presets, every
+        /// cycle under High. A Team that fails is retried at the next run. So a Team's latest snapshot is normally a day or two
+        /// old, and seven days allows for most of a week of failed crawls or a stopped importer.
+        /// </para>
+        /// <para>
+        /// <b>Fail safe.</b> A team with no snapshot in those days has no row here, so it counts as fewer members than the
+        /// floor and a reader without See PII is not shown its channels or sentiment - nothing read says who its members are
+        /// now. A reader with See PII is shown the same rows either way.
+        /// </para>
+        /// <para>
+        /// The <c>7</c> below is <see cref="LatestMembershipHorizonDays"/>, written out because a constant string cannot be
+        /// built from an integer; <c>TeamsExplorerMembershipHorizonSqlIntegrationTests</c> pins both sides of the boundary.
+        /// The range is repeated in <c>Members</c> so that it seeks the same days too.
+        /// </para>
+        /// </remarks>
+        public const string LatestTeamMembers = @"LatestMembership AS (
+    SELECT m.team_id, MAX(m.[date]) AS LatestDate
+    FROM dbo.team_membership_log AS m
+    WHERE m.[date] >= DATEADD(DAY, -7, @to) AND m.[date] < @to
+    GROUP BY m.team_id
+),
+Members AS (
+    SELECT m.team_id, COUNT(DISTINCT m.user_id) AS Members
+    FROM dbo.team_membership_log AS m
+    INNER JOIN LatestMembership AS l ON l.team_id = m.team_id AND l.LatestDate = m.[date]
+    WHERE m.[date] >= DATEADD(DAY, -7, @to) AND m.[date] < @to
+    GROUP BY m.team_id
+)";
+
+        /// <summary>
         /// The team leaderboard. Membership is taken from the most recent membership log date per team
         /// rather than from every row, because <c>team_membership_log</c> is an append-only history and
         /// counting all of it would count everyone who has ever been a member.
@@ -796,7 +976,7 @@ Stats AS (
     GROUP BY ch.team_id
 ),
 Reactions AS (
-    SELECT ch.team_id, COUNT_BIG(*) AS Reactions
+    SELECT ch.team_id, COUNT_BIG(*) AS Reactions, COUNT(DISTINCT r.user_id) AS ReactingUsers
     FROM dbo.teams_user_channel_reactions AS r
     INNER JOIN dbo.teams_channels AS ch ON ch.id = r.channel_id
     WHERE r.[date] >= @from AND r.[date] < @to
@@ -818,6 +998,7 @@ SELECT TOP (@top)
     ISNULL(tab.Tabs, 0)                             AS Tabs,
     ISNULL(st.Messages, 0)                          AS Messages,
     ISNULL(re.Reactions, 0)                         AS Reactions,
+    ISNULL(re.ReactingUsers, 0)                     AS ReactingUsers,
     CASE WHEN ISNULL(st.ScoredMessages, 0) > 0
          THEN st.SentimentWeight / st.ScoredMessages END AS Sentiment,
     ISNULL(st.MessageDays, 0)                       AS ActiveDays,
@@ -839,7 +1020,8 @@ OPTION (RECOMPILE);" + TenantWide;
         /// counts are what the schema can actually support.
         /// </remarks>
         public const string ChannelLeaderboard = @"
-WITH Stats AS (
+WITH " + LatestTeamMembers + @",
+Stats AS (
     SELECT s.channel_id,
            SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)) AS Messages,
            SUM(CASE WHEN ISNULL(s.chats_count, 0) > 0 THEN 1 ELSE 0 END) AS MessageDays,
@@ -875,9 +1057,11 @@ SELECT TOP (@top)
     ISNULL(re.ReactingUsers, 0) AS ReactingUsers,
     CASE WHEN ISNULL(st.ScoredMessages, 0) > 0
          THEN st.SentimentWeight / st.ScoredMessages END AS Sentiment,
-    ISNULL(st.MessageDays, 0)   AS ActiveDays
+    ISNULL(st.MessageDays, 0)   AS ActiveDays,
+    ISNULL(mem.Members, 0)      AS TeamMembers
 FROM dbo.teams_channels AS ch
 INNER JOIN dbo.teams AS t ON t.id = ch.team_id
+LEFT JOIN Members   AS mem ON mem.team_id = ch.team_id
 LEFT JOIN Stats     AS st  ON st.channel_id = ch.id
 LEFT JOIN Reactions AS re  ON re.channel_id = ch.id
 LEFT JOIN Tabs      AS tab ON tab.channel_id = ch.id
@@ -911,9 +1095,12 @@ WHERE t.has_refresh_token = 1
 ORDER BY [Count] DESC, t.[name]
 OPTION (RECOMPILE);" + TenantWide;
 
-        /// <summary>Which reactions people use - a cheap but genuine engagement signal.</summary>
+        /// <summary>
+        /// Which reactions people use - a cheap but genuine engagement signal - and how many people used each, so a reaction
+        /// only a few people use can be folded for a reader without See PII (#844).
+        /// </summary>
         public const string ReactionMix = @"
-SELECT ISNULL(rt.[name], N'(unknown)') AS Name, COUNT_BIG(*) AS [Count]
+SELECT ISNULL(rt.[name], N'(unknown)') AS Name, COUNT_BIG(*) AS [Count], COUNT(DISTINCT r.user_id) AS People
 FROM dbo.teams_user_channel_reactions AS r
 LEFT JOIN dbo.teams_reaction_types AS rt ON rt.id = r.reaction_id
 WHERE r.[date] >= @from AND r.[date] < @to
@@ -994,16 +1181,23 @@ ORDER BY WeekStart
 OPTION (RECOMPILE);{TenantWide}";
         }
 
-        /// <summary>Sentiment per team, weighted by message count.</summary>
+        /// <summary>
+        /// Sentiment per team, weighted by message count, with the team's members: the people the row describes, for the
+        /// floor a reader without See PII is held to (#844). Teams that share a name are one row, so their largest
+        /// membership is the people it describes at least.
+        /// </summary>
         public const string SentimentByTeam = @"
+WITH " + LatestTeamMembers + @"
 SELECT TOP (@top)
     t.[name] AS Name,
     SUM(s.sentiment_score * ISNULL(s.chats_count, 0))
         / NULLIF(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0) AS Sentiment,
-    ISNULL(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0)       AS Messages
+    ISNULL(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0)       AS Messages,
+    ISNULL(MAX(mem.Members), 0)                                    AS Members
 FROM dbo.teams_channel_stats_log AS s
 INNER JOIN dbo.teams_channels AS ch ON ch.id = s.channel_id
 INNER JOIN dbo.teams AS t ON t.id = ch.team_id
+LEFT JOIN Members AS mem ON mem.team_id = t.id
 WHERE s.[date] >= @from AND s.[date] < @to
   AND s.sentiment_score IS NOT NULL
   AND ISNULL(s.chats_count, 0) > 0
@@ -1011,16 +1205,19 @@ GROUP BY t.[name]
 ORDER BY Messages DESC
 OPTION (RECOMPILE);" + TenantWide;
 
-        /// <summary>Sentiment per channel, weighted by message count.</summary>
+        /// <summary>Sentiment per channel, weighted by message count, with its team's members (see <see cref="SentimentByTeam"/>).</summary>
         public const string SentimentByChannel = @"
+WITH " + LatestTeamMembers + @"
 SELECT TOP (@top)
     t.[name] + N' / ' + ch.[name] AS Name,
     SUM(s.sentiment_score * ISNULL(s.chats_count, 0))
         / NULLIF(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0) AS Sentiment,
-    ISNULL(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0)       AS Messages
+    ISNULL(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0)       AS Messages,
+    ISNULL(MAX(mem.Members), 0)                                    AS Members
 FROM dbo.teams_channel_stats_log AS s
 INNER JOIN dbo.teams_channels AS ch ON ch.id = s.channel_id
 INNER JOIN dbo.teams AS t ON t.id = ch.team_id
+LEFT JOIN Members AS mem ON mem.team_id = t.id
 WHERE s.[date] >= @from AND s.[date] < @to
   AND s.sentiment_score IS NOT NULL
   AND ISNULL(s.chats_count, 0) > 0
@@ -1135,7 +1332,11 @@ WHERE " + EnabledUsersPredicate + DirectoryScope + @"
 ORDER BY p.LastActivity, u.user_name
 OPTION (RECOMPILE);";
 
-        /// <summary>Where the champions are - the departments already carrying Teams adoption.</summary>
+        /// <summary>
+        /// Where the champions are - the departments already carrying Teams adoption. For a reader without See PII, every
+        /// department, over the directory population (<see cref="JoinedUserPopulation"/>), since they add up to the Power segment
+        /// published beside them and are folded before any cut (<c>TeamsPeople.WithoutIndividualData</c>).
+        /// </summary>
         public const string ChampionsByDepartment = @"
 WITH PerUser AS (
     SELECT t.user_id, SUM(CASE WHEN " + ActivitySum + @" > 0 THEN 1 ELSE 0 END) AS ActiveDays
@@ -1147,7 +1348,7 @@ SELECT TOP (@top) ISNULL(dep.[name], N'(not set)') AS Name, COUNT_BIG(*) AS [Cou
 FROM PerUser AS p
 INNER JOIN dbo.users AS u ON u.id = p.user_id
 LEFT JOIN dbo.user_departments AS dep ON dep.id = u.department_id
-WHERE p.ActiveDays >= @championDays
+WHERE p.ActiveDays >= @championDays" + JoinedUserPopulation + @"
 GROUP BY ISNULL(dep.[name], N'(not set)')
 ORDER BY [Count] DESC
 OPTION (RECOMPILE);";

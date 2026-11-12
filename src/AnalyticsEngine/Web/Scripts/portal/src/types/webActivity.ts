@@ -35,10 +35,22 @@ export interface WebActivityWindow {
   minimumPagesForDecile: number;
 }
 
-/** A verdict on one headline figure. */
+/**
+ * A verdict on one headline figure.
+ *
+ * The portal words it from `headlineKey`/`detailKey` and the unformatted `values`, so the sentence
+ * and its numbers follow the reader's language. `headline`/`detail` are the server's English, shown
+ * only for a key this build does not recognise.
+ */
 export interface WebActivityJudgement {
   key: string;
   tone: 'good' | 'neutral' | 'warning' | 'critical';
+  /** `{key}.headline` or `{key}.headline.{variant}`; absent from a server older than this build. */
+  headlineKey?: string;
+  /** `{key}.detail` or `{key}.detail.{variant}`; absent from a server older than this build. */
+  detailKey?: string;
+  /** The figures the sentences quote, by placeholder name. */
+  values?: Record<string, number | string>;
   headline: string;
   detail: string;
 }
@@ -138,6 +150,12 @@ export interface WebActivityOverview extends WebActivitySection {
   heatmap: WebActivityHeatCell[];
   topSites: WebActivityNamedCount[];
   judgements: WebActivityJudgement[];
+  /** For a reader without See PII, the fewest people a row may describe; null (or absent) when nothing is held back. */
+  minimumGroupSize?: number | null;
+  /** Sites left out of `topSites` for a reader without See PII. */
+  withheldSites?: number;
+  /** Engagement segments left out of `visitorSegments` for a reader without See PII. */
+  withheldSegments?: number;
 }
 
 export interface WebActivityVisitKpis {
@@ -162,6 +180,12 @@ export interface WebActivityVisits extends WebActivitySection {
   byPeriodOfDay: WebActivityBucket[];
   byHour: WebActivityBucket[];
   siteOverTime: WebActivityStackPoint[];
+  minimumGroupSize?: number | null;
+  withheldSites?: number;
+  withheldDevices?: number;
+  withheldBrowsers?: number;
+  /** Pages left out of `byPage` for a reader without See PII. */
+  withheldPages?: number;
 }
 
 /** A page and everything the report knows about how it performed. */
@@ -170,6 +194,10 @@ export interface WebActivityPageRow {
   url: string;
   site: string | null;
   pageViews: number;
+  /**
+   * With the four endpoint figures below, the figures counted in visits. Absent from a Pages-tab row sent to a reader
+   * without See PII (`WebActivityPages.visitFiguresWithheld`), whose tables then do not show those columns.
+   */
   uniquePageViews: number;
   visitors: number;
   averageSecondsOnPage: number | null;
@@ -210,6 +238,19 @@ export interface WebActivityPages extends WebActivitySection {
   quietPages: WebActivityPageRow[];
   bySite: WebActivitySiteRow[];
   periodOverTime: WebActivityStackPoint[];
+  minimumGroupSize?: number | null;
+  withheldSites?: number;
+  /** Pages left out of `topPages`, `slowestPages` and `quietPages` for a reader without See PII. */
+  withheldTopPages?: number;
+  withheldSlowestPages?: number;
+  /** Every quiet page has fewer people than the minimum, so for that reader every row is left out. */
+  withheldQuietPages?: number;
+  /**
+   * For a reader without See PII: no page row on this tab carries a figure counted in visits - `uniquePageViews`, `entries`,
+   * `exits`, `bounces` or `bouncePct`. The server omits them, because they are the Visits tab's visits by page and the
+   * Journeys tab's entries, exits and bounces, which those tabs floor on their own. Absent for a See PII reader.
+   */
+  visitFiguresWithheld?: boolean;
 }
 
 export interface WebActivityTransitionRow {
@@ -244,6 +285,8 @@ export interface WebActivityJourneyKpis {
   medianPagesPerVisit: number;
   /** Null when no visit reported a dwell time - not a zero-second visit. */
   averageVisitSeconds: number | null;
+  /** The visits the average is over: those in which at least one page reported a dwell time. */
+  measuredVisits: number;
   clicks: number;
 }
 
@@ -258,6 +301,14 @@ export interface WebActivityJourneys extends WebActivitySection {
   flowsCoveragePct: number;
   depth: WebActivityBucket[];
   clickedElements: WebActivityNamedCount[];
+  minimumGroupSize?: number | null;
+  /** Rows left out of each list for a reader without See PII. */
+  withheldEntryPages?: number;
+  withheldExitPages?: number;
+  withheldBouncePages?: number;
+  withheldTransitions?: number;
+  withheldFlows?: number;
+  withheldClickedElements?: number;
 }
 
 export interface WebActivityGeographyKpis {
@@ -292,6 +343,10 @@ export interface WebActivityGeography extends WebActivitySection {
   cities: WebActivityPlaceRow[];
   provinces: WebActivityPlaceRow[];
   countryOverTime: WebActivityStackPoint[];
+  minimumGroupSize?: number | null;
+  withheldCountries?: number;
+  withheldCities?: number;
+  withheldProvinces?: number;
 }
 
 export interface WebActivitySearchKpis {
@@ -324,6 +379,11 @@ export interface WebActivitySearch extends WebActivitySection {
   byDay: WebActivityBucket[];
   byPeriodOfDay: WebActivityBucket[];
   bySite: WebActivityNamedCount[];
+  minimumGroupSize?: number | null;
+  /** For a reader without See PII, the search and dead-end terms are empty: they are text people typed. */
+  termsWithheld?: boolean;
+  /** For a reader without See PII, `bySite` is empty: nothing counts the people who searched on a site. */
+  sitesWithheld?: boolean;
 }
 
 export interface WebActivityTechnologyKpis {
@@ -373,6 +433,11 @@ export interface WebActivityTechnology extends WebActivitySection {
   devices: WebActivityPlatformRow[];
   deviceOverTime: WebActivityStackPoint[];
   detail: WebActivityTechnologyDetailRow[];
+  minimumGroupSize?: number | null;
+  withheldBrowsers?: number;
+  withheldOperatingSystems?: number;
+  withheldDevices?: number;
+  withheldDetailRows?: number;
 }
 
 /** The CSV exports the API offers. Must match `WebActivityExports.Sections` on the server. */

@@ -66,7 +66,10 @@ export type ReportChartType = 'timeseries' | 'bar' | 'wordcloud' | 'matrix';
 export interface ReportMatrixCell {
   row: string;
   column: string;
-  value: number;
+  /** Null when `withheld`. */
+  value: number | null;
+  /** For a reader without See PII: one to four people are behind the cell, so it is withheld - never shown as zero. */
+  withheld?: boolean;
 }
 
 /**
@@ -109,7 +112,19 @@ export interface ReportChart {
   /** For `errorKey` `queryFailed`: the error reference the server log carries. */
   errorReference?: string | null;
   warning: string | null;
+  /**
+   * Which sentence a `seriesWarnings`-based warning is: `seriesUnavailable`, `incompleteWeeks` (every
+   * series is charted, some weeks are missing a day of reports) or `seriesUnavailableAndIncompleteWeeks`.
+   */
+  warningKey?: string | null;
   seriesWarnings?: ReportSeriesWarning[] | null;
+  /**
+   * For a reader without See PII, the fewest people a bar, word, or matrix column and cell describes; absent when nothing
+   * is held back for the reader.
+   */
+  minimumGroupSize?: number | null;
+  /** Bars or words (for a matrix, columns) left out for a reader without See PII. Absent when none were. */
+  withheldItems?: number;
 }
 
 /** The set of charts for one report area over the requested window. */

@@ -1,10 +1,19 @@
 ﻿import { translateActive } from '../i18n/runtime';
 import type { TranslationKey } from '../i18n/catalog';
-import { apiFetch } from './http';
+import type { TranslationValues } from '../i18n/translate';
+import {
+  apiFetch,
+  PortalPermissionError,
+  REPORT_SCOPE_ERROR_KEYS,
+  ReportScopeError,
+  SessionExpiredError,
+  UnexpectedServerError,
+} from './http';
 import type {
   AdoptionFilterOptions,
   CopilotAdoptionAvailability,
   CopilotAdoptionSummary,
+  AdoptionProgress,
   CoworkFilters,
   CoworkReadinessPage,
   LicenceOpportunityPage,
@@ -35,6 +44,89 @@ const DEFAULT_RETRY_SECONDS = 5;
  */
 const POLL_CEILING_MS = 10 * 60 * 1000;
 
+export interface AdoptionLoadOptions {
+  onProgress?: (progress: AdoptionProgress) => void;
+  after?: string;
+  generationId?: string;
+}
+
+/** The catalog key, and its values, that a failure is worded from. */
+export interface AdoptionWording {
+  key: TranslationKey;
+  values?: TranslationValues;
+}
+
+/**
+ * A failure as a page keeps it in state: its wording, or the text of an error the portal did not word
+ * (the browser's own network error). Never the translated sentence - that stays in the language the
+ * request failed in, and a reader who then switches language would read it in the old one.
+ */
+export type AdoptionFailure = AdoptionWording | { text: string };
+
+export class AdoptionRequestError extends Error {
+  /** What the message was worded from, so it can be worded again in the language being read. */
+  readonly wording?: AdoptionWording;
+
+  constructor(message: string | AdoptionWording, readonly status?: number, readonly retryAfterSeconds = 0) {
+    super(typeof message === 'string' ? message : translateActive(message.key, message.values));
+    this.name = 'AdoptionRequestError';
+    if (typeof message !== 'string') this.wording = message;
+  }
+}
+
+const GENERATION_CHANGED: AdoptionWording = { key: 'copilotAdoption.error.generationChanged' };
+
+export class AdoptionGenerationChangedError extends Error {
+  readonly wording = GENERATION_CHANGED;
+
+  constructor() {
+    super(translateActive(GENERATION_CHANGED.key));
+    this.name = 'AdoptionGenerationChangedError';
+  }
+}
+
+/**
+ * What a page keeps when a Copilot Adoption request fails.
+ *
+ * Every error the portal words itself is kept as its catalog key: this module's own, and those
+ * `apiFetch` throws for an expired session, a missing permission, a report filter that cannot be
+ * applied and a server fault. Anything else that is an `Error` keeps its own text; anything that is
+ * not gets `fallbackKey`.
+ */
+export function adoptionFailure(error: unknown, fallbackKey: TranslationKey): AdoptionFailure {
+  if ((error instanceof AdoptionRequestError || error instanceof AdoptionGenerationChangedError) && error.wording) {
+    return error.wording;
+  }
+  if (error instanceof SessionExpiredError) return { key: 'errors.http.sessionExpired' };
+  if (error instanceof PortalPermissionError) {
+    return {
+      key: error.permission === 'administration'
+        ? 'access.permissionRequired.administration'
+        : 'access.permissionRequired.seePii',
+    };
+  }
+  if (error instanceof ReportScopeError) {
+    const key = REPORT_SCOPE_ERROR_KEYS.get(error.code);
+    if (key) return { key };
+  }
+  if (error instanceof UnexpectedServerError) return { key: 'errors.http.unexpected', values: { errorId: error.errorId } };
+  if (error instanceof Error && error.message) return { text: error.message };
+  return { key: fallbackKey };
+}
+
+/** A kept failure, in the language the reader is reading now. */
+export function adoptionFailureText(
+  t: (key: TranslationKey, values?: TranslationValues) => string,
+  failure: AdoptionFailure,
+): string {
+  return 'key' in failure ? t(failure.key, failure.values) : failure.text;
+}
+
+export function canRetryAdoptionRequest(error: unknown): boolean {
+  if (error instanceof PortalPermissionError || error instanceof SessionExpiredError || error instanceof ReportScopeError) return false;
+  return !(error instanceof AdoptionRequestError) || error.status === undefined || error.status === 429 || error.status >= 500;
+}
+
 const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
   new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -55,7 +147,9 @@ const delay = (ms: number, signal?: AbortSignal): Promise<void> =>
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 
-async function getJson<T>(path: string, failureKey: TranslationKey, signal?: AbortSignal): Promise<T> {
+async function getJson<T>(
+  path: string, failureKey: TranslationKey, signal?: AbortSignal, options?: AdoptionLoadOptions,
+): Promise<T> {
   const giveUpAt = Date.now() + POLL_CEILING_MS;
 
   // The server names the analysis run each 202 is waiting on. Quoted in the give-up message, it lets a
@@ -76,15 +170,17 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
       const body = (await response.json().catch(() => null)) as {
         retryAfterSeconds?: number;
         runId?: string;
+        progress?: AdoptionProgress;
       } | null;
       if (typeof body?.runId === 'string' && body.runId.length > 0) runId = body.runId;
+      if (body?.progress) options?.onProgress?.(body.progress);
       const waitMs = (body?.retryAfterSeconds ?? DEFAULT_RETRY_SECONDS) * 1000;
 
       if (Date.now() + waitMs >= giveUpAt) {
-        throw new Error(
+        throw new AdoptionRequestError(
           runId
-            ? translateActive('errors.copilotAdoption.analysisStillRunningWithReference', { runId })
-            : translateActive('errors.copilotAdoption.analysisStillRunning'),
+            ? { key: 'errors.copilotAdoption.analysisStillRunningWithReference', values: { runId } }
+            : { key: 'errors.copilotAdoption.analysisStillRunning' },
         );
       }
 
@@ -95,13 +191,20 @@ async function getJson<T>(path: string, failureKey: TranslationKey, signal?: Abo
     }
 
     if (!response.ok) {
-      const body = (await response.clone().json().catch(() => null)) as { code?: unknown } | null;
+      const body = (await response.clone().json().catch(() => null)) as { code?: unknown; retryAfterSeconds?: number } | null;
       if (typeof body?.code === 'string' && body.code.startsWith('copilotAdoption.error.')) {
-        throw new Error(translateActive(body.code as TranslationKey));
+        throw new AdoptionRequestError({ key: body.code as TranslationKey }, response.status, body.retryAfterSeconds);
       }
-      throw new Error(translateActive(failureKey, { status: response.status }));
+      throw new AdoptionRequestError({ key: failureKey, values: { status: response.status } }, response.status);
     }
 
+    const generationId = response.headers.get('X-CopilotAdoption-GenerationId');
+    if (options?.generationId && generationId && generationId !== options.generationId)
+      throw new AdoptionGenerationChangedError();
+    // Asked for the replacement of `after`, and handed `after` itself: the replacement ended without being published
+    // and the server kept the previous report, as it does once a replacement is no longer running.
+    if (options?.after && generationId === options.after)
+      throw new AdoptionRequestError({ key: 'copilotAdoption.error.rebuildNotCompleted' });
     return response.json() as Promise<T>;
   }
 }
@@ -156,8 +259,8 @@ function applyCoworkFilters(params: URLSearchParams, filters: CoworkFilters): UR
   return params;
 }
 
-export function fetchAdoptionAvailability(): Promise<CopilotAdoptionAvailability> {
-  return getJson<CopilotAdoptionAvailability>('/availability', 'errors.copilotAdoption.availabilityFailed');
+export function fetchAdoptionAvailability(signal?: AbortSignal): Promise<CopilotAdoptionAvailability> {
+  return getJson<CopilotAdoptionAvailability>('/availability', 'errors.copilotAdoption.availabilityFailed', signal);
 }
 
 /**
@@ -174,14 +277,18 @@ export function fetchAdoptionSummary(
   emailDomain?: string | null,
   userFilter?: string | null,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<CopilotAdoptionSummary> {
   const params = scopeParams(windowDays, seatLicenceTypeIds, dateRange);
   if (emailDomain) params.set('emailDomain', emailDomain);
   if (userFilter) params.set('userFilter', userFilter);
+  if (options?.onProgress) params.set('includeProgress', 'true');
+  if (options?.after) params.set('after', options.after);
   return getJson<CopilotAdoptionSummary>(
     `/summary?${params}`,
     'errors.copilotAdoption.summaryFailed',
     signal,
+    options,
   );
 }
 
@@ -197,11 +304,13 @@ export function fetchAdoptionFilters(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<AdoptionFilterOptions> {
   return getJson<AdoptionFilterOptions>(
     `/filters?${scopeParams(windowDays, seatLicenceTypeIds, dateRange)}`,
     'errors.copilotAdoption.filtersFailed',
     signal,
+    options,
   );
 }
 
@@ -213,12 +322,13 @@ export function fetchLicensedUsers(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<LicensedUserPage> {
   const params = applyLicensedUserFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<LicensedUserPage>(`/licensed-users?${params}`, 'errors.copilotAdoption.licensedUsersFailed', signal);
+  return getJson<LicensedUserPage>(`/licensed-users?${params}`, 'errors.copilotAdoption.licensedUsersFailed', signal, options);
 }
 
 export function fetchOpportunities(
@@ -229,12 +339,13 @@ export function fetchOpportunities(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<LicenceOpportunityPage> {
   const params = applyOpportunityFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<LicenceOpportunityPage>(`/opportunities?${params}`, 'errors.copilotAdoption.opportunitiesFailed', signal);
+  return getJson<LicenceOpportunityPage>(`/opportunities?${params}`, 'errors.copilotAdoption.opportunitiesFailed', signal, options);
 }
 
 export function fetchCowork(
@@ -245,12 +356,13 @@ export function fetchCowork(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<CoworkReadinessPage> {
   const params = applyCoworkFilters(scopeParams(windowDays, seatLicenceTypeIds, dateRange), filters);
   params.set('skip', String(skip));
   params.set('take', String(take));
 
-  return getJson<CoworkReadinessPage>(`/cowork?${params}`, 'errors.copilotAdoption.coworkFailed', signal);
+  return getJson<CoworkReadinessPage>(`/cowork?${params}`, 'errors.copilotAdoption.coworkFailed', signal, options);
 }
 
 export function fetchAdoptionSql(
@@ -258,12 +370,39 @@ export function fetchAdoptionSql(
   seatLicenceTypeIds?: number[],
   signal?: AbortSignal,
   dateRange?: DateRange | null,
+  options?: AdoptionLoadOptions,
 ): Promise<Record<string, string>> {
   return getJson<Record<string, string>>(
     `/sql?${scopeParams(windowDays, seatLicenceTypeIds, dateRange)}`,
     'errors.copilotAdoption.queriesFailed',
     signal,
+    options,
   );
+}
+
+export async function rebuildAdoption(
+  windowDays: number, expectedGenerationId: string, signal?: AbortSignal,
+  userFilter?: string | null, dateRange?: DateRange | null,
+): Promise<{ generationId: string; progress?: AdoptionProgress }> {
+  const params = scopeParams(windowDays, undefined, dateRange);
+  if (userFilter) params.set('userFilter', userFilter);
+  const response = await apiFetch(`${baseUrl()}/rebuild?${params}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expectedGenerationId }),
+    signal,
+  });
+  const body = await response.json().catch(() => null) as {
+    generationId: string; progress?: AdoptionProgress; code?: string; retryAfterSeconds?: number;
+  } | null;
+  if (!response.ok) {
+    const key = typeof body?.code === 'string' && body.code.startsWith('copilotAdoption.error.')
+      ? body.code as TranslationKey : 'copilotAdoption.error.rebuildFailed';
+    throw new AdoptionRequestError({ key }, response.status, body?.retryAfterSeconds);
+  }
+  if (!body || typeof body.generationId !== 'string')
+    throw new AdoptionRequestError({ key: 'copilotAdoption.error.rebuildFailed' });
+  return body;
 }
 
 /**

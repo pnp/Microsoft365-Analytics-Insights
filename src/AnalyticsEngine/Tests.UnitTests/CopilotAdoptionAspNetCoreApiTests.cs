@@ -14,6 +14,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -156,6 +157,127 @@ namespace Tests.UnitTests
             return analysis;
         }
 
+        /// <summary>
+        /// Stable build 1860 (#858, #889) through the ASP.NET Core host. A report whose optional step failed can be rebuilt with
+        /// <c>POST rebuild</c>, whose token is bound from the JSON body - <c>[FromBody]</c> here, Web API 2's default there - so
+        /// a token that is not one, or no body at all, is a 400. A replacement that ends without publishing is the 503 with its
+        /// stable code, and asking again inside the cooldown is the 429 with <c>Retry-After</c>: both carried to the reply by
+        /// <c>[ApiReplyExceptionFilter]</c>, as Web API 2's <c>HttpResponseException</c> carried them. Every 200 names the
+        /// generation it came from in <c>X-CopilotAdoption-GenerationId</c>, which is how the portal tells a mixed generation.
+        /// </summary>
+        [TestMethod]
+        public async Task Rebuild_OverHttp_AnUnpublishedReplacementIs503_ThenTheCooldownIs429WithRetryAfter()
+        {
+            var previous = MinimalAnalysis("00000000000000000000000000000051");
+            previous.Summary.Diagnostics.Record(CopilotAdoptionSteps.ResourceTypes, 90_000, true);
+            var worse = MinimalAnalysis("00000000000000000000000000000052");
+            worse.Summary.Diagnostics.Record(CopilotAdoptionSteps.ResourceTypes, 90_000, true);
+            worse.Summary.MarkFiguresIncomplete("synthetic headline input");
+            var runner = new SequencedAnalysisRunner(Task.FromResult(previous), Task.FromResult(worse));
+            var coordinator = new AdoptionCoordinator(
+                runner, new DictionaryAnalysisCache(), (windowDays, hasOverride) => NullAnalysisTelemetry.Instance, TimeSpan.FromMinutes(10));
+
+            await using (var app = await StartControllerHost(coordinator))
+            using (var client = app.GetTestClient())
+            {
+                string generation;
+                using (var summary = await client.GetAsync("/api/CopilotAdoption/summary?windowDays=28"))
+                {
+                    Assert.AreEqual(HttpStatusCode.OK, summary.StatusCode, await summary.Content.ReadAsStringAsync());
+                    Assert.IsTrue(summary.Headers.TryGetValues(CopilotAdoptionAPIController.GenerationIdHeader, out var generations),
+                        "A 200 must name the generation it came from.");
+                    generation = generations.Single();
+                    Assert.AreEqual(previous.Summary.Diagnostics.GenerationId, generation);
+                }
+
+                using (var invalid = await PostRebuild(client, "{\"expectedGenerationId\":\"not-a-generation\"}"))
+                    Assert.AreEqual(HttpStatusCode.BadRequest, invalid.StatusCode, "A token that is not a generation id.");
+                using (var empty = await PostRebuild(client, string.Empty))
+                    Assert.AreEqual(HttpStatusCode.BadRequest, empty.StatusCode, "No body binds to null, which is a 400 - not a model-binding error.");
+                Assert.AreEqual(1, runner.CallCount, "A refused rebuild starts nothing.");
+
+                using (var failed = await PostRebuild(client, "{\"expectedGenerationId\":\"" + generation + "\"}"))
+                {
+                    var text = await failed.Content.ReadAsStringAsync();
+                    Assert.AreEqual(HttpStatusCode.ServiceUnavailable, failed.StatusCode, text);
+                    Assert.AreEqual("copilotAdoption.error.rebuildNotCompleted", (string)JObject.Parse(text)["code"]);
+                    Assert.IsTrue(failed.Headers.CacheControl?.NoStore == true, "A refusal is never cached.");
+                }
+
+                using (var cooling = await PostRebuild(client, "{\"expectedGenerationId\":\"" + generation + "\"}"))
+                {
+                    var text = await cooling.Content.ReadAsStringAsync();
+                    Assert.AreEqual((HttpStatusCode)429, cooling.StatusCode, text);
+                    var body = JObject.Parse(text);
+                    Assert.AreEqual("copilotAdoption.error.rebuildCooldown", (string)body["code"]);
+                    var seconds = (int)body["retryAfterSeconds"];
+                    Assert.IsTrue(seconds > 0 && seconds <= 60, "Inside the one-minute cooldown: " + seconds);
+                    Assert.AreEqual(TimeSpan.FromSeconds(seconds), cooling.Headers.RetryAfter?.Delta,
+                        "The Retry-After header set before the reply was thrown must survive the exception filter.");
+                }
+
+                Assert.AreEqual(2, runner.CallCount, "The cooldown starts no third run.");
+
+                // The kept report is still served, still naming its own generation.
+                using (var kept = await client.GetAsync("/api/CopilotAdoption/summary?windowDays=28"))
+                {
+                    Assert.AreEqual(HttpStatusCode.OK, kept.StatusCode);
+                    Assert.AreEqual(generation, kept.Headers.GetValues(CopilotAdoptionAPIController.GenerationIdHeader).Single());
+                }
+            }
+        }
+
+        /// <summary>
+        /// Stable build 1860 (#858): <c>summary?includeProgress=true</c> answers inside its short first-response budget with the
+        /// 202 the portal polls on, now carrying the generation being built and its progress; the 200 that follows names the
+        /// same generation.
+        /// </summary>
+        [TestMethod]
+        public async Task SummaryWithProgress_OverHttp_Is202WithTheGenerationAndItsProgress_ThenThatGeneration()
+        {
+            var pending = new TaskCompletionSource<CopilotAdoptionAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var runner = new SequencedAnalysisRunner(pending.Task);
+            var coordinator = new AdoptionCoordinator(
+                runner, new DictionaryAnalysisCache(), (windowDays, hasOverride) => NullAnalysisTelemetry.Instance, TimeSpan.FromMinutes(10));
+
+            await using (var app = await StartControllerHost(coordinator))
+            using (var client = app.GetTestClient())
+            {
+                string generation;
+                var watch = System.Diagnostics.Stopwatch.StartNew();
+                using (var building = await client.GetAsync("/api/CopilotAdoption/summary?windowDays=28&includeProgress=true"))
+                {
+                    watch.Stop();
+                    var text = await building.Content.ReadAsStringAsync();
+                    Assert.AreEqual(HttpStatusCode.Accepted, building.StatusCode, text);
+                    Assert.IsTrue(watch.Elapsed < TimeSpan.FromSeconds(15), "Answered inside the progress budget, not the 20-second one: " + watch.Elapsed);
+                    Assert.IsNotNull(building.Headers.RetryAfter, "The 202 says when to poll again.");
+                    var body = JObject.Parse(text);
+                    Assert.AreEqual("building", (string)body["status"]);
+                    generation = (string)body["generationId"];
+                    Assert.IsFalse(string.IsNullOrEmpty(generation), text);
+                    Assert.AreEqual(JTokenType.Object, body["progress"]?.Type, text);
+                    Assert.AreEqual(generation, (string)body["progress"]["generationId"]);
+                }
+
+                pending.SetResult(MinimalAnalysis("00000000000000000000000000000053"));
+
+                using (var done = await client.GetAsync("/api/CopilotAdoption/summary?windowDays=28"))
+                {
+                    Assert.AreEqual(HttpStatusCode.OK, done.StatusCode, await done.Content.ReadAsStringAsync());
+                    Assert.AreEqual(generation, done.Headers.GetValues(CopilotAdoptionAPIController.GenerationIdHeader).Single());
+                }
+
+                Assert.AreEqual(1, runner.CallCount);
+            }
+        }
+
+        private static Task<System.Net.Http.HttpResponseMessage> PostRebuild(System.Net.Http.HttpClient client, string json)
+        {
+            return client.PostAsync("/api/CopilotAdoption/rebuild?windowDays=28",
+                new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json"));
+        }
+
         private static async Task<WebApplication> StartControllerHost(AdoptionCoordinator coordinator)
         {
             var builder = WebApplication.CreateBuilder();
@@ -250,6 +372,23 @@ namespace Tests.UnitTests
 
             public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, Common.Entities.CopilotAdoption.CopilotAdoptionEffectiveScoreSettings scoreSettings, ICopilotAdoptionRunTelemetry telemetry)
                 => Task.FromResult(_analysis);
+        }
+
+        /// <summary>Hands out the given runs in order, the last one again if asked for more, and counts the calls.</summary>
+        private sealed class SequencedAnalysisRunner : AdoptionRunner
+        {
+            private readonly Task<CopilotAdoptionAnalysis>[] _runs;
+            private int _calls;
+
+            public SequencedAnalysisRunner(params Task<CopilotAdoptionAnalysis>[] runs) => _runs = runs;
+
+            public int CallCount => System.Threading.Volatile.Read(ref _calls);
+
+            public Task<CopilotAdoptionAnalysis> RunAsync(int windowDays, DateTime? fromUtc, DateTime? toUtc, DateTime? toExclusiveUtc, bool usesExplicitDates, List<int> seatLicenceTypeIds, Common.Entities.CopilotAdoption.CopilotAdoptionEffectiveScoreSettings scoreSettings, ICopilotAdoptionRunTelemetry telemetry)
+            {
+                var call = System.Threading.Interlocked.Increment(ref _calls);
+                return _runs[Math.Min(call, _runs.Length) - 1];
+            }
         }
 
         private sealed class DictionaryAnalysisCache : AdoptionCache

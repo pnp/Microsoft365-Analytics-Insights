@@ -67,7 +67,10 @@ export interface CreditSource {
   periodStatus: 'verified' | 'unverified' | 'mixed' | null;
   observedUsers: number;
   unresolvedObjects: number | null;
+  /** Null in a filtered view, or when `unresolvedCreditsWithheld`. */
   unresolvedCredits: number | null;
+  /** For a reader without See PII: one to four unmatched objects hold the balances, so they are withheld - never 0. */
+  unresolvedCreditsWithheld?: boolean;
   partialUsers: number;
   staleUsers: number;
   oldestFreshness: string | null;
@@ -90,7 +93,10 @@ export interface StudioSource {
   importEnabled: boolean;
   lastImportUtc: string | null;
   lastImportFailed: boolean;
+  /** Null in a filtered view, or when `unresolvedCreditsWithheld`. */
   unresolvedCredits: number | null;
+  /** For a reader without See PII: one to four unmatched makers were charged, so the charges are withheld - never 0. */
+  unresolvedCreditsWithheld?: boolean;
   failureCode: string | null;
 }
 

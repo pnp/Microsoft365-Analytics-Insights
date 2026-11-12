@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProvider } from '../test/renderWithProvider';
-import CopilotCostConnectionPage from './CopilotCostConnectionPage';
+import CopilotCostConnectionPage, { PROBE_FIRST_DELAY_MS, PROBE_MAX_STEPS } from './CopilotCostConnectionPage';
 import { changeCostConnection, costConnectionText, fetchCostCollection, fetchCostConnection, type CostCollectionStatus, type CostConnectionStatus } from '../api/copilotCostConnectionApi';
 
 vi.mock('../api/copilotCostConnectionApi', async (importOriginal) => {
@@ -195,5 +195,86 @@ describe('CopilotCostConnectionPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(outcome === 'failure' ? 'Synthetic connection failure' : 'callback could not be validated');
     expect(screen.getByRole('button', { name: 'Connect reader' })).toBeEnabled();
     expect(screen.queryByText(/You will be taken to Microsoft/)).not.toBeInTheDocument();
+  });
+});
+
+
+describe('CopilotCostConnectionPage data check pacing', () => {
+  const inProgress = (observed: number): CostConnectionStatus => ({
+    ...connected,
+    probe: { phase: 'users', directoryUsers: 100_000, inventoryComplete: true, observed, measured: observed,
+      empty: 0, partial: 0, unevaluated: 0, failed: 0, denied: 0, lastOutcome: 'sliceCompleted' },
+  });
+
+  let visibility: DocumentVisibilityState = 'visible';
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    window.location.hash = '';
+    visibility = 'visible';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    vi.mocked(changeCostConnection).mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete (document as { visibilityState?: DocumentVisibilityState }).visibilityState;
+  });
+
+  /** Confirms a data check with fake timers in force, so each wait between steps is controlled. */
+  async function startDataCheck() {
+    renderWithProvider(<CopilotCostConnectionPage />);
+    // The button is on the page, disabled, while the first status read is in flight; a click then does nothing.
+    const run = await screen.findByRole('button', { name: 'Run or resume data check' });
+    await waitFor(() => expect(run).toBeEnabled());
+    fireEvent.click(run);
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+  }
+
+  it('waits twice as long after each step that changes nothing', async () => {
+    vi.mocked(fetchCostConnection).mockResolvedValue(inProgress(10));
+    await startDataCheck();
+    expect(changeCostConnection).toHaveBeenCalledTimes(1);
+
+    await act(() => vi.advanceTimersByTimeAsync(2 * PROBE_FIRST_DELAY_MS - 1));
+    expect(changeCostConnection).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(changeCostConnection).toHaveBeenCalledTimes(2);
+
+    await act(() => vi.advanceTimersByTimeAsync(4 * PROBE_FIRST_DELAY_MS - 1));
+    expect(changeCostConnection).toHaveBeenCalledTimes(2);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(changeCostConnection).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops after a ceiling of steps, keeping its progress, and says how to carry on', async () => {
+    let observed = 0;
+    vi.mocked(fetchCostConnection).mockImplementation(async () => inProgress(observed++));
+    await startDataCheck();
+
+    await act(() => vi.advanceTimersByTimeAsync((PROBE_MAX_STEPS + 20) * PROBE_FIRST_DELAY_MS));
+
+    expect(changeCostConnection).toHaveBeenCalledTimes(PROBE_MAX_STEPS);
+    expect(screen.getByText(`The data check stopped after ${PROBE_MAX_STEPS} steps so that it does not keep running unattended. Its progress is saved: select Run or resume data check to continue.`)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run or resume data check' })).toBeEnabled();
+  });
+
+  it('takes no steps while the tab is in the background, and carries on when it is back', async () => {
+    visibility = 'hidden';
+    let observed = 0;
+    vi.mocked(fetchCostConnection).mockImplementation(async () => inProgress(observed++));
+    await startDataCheck();
+
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(changeCostConnection).not.toHaveBeenCalled();
+
+    visibility = 'visible';
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(changeCostConnection).toHaveBeenCalledTimes(1);
   });
 });

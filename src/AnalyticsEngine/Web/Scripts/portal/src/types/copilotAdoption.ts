@@ -20,6 +20,25 @@ export interface CopilotAdoptionAvailability {
   messages: string[];
 }
 
+/** Why a Copilot seat's idle count is withheld from a reader without See PII (C# SeatIdleWithheldReasons). */
+export type SeatIdleWithheldReason = 'fewHolders' | 'revealsSmallerSeat';
+
+/**
+ * Why a figure is withheld from a reader without See PII (C# SmallGroupWithheldReasons): `fewPeople` - fewer than the
+ * floor are behind it - or `revealsSmallerGroup` - enough are, but with the total published beside it, it would give
+ * back a figure withheld for having fewer. A key, never text; the page writes the sentence.
+ */
+export type SmallGroupWithheldReason = 'fewPeople' | 'revealsSmallerGroup';
+
+/** A breakdown `CopilotAdoptionSummary.smallestGroupsWithheld` names (#844); the server's CopilotAdoptionWithheldBreakdowns. */
+export type WithheldBreakdown =
+  | 'departments'
+  | 'countries'
+  | 'accountability'
+  | 'unlicensedDepartments'
+  | 'agentDepartments'
+  | 'builderDepartments';
+
 /** A licence type and whether the tool counted it as a Microsoft 365 Copilot seat. */
 export interface LicenceTypeClassification {
   id: number;
@@ -28,7 +47,17 @@ export interface LicenceTypeClassification {
   assignedUsers: number;
   purchasedUnits: number | null;
   unassignedUnits: number | null;
-  assignedIdleUsers: number;
+  /** Null only when withheld from a reader without See PII (`assignedIdleWithheld`) - never a substitute zero. */
+  assignedIdleUsers: number | null;
+  /**
+   * True when a reader without See PII is not given `assignedIdleUsers`: the seat is held by fewer than `minimumHolders`
+   * people, or, with the reclaimable total, its count would give such a seat's back. Absent from an older server.
+   */
+  assignedIdleWithheld?: boolean;
+  /** Why `assignedIdleUsers` is withheld; null when it is shown. A key the page turns into a sentence. */
+  assignedIdleWithheldReason?: SeatIdleWithheldReason | null;
+  /** On a withheld row, the fewest holders a seat needs for its idle count to be shown to this reader. */
+  minimumHolders?: number | null;
   purchasedUnitsRefreshedUtc: string | null;
   isCopilotSeat: boolean;
 }
@@ -96,6 +125,11 @@ export interface AdoptionSegmentRow {
    * fixtures written before it still type-check.
    */
   recommendedCandidates?: number | null;
+  /**
+   * Set when a count large enough to show is withheld anyway, for a reader without See PII: with the tenant's
+   * recommended candidates, it would give back a department withheld for having fewer (#844).
+   */
+  recommendedCandidatesWithheld?: SmallGroupWithheldReason | null;
 }
 
 /**
@@ -106,23 +140,43 @@ export interface AdoptionSegmentRow {
  * inside one business; a domain with strong adoption and a queue of licence candidates is a
  * business case. Neither is visible when the same people are split across departments that span
  * every company in the tenant.
+ *
+ * Three populations share a row - the seat holders (every figure from `licensedUsers` to
+ * `coworkPrimeCandidates`), the unlicensed Copilot Chat users and the licence candidates - and for a reader
+ * without See PII each is floored on its own (#844): a withheld population's figures are null, with the reason
+ * beside them. Never render a withheld figure as 0, and never read withheld seat holders as "no seats".
  */
-export interface AdoptionDomainRow extends AdoptionSegmentRow {
+export interface AdoptionDomainRow {
+  segment: string;
+  licensedUsers: number | null;
+  activeUsers: number | null;
+  habitualUsers: number | null;
+  neverUsedUsers: number | null;
+  adoptionRatePct: number | null;
+  averageAdoptionScore: number | null;
   /** Seats in this domain that look reclaimable, on the same confidence tiering as the headline. */
-  reclaimableSeats: number;
+  reclaimableSeats: number | null;
   /** Audit interactions per licensed user, normalised to a month. Idle seats are in the denominator. */
-  interactionsPerLicensedUser: number;
+  interactionsPerLicensedUser: number | null;
   /** People here using Copilot Chat in the window with no seat assigned. */
-  unlicensedActiveUsers: number;
+  unlicensedActiveUsers: number | null;
   /** People here the licence-opportunity ranking recommends buying a seat for. */
-  recommendedForLicence: number;
+  recommendedForLicence: number | null;
   /** Seat holders here scored as prime Cowork candidates. */
-  coworkPrimeCandidates: number;
+  coworkPrimeCandidates: number | null;
   /**
    * True when this domain is external guests rather than members of the tenant - a partner being
    * collaborated with, not a part of the business that can be sent on a training course.
    */
   external: boolean;
+  /** Why the seat holders' figures are withheld. Absent when they are shown. */
+  seatHoldersWithheld?: SmallGroupWithheldReason | null;
+  /** Why `unlicensedActiveUsers` is withheld. Absent when it is shown. */
+  unlicensedUsersWithheld?: SmallGroupWithheldReason | null;
+  /** Why `recommendedForLicence` is withheld. Absent when it is shown. */
+  licenceCandidatesWithheld?: SmallGroupWithheldReason | null;
+  /** The fewest people a figure on this row may describe, when any of them is withheld. */
+  minimumPeople?: number | null;
 }
 
 /** Every threshold and weight the adoption maths used, echoed back so a figure can be traced to its rule. */
@@ -456,6 +510,18 @@ export interface AdoptionCombinedSegmentRow {
   agentInteractions?: number | null;
   interactionsPerActiveAgent?: number | null;
   agentBuilders?: number | null;
+  /**
+   * Set, for a reader without See PII, when that side's figures are null although enough people are on it: with the
+   * tenant's figures beside the table, they would give back a department too small to list (#844).
+   */
+  licensedWithheld?: SmallGroupWithheldReason | null;
+  unlicensedWithheld?: SmallGroupWithheldReason | null;
+  /** Why the agent figures are withheld, when it is to protect a smaller department rather than this one's size (#844). */
+  agentFiguresWithheldReason?: SmallGroupWithheldReason | null;
+  /** Set when `agentBuilders` is null for a reader without See PII: too few builders, or it would give back such a count (#844). */
+  agentBuildersWithheld?: SmallGroupWithheldReason | null;
+  /** The floor a reader without See PII is held to, sent with any of the reasons above. */
+  minimumPeople?: number | null;
 }
 
 /** Adoption, reclaim and next-action counts for one accountable unit. */
@@ -519,6 +585,31 @@ export interface ManagerModellingSegmentRow extends ManagerModellingFigures {
   /** Tenant data: rendered verbatim, never translated. */
   segment: string;
   licensedUsers: number;
+  /**
+   * Why a step of this department's figures is withheld when it has enough managers for it (#844): a reader without
+   * See PII only, so that the whole population's figures less the departments shown never give back a department
+   * withheld for having too few. Absent otherwise, and from older servers.
+   */
+  managersWithheld?: SmallGroupWithheldReason | null;
+  comparisonWithheld?: SmallGroupWithheldReason | null;
+  seatSplitWithheld?: SmallGroupWithheldReason | null;
+}
+
+export interface AdoptionProgressStep {
+  step: string;
+  state: 'pending' | 'running' | 'loaded' | 'failed' | 'skipped' | 'blocked';
+  durationMs: number;
+  queryElapsedMs?: number | null;
+  failure?: string | null;
+  reference?: string | null;
+}
+
+export interface AdoptionProgress {
+  generationId: string;
+  phase: string;
+  elapsedMs: number;
+  percentComplete: number | null;
+  steps: AdoptionProgressStep[];
 }
 
 /**
@@ -528,6 +619,13 @@ export interface ManagerModellingSegmentRow extends ManagerModellingFigures {
  * fixture or a server that predates them still type-checks.
  */
 export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures> {
+  diagnostics?: {
+    generationId?: string;
+    runId?: string | null;
+    totalMs: number;
+    steps: { step: string; durationMs: number; failed: boolean }[];
+    progress?: AdoptionProgress;
+  };
   generatedUtc: string;
   windowDays: number;
   fromUtc: string;
@@ -699,6 +797,17 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
   leadershipComparison?: LeadershipAdoptionComparison | null;
   usageByApp: ReportCategory[];
   opportunityByDepartment: ReportCategory[];
+  /**
+   * Set when `opportunityByDepartment` leaves out a department with enough candidates to show, for a reader without
+   * See PII: with the tenant's recommended candidates, its count would give back a smaller department's (#844).
+   */
+  opportunityByDepartmentWithheld?: SmallGroupWithheldReason | null;
+  /**
+   * The breakdowns that, for a reader without See PII, left out their smallest listed group from every view of them as
+   * well as the groups too small to list, so that the tenant's figures less the groups shown cannot give back a small one
+   * (#844). Absent when none did.
+   */
+  smallestGroupsWithheld?: WithheldBreakdown[] | null;
   weeklyTrend: ReportSeries[];
   weeklyVolumeTrend: ReportSeries[];
   scoreProfiles: AdoptionScoreProfile[];

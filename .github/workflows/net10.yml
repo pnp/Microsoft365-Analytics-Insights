@@ -331,6 +331,25 @@ jobs:
             --filter "FullyQualifiedName~SameOriginStateChangeFilterTests|FullyQualifiedName~InstallerSecretHandlingTests|FullyQualifiedName~StringCipherCompatibilityTests|FullyQualifiedName~HybridWorkerExtensionPolicyTests|FullyQualifiedName~InstallerOperatorSettingsTests|FullyQualifiedName~DemoCollaborationTests|FullyQualifiedName~TeamsExplorerConcurrencyTests|FullyQualifiedName~ReportQueryFailureTests"
           exit $LASTEXITCODE
 
+      # The stable 1860 semantic ports, through the ASP.NET Core host: sign-out and the Teams connection as POSTs from this
+      # site only, with a GET a 404 rather than the portal page (#865, AccountFormPostCoreHostTests); the Administration API
+      # for dead-lettered Teams calls, its request store in the runtime-state table and the importer's poller (#870, #890);
+      # the anonymous endpoints' 400/403 and nosniff replies (#865); the views compiled into the web assembly; and the
+      # privacy-floor registry over this host's API controllers, with the floors it names (#872, #876-#884, #887, #888,
+      # #891, #892). Copilot Adoption's rebuild, progress and generation header (#858, #889) are in
+      # CopilotAdoptionAspNetCoreApiTests and the sign-out/Teams attribute checks in PortalPermissionTests, both gated above.
+      - name: Check stable build 1860 account, dead-letter, anonymous-endpoint and privacy-floor ports
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          dotnet test src\AnalyticsEngine\Tests.UnitTests\Tests.UnitTests.csproj `
+            -c Release --no-build --nologo `
+            --logger "trx;LogFileName=net10-stable-1860.trx" `
+            --results-directory "$env:RUNNER_TEMP\testresults\stable-1860" `
+            --blame-hang --blame-hang-timeout 8m --blame-hang-dump-type none `
+            --filter "FullyQualifiedName~AccountFormPostCoreHostTests|FullyQualifiedName~PortalHostingTests|FullyQualifiedName~CallDeadLettersApiTests|FullyQualifiedName~CallDeadLetterRequestTests|FullyQualifiedName~CallDeadLetterRequestPollerTests|FullyQualifiedName~CallDeadLetterReplayTests|FullyQualifiedName~AnonymousEndpointTests|FullyQualifiedName~MvcViewTests|FullyQualifiedName~SecurityLogHygieneTests|FullyQualifiedName~PortalPrivacyFloorTests|FullyQualifiedName~WebActivityPrivacyFloorTests|FullyQualifiedName~TeamsExplorerListFloorTests|FullyQualifiedName~TeamsExplorerMeetingsFloorTests|FullyQualifiedName~TeamsExplorerOverviewFloorTests|FullyQualifiedName~DlpApiContractTests|FullyQualifiedName~AgentCostReportConsistencyTests|FullyQualifiedName~ReleasePackageDownloadTests|FullyQualifiedName~ManualMigrationScriptVerbatimTests"
+          exit $LASTEXITCODE
+
       - name: Check stable credit collector SQL invariants
         shell: pwsh
         run: |

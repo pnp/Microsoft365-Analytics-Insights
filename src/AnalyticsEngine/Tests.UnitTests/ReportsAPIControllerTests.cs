@@ -6,7 +6,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using ReportAreaData = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportAreaData;
+using ReportCategory = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportCategory;
 using ReportChart = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportChart;
+using ReportMatrix = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportMatrix;
+using ReportMatrixCell = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportMatrixCell;
 using ReportSeriesWarning = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportSeriesWarning;
 using ReportsAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.ReportsAPIController;
 
@@ -258,6 +261,10 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, warning.Count);
             StringAssert.Contains(result.Warning, "missing at least one day of usage reports");
 
+            // Teams is charted, so it must not be reported as an unavailable series (#816).
+            Assert.AreEqual("incompleteWeeks", result.WarningKey);
+            Assert.IsFalse(result.Warning.Contains("unavailable"), result.Warning);
+
             var json = JsonConvert.SerializeObject(points);
             Assert.AreEqual(1, json.Split(new[] { "\"incomplete\":true" }, StringSplitOptions.None).Length - 1,
                 "Only the incomplete week carries the flag on the wire.");
@@ -277,8 +284,47 @@ namespace Tests.UnitTests
                 new Dictionary<string, List<DateTime>> { { "Teams", new List<DateTime>() } });
 
             Assert.IsNull(result.Warning);
+            Assert.IsNull(result.WarningKey);
             Assert.IsNull(result.SeriesWarnings);
             Assert.IsFalse(result.Series.Single().Points.Single().Incomplete);
+        }
+
+        [TestMethod]
+        public void CompleteMultiTimeSeries_KeysTheWarningByWhatIsWrong()
+        {
+            // An unavailable series and a charted series with incomplete weeks are different facts, and
+            // the SPA words each from this key: one sentence each, never one listed as the other.
+            var week = new DateTime(2026, 6, 1);
+            var weeks = new List<DateTime> { week };
+
+            var unavailable = ReportsAPIController.CompleteMultiTimeSeries(
+                Chart(),
+                new List<KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>>
+                {
+                    Series("Teams", week),
+                    new KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>("Outlook", new List<ReportsAPIController.WeekValueRow>()),
+                },
+                new List<string>(),
+                weeks);
+            Assert.AreEqual("seriesUnavailable", unavailable.WarningKey);
+            StringAssert.StartsWith(unavailable.Warning, "Some workload series are unavailable: Outlook");
+
+            var both = ReportsAPIController.CompleteMultiTimeSeries(
+                Chart(),
+                new List<KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>>
+                {
+                    Series("Teams", week),
+                    new KeyValuePair<string, List<ReportsAPIController.WeekValueRow>>("Outlook", new List<ReportsAPIController.WeekValueRow>()),
+                },
+                new List<string>(),
+                weeks,
+                null,
+                new Dictionary<string, List<DateTime>> { { "Teams", new List<DateTime> { week } } });
+            Assert.AreEqual("seriesUnavailableAndIncompleteWeeks", both.WarningKey);
+            StringAssert.StartsWith(both.Warning, "Some workload series are unavailable: Outlook: no settled usage data. Some weeks are incomplete: Teams:");
+            CollectionAssert.AreEquivalent(
+                new[] { "noSettledData", "incompleteWeeks" },
+                both.SeriesWarnings.Select(w => w.Reason).ToList());
         }
 
         [TestMethod]
@@ -319,6 +365,82 @@ namespace Tests.UnitTests
         }
 
         #region Copilot prompt insight charts (issue #312)
+
+        [TestMethod]
+        public void PromptPhrasesAndLanguages_CountTheDistinctPeopleBehindEach()
+        {
+            // A key phrase is text taken from a prompt: a reader without See PII is shown only those five or more people
+            // used (#844), so the query has to say how many people each came from.
+            StringAssert.Contains(ReportsAPIController.BuildCopilotKeyPhrasesQuery(), "COUNT(DISTINCT i.user_id) AS People");
+            StringAssert.Contains(ReportsAPIController.BuildCopilotLanguagesQuery(), "COUNT(DISTINCT i.user_id) AS People");
+            StringAssert.Contains(ReportsAPIController.AppByDepartmentQuery(), "ActivePeople AS ColumnPeople");
+            StringAssert.Contains(ReportsAPIController.AppByDomainQuery(), "ActivePeople AS ColumnPeople");
+        }
+
+        [TestMethod]
+        public void WithoutSmallGroups_HoldsPhrasesLanguagesAndDepartmentGridsToFivePeople_OnACopy()
+        {
+            var phrases = new ReportChart
+            {
+                Key = "copilot-key-phrases",
+                Type = "wordcloud",
+                Categories = new List<ReportCategory>
+                {
+                    new ReportCategory { Label = "contoso quarterly plan", Value = 40, People = 12 },
+                    new ReportCategory { Label = "contoso five", Value = 9, People = 5 },
+                    new ReportCategory { Label = "contoso private matter", Value = 30, People = 1 },
+                },
+            };
+            var grid = new ReportChart
+            {
+                Key = "office-apps-by-department",
+                Type = "matrix",
+                Matrix = new ReportMatrix
+                {
+                    Rows = new List<string> { "Word", "OneNote" },
+                    Columns = new List<string> { "Πωλήσεις", "Contoso Tiny" },
+                    Cells = new List<ReportMatrixCell>
+                    {
+                        new ReportMatrixCell { Row = "Word", Column = "Πωλήσεις", Value = 30 },
+                        new ReportMatrixCell { Row = "OneNote", Column = "Πωλήσεις", Value = 2 },
+                        new ReportMatrixCell { Row = "Word", Column = "Contoso Tiny", Value = 3 },
+                    },
+                    ColumnPeople = new Dictionary<string, int> { ["Πωλήσεις"] = 31, ["Contoso Tiny"] = 3 },
+                },
+            };
+            var trend = new ReportChart { Key = "copilot-sentiment", Type = "timeseries" };
+            var area = new ReportAreaData { Area = "copilot", Charts = new List<ReportChart> { phrases, grid, trend } };
+
+            var trimmed = area.WithoutSmallGroups(5);
+
+            var trimmedPhrases = trimmed.Charts[0];
+            CollectionAssert.AreEqual(
+                new[] { "contoso quarterly plan", "contoso five" },
+                trimmedPhrases.Categories.Select(c => c.Label).ToArray(),
+                "One person's prompt phrase is withheld; five people's stays.");
+            Assert.AreEqual(1, trimmedPhrases.WithheldItems);
+            Assert.AreEqual(5, trimmedPhrases.MinimumGroupSize);
+
+            var trimmedGrid = trimmed.Charts[1].Matrix;
+            CollectionAssert.AreEqual(new[] { "Πωλήσεις" }, trimmedGrid.Columns.ToArray(), "A department of three is those three.");
+            Assert.AreEqual(1, trimmed.Charts[1].WithheldItems);
+            Assert.AreEqual(30d, trimmedGrid.Cells.Single(c => c.Row == "Word").Value);
+            var oneNote = trimmedGrid.Cells.Single(c => c.Row == "OneNote");
+            Assert.IsTrue(oneNote.Withheld, "Two people's OneNote use is withheld...");
+            Assert.IsNull(oneNote.Value, "...and never sent as a number, nor left out to read as zero.");
+            Assert.IsFalse(trimmedGrid.Cells.Any(c => c.Column == "Contoso Tiny"));
+            Assert.AreSame(trend, trimmed.Charts[2], "A chart that counts nobody is untouched.");
+
+            var json = JsonConvert.SerializeObject(trimmed);
+            Assert.IsFalse(json.Contains("contoso private matter") || json.Contains("Contoso Tiny"));
+            Assert.IsFalse(json.Contains("columnPeople") || json.Contains("\"people\""), "The people counts only decide; they are never sent.");
+
+            // The cached area is never edited: a See PII reader is served it as it was.
+            Assert.AreEqual(3, area.Charts[0].Categories.Count);
+            Assert.AreEqual(2, area.Charts[1].Matrix.Columns.Count);
+            Assert.AreEqual(2d, area.Charts[1].Matrix.Cells.Single(c => c.Row == "OneNote").Value);
+            Assert.IsNull(area.Charts[0].MinimumGroupSize);
+        }
 
         [TestMethod]
         public void KeyPhrasesQuery_AggregatesAndCapsInSql()

@@ -374,6 +374,7 @@ namespace Common.Entities.CopilotSpend
             {
                 section.UnresolvedAccounts = unresolved.Count;
                 section.UnresolvedCredits = Math.Round(unresolved.Sum(u => u.Credits ?? 0), 6);
+                section.UnresolvedContributors = unresolved.Count(u => (u.Credits ?? 0) != 0);
             }
             if (!input.Filtered)
             {

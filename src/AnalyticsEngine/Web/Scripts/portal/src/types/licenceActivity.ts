@@ -79,12 +79,21 @@ export interface LicenceActivitySku {
    */
   adoptionScore?: number | null;
   /**
-   * True when fewer people hold this licence than a reader without See PII may see (`query.minimumGroupSize`):
-   * `assignedUsers` stays, but `workloads` is empty and `adoptionScore` null - those few people's activity is hidden.
+   * True when a reader without See PII may not see this licence's activity (`query.minimumGroupSize`):
+   * `assignedUsers` stays, but `workloads` is empty and `adoptionScore` null. `withheldReason` says why.
    */
   withheld?: boolean;
+  /**
+   * Why `withheld` is set: `fewHolders` (fewer than the minimum hold it) or `revealsFewPeople` (with everyone holding a
+   * licence and the other licences, its figures would give back fewer than the minimum's activity). A stable key the page
+   * words; absent from older servers, where a withheld licence always meant `fewHolders`. Null when shown.
+   */
+  withheldReason?: LicenceWithheldReason | null;
   workloads: LicenceActivityDistribution[];
 }
+
+/** Why a licence's activity is withheld from a reader without See PII. A newer server may send a key this build lacks. */
+export type LicenceWithheldReason = 'fewHolders' | 'revealsFewPeople' | (string & {});
 
 /** Everyone holding any licence, each person counted once: the baseline every licence is compared with. */
 export interface LicenceActivityAllLicences {

@@ -51,6 +51,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
         /// </summary>
         public DateTime? LastLoadLatestRefreshDate { get; private set; }
 
+        /// <summary>
+        /// The most pages one report may take: a safety net against paging that never ends, far above any real report (at
+        /// 200 rows a page, two million sites). Going past it fails the report for this cycle, as an unreadable page does.
+        /// </summary>
+        public const int MaxPages = 10000;
+
         public virtual async Task<IEnumerable<T>> LoadReportData()
         {
             LastLoadRowCount = 0;
@@ -61,17 +67,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
             var allStats = new List<T>();
 
             // Keep loading until we run out of pages. Strict: a page that cannot be read fails the whole report for this
-            // cycle, before anything is saved, so the caller records it as failed and it is retried next cycle.
+            // cycle, before anything is saved, so the caller records it as failed and it is retried next cycle. So does
+            // paging that loops (a link Graph already returned) or runs past MaxPages: before #847 either one looped for
+            // ever, holding the background usage-report pass and calling Graph without end.
+            var requestedUrls = new HashSet<string>(StringComparer.Ordinal);
             int pageCount = 0;
             while (requestUrl != null)
             {
                 pageCount++;
+                if (pageCount > MaxPages)
+                {
+                    throw new InvalidOperationException($"{ReportName}: Graph's paging of the report went past {MaxPages:N0} pages. " +
+                        "Nothing from this report was saved; it is retried on a later cycle.");
+                }
+                if (!requestedUrls.Add(requestUrl))
+                {
+                    throw new InvalidOperationException($"{ReportName}: Graph linked page {pageCount} of the report back to a page it had already returned. " +
+                        "Nothing from this report was saved; it is retried on a later cycle.");
+                }
+
                 var reportPage = await LoadReportDataForUrl(requestUrl);
 
                 // A 200 whose body was empty or not JSON comes back null (ManualGraphCallClient logs the body). This used
                 // to log a warning and request the same URL again, for ever - hanging the import cycle and hammering Graph.
-                // A page without its "value" collection is no more usable: its rows are unknown, not absent. Neither
-                // message names the URL, which carries a paging $skiptoken.
+                // A page without its "value" collection is no more usable: its rows are unknown, not absent. No message
+                // here names the URL, which carries a paging $skiptoken.
                 if (reportPage == null)
                 {
                     throw new InvalidOperationException($"{ReportName}: Graph returned page {pageCount} of the report in a form that could not be read. " +
@@ -85,9 +105,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Aggregate
 
                 if (reportPage.HasNextLink)
                 {
-                    Telemetry.LogInformation($"Loading next page from '{reportPage.NextLink}'");
+                    // The page number only: the link itself carries a $skiptoken. Every 50th page at Information, as the
+                    // shared Graph pager does, so a large report doesn't log a line a page.
+                    var next = pageCount + 1;
+                    if (next % 50 == 0)
+                    {
+                        Telemetry.LogInformation($"{ReportName}: loading page {next}...");
+                    }
+                    else
+                    {
+                        Telemetry.LogDebug($"{ReportName}: loading page {next}...");
+                    }
                 }
-                requestUrl = reportPage.NextLink;
+                requestUrl = reportPage.HasNextLink ? reportPage.NextLink : null;
                 allStats.AddRange(reportPage.Stats);
             }
 

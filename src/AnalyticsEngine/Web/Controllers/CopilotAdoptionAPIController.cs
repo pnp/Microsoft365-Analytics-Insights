@@ -97,6 +97,12 @@ namespace Web.AnalyticsWeb.Controllers
         // ApiController is request-scoped. Keep the joined generation's identity, not a lookup using
         // settings that another request may change during the wait.
         private string _joinedRunId;
+        private CopilotAdoptionProgressSnapshot _joinedProgress;
+        private bool _progressRequested;
+        private string _afterGeneration;
+        private bool _rebuildRequested;
+        internal const string GenerationIdHeader = "X-CopilotAdoption-GenerationId";
+        private static readonly TimeSpan ProgressResponseBudget = TimeSpan.FromSeconds(3);
 
         /// <summary>The directory snapshot a <c>userFilter</c> is evaluated against.</summary>
         internal IUserDirectorySource Directory { get; }
@@ -402,10 +408,27 @@ namespace Web.AnalyticsWeb.Controllers
                 var waited = await Coordinator.TryGetWithRunIdAsync(
                     range,
                     ParseIds(seatLicenceTypeIds),
-                    budget,
-                    cancellationToken);
+                    _progressRequested ? ProgressResponseBudget : budget,
+                    cancellationToken, _afterGeneration, _rebuildRequested);
                 _joinedRunId = waited.RunId;
+                _joinedProgress = waited.Progress;
                 return waited.Analysis;
+            }
+            catch (CopilotAdoptionRebuildCooldownException ex)
+            {
+                // net10: Web API 2's HttpResponseException(429 + Retry-After), carried to the reply by
+                // [ApiReplyExceptionFilter], which keeps the headers already set on the response.
+                Response.Headers.RetryAfter = ex.RetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
+                throw new ApiReplyException(
+                    StatusCode(StatusCodes.Status429TooManyRequests,
+                        new { code = "copilotAdoption.error.rebuildCooldown", retryAfterSeconds = ex.RetryAfterSeconds }),
+                    "copilotAdoption.error.rebuildCooldown");
+            }
+            catch (CopilotAdoptionRebuildNotCompletedException)
+            {
+                throw new ApiReplyException(
+                    StatusCode(StatusCodes.Status503ServiceUnavailable, new { code = "copilotAdoption.error.rebuildNotCompleted" }),
+                    "copilotAdoption.error.rebuildNotCompleted");
             }
             catch (CopilotAdoptionScoreSettingsUnavailableException ex)
             {
@@ -470,10 +493,32 @@ namespace Web.AnalyticsWeb.Controllers
             Response.Headers.RetryAfter = RetryAfterSeconds.ToString(CultureInfo.InvariantCulture);
             AddRunIdHeader(Response, runId);
 
+            var body = StillBuildingBody(runId);
+            if (_joinedProgress != null)
+            {
+                body["generationId"] = _joinedProgress.GenerationId;
+                if (_progressRequested) body["progress"] = _joinedProgress;
+            }
+
             // A dictionary rather than a model, as on the Web API 2 build: its keys are written exactly
             // as given whichever serializer the host runs, so the body the SPA detects cannot be
             // re-cased by a naming policy.
-            return StatusCode((int)HttpStatusCode.Accepted, StillBuildingBody(runId));
+            return StatusCode((int)HttpStatusCode.Accepted, body);
+        }
+
+        /// <summary>
+        /// A 200 with the analysis generation the body came from in <see cref="GenerationIdHeader"/>, so the SPA can
+        /// tell a response from a mixed generation (#858).
+        /// </summary>
+        /// <remarks>
+        /// net10: Web API 2's <c>OkNegotiatedContentResult</c> subclass adds the header as the result executes; here it
+        /// is set on <see cref="HttpResponse.Headers"/> before the result does, as the run id header is.
+        /// </remarks>
+        private IActionResult AnalysisResult<T>(T model, CopilotAdoptionAnalysis analysis)
+        {
+            var generationId = analysis?.Summary?.Diagnostics?.GenerationId;
+            if (!string.IsNullOrEmpty(generationId) && Response != null) Response.Headers[GenerationIdHeader] = generationId;
+            return Ok(model);
         }
 
         /// <summary>
@@ -556,17 +601,58 @@ namespace Web.AnalyticsWeb.Controllers
             string seatLicenceTypeIds = null,
             string emailDomain = null,
             string userFilter = null,
-            CancellationToken cancellationToken = default(CancellationToken))
+            CancellationToken cancellationToken = default(CancellationToken),
+            bool includeProgress = false,
+            string after = null)
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
             var permissionDenied = ScopePermissionDenied(emailDomain, filter, seatLicenceTypeIds);
             if (permissionDenied != null) return permissionDenied;
+            _progressRequested = includeProgress;
+            _afterGeneration = after;
 
             var (analysis, narrowed) = await TryGetScopedAnalysisAsync(
                 windowDays, from, to, seatLicenceTypeIds, emailDomain, filter, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
             var leadership = await LeadershipComparisonForAsync(analysis, narrowed, cancellationToken);
-            return Ok(SummaryForCaller(analysis.Summary.WithLeadershipComparison(leadership)));
+            return AnalysisResult(SummaryForCaller(analysis.Summary.WithLeadershipComparison(leadership)), analysis);
+        }
+
+        public sealed class RebuildRequest
+        {
+            [JsonProperty("expectedGenerationId")]
+            public string ExpectedGenerationId { get; set; }
+        }
+
+        /// <remarks>
+        /// net10: the body is <c>[FromBody]</c> explicitly - Web API 2 reads a complex parameter from the body by
+        /// default, ASP.NET Core without <c>[ApiController]</c> does not - and an empty body binds to null, as it does
+        /// there, so it is the 400 below rather than a model-binding error.
+        /// </remarks>
+        [HttpPost]
+        [Route("rebuild")]
+        public async Task<IActionResult> Rebuild(
+            [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] RebuildRequest body,
+            int windowDays = 28, string from = null, string to = null,
+            string seatLicenceTypeIds = null, string emailDomain = null, string userFilter = null,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (body == null || !Guid.TryParseExact(body.ExpectedGenerationId, "N", out _))
+                return BadRequest();
+            if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
+            var permissionDenied = ScopePermissionDenied(emailDomain, filter, seatLicenceTypeIds);
+            if (permissionDenied != null) return permissionDenied;
+            await ResolveScopeAsync(emailDomain, filter, cancellationToken);
+            _progressRequested = true;
+            _rebuildRequested = true;
+            _afterGeneration = body.ExpectedGenerationId;
+            var analysis = await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, cancellationToken);
+            if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
+            return AnalysisResult(new
+            {
+                generationId = analysis.Summary.Diagnostics.GenerationId,
+                progress = analysis.Summary.Diagnostics.Progress,
+            }, analysis);
         }
 
         /// <summary>Whether the caller holds the portal's See PII permission (#661).</summary>
@@ -618,6 +704,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// Under the administrator's global filter only the Copilot seat types are listed, with the narrowed
         /// assigned and idle counts the summary shows: a reader limited to one department must not be able to
         /// read the whole tenant's per-licence counts here instead.
+        ///
+        /// A reader without See PII is given the list the summary gives them: without the idle count of a Copilot seat
+        /// that one to four people hold, or of the seat that would give it back (#844).
         /// </summary>
         // GET: api/CopilotAdoption/licence-types
         [HttpGet]
@@ -635,7 +724,7 @@ namespace Web.AnalyticsWeb.Controllers
             var analysis = await TryGetScopedSummaryAsync(
                 windowDays, from, to, seatLicenceTypeIds, null, UserFilterExpression.Empty, FirstResponseBudget, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
-            return Ok(analysis.Summary.SeatLicenceTypes);
+            return Ok(SummaryForCaller(analysis.Summary).SeatLicenceTypes);
         }
 
         /// <summary>The queries behind the numbers, for the SQL popover the rest of the admin site uses.</summary>
@@ -654,7 +743,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             var analysis = await TryGetAnalysisAsync(windowDays, from, to, seatLicenceTypeIds, cancellationToken);
             if (analysis == null) return StillBuilding(windowDays, from, to, seatLicenceTypeIds);
-            return Ok(analysis.Sql);
+            return AnalysisResult(analysis.Sql, analysis);
         }
 
         /// <summary>
@@ -692,7 +781,7 @@ namespace Web.AnalyticsWeb.Controllers
             var cowork = analysis.CoworkReadiness.Where(c => visible(c.UserId)).ToList();
             var unlicensed = analysis.UnlicensedUsers.Where(u => visible(u.UserId)).ToList();
 
-            return Ok(new
+            return AnalysisResult(new
             {
                 // Every population, so a domain that holds no seats at all - an acquired business
                 // using Copilot Chat without ever having been licensed - is still selectable.
@@ -723,7 +812,7 @@ namespace Web.AnalyticsWeb.Controllers
                         basis = CopilotAdoptionScoring.CoworkTierBasis(t),
                     })
                     .ToList(),
-            });
+            }, analysis);
         }
 
         #endregion
@@ -775,7 +864,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             var matched = CopilotAdoptionExports.Apply(analysis.LicensedUsers, query);
 
-            return Ok(new LicensedUserPage
+            return AnalysisResult(new LicensedUserPage
             {
                 Total = matched.Count,
                 Skip = Math.Max(0, skip),
@@ -783,7 +872,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Rows = CopilotAdoptionExports.Page(matched, skip, take, MaxTake),
                 Warnings = analysis.Summary.Warnings,
                 WarningDetails = analysis.Summary.WarningDetails,
-            });
+            }, analysis);
         }
 
         /// <summary>
@@ -907,7 +996,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             var matched = CopilotAdoptionExports.Apply(analysis.Opportunities, query);
 
-            return Ok(new LicenceOpportunityPage
+            return AnalysisResult(new LicenceOpportunityPage
             {
                 Total = matched.Count,
                 Skip = Math.Max(0, skip),
@@ -915,7 +1004,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Rows = CopilotAdoptionExports.Page(matched, skip, take, MaxTake),
                 Warnings = analysis.Summary.Warnings,
                 WarningDetails = analysis.Summary.WarningDetails,
-            });
+            }, analysis);
         }
 
         // GET: api/CopilotAdoption/opportunities/export
@@ -1013,7 +1102,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             var matched = CopilotAdoptionExports.Apply(analysis.CoworkReadiness, query);
 
-            return Ok(new CoworkReadinessPage
+            return AnalysisResult(new CoworkReadinessPage
             {
                 Total = matched.Count,
                 Skip = Math.Max(0, skip),
@@ -1021,7 +1110,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Rows = CopilotAdoptionExports.Page(matched, skip, take, MaxTake),
                 Warnings = analysis.Summary.Warnings,
                 WarningDetails = analysis.Summary.WarningDetails,
-            });
+            }, analysis);
         }
 
         /// <summary>
@@ -1067,7 +1156,11 @@ namespace Web.AnalyticsWeb.Controllers
             var rows = CopilotAdoptionExports.Apply(analysis.CoworkReadiness, query).Take(MaxCsvRows).ToList();
 
             return CsvResponse(
-                CsvSerialiser.ToBytes(rows, CopilotAdoptionExports.CoworkReadinessColumns()),
+                CsvSerialiser.ToBytes(
+                    rows,
+                    CopilotAdoptionExports.CoworkReadinessColumns(
+                        analysis.Summary.FiguresIncomplete,
+                        WarningSummary(analysis.Summary))),
                 CsvSerialiser.FileName(ScopedFileNamePrefix("copilot-cowork-readiness", emailDomain, filter, analysis.Summary), analysis.Summary.GeneratedUtc),
                 analysis.Summary.Diagnostics?.RunId);
         }
@@ -1157,7 +1250,8 @@ namespace Web.AnalyticsWeb.Controllers
                     analysis,
                     timeSaved.Any ? timeSaved : null,
                     includeIndividualData: CanSeeIndividuals() && !analysis.Summary.Options.UsesExplicitDates,
-                    leadership: leadership);
+                    leadership: leadership,
+                    readerSeesPii: CanSeeIndividuals());
             }
             catch (Exception ex)
             {

@@ -142,7 +142,7 @@ namespace Tests.UnitTests
             oneDriveEvent.Workload = ActivityImportConstants.WORKLOAD_OD;
             hits.Add(oneDriveEvent);
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
-            var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), Common.Entities.UserScope.UserImportScope.Unfiltered, logger, new AppConfig());
+            var sqlPersist = OfflineSqlActivityPersistence.Create(logger, new AppConfig());
 
             await hits.CommitAllToSQL(sqlPersist);
 
@@ -178,7 +178,7 @@ namespace Tests.UnitTests
                 // Save
                 int preSPLogsInsertSPEventsCount = db.sharepoint_events.Count();
                 var logger = AnalyticsLogger.ConsoleOnlyTracer();
-                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), Common.Entities.UserScope.UserImportScope.Unfiltered, logger, new AppConfig());
+                var sqlPersist = OfflineSqlActivityPersistence.Create(logger, new AppConfig());
                 await sharePointLogs.CommitAllToSQL(sqlPersist);
 
                 // Validate new count
@@ -246,7 +246,7 @@ namespace Tests.UnitTests
                 // Save
                 int preSPLogsInsertSPEventsCount = db.AuditEventsCommon.Count();
                 var logger = AnalyticsLogger.ConsoleOnlyTracer();
-                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), Common.Entities.UserScope.UserImportScope.Unfiltered, logger, new AppConfig());
+                var sqlPersist = OfflineSqlActivityPersistence.Create(logger, new AppConfig());
                 await otherLogs.CommitAllToSQL(sqlPersist);
 
                 // Validate new events count
@@ -427,7 +427,7 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
                 int preInsertCount = db.sharepoint_events.Count();
 
                 var logger = AnalyticsLogger.ConsoleOnlyTracer();
-                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), Common.Entities.UserScope.UserImportScope.Unfiltered, logger, new AppConfig());
+                var sqlPersist = OfflineSqlActivityPersistence.Create(logger, new AppConfig());
 
                 // Create content-set for two different-but-same-id activities
                 TestActivityReportSet duplicateContent = new TestActivityReportSet() { randomActivity, duplicateIdRandomActivity };
@@ -616,7 +616,7 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
                 var tempCache = ActivityImportCache.GetEmptyCache();
 
                 var logger = AnalyticsLogger.ConsoleOnlyTracer();
-                var sqlPersist = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), Common.Entities.UserScope.UserImportScope.Unfiltered, logger, new AppConfig());
+                var sqlPersist = OfflineSqlActivityPersistence.Create(logger, new AppConfig());
 
                 var s = await hitsActivity.CommitAllToSQL(sqlPersist);
 
@@ -665,8 +665,6 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
             var s = GetSettings();
 
             var logger = AnalyticsLogger.ConsoleOnlyTracer();
-            var auth = new ActivityAPIAppIndentityOAuthContext(logger, s.ClientID, s.TenantGUID.ToString(), s.ClientSecret, s.KeyVaultUrl, s.UseClientCertificate);
-
 
             using var fakeApi = new FakeApiHost();
             var server = fakeApi.Handler;
@@ -715,7 +713,7 @@ Event found in API, doesn't find it in cache, assumes it's a new ignored event, 
 
                 // Download all the things & get stats.
 
-                var stats = await importer.LoadReportsAndSave(new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), Common.Entities.UserScope.UserImportScope.Unfiltered, logger, new AppConfig()));
+                var stats = await importer.LoadReportsAndSave(OfflineSqlActivityPersistence.Create(logger, new AppConfig()));
 
                 var contentMetaDataLoader = new WebContentMetaDataLoader(logger, fakeClient, s);
 

@@ -251,6 +251,51 @@ export function queryFor(
   return queries.find((q) => q.key === key);
 }
 
+/**
+ * The note a list shows a reader without See PII when the server left rows out of it (#844): rows of fewer than
+ * `minimumGroupSize` people, and the smallest of the others so none can be worked out from the totals. Undefined when
+ * nothing was left out, or for a See PII reader, whose sections carry no minimum.
+ */
+export function leftOutNote(
+  t: TFunction,
+  minimumGroupSize: number | null | undefined,
+  leftOut: number | undefined,
+): string | undefined {
+  if (minimumGroupSize == null || !leftOut) return undefined;
+  return t(plural(leftOut, 'webActivity.privacy.leftOut.one', 'webActivity.privacy.leftOut.other'), {
+    count: formatCount(leftOut),
+    minimum: formatCount(minimumGroupSize),
+  });
+}
+
+/** A card's own note and a privacy note together; undefined when there is neither. */
+export function withNote(own: string | undefined, privacy: string | undefined): string | undefined {
+  if (own && privacy) return `${own} ${privacy}`;
+  return own ?? privacy;
+}
+
+/**
+ * How the card of a list floored for a reader without See PII reads (#844): its own note with the privacy note beside it,
+ * or - when every row was left out - the privacy note in place of the card's "nothing here" message, which would
+ * otherwise say the period had no such rows. `exportable` is false then: the file would be as empty as the card. For a
+ * See PII reader, whose sections carry no minimum, this is the card's own note and message.
+ */
+export function flooredCard(
+  t: TFunction,
+  minimumGroupSize: number | null | undefined,
+  leftOut: number | undefined,
+  rows: number,
+  own: { note?: string; empty?: string } = {},
+): { note: string | undefined; emptyMessage: string | undefined; exportable: boolean } {
+  const privacy = leftOutNote(t, minimumGroupSize, leftOut);
+  const allLeftOut = rows === 0 && privacy !== undefined;
+  return {
+    note: allLeftOut ? own.note : withNote(own.note, privacy),
+    emptyMessage: allLeftOut ? privacy : own.empty,
+    exportable: !allLeftOut,
+  };
+}
+
 const useStyles = makeStyles({
   card: {
     display: 'flex',
@@ -434,22 +479,79 @@ export function WindowNote({ window: reportWindow }: { window: WebActivityWindow
 /** The judgement message bars shown under the Overview KPIs. */
 export function JudgementList({ judgements }: { judgements: WebActivityJudgement[] }) {
   const styles = useStyles();
+  const t = useT();
 
   if (judgements.length === 0) return null;
 
   return (
     <div className={styles.judgements}>
-      {judgements.map((judgement) => (
-        <MessageBar key={judgement.key} intent={judgementIntent(judgement.tone)}>
-          <MessageBarBody>
-            <Text weight="semibold">{judgement.headline}</Text>
-            <br />
-            <Text size={200}>{judgement.detail}</Text>
-          </MessageBarBody>
-        </MessageBar>
-      ))}
+      {judgements.map((judgement) => {
+        const values = judgementValues(judgement.values);
+        return (
+          <MessageBar key={judgement.key} intent={judgementIntent(judgement.tone)}>
+            <MessageBarBody>
+              <Text weight="semibold">{judgementSentence(t, judgement.headlineKey, judgement.headline, values)}</Text>
+              <br />
+              <Text size={200}>{judgementSentence(t, judgement.detailKey, judgement.detail, values)}</Text>
+            </MessageBarBody>
+          </MessageBar>
+        );
+      })}
     </div>
   );
+}
+
+function formatOneDecimal(value: number): string {
+  return formatNumber(Math.round(value * 10) / 10, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
+/**
+ * How each figure a judgement quotes is formatted, by the placeholder name `WebActivityScoring`
+ * sends it under. The server sends figures unformatted so that they follow the reader's locale;
+ * `serverAuthoredText.test.ts` fails when it sends a name this table does not know.
+ */
+export const JUDGEMENT_VALUE_FORMATS: Readonly<Record<string, (value: number) => string>> = {
+  visitors: formatCount,
+  enabledVisitors: formatCount,
+  knownUsers: formatCount,
+  pages: formatCount,
+  reach: formatPct,
+  bounce: formatPct,
+  reliance: formatPct,
+  share: formatPct,
+  pagesPerVisit: formatOneDecimal,
+  average: formatSeconds,
+  p95: formatSeconds,
+};
+
+/** Formats a judgement's figures; a non-finite one (Json.NET writes NaN as "NaN") is left out. */
+export function judgementValues(values: WebActivityJudgement['values']): Record<string, string> {
+  const formatted: Record<string, string> = {};
+  for (const [name, raw] of Object.entries(values ?? {})) {
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) continue;
+    formatted[name] = (JUDGEMENT_VALUE_FORMATS[name] ?? formatDecimal)(raw);
+  }
+  return formatted;
+}
+
+/**
+ * One sentence of a judgement in the reader's language.
+ *
+ * Falls back to the server's English for a key this build has no entry for (a newer server, or an
+ * older one that sent no key) and for a sentence whose figure did not arrive, which would otherwise
+ * render as a literal `{placeholder}`.
+ */
+export function judgementSentence(
+  t: TFunction,
+  sentenceKey: string | undefined,
+  fallback: string,
+  values: Record<string, string>,
+): string {
+  if (!sentenceKey) return fallback;
+  const catalogKey = `webActivity.judgement.${sentenceKey}` as TranslationKey;
+  const translated = t(catalogKey, values);
+  if (translated === catalogKey) return fallback;
+  return /\{\w+\}/.test(translated) ? fallback : translated;
 }
 
 /**

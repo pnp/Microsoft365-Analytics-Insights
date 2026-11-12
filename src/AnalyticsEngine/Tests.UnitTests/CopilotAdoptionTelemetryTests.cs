@@ -31,6 +31,9 @@ using SharedHeartbeatFactory = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdop
 using AppInsightsAdoptionWriter = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.AppInsightsCopilotAdoptionTelemetryWriter;
 using CopilotAdoptionAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotAdoptionAPIController;
 using WebExceptionTelemetry = AnalyticsWeb::Web.AnalyticsWeb.WebExceptionTelemetry;
+using AdoptionCooldown = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionRebuildCooldownException;
+using AdoptionRebuildNotCompleted = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.CopilotAdoptionRebuildNotCompletedException;
+using AdoptionScoreSource = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAdoption.ICopilotAdoptionScoreSettingsSource;
 
 namespace Tests.UnitTests
 {
@@ -242,6 +245,212 @@ namespace Tests.UnitTests
 
             sink.ReleaseCompletion.Set();
             Assert.AreSame(analysis, await first);
+        }
+
+        [TestMethod]
+        public void Progress_TracksConcurrentExecution_AndReservesPublication()
+        {
+            var progress = new CopilotAdoptionRunProgress();
+            Assert.IsNull(progress.Snapshot().PercentComplete, "The conditional plan is not known yet.");
+            progress.SetPlan(new[] { CopilotAdoptionSteps.LicenceTypes, CopilotAdoptionSteps.ResourceTypes, CopilotAdoptionSteps.Scoring });
+            var licences = progress.StepStarted(CopilotAdoptionSteps.LicenceTypes);
+            var resources = progress.StepStarted(CopilotAdoptionSteps.ResourceTypes);
+            var query = progress.QueryStarted(CopilotAdoptionSteps.ResourceTypes, "synthetic-query");
+            var live = progress.Snapshot();
+            Assert.AreEqual(2, live.Steps.Count(step => step.State == "running"));
+            Assert.IsNotNull(live.Steps.Single(step => step.Step == CopilotAdoptionSteps.ResourceTypes).QueryElapsedMs);
+            Assert.IsFalse(Newtonsoft.Json.JsonConvert.SerializeObject(live).Contains("synthetic-query"));
+
+            var failure = CopilotAdoptionFailure.From(new TimeoutException("synthetic failure"));
+            progress.QueryCompleted(query, CopilotAdoptionSteps.ResourceTypes, "synthetic-query", 90_000, true, failure);
+            progress.StepCompleted(resources, CopilotAdoptionSteps.ResourceTypes, 90_000, true, failure);
+            progress.StepCompleted(licences, CopilotAdoptionSteps.LicenceTypes, 10, false);
+            var scoring = progress.StepStarted(CopilotAdoptionSteps.Scoring);
+            progress.StepCompleted(scoring, CopilotAdoptionSteps.Scoring, 10, false);
+            Assert.AreEqual(75, progress.Snapshot().PercentComplete);
+            Assert.AreEqual(100, progress.Snapshot(published: true).PercentComplete);
+            Assert.AreEqual(failure.ErrorId, progress.Snapshot().Steps.Single(step => step.Step == CopilotAdoptionSteps.ResourceTypes).Reference);
+            live.Steps[0].State = "changed";
+            Assert.AreEqual("loaded", progress.Snapshot().Steps[0].State, "Snapshots must not share mutable rows.");
+        }
+
+        [TestMethod]
+        public void Progress_EarlyLicenceReturn_DistinguishesBlockedAndUnneededSteps()
+        {
+            foreach (var blocked in new[] { false, true })
+            {
+                var progress = new CopilotAdoptionRunProgress();
+                var operation = progress.StepStarted(CopilotAdoptionSteps.LicenceTypes);
+                progress.StepCompleted(operation, CopilotAdoptionSteps.LicenceTypes, 10, blocked);
+                progress.SetPlan(new[] { CopilotAdoptionSteps.LicenceTypes }, blocked);
+                var snapshot = progress.Snapshot();
+                Assert.AreEqual(50, snapshot.PercentComplete, "Publication is still outstanding.");
+                Assert.AreEqual(blocked ? "blocked" : "skipped",
+                    snapshot.Steps.Single(step => step.Step == CopilotAdoptionSteps.DataSourceProbes).State);
+            }
+            var conditional = new CopilotAdoptionRunProgress();
+            conditional.SetPlan(new[] { CopilotAdoptionSteps.LicenceTypes },
+                blockedSteps: new[] { CopilotAdoptionSteps.ResourceTypes });
+            Assert.AreEqual("blocked", conditional.Snapshot().Steps.Single(step => step.Step == CopilotAdoptionSteps.ResourceTypes).State);
+            Assert.AreEqual("skipped", conditional.Snapshot().Steps.Single(step => step.Step == CopilotAdoptionSteps.LicensedUsers).State);
+        }
+
+        [TestMethod]
+        public async Task Progress_IsAvailableWithoutTelemetry_AndCancellingAWaitDoesNotCancelTheRun()
+        {
+            var runner = new ControllableRunner();
+            var coordinator = new AdoptionCoordinator(runner, new InMemoryAnalysisCache(), (_, __) => null, TimeSpan.FromMinutes(10));
+            var range = CopilotAdoptionDateRange.Create(28, null, null, DateTime.UtcNow);
+            var pending = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None);
+            Assert.IsNotNull(pending.Progress.GenerationId);
+            Assert.IsNull(pending.RunId);
+            Assert.IsTrue(SpinWait.SpinUntil(() => runner.CallCount == 1, TimeSpan.FromSeconds(2)));
+            var progress = (CopilotAdoptionRunProgress)runner.Telemetry;
+            progress.SetPlan(new[] { CopilotAdoptionSteps.LicenceTypes });
+            var operation = progress.StepStarted(CopilotAdoptionSteps.LicenceTypes);
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var waiting = coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.FromSeconds(10), cancellation.Token);
+                cancellation.Cancel();
+                await Assert.ThrowsExceptionAsync<OperationCanceledException>(async () => await waiting);
+            }
+            var live = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None);
+            Assert.AreEqual(pending.Progress.GenerationId, live.Progress.GenerationId);
+            Assert.AreEqual("running", live.Progress.Steps[0].State);
+            progress.StepCompleted(operation, CopilotAdoptionSteps.LicenceTypes, 10, false);
+            runner.Complete(new CopilotAdoptionAnalysis());
+            var complete = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.FromSeconds(2), CancellationToken.None);
+            Assert.AreEqual(pending.Progress.GenerationId, complete.Analysis.Summary.Diagnostics.GenerationId);
+            Assert.AreEqual(100, complete.Progress.PercentComplete);
+        }
+
+        [TestMethod]
+        public async Task Rebuild_RefusesUnreadableScoreSettingsRatherThanUsingTheDefaultCacheKey()
+        {
+            var previous = new CopilotAdoptionAnalysis();
+            previous.Summary.Diagnostics.GenerationId = "00000000000000000000000000000001";
+            previous.Summary.Diagnostics.Record(CopilotAdoptionSteps.ResourceTypes, 90_000, true);
+            var cache = new InMemoryAnalysisCache();
+            cache.Set(AdoptionCoordinator.CacheKey(28, new List<int>()), previous, TimeSpan.FromMinutes(10));
+            var runner = new ControllableRunner();
+            var coordinator = new AdoptionCoordinator(runner, cache, (_, __) => null, TimeSpan.FromMinutes(10),
+                settingsSource: new NullScoreSource());
+            var range = CopilotAdoptionDateRange.Create(28, null, null, DateTime.UtcNow);
+            await Assert.ThrowsExceptionAsync<CopilotAdoptionScoreSettingsUnavailableException>(async () =>
+                await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None,
+                    previous.Summary.Diagnostics.GenerationId, rebuild: true));
+            Assert.AreEqual(0, runner.CallCount);
+        }
+
+        [TestMethod]
+        public async Task OptionalFailure_RebuildIsSingleFlight_AndPollingDoesNotReturnTheOldReport()
+        {
+            var previous = new CopilotAdoptionAnalysis();
+            previous.Summary.Diagnostics.Record(CopilotAdoptionSteps.ResourceTypes, 90_000, true);
+            var replacement = new TaskCompletionSource<CopilotAdoptionAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var runner = new SequencedRunner(Task.FromResult(previous), replacement.Task);
+            var cache = new InMemoryAnalysisCache();
+            var coordinator = NewCoordinator(runner, cache, new RecordingSink(), new ManualHeartbeatFactory());
+            var range = CopilotAdoptionDateRange.Create(28, null, null, DateTime.UtcNow);
+            await coordinator.GetAsync(28, new List<int>());
+            var expected = previous.Summary.Diagnostics.GenerationId;
+            Assert.IsFalse(previous.Summary.FiguresIncomplete, "This is an optional failure, not a headline failure.");
+
+            var first = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected, rebuild: true);
+            var second = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected, rebuild: true);
+            Assert.AreEqual(first.Progress.GenerationId, second.Progress.GenerationId);
+            Assert.AreNotEqual(expected, first.Progress.GenerationId);
+            Assert.AreSame(previous, await coordinator.GetAsync(28, new List<int>()), "Ordinary readers keep the previous report.");
+            var poll = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected);
+            Assert.IsNull(poll.Analysis, "The retrying reader must wait for the replacement, not read the old cache.");
+            Assert.AreEqual(first.Progress.GenerationId, poll.Progress.GenerationId);
+            var recovered = new CopilotAdoptionAnalysis();
+            replacement.SetResult(recovered);
+            var completed = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.FromSeconds(2), CancellationToken.None, expected);
+            Assert.AreSame(recovered, completed.Analysis);
+            Assert.AreEqual(2, cache.SetCount);
+            Assert.AreEqual(expected, previous.Summary.Diagnostics.GenerationId, "Published reports are never mutated.");
+            var staleRetry = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected, rebuild: true);
+            Assert.AreSame(recovered, staleRetry.Analysis);
+            Assert.AreEqual(2, runner.CallCount, "A stale retry must not rebuild the newer complete report.");
+        }
+
+        /// <summary>
+        /// A replacement that ends without publishing - it faults, or is refused for losing complete headline figures - keeps
+        /// the previous report. While it runs, a request after the previous generation follows it, and the request waiting on
+        /// it sees how it ended; but a later request after the same generation ("Check again") gets the kept report. Handing
+        /// that request the stored failure repeated the error until the old report expired. The cooldown is unchanged.
+        /// </summary>
+        [TestMethod]
+        public async Task FaultedRebuild_KeepsPreviousCache_ItsWaiterSeesTheFailure_AndLaterRequestsGetThePreviousReport()
+        {
+            foreach (var refused in new[] { false, true })
+            {
+                var previous = new CopilotAdoptionAnalysis();
+                previous.Summary.Diagnostics.Record(CopilotAdoptionSteps.ResourceTypes, 90_000, true);
+                var replacement = new TaskCompletionSource<CopilotAdoptionAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var runner = new SequencedRunner(Task.FromResult(previous), replacement.Task);
+                var cache = new InMemoryAnalysisCache();
+                var coordinator = NewCoordinator(runner, cache, new RecordingSink(), new ManualHeartbeatFactory());
+                var range = CopilotAdoptionDateRange.Create(28, null, null, DateTime.UtcNow);
+                await coordinator.GetAsync(28, new List<int>());
+                var expected = previous.Summary.Diagnostics.GenerationId;
+
+                var waiting = coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.FromSeconds(10), CancellationToken.None, expected, rebuild: true);
+                Assert.IsTrue(SpinWait.SpinUntil(() => runner.CallCount == 2, TimeSpan.FromSeconds(2)), "The replacement started.");
+                var poll = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected);
+                Assert.IsNull(poll.Analysis, "While the replacement runs, it is followed rather than the old report returned.");
+
+                if (refused)
+                {
+                    var worse = new CopilotAdoptionAnalysis();
+                    worse.Summary.MarkFiguresIncomplete("synthetic headline input");
+                    replacement.SetResult(worse);
+                    await Assert.ThrowsExceptionAsync<AdoptionRebuildNotCompleted>(async () => await waiting);
+                }
+                else
+                {
+                    replacement.SetException(new InvalidOperationException("synthetic failure"));
+                    await Assert.ThrowsExceptionAsync<InvalidOperationException>(async () => await waiting);
+                }
+
+                var later = await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected);
+                Assert.AreSame(previous, later.Analysis, "A later request gets the kept report, not the stored failure.");
+                await Assert.ThrowsExceptionAsync<AdoptionCooldown>(async () =>
+                    await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero, CancellationToken.None, expected, rebuild: true));
+                Assert.AreSame(previous, await coordinator.GetAsync(28, new List<int>()));
+                Assert.AreEqual(1, cache.SetCount);
+                Assert.AreEqual(2, runner.CallCount);
+            }
+        }
+
+        [TestMethod]
+        public async Task Rebuild_CannotReplaceCompleteHeadlinesWithIncompleteFigures_AndPartialReplacementsInheritCooldown()
+        {
+            foreach (var worse in new[] { false, true })
+            {
+                var previous = new CopilotAdoptionAnalysis();
+                previous.Summary.Diagnostics.Record(CopilotAdoptionSteps.ResourceTypes, 90_000, true);
+                var replacement = new CopilotAdoptionAnalysis();
+                replacement.Summary.Diagnostics.Record(CopilotAdoptionSteps.ResourceTypes, 90_000, true);
+                if (worse) replacement.Summary.MarkFiguresIncomplete("synthetic headline input");
+                var runner = new SequencedRunner(Task.FromResult(previous), Task.FromResult(replacement));
+                var cache = new InMemoryAnalysisCache();
+                var coordinator = NewCoordinator(runner, cache, new RecordingSink(), new ManualHeartbeatFactory());
+                var range = CopilotAdoptionDateRange.Create(28, null, null, DateTime.UtcNow);
+                await coordinator.GetAsync(28, new List<int>());
+                var retry = coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.FromSeconds(2),
+                    CancellationToken.None, previous.Summary.Diagnostics.GenerationId, rebuild: true);
+                if (worse)
+                    await Assert.ThrowsExceptionAsync<AdoptionRebuildNotCompleted>(async () => await retry);
+                else
+                    Assert.AreSame(replacement, (await retry).Analysis);
+                var retained = worse ? previous : replacement;
+                Assert.AreSame(retained, await coordinator.GetAsync(28, new List<int>()));
+                await Assert.ThrowsExceptionAsync<AdoptionCooldown>(async () =>
+                    await coordinator.TryGetWithRunIdAsync(range, new List<int>(), TimeSpan.Zero,
+                        CancellationToken.None, retained.Summary.Diagnostics.GenerationId, rebuild: true));
+            }
         }
 
         [TestMethod]
@@ -2101,6 +2310,13 @@ namespace Tests.UnitTests
             }
         }
 
+        private sealed class NullScoreSource : AdoptionScoreSource
+        {
+            public CopilotAdoptionEffectiveScoreSettings LastKnown => CopilotAdoptionEffectiveScoreSettings.Defaults;
+            public Task<CopilotAdoptionEffectiveScoreSettings> GetAsync(CancellationToken cancellationToken = default) =>
+                Task.FromResult<CopilotAdoptionEffectiveScoreSettings>(null);
+        }
+
         private sealed class ControllableRunner : AdoptionRunner
         {
             private readonly TaskCompletionSource<CopilotAdoptionAnalysis> _completion =
@@ -2109,6 +2325,7 @@ namespace Tests.UnitTests
             private int _callCount;
 
             public int CallCount => Volatile.Read(ref _callCount);
+            public ICopilotAdoptionRunTelemetry Telemetry { get; private set; }
 
             public Task<CopilotAdoptionAnalysis> RunAsync(
                 int windowDays,
@@ -2120,6 +2337,7 @@ namespace Tests.UnitTests
                     Common.Entities.CopilotAdoption.CopilotAdoptionEffectiveScoreSettings scoreSettings,
                     ICopilotAdoptionRunTelemetry telemetry)
             {
+                Telemetry = telemetry;
                 Interlocked.Increment(ref _callCount);
                 return _completion.Task;
             }

@@ -10,12 +10,6 @@ namespace Web.AnalyticsWeb.Controllers
 {
     public class AccountController : Controller
     {
-        [HttpGet]
-        public IActionResult CredentialsInvalid()
-        {
-            return View();
-        }
-
         /// <summary>
         /// Sends an OpenID Connect sign-in request.
         /// </summary>
@@ -35,11 +29,18 @@ namespace Web.AnalyticsWeb.Controllers
         /// Asks Entra ID for the delegated Teams permissions that Teams deep analytics needs (issue #670).
         /// </summary>
         /// <remarks>
-        /// Ordinary sign-in no longer requests these scopes. This marked challenge returns only to the
-        /// Teams permissions page, so it cannot be used as an open redirect.
+        /// Signing in no longer requests these, so a tenant that hasn't granted them - often because it doesn't use
+        /// Teams deep analytics - can still use the portal. The Teams permissions page posts here when the site has
+        /// no Graph token for the admin. This re-runs the OIDC challenge with the Teams scopes; the marked challenge
+        /// returns only to the Teams permissions page, with an outcome key if Entra ID said no, so it cannot be used
+        /// as an open redirect. A POST from this site only: with consent already granted Entra ID asks nothing, so a
+        /// link on another site used to be able to run it (#853). A GET is a 404, as on the Web API 2 build
+        /// (<see cref="PortalHosting.MapPortalRoutes"/>).
         /// </remarks>
+        [HttpPost]
         [Authorize]
         [RequirePortalPermission(PortalPermission.Administration)]
+        [RequireSameOriginFormPost]
         public IActionResult ConnectTeams()
         {
             return Challenge(
@@ -59,7 +60,8 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>
         /// Signs out of both the local cookie and the identity provider, then returns to
-        /// <see cref="SignOutCallback"/>.
+        /// <see cref="SignOutCallback"/>. A POST from this site only, so another site can't sign anyone
+        /// out (#853); a GET is a 404, as on the Web API 2 build.
         /// </summary>
         /// <remarks>
         /// <c>new</c> is deliberate: this is the routed <c>/Account/SignOut</c> action and it
@@ -68,6 +70,8 @@ namespace Web.AnalyticsWeb.Controllers
         /// properties and both scheme names. Declaring the hiding keeps CS0114 from masking a genuine
         /// accidental shadow elsewhere later.
         /// </remarks>
+        [HttpPost]
+        [RequireSameOriginFormPost]
         public new IActionResult SignOut()
         {
             var callbackUrl = Url.Action(nameof(SignOutCallback), "Account", values: null, protocol: Request.Scheme);

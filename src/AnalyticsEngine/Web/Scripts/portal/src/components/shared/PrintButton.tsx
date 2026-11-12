@@ -40,16 +40,19 @@ type Refusal = Extract<PrintOutcome, { kind: 'failed' }>;
 export default function PrintButton({
   tooltip,
   label,
+  disabled = false,
 }: {
   /** What this printout will contain, so the reader knows before they spend the paper. */
   tooltip: string;
   label?: string;
+  disabled?: boolean;
 }) {
   const t = useT();
   const phase = usePrintPhase();
   const [refusal, setRefusal] = useState<Refusal | null>(null);
 
   const print = useCallback(() => {
+    if (disabled) return;
     void requestPrint().then((outcome) => {
       if (outcome.kind === 'failed') setRefusal(outcome);
       if (outcome.kind === 'printed' && outcome.truncated) {
@@ -62,7 +65,7 @@ export default function PrintButton({
         );
       }
     });
-  }, [t]);
+  }, [t, disabled]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -84,6 +87,7 @@ export default function PrintButton({
         <Button
           icon={preparing ? <Spinner size="extra-tiny" /> : <Print16Regular />}
           disabledFocusable={preparing}
+          disabled={disabled}
           onClick={print}
         >
           {preparing ? t('common.print.preparing') : (label ?? t('common.action.print'))}

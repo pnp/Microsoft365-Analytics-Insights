@@ -26,6 +26,7 @@ import {
   formatDecimal,
   formatDuration,
   formatPct,
+  flooredCard,
   queryFor,
   shortenUrl,
   toCategories,
@@ -60,6 +61,34 @@ export default function JourneysPanel({
   const t = useT();
   const kpis = data.kpis;
 
+  // Without See PII, a page, step, flow or clicked element of too few people is left out of each list, with the smallest
+  // row shown. Each card says so - and when every row is left out, says that instead of "nothing happened".
+  const floored = (leftOut: number | undefined, rows: number, own: { note?: string; empty?: string } = {}) =>
+    flooredCard(t, data.minimumGroupSize, leftOut, rows, own);
+  const entry = floored(data.withheldEntryPages, data.entryPages.length);
+  const bounce = floored(data.withheldBouncePages, data.bouncePages.length, {
+    note: t('webActivity.journeys.bounce.note'),
+    empty: t('webActivity.journeys.bouncePages.empty'),
+  });
+  const exit = floored(data.withheldExitPages, data.exitPages.length, { note: t('webActivity.journeys.exit.note') });
+  const flows = floored(data.withheldFlows, data.flows.length, {
+    note: t('webActivity.journeys.flows.note'),
+    empty: t('webActivity.journeys.flows.empty'),
+  });
+  const routes = floored(data.withheldTransitions, data.transitions.length, {
+    note: t('webActivity.journeys.transitions.note'),
+    empty: t('webActivity.journeys.routes.empty'),
+  });
+  const clicks = floored(data.withheldClickedElements, data.clickedElements.length, {
+    empty: clickTrackingAvailable ? t('webActivity.journeys.clicks.emptyThisPeriod') : t('webActivity.journeys.clicks.emptyEver'),
+  });
+  const exportButton = (exportable: boolean, onClick: () => void) =>
+    exportable ? (
+      <Button appearance="subtle" size="small" icon={<ArrowDownload16Regular />} onClick={onClick} disabled={exporting}>
+        {t('webActivity.common.export')}
+      </Button>
+    ) : undefined;
+
   const items: KpiDefinition[] = [
     {
       key: 'bounce',
@@ -88,6 +117,14 @@ export default function JourneysPanel({
       key: 'visit-length',
       label: t('webActivity.journeys.kpi.averageVisitLength'),
       value: formatDuration(kpis.averageVisitSeconds),
+      hint: kpis.visits === 0
+        ? t('webActivity.common.noVisitsRecorded')
+        : kpis.averageVisitSeconds === null
+          ? t('webActivity.journeys.kpi.noMeasuredVisitsHint')
+          : t('webActivity.journeys.kpi.measuredVisitsHint', {
+              measured: formatCount(kpis.measuredVisits),
+              visits: formatCount(kpis.visits),
+            }),
       info: {
         what: t('webActivity.journeys.kpi.averageVisitLengthWhat'),
         how: t('webActivity.journeys.kpi.visitLengthHow'),
@@ -121,19 +158,11 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.entry.title')}
           description={t('webActivity.journeys.entry.description')}
+          note={entry.note}
           query={queryFor(data.queries, 'journeys-entry')}
           isEmpty={data.entryPages.length === 0}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportEntry}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          emptyMessage={entry.emptyMessage}
+          actions={exportButton(entry.exportable, onExportEntry)}
         >
           <PageTable
             rows={data.entryPages}
@@ -147,10 +176,10 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.bouncePages.title')}
           description={t('webActivity.journeys.bouncePages.description', { minimumViews: data.window.minimumViews })}
-          note={t('webActivity.journeys.bounce.note')}
+          note={bounce.note}
           query={queryFor(data.queries, 'journeys-bounce')}
           isEmpty={data.bouncePages.length === 0}
-          emptyMessage={t('webActivity.journeys.bouncePages.empty')}
+          emptyMessage={bounce.emptyMessage}
         >
           <PageTable
             rows={data.bouncePages}
@@ -163,20 +192,11 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.exit.title')}
           description={t('webActivity.journeys.exit.description')}
-          note={t('webActivity.journeys.exit.note')}
+          note={exit.note}
           query={queryFor(data.queries, 'journeys-exit')}
           isEmpty={data.exitPages.length === 0}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportExit}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          emptyMessage={exit.emptyMessage}
+          actions={exportButton(exit.exportable, onExportExit)}
         >
           <PageTable
             rows={data.exitPages}
@@ -189,21 +209,11 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.flows.title')}
           description={t('webActivity.journeys.flows.description')}
-          note={t('webActivity.journeys.flows.note')}
+          note={flows.note}
           query={queryFor(data.queries, 'journeys-flows')}
           isEmpty={data.flows.length === 0}
-          emptyMessage={t('webActivity.journeys.flows.empty')}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportFlows}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          emptyMessage={flows.emptyMessage}
+          actions={exportButton(flows.exportable, onExportFlows)}
         >
           <SankeyChart
             flows={data.flows.map((f) => ({
@@ -232,21 +242,11 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.routes.title')}
           description={t('webActivity.journeys.routes.description')}
-          note={t('webActivity.journeys.transitions.note')}
+          note={routes.note}
           query={queryFor(data.queries, 'journeys-transitions')}
           isEmpty={data.transitions.length === 0}
-          emptyMessage={t('webActivity.journeys.routes.empty')}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportTransitions}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          emptyMessage={routes.emptyMessage}
+          actions={exportButton(routes.exportable, onExportTransitions)}
         >
           <div className={styles.tableWrap}>
             <Table size="small" aria-label={t('webActivity.journeys.routes.aria')}>
@@ -300,13 +300,10 @@ export default function JourneysPanel({
         <SectionCard
           title={t('webActivity.journeys.clicks.title')}
           description={t('webActivity.journeys.clicks.description')}
+          note={clicks.note}
           query={queryFor(data.queries, 'journeys-clicks')}
           isEmpty={data.clickedElements.length === 0}
-          emptyMessage={
-            clickTrackingAvailable
-              ? t('webActivity.journeys.clicks.emptyThisPeriod')
-              : t('webActivity.journeys.clicks.emptyEver')
-          }
+          emptyMessage={clicks.emptyMessage}
         >
           <CategoryBarChart categories={toCategories(data.clickedElements)} valueLabel={t('webActivity.journeys.clicks.valueLabel')} />
         </SectionCard>

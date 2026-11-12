@@ -295,6 +295,26 @@ function chartHasData(chart: ReportChart): boolean {
   return false;
 }
 
+/** The Copilot agents charts: for a reader without See PII, the top agents of those enough people used. */
+const AGENT_CHART_KEYS = new Set(['copilot-agent-totals', 'copilot-agent-interactions']);
+
+/** Which sentence says what a reader without See PII is not shown in this chart. */
+function withheldNoteKey(chart: ReportChart): TranslationKey {
+  if (chart.type === 'matrix') return 'reports.withheld.matrix';
+  if (AGENT_CHART_KEYS.has(chart.key)) return 'reports.withheld.agents';
+  return 'reports.withheld.prompts';
+}
+
+/**
+ * The sentence for an agents chart left with nothing to draw for a reader without See PII. The server never says
+ * whether agents were left out - that would tell where they rank, or that one by the filtered name exists - so the
+ * page says that none reached the minimum rather than "no data", which would read as nobody using any agent.
+ */
+function agentsWithheldEmptyKey(chart: ReportChart, agentName: string): TranslationKey | null {
+  if (chart.minimumGroupSize == null || !AGENT_CHART_KEYS.has(chart.key) || chartHasData(chart)) return null;
+  return agentName ? 'reports.withheld.agentsNoneMatching' : 'reports.withheld.agentsNone';
+}
+
 function chartText(
   t: TFunction,
   key: string,
@@ -344,10 +364,7 @@ export function reportChartWarningText(t: TFunction, chart: ReportChart): string
   if (!chart.warning) return null;
 
   if (chart.key === 'usage-active-users' && chart.seriesWarnings?.length) {
-    const details = chart.seriesWarnings.map((warning) => seriesWarningText(t, warning)).join('; ');
-    const catalogKey = 'reports.chart.usage-active-users.warning' as TranslationKey;
-    const translated = t(catalogKey, { details });
-    return translated === catalogKey ? chart.warning : translated;
+    return usageWarningText(t, chart, chart.seriesWarnings);
   }
 
   const usageWarningParts = EN_CATALOG['reports.chart.usage-active-users.warning'].split('{details}');
@@ -372,6 +389,41 @@ export function reportChartWarningText(t: TFunction, chart: ReportChart): string
   if (chart.warning !== EN_CATALOG[catalogKey]) return chart.warning;
   const translated = t(catalogKey);
   return translated === catalogKey ? chart.warning : translated;
+}
+
+/**
+ * The usage chart's warning sentence for each `warningKey` the server sends. A workload charted from
+ * the days that were imported is not unavailable, so its incomplete weeks get a sentence of their
+ * own rather than being listed as a missing series (#816).
+ */
+export const USAGE_WARNING_KEYS = {
+  seriesUnavailable: 'reports.chart.usage-active-users.warning',
+  incompleteWeeks: 'reports.chart.usage-active-users.warning.incompleteWeeks',
+  seriesUnavailableAndIncompleteWeeks: 'reports.chart.usage-active-users.warning.seriesUnavailableAndIncompleteWeeks',
+} as const satisfies Record<string, TranslationKey>;
+
+function usageWarningText(t: TFunction, chart: ReportChart, warnings: ReportSeriesWarning[]): string {
+  const details = (subset: ReportSeriesWarning[]) => subset.map((warning) => seriesWarningText(t, warning)).join('; ');
+  const incomplete = warnings.filter((warning) => warning.reason === 'incompleteWeeks');
+  const unavailable = warnings.filter((warning) => warning.reason !== 'incompleteWeeks');
+
+  // A server older than the key sends the facts alone; they say the same thing.
+  const key = chart.warningKey
+    ?? (unavailable.length === 0 ? 'incompleteWeeks' : incomplete.length === 0 ? 'seriesUnavailable' : 'seriesUnavailableAndIncompleteWeeks');
+
+  switch (key) {
+    case 'seriesUnavailable':
+      return t(USAGE_WARNING_KEYS.seriesUnavailable, { details: details(warnings) });
+    case 'incompleteWeeks':
+      return t(USAGE_WARNING_KEYS.incompleteWeeks, { details: details(warnings) });
+    case 'seriesUnavailableAndIncompleteWeeks':
+      return t(USAGE_WARNING_KEYS.seriesUnavailableAndIncompleteWeeks, {
+        unavailable: details(unavailable),
+        incomplete: details(incomplete),
+      });
+    default:
+      return chart.warning ?? '';
+  }
 }
 
 function seriesWarningText(t: TFunction, warning: ReportSeriesWarning): string {
@@ -611,6 +663,7 @@ function ReportAreaView({
         const categories = reportCategories(t, chart);
         const series = reportSeries(t, chart);
         const matrix = reportMatrix(t, chart);
+        const withheldEmptyKey = agentsWithheldEmptyKey(chart, agentName);
 
         return (
         <Card key={chart.key} className={styles.chartCard}>
@@ -622,6 +675,13 @@ function ReportAreaView({
               <Text size={200} block className={styles.muted}>
                 {description}
               </Text>
+              {chart.minimumGroupSize != null && (
+                <Text size={200} block className={styles.muted}>
+                  {t(withheldNoteKey(chart), {
+                    count: formatNumber(chart.minimumGroupSize),
+                  })}
+                </Text>
+              )}
             </div>
             <SqlPopover sql={chart.sql} title={t('reports.chart.sqlTitle')} />
           </div>
@@ -646,7 +706,11 @@ function ReportAreaView({
                 */}
                 {(!chart.warning || chartHasData(chart)) && (
                   <>
-                    {chart.type === 'timeseries' && series ? (
+                    {withheldEmptyKey && chart.minimumGroupSize != null ? (
+                      <Text className={styles.muted}>
+                        {t(withheldEmptyKey, { count: formatNumber(chart.minimumGroupSize) })}
+                      </Text>
+                    ) : chart.type === 'timeseries' && series ? (
                       <TimeSeriesChart series={series} valueLabel={valueLabel} />
                     ) : chart.type === 'bar' && categories ? (
                       <CategoryBarChart
@@ -656,7 +720,7 @@ function ReportAreaView({
                         valueSuffix={chart.valueSuffix}
                       />
                     ) : chart.type === 'matrix' && matrix ? (
-                      <MatrixChart matrix={matrix} valueLabel={valueLabel} />
+                      <MatrixChart matrix={matrix} valueLabel={valueLabel} withheldMinimum={chart.minimumGroupSize} />
                     ) : chart.type === 'wordcloud' && categories ? (
                       <WordCloud categories={categories} valueLabel={valueLabel} />
                     ) : (

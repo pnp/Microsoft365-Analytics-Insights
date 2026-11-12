@@ -377,6 +377,50 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        /// <summary>
+        /// A new file's password is asked for twice: a typing mistake there isn't noticed until the file is opened again,
+        /// when nothing can decrypt the secrets in it (#852 R11-7). Opening a file still asks once.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public void ANewFilesPassword_MustBeTypedTwice_AnExistingOnesOnce(bool newFile)
+        {
+            InstallerWorkspaceTests.RunSta(() =>
+            {
+                string refused = null;
+                using (var form = new EnterPasswordForm { ConfirmPassword = newFile, ShowValidationError = message => refused = message })
+                {
+                    form.Show();
+                    var password = InstallerWorkspaceTests.Find<TextBox>(form, "txtPassword");
+                    var again = InstallerWorkspaceTests.Find<TextBox>(form, "txtConfirmPassword");
+                    var ok = InstallerWorkspaceTests.Find<Button>(form, "btnSave");
+                    Assert.AreEqual(newFile, again.Visible);
+                    Assert.IsTrue(ok.Bottom <= form.ClientSize.Height && ok.Top > InstallerWorkspaceTests.Find<GroupBox>(form, "groupBox1").Bottom,
+                        "The OK button must stay below the boxes and inside the dialog.");
+
+                    password.Text = ConfigPassword;
+                    again.Text = ConfigPassword + "x";
+                    ok.PerformClick();
+
+                    if (newFile)
+                    {
+                        StringAssert.Contains(refused, "don't match");
+                        Assert.AreNotEqual(DialogResult.OK, form.DialogResult);
+                        Assert.IsNull(form.Password);
+
+                        refused = null;
+                        again.Text = ConfigPassword;
+                        ok.PerformClick();
+                    }
+
+                    Assert.IsNull(refused);
+                    Assert.AreEqual(DialogResult.OK, form.DialogResult);
+                    Assert.AreEqual(ConfigPassword, form.Password);
+                }
+            });
+        }
+
         [TestMethod]
         public void OpeningADamagedFile_KeepsWhatWasOpenAndWhereItSaves()
         {

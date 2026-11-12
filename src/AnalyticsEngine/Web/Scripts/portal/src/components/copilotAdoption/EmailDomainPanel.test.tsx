@@ -3,6 +3,7 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import EmailDomainPanel from './EmailDomainPanel';
+import { loadCatalog } from '../../i18n';
 import type {
   AdoptionDomainRow,
   CopilotAdoptionOptions,
@@ -101,6 +102,15 @@ describe('EmailDomainPanel', () => {
     expect(row.getByText('11')).toBeTruthy();
   });
 
+  it('writes interactions per licence in the reader\u2019s number format', async () => {
+    await loadCatalog('es');
+    renderWithProvider(<EmailDomainPanel summary={summaryWith(DOMAINS)} />, { language: 'es' });
+
+    expect(within(rowFor('fabrikam.com')).getByText('1,2')).toBeTruthy();
+    expect(within(rowFor('contoso.com')).getByText('18,4')).toBeTruthy();
+    expect(within(rowFor('contoso.com')).queryByText('18.4')).toBeNull();
+  });
+
   it('shows a dash for a domain with no seats, never 0%', () => {
     // A domain with no licences was never offered Copilot. Rendering 0% would read as "this
     // organisation ignores it", which is the opposite of the truth and the opposite decision.
@@ -196,5 +206,102 @@ describe('EmailDomainPanel', () => {
     renderPanel([domain({ segment: 'contoso.com' })]);
 
     expect(screen.getByText(/Everybody in this analysis is on one email domain/)).toBeTruthy();
+  });
+});
+
+describe('EmailDomainPanel for a reader without See PII (#844)', () => {
+  /**
+   * Each population on a row floored on its own: contoso's 3 unlicensed Chat users and fabrikam's 3 seat holders are
+   * hidden, and northwind's Chat count with them, because the tenant's total less the counts shown would give a
+   * hidden one back. What the server sends: null figures, each with its reason.
+   */
+  const WITHHELD: AdoptionDomainRow[] = [
+    domain({
+      segment: 'contoso.com',
+      licensedUsers: 20,
+      activeUsers: 12,
+      habitualUsers: 6,
+      neverUsedUsers: 8,
+      adoptionRatePct: 60,
+      unlicensedActiveUsers: null,
+      unlicensedUsersWithheld: 'fewPeople',
+      recommendedForLicence: 7,
+      minimumPeople: 5,
+    }),
+    domain({
+      segment: 'fabrikam.com',
+      licensedUsers: null,
+      activeUsers: null,
+      habitualUsers: null,
+      neverUsedUsers: null,
+      adoptionRatePct: null,
+      averageAdoptionScore: null,
+      reclaimableSeats: null,
+      interactionsPerLicensedUser: null,
+      coworkPrimeCandidates: null,
+      seatHoldersWithheld: 'fewPeople',
+      unlicensedActiveUsers: 20,
+      recommendedForLicence: 0,
+      minimumPeople: 5,
+    }),
+    domain({
+      segment: 'northwind.example',
+      licensedUsers: 0,
+      activeUsers: 0,
+      habitualUsers: 0,
+      neverUsedUsers: 0,
+      adoptionRatePct: 0,
+      averageAdoptionScore: 0,
+      reclaimableSeats: 0,
+      interactionsPerLicensedUser: 0,
+      unlicensedActiveUsers: null,
+      unlicensedUsersWithheld: 'revealsSmallerGroup',
+      recommendedForLicence: 0,
+      minimumPeople: 5,
+    }),
+  ];
+
+  it('shows a hidden population as hidden and says why - never 0, and hidden seat holders are not "no seats"', () => {
+    renderPanel(WITHHELD);
+
+    const contoso = within(rowFor('contoso.com'));
+    expect(contoso.getByLabelText('Hidden: fewer than 5 people on this domain used Copilot Chat without a licence')).toHaveTextContent('\u2014');
+    expect(contoso.getByText('20')).toBeTruthy();
+    expect(contoso.getByText('60%')).toBeTruthy();
+
+    const fabrikam = within(rowFor('fabrikam.com'));
+    expect(fabrikam.getByText('Hidden: fewer than 5 people on this domain hold a Copilot seat')).toBeTruthy();
+    expect(fabrikam.queryByText(/no seats/)).toBeNull();
+    expect(fabrikam.queryByText('0%')).toBeNull();
+    expect(fabrikam.getByText('20')).toBeTruthy();
+
+    const northwind = within(rowFor('northwind.example'));
+    expect(northwind.getByLabelText(
+      'Hidden: with the tenant total, this count would reveal a domain where fewer than 5 people used Copilot Chat without a licence',
+    )).toHaveTextContent('\u2014');
+    expect(northwind.getByText(/no seats/)).toBeTruthy();
+
+    expect(screen.getByText(/a group of fewer than 5 people is hidden, so that nobody can be singled out/)).toBeTruthy();
+    expect(screen.getByText(/One more domain is hidden in a column/)).toBeTruthy();
+  });
+
+  it('says the same in Spanish', async () => {
+    await loadCatalog('es');
+    renderWithProvider(<EmailDomainPanel summary={summaryWith(WITHHELD)} />, { language: 'es' });
+
+    expect(await screen.findByText('Oculto: menos de 5 personas de este dominio tienen un puesto de Copilot', {}, { timeout: 5000 })).toBeTruthy();
+    expect(within(rowFor('contoso.com')).getByLabelText('Oculto: menos de 5 personas de este dominio usaron Copilot Chat sin licencia')).toBeTruthy();
+    expect(within(rowFor('northwind.example')).getByLabelText(
+      'Oculto: con el total del inquilino, este recuento revelaría un dominio en el que menos de 5 personas usaron Copilot Chat sin licencia',
+    )).toBeTruthy();
+    expect(screen.getByText(/un grupo de menos de 5 personas se oculta/)).toBeTruthy();
+    expect(screen.queryByText(/Hidden/)).toBeNull();
+  });
+
+  it('adds nothing when no figure is hidden - the table a reader with See PII is given', () => {
+    renderPanel();
+
+    expect(screen.queryByLabelText(/Hidden/)).toBeNull();
+    expect(screen.queryByText(/is hidden/)).toBeNull();
   });
 });

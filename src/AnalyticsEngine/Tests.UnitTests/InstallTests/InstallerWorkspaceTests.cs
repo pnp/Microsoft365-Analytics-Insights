@@ -570,6 +570,27 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        /// <summary>
+        /// "Clear Settings" dereferenced the preferences start-up had loaded, so when start-up never got that far - as when
+        /// the preferences file could not be decrypted - it threw a NullReferenceException instead (#852 R11-16).
+        /// </summary>
+        [TestMethod]
+        public void ClearingSettings_WhenNoPreferencesWereLoaded_ResetsToTheDefaults()
+        {
+            RunSta(() =>
+            {
+                using (var form = new MainForm())
+                {
+                    Assert.IsNull(form.SavedPreferences, "The form's Load, which reads the preferences, has not run.");
+
+                    form.ResetSavedPreferences();
+
+                    Assert.IsNotNull(form.SavedPreferences?.ProxyConfig);
+                    Assert.IsNotNull(form.SavedPreferences.TestsConfig);
+                }
+            });
+        }
+
         [TestMethod]
         public void BackingOutOfDeploymentReview_DoesNotSaveOrCreateAnEngine()
         {

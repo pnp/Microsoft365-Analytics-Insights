@@ -52,7 +52,7 @@ per-person view of the Copilot spend report has something to say:
 
 A database generated in v5 or earlier has none of this. Generate a new one.
 
-The operator guide lives in the wiki: [Copilot Adoption demo data](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Copilot-Adoption-Demo-Data).
+The operator guide lives in the wiki: [Copilot Adoption Design Notes, section 8 (Demo and test data)](https://github.com/pnp/Microsoft365-Analytics-Insights/wiki/Copilot-Adoption-Design-Notes#8-demo-and-test-data).
 
 ### Rebuilding a demo database: `--recreate`
 

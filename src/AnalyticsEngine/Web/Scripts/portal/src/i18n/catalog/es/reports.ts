@@ -80,6 +80,14 @@ const reports: Record<keyof typeof en, string> = {
   'reports.chart.sqlTitle': 'SQL de este gráfico',
   'reports.chart.loadError': 'No se ha podido cargar este gráfico: {error}',
   'reports.chart.noData': 'Sin datos para este periodo.',
+  'reports.withheld.matrix':
+    'No se muestran las columnas de menos de {count} personas, y una celda de menos de {count} personas aparece como un guion, para que no se pueda identificar a nadie.',
+  'reports.withheld.prompts':
+    'Solo se muestran las frases y los idiomas que usaron al menos {count} personas distintas, para que no se pueda identificar a nadie.',
+  'reports.withheld.agents':
+    'Solo se muestran los agentes usados por al menos {count} personas distintas en este periodo, para que no se pueda identificar a nadie.',
+  'reports.withheld.agentsNone': 'Ningún agente fue usado por al menos {count} personas distintas en este periodo.',
+  'reports.withheld.agentsNoneMatching': 'Ningún agente que coincida con el filtro fue usado por al menos {count} personas distintas en este periodo.',
   'reports.chart.error.noCompletedUsageWeeks': 'No hay semanas completadas de informes de uso disponibles.',
   'reports.chart.error.noWorkloadSeriesLoaded': 'No se pudo cargar ninguna serie de carga de trabajo. {details}',
   'reports.chart.error.noCompletedUsageWeeksWithData': 'No hay semanas completadas de informes de uso disponibles para cargas de trabajo con datos.',
@@ -126,6 +134,8 @@ const reports: Record<keyof typeof en, string> = {
   'reports.chart.usage-active-users.description': 'Usuarios distintos activos en cada semana completada. Las semanas sin informe de uso todavía se dejan en blanco en lugar de mostrarse como cero.',
   'reports.chart.usage-active-users.valueLabel': 'Usuarios activos',
   'reports.chart.usage-active-users.warning': 'Algunas series de cargas de trabajo no están disponibles: {details}.',
+  'reports.chart.usage-active-users.warning.incompleteWeeks': 'Algunas semanas están incompletas: {details}.',
+  'reports.chart.usage-active-users.warning.seriesUnavailableAndIncompleteWeeks': 'Algunas series de cargas de trabajo no están disponibles: {unavailable}. Algunas semanas están incompletas: {incomplete}.',
   'reports.chart.spo-operations.title': 'Actividad de archivos por semana',
   'reports.chart.spo-operations.description': 'Operaciones de auditoría de SharePoint y OneDrive cada semana.',
   'reports.chart.spo-operations.valueLabel': 'Operaciones',

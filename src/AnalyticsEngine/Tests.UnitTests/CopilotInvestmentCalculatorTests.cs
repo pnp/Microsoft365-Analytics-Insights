@@ -785,6 +785,46 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void UnmatchedBalancesAndStudioCharges_OfOneToFourAccounts_AreWithheldFromAReaderWithoutSeePii()
+        {
+            var input = Input(new List<CopilotInvestmentPerson> { Holder(1, 10, credit: Balance(1, 10)) }, Assumptions());
+            input.Credits.Users.Add(new CreditUserFact { ObjectId = Guid.NewGuid(), Credits = 99, Quality = 2, PeriodStatus = "unverified" });
+            input.Studio = new StudioFacts { HasData = true };
+            input.Studio.Users.Add(new StudioUserFact { UserId = null, Credits = 7, ActiveDays = 1 });
+            var summary = CopilotInvestmentCalculator.Calculate(input);
+            var reason = summary.Trust.Reasons.Single(r => r.Code == CopilotInvestmentTrustCodes.CreditsUnresolved);
+            Assert.AreEqual(99, reason.Values["credits"]);
+
+            var trimmed = summary.WithoutIndividualData();
+
+            Assert.IsNull(trimmed.Sources.Credits.UnresolvedCredits, "One unmatched account's balance is that account's.");
+            Assert.IsTrue(trimmed.Sources.Credits.UnresolvedCreditsWithheld);
+            Assert.AreEqual(1, trimmed.Sources.Credits.UnresolvedObjects, "The count stays: it is nobody's balance.");
+            Assert.IsNull(trimmed.Sources.Studio.UnresolvedCredits, "One unmatched maker's charges are theirs.");
+            Assert.IsTrue(trimmed.Sources.Studio.UnresolvedCreditsWithheld);
+            var trimmedReason = trimmed.Trust.Reasons.Single(r => r.Code == CopilotInvestmentTrustCodes.CreditsUnresolved);
+            Assert.IsNull(trimmedReason.Values["credits"], "The confidence reason keeps its wording without the figure.");
+            Assert.AreEqual(1, trimmedReason.Values["objects"]);
+
+            // The cached summary is never edited: a See PII reader is given the figures as before.
+            Assert.AreEqual(99, summary.Sources.Credits.UnresolvedCredits);
+            Assert.AreEqual(7, summary.Sources.Studio.UnresolvedCredits);
+            Assert.AreEqual(99, reason.Values["credits"]);
+            Assert.IsFalse(summary.Sources.Credits.UnresolvedCreditsWithheld || summary.Sources.Studio.UnresolvedCreditsWithheld);
+
+            // Five unmatched accounts with a balance, and five unmatched makers charged: nobody's in particular.
+            for (var i = 0; i < 4; i++)
+            {
+                input.Credits.Users.Add(new CreditUserFact { ObjectId = Guid.NewGuid(), Credits = 1, Quality = 2, PeriodStatus = "unverified" });
+                input.Studio.Users.Add(new StudioUserFact { UserId = null, Credits = 1, ActiveDays = 1 });
+            }
+            var five = CopilotInvestmentCalculator.Calculate(input).WithoutIndividualData();
+            Assert.AreEqual(103, five.Sources.Credits.UnresolvedCredits);
+            Assert.AreEqual(11, five.Sources.Studio.UnresolvedCredits);
+            Assert.IsFalse(five.Sources.Credits.UnresolvedCreditsWithheld || five.Sources.Studio.UnresolvedCreditsWithheld);
+        }
+
+        [TestMethod]
         public async Task Assumptions_StartEmpty_SaveWithHistory_AndRefuseAStaleOrInvalidWrite()
         {
             var clock = new DateTime(2026, 10, 27, 9, 0, 0, DateTimeKind.Utc);
@@ -1281,6 +1321,50 @@ namespace Tests.UnitTests
             {
                 Thread.CurrentThread.CurrentCulture = previous;
             }
+        }
+
+        [TestMethod]
+        public void AWhatIfInAnotherCurrency_IsRefused_UnlessItRestatesEveryMoneyFigureTheOrganisationSet()
+        {
+            // The organisation's figures are in EUR: seat 30, credits 0.01 and 0.02, an hour 60.
+            var tenant = Assumptions();
+
+            // Only the currency and two prices: the credit prices would still be the organisation's euros, shown as dollars.
+            var relabelled = Assert.ThrowsException<CopilotInvestmentAssumptionsRejectedException>(() =>
+                new CopilotInvestmentScenario { Currency = "usd", SeatPricePerMonth = 32, HourlyCost = 65 }.ApplyTo(tenant, null));
+            Assert.AreEqual(CopilotInvestmentErrorCodes.ScenarioInvalid, relabelled.Code, "A refused what-if, as the page and the workbook link expect.");
+            CollectionAssert.Contains(relabelled.ValidationErrors.ToList(), CopilotInvestmentErrorCodes.CurrencyChangeNeedsPrices);
+            Assert.ThrowsException<CopilotInvestmentAssumptionsRejectedException>(() =>
+                new CopilotInvestmentScenario { Currency = "USD" }.ApplyTo(tenant, null), "A currency on its own relabels every figure.");
+
+            // Every money figure restated in the new currency: nothing of the organisation's is relabelled.
+            var restated = new CopilotInvestmentScenario
+            {
+                Currency = "USD", SeatPricePerMonth = 32, CreditPrice = 0.011, StudioCreditPrice = 0.021, HourlyCost = 65,
+            }.ApplyTo(tenant, null);
+            Assert.AreEqual("USD", restated.Currency);
+            Assert.AreEqual(0.011, restated.CreditPrice);
+
+            // The organisation's own currency, however it is typed, is not a change.
+            var same = new CopilotInvestmentScenario { Currency = " eur ", HourlyCost = 70 }.ApplyTo(tenant, null);
+            Assert.AreEqual("EUR", same.Currency);
+            Assert.AreEqual(30, same.SeatPricePerMonth);
+
+            // A price the organisation never set has nothing to relabel, so it need not be given.
+            var withoutCredits = Assumptions(a => { a.CreditPrice = null; a.StudioCreditPrice = null; });
+            var priced = new CopilotInvestmentScenario { Currency = "USD", SeatPricePerMonth = 32, HourlyCost = 65 }.ApplyTo(withoutCredits, null);
+            Assert.AreEqual("USD", priced.Currency);
+            Assert.IsNull(priced.CreditPrice);
+            Assert.AreEqual("USD", new CopilotInvestmentScenario { Currency = "USD", SeatPricePerMonth = 32 }
+                .ApplyTo(new CopilotInvestmentAssumptions(), null).Currency, "An organisation with no figures has no money to relabel.");
+
+            // The workbook link says why, in the reader's language.
+            var spanish = Common.Entities.Localisation.PortalLanguage.Spanish;
+            var es = Common.Entities.Localisation.PortalCatalog.For(CopilotInvestmentWorkbook.CatalogModule, spanish);
+            Assert.IsTrue(es.Has("copilotInvestment.settings.error." + CopilotInvestmentErrorCodes.CurrencyChangeNeedsPrices));
+            Assert.AreEqual(
+                es.Text("copilotInvestment.workbook.error.whatIf", ("errors", es.Text("copilotInvestment.settings.error.currencyChangeNeedsPrices"))),
+                CopilotInvestmentAPIController.WhatIfWorkbookError(relabelled, spanish).Content);
         }
 
         [TestMethod]

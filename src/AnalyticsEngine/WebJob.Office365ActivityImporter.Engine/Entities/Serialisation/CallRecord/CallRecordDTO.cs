@@ -121,7 +121,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             callDTO.JsonText = callJsonText;
 
             // Every session first: the email look-ups, the UserGroupsFilter check and the save only see what is in
-            // Sessions, so a call whose in-scope people were all on a later page would be skipped as out of scope.
+            // Sessions, so a call whose in-scope people were all on a later page would be skipped as out of scope. For the
+            // same reason a record that came back without its own session list fails here, as a read that failed.
             await callDTO.LoadRemainingSessionPages(manualClient, callRecordUrl, logger);
 
             // Find email addresses for user IDs
@@ -133,23 +134,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
 
         /// <summary>
         /// Follows <see cref="SessionsNextLink"/> until Graph has returned every session, appending each page to
-        /// <see cref="Sessions"/>. Each page is requested with the client's throttling retries.
+        /// <see cref="Sessions"/>. Each page is requested with the client's throttling retries. The call record's own
+        /// <c>sessions</c> is the first page, so a record without it fails like any other page that could not be read.
         /// </summary>
         /// <param name="callRecordUrl">The absolute URL the call record was read from; continuation links must stay on its host.</param>
         /// <exception cref="CallRecordSessionPagingException">
-        /// A page failed or was unreadable (retryable), or the paging ran away - more than
+        /// A page failed or was unreadable, the call record's own included (retryable), or the paging ran away - more than
         /// <see cref="CallRecordSessionPaging.MaxPages"/> pages, or a link repeated (not retryable).
         /// </exception>
         public async Task LoadRemainingSessionPages(ManualGraphCallClient manualClient, string callRecordUrl, ILogger logger)
         {
+            if (Sessions == null)
+            {
+                throw SessionListMissing(GraphCallID);
+            }
+
             if (string.IsNullOrEmpty(SessionsNextLink))
             {
                 return;
-            }
-
-            if (Sessions == null)
-            {
-                Sessions = new List<CallSessionDTO>();
             }
 
             var requestedUrls = new HashSet<string>(StringComparer.Ordinal);
@@ -203,17 +205,38 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         }
 
         /// <summary>
-        /// Debug testing method
+        /// Operator single-call mode (<c>--callId</c>): loads one call record from Graph and saves it.
         /// </summary>
+        /// <param name="graphServiceClientAuthenticationProvider">
+        /// The app's credential. <see cref="DataUtils.Http.ImportAppIndentityOAuthContext.Creds"/> is null until
+        /// <c>InitClientCredential</c> has run.
+        /// </param>
         /// <param name="userScope">The <c>UserGroupsFilter</c> scope to apply; null means unfiltered.</param>
         public static async Task<CallRecord> SaveNewCallToDB(string callId, ManualGraphCallClient manualClient, TokenCredential graphServiceClientAuthenticationProvider, ILogger logger, string thisTenantId,
             UserImportScope userScope = null)
         {
+            if (graphServiceClientAuthenticationProvider == null)
+            {
+                throw new ArgumentNullException(nameof(graphServiceClientAuthenticationProvider),
+                    "No Graph credential: call InitClientCredential on the OAuth context before reading its Creds.");
+            }
+
             var teamsLoadContext = new TeamsLoadContext(GraphServiceClientFactory.CreateWithTimeout(graphServiceClientAuthenticationProvider, GraphServiceClientFactory.DefaultGraphSdkTimeout));
+            return await SaveNewCallToDB(callId, manualClient, teamsLoadContext, logger, thisTenantId, userScope);
+        }
 
+        internal static async Task<CallRecord> SaveNewCallToDB(string callId, ManualGraphCallClient manualClient, TeamsLoadContext teamsLoadContext, ILogger logger, string thisTenantId,
+            UserImportScope userScope)
+        {
             var newCall = await LoadFromGraphByID(callId, manualClient, teamsLoadContext, logger, thisTenantId);
+            if (newCall == null)
+            {
+                return null;    // LoadFromGraphByID has said why
+            }
 
-            logger.LogInformation($"Response payload from Graph:\n{newCall.JsonText}");
+            // Counts, never the payload: it names everyone on the call (#853)
+            logger.LogInformation($"Loaded call record '{callId}' from Graph: {newCall.Sessions?.Count ?? 0} session(s) " +
+                $"on {newCall.LoadStats.SessionPages} page(s). The payload is not logged.");
 
             var scope = userScope ?? UserImportScope.Unfiltered;
             if (!CallRecordScopeRules.AnyParticipantInScope(newCall, scope))
@@ -240,6 +263,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         {
             var scope = userScope ?? UserImportScope.Unfiltered;
 
+            // Before anything is deleted: a call with nothing usable to save is a payload failure, not a half-done save.
+            ValidateForSave();
+
             // Make sure we only save call records one at a time
             await saveCallRecordSemaphoreSlim.WaitAsync();
 
@@ -261,65 +287,58 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                     // Agregate session data
                     foreach (var session in this.Sessions)
                     {
+                        if (session == null)
+                        {
+                            // Counted in LoadStats.SkippedSessions by ValidateForSave.
+                            continue;
+                        }
+
                         // Feedback first, from every session including the organiser's own: what an endpoint's user said
                         // about the call is theirs, whoever the session is stored against.
                         await AddFeedbackIfUnique(session.Callee, call, feedbackList, context, scope);
                         await AddFeedbackIfUnique(session.Caller, call, feedbackList, context, scope);
 
-                        bool saveSession = session.Callee.HaveUserEmail || session.Caller.HaveUserEmail;
-
-                        if (saveSession)
-                        {
-                            // Decided on the real identities, before anyone is anonymised: two different people
-                            // outside the scope are both "Unknown User", and neither is the organiser.
-                            var otherPersonEmail = GetOtherUserEmail(session, this.OrganizerEmail);
-
-                            if (string.Equals(otherPersonEmail, this.OrganizerEmail, StringComparison.OrdinalIgnoreCase))
-                            {
-                                // Session is for the organiser. Ignore
-                            }
-                            else
-                            {
-                                var otherPerson = await GetUserForStorage(context, otherPersonEmail, scope);
-
-                                // Session is unique. Add to DB
-                                var dbSession = new CallSession()
-                                {
-                                    Attendee = otherPerson,
-                                    Start = session.StartDateTime,
-                                    End = session.EndDateTime,
-                                    ParentRecord = call
-                                };
-                                call.Sessions.Add(dbSession);
-
-                                // Aggregate modes of using call in all sessions, where unique
-                                if (session.Modalities != null)
-                                {
-                                    foreach (var modalityString in session.Modalities)
-                                    {
-                                        var m = await context.GetOrCreateCallModality(modalityString);
-                                        dbSession.AddCallModality(m);
-                                    }
-                                }
-
-                                // Save failure info
-                                if (session.FailureInfo != null)
-                                {
-                                    var newFailure = new CallFailureReasonLookup() { Call = call, Reason = session.FailureInfo.Reason, Stage = session.FailureInfo.Stage };
-                                    context.Database.CallFailures.Add(newFailure);
-                                }
-                            }
-                        }
-                        else
+                        // Decided on the real identities, before anyone is anonymised: two different people
+                        // outside the scope are both "Unknown User", and neither is the organiser.
+                        var use = ClassifySession(session, this.OrganizerEmail, out var otherPersonEmail);
+                        if (use == SessionUse.NoUserEmail)
                         {
                             logger.LogInformation($"Found a session ID '{session.GraphCallID}' without a caller/callee email address. Skipping session.");
                         }
+                        else if (use == SessionUse.Attendee)
+                        {
+                            var otherPerson = await GetUserForStorage(context, otherPersonEmail, scope);
+
+                            // Session is unique. Add to DB
+                            var dbSession = new CallSession()
+                            {
+                                Attendee = otherPerson,
+                                Start = session.StartDateTime,
+                                End = session.EndDateTime,
+                                ParentRecord = call
+                            };
+                            call.Sessions.Add(dbSession);
+
+                            // Aggregate modes of using call in all sessions, where unique
+                            if (session.Modalities != null)
+                            {
+                                foreach (var modalityString in session.Modalities)
+                                {
+                                    var m = await context.GetOrCreateCallModality(modalityString);
+                                    dbSession.AddCallModality(m);
+                                }
+                            }
+
+                            // Save failure info
+                            if (session.FailureInfo != null)
+                            {
+                                var newFailure = new CallFailureReasonLookup() { Call = call, Reason = session.FailureInfo.Reason, Stage = session.FailureInfo.Stage };
+                                context.Database.CallFailures.Add(newFailure);
+                            }
+                        }
+                        // The organiser's own session has nothing more to store; a malformed one is counted in LoadStats.SkippedSessions.
                     }
 
-                    if (string.IsNullOrEmpty(this.CallType))
-                    {
-                        throw new ArgumentNullException(CallType);
-                    }
                     call.CallType = await context.GetOrCreateCallType(this.CallType);
                     call.StartDateTime = this.StartDateTime;
                     call.EndDateTime = this.EndDateTime;
@@ -354,7 +373,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
         }
 
         /// <summary>
-        /// The email address of the session participant who is not the organiser.
+        /// The email address of the session participant who is not the organiser, or <c>null</c> when the session has two
+        /// people and neither organised the call (after a transfer, say): who it should be stored against is then unknown.
         /// </summary>
         internal static string GetOtherUserEmail(CallSessionDTO session, string organiserEmail)
         {
@@ -391,9 +411,109 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
                 }
                 else
                 {
-                    throw new ArgumentOutOfRangeException(nameof(session), "Two human contacts for session, neither of which is the organiser. Can't pick the other person.");
+                    // This used to throw, failing the whole call as Transient: it was fetched again ten times over about four
+                    // hours and then dead-lettered (#847, R9-9). The session is now skipped and counted instead.
+                    return null;
                 }
             }
+        }
+
+        /// <summary>What saving does with one session of the call.</summary>
+        internal enum SessionUse
+        {
+            /// <summary>Stored against the person on it who is not the organiser.</summary>
+            Attendee,
+
+            /// <summary>The organiser's own session (with the meeting service, say): only its feedback is kept.</summary>
+            Organiser,
+
+            /// <summary>Neither end has a user address (a phone number, someone from another tenant): skipped, as always.</summary>
+            NoUserEmail,
+
+            /// <summary>
+            /// Nobody on it can be attributed: a missing session, one without a caller or callee, or two people neither of
+            /// whom organised the call. Skipped and counted in <see cref="CallLoadStats.SkippedSessions"/>.
+            /// </summary>
+            Malformed
+        }
+
+        /// <param name="attendeeEmail">For <see cref="SessionUse.Attendee"/>, who the session is stored against.</param>
+        internal static SessionUse ClassifySession(CallSessionDTO session, string organiserEmail, out string attendeeEmail)
+        {
+            attendeeEmail = null;
+            if (session?.Caller == null || session.Callee == null)
+            {
+                return SessionUse.Malformed;
+            }
+            if (!session.Callee.HaveUserEmail && !session.Caller.HaveUserEmail)
+            {
+                return SessionUse.NoUserEmail;
+            }
+
+            var other = GetOtherUserEmail(session, organiserEmail);
+            if (other == null)
+            {
+                return SessionUse.Malformed;
+            }
+            if (string.Equals(other, organiserEmail, StringComparison.OrdinalIgnoreCase))
+            {
+                return SessionUse.Organiser;
+            }
+
+            attendeeEmail = other;
+            return SessionUse.Attendee;
+        }
+
+        /// <summary>
+        /// Checks the call has something to save, and counts the sessions saving will skip as malformed into
+        /// <see cref="CallLoadStats.SkippedSessions"/>. One odd session no longer fails the whole call: it is left out and
+        /// the rest saved.
+        /// </summary>
+        /// <exception cref="CallRecordSessionPagingException">
+        /// No session list: the call record was not read completely, so it is retried like a sessions page that failed to
+        /// load - never judged on the rest of the payload or dead-lettered as it stands (see <see cref="SessionListMissing"/>).
+        /// </exception>
+        /// <exception cref="CallRecordPayloadException">
+        /// A permanent payload failure, dead-lettered under its own reason rather than retried: the call has no call type
+        /// (<see cref="CallRecordPayloadException.NoCallTypeReason"/>), or sessions of which none can be attributed
+        /// (<see cref="CallRecordPayloadException.NoUsableSessionsReason"/>). An empty session list is neither: the call
+        /// is saved without sessions.
+        /// </exception>
+        public void ValidateForSave()
+        {
+            if (Sessions == null)
+            {
+                throw SessionListMissing(GraphCallID);
+            }
+            if (string.IsNullOrEmpty(CallType))
+            {
+                throw new CallRecordPayloadException(GraphCallID, CallRecordPayloadException.NoCallTypeReason,
+                    "The call record has no call type, which every saved call needs.", isPermanent: true);
+            }
+
+            var skipped = Sessions.Count(session => ClassifySession(session, OrganizerEmail, out _) == SessionUse.Malformed);
+            LoadStats.SkippedSessions = skipped;
+            if (skipped > 0 && skipped == Sessions.Count)
+            {
+                throw new CallRecordPayloadException(GraphCallID, CallRecordPayloadException.NoUsableSessionsReason,
+                    $"None of the call record's {skipped} session(s) can be attributed: each has no caller or callee, or two people neither of whom organised the call.",
+                    isPermanent: true);
+            }
+        }
+
+        /// <summary>
+        /// A call record without its session list (no <c>sessions</c>, or <c>"sessions": null</c>), although it was read
+        /// with <c>$expand=sessions</c>. Who was on the call is unknown, not "nobody", so it is a failed read: retried with
+        /// the usual back-off, like a later sessions page that failed, and dead-lettered as
+        /// <c>CallImportRetriesExhausted</c> if it never comes back whole. Graph can still be completing a call record
+        /// when its creation notification arrives.
+        /// </summary>
+        private static CallRecordSessionPagingException SessionListMissing(string callId)
+        {
+            return new CallRecordSessionPagingException(callId,
+                $"Call record '{callId}' came back without its session list (sessions page 1), so who was on the call is unknown; " +
+                "Graph may still be completing the record.",
+                isPermanent: false);
         }
 
         /// <summary>

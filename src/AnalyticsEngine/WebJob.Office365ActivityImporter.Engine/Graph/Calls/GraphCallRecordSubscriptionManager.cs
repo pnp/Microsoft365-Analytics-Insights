@@ -36,23 +36,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
             var matchingSubs = new List<CallRecordSubscription>();
             var firstPage = await _client.Subscriptions.GetAsync();
-            if (firstPage != null)
+            if (firstPage?.Value == null)
             {
-                var iterator = PageIterator<Subscription, SubscriptionCollectionResponse>.CreatePageIterator(
-                    _client,
-                    firstPage,
-                    sub =>
-                    {
-                        if (CallSubscriptionRules.IsCallRecordsSubscriptionFor(sub.Resource, sub.NotificationUrl, notificationUrl))
-                        {
-                            matchingSubs.Add(ToCallRecordSubscription(sub));
-                        }
-
-                        return true;
-                    });
-
-                await iterator.IterateAsync();
+                // A 200 without the subscriptions list: whether the subscription exists is unknown, so this is a failed read.
+                // Read as "none", the webhook went on to create a subscription it may already have had (#847).
+                throw new GraphPageWithoutValueException(1);
             }
+
+            var iterator = PageIterator<Subscription, SubscriptionCollectionResponse>.CreatePageIterator(
+                _client,
+                firstPage,
+                sub =>
+                {
+                    if (CallSubscriptionRules.IsCallRecordsSubscriptionFor(sub.Resource, sub.NotificationUrl, notificationUrl))
+                    {
+                        matchingSubs.Add(ToCallRecordSubscription(sub));
+                    }
+
+                    return true;
+                });
+
+            await iterator.IterateAsync();
 
             return matchingSubs;
         }

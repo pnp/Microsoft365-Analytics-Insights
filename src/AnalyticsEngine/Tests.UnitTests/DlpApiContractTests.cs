@@ -14,6 +14,7 @@ using DlpGovernanceSummary = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpGovern
 using DlpImpactRow = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpImpactRow;
 using DlpSummary = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpSummary;
 using DlpTrendPoint = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpTrendPoint;
+using DlpWithheldRows = AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpWithheldRows;
 
 namespace Tests.UnitTests
 {
@@ -38,7 +39,7 @@ namespace Tests.UnitTests
         /// <summary>Every model the DLP API returns, including the governance section's (#648).</summary>
         private static readonly System.Type[] ApiModelTypes =
         {
-            typeof(DlpAvailability), typeof(DlpImpactRow), typeof(DlpTrendPoint), typeof(DlpSummary),
+            typeof(DlpAvailability), typeof(DlpImpactRow), typeof(DlpTrendPoint), typeof(DlpSummary), typeof(DlpWithheldRows),
             typeof(DlpGovernanceSummary), typeof(DlpGovernanceRate), typeof(DlpGovernanceLabelShare), typeof(DlpGovernanceMixRow),
         };
         /// <summary>
@@ -111,6 +112,14 @@ namespace Tests.UnitTests
                 Assert.AreEqual(JTokenType.Array, summary[field].Type,
                     $"'{field}' is rendered with .map() and must always be an array.");
             }
+
+            // A reader with See PII is sent no per-table withholding; a reader without it, the names the page reads.
+            Assert.AreEqual(JTokenType.Null, summary["withheldRowsByTable"].Type);
+            var withheld = JObject.Parse(JsonConvert.SerializeObject(new DlpSummary { WithheldRowsByTable = new DlpWithheldRows { Policies = 2 } }))["withheldRowsByTable"];
+            CollectionAssert.AreEqual(
+                new[] { "agents", "policies", "sensitivityLabels", "tenantPolicies" },
+                ((JObject)withheld).Properties().Select(p => p.Name).ToArray());
+            Assert.AreEqual(2, (int)withheld["policies"]);
         }
 
         /// <summary>A populated row keeps its wire names, including the computed total.</summary>
@@ -184,7 +193,7 @@ namespace Tests.UnitTests
         {
             var typings = DlpTypeScriptSource();
 
-            var expected = new[] { typeof(DlpSummary), typeof(DlpGovernanceSummary), typeof(DlpGovernanceRate), typeof(DlpGovernanceLabelShare), typeof(DlpGovernanceMixRow) }
+            var expected = new[] { typeof(DlpSummary), typeof(DlpWithheldRows), typeof(DlpGovernanceSummary), typeof(DlpGovernanceRate), typeof(DlpGovernanceLabelShare), typeof(DlpGovernanceMixRow) }
                 .SelectMany(t => t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
                 .Select(p => p.GetCustomAttribute<JsonPropertyAttribute>()?.PropertyName)
                 .Where(n => !string.IsNullOrEmpty(n))

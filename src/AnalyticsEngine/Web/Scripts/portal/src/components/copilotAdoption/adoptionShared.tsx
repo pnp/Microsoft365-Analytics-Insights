@@ -7,9 +7,9 @@ import {
 } from '@fluentui/react-icons';
 import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useT, type TFunction } from '../../i18n';
+import { useT, type TFunction, type TranslationKey } from '../../i18n';
 import { AdoptionBand } from '../../types/copilotAdoption';
-import type { AdoptionSegmentRow, ManagerModellingSegmentRow } from '../../types/copilotAdoption';
+import type { AdoptionSegmentRow, ManagerModellingSegmentRow, WithheldBreakdown } from '../../types/copilotAdoption';
 import { ADOPTION_BANDS } from '../charts/GaugeRing';
 import { formatCount, formatPct } from '../shared/KpiGrid';
 import InfoTip from '../shared/InfoTip';
@@ -352,7 +352,51 @@ const useStyles = makeStyles({
     paddingLeft: '10px',
     marginBottom: '12px',
   },
+  /** Why a breakdown leaves out one more group than its floor, below the view it applies to (#844). */
+  smallestGroupNote: {
+    display: 'block',
+    marginTop: '8px',
+    color: tokens.colorNeutralForeground3,
+  },
 });
+
+/**
+ * The sentence for each breakdown the server can name in `smallestGroupsWithheld` - the C#
+ * `CopilotAdoptionWithheldBreakdowns` constants. A test reads the C# so a new one cannot ship unworded.
+ */
+export const SMALLEST_GROUP_WITHHELD_KEYS: Record<WithheldBreakdown, TranslationKey> = {
+  departments: 'copilotAdoption.shared.smallestGroupWithheld.departments',
+  countries: 'copilotAdoption.shared.smallestGroupWithheld.countries',
+  accountability: 'copilotAdoption.shared.smallestGroupWithheld.accountability',
+  unlicensedDepartments: 'copilotAdoption.shared.smallestGroupWithheld.unlicensedDepartments',
+  agentDepartments: 'copilotAdoption.shared.smallestGroupWithheld.agentDepartments',
+  builderDepartments: 'copilotAdoption.shared.smallestGroupWithheld.builderDepartments',
+};
+
+/**
+ * Says, below a department, country or accountability view, that a reader without See PII is shown one group fewer than
+ * the floor alone would leave: whenever a breakdown leaves a group out, its smallest listed group goes from every view of
+ * it too, so the tenant's figures less the groups shown cannot give back a small one (#844). Nothing when the server
+ * withheld nothing more, which is always the case for a reader with See PII.
+ */
+export function SmallestGroupWithheldNote({
+  withheld,
+  breakdowns,
+}: {
+  withheld: readonly string[] | null | undefined;
+  breakdowns: readonly WithheldBreakdown[];
+}) {
+  const styles = useStyles();
+  const t = useT();
+  const named = breakdowns.filter((breakdown) => withheld?.includes(breakdown));
+  if (named.length === 0) return null;
+
+  return (
+    <Text size={200} className={styles.smallestGroupNote}>
+      {named.map((breakdown) => t(SMALLEST_GROUP_WITHHELD_KEYS[breakdown])).join(' ')}
+    </Text>
+  );
+}
 
 /** The engagement band as a coloured pill. */
 export function BandBadge({ band, name }: { band: AdoptionBand; name: string }) {
@@ -521,30 +565,36 @@ export function SegmentTable({
 
 /**
  * One department's manager-modelling cells. A figure the server withheld - too few people managers or
- * reports to show without singling someone out - is a dash with the reason on hover, never 0%.
+ * reports to show without singling someone out - is a dash with the reason on hover, never 0%. For a
+ * reader without See PII a department with enough managers can be withheld too, when the figures for
+ * everyone above the table would give a smaller department's back (#844); its dash says that instead.
  */
 function ManagerModellingCells({ row }: { row: ManagerModellingSegmentRow | undefined }) {
   const styles = useStyles();
   const t = useT();
   const numeric = `${styles.td} ${styles.tdNumeric}`;
   const withheld = t('copilotAdoption.shared.segmentTable.withheld');
-  const value = (pct: number | null | undefined) =>
-    pct === null || pct === undefined ? <span title={withheld} aria-label={withheld}>{'\u2014'}</span> : formatPct(pct);
+  const revealsSmallerGroup = t('copilotAdoption.shared.segmentTable.withheldRevealsSmallerGroup');
+  const value = (pct: number | null | undefined, reason: string | null | undefined) => {
+    if (pct !== null && pct !== undefined) return formatPct(pct);
+    const text = reason ? revealsSmallerGroup : withheld;
+    return <span title={text} aria-label={text}>{'\u2014'}</span>;
+  };
 
   return (
     <>
       <td className={numeric}>
-        {value(row?.managersActivePct)}
+        {value(row?.managersActivePct, row?.managersWithheld)}
         {row && row.managersStatusUnknown > 0 && (
           <Text size={100} block className={styles.tdSub}>
             {t('copilotAdoption.shared.segmentTable.managersUnknown', { count: formatCount(row.managersStatusUnknown) })}
           </Text>
         )}
       </td>
-      <td className={numeric}>{value(row?.reportsActiveRatePctManagerActive)}</td>
-      <td className={numeric}>{value(row?.reportsActiveRatePctManagerInactive)}</td>
-      <td className={numeric}>{value(row?.reportsHabitRatePctManagerActive)}</td>
-      <td className={numeric}>{value(row?.reportsHabitRatePctManagerInactive)}</td>
+      <td className={numeric}>{value(row?.reportsActiveRatePctManagerActive, row?.comparisonWithheld)}</td>
+      <td className={numeric}>{value(row?.reportsActiveRatePctManagerInactive, row?.comparisonWithheld)}</td>
+      <td className={numeric}>{value(row?.reportsHabitRatePctManagerActive, row?.comparisonWithheld)}</td>
+      <td className={numeric}>{value(row?.reportsHabitRatePctManagerInactive, row?.comparisonWithheld)}</td>
     </>
   );
 }

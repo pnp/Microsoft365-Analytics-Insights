@@ -72,6 +72,35 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// #847 (R6-9): a 200 without a readable subscriptions list is a failed read. It used to be read as an empty
+        /// page, so Service configuration showed the webhook as "Missing" - and cached that for five minutes - when
+        /// whether it was registered was unknown. Equally on a later page: the subscription may be on the page lost.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow("")]
+        [DataRow("   ")]
+        [DataRow("{}")]
+        [DataRow(@"{ ""value"": null }")]
+        [DataRow("<html>synthetic gateway page</html>")]
+        public async Task FindCallRecordSubscriptions_APageWithoutAReadableList_IsAFailedReadNotMissing(string body)
+        {
+            var firstPage = new ScriptedGraph().Returning(GraphRestCallRecordSubscriptionReader.SubscriptionsUrl, HttpStatusCode.OK, body);
+            var first = await Assert.ThrowsExceptionAsync<SubscriptionPageUnreadableException>(() =>
+                CallRecordSubscriptionStatus.ReadAsync(new GraphRestCallRecordSubscriptionReader(new FakeTokenCredential("t"), new HttpClient(firstPage)), WebhookUrl));
+            Assert.AreEqual(1, first.PageNumber);
+            Assert.IsFalse(first.Message.Contains("synthetic gateway page"), "The body never reaches the message.");
+
+            var laterPage = new ScriptedGraph()
+                .Returning(GraphRestCallRecordSubscriptionReader.SubscriptionsUrl, HttpStatusCode.OK,
+                    @"{ ""value"": [], ""@odata.nextLink"": """ + SecondPageUrl + @""" }")
+                .Returning(SecondPageUrl, HttpStatusCode.OK, body);
+            var later = await Assert.ThrowsExceptionAsync<SubscriptionPageUnreadableException>(() =>
+                new GraphRestCallRecordSubscriptionReader(new FakeTokenCredential("t"), new HttpClient(laterPage)).FindCallRecordSubscriptions(WebhookUrl));
+            Assert.AreEqual(2, later.PageNumber);
+            Assert.IsFalse(later.Message.Contains("skiptoken"), "The paging link stays out of the message.");
+        }
+
+        /// <summary>
         /// The status page shows the exception message. With the SDK that was Graph's own error text, so
         /// an admin missing a permission sees Graph's explanation rather than a bare status code.
         /// </summary>

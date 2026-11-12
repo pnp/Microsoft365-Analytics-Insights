@@ -89,4 +89,68 @@ namespace Web.AnalyticsWeb
                 : Enumerable.Empty<string>();
         }
     }
+
+    /// <summary>
+    /// The MVC counterpart, for the account actions a page starts with a form POST: sign-out and the Teams connection.
+    /// Refuses the request with a 403 unless a page on this origin sent it.
+    /// </summary>
+    /// <remarks>
+    /// Both were GET actions, so any page the signed-in admin visited could sign them out, or - once consent had been
+    /// granted, when Entra ID asks nothing - run the Teams connection, just by linking to them (#853, R6-8). They are now
+    /// <c>[HttpPost]</c>. A form on another site can still POST, and a browser that doesn't default the auth cookie to
+    /// <c>SameSite=Lax</c> sends the cookie with it, so the request must also say where it came from:
+    /// <c>Sec-Fetch-Site: same-origin</c>, which every current browser sends and a page cannot forge; or, from a browser
+    /// that doesn't send that, an <c>Origin</c> - failing that a <c>Referer</c> - on this host. A request with none of
+    /// them is refused.
+    ///
+    /// <para>net10: an ASP.NET Core authorization filter. <see cref="SameOriginStateChangeFilter"/> leaves the MVC
+    /// controllers alone (their form posts carry no <c>X-Requested-With</c>), so on those two actions this is the
+    /// defence. The Web API 2 build's refusal is a bare 403 with a status description; ASP.NET Core has no reason
+    /// phrase to set, so the same sentence is the body.</para>
+    /// </remarks>
+    [AttributeUsage(AttributeTargets.Method | AttributeTargets.Class, AllowMultiple = false)]
+    public sealed class RequireSameOriginFormPostAttribute : Attribute, IAuthorizationFilter
+    {
+        internal const string RefusedMessage = "Refused: this request did not come from this site.";
+
+        public void OnAuthorization(AuthorizationFilterContext context)
+        {
+            if (context == null) throw new ArgumentNullException(nameof(context));
+
+            if (!IsSameOrigin(context.HttpContext?.Request))
+            {
+                context.Result = new ContentResult
+                {
+                    StatusCode = StatusCodes.Status403Forbidden,
+                    Content = RefusedMessage,
+                    ContentType = "text/plain; charset=utf-8",
+                };
+            }
+        }
+
+        internal static bool IsSameOrigin(HttpRequest request)
+        {
+            // The host only: behind App Service's front end, or another proxy, the scheme and port the app sees need not
+            // be the browser's
+            var here = request?.Host.Host;
+            if (string.IsNullOrEmpty(here))
+            {
+                return false;
+            }
+
+            var fetchSite = request.Headers[RequireSameOriginXhrAttribute.FetchSiteHeader].ToString();
+            if (!string.IsNullOrWhiteSpace(fetchSite))
+            {
+                return string.Equals(fetchSite.Trim(), "same-origin", StringComparison.OrdinalIgnoreCase);
+            }
+
+            var source = request.Headers.Origin.ToString();
+            if (string.IsNullOrWhiteSpace(source))
+            {
+                source = request.Headers.Referer.ToString();
+            }
+            return Uri.TryCreate(source?.Trim(), UriKind.Absolute, out var from)
+                && string.Equals(from.Host, here, StringComparison.OrdinalIgnoreCase);
+        }
+    }
 }

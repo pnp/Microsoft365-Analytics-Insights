@@ -60,6 +60,12 @@ namespace Web.AnalyticsWeb.Models.Dlp
         public int? UsersAffected { get; set; }
 
         /// <summary>
+        /// Distinct people behind the row, including where <see cref="UsersAffected"/> is not shown (a policy under an
+        /// agent, a tenant-wide policy). Only decides what a reader without See PII is shown; internal, so never sent.
+        /// </summary>
+        internal int People { get; set; }
+
+        /// <summary>
         /// For an agent row, the individual policies that affected it, ranked the same way. Null on
         /// every other kind of row.
         /// </summary>
@@ -85,6 +91,22 @@ namespace Web.AnalyticsWeb.Models.Dlp
         public int BlockedCount { get; set; }
         [JsonProperty("auditedCount")]
         public int AuditedCount { get; set; }
+    }
+
+    /// <summary>The rows each table left out for a reader without See PII (#844). Counts of rows, never of people or matches.</summary>
+    public class DlpWithheldRows
+    {
+        [JsonProperty("agents")]
+        public int Agents { get; set; }
+
+        [JsonProperty("policies")]
+        public int Policies { get; set; }
+
+        [JsonProperty("sensitivityLabels")]
+        public int SensitivityLabels { get; set; }
+
+        [JsonProperty("tenantPolicies")]
+        public int TenantPolicies { get; set; }
     }
 
     /// <summary>
@@ -127,6 +149,26 @@ namespace Web.AnalyticsWeb.Models.Dlp
         public List<DlpImpactRow> TopSensitivityLabels { get; set; } = new List<DlpImpactRow>();
         [JsonProperty("trend")]
         public List<DlpTrendPoint> Trend { get; set; } = new List<DlpTrendPoint>();
+
+        /// <summary>
+        /// For a reader without See PII, the fewest people an agent, policy or sensitivity-label row - or a policy under
+        /// an agent - describes: rows that affected fewer are left out (#844), and so, whenever a table or an agent's policies
+        /// leave one out or a table has more rows than it lists, is the row that affected the fewest people of those still
+        /// listed. Null for a reader with See PII, who is shown every row.
+        /// </summary>
+        [JsonProperty("minimumGroupSize")]
+        public int? MinimumGroupSize { get; set; }
+
+        /// <summary>Rows left out of the agent, policy, sensitivity-label and tenant policy tables for a reader without See PII.</summary>
+        [JsonProperty("withheldRows")]
+        public int WithheldRows { get; set; }
+
+        /// <summary>
+        /// <see cref="WithheldRows"/> table by table, so that a table that lists nothing can say whether there was nothing
+        /// or everything was left out. Null for a reader with See PII.
+        /// </summary>
+        [JsonProperty("withheldRowsByTable")]
+        public DlpWithheldRows WithheldRowsByTable { get; set; }
 
         /// <summary>
         /// Tenant-wide DLP policies from the DLP.All feed, shown as a SEPARATE section.

@@ -59,10 +59,12 @@ namespace Web.AnalyticsWeb.Models.Calls
 
             var matching = new List<CallRecordSubscription>();
             var pageUrl = SubscriptionsUrl;
+            var pageNumber = 0;
             while (!string.IsNullOrEmpty(pageUrl))
             {
-                var page = await GetPage(pageUrl, token.Token).ConfigureAwait(false);
-                foreach (var sub in page.Value ?? new List<GraphSubscription>())
+                pageNumber++;
+                var page = await GetPage(pageUrl, token.Token, pageNumber).ConfigureAwait(false);
+                foreach (var sub in page.Value)
                 {
                     if (CallSubscriptionRules.IsCallRecordsSubscriptionFor(sub.Resource, sub.NotificationUrl, notificationUrl))
                     {
@@ -82,7 +84,12 @@ namespace Web.AnalyticsWeb.Models.Calls
             return matching;
         }
 
-        private async Task<SubscriptionPage> GetPage(string url, string accessToken)
+        /// <exception cref="SubscriptionPageUnreadableException">
+        /// Graph answered 200 without a readable <c>value</c> collection - a blank or malformed body, or JSON without
+        /// the list. Whether the webhook is registered is then unknown: read as an empty page, it was shown as a
+        /// "Missing" webhook on Service configuration, and cached as such for five minutes (#847, R6-9).
+        /// </exception>
+        private async Task<SubscriptionPage> GetPage(string url, string accessToken, int pageNumber)
         {
             // The token is only ever sent to Graph itself - the rule the Graph SDK's authentication
             // provider applies to every request, next-page links included.
@@ -102,7 +109,21 @@ namespace Web.AnalyticsWeb.Models.Calls
                         throw new GraphRequestException(response.StatusCode, ReadGraphErrorMessage(body));
                     }
 
-                    return JsonConvert.DeserializeObject<SubscriptionPage>(body, GraphJsonSettings) ?? new SubscriptionPage();
+                    SubscriptionPage page;
+                    try
+                    {
+                        page = string.IsNullOrWhiteSpace(body) ? null : JsonConvert.DeserializeObject<SubscriptionPage>(body, GraphJsonSettings);
+                    }
+                    catch (JsonException)
+                    {
+                        page = null;
+                    }
+
+                    if (page?.Value == null)
+                    {
+                        throw new SubscriptionPageUnreadableException(pageNumber);
+                    }
+                    return page;
                 }
             }
         }
@@ -177,5 +198,21 @@ namespace Web.AnalyticsWeb.Models.Calls
         }
 
         public HttpStatusCode StatusCode { get; }
+    }
+
+    /// <summary>
+    /// Graph answered a page of <c>GET /subscriptions</c> with a success status but without a readable <c>value</c>
+    /// collection, so whether the calls webhook is registered is unknown. A failed read, never "no subscriptions".
+    /// </summary>
+    public class SubscriptionPageUnreadableException : Exception
+    {
+        public SubscriptionPageUnreadableException(int pageNumber)
+            : base($"Graph answered page {pageNumber} of the subscriptions list without a readable 'value' collection.")
+        {
+            PageNumber = pageNumber;
+        }
+
+        /// <summary>The page that could not be read; 1 is the first request.</summary>
+        public int PageNumber { get; }
     }
 }

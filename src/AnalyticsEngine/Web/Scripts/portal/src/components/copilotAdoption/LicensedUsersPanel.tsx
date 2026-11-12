@@ -17,7 +17,14 @@ import {
   AccordionPanel,
 } from '@fluentui/react-components';
 import { ArrowDownload16Regular, ArrowClockwise16Regular } from '@fluentui/react-icons';
-import { fetchLicensedUsers, licensedUsersExportUrl } from '../../api/copilotAdoptionApi';
+import {
+  AdoptionGenerationChangedError,
+  adoptionFailure,
+  adoptionFailureText,
+  fetchLicensedUsers,
+  licensedUsersExportUrl,
+  type AdoptionFailure,
+} from '../../api/copilotAdoptionApi';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { DateRange } from '../../types/licenceActivity';
 import type {
@@ -53,7 +60,7 @@ import { usePrintAllRows } from '../shared/printPreparation';
 import { formatCount, formatDate, formatPct, weightSharePct } from '../shared/KpiGrid';
 import ActionPlan, { ActionBadge } from './ActionPlan';
 import TroubleshootUserLink from '../userlookup/TroubleshootUserLink';
-import { useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
+import { formatNumber, useT, useTNode, type TFunction, type TranslationKey } from '../../i18n';
 import {
   adoptionBandLabel,
   actionLabel,
@@ -176,6 +183,9 @@ export default function LicensedUsersPanel({
   initialAction,
   userFilter,
   shown = true,
+  generationId,
+  onGenerationChanged,
+  onLoadingChange,
 }: {
   windowDays: number;
   dateRange?: DateRange | null;
@@ -205,6 +215,9 @@ export default function LicensedUsersPanel({
    * printed, so it must not hold the printout up loading every row.
    */
   shown?: boolean;
+  generationId?: string;
+  onGenerationChanged?: () => boolean;
+  onLoadingChange?: (loading: boolean) => void;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -221,7 +234,7 @@ export default function LicensedUsersPanel({
   const [page, setPage] = useState(0);
   const [data, setData] = useState<LicensedUserPage | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AdoptionFailure | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const { isExpanded, toggle: toggleRow, resetRows, expandAll, collapseAll, allExpanded } = useRowExpansion();
 
@@ -238,18 +251,22 @@ export default function LicensedUsersPanel({
     let cancelled = false;
     const controller = new AbortController();
     setLoading(true);
+    onLoadingChange?.(true);
     setError(null);
+    setData(null);
 
-    fetchLicensedUsers(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal, ...(dateRange ? [dateRange] as const : []))
+    fetchLicensedUsers(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal,
+      dateRange, { generationId })
       .then((result) => {
         if (!cancelled) setData(result);
       })
       .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
-        setError(e instanceof Error ? e.message : t('copilotAdoptionUsers.licensed.loadError'));
+        if (e instanceof AdoptionGenerationChangedError && onGenerationChanged?.()) return;
+        setError(adoptionFailure(e, 'copilotAdoptionUsers.licensed.loadError'));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) { setLoading(false); onLoadingChange?.(false); }
       });
 
     return () => {
@@ -257,8 +274,10 @@ export default function LicensedUsersPanel({
       // These requests poll while the analysis is building, so cleanup has to actually stop them -
       // a bare `cancelled` flag would only suppress the state update and leave the loop running.
       controller.abort();
+      onLoadingChange?.(false);
     };
-  }, [windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
+    // Not keyed on the language: a switch re-renders the rows already loaded, it does not fetch them again.
+  }, [windowDays, dateRange, filters, page, seatLicenceTypeIds, reloadKey, generationId, onGenerationChanged, onLoadingChange]);
 
   /**
    * Applies a column-header sort. The effect above already resets the page whenever `filters`
@@ -431,7 +450,7 @@ export default function LicensedUsersPanel({
 
       {error && (
         <MessageBar intent="error">
-          <MessageBarBody>{error}</MessageBarBody>
+          <MessageBarBody>{adoptionFailureText(t, error)}</MessageBarBody>
         </MessageBar>
       )}
 
@@ -484,40 +503,46 @@ export default function LicensedUsersPanel({
                         <p>{t('copilotAdoptionUsers.licensed.engagementScoreHowIntro')}</p>
                         <ul>
                           <li>
-                            <strong>
-                              {t('copilotAdoptionUsers.licensed.engagementFrequencyLabel', {
-                                weight: formatPct(weightSharePct(options.frequencyWeight, scoreWeights)),
-                              })}
-                            </strong>
-                            {t('copilotAdoptionUsers.licensed.engagementFrequencyText', {
+                            {tNode('copilotAdoptionUsers.licensed.engagementFrequencySentence', {
+                              heading: (
+                                <strong>
+                                  {t('copilotAdoptionUsers.licensed.engagementFrequencyLabel', {
+                                    weight: formatPct(weightSharePct(options.frequencyWeight, scoreWeights)),
+                                  })}
+                                </strong>
+                              ),
                               target: formatPct(options.frequencyTargetRatio * 100),
                             })}
                           </li>
                           <li>
-                            <strong>
-                              {t('copilotAdoptionUsers.licensed.engagementDepthLabel', {
-                                weight: formatPct(weightSharePct(options.depthWeight, scoreWeights)),
-                              })}
-                            </strong>
-                            {t('copilotAdoptionUsers.licensed.engagementDepthText', {
-                              target: options.depthTargetInteractionsPerActiveDay,
+                            {tNode('copilotAdoptionUsers.licensed.engagementDepthSentence', {
+                              heading: (
+                                <strong>
+                                  {t('copilotAdoptionUsers.licensed.engagementDepthLabel', {
+                                    weight: formatPct(weightSharePct(options.depthWeight, scoreWeights)),
+                                  })}
+                                </strong>
+                              ),
+                              target: formatNumber(options.depthTargetInteractionsPerActiveDay),
                             })}
                           </li>
                           <li>
-                            <strong>
-                              {t('copilotAdoptionUsers.licensed.engagementBreadthLabel', {
-                                weight: formatPct(weightSharePct(options.breadthWeight, scoreWeights)),
-                              })}
-                            </strong>
-                            {t('copilotAdoptionUsers.licensed.engagementBreadthText', {
-                              target: options.breadthTargetApps,
+                            {tNode('copilotAdoptionUsers.licensed.engagementBreadthSentence', {
+                              heading: (
+                                <strong>
+                                  {t('copilotAdoptionUsers.licensed.engagementBreadthLabel', {
+                                    weight: formatPct(weightSharePct(options.breadthWeight, scoreWeights)),
+                                  })}
+                                </strong>
+                              ),
+                              target: formatNumber(options.breadthTargetApps),
                             })}
                           </li>
                         </ul>
                         <p>
                           {tNode('copilotAdoptionUsers.licensed.confidenceSentence', {
                             confidence: <strong>{t('copilotAdoptionUsers.licensed.confidenceLabel')}</strong>,
-                            days: options.depthMinActiveDays,
+                            days: formatNumber(options.depthMinActiveDays),
                           })}
                         </p>
                         <p>{t('copilotAdoptionUsers.licensed.newAccountsFrequency')}</p>
@@ -528,13 +553,13 @@ export default function LicensedUsersPanel({
                         ? 'copilotAdoptionUsers.licensed.engagementFormula.unitWeight'
                         : 'copilotAdoptionUsers.licensed.engagementFormula.weighted',
                       {
-                        depthMinDays: options.depthMinActiveDays,
-                        depthTarget: options.depthTargetInteractionsPerActiveDay,
-                        breadthTarget: options.breadthTargetApps,
-                        frequencyWeight: options.frequencyWeight,
-                        depthWeight: options.depthWeight,
-                        breadthWeight: options.breadthWeight,
-                        weightSum,
+                        depthMinDays: formatNumber(options.depthMinActiveDays),
+                        depthTarget: formatNumber(options.depthTargetInteractionsPerActiveDay),
+                        breadthTarget: formatNumber(options.breadthTargetApps),
+                        frequencyWeight: formatNumber(options.frequencyWeight),
+                        depthWeight: formatNumber(options.depthWeight),
+                        breadthWeight: formatNumber(options.breadthWeight),
+                        weightSum: formatNumber(weightSum),
                       },
                     ),
                     source: t('copilotAdoptionUsers.licensed.engagementScoreSource'),
@@ -552,10 +577,10 @@ export default function LicensedUsersPanel({
                   info={{
                     what: t('copilotAdoptionUsers.licensed.bandWhat'),
                     how: t('copilotAdoptionUsers.licensed.bandHow', {
-                      champion: options.championScore,
-                      established: options.establishedScore,
-                      developing: options.developingScore,
-                      historyDays: options.historyDays,
+                      champion: formatNumber(options.championScore),
+                      established: formatNumber(options.establishedScore),
+                      developing: formatNumber(options.developingScore),
+                      historyDays: formatNumber(options.historyDays),
                     }),
                     source: t('copilotAdoptionUsers.licensed.bandSource'),
                   }}
@@ -587,12 +612,12 @@ export default function LicensedUsersPanel({
                     what: t('copilotAdoptionUsers.licensed.activeDaysWhat'),
                     how: t('copilotAdoptionUsers.licensed.activeDaysHow', {
                       target: formatPct(options.frequencyTargetRatio * 100),
-                      workingDays: options.workingDaysPerWeek,
+                      workingDays: formatNumber(options.workingDaysPerWeek),
                     }),
                     formula: t('copilotAdoptionUsers.licensed.activeDaysFormula', {
-                      windowDays: options.windowDays,
-                      workingDays: options.workingDaysPerWeek,
-                      ratio: options.frequencyTargetRatio,
+                      windowDays: formatNumber(options.windowDays),
+                      workingDays: formatNumber(options.workingDaysPerWeek),
+                      ratio: formatNumber(options.frequencyTargetRatio),
                     }),
                   }}
                 >
@@ -769,7 +794,7 @@ export default function LicensedUsersPanel({
                             title={t('copilotAdoptionUsers.licensed.detail.seatTitle')}
                             info={{
                               what: t('copilotAdoptionUsers.licensed.reclaimEligibilityWhat'),
-                              how: t('copilotAdoptionUsers.licensed.reclaimEligibilityHow', { days: options.reclaimGraceDays }),
+                              how: t('copilotAdoptionUsers.licensed.reclaimEligibilityHow', { days: formatNumber(options.reclaimGraceDays) }),
                               source: t('copilotAdoptionUsers.licensed.reclaimEligibilitySource'),
                             }}
                             infoTitle={t('copilotAdoptionUsers.licensed.reclaimEligibilityTitle')}
@@ -918,17 +943,27 @@ function sourceComparisonText(
   const reportPeriod = dataSources?.copilotUsageReportPeriodDays
     ? `D${dataSources.copilotUsageReportPeriodDays}`
     : t('copilotAdoptionUsers.licensed.microsoftWindow');
-  const snapshotDate = dataSources?.copilotUsageReportDate
-    ? t('copilotAdoptionUsers.licensed.sourceComparisonSnapshotDate', { date: formatDate(dataSources.copilotUsageReportDate) })
-    : '';
+  const auditInteractions = formatCount(row.auditInteractions);
+  const auditDays = formatCount(row.auditActiveDays);
+  const prompts = row.reportPrompts === null ? '—' : formatCount(row.reportPrompts);
+  const reportDays = row.reportActiveDays === null ? '—' : formatCount(row.reportActiveDays);
 
-  return t('copilotAdoptionUsers.licensed.sourceComparison', {
-    windowDays,
-    auditInteractions: formatCount(row.auditInteractions),
-    auditDays: formatCount(row.auditActiveDays),
-    reportPeriod,
-    snapshotDate,
-    prompts: row.reportPrompts === null ? '—' : formatCount(row.reportPrompts),
-    reportDays: row.reportActiveDays === null ? '—' : formatCount(row.reportActiveDays),
-  });
+  return dataSources?.copilotUsageReportDate
+    ? t('copilotAdoptionUsers.licensed.sourceComparisonDated', {
+        windowDays,
+        auditInteractions,
+        auditDays,
+        reportPeriod,
+        date: formatDate(dataSources.copilotUsageReportDate),
+        prompts,
+        reportDays,
+      })
+    : t('copilotAdoptionUsers.licensed.sourceComparison', {
+        windowDays,
+        auditInteractions,
+        auditDays,
+        reportPeriod,
+        prompts,
+        reportDays,
+      });
 }

@@ -73,17 +73,29 @@ namespace Common.Entities.CopilotAdoption
         /// The leadership comparison the page showed (#654), or null when none was produced. Aggregates only, already
         /// suppressed below its minimum, so it is written for every reader.
         /// </param>
+        /// <param name="readerSeesPii">
+        /// Whether the reader holds See PII, or null to read it from <paramref name="includeIndividualData"/>. Without it the
+        /// figures are the summary's <see cref="CopilotAdoptionSummary.WithoutIndividualData"/> copy, as on screen - which also
+        /// withholds the idle count of a Copilot seat one to four people hold (#844). With it, a file whose individual rows are
+        /// left out because the period does not end today still has every figure.
+        /// </param>
         public static byte[] Build(
             CopilotAdoptionAnalysis analysis,
             TimeSavedOverrides timeSaved = null,
             bool includeIndividualData = true,
-            LeadershipCohort.LeadershipAdoptionComparison leadership = null)
+            LeadershipCohort.LeadershipAdoptionComparison leadership = null,
+            bool? readerSeesPii = null)
         {
             if (analysis == null) throw new ArgumentNullException(nameof(analysis));
 
+            var seesPii = readerSeesPii ?? includeIndividualData;
+            includeIndividualData &= seesPii;
+
             using (var workbook = new XlsxWriter())
             {
-                var summary = includeIndividualData ? analysis.Summary : analysis.Summary.WithoutIndividualData();
+                var summary = !seesPii
+                    ? analysis.Summary.WithoutIndividualData()
+                    : includeIndividualData ? analysis.Summary : analysis.Summary.WithoutNamedLists();
                 var configured = summary.Options ?? CopilotAdoptionOptions.Default;
                 var modelOptions = timeSaved != null && timeSaved.Any ? timeSaved.ApplyTo(configured) : configured;
 
@@ -98,11 +110,13 @@ namespace Common.Entities.CopilotAdoption
                 WriteAgentGrowthSheet(workbook, summary);
                 WriteUnlicensedSheet(workbook, summary);
                 WriteActionPlanSheet(workbook, summary);
-                if (includeIndividualData) WriteLicensedUsersSheet(workbook, analysis);
-                WriteCoworkSheet(workbook, analysis, includeIndividualData);
+                // The per-person sheets are given their people from the analysis, and every figure from the reader's summary
+                // above: the cached one has not been floored for a reader without See PII (#844), so no sheet may read it.
+                if (includeIndividualData) WriteLicensedUsersSheet(workbook, summary, analysis.LicensedUsers);
+                WriteCoworkSheet(workbook, summary, analysis.CoworkReadiness, includeIndividualData);
                 WriteCoworkEstimateSheet(workbook, summary, configured, modelOptions);
                 WriteSeatHolderTimeSavedSheet(workbook, summary, configured, modelOptions);
-                if (includeIndividualData) WriteOpportunitiesSheet(workbook, analysis);
+                if (includeIndividualData) WriteOpportunitiesSheet(workbook, summary, analysis.Opportunities);
                 WriteLicenceEstimateSheet(workbook, summary, configured, modelOptions);
                 WriteMethodSheet(workbook, summary, includeIndividualData);
                 WriteLeadershipSheet(workbook, leadership);
@@ -1005,6 +1019,16 @@ namespace Common.Entities.CopilotAdoption
                 "Guests are attributed to their HOME organisation, not to this tenant, so an invited "
                 + "partner appears under its own domain and is flagged External. Interactions per licence "
                 + "divides by every licence including idle ones, and is normalised to a month."));
+            if (domains.Any(d => d.SeatHoldersWithheld != null || d.UnlicensedUsersWithheld != null || d.LicenceCandidatesWithheld != null))
+            {
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "This file was exported without the See PII permission. Each row holds three groups of people - its "
+                    + "seat holders, its unlicensed Copilot Chat users and its licence candidates - and a group of fewer "
+                    + $"than {MinimumPeople(domains)} people has its figures left blank: for the seat holders, every column "
+                    + "from Seats to Interactions per licence, and the Cowork prime candidates. So does the smallest other "
+                    + "group of the same kind when the tenant's total, less the figures shown, would otherwise give a blank "
+                    + "one back. Blank means not shown, never 0."));
+            }
             sheet.AddBlankRow();
 
             sheet.AddHeaderRow("Email domain", "Seats", "Active", "Habitual", "Never used", "Adoption rate %",
@@ -1048,6 +1072,52 @@ namespace Common.Entities.CopilotAdoption
             }
         }
 
+        /// <summary>The floor a reader without See PII was held to on these rows, or the portal's when none says.</summary>
+        private static int MinimumPeople(IEnumerable<AdoptionDomainRow> domains)
+        {
+            return domains.Select(d => d.MinimumPeople).FirstOrDefault(m => m.HasValue)
+                ?? CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii;
+        }
+
+        /// <summary>
+        /// What the department, country and accountability tables left out for a reader without See PII, beyond their own
+        /// floor (#844), in one paragraph for the sheet that holds them - or null when nothing more was left out.
+        /// </summary>
+        private static string SmallestGroupsWithheldNote(CopilotAdoptionSummary summary)
+        {
+            var withheld = summary.SmallestGroupsWithheld ?? new List<string>();
+            if (withheld.Count == 0) return null;
+
+            var groups = new List<string>();
+            if (withheld.Contains(CopilotAdoptionWithheldBreakdowns.Departments)) groups.Add("department");
+            if (withheld.Contains(CopilotAdoptionWithheldBreakdowns.Countries)) groups.Add("country");
+            if (withheld.Contains(CopilotAdoptionWithheldBreakdowns.Accountability)) groups.Add("accountability group");
+
+            var text = "This file was exported without the See PII permission. ";
+            if (groups.Count > 0)
+            {
+                text += "Where a table leaves out a group too small to list, the smallest " + string.Join(", ", groups)
+                    + " it lists is left out too, from every table here and on the other sheets that show it, so that the "
+                    + "tenant's figures less the rows shown cannot reveal the small one. ";
+            }
+
+            if (withheld.Contains(CopilotAdoptionWithheldBreakdowns.UnlicensedDepartments)
+                || withheld.Contains(CopilotAdoptionWithheldBreakdowns.AgentDepartments))
+            {
+                text += "For the same reason, in the licensed and unlicensed table the unlicensed side or the agent figures "
+                    + "of one more department can be blank, and so are its unlicensed users on the Unlicensed users sheet. ";
+            }
+
+            if (withheld.Contains(CopilotAdoptionWithheldBreakdowns.BuilderDepartments))
+            {
+                text += "Agent builders are blank for one more department, the smallest shown, so that the tenant's builders "
+                    + "less the counts shown cannot reveal a department with fewer than "
+                    + CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii + ". ";
+            }
+
+            return text + "Blank means not shown, never 0.";
+        }
+
         #endregion
 
         #region Departments
@@ -1075,6 +1145,13 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddTitle("Where Copilot is used");
             sheet.AddBlankRow();
+
+            var smallestWithheld = SmallestGroupsWithheldNote(summary);
+            if (smallestWithheld != null)
+            {
+                sheet.AddRow(XlsxCell.Wrapped(smallestWithheld));
+                sheet.AddBlankRow();
+            }
 
             if (summary.AdoptionByDepartment.Count > 0)
             {
@@ -1118,7 +1195,12 @@ namespace Common.Entities.CopilotAdoption
                     + "department's unlicensed people recommended for a licence: a department with never-used seats "
                     + "AND candidates can reassign rather than buy. Blank means fewer than "
                     + $"{summary.Options.MinSeatsPerSegment} candidates, left out so that no one is singled out, or "
-                    + "none found in a candidate list that stopped at its limit."));
+                    + "none found in a candidate list that stopped at its limit."
+                    + (summary.HabitByDepartment.Any(r => r.RecommendedCandidatesWithheld != null)
+                        ? " This file was exported without the See PII permission, so a blank can also be a larger count, "
+                          + "left out because the tenant's recommended candidates less the counts shown would otherwise "
+                          + "reveal a smaller one."
+                        : string.Empty)));
                 sheet.AddHeaderRow("Department", "Seats", "Active", "Habitual", "Never used", "Habit rate %", "Adoption rate %", "Avg. score", "Licence candidates");
 
                 foreach (var row in summary.HabitByDepartment)
@@ -1165,6 +1247,18 @@ namespace Common.Entities.CopilotAdoption
                     + "depth is how many distinct agents they used per 100 of them, and how many interactions each of "
                     + "those agents had. Builders are people who created, published or shared a Copilot Studio agent. "
                     + "Blank means not measured, or too few people to report on. Definitions are on 'How this is calculated'."));
+                if (summary.CombinedByDepartment.Any(r => r != null
+                        && (r.AgentBuildersWithheld != null || r.LicensedWithheld != null || r.UnlicensedWithheld != null
+                            || r.AgentFiguresWithheldReason != null)))
+                {
+                    sheet.AddRow(XlsxCell.Wrapped(
+                        "This file was exported without the See PII permission. Agent builders are blank for a department "
+                        + "with fewer than " + CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii + " of them. A side, "
+                        + "the agent figures or the builders of one more department - the smallest shown - can be blank too, so "
+                        + "that the tenant's figures less the departments shown cannot reveal a smaller group. Blank means not "
+                        + "shown, never 0."));
+                }
+
                 sheet.AddHeaderRow("Department", "Seats", "Active licences", "Interactions per licence",
                     "Licences using agents %", "Unlicensed users", "Interactions per unlicensed user",
                     "Unlicensed using agents %", "Active users (audit)", "Using customer-built agents %",
@@ -1234,7 +1328,13 @@ namespace Common.Entities.CopilotAdoption
                 sheet.AddRow(XlsxCell.Wrapped(
                     "Licence candidates by department - unlicensed people whose business case clears the "
                     + "recommendation bar. Read against the adoption table above: a department with idle "
-                    + "licences AND candidates here does not need a purchase, it needs its seats reallocated."));
+                    + "licences AND candidates here does not need a purchase, it needs its seats reallocated."
+                    + (summary.OpportunityByDepartmentWithheld != null
+                        ? " This file was exported without the See PII permission, so a department is also left out when "
+                          + "the tenant's recommended candidates less the departments shown would otherwise reveal a "
+                          + "department with fewer than " + CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii
+                          + " candidates."
+                        : string.Empty)));
                 sheet.AddHeaderRow("Department", "Licence candidates");
                 foreach (var row in summary.OpportunityByDepartment)
                 {
@@ -1334,6 +1434,11 @@ namespace Common.Entities.CopilotAdoption
                 + "determined is counted as unknown and left out of both sides of the comparison. Each department "
                 + $"is the report's own. Figures for fewer than {summary.Options.MinSeatsPerSegment} people managers - "
                 + "in all, or on either side of a comparison - or a rate over fewer reports than that, are left blank. "
+                + (departments.Any(d => d.ManagersWithheld != null || d.ComparisonWithheld != null || d.SeatSplitWithheld != null)
+                    ? "This file was exported without the See PII permission, so a department's figures are also left blank "
+                      + "when the figures for the whole population, less the departments shown, would otherwise reveal those of "
+                      + "a department left blank for having too few people managers. "
+                    : string.Empty)
                 + "This is an association, not a cause: teams "
                 + "whose manager uses Copilot may differ in function, seniority or seat coverage."));
             sheet.AddHeaderRow(
@@ -1705,12 +1810,28 @@ namespace Common.Entities.CopilotAdoption
             if (unlicensed.UsageByDepartment.Count > 0)
             {
                 sheet.AddBlankRow();
+                if (summary.SmallestGroupsWithheld?.Contains(CopilotAdoptionWithheldBreakdowns.UnlicensedDepartments) == true)
+                {
+                    sheet.AddRow(XlsxCell.Wrapped(DepartmentLeftOutNote("unlicensed users")));
+                }
+
                 sheet.AddHeaderRow("Department", "Interactions");
                 foreach (var dept in unlicensed.UsageByDepartment)
                 {
                     sheet.AddRow(dept.Label, dept.Value);
                 }
             }
+        }
+
+        /// <summary>
+        /// One sentence for a department table that, for a reader without See PII, leaves out the smallest department it
+        /// lists as well as the departments below its floor (#844).
+        /// </summary>
+        private static string DepartmentLeftOutNote(string people)
+        {
+            return "This file was exported without the See PII permission, so one more department is left out - the "
+                + "smallest listed - so that the tenant's " + people + " less the departments shown cannot reveal one too "
+                + "small to list.";
         }
 
         #endregion
@@ -1758,12 +1879,11 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddChart(chart);
         }
 
-        private static void WriteLicensedUsersSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis)
+        private static void WriteLicensedUsersSheet(XlsxWriter workbook, CopilotAdoptionSummary summary, List<LicensedUserAdoptionRow> people)
         {
-            var users = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+            var users = people ?? new List<LicensedUserAdoptionRow>();
             if (users.Count == 0) return;
 
-            var summary = analysis.Summary;
             var cap = RowCap(summary);
             var sheet = workbook.AddSheet("Licensed users");
 
@@ -1810,13 +1930,18 @@ namespace Common.Entities.CopilotAdoption
         /// The Cowork readiness view: who already uses Cowork, who should be enabled next, and the
         /// department order to roll it out in.
         /// </summary>
-        private static void WriteCoworkSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis, bool includeIndividualData)
+        /// <param name="summary">
+        /// The reader's summary, which every figure on the sheet comes from: the tiers, the scored seat holders, the
+        /// rollout order and the quadrant. For a reader without See PII it is the floored copy, so the sheet leaves out
+        /// the departments the screen does (#844); the cached summary would give them back.
+        /// </param>
+        /// <param name="people">The scored seat holders, listed by name only when <paramref name="includeIndividualData"/>.</param>
+        private static void WriteCoworkSheet(
+            XlsxWriter workbook, CopilotAdoptionSummary summary, List<CoworkReadinessRow> people, bool includeIndividualData)
         {
-            var summary = analysis.Summary;
-            if (!summary.CoworkReadinessAvailable) return;
+            if (!summary.CoworkReadinessAvailable || summary.CoworkScoredUsers == 0) return;
 
-            var rows = analysis.CoworkReadiness ?? new List<CoworkReadinessRow>();
-            if (rows.Count == 0) return;
+            var rows = people ?? new List<CoworkReadinessRow>();
 
             var sheet = workbook.AddSheet("Cowork readiness");
 
@@ -1824,7 +1949,7 @@ namespace Common.Entities.CopilotAdoption
             // a worksheet has one set of column widths for both. Take the table's widths and widen the
             // first three to suit the label/value/notes block above it, so neither is unreadable.
             var coworkColumns = CombineColumns(
-                CopilotAdoptionExports.CoworkReadinessColumns(),
+                CopilotAdoptionExports.CoworkReadinessColumns(summary.FiguresIncomplete, WarningSummary(summary)),
                 CoworkWorkbookOnlyColumns());
             var widths = coworkColumns.Select(ColumnWidth).ToArray();
             widths[0] = Math.Max(widths[0], 34);
@@ -1948,7 +2073,10 @@ namespace Common.Entities.CopilotAdoption
                 sheet.AddTitle("Rollout order by department");
                 sheet.AddRow(XlsxCell.Wrapped(
                     "Ordered by the NUMBER of prime candidates, not the rate. A three-person team where "
-                    + "everyone qualifies is a 100% rate and not where a rollout should start."));
+                    + "everyone qualifies is a 100% rate and not where a rollout should start."
+                    + (summary.SmallestGroupsWithheld?.Contains(CopilotAdoptionWithheldBreakdowns.Departments) == true
+                        ? " " + DepartmentLeftOutNote("seat holders")
+                        : string.Empty)));
                 sheet.AddHeaderRow(
                     "Department", "Copilot seats", "Prime candidates", "Prime candidate %",
                     "Regular Cowork users", "Avg coordination load", "Avg fluency");
@@ -1979,7 +2107,10 @@ namespace Common.Entities.CopilotAdoption
                     + $"high fluency (at or above {summary.Options.CoworkLoadMinScore} and "
                     + $"{summary.Options.CoworkFluencyMinScore}) is where a rollout starts; high load with low "
                     + "fluency needs Copilot practice first; low load means Cowork has little to absorb however "
-                    + "fluent people are."));
+                    + "fluent people are."
+                    + (summary.SmallestGroupsWithheld?.Contains(CopilotAdoptionWithheldBreakdowns.Departments) == true
+                        ? " " + DepartmentLeftOutNote("seat holders")
+                        : string.Empty)));
                 sheet.AddHeaderRow(
                     "Department", "Copilot seats", "Coordination load", "Copilot fluency",
                     "Prime candidates", "Regular Cowork users");
@@ -2043,7 +2174,7 @@ namespace Common.Entities.CopilotAdoption
             WriteRowsFromColumns(
                 sheet,
                 listed,
-                CopilotAdoptionExports.CoworkReadinessColumns(),
+                CopilotAdoptionExports.CoworkReadinessColumns(summary.FiguresIncomplete, WarningSummary(summary)),
                 CoworkWorkbookOnlyColumns(),
                 setColumnWidths: false,
                 freezePanes: false);
@@ -2331,13 +2462,12 @@ namespace Common.Entities.CopilotAdoption
             return value.ToString("0.###############", CultureInfo.InvariantCulture);
         }
 
-        private static void WriteOpportunitiesSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis)
+        private static void WriteOpportunitiesSheet(XlsxWriter workbook, CopilotAdoptionSummary summary, List<LicenceOpportunityRow> people)
         {
-            var candidates = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
+            var candidates = people ?? new List<LicenceOpportunityRow>();
             if (candidates.Count == 0) return;
 
             var sheet = workbook.AddSheet("Licence opportunities");
-            var summary = analysis.Summary;
             var cap = RowCap(summary);
 
             if (candidates.Count > cap)
@@ -2476,6 +2606,11 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddBlankRow();
             sheet.AddTitle("By department");
+            if (summary.SmallestGroupsWithheld?.Contains(CopilotAdoptionWithheldBreakdowns.Departments) == true)
+            {
+                sheet.AddRow(XlsxCell.Wrapped(DepartmentLeftOutNote("seat holders")));
+            }
+
             sheet.AddHeaderRow("Department", "Hours high", "People");
             foreach (var row in estimate.ByDepartment)
                 sheet.AddRow(row.Segment, XlsxCell.Number(row.HoursPerMonthHigh), XlsxCell.Number(row.CohortUsers));
@@ -2648,6 +2783,31 @@ namespace Common.Entities.CopilotAdoption
                   + " Reset to defaults on that page restores them."
                 : "The engagement-score weights and band thresholds are the defaults. " + defaults
                   + " An administrator can change them on Administration > Copilot Adoption settings.";
+        }
+
+        /// <summary>
+        /// What else differs from a full export's Snapshot facts when the departments' candidate chart left out a department
+        /// for a reader without See PII (#844), or nothing.
+        /// </summary>
+        private static string WithheldFactsNote(CopilotAdoptionSummary summary)
+        {
+            var note = string.Empty;
+            if ((summary.SmallestGroupsWithheld?.Count ?? 0) > 0)
+            {
+                note += " smallestGroupsWithheld.count and the row counts of the breakdowns it names differ too: a department, "
+                    + "country or accountability table that leaves out a group too small to list leaves out its smallest listed "
+                    + "group as well, on every sheet that shows it, so that the tenant's figures less the rows shown cannot reveal "
+                    + "a group with fewer than " + CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii + ".";
+            }
+
+            if (summary.OpportunityByDepartmentWithheld != null)
+            {
+                note += " opportunityByDepartmentWithheld and opportunityByDepartment.count differ too: the departments' licence candidates "
+                    + "leave out a department whose count, with the tenant's recommended candidates, would reveal a department with "
+                    + "fewer than " + CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii + ".";
+            }
+
+            return note;
         }
 
         /// <summary>
@@ -2985,15 +3145,22 @@ namespace Common.Entities.CopilotAdoption
                         ? "Per-user movement cannot be read from this file: historical exports hide named lists, "
                           + "so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full export's except "
                           + "accountabilityRollup.count, which is 0 when the roll-up is grouped by manager, because those rows name managers."
+                          + WithheldFactsNote(summary)
                         : "Per-user movement cannot be read from this file: it was exported without the See PII "
                           + "permission, so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full "
                           + "export's except accountabilityRollup.count, which is 0 when the roll-up is grouped by "
-                          + "manager, because those rows name managers."));
+                          + "manager, because those rows name managers."
+                          + WithheldFactsNote(summary)));
 
             AddMethod(sheet, "Licence classification",
                 "Microsoft ships Copilot-branded SKUs that are not a Microsoft 365 Copilot licence (Copilot Studio, "
                 + "Copilot for Sales), and ships new licence SKUs regularly. Everything found is listed below, "
-                + "including what was excluded, so the licensed population can be checked rather than trusted.");
+                + "including what was excluded, so the licensed population can be checked rather than trusted."
+                + (summary.SeatLicenceTypes.Any(l => l.AssignedIdleWithheld)
+                    ? " This file was exported without the See PII permission, so 'Assigned idle' is not shown for a Copilot "
+                      + "licence that so few people hold that it would describe them, nor for the licence that, with the "
+                      + "reclaimable total, would give that figure back."
+                    : string.Empty));
 
             if (summary.SeatLicenceTypes.Count > 0)
             {
@@ -3004,7 +3171,7 @@ namespace Common.Entities.CopilotAdoption
                     sheet.AddRow(licence.Name, licence.SkuPartNumber, licence.AssignedUsers,
                         licence.PurchasedUnits.HasValue ? (object)licence.PurchasedUnits.Value : "Unknown",
                         licence.UnassignedUnits.HasValue ? (object)licence.UnassignedUnits.Value : "Unknown",
-                        licence.AssignedIdleUsers,
+                        AssignedIdleCell(licence),
                         licence.PurchasedUnitsRefreshedUtc.HasValue ? licence.PurchasedUnitsRefreshedUtc.Value.ToString("yyyy-MM-dd HH:mm:ss") : "",
                         licence.IsCopilotSeat ? "Yes" : "No");
                 }
@@ -3031,6 +3198,21 @@ namespace Common.Entities.CopilotAdoption
             }
 
             sheet.FreezeTopRows(3);
+        }
+
+        /// <summary>
+        /// The licence classification's "Assigned idle" cell: the count, or why it is withheld from a reader without See PII
+        /// (#844) - never a 0 standing in for it.
+        /// </summary>
+        internal static object AssignedIdleCell(LicenceTypeClassification licence)
+        {
+            if (!licence.AssignedIdleWithheld) return licence.AssignedIdleUsers;
+
+            var minimum = licence.MinimumHolders ?? CopilotInvestment.SmallPopulations.MinPeopleWithoutSeePii;
+            return string.Equals(licence.AssignedIdleWithheldReason, SeatIdleWithheldReasons.RevealsSmallerSeat, StringComparison.Ordinal)
+                ? string.Format(CultureInfo.InvariantCulture,
+                    "Not shown: with the reclaimable total, it would reveal the figure for a licence fewer than {0} people hold", minimum)
+                : string.Format(CultureInfo.InvariantCulture, "Not shown: fewer than {0} people hold this licence", minimum);
         }
 
         private static string SourceComparisonSummary(LicensedUserAdoptionRow user, CopilotAdoptionSummary summary)
@@ -3201,12 +3383,61 @@ namespace Common.Entities.CopilotAdoption
 
             var headerRow = sheet.CurrentRow;
 
+            var withheld = summary?.WithheldSections ?? new List<string>();
             foreach (var fact in ScalarFacts(summary))
             {
-                sheet.AddRow(fact.Key, fact.Value, XlsxCell.Wrapped(fact.Label));
+                sheet.AddRow(fact.Key, IsWithheldFact(fact.Key, withheld) ? string.Empty : fact.Value, XlsxCell.Wrapped(fact.Label));
             }
 
             sheet.FreezeTopRows(headerRow);
+        }
+
+        /// <summary>
+        /// The Snapshot facts keys of each section the administrator's global filter leaves out
+        /// (<see cref="CopilotAdoptionSummary.WithheldSections"/>), each with everything beneath it. The withheld section holds
+        /// zeros and empty lists, which written as they are would read as a measured collapse to zero; they are written blank -
+        /// unknown, as the sheet says - instead (#844).
+        /// </summary>
+        private static readonly Dictionary<string, string[]> WithheldSectionFactKeys = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            [CopilotAdoptionUnscopedSections.UsageByApp] = new[] { "usageByApp", "unlicensed.usageByApp" },
+            [CopilotAdoptionUnscopedSections.TopResourceTypes] = new[] { "topResourceTypes" },
+            [CopilotAdoptionUnscopedSections.WeeklyTrend] = new[] { "weeklyTrend", "weeklyVolumeTrend" },
+            [CopilotAdoptionUnscopedSections.Agents] = new[] { "agents", "agentsInThreeOrMoreDepartments", "agentsInThreeOrMoreDepartmentsUnknownOrigin" },
+            [CopilotAdoptionUnscopedSections.PurchasedSeats] = new[] { "purchasedCopilotSeats", "unassignedCopilotSeats", "subscribedSkusAvailable" },
+            [CopilotAdoptionUnscopedSections.CoworkCredits] = new[] { "coworkCreditPosition" },
+            [CopilotAdoptionUnscopedSections.MicrosoftReport] = new[]
+            {
+                "microsoftReportDate", "microsoftReportPeriodDays", "microsoftReportVersion",
+                "microsoftReportPromptsSubmitted", "microsoftReportAveragePromptsPerActiveUser",
+            },
+        };
+
+        /// <summary>
+        /// Keys under a withheld section that stay, because they are as true of the narrowed view as of the tenant: the
+        /// agent inventory's look-back is a setting, and whether per-person credit rows are imported is a fact about the import.
+        /// </summary>
+        private static readonly HashSet<string> FactsKeptUnderWithheldSections = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "agents.historyDays",
+            "coworkCreditPosition.perUserCreditsAvailable",
+        };
+
+        /// <summary>True when <paramref name="key"/> belongs to one of <paramref name="withheldSections"/>, so it is written blank.</summary>
+        internal static bool IsWithheldFact(string key, IEnumerable<string> withheldSections)
+        {
+            if (string.IsNullOrEmpty(key) || withheldSections == null || FactsKeptUnderWithheldSections.Contains(key)) return false;
+
+            foreach (var section in withheldSections)
+            {
+                if (section == null || !WithheldSectionFactKeys.TryGetValue(section, out var prefixes)) continue;
+                foreach (var prefix in prefixes)
+                {
+                    if (key == prefix || key.StartsWith(prefix + ".", StringComparison.Ordinal)) return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

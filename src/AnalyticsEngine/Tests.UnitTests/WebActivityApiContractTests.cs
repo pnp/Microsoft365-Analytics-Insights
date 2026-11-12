@@ -125,6 +125,9 @@ namespace Tests.UnitTests
             {
                 Key = "bounce",
                 Tone = "good",
+                HeadlineKey = "bounce.headline",
+                DetailKey = "bounce.detail.healthy",
+                Values = new Dictionary<string, double> { ["bounce"] = 30.5, ["pagesPerVisit"] = 4.2 },
                 Headline = "Headline sentence.",
                 Detail = "Detail sentence.",
             });
@@ -138,6 +141,13 @@ namespace Tests.UnitTests
                 "The Overview tab reads judgement.headline. PascalCase here renders a blank card.");
             Assert.AreEqual("Detail sentence.", (string)judgement["detail"]);
             Assert.IsNull(judgement["Headline"], "PascalCase must not be emitted alongside the camelCase name.");
+
+            // JudgementList words the sentences from these keys and formats the raw figures itself.
+            Assert.AreEqual("bounce.headline", (string)judgement["headlineKey"]);
+            Assert.AreEqual("bounce.detail.healthy", (string)judgement["detailKey"]);
+            Assert.AreEqual(30.5, (double)judgement["values"]["bounce"], 1e-9);
+            Assert.AreEqual(4.2, (double)judgement["values"]["pagesPerVisit"], 1e-9,
+                "The figure names are the catalog's placeholder names, so they must not be re-cased.");
 
             // The window drives captions and the suppression thresholds the panels read.
             var window = payload["window"];

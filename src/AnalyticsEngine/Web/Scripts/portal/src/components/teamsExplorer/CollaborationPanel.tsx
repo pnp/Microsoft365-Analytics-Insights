@@ -20,10 +20,11 @@ import CategoryBarChart from '../charts/CategoryBarChart';
 import TimeSeriesChart from '../charts/TimeSeriesChart';
 import SentimentLight from '../shared/SentimentLight';
 import type { TeamsCollaboration } from '../../types/teamsExplorer';
-import { useT, useTNode } from '../../i18n';
+import { plural, useT, useTNode } from '../../i18n';
 import {
   SectionCard,
   WindowNote,
+  WithheldDash,
   bucketsToCategories,
   formatCount,
   queryFor,
@@ -144,6 +145,35 @@ export default function CollaborationPanel({
     },
   ];
 
+  // Without See PII, teams (and their channels) of too few members come back left out, reactions one to four people
+  // made come back withheld, rarely-used reactions combined and the tab list withheld. Each says so rather than read as 0.
+  const minimumGroupSize = data.minimumGroupSize ?? null;
+  const minimumText = formatCount(minimumGroupSize ?? 5);
+  const reactionsWithheldText = t('teamsExplorer.collaboration.reactionsWithheld', { count: minimumText });
+  const teamsNote =
+    minimumGroupSize != null
+      ? `${sentimentScaleNoteText} ${t('teamsExplorer.collaboration.teamLeaderboard.withheldNote', { count: minimumText })}`
+      : sentimentScaleNoteText;
+  const channelsNote =
+    minimumGroupSize != null
+      ? `${sentimentScaleNoteText} ${t('teamsExplorer.collaboration.channelLeaderboard.withheldNote', { count: minimumText })}`
+      : sentimentScaleNoteText;
+  const otherReactions = data.otherReactions ?? 0;
+  const otherReactionsLabel = t(
+    plural(
+      otherReactions,
+      'teamsExplorer.collaboration.reactionsUsed.other.one',
+      'teamsExplorer.collaboration.reactionsUsed.other.other',
+    ),
+    { count: formatCount(otherReactions) },
+  );
+  const reactionsAllSmall = otherReactions > 0 && data.reactionMix.length === 0;
+  const reactionsNote =
+    otherReactions > 0 && data.reactionMix.length > 0
+      ? t('teamsExplorer.collaboration.reactionsUsed.otherNote', { count: minimumText })
+      : undefined;
+  const tabUsageWithheld = data.tabUsageWithheld === true;
+
   if (!analyticsAvailable) {
     return (
       <MessageBar intent="warning">
@@ -181,7 +211,7 @@ export default function CollaborationPanel({
           description={t('teamsExplorer.collaboration.teamLeaderboard.description')}
           query={queryFor(data.queries, 'collab-teams')}
           isEmpty={data.teams.length === 0}
-          note={sentimentScaleNoteText}
+          note={teamsNote}
         >
           <div className={styles.exportRow}>
             <Button
@@ -230,7 +260,13 @@ export default function CollaborationPanel({
                     <TableCell className={styles.numeric}>{formatCount(team.channels)}</TableCell>
                     <TableCell className={styles.numeric}>{formatCount(team.tabs)}</TableCell>
                     <TableCell className={styles.numeric}>{formatCount(team.messages)}</TableCell>
-                    <TableCell className={styles.numeric}>{formatCount(team.reactions)}</TableCell>
+                    <TableCell className={styles.numeric}>
+                      {team.reactionsWithheld || team.reactions === null ? (
+                        <WithheldDash reason={reactionsWithheldText} />
+                      ) : (
+                        formatCount(team.reactions)
+                      )}
+                    </TableCell>
                     <TableCell className={styles.numeric}>{formatCount(team.activeDays)}</TableCell>
                     <TableCell><SentimentLight value={team.sentiment} /></TableCell>
                   </TableRow>
@@ -245,7 +281,7 @@ export default function CollaborationPanel({
           description={t('teamsExplorer.collaboration.channelLeaderboard.description')}
           query={queryFor(data.queries, 'collab-channels')}
           isEmpty={data.channels.length === 0}
-          note={sentimentScaleNoteText}
+          note={channelsNote}
         >
           <div className={styles.exportRow}>
             <Button
@@ -278,8 +314,20 @@ export default function CollaborationPanel({
                     <TableCell>{channel.name}</TableCell>
                     <TableCell>{channel.teamName}</TableCell>
                     <TableCell className={styles.numeric}>{formatCount(channel.messages)}</TableCell>
-                    <TableCell className={styles.numeric}>{formatCount(channel.reactingUsers)}</TableCell>
-                    <TableCell className={styles.numeric}>{formatCount(channel.reactions)}</TableCell>
+                    <TableCell className={styles.numeric}>
+                      {channel.reactionsWithheld || channel.reactingUsers === null ? (
+                        <WithheldDash reason={reactionsWithheldText} />
+                      ) : (
+                        formatCount(channel.reactingUsers)
+                      )}
+                    </TableCell>
+                    <TableCell className={styles.numeric}>
+                      {channel.reactionsWithheld || channel.reactions === null ? (
+                        <WithheldDash reason={reactionsWithheldText} />
+                      ) : (
+                        formatCount(channel.reactions)
+                      )}
+                    </TableCell>
                     <TableCell className={styles.numeric}>{formatCount(channel.tabs)}</TableCell>
                     <TableCell className={styles.numeric}>{formatCount(channel.activeDays)}</TableCell>
                     <TableCell><SentimentLight value={channel.sentiment} /></TableCell>
@@ -353,7 +401,8 @@ export default function CollaborationPanel({
           title={t('teamsExplorer.collaboration.appsTabs.title')}
           description={t('teamsExplorer.collaboration.appsTabs.description')}
           query={queryFor(data.queries, 'collab-tabs')}
-          isEmpty={data.tabUsage.length === 0}
+          isEmpty={tabUsageWithheld || data.tabUsage.length === 0}
+          emptyMessage={tabUsageWithheld ? t('teamsExplorer.collaboration.appsTabs.withheld') : undefined}
         >
           <CategoryBarChart categories={toCategories(data.tabUsage)} valueLabel={t('teamsExplorer.valueLabel.channels')} />
         </SectionCard>
@@ -363,9 +412,13 @@ export default function CollaborationPanel({
           description={t('teamsExplorer.collaboration.reactionsUsed.description')}
           query={queryFor(data.queries, 'collab-reactions')}
           isEmpty={data.reactionMix.length === 0}
+          emptyMessage={
+            reactionsAllSmall ? t('teamsExplorer.collaboration.reactionsUsed.allSmall', { count: minimumText }) : undefined
+          }
+          note={reactionsNote}
         >
           <CategoryBarChart
-            categories={bucketsToCategories(data.reactionMix)}
+            categories={bucketsToCategories(data.reactionMix, otherReactionsLabel)}
             valueLabel={t('teamsExplorer.valueLabel.reactions')}
             showShare
           />

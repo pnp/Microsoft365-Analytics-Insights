@@ -9,6 +9,11 @@ export const agentCosts = {
   'agentCosts.state.notReported': 'Not reported',
   'agentCosts.state.loadFailed': 'These figures could not be loaded, so none are shown. Refresh to try again.',
   'agentCosts.unit.credits': 'credits',
+  'agentCosts.state.withheld': 'Withheld',
+
+  // The privacy floor for a reader without See PII (#844)
+  'agentCosts.floor.note': 'Your access doesn\u2019t include the See PII permission, so every Copilot Studio figure on this page leaves out the billed lines that Microsoft reports fewer than {count} people on, or gives no number of people for: a figure for so few people could single someone out. The totals are lower than the full spend for that reason. The capacity tiles still show the whole tenant\u2019s consumption.',
+  'agentCosts.floor.allWithheld': 'Withheld. Microsoft reports fewer than {count} people on every billed line in this selection, or gives no number of people, so its figures could single someone out. They are shown only to people with the See PII permission.',
 
   // Harness values
   'agentCosts.harness.standardOrCopilotChat': 'Standard / Copilot Chat',
@@ -108,6 +113,7 @@ export const agentCosts = {
   'agentCosts.trend.empty': 'No credit usage in this period.',
   'agentCosts.trend.barTitle': '{day}: {credits} credits',
   'agentCosts.trend.caption': '{from} to {to}, peak {peak} credits in a day',
+  'agentCosts.trend.smallDaysLeftOut': 'Days on which every billed line had fewer than {count} people aren\u2019t shown.',
 
   // Filters
   'agentCosts.filters.title': 'Narrow the per-agent figures',
@@ -125,6 +131,8 @@ export const agentCosts = {
   // Credit breakdown
   'agentCosts.breakdown.title': 'Where the credits went',
   'agentCosts.breakdown.hiddenRows': 'Showing the top {count} of this period\u0027s spend. Shares are of the full {credits} credits, so they will not add up to 100%.',
+  'agentCosts.breakdown.withheldRow.one': 'One more, with fewer than {min} people on every billed line',
+  'agentCosts.breakdown.withheldRow.other': '{count} more, each with fewer than {min} people on every billed line',
 
   // Billed-line detail
   'agentCosts.detail.title': 'Every billed line',
@@ -133,6 +141,7 @@ export const agentCosts = {
   'agentCosts.detail.exporting': 'Exporting...',
   'agentCosts.detail.exportAllRows': 'Export all {rows} rows',
   'agentCosts.detail.empty': 'No billed lines match the current filters.',
+  'agentCosts.detail.smallLinesLeftOut': 'Billed lines with fewer than {count} people, or with no number of people, aren\u2019t listed, counted or exported.',
   'agentCosts.export.pageFilename': 'agent-credits-{from}-to-{to}-page{page}.csv',
   'agentCosts.export.filteredFilename': 'agent-credits-{from}-to-{to}-filtered.csv',
 

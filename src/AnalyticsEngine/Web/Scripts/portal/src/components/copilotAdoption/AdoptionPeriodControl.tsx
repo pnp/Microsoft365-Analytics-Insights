@@ -165,7 +165,11 @@ export default function AdoptionPeriodControl({
   // period in effect until Apply.
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<DateRange>(() => fixed?.range ?? rollingAsRange(windowDays, now));
-  const [error, setError] = useState<string | null>(null);
+  // The range Apply refused, not the reason: the reason is worded when it renders, so it follows a
+  // language switch instead of staying in the language it was refused in.
+  const [rejected, setRejected] = useState<DateRange | null>(null);
+  const rejection = rejected ? validateRange(rejected, { now, t }) : null;
+  const error = rejection && !rejection.ok ? rejection.error : null;
 
   const appliedCustom = fixed?.kind === 'custom' ? fixed.range : null;
 
@@ -173,7 +177,7 @@ export default function AdoptionPeriodControl({
   useEffect(() => {
     if (appliedCustom) {
       setDraft(appliedCustom);
-      setError(null);
+      setRejected(null);
     }
   }, [appliedCustom?.from, appliedCustom?.to]);
 
@@ -183,7 +187,7 @@ export default function AdoptionPeriodControl({
   const pending = editing || (appliedCustom !== null && !sameRange(draft, appliedCustom));
 
   const choose = (value: string) => {
-    setError(null);
+    setRejected(null);
     if (value === 'custom') {
       setDraft(fixed?.range ?? rollingAsRange(windowDays, now));
       setEditing(true);
@@ -198,10 +202,10 @@ export default function AdoptionPeriodControl({
   const apply = () => {
     const result = validateRange(draft, { now, t });
     if (!result.ok) {
-      setError(result.error);
+      setRejected(draft);
       return;
     }
-    setError(null);
+    setRejected(null);
     setEditing(false);
     onFixedChange({ kind: 'custom', range: draft });
   };

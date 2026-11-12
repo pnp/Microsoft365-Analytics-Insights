@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using System;
+using System.Threading.Tasks;
 
 namespace Web.AnalyticsWeb
 {
@@ -53,6 +54,17 @@ namespace Web.AnalyticsWeb
             endpoints.MapControllers();
             endpoints.MapControllerRoute(name: "Account", pattern: "Account/{action=Index}/{id?}", defaults: new { controller = "Account" });
             endpoints.MapControllerRoute(name: "Home", pattern: "{action=Index}/{id?}", defaults: new { controller = "Home" });
+
+            // An Account path no action answers - above all a GET on the POST-only SignOut and ConnectTeams (#853) - is a
+            // 404, as on the Web API 2 build, where the Account route is chosen before the action and an action that
+            // doesn't take the method is not found. Without this, ASP.NET Core passes such a request on to the portal
+            // fallback below, which serves the page: a GET /Account/SignOut would answer 200 and sign nobody out, and a
+            // link to it would look like it worked. The literal "Account" segment ranks this above the catch-all.
+            endpoints.MapFallback("Account/{**rest}", context =>
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return Task.CompletedTask;
+            });
 
             // Anything not matched above - a deep link or a refresh - gets the portal page, from the same
             // action as "/" so it is stamped and authorised like every other load. (The SPA's HashRouter

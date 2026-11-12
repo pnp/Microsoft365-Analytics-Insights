@@ -45,11 +45,11 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.licensed.engagementScoreWhat': 'How much a part of this person\u2019s working week Copilot has become, scored 0 to 100. Deliberately not "did they use it": two people who each tried it once look identical on that, and that never tells you what to do next.',
   'copilotAdoptionUsers.licensed.engagementScoreHowIntro': 'Three things, each measured against a target and each capped there, so going past a target buys no extra credit:',
   'copilotAdoptionUsers.licensed.engagementFrequencyLabel': 'How often - frequency ({weight})',
-  'copilotAdoptionUsers.licensed.engagementFrequencyText': ': days they used Copilot, against {target} of their available working days.',
+  'copilotAdoptionUsers.licensed.engagementFrequencySentence': '{heading}: days they used Copilot, against {target} of their available working days.',
   'copilotAdoptionUsers.licensed.engagementDepthLabel': 'How much - depth ({weight})',
-  'copilotAdoptionUsers.licensed.engagementDepthText': ': interactions on each day they did use it, against a target of {target}.',
+  'copilotAdoptionUsers.licensed.engagementDepthSentence': '{heading}: interactions on each day they did use it, against a target of {target}.',
   'copilotAdoptionUsers.licensed.engagementBreadthLabel': 'How widely - breadth ({weight})',
-  'copilotAdoptionUsers.licensed.engagementBreadthText': ': how many different Copilot apps they use, against a target of {target}.',
+  'copilotAdoptionUsers.licensed.engagementBreadthSentence': '{heading}: how many different Copilot apps they use, against a target of {target}.',
   'copilotAdoptionUsers.licensed.confidenceLabel': 'Confidence',
   'copilotAdoptionUsers.licensed.confidenceSentence': '{confidence} keeps depth honest. Depth is a per-day average, so somebody active on a single day can hit the target in one sitting and read as a power user. Depth therefore only counts in full once Copilot has been used on {days} separate days; below that it counts in proportion, so half as many days counts for half.',
   'copilotAdoptionUsers.licensed.newAccountsFrequency': 'Accounts newer than the reporting period get a smaller frequency target, so nobody is marked down for days before they joined.',
@@ -105,8 +105,8 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.licensed.coworkNo': 'No',
   'copilotAdoptionUsers.licensed.coworkAudited': 'Yes \u00b7 {count} audited',
   'copilotAdoptionUsers.licensed.microsoftWindow': 'Microsoft window',
-  'copilotAdoptionUsers.licensed.sourceComparison': 'Audit D{windowDays}: {auditInteractions} interactions, {auditDays} days. Microsoft report {reportPeriod}{snapshotDate}: {prompts} prompts, {reportDays} days.',
-  'copilotAdoptionUsers.licensed.sourceComparisonSnapshotDate': ', {date}',
+  'copilotAdoptionUsers.licensed.sourceComparison': 'Audit D{windowDays}: {auditInteractions} interactions, {auditDays} days. Microsoft report {reportPeriod}: {prompts} prompts, {reportDays} days.',
+  'copilotAdoptionUsers.licensed.sourceComparisonDated': 'Audit D{windowDays}: {auditInteractions} interactions, {auditDays} days. Microsoft report {reportPeriod}, {date}: {prompts} prompts, {reportDays} days.',
   'copilotAdoptionUsers.licensed.engagementFormula.unitWeight': 'frequency  = min(1, activeDays / expectedActiveDays)\nconfidence = min(1, activeDays / {depthMinDays})\ndepth      = min(1, interactions / activeDays / {depthTarget}) x confidence\nbreadth    = min(1, appsUsed / {breadthTarget})\nscore      = (frequency x {frequencyWeight} + depth x {depthWeight} + breadth x {breadthWeight}) x 100',
   'copilotAdoptionUsers.licensed.engagementFormula.weighted': 'frequency  = min(1, activeDays / expectedActiveDays)\nconfidence = min(1, activeDays / {depthMinDays})\ndepth      = min(1, interactions / activeDays / {depthTarget}) x confidence\nbreadth    = min(1, appsUsed / {breadthTarget})\nscore      = (frequency x {frequencyWeight} + depth x {depthWeight} + breadth x {breadthWeight})\n             / {weightSum} x 100',
   'copilotAdoptionUsers.licensed.reclaimTierExpired': '{tier} - exclusion expired',
@@ -298,6 +298,24 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.emailDomain.noSeats': 'no seats',
   'copilotAdoptionUsers.emailDomain.clear': 'Clear',
   'copilotAdoptionUsers.emailDomain.filter': 'Filter',
+  // What a reader without See PII sees in place of a population of one to four people on a domain row (#844)
+  'copilotAdoptionUsers.emailDomain.withheld.seats.fewPeople':
+    'Hidden: fewer than {count} people on this domain hold a Copilot seat',
+  'copilotAdoptionUsers.emailDomain.withheld.seats.revealsSmallerGroup':
+    'Hidden: with the tenant totals, these figures would reveal those of a domain where fewer than {count} people hold a seat',
+  'copilotAdoptionUsers.emailDomain.withheld.unlicensed.fewPeople':
+    'Hidden: fewer than {count} people on this domain used Copilot Chat without a licence',
+  'copilotAdoptionUsers.emailDomain.withheld.unlicensed.revealsSmallerGroup':
+    'Hidden: with the tenant total, this count would reveal a domain where fewer than {count} people used Copilot Chat without a licence',
+  'copilotAdoptionUsers.emailDomain.withheld.candidates.fewPeople':
+    'Hidden: this domain has fewer than {count} licence candidates',
+  'copilotAdoptionUsers.emailDomain.withheld.candidates.revealsSmallerGroup':
+    'Hidden: with the tenant total, this count would reveal a domain with fewer than {count} licence candidates',
+  'copilotAdoptionUsers.emailDomain.withheld.other': 'Hidden: it could single out fewer than {count} people',
+  'copilotAdoptionUsers.emailDomain.withheldNote':
+    'Each row holds three groups of people - its seat holders, its unlicensed Copilot Chat users and its licence candidates - and a group of fewer than {count} people is hidden, so that nobody can be singled out.',
+  'copilotAdoptionUsers.emailDomain.withheldNoteComplement':
+    'One more domain is hidden in a column when subtracting the figures shown from the tenant\u2019s total would otherwise reveal a hidden one.',
 
   // Server-authored licensed-user and opportunity text
   'copilotAdoptionUsers.server.apps.single': 'a single Copilot app',

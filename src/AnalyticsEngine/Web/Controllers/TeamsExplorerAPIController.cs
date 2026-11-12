@@ -49,6 +49,25 @@ namespace Web.AnalyticsWeb.Controllers
     /// one-person job title, office or department is not that person's activity. The cached section is the complete
     /// one; a reader without the permission gets a trimmed copy of it.
     /// </para>
+    /// <para>
+    /// The same reader is held to that floor in the other sections too (#844): meetings withholds a week of fewer than
+    /// five attendees - with the week of fewest attendees still shown, so that the calls and call hours less the weeks shown
+    /// are never one week's - the distributions when fewer than five people attended at all, and folds modalities used by fewer;
+    /// collaboration leaves out teams - and the channels of teams - with fewer than five members, withholds reactions one
+    /// to four people made, folds rarely-used reactions and withholds the tab list; conversations withholds the key phrases
+    /// and languages and leaves out the sentiment of teams with fewer than five members. Each such list leaves out the smallest
+    /// row shown too, so that the totals beside it less its rows are never one small team's, and is decided over the
+    /// export-sized list - its rows beyond counted as left out - before it is cut to the top asked for, so that two tops never
+    /// leave out different rows; the power users per department are folded over every department (P4-1). The team and
+    /// channel exports match the page.
+    /// </para>
+    /// <para>
+    /// The overview and the rest of the adoption tab are read, for that reader, over the people the adoption breakdown is
+    /// made of - the enabled directory users reach is measured against - so that no total less the breakdown's rows leaves
+    /// the activity of an account disabled since (#844, S4-1); that section is cached apart from a See PII reader's, whose
+    /// figures are unchanged. Then a week, an engagement segment, a lifecycle count or a platform of one to four people is
+    /// withheld, with whatever would give it back, and the KPIs when one to four people were active at all.
+    /// </para>
     /// </remarks>
     [Authorize]
     [Route("api/TeamsExplorer")]
@@ -123,7 +142,14 @@ namespace Web.AnalyticsWeb.Controllers
         public async Task<IActionResult> Overview(int days = TeamsExplorerQuery.DefaultWindowDays)
         {
             var query = await BuildQueryAsync(days).ConfigureAwait(false);
-            return await CachedAsync("overview", query, () => _store.GetOverviewAsync(query, ReadSources())).ConfigureAwait(false);
+            Func<TeamsOverview, TeamsOverview> forReader = null;
+            if (!PortalAccess.Evaluate(Request, User).SeePii)
+            {
+                // Read over the people the Adoption breakdown is made of, and cached apart from a See PII reader's section.
+                query = query.WithDirectoryPopulation();
+                forReader = o => o.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
+            }
+            return await CachedAsync("overview", query, () => _store.GetOverviewAsync(query, ReadSources()), forReader).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/adoption?days=28&groupBy=department
@@ -136,9 +162,10 @@ namespace Web.AnalyticsWeb.Controllers
         {
             var seePii = PortalAccess.Evaluate(Request, User).SeePii;
             // Without See PII, small groups are folded over every group, whatever top was asked for, and only then cut to
-            // it: see TeamsAdoption.WithFirstGroups and TeamsExplorerQuery.WithEveryRow.
+            // it: see TeamsAdoption.WithFirstGroups and TeamsExplorerQuery.WithEveryRow. The rest of the section is read over
+            // the breakdown's own population (TeamsExplorerQuery.WithDirectoryPopulation), and cached apart.
             var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
-            if (!seePii) query = query.WithEveryRow();
+            if (!seePii) query = query.WithEveryRow().WithDirectoryPopulation();
             Func<TeamsAdoption, TeamsAdoption> forReader = null;
             if (!seePii)
             {
@@ -157,7 +184,8 @@ namespace Web.AnalyticsWeb.Controllers
         {
             var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
             Func<TeamsMeetings, TeamsMeetings> forReader = null;
-            if (!PortalAccess.Evaluate(Request, User).SeePii) forReader = m => m.WithoutIndividualData();
+            if (!PortalAccess.Evaluate(Request, User).SeePii)
+                forReader = m => m.WithoutIndividualData().WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii);
             return await CachedAsync("meetings", query, () => _store.GetMeetingsAsync(query), forReader).ConfigureAwait(false);
         }
 
@@ -168,8 +196,19 @@ namespace Web.AnalyticsWeb.Controllers
             int days = TeamsExplorerQuery.DefaultWindowDays,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
-            return await CachedAsync("collaboration", query, () => _store.GetCollaborationAsync(query)).ConfigureAwait(false);
+            var seePii = PortalAccess.Evaluate(Request, User).SeePii;
+            // For a reader without See PII the leaderboards are floored over the export-sized list, read with one row more to
+            // tell whether more exist, and only then cut to top (TeamsCollaboration.WithFirstRows): what is left out never
+            // depends on the top asked for (#844, P4-1). That read is cached apart, under its own top.
+            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, seePii ? top : TeamsExplorerQuery.MaximumTop).ConfigureAwait(false);
+            Func<TeamsCollaboration, TeamsCollaboration> forReader = null;
+            if (!seePii)
+            {
+                query = query.WithListProbe();
+                var shown = TeamsExplorerQuery.NormaliseTop(top);
+                forReader = c => c.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii).WithFirstRows(shown);
+            }
+            return await CachedAsync("collaboration", query, () => _store.GetCollaborationAsync(query), forReader).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/conversations?days=28
@@ -179,9 +218,18 @@ namespace Web.AnalyticsWeb.Controllers
             int days = TeamsExplorerQuery.DefaultWindowDays,
             int top = TeamsExplorerQuery.DefaultTop)
         {
-            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, top).ConfigureAwait(false);
+            var seePii = PortalAccess.Evaluate(Request, User).SeePii;
+            // As for collaboration: the sentiment lists are floored over the export-sized list before the cut to top.
+            var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, seePii ? top : TeamsExplorerQuery.MaximumTop).ConfigureAwait(false);
             var cognitive = ReadSources().Cognitive;
-            return await CachedAsync("conversations", query, () => _store.GetConversationsAsync(query, cognitive)).ConfigureAwait(false);
+            Func<TeamsConversations, TeamsConversations> forReader = null;
+            if (!seePii)
+            {
+                query = query.WithListProbe();
+                var shown = TeamsExplorerQuery.NormaliseTop(top);
+                forReader = c => c.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii).WithFirstRows(shown);
+            }
+            return await CachedAsync("conversations", query, () => _store.GetConversationsAsync(query, cognitive), forReader).ConfigureAwait(false);
         }
 
         // GET: api/TeamsExplorer/people?days=28&top=20
@@ -192,12 +240,15 @@ namespace Web.AnalyticsWeb.Controllers
             int top = TeamsExplorerQuery.DefaultTop)
         {
             var seePii = PortalAccess.Evaluate(Request, User).SeePii;
-            // As for adoption, departments are folded before the cut to top (TeamsPeople.WithFirstDepartments), over the
-            // first MaximumTop departments: this section also lists people, so it is never read with every row.
+            // As for adoption, departments are folded before the cut to top (TeamsPeople.WithFirstDepartments), over every
+            // department (TeamsExplorerQuery.WithEveryGroup) - they add up to the Power segment the Overview publishes, over the
+            // same people (WithDirectoryPopulation), so none beyond a cut can be worked out from it (#844, P4-1). The lists of
+            // people keep MaximumTop: this reader is never sent them.
             var query = await BuildQueryAsync(days, TeamsExplorerQuery.DefaultGrouping, seePii ? top : TeamsExplorerQuery.MaximumTop).ConfigureAwait(false);
             Func<TeamsPeople, TeamsPeople> forReader = null;
             if (!seePii)
             {
+                query = query.WithEveryGroup().WithDirectoryPopulation();
                 var shown = TeamsExplorerQuery.NormaliseTop(top);
                 forReader = p => p.WithoutIndividualData(ReportScopeResolver.MinimumPeopleWithoutSeePii).WithFirstDepartments(shown);
             }
@@ -244,10 +295,13 @@ namespace Web.AnalyticsWeb.Controllers
 
             var normalised = section.ToLowerInvariant();
             var seePii = PortalAccess.Evaluate(Request, User).SeePii;
-            // The adoption breakdown is folded over every group for a reader without See PII, as on the page.
+            // The adoption breakdown is folded over every group for a reader without See PII, as on the page; and the team and
+            // channel leaderboards floored over the export-sized list read with one row more, then cut to top (#844, P4-1).
             var foldsGroups = normalised == "adoption" && !seePii;
+            var floorsList = (normalised == "teams" || normalised == "channels") && !seePii;
             var query = await BuildQueryAsync(days, groupBy, top).ConfigureAwait(false);
             if (foldsGroups) query = query.WithEveryRow();
+            if (floorsList) query = query.WithListProbe();
             byte[] csv;
             string failedQuery;
             TeamsExplorerQueryInfo failedInfo;
@@ -265,6 +319,10 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     var collaboration = await _store.GetCollaborationAsync(query).ConfigureAwait(false);
                     failedQuery = FailedQuery(collaboration, "collab-teams", out failedInfo);
+                    // Never less redacted than the page: the same teams are left out, and the same reactions withheld.
+                    if (floorsList)
+                        collaboration = collaboration.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii)
+                            .WithFirstRows(TeamsExplorerQuery.NormaliseTop(top));
                     csv = CsvSerialiser.ToBytes(collaboration.Teams, TeamsExplorerExports.TeamColumns());
                     break;
                 }
@@ -273,6 +331,9 @@ namespace Web.AnalyticsWeb.Controllers
                 {
                     var collaboration = await _store.GetCollaborationAsync(query).ConfigureAwait(false);
                     failedQuery = FailedQuery(collaboration, "collab-channels", out failedInfo);
+                    if (floorsList)
+                        collaboration = collaboration.WithoutSmallGroups(ReportScopeResolver.MinimumPeopleWithoutSeePii)
+                            .WithFirstRows(TeamsExplorerQuery.NormaliseTop(top));
                     csv = CsvSerialiser.ToBytes(collaboration.Channels, TeamsExplorerExports.ChannelColumns());
                     break;
                 }

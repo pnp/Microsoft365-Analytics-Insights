@@ -6,6 +6,7 @@ import { reportQueryFailureText } from '../shared/reportQueryFailure';
 import { formatDateParts, formatNumber, parseApiDate, useT, type TFunction, type TranslationKey } from '../../i18n';
 import type {
   TeamsBucket,
+  TeamsDeviceRow,
   TeamsDormancy,
   TeamsNamedCount,
   TeamsQueryInfo,
@@ -85,9 +86,49 @@ export function toCategories(rows: TeamsNamedCount[]): ReportCategory[] {
   return rows.map((row) => ({ label: row.name, value: row.count }));
 }
 
-/** Distribution buckets -> bar categories, preserving bucket order. */
-export function bucketsToCategories(buckets: TeamsBucket[]): ReportCategory[] {
-  return buckets.map((bucket) => ({ label: bucket.label, value: bucket.count }));
+/**
+ * Distribution buckets -> bar categories, preserving bucket order. `otherLabel` names the combined row a reader without
+ * See PII gets in place of the buckets too few people are behind.
+ */
+export function bucketsToCategories(buckets: TeamsBucket[], otherLabel = ''): ReportCategory[] {
+  return buckets.map((bucket) => ({ label: bucket.other ? otherLabel : bucket.label ?? '', value: bucket.count }));
+}
+
+/** A figure withheld from a reader without See PII: a dash whose name says why - never a zero or a blank. */
+export function WithheldDash({ reason }: { reason: string }) {
+  return (
+    <span role="img" aria-label={reason} title={reason} data-withheld="true">
+      {'\u2014'}
+    </span>
+  );
+}
+
+/** Why a figure is withheld, for a section's minimum group size: "Withheld: fewer than 5 people". */
+export function withheldReason(t: TFunction, minimumGroupSize: number | null | undefined): string {
+  return t('teamsExplorer.privacy.withheld', { count: formatCount(minimumGroupSize ?? 5) });
+}
+
+/**
+ * A figure a reader without See PII may be sent withheld (null): the figure formatted, or a dash that says why. Null is
+ * never drawn as a zero (#844).
+ */
+export function figureOrWithheld(value: number | null | undefined, format: (value: number) => string, reason: string): ReactNode {
+  return value == null ? <WithheldDash reason={reason} /> : format(value);
+}
+
+/**
+ * The note a tab shows a reader without See PII, whose figures count only people with an enabled account and leave out
+ * groups smaller than `minimumGroupSize`; undefined for a reader with See PII, whose sections carry no minimum.
+ */
+export function PrivacyReaderNote({ minimumGroupSize }: { minimumGroupSize: number | null | undefined }) {
+  const styles = useStyles();
+  const t = useT();
+  if (minimumGroupSize == null) return null;
+  return (
+    <Text as="p" block size={200} className={styles.muted} style={{ marginTop: '4px' }} data-testid="teams-privacy-note">
+      {t('teamsExplorer.privacy.readerNote', { count: formatCount(minimumGroupSize) })}
+    </Text>
+  );
 }
 
 // Graph callRecord modality and userFeedback rating values. Each code has its OWN label: two codes sharing
@@ -124,8 +165,35 @@ export function translatedCodeBucketsToCategories(
   t: TFunction,
   group: TeamsCallCodeGroup,
   buckets: TeamsBucket[],
+  otherLabel = '',
 ): ReportCategory[] {
-  return buckets.map((bucket) => ({ label: translatedCodeLabel(t, group, bucket.key), value: bucket.count }));
+  return buckets.map((bucket) => ({
+    label: bucket.other ? otherLabel : translatedCodeLabel(t, group, bucket.key),
+    value: bucket.count,
+  }));
+}
+
+/**
+ * The Adoption tab's platforms, by the stable key the server sends beside each English name
+ * (`SqlTeamsExplorerStore.BuildDevices`). serverAuthoredText.test.ts fails when the two lists disagree.
+ */
+export const TEAMS_PLATFORM_LABEL_KEYS = {
+  windows: 'teamsExplorer.adoption.devices.platform.windows',
+  mac: 'teamsExplorer.adoption.devices.platform.mac',
+  web: 'teamsExplorer.adoption.devices.platform.web',
+  ios: 'teamsExplorer.adoption.devices.platform.ios',
+  android: 'teamsExplorer.adoption.devices.platform.android',
+  linux: 'teamsExplorer.adoption.devices.platform.linux',
+  chromeOs: 'teamsExplorer.adoption.devices.platform.chromeOs',
+  mobile: 'teamsExplorer.adoption.devices.platform.mobile',
+} as const satisfies Record<string, TranslationKey>;
+
+/** A platform's name in the reader's language, or the server's English for a key this build does not know. */
+export function platformLabel(t: TFunction, row: Pick<TeamsDeviceRow, 'platform' | 'platformKey'>): string {
+  const key = row.platformKey;
+  return key && Object.prototype.hasOwnProperty.call(TEAMS_PLATFORM_LABEL_KEYS, key)
+    ? t(TEAMS_PLATFORM_LABEL_KEYS[key as keyof typeof TEAMS_PLATFORM_LABEL_KEYS])
+    : row.platform;
 }
 
 export const TEAMS_SEGMENT_TEXT_KEYS: Record<string, { labelKey: TranslationKey; descriptionKey: TranslationKey }> = {
@@ -193,8 +261,8 @@ export function translatedBucketsToCategories(
 ): ReportCategory[] {
   const keys: Record<string, TranslationKey> = TEAMS_MEETING_BUCKET_LABEL_KEYS[group];
   return buckets.map((bucket) => {
-    const key = keys[bucket.key];
-    return { label: key ? t(key) : bucket.label, value: bucket.count };
+    const key = bucket.key == null ? undefined : keys[bucket.key];
+    return { label: key ? t(key) : bucket.label ?? '', value: bucket.count };
   });
 }
 

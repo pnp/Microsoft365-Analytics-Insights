@@ -2,6 +2,7 @@
 using System;
 using System.IO;
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
 
 namespace DataUtils
 {
@@ -39,16 +40,40 @@ namespace DataUtils
             Console.WriteLine($"Deleted '{FullFileName}'");
         }
 
-        public static T Load<T>() where T : SecureLocalPreferences, new()
+        /// <summary>
+        /// Loads the preferences saved for <typeparamref name="T"/>, or the defaults when none are saved.
+        /// </summary>
+        /// <param name="reportUnreadable">
+        /// Told why, when a saved file can't be read and the defaults are used instead. A file Windows can't decrypt for
+        /// this account (written by another account or machine, or after its data-protection keys changed), or a damaged
+        /// one, must not stop the application starting: saving preferences again replaces it.
+        /// </param>
+        public static T Load<T>(Action<string> reportUnreadable = null) where T : SecureLocalPreferences, new()
         {
             T defaultData = (T)Activator.CreateInstance(typeof(T));
 
             if (File.Exists(defaultData.FullFileName))
             {
-                var binaryData = File.ReadAllBytes(defaultData.FullFileName);
-                var json = StringUtils.UnprotectString(binaryData);
-                Console.WriteLine($"Read file '{defaultData.FullFileName}' for type '{typeof(T).Name}'");
-                return JsonConvert.DeserializeObject<T>(json);
+                string problem;
+                try
+                {
+                    var binaryData = File.ReadAllBytes(defaultData.FullFileName);
+                    var json = StringUtils.UnprotectString(binaryData);
+                    Console.WriteLine($"Read file '{defaultData.FullFileName}' for type '{typeof(T).Name}'");
+                    var loaded = JsonConvert.DeserializeObject<T>(json);
+                    if (loaded != null) return loaded;
+                    problem = "it holds no preferences";
+                }
+                catch (Exception ex) when (ex is CryptographicException || ex is JsonException || ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    problem = $"{ex.GetType().Name}: {ex.Message.Trim()}";
+                }
+
+                var message = $"The saved preferences in '{defaultData.FullFileName}' could not be read ({problem}), so the defaults " +
+                    "are in use. Saving the preferences again replaces the file.";
+                Console.WriteLine(message);
+                reportUnreadable?.Invoke(message);
+                return defaultData;
             }
             else
             {

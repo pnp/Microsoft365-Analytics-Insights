@@ -288,7 +288,7 @@ INSERT dbo.copilot_event_ai_system_plugins (copilot_chat_id, ai_system_plugin_id
         {
             using (var db = NewDatabase())
             {
-                var from = DateTime.UtcNow.Date.AddDays(-28);
+                var from = DlpAPIController.WindowStartUtc(DateTime.UtcNow, 28);
                 var runtime = Chat(db, 1, 1, from.AddSeconds(-2));
                 var client = Chat(db, 2, 1, from.AddSeconds(1));
                 Duplicate(db, runtime, client, 1);

@@ -422,6 +422,28 @@ describe('ReportsPage', () => {
 
     expect(warning).toContain('Viva Engage: a 2 de las semanas representadas les falta al menos un día de informes de uso');
     expect(warning).not.toContain('missing at least one day');
+
+    // Viva Engage is charted, from the days that were imported, so it is not an unavailable series (#816).
+    expect(warning).toMatch(/^Algunas semanas están incompletas: /);
+    expect(warning).not.toContain('no están disponibles');
+  });
+
+  it('words unavailable series and incomplete weeks as separate sentences', async () => {
+    const en = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
+      translateStatic('en', key, values);
+
+    const warning = reportChartWarningText(en, baseChart({
+      key: 'usage-active-users',
+      warning: 'Some workload series are unavailable: Outlook: no settled usage data. Some weeks are incomplete: Viva Engage: 2 of the charted weeks are missing at least one day of usage reports (most recently the week of 2026-06-15), so those weeks count only the days that were imported.',
+      warningKey: 'seriesUnavailableAndIncompleteWeeks',
+      seriesWarnings: [
+        { series: 'Outlook', reason: 'noSettledData', error: null, week: null },
+        { series: 'Viva Engage', reason: 'incompleteWeeks', error: null, week: '2026-06-15T00:00:00Z', count: 2 },
+      ],
+    }));
+
+    expect(warning).toMatch(/^Some workload series are unavailable: Outlook: no settled usage data\. Some weeks are incomplete: Viva Engage: 2 of the charted weeks/);
+    expect(warning).not.toMatch(/unavailable: [^.]*Viva Engage/);
   });
 
   /**
@@ -515,5 +537,58 @@ describe('ReportsPage', () => {
     expect(await screen.findByRole('heading', { name: 'Office apps' })).toBeInTheDocument();
     await waitFor(() => expect(mockArea).toHaveBeenCalledWith('office-apps', 3, undefined));
     expect(screen.queryByText(/Showing the last/)).not.toBeInTheDocument();
+  });
+
+  /** For a reader without See PII the server charts only agents five or more people used (#844), and says so. */
+  it('says which agents a reader without See PII is shown', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, copilot: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'copilot-agents',
+      charts: [
+        baseChart({ key: 'copilot-agent-totals', categories: [{ label: 'Contoso Helpdesk', value: 14 }], minimumGroupSize: 5 }),
+        baseChart({
+          key: 'copilot-agent-interactions',
+          type: 'timeseries',
+          series: [{ name: 'Contoso Helpdesk', points: [{ weekStart: '2026-01-05T00:00:00Z', value: 14 }] }],
+          minimumGroupSize: 5,
+        }),
+      ],
+    });
+
+    renderReport('/insights/reports/copilot-agents');
+
+    expect(await screen.findAllByText(
+      'Only agents used by at least 5 different people in this period are shown, so that nobody can be singled out.',
+      undefined,
+      { timeout: 5000 },
+    )).toHaveLength(2);
+    expect(screen.getByTitle('Contoso Helpdesk: 14 Executions')).toBeInTheDocument();
+    expect(screen.queryByText(/phrases and languages/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['en', '', 'reports.withheld.agentsNone'],
+    ['es', '', 'reports.withheld.agentsNone'],
+    ['en', '?agentName=Contoso', 'reports.withheld.agentsNoneMatching'],
+    ['es', '?agentName=Contoso', 'reports.withheld.agentsNoneMatching'],
+  ] as const)('never reads as no data when every agent is withheld (%s, %s)', async (language, search, key) => {
+    await loadCatalog(language);
+    mockAreas.mockResolvedValue({ ...NO_AREAS, copilot: true });
+    mockArea.mockResolvedValue({
+      ...areaData,
+      area: 'copilot-agents',
+      charts: [
+        baseChart({ key: 'copilot-agent-totals', categories: [], minimumGroupSize: 5 }),
+        baseChart({ key: 'copilot-agent-interactions', type: 'timeseries', series: [], minimumGroupSize: 5 }),
+      ],
+    });
+
+    renderReport('/insights/reports/copilot-agents', language, search);
+
+    const expected = translateStatic(language, key).replace('{count}', '5');
+    expect(await screen.findAllByText(expected, undefined, { timeout: 5000 })).toHaveLength(2);
+    expect(screen.queryByText(translateStatic(language, 'charts.empty.noDataForPeriod'))).not.toBeInTheDocument();
+    expect(screen.queryByText(translateStatic(language, 'reports.chart.noData'))).not.toBeInTheDocument();
   });
 });

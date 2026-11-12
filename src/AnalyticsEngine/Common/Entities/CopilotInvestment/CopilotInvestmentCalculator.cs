@@ -430,6 +430,7 @@ namespace Common.Entities.CopilotInvestment
             {
                 source.UnresolvedObjects = unresolved.Count;
                 source.UnresolvedCredits = Math.Round(unresolved.Sum(u => u.Credits ?? 0), 6);
+                source.UnresolvedContributors = unresolved.Count(u => (u.Credits ?? 0) != 0);
             }
             if (credits.Collector != null)
             {
@@ -451,6 +452,7 @@ namespace Common.Entities.CopilotInvestment
                 LastImportUtc = studio.LastImportUtc,
                 LastImportFailed = !string.IsNullOrEmpty(studio.LastImportError),
                 UnresolvedCredits = input.Filtered ? (double?)null : Math.Round(studio.Users.Where(u => !u.UserId.HasValue).Sum(u => u.Credits), 6),
+                UnresolvedContributors = input.Filtered ? 0 : studio.Users.Count(u => !u.UserId.HasValue && u.Credits != 0),
                 FailureCode = studio.FailureCode,
             };
             return sources;

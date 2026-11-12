@@ -154,14 +154,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             var team = await context.GraphClient.Teams[teamId].GetAsync();
             var fullTeam = new O365Team(team);
 
-            // Populate new Teams definition with graph data
-            var parentGroupFull = await context.GraphClient.Groups[teamId].GetAsync(rc =>
-            {
-                rc.QueryParameters.Expand = new[] { "Owners" };
-            });
+            // Populate new Teams definition with graph data. Every owner, page by page: $expand=owners on the group returns
+            // only the first few, with nothing to say the rest were left out (#847, R8-11).
+            var groupOwners = await LoadAllGroupOwners(context.GraphClient, teamId);
 
             // Add owners. Owners outside UserGroupsFilter are skipped before their Graph lookup, so they are never stored.
-            foreach (var groupOwner in parentGroupFull.Owners)
+            foreach (var groupOwner in groupOwners)
             {
                 if (!context.UserScope.IsInScope(groupOwner.Id))
                 {
@@ -217,13 +215,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
                 logger.LogInformation($"Team '{fullTeam.DisplayName}': {membersNotFound:N0} member(s) weren't found in Entra ID (deleted, or not a user account), so their membership isn't recorded.");
             }
 
-            // Channels and tabs:
+            // Channels and tabs. A 200 without its collection is a failed read, not a Team without channels or a channel
+            // without tabs (#847): the Team fails for this cycle and keeps what was saved before.
             var channelsLoaded = await context.GraphClient.Teams[teamId].Channels.GetAsync();
-            if (channelsLoaded?.Value != null)
+            if (channelsLoaded?.Value == null)
             {
-                foreach (var channel in channelsLoaded.Value)
-                    fullTeam.Channels.Add(new ChannelWithReactions(channel));
+                throw new GraphPageWithoutValueException(1);
             }
+            foreach (var channel in channelsLoaded.Value)
+                fullTeam.Channels.Add(new ChannelWithReactions(channel));
 
 
             var teamTokenManager = new TeamTokenManager(fullTeam, appConfig, logger);
@@ -231,17 +231,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             // Load tabs in each channel
             foreach (var channel in fullTeam.Channels)
             {
-                var dbChannel = await db.TeamChannels.Where(c => c.GraphID == channel.Id).SingleOrDefaultAsync();
-                if (dbChannel == null && teamTokenManager.ChannelDeltaTokenStore != null)
+                if (teamTokenManager.ChannelDeltaTokenStore != null)
                 {
-                    // Clear delta cache if new channel in DB. Mainly for debug reasons but also if there's no channel, we need to make sure we ignore any delta code (just in case)
-                    await teamTokenManager.ChannelDeltaTokenStore.RemoveDeltaToken(fullTeam.Id, channel.Id);
+                    var dbChannel = await db.TeamChannels.Where(c => c.GraphID == channel.Id).SingleOrDefaultAsync();
+                    if (dbChannel == null)
+                    {
+                        // Clear delta cache if new channel in DB. Mainly for debug reasons but also if there's no channel, we need to make sure we ignore any delta code (just in case)
+                        await teamTokenManager.ChannelDeltaTokenStore.RemoveDeltaToken(fullTeam.Id, channel.Id);
+                    }
                 }
                 var tabsPage = await context.GraphClient.Teams[teamId].Channels[channel.Id].Tabs.GetAsync(rc =>
                 {
                     rc.QueryParameters.Expand = new[] { "teamsApp" };
                 });
-                channel.Tabs = tabsPage?.Value ?? new List<TeamsTab>();
+                channel.Tabs = tabsPage?.Value ?? throw new GraphPageWithoutValueException(1);
             }
 
             // Get token for Team
@@ -395,6 +398,48 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
         }
         #endregion
 
+        /// <summary>
+        /// The most pages of owners one group may take. A group has at most a few hundred owners and Graph returns 100 a page,
+        /// so this only stops paging that never ends.
+        /// </summary>
+        internal const int MaxOwnerPages = 50;
+
+        /// <summary>
+        /// Every owner of the group: <c>GET /groups/{id}/owners</c> (Microsoft Learn, "List group owners", v1.0), following
+        /// <c>@odata.nextLink</c>. Strict, like the shared strict pager: a page without its <c>value</c> collection, a link
+        /// back to a page already read or paging past <see cref="MaxOwnerPages"/> fails the Team for this cycle - an owner
+        /// list that is silently short is what this replaced. No message names a paging link.
+        /// </summary>
+        internal static async Task<List<DirectoryObject>> LoadAllGroupOwners(GraphServiceClient client, string groupId)
+        {
+            var owners = new List<DirectoryObject>();
+            var requestedLinks = new HashSet<string>(StringComparer.Ordinal);
+            var page = await client.Groups[groupId].Owners.GetAsync();
+            for (var pageNumber = 1; ; pageNumber++)
+            {
+                if (page?.Value == null)
+                {
+                    throw new GraphPageWithoutValueException(pageNumber);
+                }
+                owners.AddRange(page.Value);
+
+                var nextLink = page.OdataNextLink;
+                if (string.IsNullOrEmpty(nextLink))
+                {
+                    return owners;
+                }
+                if (pageNumber >= MaxOwnerPages)
+                {
+                    throw new InvalidOperationException($"Graph's paging of a group's owners went past {MaxOwnerPages} pages.");
+                }
+                if (!requestedLinks.Add(nextLink))
+                {
+                    throw new InvalidOperationException($"Graph linked page {pageNumber + 1} of a group's owners back to a page it had already returned.");
+                }
+                page = await client.Groups[groupId].Owners.WithUrl(nextLink).GetAsync();
+            }
+        }
+
         private static async Task<List<DirectoryObject>> LoadAllGroupMembers(GraphServiceClient client, string groupId, ILogger logger)
         {
             // Safety cap on paging: at 200k-user scale a single group rarely exceeds ~50k members
@@ -402,8 +447,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
             // is comfortably above any realistic limit.
             var all = new List<DirectoryObject>();
 
+            // A 200 without the member list is a failed read, not a Team without members (#847).
             var firstPage = await client.Groups[groupId].Members.GetAsync();
-            if (firstPage == null) return all;
+            if (firstPage?.Value == null)
+            {
+                throw new GraphPageWithoutValueException(1);
+            }
 
             int loaded = 0;
             var iterator = PageIterator<DirectoryObject, DirectoryObjectCollectionResponse>

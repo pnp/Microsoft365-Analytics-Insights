@@ -31,6 +31,35 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, calls);
         }
 
+        /// <summary>
+        /// #847 (R8-13): the importer holds one gate for the life of the process, so the collector's back-off survives the
+        /// cycle boundary; and the cycle pause's 5-second poll no longer logs every outcome at Information (about 16,000
+        /// lines a day) - only a change, or a persisting warning once an hour.
+        /// </summary>
+        [TestMethod]
+        public void PollGate_BacksOffUnlessThereIsMoreWork_AndLogsAnOutcomeOncePerChange()
+        {
+            var gate = new CostCollectorPollGate();
+            var now = new DateTimeOffset(2026, 11, 9, 12, 0, 0, TimeSpan.Zero);
+
+            Assert.IsTrue(gate.IsDue(now));
+            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Information, gate.Record("sliceCompleted", now), "A new outcome is logged.");
+            Assert.IsTrue(gate.IsDue(now.AddSeconds(5)), "More work: ask again at the next poll.");
+            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Debug, gate.Record("sliceCompleted", now.AddSeconds(5)), "The same outcome again is Debug.");
+
+            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Information, gate.Record("idle", now.AddSeconds(10)));
+            Assert.IsFalse(gate.IsDue(now.AddSeconds(30)), "Idle backs off for a minute...");
+            Assert.IsTrue(gate.IsDue(now.AddSeconds(70)));
+
+            var failedAt = now.AddMinutes(2);
+            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Warning, gate.Record("throttled", failedAt));
+            Assert.IsFalse(gate.IsDue(failedAt.AddMinutes(4)), "...a failure for five.");
+            Assert.IsTrue(gate.IsDue(failedAt.AddMinutes(5)));
+            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Debug, gate.Record("throttled", failedAt.AddMinutes(5)), "A persisting warning is not repeated every poll...");
+            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Warning, gate.Record("throttled", failedAt + CostCollectorPollGate.WarningRepeatInterval), "...but is once an hour.");
+            Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Information, gate.Record("sliceCompleted", failedAt.AddHours(2)), "Recovery is a change, so it is logged.");
+        }
+
         [TestMethod]
         public void FreshnessIsNotAnAccountingMonthAndFilteredInventoryIsRejected()
         {

@@ -5,10 +5,12 @@ using Common.Entities.Entities.AuditLog;
 using Common.Entities.UserFilters;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
 using System.Data.Common;
 using System.Data.Entity.Infrastructure.Interception;
 using System.Data.Entity.Migrations;
 using Microsoft.Data.SqlClient;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -242,12 +244,320 @@ namespace Tests.UnitTests
             Assert.IsNull(summary.TopPolicies.Single().Policies,
                 "Only agent rows carry a nested breakdown; a policy row nesting policies would be meaningless.");
 
-            // A reader without the portal's See PII permission gets every figure above except the people (#661).
+            // A reader without the portal's See PII permission gets every aggregate above except the people (#661) - and,
+            // because one person is behind every agent, policy and label here, none of those rows either (#844): one
+            // person's matches are that person's.
             var aggregateOnly = await NewController().BuildSummaryAsync(28, includeIndividuals: false);
             Assert.AreEqual(0, aggregateOnly.TopUsers.Count, "The top-users rows are sign-in names.");
             Assert.AreEqual(1, aggregateOnly.UsersImpacted, "How many people were affected names nobody.");
-            Assert.AreEqual("Contoso HR Agent", aggregateOnly.TopAgents.Single().Name);
-            Assert.AreEqual(1, aggregateOnly.TopAgents.Single().UsersAffected);
+            Assert.AreEqual(0, aggregateOnly.TopAgents.Count, "One person's agent is withheld.");
+            Assert.AreEqual(0, aggregateOnly.TopPolicies.Count + aggregateOnly.TopSensitivityLabels.Count + aggregateOnly.TenantTopPolicies.Count);
+            Assert.AreEqual(4, aggregateOnly.WithheldRows);
+            Assert.AreEqual(5, aggregateOnly.MinimumGroupSize);
+            Assert.IsNull(summary.MinimumGroupSize, "A See PII reader is shown every row, as before.");
+            Assert.AreEqual(0, summary.WithheldRows);
+        }
+
+        /// <summary>
+        /// The floor a reader without See PII is held to (#844). The release review's example: policies with 100, 25 and 7
+        /// blocked matches, the 7 two people's, beside 132 blocked matches in all. Leaving out only the 7 gave it back as
+        /// 132 - 100 - 25, so whenever a table leaves out a row of fewer than five people, the smallest row it still lists - by
+        /// people, not by its place in the ranking - goes too, and the total less the rows listed always holds a row of five or
+        /// more. The same in every table, for matches with nobody to count, and among an agent's policies against the agent's
+        /// own figures. A table with no small row is shown as it is.
+        /// </summary>
+        [TestMethod]
+        public void WithoutSmallGroups_LeavesOutTheSmallestRowListedBesideASmallOne_SoNoTotalLessTheRowsListedIsOneSmallRow()
+        {
+            DlpImpactRow Row(string id, int blocked, int people, List<DlpImpactRow> policies = null) => new DlpImpactRow
+            {
+                Id = id,
+                Name = "Contoso " + id,
+                BlockedCount = blocked,
+                AuditedCount = 1,
+                UsersAffected = people,
+                People = people,
+                Policies = policies,
+            };
+
+            var summary = new DlpSummary
+            {
+                CopilotBlockedCount = 132,
+                TenantBlockedCount = 132,
+                TopAgents = new List<DlpImpactRow>
+                {
+                    Row("agent-busy", 132, 40, new List<DlpImpactRow> { Row("agent-policy-1", 100, 30), Row("agent-policy-2", 25, 8), Row("agent-policy-3", 7, 2) }),
+                    Row("agent-quiet", 9, 6),
+                },
+                TopPolicies = new List<DlpImpactRow> { Row("policy-1", 100, 30), Row("policy-2", 25, 8), Row("policy-3", 7, 2) },
+                // Ranked by blocked matches, but the fewest people are behind the first.
+                TopSensitivityLabels = new List<DlpImpactRow> { Row("label-1", 100, 6), Row("label-2", 25, 30), Row("label-3", 7, 2) },
+                TenantTopPolicies = new List<DlpImpactRow> { Row("tenant-policy-1", 100, 30), Row("tenant-policy-2", 25, 8), Row("tenant-policy-3", 7, 0) },
+            };
+
+            DlpAPIController.WithoutSmallGroups(summary, 5);
+
+            CollectionAssert.AreEqual(new[] { "policy-1" }, summary.TopPolicies.Select(r => r.Id).ToArray(),
+                "The 7 two people had is left out, and the 25, the smallest policy listed beside it, goes too.");
+            Assert.AreEqual(32, summary.CopilotBlockedCount - summary.TopPolicies.Sum(r => r.BlockedCount),
+                "132 less the policies listed is the 25 and the 7 together - never the 7 on its own.");
+
+            CollectionAssert.AreEqual(new[] { "label-2" }, summary.TopSensitivityLabels.Select(r => r.Id).ToArray(),
+                "The smallest label listed is the one with the fewest people, wherever it ranks.");
+            Assert.AreEqual(107, summary.CopilotBlockedCount - summary.TopSensitivityLabels.Sum(r => r.BlockedCount));
+
+            CollectionAssert.AreEqual(new[] { "tenant-policy-1" }, summary.TenantTopPolicies.Select(r => r.Id).ToArray(),
+                "Matches with nobody to count are left out as a small row is - nothing says they are five people's - and take "
+                + "the smallest policy listed with them.");
+            Assert.AreEqual(32, summary.TenantBlockedCount - summary.TenantTopPolicies.Sum(r => r.BlockedCount));
+
+            CollectionAssert.AreEqual(new[] { "agent-busy", "agent-quiet" }, summary.TopAgents.Select(r => r.Id).ToArray(),
+                "A table with no row of fewer than five people, and nothing past the rows it lists, is shown as it is.");
+            var busy = summary.TopAgents[0];
+            CollectionAssert.AreEqual(new[] { "agent-policy-1" }, busy.Policies.Select(r => r.Id).ToArray(),
+                "An agent's policies are held against the agent's own figures the same way.");
+            Assert.AreEqual(32, busy.BlockedCount - busy.Policies.Sum(r => r.BlockedCount), "Never the 7 on its own.");
+
+            Assert.AreEqual(6, summary.WithheldRows, "Two rows from each of the policy, label and tenant policy tables.");
+            Assert.AreEqual("0|2|2|2", DescribeWithheld(summary.WithheldRowsByTable), "Table by table, so a table left empty can say so.");
+            Assert.AreEqual(5, summary.MinimumGroupSize);
+        }
+
+        /// <summary>
+        /// A table lists the first <see cref="DlpAPIController.TopN"/> rows of a ranking read one row longer. A row past them is
+        /// in the totals but not in the table, as a row left out is, and can be one of fewer than five people: with exactly one
+        /// such row past the cut and every row listed of five or more, the table still leaves out its smallest row listed, so
+        /// the totals less the rows listed are never that row's alone. A table that ends within its rows loses nothing.
+        /// </summary>
+        [TestMethod]
+        public void WithoutSmallGroups_ATableThatGoesOnPastTheRowsItLists_LeavesOutItsSmallestRowListed()
+        {
+            var top = DlpAPIController.TopN;
+
+            // Ranked by blocked matches. Listed: rows of 11 to 30 people, but for the twelfth, of five. Past the cut: two people.
+            List<DlpImpactRow> Ranked(string prefix, int rows) => Enumerable.Range(1, rows).Select(i => new DlpImpactRow
+            {
+                Id = prefix + "-" + i.ToString("D2", CultureInfo.InvariantCulture),
+                Name = "Contoso " + prefix + " " + i.ToString(CultureInfo.InvariantCulture),
+                BlockedCount = 100 - i,
+                People = i > top ? 2 : i == 12 ? 5 : 10 + i,
+            }).ToList();
+
+            var summary = new DlpSummary
+            {
+                TopAgents = Ranked("agent", top + 1),
+                TopPolicies = Ranked("policy", top + 1),
+                TopSensitivityLabels = Ranked("label", top + 1),
+                TenantTopPolicies = Ranked("tenant-policy", top),
+            };
+
+            DlpAPIController.WithoutSmallGroups(summary, 5);
+
+            foreach (var (table, rows) in new[]
+            {
+                ("agents", summary.TopAgents),
+                ("policies", summary.TopPolicies),
+                ("labels", summary.TopSensitivityLabels),
+            })
+            {
+                Assert.AreEqual(top - 1, rows.Count, table + ": the row past the cut counts as a row left out.");
+                Assert.IsFalse(rows.Any(r => r.Id.EndsWith("-12", StringComparison.Ordinal)), table + ": the smallest row listed goes.");
+                Assert.IsFalse(rows.Any(r => r.Id.EndsWith("-21", StringComparison.Ordinal)), table + ": a row past the cut is never shown.");
+            }
+
+            Assert.AreEqual(top, summary.TenantTopPolicies.Count, "A table that ends within its rows, none small, is shown as it is.");
+            Assert.AreEqual(3, summary.WithheldRows, "One of the rows listed, from each table that goes on.");
+            Assert.AreEqual("1|1|1|0", DescribeWithheld(summary.WithheldRowsByTable));
+        }
+
+        /// <summary>
+        /// The release review's example end to end, unfiltered and under a filter: one agent's 132 blocked matches, 100 of
+        /// them under one policy and label from ten people, 25 under another from five and 7 under a third from two - and the
+        /// same matches on the DLP.All feed. A reader without See PII is shown neither the 7 nor the 25 in any table, nor among
+        /// the agent's policies, so the totals - and the agent's own figures - less the rows listed are 32, never the 7. A
+        /// reader with See PII is shown every row, as before.
+        /// </summary>
+        /// <remarks>On a clock fixed in March 2019, years before every other test's rows, so these figures are this test's alone.</remarks>
+        [TestMethod]
+        public async Task Summary_WithoutSeePii_NoTotalLessTheRowsListedIsOneSmallRow_AndWithSeePiiEveryRowIsListed()
+        {
+            var now = new DateTime(2019, 3, 15, 12, 0, 0, DateTimeKind.Utc);
+            var people = new List<int>();
+
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                var operation = new EventOperation { Name = "CopilotInteractionBesideTheTotals" };
+                db.event_operations.Add(operation);
+                var agent = new CopilotAgent { AgentID = "CopilotStudio.Declarative.totals", Name = "Contoso Totals Agent" };
+                db.CopilotAgents.Add(agent);
+                db.SaveChanges();
+
+                foreach (var (suffix, blocked, persons) in new[] { ("1", 100, 10), ("2", 25, 5), ("3", 7, 2) })
+                {
+                    var policy = new DlpPolicy { PolicyId = "pol-totals-" + suffix, Name = "Contoso totals policy " + suffix };
+                    var label = new SensitivityLabel { LabelId = "00000000-0000-0000-0000-00000000d10" + suffix };
+                    var users = Enumerable.Range(1, persons).Select(i => new User { UserPrincipalName = $"totals{suffix}-{i}@contoso.com" }).ToList();
+                    db.dlp_policies.Add(policy);
+                    db.SensitivityLabels.Add(label);
+                    db.users.AddRange(users);
+                    db.SaveChanges();
+                    people.AddRange(users.Select(u => u.ID));
+
+                    SeedBlockedMatches(db, operation, users, agent, policy, label, blocked, now.AddDays(-1));
+                }
+            }
+
+            var controller = new DlpAPIController(new ConnectionStringAnalyticsDbContextFactory(_connectionString), utcNow: () => now);
+            foreach (var scope in new[] { null, ReportUserScope.ForUsers(people) })
+            {
+                var because = scope == null ? " (unfiltered)" : " (under a filter)";
+
+                var named = await controller.BuildSummaryAsync(7, includeIndividuals: true, scope: scope);
+                Assert.AreEqual(132, named.CopilotBlockedCount, because);
+                foreach (var (table, rows) in new[]
+                {
+                    ("policies", named.TopPolicies),
+                    ("labels", named.TopSensitivityLabels),
+                    ("tenant policies", named.TenantTopPolicies),
+                    ("the agent's policies", named.TopAgents.Single().Policies),
+                })
+                {
+                    CollectionAssert.AreEqual(new[] { 100, 25, 7 }, rows.Select(r => r.BlockedCount).ToArray(),
+                        table + ": a reader with See PII is shown every row, as before" + because);
+                }
+
+                Assert.IsNull(named.MinimumGroupSize, because);
+                Assert.AreEqual(0, named.WithheldRows, because);
+                Assert.IsNull(named.WithheldRowsByTable, because);
+
+                var anonymous = await controller.BuildSummaryAsync(7, includeIndividuals: false, scope: scope);
+                Assert.AreEqual(132, anonymous.CopilotBlockedCount, "The totals stay" + because);
+                Assert.AreEqual(132, anonymous.TenantBlockedCount, because);
+                var agentRow = anonymous.TopAgents.Single();
+                Assert.AreEqual(17, agentRow.UsersAffected, "Seventeen people's agent is listed" + because);
+                foreach (var (table, total, rows) in new[]
+                {
+                    ("policies", anonymous.CopilotBlockedCount, anonymous.TopPolicies),
+                    ("labels", anonymous.CopilotBlockedCount, anonymous.TopSensitivityLabels),
+                    ("tenant policies", anonymous.TenantBlockedCount, anonymous.TenantTopPolicies),
+                    ("the agent's policies", agentRow.BlockedCount, agentRow.Policies),
+                })
+                {
+                    CollectionAssert.AreEqual(new[] { 100 }, rows.Select(r => r.BlockedCount).ToArray(),
+                        table + ": the 7 two people had is left out, and the 25 listed beside it goes too" + because);
+                    Assert.AreEqual(32, total - rows.Sum(r => r.BlockedCount),
+                        table + ": the total less the rows listed is the 25 and the 7 together, never the 7" + because);
+                }
+
+                Assert.AreEqual(6, anonymous.WithheldRows, "Two rows from each of the policy, label and tenant policy tables" + because);
+                Assert.AreEqual("0|2|2|2", DescribeWithheld(anonymous.WithheldRowsByTable), because);
+                Assert.AreEqual(5, anonymous.MinimumGroupSize, because);
+            }
+        }
+
+        /// <summary>
+        /// A table cut at <see cref="DlpAPIController.TopN"/> rows, end to end, unfiltered and under a filter: twenty agents,
+        /// policies and labels of five people each and, ranked after them, one of two people - exactly one small row past the
+        /// cut. A reader with See PII is shown the first twenty, as before. A reader without it is not shown the row past the
+        /// cut either, but the totals less the rows listed would be its figures alone, so the table also leaves out its
+        /// smallest row listed: of twenty rows of five people, the first by id.
+        /// </summary>
+        /// <remarks>On a clock fixed in March 2018, years before every other test's rows, so these figures are this test's alone.</remarks>
+        [TestMethod]
+        public async Task Summary_WithoutSeePii_ATableWithOneSmallRowPastItsTwentyRows_LeavesOutItsSmallestRowListed()
+        {
+            var now = new DateTime(2018, 3, 15, 12, 0, 0, DateTimeKind.Utc);
+            var top = DlpAPIController.TopN;
+            List<int> people;
+
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                var operation = new EventOperation { Name = "CopilotInteractionPastTheCut" };
+                db.event_operations.Add(operation);
+                var users = Enumerable.Range(1, 5).Select(i => new User { UserPrincipalName = $"cut-{i}@contoso.com" }).ToList();
+                db.users.AddRange(users);
+                db.SaveChanges();
+                people = users.Select(u => u.ID).ToList();
+
+                for (var row = 1; row <= top + 1; row++)
+                {
+                    var id = row.ToString("D2", CultureInfo.InvariantCulture);
+                    var agent = new CopilotAgent { AgentID = "CopilotStudio.Declarative.cut" + id, Name = "Contoso Cut Agent " + id };
+                    var policy = new DlpPolicy { PolicyId = "pol-cut-" + id, Name = "Contoso cut policy " + id };
+                    var label = new SensitivityLabel { LabelId = "00000000-0000-0000-0000-0000000e00" + id };
+                    db.CopilotAgents.Add(agent);
+                    db.dlp_policies.Add(policy);
+                    db.SensitivityLabels.Add(label);
+                    db.SaveChanges();
+
+                    // A match for each of five people on every row listed; for two people on the row past the cut.
+                    var who = row <= top ? users : users.Take(2).ToList();
+                    SeedBlockedMatches(db, operation, who, agent, policy, label, who.Count, now.AddDays(-1));
+                }
+            }
+
+            string[] Rows(int first, int last) =>
+                Enumerable.Range(first, last - first + 1).Select(i => i.ToString("D2", CultureInfo.InvariantCulture)).ToArray();
+            string[] Ids(IEnumerable<DlpImpactRow> rows) => rows.Select(r => r.Id.Substring(r.Id.Length - 2)).ToArray();
+
+            var controller = new DlpAPIController(new ConnectionStringAnalyticsDbContextFactory(_connectionString), utcNow: () => now);
+            foreach (var scope in new[] { null, ReportUserScope.ForUsers(people) })
+            {
+                var because = scope == null ? " (unfiltered)" : " (under a filter)";
+                var named = await controller.BuildSummaryAsync(7, includeIndividuals: true, scope: scope);
+                var anonymous = await controller.BuildSummaryAsync(7, includeIndividuals: false, scope: scope);
+
+                foreach (var (table, listed, shown) in new[]
+                {
+                    ("agents", named.TopAgents, anonymous.TopAgents),
+                    ("policies", named.TopPolicies, anonymous.TopPolicies),
+                    ("labels", named.TopSensitivityLabels, anonymous.TopSensitivityLabels),
+                    ("tenant policies", named.TenantTopPolicies, anonymous.TenantTopPolicies),
+                })
+                {
+                    CollectionAssert.AreEquivalent(Rows(1, top), Ids(listed), table + ": a reader with See PII is shown the first twenty, as before" + because);
+                    CollectionAssert.AreEquivalent(Rows(2, top), Ids(shown),
+                        table + ": the row past the cut counts as one left out, so the smallest row listed goes too" + because);
+                }
+
+                Assert.AreEqual(102, anonymous.CopilotBlockedCount, because);
+                Assert.AreEqual(7, anonymous.CopilotBlockedCount - anonymous.TopPolicies.Sum(r => r.BlockedCount),
+                    "The total less the policies listed is the row past the cut with the first one's five - never its two alone" + because);
+                Assert.IsTrue(anonymous.TopAgents.All(a => a.Policies.Count == 1), "Five people's policy under each agent is listed" + because);
+                Assert.AreEqual(4, anonymous.WithheldRows, "One of the rows listed, from each table" + because);
+                Assert.AreEqual("1|1|1|1", DescribeWithheld(anonymous.WithheldRowsByTable), because);
+                Assert.AreEqual(0, named.WithheldRows, because);
+                Assert.IsNull(named.MinimumGroupSize, because);
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="blocked"/> blocked Copilot interactions with <paramref name="agent"/> at <paramref name="when"/>,
+        /// taken by each of <paramref name="users"/> in turn, each matched by <paramref name="policy"/> on content labelled
+        /// <paramref name="label"/> - and the same matches on the DLP.All feed.
+        /// </summary>
+        private static void SeedBlockedMatches(AnalyticsEntitiesContext db, EventOperation operation, IReadOnlyList<User> users,
+            CopilotAgent agent, DlpPolicy policy, SensitivityLabel label, int blocked, DateTime when)
+        {
+            var interactions = new List<Guid>();
+            for (var i = 0; i < blocked; i++)
+            {
+                var user = users[i % users.Count];
+                var eventId = Guid.NewGuid();
+                db.AuditEventsCommon.Add(new CommonAuditEvent { Id = eventId, TimeStamp = when, User = user, Operation = operation });
+                db.CopilotChats.Add(new CopilotChat { EventID = eventId, Agent = agent, UserId = user.ID, TimeStampUtc = when });
+                interactions.Add(eventId);
+            }
+
+            db.SaveChanges();
+
+            foreach (var eventId in interactions)
+            {
+                db.copilot_dlp_events.Add(new CopilotDlpEvent { ChatId = eventId, DlpPolicyId = policy.ID, SensitivityLabelId = label.ID, IsBlocked = true });
+                db.dlp_rule_matches.Add(new DlpRuleMatch { EventId = eventId, DlpPolicyId = policy.ID, IsBlocked = true });
+            }
+
+            db.SaveChanges();
         }
 
         /// <summary>
@@ -361,6 +671,74 @@ namespace Tests.UnitTests
             Assert.AreEqual(7, DlpAPIController.SnapWindow(1));
             Assert.AreEqual(28, DlpAPIController.SnapWindow(30));
             Assert.AreEqual(180, DlpAPIController.SnapWindow(100000));
+        }
+
+        /// <summary>
+        /// "Last 7 days" is seven calendar dates including today - Copilot Adoption's window - not midnight seven days ago,
+        /// which spans eight (#851, R3-9). An interaction a second either side of each end shows exactly where the window
+        /// stops, on every path that reads it: the summary, the summary under a filter, and the governance figures.
+        /// </summary>
+        /// <remarks>
+        /// On a clock fixed in 2020, years before every other test's rows, so these counts are this test's alone whichever
+        /// order the tests run in.
+        /// </remarks>
+        [TestMethod]
+        public async Task Window_CoversNCalendarDatesIncludingToday_AsCopilotAdoptionDoes()
+        {
+            var now = new DateTime(2020, 6, 15, 10, 30, 0, DateTimeKind.Utc);
+            var start = new DateTime(2020, 6, 9, 0, 0, 0, DateTimeKind.Utc);
+            Assert.AreEqual(start, Common.Entities.CopilotAdoption.CopilotAdoptionScoring.WindowStartUtc(now, 7),
+                "The window the DLP page must match.");
+
+            int frances;
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                var operation = new EventOperation { Name = "CopilotInteractionAtTheWindowEdges" };
+                db.event_operations.Add(operation);
+                var user = new User { UserPrincipalName = "frances@contoso.com" };
+                db.users.Add(user);
+                var agent = new CopilotAgent { AgentID = "CopilotStudio.Declarative.edges", Name = "Contoso Edge Agent" };
+                db.CopilotAgents.Add(agent);
+                var policy = new DlpPolicy { PolicyId = "pol-edges", Name = "Block at the edges" };
+                db.dlp_policies.Add(policy);
+                db.SaveChanges();
+                frances = user.ID;
+
+                foreach (var when in new[] { start.AddSeconds(-1), start, now, now.AddSeconds(1) })
+                {
+                    var eventId = Guid.NewGuid();
+                    db.AuditEventsCommon.Add(new CommonAuditEvent { Id = eventId, TimeStamp = when, User = user, Operation = operation });
+                    db.CopilotChats.Add(new CopilotChat { EventID = eventId, Agent = agent, UserId = user.ID, TimeStampUtc = when });
+                    db.SaveChanges();
+
+                    db.copilot_dlp_events.Add(new CopilotDlpEvent { ChatId = eventId, DlpPolicyId = policy.ID, IsBlocked = true });
+                    db.dlp_rule_matches.Add(new DlpRuleMatch { EventId = eventId, DlpPolicyId = policy.ID, IsBlocked = true });
+                    db.SaveChanges();
+                }
+            }
+
+            var controller = new DlpAPIController(new ConnectionStringAnalyticsDbContextFactory(_connectionString), utcNow: () => now);
+
+            foreach (var scope in new[] { null, ReportUserScope.ForUsers(new[] { frances }) })
+            {
+                var because = scope == null ? "unfiltered" : "under a filter";
+                var summary = await controller.BuildSummaryAsync(7, scope: scope);
+
+                Assert.AreEqual(start, summary.FromUtc, because);
+                Assert.AreEqual(now, summary.ToUtc, because);
+                Assert.AreEqual(2, summary.CopilotBlockedCount,
+                    "Midnight six days ago and now are inside; a second before that midnight and a second after now are not - " + because);
+                Assert.AreEqual(2, summary.TenantBlockedCount, "The DLP.All figures use the same window - " + because);
+                CollectionAssert.AreEqual(
+                    new[] { start, now.Date },
+                    summary.Trend.Select(p => p.Date).ToArray(),
+                    "The trend has no point for the day before the window - " + because);
+            }
+
+            var governance = await controller.BuildGovernanceAsync(7);
+            Assert.AreEqual(start, governance.FromUtc);
+            Assert.AreEqual(now, governance.ToUtc);
+            Assert.AreEqual(2, governance.Interactions, "The governance figures use the same window.");
         }
 
         /// <summary>
@@ -696,5 +1074,9 @@ namespace Tests.UnitTests
                     .OrderBy(s => s, StringComparer.Ordinal));
             return $"{row.Id}|{row.Name}|{row.BlockedCount}|{row.AuditedCount}|{row.UsersAffected}|{policies}";
         }
+
+        /// <summary>Rows left out of the agents, policies, labels and tenant policies tables, in that order.</summary>
+        private static string DescribeWithheld(AnalyticsWeb::Web.AnalyticsWeb.Models.Dlp.DlpWithheldRows withheld) =>
+            withheld == null ? "-" : $"{withheld.Agents}|{withheld.Policies}|{withheld.SensitivityLabels}|{withheld.TenantPolicies}";
     }
 }

@@ -111,7 +111,7 @@ namespace DataUtils
             if (includeStack)
             {
                 sb.AppendLine();
-                sb.Append(ex.ToString());
+                sb.Append(Sql.SqlErrorMessages.WithoutValues(ex.ToString()));
             }
             return sb.ToString();
         }
@@ -139,7 +139,8 @@ namespace DataUtils
 
         private static string DescribeOne(Exception e)
         {
-            var text = e.GetType().Name + ": " + e.Message;
+            // Without any value SQL Server quoted: every exception in the chain, as a wrapper can carry the text too
+            var text = e.GetType().Name + ": " + Sql.SqlErrorMessages.WithoutValues(e.Message);
             if (e is Microsoft.Data.SqlClient.SqlException sql)
             {
                 text += " (SQL error " + sql.Number.ToString(CultureInfo.InvariantCulture) + ")";

@@ -78,6 +78,14 @@ export const reports = {
   'reports.chart.sqlTitle': 'SQL behind this chart',
   'reports.chart.loadError': "Couldn't load this chart: {error}",
   'reports.chart.noData': 'No data for this period.',
+  'reports.withheld.matrix':
+    'Columns of fewer than {count} people are not shown, and a cell of fewer than {count} people is shown as a dash, so that nobody can be singled out.',
+  'reports.withheld.prompts':
+    'Only phrases and languages used by at least {count} different people are shown, so that nobody can be singled out.',
+  'reports.withheld.agents':
+    'Only agents used by at least {count} different people in this period are shown, so that nobody can be singled out.',
+  'reports.withheld.agentsNone': 'No agent was used by at least {count} different people in this period.',
+  'reports.withheld.agentsNoneMatching': 'No agent matching the filter was used by at least {count} different people in this period.',
   'reports.chart.error.noCompletedUsageWeeks': 'No completed usage-report weeks are available.',
   'reports.chart.error.noWorkloadSeriesLoaded': 'No workload series could be loaded. {details}',
   'reports.chart.error.noCompletedUsageWeeksWithData': 'No completed usage-report weeks are available for workloads with data.',
@@ -124,6 +132,8 @@ export const reports = {
   'reports.chart.usage-active-users.description': 'Distinct users active in each completed week. Weeks with no usage report yet are left blank rather than shown as zero.',
   'reports.chart.usage-active-users.valueLabel': 'Active users',
   'reports.chart.usage-active-users.warning': 'Some workload series are unavailable: {details}.',
+  'reports.chart.usage-active-users.warning.incompleteWeeks': 'Some weeks are incomplete: {details}.',
+  'reports.chart.usage-active-users.warning.seriesUnavailableAndIncompleteWeeks': 'Some workload series are unavailable: {unavailable}. Some weeks are incomplete: {incomplete}.',
   'reports.chart.spo-operations.title': 'File activity per week',
   'reports.chart.spo-operations.description': 'SharePoint & OneDrive audit operations each week.',
   'reports.chart.spo-operations.valueLabel': 'Operations',

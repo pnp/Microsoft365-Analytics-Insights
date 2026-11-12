@@ -47,11 +47,11 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.licensed.engagementScoreWhat': 'Hasta qué punto Copilot se ha convertido en parte de la semana laboral de esta persona, con una puntuación de 0 a 100. Deliberadamente no es "si lo ha usado": dos personas que lo probaron una vez tendrían el mismo aspecto con esa medida, y eso nunca indica qué hacer después.',
   'copilotAdoptionUsers.licensed.engagementScoreHowIntro': 'Tres elementos, cada uno medido contra un objetivo y limitado a ese objetivo, por lo que superarlo no aporta crédito adicional:',
   'copilotAdoptionUsers.licensed.engagementFrequencyLabel': 'Con qué frecuencia: frecuencia ({weight})',
-  'copilotAdoptionUsers.licensed.engagementFrequencyText': ': días en los que usó Copilot, frente al {target} de sus días laborables disponibles.',
+  'copilotAdoptionUsers.licensed.engagementFrequencySentence': '{heading}. Días en los que usó Copilot, frente al {target} de sus días laborables disponibles.',
   'copilotAdoptionUsers.licensed.engagementDepthLabel': 'Cuánto: profundidad ({weight})',
-  'copilotAdoptionUsers.licensed.engagementDepthText': ': interacciones en cada día en que lo usó, frente a un objetivo de {target}.',
+  'copilotAdoptionUsers.licensed.engagementDepthSentence': '{heading}. Interacciones en cada día en que lo usó, frente a un objetivo de {target}.',
   'copilotAdoptionUsers.licensed.engagementBreadthLabel': 'Con qué amplitud: cobertura ({weight})',
-  'copilotAdoptionUsers.licensed.engagementBreadthText': ': cuántas aplicaciones de Copilot distintas usa, frente a un objetivo de {target}.',
+  'copilotAdoptionUsers.licensed.engagementBreadthSentence': '{heading}. Cuántas aplicaciones de Copilot distintas usa, frente a un objetivo de {target}.',
   'copilotAdoptionUsers.licensed.confidenceLabel': 'Confianza',
   'copilotAdoptionUsers.licensed.confidenceSentence': '{confidence} mantiene honesta la profundidad. La profundidad es una media por día, así que alguien activo un único día puede alcanzar el objetivo en una sola sesión y parecer un usuario avanzado. Por eso la profundidad solo cuenta por completo cuando Copilot se ha usado en {days} días distintos; por debajo de eso cuenta proporcionalmente, de modo que la mitad de días cuenta como la mitad.',
   'copilotAdoptionUsers.licensed.newAccountsFrequency': 'Las cuentas más recientes que el periodo del informe reciben un objetivo de frecuencia menor, para que nadie quede penalizado por días anteriores a su incorporación.',
@@ -107,8 +107,8 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.licensed.coworkNo': 'No',
   'copilotAdoptionUsers.licensed.coworkAudited': 'Sí \u00b7 {count} auditadas',
   'copilotAdoptionUsers.licensed.microsoftWindow': 'Ventana de Microsoft',
-  'copilotAdoptionUsers.licensed.sourceComparison': 'Auditoría D{windowDays}: {auditInteractions} interacciones, {auditDays} días. Informe de Microsoft {reportPeriod}{snapshotDate}: {prompts} avisos, {reportDays} días.',
-  'copilotAdoptionUsers.licensed.sourceComparisonSnapshotDate': ', {date}',
+  'copilotAdoptionUsers.licensed.sourceComparison': 'Auditoría D{windowDays}: {auditInteractions} interacciones, {auditDays} días. Informe de Microsoft {reportPeriod}: {prompts} indicaciones, {reportDays} días.',
+  'copilotAdoptionUsers.licensed.sourceComparisonDated': 'Auditoría D{windowDays}: {auditInteractions} interacciones, {auditDays} días. Informe de Microsoft {reportPeriod}, {date}: {prompts} indicaciones, {reportDays} días.',
   'copilotAdoptionUsers.licensed.engagementFormula.unitWeight': 'frecuencia = min(1, diasActivos / diasActivosEsperados)\nconfianza  = min(1, diasActivos / {depthMinDays})\nprofundidad = min(1, interacciones / diasActivos / {depthTarget}) x confianza\namplitud   = min(1, appsUsadas / {breadthTarget})\npuntuacion = (frecuencia x {frequencyWeight} + profundidad x {depthWeight} + amplitud x {breadthWeight}) x 100',
   'copilotAdoptionUsers.licensed.engagementFormula.weighted': 'frecuencia = min(1, diasActivos / diasActivosEsperados)\nconfianza  = min(1, diasActivos / {depthMinDays})\nprofundidad = min(1, interacciones / diasActivos / {depthTarget}) x confianza\namplitud   = min(1, appsUsadas / {breadthTarget})\npuntuacion = (frecuencia x {frequencyWeight} + profundidad x {depthWeight} + amplitud x {breadthWeight})\n             / {weightSum} x 100',
   'copilotAdoptionUsers.licensed.reclaimTierExpired': '{tier} - exclusión expirada',
@@ -300,6 +300,24 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.emailDomain.noSeats': 'sin puestos',
   'copilotAdoptionUsers.emailDomain.clear': 'Borrar',
   'copilotAdoptionUsers.emailDomain.filter': 'Filtrar',
+  // Lo que ve un lector sin See PII en lugar de un grupo de una a cuatro personas en una fila de dominio (#844)
+  'copilotAdoptionUsers.emailDomain.withheld.seats.fewPeople':
+    'Oculto: menos de {count} personas de este dominio tienen un puesto de Copilot',
+  'copilotAdoptionUsers.emailDomain.withheld.seats.revealsSmallerGroup':
+    'Oculto: con los totales del inquilino, estas cifras revelarían las de un dominio en el que menos de {count} personas tienen un puesto',
+  'copilotAdoptionUsers.emailDomain.withheld.unlicensed.fewPeople':
+    'Oculto: menos de {count} personas de este dominio usaron Copilot Chat sin licencia',
+  'copilotAdoptionUsers.emailDomain.withheld.unlicensed.revealsSmallerGroup':
+    'Oculto: con el total del inquilino, este recuento revelaría un dominio en el que menos de {count} personas usaron Copilot Chat sin licencia',
+  'copilotAdoptionUsers.emailDomain.withheld.candidates.fewPeople':
+    'Oculto: este dominio tiene menos de {count} candidatos a licencia',
+  'copilotAdoptionUsers.emailDomain.withheld.candidates.revealsSmallerGroup':
+    'Oculto: con el total del inquilino, este recuento revelaría un dominio con menos de {count} candidatos a licencia',
+  'copilotAdoptionUsers.emailDomain.withheld.other': 'Oculto: podría identificar a menos de {count} personas',
+  'copilotAdoptionUsers.emailDomain.withheldNote':
+    'Cada fila reúne tres grupos de personas (quienes tienen puesto, quienes usan Copilot Chat sin licencia y los candidatos a licencia), y un grupo de menos de {count} personas se oculta para que no se pueda señalar a nadie.',
+  'copilotAdoptionUsers.emailDomain.withheldNoteComplement':
+    'En una columna se oculta además otro dominio cuando, al restar del total del inquilino las cifras mostradas, se revelaría una cifra oculta.',
 
   // Texto de usuarios y oportunidades creado por el servidor
   'copilotAdoptionUsers.server.apps.single': 'una sola aplicación de Copilot',

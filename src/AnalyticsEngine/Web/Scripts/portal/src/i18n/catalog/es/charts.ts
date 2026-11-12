@@ -17,6 +17,7 @@ const charts: Record<keyof typeof en, string> = {
 
   // Donut chart
   'charts.donut.sliceTitle': '{label}: {value} ({percent} %)',
+  'charts.donut.sliceTitleWithoutShare': '{label}: {value}',
   'charts.donut.legendValue': '{value} ({percent} %)',
 
   // Gauge chart
@@ -33,6 +34,7 @@ const charts: Record<keyof typeof en, string> = {
 
   // Matrix chart
   'charts.matrix.cellTitle': '{row} / {column}: {value} {valueLabel}',
+  'charts.matrix.cellWithheld': '{row} / {column}: oculto - menos de {count} personas, así que no se muestra',
   'charts.matrix.legendShadedByRow': '{columnLabel} \u00b7 sombreado dentro de cada fila \u00b7 ninguno',
   'charts.matrix.legendShadedOverall': '{columnLabel} \u00b7 ninguno',
   'charts.matrix.most': 'máximo',

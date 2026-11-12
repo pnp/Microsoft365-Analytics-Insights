@@ -351,7 +351,7 @@ VALUES (@p0, N'Word', @userId, @p1);",
                 })
             };
             var logger = new FakeLoaderClasses.RecordingLogger();
-            var persistence = new ActivityReportSqlPersistenceManager(new AllowAllFilterConfig(), Common.Entities.UserScope.UserImportScope.Unfiltered, logger, config);
+            var persistence = FakeLoaderClasses.OfflineSqlActivityPersistence.Create(logger, config);
             var diagnosticPersistence = new MeasuredScalePersistence(async records =>
             {
                 try { return await persistence.CommitAll(records); }

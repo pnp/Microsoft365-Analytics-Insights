@@ -86,9 +86,11 @@ export default function PeoplePanel({
   const t = useT();
   const tNode = useTNode();
 
-  // Without See PII, departments with too few power users to name come back combined into one row.
+  // Without See PII, departments with too few power users to name come back combined into one row - or, when even their
+  // combined count would let one be worked out from the power users counted elsewhere, left out with no combined row.
   const otherDepartments = data.otherChampionDepartments ?? 0;
   const minimumGroupSize = data.minimumGroupSize ?? null;
+  const combinedRowShown = data.championsByDepartment.some((row) => row.other);
   const departmentCategories = data.championsByDepartment.map((row) => ({
     label: row.other
       ? t(
@@ -104,7 +106,12 @@ export default function PeoplePanel({
   }));
   const departmentsNote =
     otherDepartments > 0 && minimumGroupSize != null && data.championsByDepartment.length > 0
-      ? t('teamsExplorer.people.championDepartments.otherNote', { count: formatCount(minimumGroupSize) })
+      ? t(
+          combinedRowShown
+            ? 'teamsExplorer.people.championDepartments.otherNote'
+            : 'teamsExplorer.people.championDepartments.leftOutNote',
+          { count: formatCount(minimumGroupSize) },
+        )
       : undefined;
   const allDepartmentsSmall =
     otherDepartments > 0 && minimumGroupSize != null && data.championsByDepartment.length === 0

@@ -23,6 +23,7 @@ import {
   TIME_SAVED_COWORK_COLOUR,
   TimeSavedHeroFrame,
   formatAssumption,
+  formatWholeShare,
   wholeShares,
   type HeroStat,
 } from './timeSavedShared';
@@ -237,7 +238,7 @@ export default function CoworkTimeSavedHero({
           role="img"
           aria-label={t('copilotAdoptionCowork.timeSaved.hero.breakdownAria', {
             parts: segments
-              .map((s, i) => t('copilotAdoptionCowork.timeSaved.hero.breakdownPart', { activity: s.label, share: `${shares[i]}%` }))
+              .map((s, i) => t('copilotAdoptionCowork.timeSaved.hero.breakdownPart', { activity: s.label, share: formatWholeShare(shares[i]) }))
               .join(', '),
           })}
         >
@@ -250,10 +251,10 @@ export default function CoworkTimeSavedHero({
                 title={t('copilotAdoptionCowork.timeSaved.hero.sliceTitle', {
                   activity: s.label,
                   hours: formatCount(s.hours),
-                  share: `${shares[i]}%`,
+                  share: formatWholeShare(shares[i]),
                 })}
               >
-                {shares[i] >= 10 ? `${shares[i]}%` : ''}
+                {shares[i] >= 10 ? formatWholeShare(shares[i]) : ''}
               </div>
             ) : null,
           )}
@@ -266,7 +267,7 @@ export default function CoworkTimeSavedHero({
                 {t('copilotAdoptionCowork.timeSaved.hero.legendEntry', {
                   activity: s.label,
                   hours: formatCount(s.hours),
-                  share: `${shares[i]}%`,
+                  share: formatWholeShare(shares[i]),
                 })}
               </Text>
             </div>

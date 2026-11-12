@@ -169,6 +169,14 @@ namespace Common.Entities.State
         public const string CallsWebhook = "CallsWebhook";
 
         /// <summary>
+        /// An administrator's latest request, from the portal's Service configuration page, to reprocess or clear the Teams
+        /// calls dead-letter queue, and its result: one row, <c>LatestRequest</c>, holding times, the action, counts and stable
+        /// codes - never a message, call id or user name. The web app records it; the importer claims it, carries it out and
+        /// records the result. Deleting the row forgets the request. See <c>Common.Entities.Calls.CallDeadLetterRequestStore</c>.
+        /// </summary>
+        public const string CallDeadLetters = "CallDeadLetters";
+
+        /// <summary>
         /// The delegated refresh token authorised for each Team in the portal (Teams deep analytics). Secrets: protected
         /// by the storage account's access control, like every other secret the App Service holds.
         /// </summary>

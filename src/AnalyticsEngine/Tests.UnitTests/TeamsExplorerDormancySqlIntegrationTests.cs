@@ -166,7 +166,7 @@ namespace Tests.UnitTests
             var mix = overview.SegmentMix.ToDictionary(s => s.Segment);
             Assert.AreEqual(1, mix["Power"].Users, "Ada used Teams every day.");
             Assert.AreEqual(1, mix["Dormant"].Users, "Alan holds a Teams licence and did nothing.");
-            Assert.AreEqual(50, mix["Dormant"].SharePct, 0.001,
+            Assert.AreEqual(50, mix["Dormant"].SharePct.Value, 0.001,
                 "The share is of the people licensed for or using Teams, not just of the people who were active.");
             Assert.AreEqual(0, mix["Light"].Users, "The disabled leaver is not in the population.");
             Assert.AreEqual(0, overview.Dormancy.UnmeasuredUsers);
@@ -190,7 +190,7 @@ namespace Tests.UnitTests
             var mix = overview.SegmentMix.ToDictionary(s => s.Segment);
             Assert.AreEqual(0, mix["Dormant"].Users, "Unproven inactivity is not put in the Dormant segment...");
             Assert.AreEqual(1, overview.Dormancy.UnmeasuredUsers, "...it is counted as unmeasured, so the page can say so.");
-            Assert.AreEqual(100, mix.Values.Sum(s => s.SharePct), 0.001);
+            Assert.AreEqual(100, mix.Values.Sum(s => s.SharePct.Value), 0.001);
         }
 
         [TestMethod]
@@ -227,8 +227,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(5, overview.Kpis.KnownUsers, "Five enabled directory users.");
             Assert.AreEqual(1, overview.Kpis.ActiveUsers,
                 "Joan was active but is disabled now: she is not in the denominator, so she cannot be in the numerator.");
-            Assert.AreEqual(20, overview.Kpis.ReachPct, 0.001);
-            Assert.AreEqual(7, overview.Kpis.MeetingsPerActiveUser, 0.001,
+            Assert.AreEqual(20, overview.Kpis.ReachPct.Value, 0.001);
+            Assert.AreEqual(7, overview.Kpis.MeetingsPerActiveUser.Value, 0.001,
                 "Ada attended a meeting on each of 7 days. Joan's 5 are left out with her, or one active user would "
                 + "be credited with 12.");
 
@@ -238,7 +238,7 @@ namespace Tests.UnitTests
                 new TeamsExplorerSources());
             Assert.AreEqual(1, scoped.Kpis.KnownUsers);
             Assert.AreEqual(0, scoped.Kpis.ActiveUsers);
-            Assert.AreEqual(0, scoped.Kpis.ReachPct, 0.001);
+            Assert.AreEqual(0, scoped.Kpis.ReachPct.Value, 0.001);
         }
 
         private static void Execute(string connectionString, string sql)

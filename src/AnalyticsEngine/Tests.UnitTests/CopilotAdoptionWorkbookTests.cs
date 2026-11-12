@@ -835,6 +835,44 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// The Cowork readiness CSV and sheet carry the run's "Figures incomplete" and "Figure warnings" on every row, under
+        /// the same headers and with the same values as the licensed-user and licence-opportunity exports (#851, R3-7). The
+        /// Cowork file is pasted into a spending policy; without them it read as complete after a source query had failed.
+        /// </summary>
+        [TestMethod]
+        public void CoworkReadiness_CarriesTheRunsFigureWarningsOnEveryRow_AsTheOtherPerUserExportsDo()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.FiguresIncomplete = true;
+            analysis.Summary.IncompleteReasons.Add("Contoso test reason");
+            var warnings = string.Join(" | ", new[] { "Figures incomplete: Contoso test reason" }.Concat(analysis.Summary.Warnings));
+            Assert.IsTrue(analysis.CoworkReadiness.Count > 0, "The fixture must have Cowork rows to carry the warnings.");
+
+            var coworkColumns = CopilotAdoptionExports.CoworkReadinessColumns(true, warnings);
+            foreach (var header in new[] { "Figures incomplete", "Figure warnings" })
+            {
+                Assert.IsTrue(CopilotAdoptionExports.LicensedUserColumns(true, warnings).Any(c => c.Header == header), header);
+                Assert.IsTrue(CopilotAdoptionExports.LicenceOpportunityColumns(true, warnings).Any(c => c.Header == header), header);
+                Assert.AreEqual(1, coworkColumns.Count(c => c.Header == header), "The Cowork readiness CSV must carry '" + header + "' too.");
+            }
+
+            var incomplete = coworkColumns.Single(c => c.Header == "Figures incomplete");
+            var figureWarnings = coworkColumns.Single(c => c.Header == "Figure warnings");
+            foreach (var row in analysis.CoworkReadiness)
+            {
+                Assert.AreEqual(true, incomplete.Value(row), "Every CSV row says the figures are incomplete...");
+                Assert.AreEqual(warnings, figureWarnings.Value(row), "...and why.");
+            }
+
+            var bytes = CopilotAdoptionWorkbook.Build(analysis);
+            Assert.IsTrue(SheetCells(bytes, "Licensed users").Contains(warnings), "The licensed-user sheet is the behaviour to match.");
+            Assert.AreEqual(
+                analysis.CoworkReadiness.Count,
+                SheetCells(bytes, "Cowork readiness").Count(cell => cell == warnings),
+                "Every row of the Cowork readiness sheet carries the run's warnings.");
+        }
+
+        /// <summary>
         /// The governance columns specifically. These are the ones an admin exports the workbook for -
         /// the reclaim verdict per person, and who excluded a seat from reclaim - and they were the
         /// most damaging of the twenty-eight omissions, because the Report sheet counts them in a
@@ -960,6 +998,192 @@ namespace Tests.UnitTests
             StringAssert.Contains(text, "fabrikam.example");
             StringAssert.Contains(text, "contoso.com");
             StringAssert.Contains(text, "Licence candidates");
+        }
+
+        [TestMethod]
+        public void EmailDomainSheet_WithoutSeePii_LeavesAFewPeoplesFiguresBlank_AsTheScreenDoes_AndWithItWritesThem()
+        {
+            // #844: each population on a domain row is floored on its own for a reader without See PII, and an export is
+            // never less redacted than the screen. Twenty seat holders and three of the twenty unlicensed Copilot Chat users
+            // are on fabrikam.example: its Chat count is about three people. Contoso's seventeen go too, because the
+            // tenant's unlicensed total less them would be fabrikam's three.
+            var analysis = SyntheticAnalysis();
+            for (var i = 0; i < 20; i++)
+            {
+                analysis.LicensedUsers[i].UserPrincipalName = "user" + i + "@fabrikam.example";
+                analysis.LicensedUsers[i].EmailDomain = "fabrikam.example";
+            }
+
+            for (var i = 0; i < 3; i++)
+            {
+                analysis.UnlicensedUsers[i].UserPrincipalName = "unlicensed" + i + "@fabrikam.example";
+                analysis.UnlicensedUsers[i].EmailDomain = "fabrikam.example";
+            }
+
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+
+            Dictionary<string, string> Row(byte[] workbook, string domain)
+            {
+                string Text(XElement c) => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
+                string RowOf(XElement c) => Regex.Match((string)c.Attribute("r"), @"\d+$").Value;
+                var cells = SheetCellElements(workbook, "Email domains");
+                var row = RowOf(cells.First(c => Text(c) == domain));
+                return cells.Where(c => RowOf(c) == row)
+                    .ToDictionary(c => Regex.Match((string)c.Attribute("r"), "^[A-Z]+").Value, Text);
+            }
+
+            // Columns: A domain, B seats, C active, ..., J unlicensed users, K licence candidates, L external.
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            var fabrikam = Row(trimmed, "fabrikam.example");
+            Assert.IsFalse(fabrikam.ContainsKey("J"), "Three Chat users: blank, never 0.");
+            Assert.AreEqual("20", fabrikam["B"], "Twenty seat holders are enough on their own.");
+            Assert.IsFalse(Row(trimmed, "contoso.com").ContainsKey("J"), "The count that would give the three back is blank too.");
+            Assert.IsTrue(SheetCells(trimmed, "Email domains").Any(c => c.Contains("a group of fewer than 5 people has its figures left blank")));
+
+            // The file says exactly what the screen does: blank wherever the summary served without See PII is null.
+            var screen = analysis.Summary.WithoutIndividualData().EmailDomains;
+            foreach (var domain in screen)
+            {
+                var cells = Row(trimmed, domain.Segment);
+                foreach (var (column, value) in new[] { ("B", domain.LicensedUsers), ("J", domain.UnlicensedActiveUsers), ("K", domain.RecommendedForLicence) })
+                {
+                    Assert.AreEqual(value?.ToString(CultureInfo.InvariantCulture), cells.TryGetValue(column, out var cell) ? cell : null,
+                        $"{domain.Segment}, column {column}: the workbook and the screen must agree.");
+                }
+            }
+
+            var full = CopilotAdoptionWorkbook.Build(analysis);
+            string Cell(Dictionary<string, string> row, string column) => row.TryGetValue(column, out var cell) ? cell : null;
+            Assert.AreEqual("3", Cell(Row(full, "fabrikam.example"), "J"), "With See PII every figure is written, as before.");
+            Assert.AreEqual("17", Cell(Row(full, "contoso.com"), "J"));
+            Assert.IsFalse(SheetCells(full, "Email domains").Any(c => c.Contains("left blank")));
+            Assert.AreEqual(3, analysis.Summary.EmailDomains.Single(d => d.Segment == "fabrikam.example").UnlicensedActiveUsers,
+                "The cached analysis must never be edited for one reader.");
+        }
+
+        [TestMethod]
+        public void DepartmentSheet_WithoutSeePii_LeavesOutTheDepartmentTheScreenDoes_AndSaysWhy_AndWithItWritesEveryOne()
+        {
+            // #844: three of Finance's fifteen seat holders move to a department of their own, too small to list, so the
+            // tenant's sixty less the departments listed would be their three. For a reader without See PII the smallest
+            // listed department, Finance's twelve, goes from every table too - in the file exactly as on screen.
+            var analysis = SyntheticAnalysis();
+            foreach (var user in analysis.LicensedUsers.Where(u => u.Department == "Finance").Take(3).ToList())
+            {
+                user.Department = "Tiny";
+            }
+
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            var screen = analysis.Summary.WithoutIndividualData();
+            Assert.IsFalse(screen.AdoptionByDepartment.Any(r => r.Segment == "Finance"));
+            CollectionAssert.Contains(screen.SmallestGroupsWithheld, CopilotAdoptionWithheldBreakdowns.Departments);
+
+            // Every row of the sheet, keyed by column letter, for the rows whose first column names a department.
+            List<Dictionary<string, string>> Rows(byte[] workbook, string department)
+            {
+                string Text(XElement c) => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
+                string RowOf(XElement c) => Regex.Match((string)c.Attribute("r"), @"\d+$").Value;
+                var cells = SheetCellElements(workbook, "Departments and apps");
+                return cells.Where(c => Text(c) == department && ((string)c.Attribute("r")).StartsWith("A", StringComparison.Ordinal))
+                    .Select(c => cells.Where(other => RowOf(other) == RowOf(c))
+                        .ToDictionary(other => Regex.Match((string)other.Attribute("r"), "^[A-Z]+").Value, Text))
+                    .ToList();
+            }
+
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            var finance = Rows(trimmed, "Finance").Where(r => r.Count >= 4).ToList();
+            Assert.AreEqual(1, finance.Count, "Only the side-by-side table still names Finance, for its unlicensed side.");
+            Assert.IsFalse(finance.Single().ContainsKey("B"), "Its seat-holder columns are blank, never 0.");
+            foreach (var department in screen.AdoptionByDepartment)
+            {
+                Assert.IsTrue(Rows(trimmed, department.Segment).Any(r => r.TryGetValue("B", out var seats)
+                        && seats == department.LicensedUsers.ToString(CultureInfo.InvariantCulture)),
+                    $"{department.Segment}: the workbook lists every department the screen does.");
+            }
+
+            var text = SheetCells(trimmed, "Departments and apps");
+            Assert.IsTrue(text.Any(c => c.Contains("the smallest department it lists is left out too")), "The sheet says why.");
+
+            var full = CopilotAdoptionWorkbook.Build(analysis);
+            Assert.IsTrue(Rows(full, "Finance").Any(r => r.TryGetValue("B", out var seats) && seats == "12"),
+                "With See PII every department is written, as before.");
+            Assert.IsFalse(SheetCells(full, "Departments and apps").Any(c => c.Contains("is left out too")));
+            Assert.IsTrue(analysis.Summary.AdoptionByDepartment.Any(r => r.Segment == "Finance"),
+                "The cached analysis must never be edited for one reader.");
+        }
+
+        [TestMethod]
+        public void CoworkSheet_WithoutSeePii_ListsOnlyTheDepartmentsTheScreenDoes_AndSaysWhy_AndWithItListsEveryOne()
+        {
+            // #844, found in the final review of #884: the Cowork sheet read the cached summary instead of the reader's, so the
+            // department the screen leaves out came back in the export. Three of Finance's seat holders move to a department of
+            // their own, too small to list, in the licence and the Cowork data alike: 30 seat holders scored for Cowork - Legal
+            // 8, the Greek and ampersand departments 7 each, Finance 5, Tiny 3. For a reader without See PII, Finance - the
+            // smallest department listed - goes from every view, so 30 less the 22 shown hold Finance's five and Tiny's three;
+            // with Finance in the file they would be Tiny's three alone.
+            var analysis = SyntheticAnalysis();
+            var moved = new HashSet<int>(analysis.LicensedUsers.Where(u => u.Department == "Finance").Take(3).Select(u => u.UserId));
+            foreach (var user in analysis.LicensedUsers.Where(u => moved.Contains(u.UserId))) user.Department = "Tiny";
+            foreach (var signal in analysis.CoworkSignals.Where(s => moved.Contains(s.UserId))) signal.Department = "Tiny";
+
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            var cached = analysis.Summary;
+            var screen = cached.WithoutIndividualData();
+            Assert.AreEqual(5, cached.CoworkByDepartment.Single(r => r.Segment == "Finance").LicensedUsers, "The control: the cached summary lists Finance.");
+            Assert.IsFalse(screen.CoworkByDepartment.Any(r => r.Segment == "Finance"), "The control: the screen does not.");
+            Assert.IsFalse(screen.CoworkQuadrant.Any(p => p.Segment == "Finance"));
+            Assert.AreEqual(8, screen.CoworkScoredUsers - screen.CoworkByDepartment.Sum(r => r.LicensedUsers));
+
+            // The Cowork sheet's rows whose first column holds the text, keyed by column letter. A department heads a row of
+            // the rollout order and one of the quadrant; the named list, written only with See PII, starts with a sign-in name.
+            List<Dictionary<string, string>> Rows(byte[] workbook, string first)
+            {
+                string Text(XElement c) => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
+                string RowOf(XElement c) => Regex.Match((string)c.Attribute("r"), @"\d+$").Value;
+                var cells = SheetCellElements(workbook, "Cowork readiness");
+                return cells.Where(c => Text(c) == first && ((string)c.Attribute("r")).StartsWith("A", StringComparison.Ordinal))
+                    .Select(c => cells.Where(other => RowOf(other) == RowOf(c))
+                        .ToDictionary(other => Regex.Match((string)other.Attribute("r"), "^[A-Z]+").Value, Text))
+                    .ToList();
+            }
+
+            string Count(int value) => value.ToString(CultureInfo.InvariantCulture);
+
+            // Without See PII: the scored seat holders, the rollout order (department, seats, prime candidates) and the quadrant
+            // (department, seats, ..., prime candidates in E) are the screen's, and Finance is in neither table.
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            Assert.AreEqual(0, Rows(trimmed, "Finance").Count, "The file must not list a department the screen leaves out.");
+            Assert.AreEqual(0, Rows(trimmed, "Tiny").Count);
+            Assert.AreEqual(Count(screen.CoworkScoredUsers), Rows(trimmed, "Seat holders scored").Single()["B"]);
+            foreach (var department in screen.CoworkByDepartment)
+            {
+                var rows = Rows(trimmed, department.Segment);
+                Assert.AreEqual(2, rows.Count, $"{department.Segment}: one row in the rollout order and one in the quadrant.");
+                Assert.IsTrue(rows.Any(r => r["B"] == Count(department.LicensedUsers) && r["C"] == Count(department.PrimeCandidates)),
+                    $"{department.Segment}: the rollout order agrees with the screen.");
+            }
+
+            foreach (var point in screen.CoworkQuadrant)
+            {
+                Assert.IsTrue(Rows(trimmed, point.Segment).Any(r => r["B"] == Count(point.LicensedUsers) && r.TryGetValue("E", out var prime) && prime == Count(point.PrimeCandidates)),
+                    $"{point.Segment}: the quadrant agrees with the screen.");
+            }
+
+            Assert.AreEqual(2, SheetCells(trimmed, "Cowork readiness").Count(c => c.Contains("one more department is left out - the smallest listed")),
+                "The rollout order and the quadrant each say why a department is missing.");
+
+            // With See PII nothing changes: Finance's five are in both tables, and nothing says a department is left out.
+            var full = CopilotAdoptionWorkbook.Build(analysis);
+            Assert.AreEqual(2, Rows(full, "Finance").Count(r => r["B"] == "5"), "With See PII the rollout order and the quadrant list Finance, as before.");
+            foreach (var department in cached.CoworkByDepartment)
+            {
+                Assert.IsTrue(Rows(full, department.Segment).Any(r => r["B"] == Count(department.LicensedUsers) && r["C"] == Count(department.PrimeCandidates)),
+                    $"{department.Segment}: the full file lists every department the cached summary does.");
+            }
+
+            Assert.IsFalse(SheetCells(full, "Cowork readiness").Any(c => c.Contains("one more department is left out")));
+            Assert.AreEqual(5, cached.CoworkByDepartment.Single(r => r.Segment == "Finance").LicensedUsers,
+                "The cached analysis must never be edited for one reader.");
         }
 
         [TestMethod]
@@ -1135,6 +1359,52 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void SnapshotFacts_WriteTheSectionsTheGlobalFilterWithholdsBlank_NeverZero()
+        {
+            // Under the administrator's global filter the tenant-wide sections are left out and hold zeros and empty lists
+            // (CopilotAdoptionScopeFilter.WithholdTenantSections). Written as they are, a filtered snapshot diffed against
+            // an unfiltered one reads as a collapse to zero (#844).
+            var analysis = SyntheticAnalysis();
+            var unfiltered = SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
+            Assert.AreNotEqual(string.Empty, unfiltered["usageByApp.count"], "The control: unfiltered, the section has a figure.");
+            Assert.AreNotEqual(string.Empty, unfiltered["agents.knownAgents"]);
+
+            analysis.Summary.WithheldSections = new List<string>
+            {
+                CopilotAdoptionUnscopedSections.UsageByApp,
+                CopilotAdoptionUnscopedSections.TopResourceTypes,
+                CopilotAdoptionUnscopedSections.WeeklyTrend,
+                CopilotAdoptionUnscopedSections.Agents,
+                CopilotAdoptionUnscopedSections.PurchasedSeats,
+                CopilotAdoptionUnscopedSections.CoworkCredits,
+                CopilotAdoptionUnscopedSections.MicrosoftReport,
+            };
+            analysis.Summary.UsageByApp = new List<AdoptionCategory>();
+            analysis.Summary.TopResourceTypes = new List<AdoptionResourceTypeRow>();
+            analysis.Summary.WeeklyTrend = new List<AdoptionSeries>();
+            analysis.Summary.WeeklyVolumeTrend = new List<AdoptionSeries>();
+            analysis.Summary.Agents = new AgentEstateSummary { HistoryDays = 90 };
+            analysis.Summary.CoworkCreditPosition = new CoworkCreditPosition { PerUserCreditsAvailable = true };
+            analysis.Summary.SubscribedSkusAvailable = false;
+            var filtered = SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
+
+            CollectionAssert.AreEqual(unfiltered.Keys.ToList(), filtered.Keys.ToList(), "The same keys, so the two files still diff.");
+            var blanked = filtered.Keys.Where(k => CopilotAdoptionWorkbook.IsWithheldFact(k, analysis.Summary.WithheldSections)).ToList();
+            CollectionAssert.IsSubsetOf(
+                new[] { "usageByApp.count", "topResourceTypes.count", "weeklyTrend.count", "weeklyVolumeTrend.count", "agents.knownAgents", "agents.activeAgents", "subscribedSkusAvailable", "unlicensed.usageByApp.count" },
+                blanked);
+            Assert.IsTrue(blanked.Any(k => k.StartsWith("coworkCreditPosition.", StringComparison.Ordinal)));
+            foreach (var key in blanked)
+            {
+                Assert.AreEqual(string.Empty, filtered[key], $"'{key}' is withheld under the global filter: blank, never 0.");
+            }
+
+            Assert.AreEqual("90", filtered["agents.historyDays"], "A setting is as true of the narrowed view as of the tenant.");
+            Assert.AreNotEqual(string.Empty, filtered["coworkCreditPosition.perUserCreditsAvailable"]);
+            Assert.AreEqual(unfiltered["licensedUsers"], filtered["licensedUsers"], "A narrowed figure is written as before.");
+        }
+
+        [TestMethod]
         public void Workbook_WithoutIndividualData_NamesNobody_ButKeepsEveryAggregate()
         {
             // The workbook a reader without the portal's See PII permission downloads (#661). An export
@@ -1190,6 +1460,39 @@ namespace Tests.UnitTests
                 "Only accountabilityRollup.count may differ from a full export, as the method sheet says.");
 
             Assert.IsTrue(analysis.Summary.AccountabilityRollup.Count > 0, "The cached analysis must never be edited for one reader.");
+        }
+
+        [TestMethod]
+        public void LicenceClassification_WithoutSeePii_SaysWhyASmallSeatsIdleCountIsNotShown_NeverZero()
+        {
+            // #844 G4: the workbook's licence classification is the SKU table on screen, and an export is never less
+            // redacted than the screen.
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.SeatLicenceTypes = new List<LicenceTypeClassification>
+            {
+                new LicenceTypeClassification { Id = 1, Name = "Microsoft 365 Copilot", SkuPartNumber = "Microsoft_365_Copilot", AssignedUsers = 40, AssignedIdleUsers = 7, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 2, Name = "Contoso Copilot pilot", SkuPartNumber = "CONTOSO_COPILOT_PILOT", AssignedUsers = 3, AssignedIdleUsers = 2, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 3, Name = "Microsoft 365 Copilot EDU", SkuPartNumber = "Microsoft_365_Copilot_EDU", AssignedUsers = 9, AssignedIdleUsers = 6, IsCopilotSeat = true },
+            };
+            string Idle(byte[] workbook, string sku)
+            {
+                var cells = SheetCells(workbook, "How this is calculated");
+                var at = cells.IndexOf(sku);
+                Assert.AreNotEqual(-1, at, sku + " is missing from the licence classification.");
+                return cells[at + 4]; // SKU, then assigned, purchased, unassigned, and assigned idle.
+            }
+
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            Assert.AreEqual("Not shown: fewer than 5 people hold this licence", Idle(trimmed, "CONTOSO_COPILOT_PILOT"));
+            Assert.AreEqual("Not shown: with the reclaimable total, it would reveal the figure for a licence fewer than 5 people hold",
+                Idle(trimmed, "Microsoft_365_Copilot_EDU"));
+            Assert.AreEqual("7", Idle(trimmed, "Microsoft_365_Copilot"));
+            Assert.IsTrue(SheetCells(trimmed, "How this is calculated").Any(c => c.Contains("exported without the See PII permission, so 'Assigned idle' is not shown")));
+
+            Assert.AreEqual("2", Idle(CopilotAdoptionWorkbook.Build(analysis), "CONTOSO_COPILOT_PILOT"));
+            Assert.AreEqual("2", Idle(CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false, readerSeesPii: true), "CONTOSO_COPILOT_PILOT"),
+                "A reader with See PII whose named lists are left out for a past period still has every figure.");
+            Assert.AreEqual(2, analysis.Summary.SeatLicenceTypes[1].AssignedIdleUsers, "The cached analysis must never be edited for one reader.");
         }
 
         [TestMethod]
@@ -1859,6 +2162,50 @@ namespace Tests.UnitTests
 
                 Assert.IsTrue(stream.CanWrite, "Save() must not close or dispose the caller's stream.");
                 Assert.IsTrue(stream.Length > 0);
+            }
+        }
+
+        [TestMethod]
+        public void NonFiniteNumbers_AreWrittenAsBlankCells()
+        {
+            // A ratio over a zero denominator is NaN or infinite. SpreadsheetML has no form for either,
+            // and "NaN" in a cell or a chart cache makes Excel report the whole workbook as damaged.
+            byte[] bytes;
+            using (var workbook = new XlsxWriter())
+            {
+                var sheet = workbook.AddSheet("Data")
+                    .SetColumnWidths(double.NaN, 12)
+                    .AddRow("Contoso", double.NaN, double.PositiveInfinity, double.NegativeInfinity, float.NaN, 1.5);
+                sheet.AddChart(new XlsxChart { Type = XlsxChartType.Column, CategoryRange = "'Data'!$A$1:$A$1" }
+                    .AddSeries("Ratio", "'Data'!$B$1:$F$1"));
+                bytes = workbook.ToArray();
+            }
+
+            var cells = SheetCellElements(bytes, "Data");
+            Assert.AreEqual(6, cells.Count, "A blank is still written, so the columns after it stay in place.");
+            foreach (var blank in cells.Skip(1).Take(4))
+            {
+                Assert.IsFalse(blank.HasElements, $"{blank.Attribute("r")} should be blank: {blank}");
+            }
+            Assert.AreEqual("1.5", cells[5].Value);
+
+            var chart = ChartXmls(bytes).Single();
+            StringAssert.Contains(chart, "<c:v>1.5</c:v>");
+            foreach (var xml in new[] { SheetXml(bytes, "Data"), chart })
+            {
+                Assert.IsFalse(xml.Contains("NaN") || xml.Contains("Infinity") || xml.Contains("\u221E"),
+                    "A non-finite value reached the package: " + xml);
+            }
+        }
+
+        private static string SheetXml(byte[] bytes, string sheetName)
+        {
+            var index = WorkbookSheetNames(bytes).IndexOf(sheetName);
+            using (var stream = new MemoryStream(bytes))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Read))
+            using (var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet" + (index + 1) + ".xml").Open(), Encoding.UTF8))
+            {
+                return reader.ReadToEnd();
             }
         }
 

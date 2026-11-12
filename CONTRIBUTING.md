@@ -40,6 +40,11 @@ This is a Windows-based .NET Framework solution. To build it you will need:
   [`.nvmrc`](.nvmrc); see [Node.js version](#nodejs-version) below.
 * A SQL Server **LocalDB** instance, `(localdb)\MSSQLLocalDB`, for running the
   unit tests.
+* **.NET 10 SDK** — only for the Telemetry Service (`src/TelemetryService`), the
+  separate ASP.NET Core 10 solution (`TelemetryService.slnx`) that receives the
+  anonymous usage reports. It is built and tested with the `dotnet` CLI; see the
+  *Tests* section of its [README](src/TelemetryService/README.md#tests). The
+  AnalyticsEngine solution doesn't need it.
 * **Azurite**, the Azure Storage emulator, listening for the Table service on
   `127.0.0.1:10002`. The sample debug configs in `deploy/Debug Config Files` set
   `Storage` to `UseDevelopmentStorage=true`, and the importer and web app keep

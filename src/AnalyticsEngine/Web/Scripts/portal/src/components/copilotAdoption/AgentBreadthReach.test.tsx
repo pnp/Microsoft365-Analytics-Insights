@@ -11,6 +11,7 @@ import {
 } from './CombinedViews';
 import { AgentReachCells, AgentReachHeaderCells } from './AgentReachColumns';
 import AgentsPanel from './AgentsPanel';
+import { SMALLEST_GROUP_WITHHELD_KEYS } from './adoptionShared';
 import { AgentHealth } from '../../types/copilotAdoption';
 import type {
   AdoptionCombinedSegmentRow,
@@ -135,6 +136,67 @@ describe('Department table: agent breadth, depth and builders (#646, #647)', () 
     expect(finance.getByText('25%')).toHaveAttribute('title', '4 of 16 active users');
   });
 
+  it.each([
+    {
+      language: 'en' as const,
+      complement: 'Hidden: with the tenant\u2019s figures, this department\u2019s would reveal those of a department too small to list',
+      fewBuilders: 'Hidden: fewer than 5 agent builders in this department',
+      complementBuilders: 'Hidden: with the tenant\u2019s agent builders, this count would reveal a department with fewer than 5',
+    },
+    {
+      language: 'es' as const,
+      complement: 'Oculto: con las cifras del inquilino, las de este departamento revelarían las de un departamento demasiado pequeño para mostrarse',
+      fewBuilders: 'Oculto: menos de 5 creadores de agentes en este departamento',
+      complementBuilders: 'Oculto: con los creadores de agentes del inquilino, este recuento revelaría un departamento con menos de 5',
+    },
+  ])('says in $language why a larger side, the agent figures or the builders are hidden from a reader without See PII (#844), never as 0', async ({ language, complement, fewBuilders, complementBuilders }) => {
+    if (language === 'es') await loadCatalog('es');
+    renderWithProvider(
+      <CombinedSegmentTable
+        rows={[
+          segment({ agentBuilders: null, agentBuildersWithheld: 'fewPeople', minimumPeople: 5 }),
+          segment({
+            segment: 'Legal',
+            licensedUsers: null,
+            licensedActiveUsers: null,
+            interactionsPerLicensedUser: null,
+            licensedAgentUserPct: null,
+            licensedWithheld: 'revealsSmallerGroup',
+            agentFiguresWithheld: true,
+            agentFiguresWithheldReason: 'revealsSmallerGroup',
+            agentActiveUsers: null,
+            agentUsers: null,
+            agentUserPct: null,
+            distinctAgents: null,
+            agentsPer100ActiveUsers: null,
+            agentInteractions: null,
+            interactionsPerActiveAgent: null,
+            agentBuilders: null,
+            agentBuildersWithheld: 'revealsSmallerGroup',
+            minimumPeople: 5,
+          }),
+        ]}
+        agentTotals={TOTALS}
+        minSeatsPerSegment={5}
+      />,
+      { language },
+    );
+
+    const finance = within(screen.getByText('Finance').closest('tr')!);
+    const financeBlanks = finance.getAllByText('\u2014');
+    expect(financeBlanks).toHaveLength(1);
+    expect(financeBlanks[0].closest('[title]')).toHaveAttribute('title', fewBuilders);
+    expect(finance.queryByText('0')).toBeNull();
+
+    const legal = within(screen.getByText('Legal').closest('tr')!);
+    const blanks = legal.getAllByText('\u2014');
+    // Four licensed cells and four agent cells hidden to protect a smaller department, and the builders.
+    expect(blanks).toHaveLength(9);
+    expect(blanks.filter((b) => b.closest('[title]')?.getAttribute('title') === complement)).toHaveLength(8);
+    expect(blanks.filter((b) => b.closest('[title]')?.getAttribute('title') === complementBuilders)).toHaveLength(1);
+    expect(legal.getByText('6')).toBeInTheDocument();
+  });
+
   it('states the tenant-wide figures above the table and names which agents they count', () => {
     renderWithProvider(<CombinedSegmentTable rows={ROWS} agentTotals={TOTALS} minSeatsPerSegment={5} />);
 
@@ -175,7 +237,8 @@ describe('Department table: agent breadth, depth and builders (#646, #647)', () 
 
   it('renders the same in Spanish, with Spanish number formatting and tenant data untouched', async () => {
     await loadCatalog('es');
-    renderWithProvider(<CombinedSegmentTable rows={ROWS} agentTotals={TOTALS} minSeatsPerSegment={5} />, { language: 'es' });
+    const rows = [segment({ interactionsPerLicensedUser: 4.5, interactionsPerUnlicensedUser: 12.5 }), ROWS[1]];
+    renderWithProvider(<CombinedSegmentTable rows={rows} agentTotals={TOTALS} minSeatsPerSegment={5} />, { language: 'es' });
 
     expect(await screen.findByText('Amplitud y profundidad de los agentes', undefined, { timeout: 5000 })).toBeInTheDocument();
     expect(headerTexts()).toEqual(expect.arrayContaining([
@@ -189,6 +252,11 @@ describe('Department table: agent breadth, depth and builders (#646, #647)', () 
     expect(within(screen.getByTestId('agent-total-departments')).getByText('2 de 3 (66,7%)')).toBeInTheDocument();
     expect(within(screen.getByTestId('agent-total-perAgent')).getByText('1234,5')).toBeInTheDocument();
     expect(within(screen.getByText('Finance').closest('tr')!).getByText('18,8')).toBeInTheDocument();
+    // Interactions per licence and per unlicensed user: the decimal comma, not an English full stop.
+    const finance = within(screen.getByText('Finance').closest('tr')!);
+    expect(finance.getByText('4,5')).toBeInTheDocument();
+    expect(finance.getByText('12,5')).toBeInTheDocument();
+    expect(finance.queryByText('12.5')).toBeNull();
     expect(screen.getByText(GREEK)).toBeInTheDocument();
     expect(screen.queryByText('Using customer-built agents')).toBeNull();
   });
@@ -381,6 +449,21 @@ describe('Agent breadth and reach constants stay in step with the server', () =>
     expect(scopes.length).toBeGreaterThan(0);
     expect(Object.keys(AGENT_FIGURES_SCOPE_KEYS).sort()).toEqual([...scopes].sort());
     for (const key of Object.values(AGENT_FIGURES_SCOPE_KEYS)) {
+      const spanish = (ES_COPILOT_ADOPTION as Record<string, string>)[key];
+      expect(EN_CATALOG[key]).toBeTruthy();
+      expect(spanish).toBeTruthy();
+      expect(spanish).not.toBe(EN_CATALOG[key]);
+    }
+  });
+
+  it('words every breakdown the server can name in smallestGroupsWithheld, in both languages (#844)', () => {
+    const models = readFileSync(join(COPILOT_ADOPTION_DIR, 'CopilotAdoptionSummaryModels.cs'), 'utf8');
+    const constants = /public static class CopilotAdoptionWithheldBreakdowns\s*\{([\s\S]*?)\n {4}\}/.exec(models)?.[1] ?? '';
+    const breakdowns = [...constants.matchAll(/public const string \w+ = "([^"]+)";/g)].map((m) => m[1]);
+
+    expect(breakdowns.length).toBeGreaterThan(0);
+    expect(Object.keys(SMALLEST_GROUP_WITHHELD_KEYS).sort()).toEqual([...breakdowns].sort());
+    for (const key of Object.values(SMALLEST_GROUP_WITHHELD_KEYS)) {
       const spanish = (ES_COPILOT_ADOPTION as Record<string, string>)[key];
       expect(EN_CATALOG[key]).toBeTruthy();
       expect(spanish).toBeTruthy();

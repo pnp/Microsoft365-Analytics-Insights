@@ -242,6 +242,11 @@ namespace DataUtils
 
                 var safeDetails = ex as IExceptionTelemetryDetails;
                 var telemetry = new ExceptionTelemetry(safeDetails?.ToTelemetryException() ?? ex);
+                foreach (var details in telemetry.ExceptionDetailsInfoList)
+                {
+                    // A value SQL Server quoted in any exception of the chain is tenant data (#853)
+                    details.Message = Sql.SqlErrorMessages.WithoutValues(details.Message);
+                }
                 if (safeDetails != null && !string.IsNullOrEmpty(safeDetails.TelemetryProblemId))
                 {
                     telemetry.ProblemId = safeDetails.TelemetryProblemId;
@@ -281,6 +286,8 @@ namespace DataUtils
 
         void TrackTrace(string sayWut, Microsoft.ApplicationInsights.DataContracts.SeverityLevel severityLevel, Exception exception = null)
         {
+            // A line built from an exception's message (or its inner exceptions') can carry a value SQL Server quoted
+            sayWut = Sql.SqlErrorMessages.WithoutValues(sayWut);
             ConsoleLog.Write(severityLevel, CurrentOperationId.Value, sayWut, exception);
 
             if (AppInsights != null)

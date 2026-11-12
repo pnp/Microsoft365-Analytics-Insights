@@ -862,10 +862,14 @@ SET @t = SYSUTCDATETIME();
 -- every row written before that upgrade has NULL in both. A re-staged pre-upgrade event now resolves a
 -- non-NULL action_id (the payload's Action, present on most accessed resources), and NULL-safe INTERSECT
 -- correctly reports (.., NULL, NULL) as different from (.., <action>, ..) - so the full-tuple check alone
--- would insert a SECOND copy of a row that is already there. Re-staging is routine, not exotic: the
--- importer re-reads a rolling look-back window and the blob checkpoint is in-memory by default, so every
--- event imported in the days before the upgrade comes back through this merge afterwards. Those
--- duplicates would be permanent and would silently inflate every COUNT over this table.
+-- would insert a SECOND copy of a row that is already there. Re-staging is routine, not exotic. A stored
+-- event comes back through this merge whenever it is staged again: a batch retried after a transient SQL
+-- fault (ActivitySaveRetryState), a content blob whose earlier save did not finish (the durable Azure Table
+-- blob checkpoint, used whenever a Storage connection string is configured, keeps such a blob
+-- recovery-pending - see ProcessedBlobStoreFactory), the Copilot audit backfill recovering missing
+-- Copilot metadata, and the opt-in historical repair (CopilotHistoricalRepair). Any of them can bring back
+-- an event imported before the upgrade. Those duplicates would be permanent and would silently inflate
+-- every COUNT over this table.
 --
 -- So a stored row with NULL in both new columns is treated as matching on the five original columns.
 -- That deliberately declines to add a second action for an event imported pre-upgrade: under the old

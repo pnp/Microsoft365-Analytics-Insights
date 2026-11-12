@@ -31,11 +31,6 @@ namespace Web.AnalyticsWeb.Controllers
             return ServePortalApp();
         }
 
-        public ActionResult CredentialsInvalid()
-        {
-            return View();
-        }
-
         [AllowAnonymous]
         public ActionResult Error()
         {

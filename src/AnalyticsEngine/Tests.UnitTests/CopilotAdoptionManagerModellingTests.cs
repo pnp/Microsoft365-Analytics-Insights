@@ -496,6 +496,119 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void WithoutSeePii_TheWholePopulationLessTheDepartmentsShown_NeverGivesBackAWithheldDepartment_AndWithSeePiiNothingChanges()
+        {
+            // Each department's manager figures are published in three steps - the share of managers using Copilot, the
+            // comparison of their teams, and that comparison by seat - each withheld when it would describe too few
+            // managers. The same figures for everyone head the table. Four departments, every manager with a seat and
+            // three reports in the department:
+            //   Sales    10 managers, 5 using Copilot
+            //   Support   6 managers, 3 using it  - its comparison is withheld for every reader: 3 on each side
+            //   Legal     2 managers, 1 using it  - everything withheld for every reader
+            //   Finance  12 managers, 6 using it
+            // Everyone: 30 managers, 15 using Copilot. Without more withheld, 15 - 5 - 3 - 6 = 1 is Legal's one manager.
+            var seats = new List<LicensedUserAdoptionRow>();
+            var next = 1;
+            foreach (var (department, managers) in new[] { ("Contoso Sales", 10), ("Contoso Support", 6), ("Contoso Legal", 2), ("Contoso Finance", 12) })
+            {
+                for (var m = 0; m < managers; m++)
+                {
+                    var manager = next++;
+                    seats.Add(Seat(manager, m < managers / 2 ? AdoptionBand.Established : AdoptionBand.NeverUsed, department: department));
+                    for (var r = 0; r < 3; r++) seats.Add(Seat(manager * 100 + r, r == 0 ? AdoptionBand.Trialling : AdoptionBand.NeverUsed, manager: manager, department: department));
+                }
+            }
+
+            var summary = Finalise(Analysis(seats), minSeats: 5);
+            ManagerModellingSegmentRow Row(CopilotAdoptionSummary s, string department) => s.ManagerModellingByDepartment.Single(d => d.Segment == department);
+
+            Assert.AreEqual(30, summary.ManagersStatusKnown);
+            Assert.AreEqual(15, summary.ManagersActive);
+            Assert.AreEqual(50d, Row(summary, "Contoso Support").ManagersActivePct, "The control: with See PII, Support's share is shown.");
+            Assert.IsNotNull(Row(summary, "Contoso Sales").ReportsManagerActive, "The control: with See PII, Sales' comparison is shown.");
+            Assert.IsNull(Row(summary, "Contoso Legal").ManagersActive);
+
+            var trimmed = summary.WithoutIndividualData();
+
+            // Step 1: Legal's two managers are withheld; the smallest department shown with five or more - Support, six -
+            // goes too, so the difference holds eight managers.
+            var support = Row(trimmed, "Contoso Support");
+            Assert.IsNull(support.ManagersActive, "Withheld, never 0.");
+            Assert.IsNull(support.ManagersActivePct);
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, support.ManagersWithheld);
+            Assert.AreEqual(6, support.ManagersStatusKnown, "Who is behind a row is published for every reader, as before.");
+
+            // Step 2: the comparison is shown for Sales and Finance only, and Support's and Legal's - one to three managers
+            // on each side - would come back as everyone's less theirs. Sales has the fewest on a side (five): withheld.
+            var sales = Row(trimmed, "Contoso Sales");
+            Assert.AreEqual(50d, sales.ManagersActivePct, "Sales' share stays: everyone's less Sales' and Finance's covers eight managers.");
+            Assert.IsNull(sales.ReportsManagerActive);
+            Assert.IsNull(sales.ReportsActiveRatePctManagerInactive);
+            Assert.IsNull(sales.ReportsManagerActiveLicensed, "A step withheld takes the steps after it.");
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, sales.ComparisonWithheld);
+            Assert.IsNull(sales.ManagersWithheld);
+
+            var finance = Row(trimmed, "Contoso Finance");
+            Assert.AreEqual(50d, finance.ManagersActivePct);
+            Assert.AreEqual(18, finance.ReportsManagerActive, "Finance is never the smallest: it stays whole.");
+            Assert.AreEqual(18, finance.ReportsManagerActiveLicensed);
+            Assert.IsNull(finance.ManagersWithheld);
+            Assert.IsNull(finance.ComparisonWithheld);
+            Assert.IsNull(finance.SeatSplitWithheld);
+
+            var legal = Row(trimmed, "Contoso Legal");
+            Assert.IsNull(legal.ManagersActive);
+            Assert.IsNull(legal.ManagersWithheld, "Legal is withheld for its own size, for every reader, as before.");
+
+            // The headline stays, and whatever it less the departments shown gives covers five managers or more.
+            Assert.AreEqual(15, trimmed.ManagersActive);
+            Assert.AreEqual(summary.ReportsManagerActive, trimmed.ReportsManagerActive);
+            var shownStep1 = trimmed.ManagerModellingByDepartment.Where(d => d.ManagersActive.HasValue).Sum(d => d.ManagersStatusKnown);
+            Assert.IsTrue(trimmed.ManagersStatusKnown - shownStep1 >= 5);
+            var shownStep2 = trimmed.ManagerModellingByDepartment.Where(d => d.ReportsManagerActive.HasValue).Sum(d => d.ManagersActive.Value);
+            Assert.IsTrue(trimmed.ManagersActive - shownStep2 >= 5, "The comparison's difference covers at least five managers using Copilot.");
+
+            Assert.IsNotNull(Row(summary, "Contoso Support").ManagersActive, "The cached summary must never be edited for one reader.");
+            Assert.IsNotNull(Row(summary, "Contoso Sales").ReportsManagerActive);
+            Assert.IsNull(Row(summary, "Contoso Sales").ComparisonWithheld);
+        }
+
+        [TestMethod]
+        public void WithoutSeePii_TheManagerOfADepartmentTooSmallToList_IsNotGivenBackByTheWholeLessTheDepartmentsShown()
+        {
+            // Nothing in the table is withheld, but a department of four seats is not listed at all. Its one manager is in
+            // everyone's figures, so everyone's less the two departments shown would be that one person's own use.
+            var seats = new List<LicensedUserAdoptionRow>();
+            var next = 1;
+            foreach (var (department, managers) in new[] { ("Contoso Sales", 10), ("Contoso Finance", 12), ("Contoso Tiny", 1) })
+            {
+                for (var m = 0; m < managers; m++)
+                {
+                    var manager = next++;
+                    seats.Add(Seat(manager, m % 2 == 0 ? AdoptionBand.Established : AdoptionBand.NeverUsed, department: department));
+                    for (var r = 0; r < 3; r++) seats.Add(Seat(manager * 100 + r, AdoptionBand.Trialling, manager: manager, department: department));
+                }
+            }
+
+            var summary = Finalise(Analysis(seats), minSeats: 5);
+            Assert.IsFalse(summary.ManagerModellingByDepartment.Any(d => d.Segment == "Contoso Tiny"), "The control: too few seats to list.");
+            Assert.AreEqual(23, summary.ManagersStatusKnown);
+            Assert.IsTrue(summary.ManagerModellingByDepartment.All(d => d.ManagersActive.HasValue), "The control: nothing listed is withheld.");
+
+            var trimmed = summary.WithoutIndividualData();
+
+            // The department breakdown leaves Tiny out, so for a reader without See PII it leaves out its smallest listed
+            // department as well - Sales - from every view of it, this table included (#844). Everyone's figures less the
+            // department shown then hold eleven managers.
+            CollectionAssert.AreEqual(new[] { "Contoso Finance" }, trimmed.ManagerModellingByDepartment.Select(d => d.Segment).ToList(),
+                "With nothing more withheld, everyone's figures less the two departments shown would be the unlisted manager's own use.");
+            Assert.IsTrue(trimmed.ManagerModellingByDepartment.All(d => d.ManagersActive.HasValue), "Finance stays whole.");
+            Assert.AreEqual(11, trimmed.ManagersStatusKnown - trimmed.ManagerModellingByDepartment.Sum(d => d.ManagersStatusKnown));
+            Assert.AreEqual(summary.ManagersActive, trimmed.ManagersActive, "The headline stays.");
+            Assert.AreEqual(2, summary.ManagerModellingByDepartment.Count, "The cached summary must never be edited for one reader.");
+        }
+
+        [TestMethod]
         public void TheRollupByManager_CarriesNoManagersOwnStatus()
         {
             // The issue puts a manager's own status on a roll-up row out of scope: one row per manager

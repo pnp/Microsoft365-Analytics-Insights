@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
+import { LanguageSwitcher, loadCatalog } from '../../i18n';
 import { PRINT_ROW_LIMIT, requestPrint, resetPrintPreparation } from '../shared/printPreparation';
 import type {
   CopilotAdoptionOptions,
@@ -995,6 +996,37 @@ describe('CoworkPanel without See PII', () => {
     expect(within(people).getByText('Individual details are hidden')).toBeTruthy();
     expect(within(people).queryByText('aisha.rahman@contoso.com')).toBeNull();
     expect(fetchCowork).not.toHaveBeenCalled();
+  });
+});
+
+describe('CoworkPanel language switch', () => {
+  beforeEach(() => {
+    fetchCowork.mockReset();
+    fetchCowork.mockResolvedValue(page([row({})]));
+    resetTimeSavedStore();
+    resetTimeSavedCohortStore();
+  });
+
+  it('keeps the people list and its search when the reader switches language, without asking again', async () => {
+    await loadCatalog('es');
+    const user = userEvent.setup();
+    renderWithProvider(
+      <>
+        <LanguageSwitcher />
+        <CoworkPanel windowDays={28} summary={summary()} options={OPTIONS} />
+      </>,
+    );
+    const people = await openSection(user, /People to enable/);
+    await user.type(within(people).getByRole('textbox', { name: 'Search Cowork candidates' }), 'contoso{Enter}');
+    await waitFor(() => expect(fetchCowork.mock.calls.at(-1)![1]).toMatchObject({ search: 'contoso' }));
+    const requests = fetchCowork.mock.calls.length;
+
+    await user.click(screen.getByRole('button', { name: /Language: English/ }));
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Espa\u00f1ol' }, { timeout: 5000 }));
+
+    expect(await screen.findByRole('tab', { name: /Personas que habilitar/, selected: true }, { timeout: 5000 })).toBeVisible();
+    expect(screen.getByRole('textbox', { name: 'Buscar candidatos para Cowork' })).toHaveValue('contoso');
+    expect(fetchCowork).toHaveBeenCalledTimes(requests);
   });
 });
 

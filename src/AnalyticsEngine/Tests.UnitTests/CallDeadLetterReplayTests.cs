@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using UnitTests.FakeLoaderClasses;
+using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
 
 namespace Tests.UnitTests
@@ -704,6 +705,46 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// A call record with no call type, or whose every session nobody can be attributed to, is dead-lettered at once
+        /// (#847): fetching it again returns the same record. Like the importer's other never-importable reasons, a default
+        /// replay leaves it, <c>--include-invalid</c> replays it and <c>--purge-invalid</c> deletes it - and the help says so.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(CallRecordPayloadException.NoUsableSessionsReason)]
+        [DataRow(CallRecordPayloadException.NoCallTypeReason)]
+        public async Task CallRecordPayloadReasons_AreNeverImportable_SkippedByDefault_ReplayedOrDeletedOnlyWhenAsked(string reason)
+        {
+            Func<FakeCallDeadLetterQueue> deadLetters = () =>
+            {
+                var q = new FakeCallDeadLetterQueue();
+                q.AddDeadLetter("payload", reason, Now.AddHours(-1));
+                q.AddDeadLetter("retries", CallQueueRetryPolicy.RetriesExhaustedReason, Now.AddHours(-1));
+                return q;
+            };
+
+            var byDefault = deadLetters();
+            var summary = await Run(byDefault, new CallDeadLetterReplayOptions());
+            CollectionAssert.AreEqual(new[] { "payload" }, Ids(byDefault.DeadLetters), "A default replay leaves it in the dead-letter queue.");
+            CollectionAssert.AreEqual(new[] { "send:retries" }, byDefault.Operations.Where(o => o.StartsWith("send:")).ToList());
+            Assert.AreEqual(1, summary.SkippedByReason[CallDeadLetterSkipReason.NeverImportable]);
+
+            var included = deadLetters();
+            summary = await Run(included, new CallDeadLetterReplayOptions { IncludeInvalid = true });
+            Assert.AreEqual(2, summary.Replayed);
+            Assert.AreEqual(0, included.DeadLetters.Count);
+
+            var purged = deadLetters();
+            summary = await Run(purged, new CallDeadLetterReplayOptions { PurgeInvalid = true });
+            Assert.AreEqual(1, summary.PurgedByReason[CallDeadLetterSkipReason.NeverImportable]);
+            CollectionAssert.Contains(purged.Operations, "complete:payload");
+            CollectionAssert.DoesNotContain(purged.Operations, "send:payload", "Deleted, not replayed.");
+            Assert.AreEqual(1, summary.Replayed);
+            Assert.AreEqual(0, purged.DeadLetters.Count);
+
+            StringAssert.Contains(CallDeadLetterReplayCommand.Usage, reason);
+        }
+
+        /// <summary>
         /// Graph deletes a call record 30 days after the call, so replaying an older notification can only fail. Its age
         /// is taken from the earliest time the message shows it was queued.
         /// </summary>
@@ -993,6 +1034,159 @@ namespace Tests.UnitTests
             exit = await CallDeadLetterReplayCommand.RunAsync(new[] { "--replayCallDeadLetters", "--dry-run" }, new RecordingLogger(),
                 () => { throw new InvalidOperationException("Service Bus is not configured on this deployment."); }, new FixedClock(Now), CancellationToken.None);
             Assert.AreEqual(CallDeadLetterReplayCommand.ExitFailed, exit);
+        }
+
+        #endregion
+
+        #region Purge all
+
+        /// <summary>One of each kind: what could still be imported, what never can, what Graph no longer has, what was replayed enough.</summary>
+        private static FakeCallDeadLetterQueue EveryKindOfDeadLetter()
+        {
+            var queue = new FakeCallDeadLetterQueue();
+            queue.AddDeadLetter("retries-exhausted", CallQueueRetryPolicy.RetriesExhaustedReason, Now.AddHours(-1));
+            queue.AddDeadLetter("delivery-count", MaxDeliveryCountExceeded, Now.AddDays(-1));
+            queue.AddDeadLetter("old", MaxDeliveryCountExceeded, Now.AddDays(-45));
+            queue.AddDeadLetter("no-call-id", CallQueueMessageHandler.MissingCallIdReason, Now.AddMinutes(-5));
+            queue.AddDeadLetter("capped", CallQueueRetryPolicy.RetriesExhaustedReason, Now.AddDays(-2),
+                properties: new Dictionary<string, object> { [CallDeadLetterReplayer.ReplayCountProperty] = 3 });
+            queue.AddDeadLetter("no-reason", null, Now.AddDays(-3));
+            return queue;
+        }
+
+        /// <summary>A dry run of --purge-all counts everything it would delete, whatever its reason or age, and touches nothing.</summary>
+        [TestMethod]
+        public async Task PurgeAll_DryRun_CountsEveryDeadLetterItWouldDelete_AndChangesNothing()
+        {
+            var queue = EveryKindOfDeadLetter();
+            var before = Ids(queue.DeadLetters);
+            var logger = new RecordingLogger();
+
+            var summary = await Run(queue, new CallDeadLetterReplayOptions { DryRun = true, PurgeAll = true }, logger);
+
+            Assert.IsTrue(queue.Operations.All(o => o == "peek"), "A dry run only browses: nothing is received (locked), sent, completed or abandoned.");
+            CollectionAssert.AreEqual(before, Ids(queue.DeadLetters));
+            Assert.AreEqual(0, queue.Sent.Count);
+            Assert.AreEqual(6, summary.Scanned);
+            Assert.AreEqual(0, summary.Replayed, "Nothing is replayed, not even what could still be imported.");
+            Assert.AreEqual(6, summary.Purged);
+            Assert.AreEqual(6, summary.PurgedByReason[CallDeadLetterSkipReason.PurgeAll]);
+            Assert.AreEqual(0, summary.Skipped);
+            Assert.AreEqual(2, summary.ByDeadLetterReason[CallQueueRetryPolicy.RetriesExhaustedReason].Deleted);
+            Assert.AreEqual(1, summary.ByDeadLetterReason[CallDeadLetterReplaySummary.NoReason].Deleted);
+            Assert.IsTrue(logger.Entries.Any(e => e.Message.StartsWith("Would delete: 6")));
+            Assert.IsTrue(logger.Entries.Any(e => e.Message.Contains("6 x deleted as asked, whatever its reason or age (--purge-all)")));
+            Assert.IsTrue(summary.Succeeded);
+        }
+
+        /// <summary>
+        /// --purge-all deletes every dead-lettered message it looks at - including the recent ones that could still be imported,
+        /// the never-importable ones and those replayed three times - and replays none.
+        /// </summary>
+        [TestMethod]
+        public async Task PurgeAll_DeletesEveryDeadLetter_WhateverItsReasonOrAge_AndReplaysNone()
+        {
+            var queue = EveryKindOfDeadLetter();
+            var logger = new RecordingLogger();
+
+            var summary = await Run(queue, new CallDeadLetterReplayOptions { PurgeAll = true }, logger);
+
+            Assert.AreEqual(0, queue.DeadLetters.Count);
+            Assert.AreEqual(0, queue.Sent.Count);
+            Assert.AreEqual(6, summary.Purged);
+            Assert.AreEqual(6, summary.PurgedByReason[CallDeadLetterSkipReason.PurgeAll]);
+            Assert.AreEqual(0, summary.Replayed);
+            Assert.AreEqual(0, summary.Skipped);
+            Assert.IsTrue(summary.Succeeded);
+            Assert.IsNull(summary.StopCode);
+            CollectionAssert.Contains(queue.Operations, "complete:retries-exhausted");
+            Assert.IsTrue(logger.Entries.Any(e => e.Message.Contains("DELETING every message it looks at")));
+            Assert.IsTrue(logger.Entries.Any(e => e.Message.Contains("deleted dead-lettered message 'capped'") && e.Message.Contains("asked to delete every dead-lettered call")));
+        }
+
+        /// <summary>--purge-all keeps to the scan limit and to --reason, and a cancelled run stops at the message in hand.</summary>
+        [TestMethod]
+        public async Task PurgeAll_KeepsToTheScanLimitAndReason_AndStopsWhenCancelled()
+        {
+            var limited = new FakeCallDeadLetterQueue();
+            for (var i = 0; i < 150; i++)
+            {
+                limited.AddDeadLetter($"m{i}", MaxDeliveryCountExceeded, Now.AddHours(-1));
+            }
+            var summary = await Run(limited, new CallDeadLetterReplayOptions { PurgeAll = true, ScanLimit = 120 });
+            Assert.AreEqual(120, summary.Purged);
+            Assert.IsTrue(summary.ReachedScanLimit);
+            Assert.AreEqual("m120", limited.DeadLetters[0].MessageId);
+            Assert.AreEqual(30, limited.DeadLetters.Count);
+            Assert.IsFalse(limited.DeadLetters.Any(limited.IsLocked));
+
+            var oneReason = EveryKindOfDeadLetter();
+            summary = await Run(oneReason, new CallDeadLetterReplayOptions { PurgeAll = true, Reason = MaxDeliveryCountExceeded });
+            Assert.AreEqual(2, summary.Purged);
+            Assert.AreEqual(4, summary.SkippedByReason[CallDeadLetterSkipReason.OtherReason]);
+            CollectionAssert.AreEqual(new[] { "retries-exhausted", "no-call-id", "capped", "no-reason" }, Ids(oneReason.DeadLetters));
+
+            var cancelled = new FakeCallDeadLetterQueue();
+            for (var i = 0; i < 150; i++)
+            {
+                cancelled.AddDeadLetter($"m{i}", MaxDeliveryCountExceeded, Now.AddHours(-1));
+            }
+            using (var cancellation = new CancellationTokenSource())
+            {
+                cancelled.BeforeReceive = receive =>
+                {
+                    if (receive == 2) cancellation.Cancel();
+                };
+                summary = await new CallDeadLetterReplayer(cancelled, cancelled, new RecordingLogger(), cancelled.Clock)
+                    .RunAsync(new CallDeadLetterReplayOptions { PurgeAll = true }, cancellation.Token);
+            }
+            Assert.AreEqual(100, summary.Purged, "The first batch; the run stopped before deleting any of the second.");
+            Assert.AreEqual(50, cancelled.DeadLetters.Count);
+            Assert.IsTrue(summary.Cancelled);
+            Assert.AreEqual(Common.Entities.Calls.CallDeadLetterFailureCodes.Cancelled, summary.StopCode);
+        }
+
+        /// <summary>--purge-all is read like the other options, is never the default, and is refused beside --include-invalid.</summary>
+        [TestMethod]
+        public async Task CommandLine_PurgeAll_IsReadInAnyCase_RefusedWithIncludeInvalid_AndDeletesEverything()
+        {
+            Assert.IsTrue(CallDeadLetterReplayCommand.TryParse(new[] { "--replayCallDeadLetters" }, out var bare, out var error), error);
+            Assert.IsFalse(bare.PurgeAll, "Deleting is never the default.");
+            Assert.IsTrue(CallDeadLetterReplayCommand.TryParse(new[] { "--replayCallDeadLetters", "--Purge-All", "--dry-run" }, out var purgeAll, out error), error);
+            Assert.IsTrue(purgeAll.PurgeAll);
+            Assert.IsTrue(purgeAll.DryRun);
+            StringAssert.Contains(CallDeadLetterReplayCommand.Usage, "[--purge-all]");
+            StringAssert.Contains(CallDeadLetterReplayCommand.Usage, "--purge-all           DELETE every dead-lettered call");
+
+            var refused = new[]
+            {
+                new { Args = new[] { "--replayCallDeadLetters", "--purge-all", "--include-invalid" }, Says = "--include-invalid replays what --purge-all deletes" },
+                new { Args = new[] { "--replayCallDeadLetters", "--purge-all", "--PURGE-ALL" }, Says = "--purge-all is given more than once" },
+                new { Args = new[] { "--purge-all" }, Says = $"{CallDeadLetterReplayCommand.Switch} is missing" },
+                new { Args = new[] { "--replayCallDeadLetters", "-purge-all" }, Says = "must begin with two hyphens: --purge-all" },
+                new { Args = new[] { "--replayCallDeadLetters", "\u2013purge-all" }, Says = "en or em dash" }
+            };
+            foreach (var commandLine in refused)
+            {
+                var text = string.Join(" ", commandLine.Args);
+                Assert.IsTrue(CallDeadLetterReplayCommand.IsRequested(commandLine.Args), $"'{text}' must not start the import.");
+
+                var opened = false;
+                var logger = new RecordingLogger();
+                var exit = await CallDeadLetterReplayCommand.RunAsync(commandLine.Args, logger, () => { opened = true; return new FakeCallDeadLetterQueue(); },
+                    new FixedClock(Now), CancellationToken.None);
+
+                Assert.AreEqual(CallDeadLetterReplayCommand.ExitUsage, exit, text);
+                Assert.IsFalse(opened, text);
+                StringAssert.Contains(logger.Entries.Last().Message, commandLine.Says, text);
+            }
+
+            var queue = EveryKindOfDeadLetter();
+            var succeeded = await CallDeadLetterReplayCommand.RunAsync(new[] { "--replayCallDeadLetters", "--purge-all" }, new RecordingLogger(),
+                () => queue, new FixedClock(Now), CancellationToken.None);
+            Assert.AreEqual(CallDeadLetterReplayCommand.ExitSucceeded, succeeded);
+            Assert.AreEqual(0, queue.DeadLetters.Count);
+            Assert.AreEqual(0, queue.Sent.Count);
         }
 
         #endregion

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { screen, fireEvent, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import AdoptionPeriodControl, {
   lastCalendarMonthRange,
@@ -9,6 +10,7 @@ import AdoptionPeriodControl, {
   type FixedPeriod,
 } from './AdoptionPeriodControl';
 import { translateActive } from '../../i18n/runtime';
+import { LanguageSwitcher, loadCatalog } from '../../i18n';
 
 const NOW = new Date(Date.UTC(2026, 4, 20, 12)); // 2026-05-20; latest allowed end = 2026-05-19
 
@@ -177,5 +179,29 @@ describe('AdoptionPeriodControl', () => {
     expect(lastCalendarMonthRange(new Date(Date.UTC(2026, 0, 1, 0, 30)))).toEqual({ from: '2025-12-01', to: '2025-12-31' });
     expect(lastCalendarQuarterRange(new Date(Date.UTC(2026, 3, 1)))).toEqual({ from: '2026-01-01', to: '2026-03-31' });
     expect(lastCalendarQuarterRange(new Date(Date.UTC(2026, 11, 31)))).toEqual({ from: '2026-07-01', to: '2026-09-30' });
+  });
+
+  // Last in this file: it leaves the portal in Spanish, and the period names above are read in English.
+  it('words a refused range in the language being read, not the one it was refused in', async () => {
+    await loadCatalog('es');
+    const user = userEvent.setup();
+    renderWithProvider(
+      <>
+        <LanguageSwitcher />
+        <Harness />
+      </>,
+    );
+    fireEvent.change(period(), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-05-20' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('The end date must be before today (reporting covers whole past days).');
+
+    await user.click(screen.getByRole('button', { name: /Language: English/ }));
+    await user.click(await screen.findByRole('menuitemradio', { name: 'Espa\u00f1ol' }, { timeout: 5000 }));
+
+    expect(await screen.findByRole('alert', undefined, { timeout: 5000 })).toHaveTextContent(
+      'La fecha de finalizaci\u00f3n debe ser anterior a hoy (los informes cubren d\u00edas pasados completos).',
+    );
+    expect(screen.getByLabelText('Hasta')).toHaveValue('2026-05-20');
   });
 });

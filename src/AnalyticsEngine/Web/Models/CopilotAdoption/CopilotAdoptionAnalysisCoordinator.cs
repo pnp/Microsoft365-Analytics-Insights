@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.Caching;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Web.AnalyticsWeb.Models.UserDiagnostics;
@@ -13,14 +14,27 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 {
     internal sealed class CopilotAdoptionAnalysisWaitResult
     {
-        internal CopilotAdoptionAnalysisWaitResult(CopilotAdoptionAnalysis analysis, string runId)
+        internal CopilotAdoptionAnalysisWaitResult(
+            CopilotAdoptionAnalysis analysis, string runId, CopilotAdoptionProgressSnapshot progress = null)
         {
             Analysis = analysis;
-            RunId = runId;
+            RunId = runId ?? analysis?.Summary?.Diagnostics?.RunId;
+            Progress = analysis?.Summary?.Diagnostics?.Progress ?? progress;
         }
 
         internal CopilotAdoptionAnalysis Analysis { get; }
         internal string RunId { get; }
+        internal CopilotAdoptionProgressSnapshot Progress { get; }
+    }
+
+    internal sealed class CopilotAdoptionRebuildCooldownException : Exception
+    {
+        internal CopilotAdoptionRebuildCooldownException(int seconds) { RetryAfterSeconds = seconds; }
+        internal int RetryAfterSeconds { get; }
+    }
+
+    internal sealed class CopilotAdoptionRebuildNotCompletedException : Exception
+    {
     }
 
     internal interface ICopilotAdoptionAnalysisRunner
@@ -234,6 +248,10 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         private readonly ICopilotAdoptionScoreSettingsSource _settingsSource;
         private readonly LicenceDataGenerationSource _licenceGeneration;
         private int _queuedRuns;
+        private readonly object _publicationSync = new object();
+        private readonly ConditionalWeakTable<CopilotAdoptionAnalysis, RebuildState> _rebuilds =
+            new ConditionalWeakTable<CopilotAdoptionAnalysis, RebuildState>();
+        internal static readonly TimeSpan RebuildCooldown = TimeSpan.FromMinutes(1);
 
         /// <param name="licenceGeneration">
         /// Part of the cache key, so an analysis computed before a licence changed is not served after it. None by
@@ -303,15 +321,22 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             CopilotAdoptionDateRange range,
             List<int> seatLicenceTypeIds,
             TimeSpan waitBudget,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            string after = null,
+            bool rebuild = false)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var requestWatch = System.Diagnostics.Stopwatch.StartNew();
             var settings = await ScoreSettingsAsync(cancellationToken).ConfigureAwait(false);
             var licenceGeneration = await _licenceGeneration.GetAsync().ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            var task = Join(range, seatLicenceTypeIds, settings, licenceGeneration, out var interest, out var generation);
-            if (task.IsCompleted) return new CopilotAdoptionAnalysisWaitResult(await task, generation?.RunId);
+            AnalysisInterest interest;
+            Generation generation;
+            var task = rebuild
+                ? Rebuild(range, seatLicenceTypeIds, settings, licenceGeneration, after, out interest, out generation)
+                : Join(range, seatLicenceTypeIds, settings, licenceGeneration, out interest, out generation, after);
+            if (task.IsCompleted)
+                return new CopilotAdoptionAnalysisWaitResult(await task, generation?.RunId, generation?.Progress.Snapshot());
 
             // Joining already recorded this request, so a queued run cannot judge it absent in the gap
             // before this line. Waiting as well keeps a long wait - an export's 150 seconds - counted as
@@ -322,7 +347,8 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 var remaining = waitBudget - requestWatch.Elapsed;
                 var finished = await Task.WhenAny(task, Task.Delay(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, cancellationToken));
                 cancellationToken.ThrowIfCancellationRequested();
-                return new CopilotAdoptionAnalysisWaitResult(finished == task ? await task : null, generation?.RunId);
+                return new CopilotAdoptionAnalysisWaitResult(
+                    finished == task ? await task : null, generation?.RunId, generation?.Progress.Snapshot());
             }
             finally
             {
@@ -412,53 +438,117 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             CopilotAdoptionEffectiveScoreSettings settings,
             string licenceGeneration,
             out AnalysisInterest interest,
-            out Generation joinedGeneration)
+            out Generation joinedGeneration,
+            string after = null)
         {
-            interest = null;
-            joinedGeneration = null;
-            var ids = seatLicenceTypeIds ?? new List<int>();
-            if (settings == null)
-                throw new CopilotAdoptionScoreSettingsUnavailableException("The score settings source returned no settings.");
-            var cacheKey = CacheKey(range, ids, settings, licenceGeneration);
-
-            if (_cache.TryGet(cacheKey, out var cached))
+            lock (_publicationSync)
             {
-                return Task.FromResult(cached);
-            }
+                interest = null;
+                joinedGeneration = null;
+                var ids = seatLicenceTypeIds ?? new List<int>();
+                if (settings == null)
+                    throw new CopilotAdoptionScoreSettingsUnavailableException("The score settings source returned no settings.");
+                var cacheKey = CacheKey(range, ids, settings, licenceGeneration);
 
-            // More than one pass only when the run found in the table had been sealed as abandoned in the
-            // instant before this request; one created by this pass cannot be sealed before it has even started.
-            for (var pass = 0; pass < 3; pass++)
-            {
-                var candidate = NewGeneration(cacheKey, range, ids, settings);
-                var effective = _inFlight.GetOrAdd(cacheKey, candidate);
-
-                // A previous generation may have published between the first miss and GetOrAdd.
-                if (ReferenceEquals(effective, candidate) && _cache.TryGet(cacheKey, out var justPublished))
+                if (_cache.TryGet(cacheKey, out var cached))
                 {
-                    RemoveInFlight(cacheKey, candidate);
-                    return Task.FromResult(justPublished);
+                    // Followed only while it runs. A replacement that ended without publishing - failed, abandoned, or
+                    // refused because it lost complete headline figures - leaves the report it was asked to replace in
+                    // place, and that is what a later request is given; the SPA, handed back the generation it asked to be
+                    // after, says the replacement did not complete. Handing back the stored failure instead answered every
+                    // "Check again" with the same error until the old report expired. A request already waiting on the
+                    // replacement still sees how it ended.
+                    if (after != null && after == cached.Summary.Diagnostics.GenerationId
+                        && _rebuilds.TryGetValue(cached, out var retry) && retry.Attempt != null && IsRunning(retry.Attempt))
+                    {
+                        joinedGeneration = retry.Attempt;
+                        interest = retry.Attempt.Interest;
+                        interest.TryTouch(_utcNow());
+                        return retry.Attempt.Work.Value;
+                    }
+                    return Task.FromResult(cached);
                 }
 
-                // Recorded BEFORE the run can start, so it can never judge the request that started it absent.
-                if (effective.Interest.TryTouch(_utcNow()))
+                // More than one pass only when the run found in the table had been sealed as abandoned in the
+                // instant before this request; one created by this pass cannot be sealed before it has even started.
+                for (var pass = 0; pass < 3; pass++)
                 {
-                    interest = effective.Interest;
-                    joinedGeneration = effective;
-                    return effective.Work.Value;
+                    var candidate = NewGeneration(cacheKey, range, ids, settings);
+                    var effective = _inFlight.GetOrAdd(cacheKey, candidate);
+
+                    // A previous generation may have published between the first miss and GetOrAdd.
+                    if (ReferenceEquals(effective, candidate) && _cache.TryGet(cacheKey, out var justPublished))
+                    {
+                        RemoveInFlight(cacheKey, candidate);
+                        return Task.FromResult(justPublished);
+                    }
+
+                    // Recorded BEFORE the run can start, so it can never judge the request that started it absent.
+                    if (effective.Interest.TryTouch(_utcNow()))
+                    {
+                        interest = effective.Interest;
+                        joinedGeneration = effective;
+                        return effective.Work.Value;
+                    }
+
+                    // Sealed: that run will publish nothing. Take it out - only if it is still there - so the next
+                    // pass starts a fresh run instead of handing this request a result that is never coming.
+                    RemoveInFlight(cacheKey, effective);
                 }
 
-                // Sealed: that run will publish nothing. Take it out - only if it is still there - so the next
-                // pass starts a fresh run instead of handing this request a result that is never coming.
-                RemoveInFlight(cacheKey, effective);
+                // Unreachable in practice. Null is "not ready yet", which every caller already answers with a 202.
+                return Task.FromResult<CopilotAdoptionAnalysis>(null);
             }
-
-            // Unreachable in practice. Null is "not ready yet", which every caller already answers with a 202.
-            return Task.FromResult<CopilotAdoptionAnalysis>(null);
         }
 
+        private Task<CopilotAdoptionAnalysis> Rebuild(
+            CopilotAdoptionDateRange range, List<int> ids, CopilotAdoptionEffectiveScoreSettings settings,
+            string licenceGeneration, string expectedGenerationId, out AnalysisInterest interest, out Generation generation)
+        {
+            if (settings == null)
+                throw new CopilotAdoptionScoreSettingsUnavailableException("The score settings source returned no settings.");
+            lock (_publicationSync)
+            {
+                interest = null;
+                generation = null;
+                var key = CacheKey(range, ids, settings, licenceGeneration);
+                if (!_cache.TryGet(key, out var previous)
+                    || previous.Summary.Diagnostics.GenerationId != expectedGenerationId
+                    || !HasFailedSteps(previous))
+                    return Join(range, ids, settings, licenceGeneration, out interest, out generation);
+
+                if (_inFlight.TryGetValue(key, out var running) && running.Interest.TryTouch(_utcNow()))
+                {
+                    interest = running.Interest;
+                    generation = running;
+                    return running.Work.Value;
+                }
+
+                var retry = _rebuilds.GetValue(previous, _ => new RebuildState());
+                var remaining = RebuildCooldown - (_utcNow() - retry.StartedUtc);
+                if (remaining > TimeSpan.Zero)
+                    throw new CopilotAdoptionRebuildCooldownException((int)Math.Ceiling(remaining.TotalSeconds));
+
+                generation = NewGeneration(key, range, ids ?? new List<int>(), settings, previous);
+                _inFlight[key] = generation;
+                retry.Attempt = generation;
+                retry.StartedUtc = _utcNow();
+                generation.RebuildStartedUtc = retry.StartedUtc;
+                generation.Interest.TryTouch(_utcNow());
+                interest = generation.Interest;
+                return generation.Work.Value;
+            }
+        }
+
+        internal static bool HasFailedSteps(CopilotAdoptionAnalysis analysis) =>
+            analysis?.Summary?.Diagnostics?.Steps?.Any(step => step.Failed) == true;
+
+        private static bool IsRunning(Generation generation) =>
+            generation.Work.IsValueCreated && !generation.Work.Value.IsCompleted;
+
         private Generation NewGeneration(
-            string cacheKey, CopilotAdoptionDateRange range, List<int> ids, CopilotAdoptionEffectiveScoreSettings settings)
+            string cacheKey, CopilotAdoptionDateRange range, List<int> ids, CopilotAdoptionEffectiveScoreSettings settings,
+            CopilotAdoptionAnalysis previous = null)
         {
             Generation generation = null;
             generation = new Generation(new Lazy<Task<CopilotAdoptionAnalysis>>(
@@ -480,7 +570,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 // which fixes this for every await in the analysis - including ones not yet written -
                 // rather than relying on ~32 separate ConfigureAwait(false) calls staying correct.
                 () => Task.Run(() => RunAndPublishAsync(cacheKey, generation, range, ids, settings)),
-                LazyThreadSafetyMode.ExecutionAndPublication));
+                LazyThreadSafetyMode.ExecutionAndPublication), previous);
             return generation;
         }
 
@@ -528,7 +618,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 // generation in the instant after the result it would compute was published - and the Join that
                 // inserted the generation may then detach it from the in-flight table. Without this check the run
                 // repeated a whole analysis whose result every caller could already read.
-                if (_cache.TryGet(cacheKey, out var alreadyPublished))
+                if (generation.Previous == null && _cache.TryGet(cacheKey, out var alreadyPublished))
                 {
                     return alreadyPublished;
                 }
@@ -547,11 +637,13 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
                 runId = string.IsNullOrEmpty(telemetry.RunId) ? null : telemetry.RunId;
                 generation.RunId = runId;
+                generation.Progress.Observe(telemetry);
 
                 // Admission. Try for a slot without waiting first, so the common case - nothing else running -
                 // emits no Queued stage at all and a Queued event always means real contention.
                 var queueWatch = System.Diagnostics.Stopwatch.StartNew();
                 var queued = !_gate.Wait(0);
+                if (queued) generation.Progress.SetPhase("queued");
                 var admission = queued
                     ? await QueueAsync(generation, telemetry).ConfigureAwait(false)
                     : Admission.Slot;
@@ -565,6 +657,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 {
                     telemetry.Checkpoint(
                         CopilotAdoptionTelemetryStages.Abandoned, queueWatch.ElapsedMilliseconds);
+                    if (generation.Previous != null) throw new CopilotAdoptionRebuildNotCompletedException();
                     return null;
                 }
 
@@ -572,12 +665,14 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 {
                     telemetry.Checkpoint(
                         CopilotAdoptionTelemetryStages.GateTimedOut, queueWatch.ElapsedMilliseconds);
+                    if (generation.Previous != null) throw new CopilotAdoptionRebuildNotCompletedException();
                     return null;
                 }
 
                 if (admission == Admission.QueueFull)
                 {
                     telemetry.Checkpoint(CopilotAdoptionTelemetryStages.QueueFull);
+                    if (generation.Previous != null) throw new CopilotAdoptionRebuildNotCompletedException();
                     return null;
                 }
 
@@ -594,6 +689,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 {
                     telemetry.Checkpoint(
                         CopilotAdoptionTelemetryStages.Abandoned, queueWatch.ElapsedMilliseconds);
+                    if (generation.Previous != null) throw new CopilotAdoptionRebuildNotCompletedException();
                     return null;
                 }
 
@@ -606,8 +702,11 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                     range.UsesExplicitDates,
                     seatLicenceTypeIds,
                     settings,
-                    telemetry).ConfigureAwait(false);
+                    generation.Progress).ConfigureAwait(false);
                 var serviceDurationMs = serviceWatch.ElapsedMilliseconds;
+
+                if (generation.Previous?.Summary.FiguresIncomplete == false && analysis.Summary.FiguresIncomplete)
+                    throw new CopilotAdoptionRebuildNotCompletedException();
 
                 // Stamped before publication so the summary every caller reads carries the id of the run that
                 // produced it - the join between a browser trace and the lifecycle events.
@@ -615,11 +714,20 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 {
                     analysis.Summary.Diagnostics.RunId = runId;
                 }
+                generation.Progress.SetPhase("publishing");
+                analysis.Summary.Diagnostics.GenerationId = generation.Progress.GenerationId;
+                analysis.Summary.Diagnostics.Progress = generation.Progress.Snapshot(published: true);
 
                 // Publish first. A blocked or broken telemetry channel must never keep the page polling
                 // after the analysis has already produced a valid result.
                 var cacheWatch = System.Diagnostics.Stopwatch.StartNew();
-                _cache.Set(cacheKey, analysis, CacheTtlFor(analysis));
+                lock (_publicationSync)
+                {
+                    _cache.Set(cacheKey, analysis, CacheTtlFor(analysis));
+                    if (generation.Previous != null)
+                        _rebuilds.GetValue(analysis, _ => new RebuildState()).StartedUtc = generation.RebuildStartedUtc;
+                }
+                generation.Progress.SetPhase("completed");
                 cacheWatch.Stop();
 
                 telemetry.Checkpoint(
@@ -631,6 +739,7 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
             }
             catch (Exception ex)
             {
+                generation.Progress.SetPhase("failed");
                 // QueueFailure returns false when the bounded failure sink rejected the event - it is
                 // full, or the host is stopping - and the no-op telemetry used when telemetry
                 // construction failed always returns false. In that case nothing else is guaranteed to
@@ -761,14 +870,18 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
         {
             private string _runId;
 
-            public Generation(Lazy<Task<CopilotAdoptionAnalysis>> work)
+            public Generation(Lazy<Task<CopilotAdoptionAnalysis>> work, CopilotAdoptionAnalysis previous)
             {
                 Work = work;
+                Previous = previous;
             }
 
             public Lazy<Task<CopilotAdoptionAnalysis>> Work { get; }
 
             public AnalysisInterest Interest { get; } = new AnalysisInterest();
+            public CopilotAdoptionRunProgress Progress { get; } = new CopilotAdoptionRunProgress();
+            public CopilotAdoptionAnalysis Previous { get; }
+            public DateTime RebuildStartedUtc { get; set; }
 
             /// <summary>Written by the run once its telemetry exists; read by request threads for the 202.</summary>
             public string RunId
@@ -776,6 +889,12 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
                 get => Volatile.Read(ref _runId);
                 set => Volatile.Write(ref _runId, value);
             }
+        }
+
+        private sealed class RebuildState
+        {
+            public DateTime StartedUtc;
+            public Generation Attempt;
         }
 
         /// <summary>
