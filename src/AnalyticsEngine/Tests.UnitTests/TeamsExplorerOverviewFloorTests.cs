@@ -322,6 +322,29 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Devices_CarryAKeyThePortalWordsThemFrom_AndAWithheldPlatformKeepsIt()
+        {
+            var rows = SqlTeamsExplorerStore.BuildDevices(new TeamsExplorerRows.DevicesRow
+            {
+                MeasuredUsers = 40, UsedWindows = 38, UsedMac = 6, UsedWeb = 20, UsedIos = 3, UsedAndroid = 9, UsedLinux = 1, UsedChromeOs = 5, UsedMobile = 11,
+            });
+
+            // The portal names each platform from its key, in the reader's language (#850): "Mobile (any)" is English prose,
+            // and the name is only the fallback for a key the portal does not know. serverAuthoredText.test.ts reads this list.
+            CollectionAssert.AreEqual(
+                new[] { "windows: Windows", "web: Web", "mobile: Mobile (any)", "android: Android", "mac: Mac", "chromeOs: Chrome OS", "ios: iOS", "linux: Linux" },
+                rows.Select(r => r.PlatformKey + ": " + r.Platform).ToArray());
+            Assert.AreEqual("mobile", (string)JObject.FromObject(rows.Single(r => r.Platform == TeamsDeviceRow.AnyMobile))["platformKey"]);
+
+            // For a reader without See PII, Linux (1) and iOS (3) are withheld, and the mobile total with iOS, as before: each
+            // withheld row is a new one, and keeps its key.
+            var trimmed = TeamsSmallGroups.WithoutSmallPlatforms(rows, Floor);
+            CollectionAssert.AreEqual(new[] { "mobile", "ios", "linux" }, trimmed.Where(r => r.Withheld).Select(r => r.PlatformKey).ToArray());
+            CollectionAssert.AreEqual(rows.Select(r => r.PlatformKey).ToArray(), trimmed.Select(r => r.PlatformKey).ToArray());
+            Assert.IsTrue(trimmed.Where(r => r.Withheld).All(r => r.Users == null && r.SharePct == null));
+        }
+
+        [TestMethod]
         public void Rhythm_WithoutSmallGroups_WithholdsTheDailyMean_WhenThePeriodsActivePeopleAreFew_OrCannotBeRead()
         {
             var rhythm = new TeamsAdoptionRhythm { MeanDailyActiveUsers = 1.5, WeeklyActiveUsers = 2, MonthlyActiveUsers = 3, StickinessPct = 50 };

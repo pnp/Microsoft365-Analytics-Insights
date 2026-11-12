@@ -240,13 +240,19 @@ export type TeamsDemographicRow = {
 };
 
 export type TeamsDeviceRow = {
+  /** The server's English name for the platform, shown only for a `platformKey` this build does not know. */
   platform: string;
+  /**
+   * A stable key the page names the platform from (`TEAMS_PLATFORM_LABEL_KEYS`): `windows`, `mac`, `web`, `ios`,
+   * `android`, `linux`, `chromeOs`, or `mobile` for the people seen on iOS or Android or both. Absent from an older API.
+   */
+  platformKey?: string | null;
   /** Null when `withheld`. */
   users: number | null;
   /** Shares intentionally sum above 100: one person uses several platforms. Null when any platform is withheld. */
   sharePct: number | null;
   /**
-   * For a reader without See PII: one to four people used the platform - or, for "Mobile (any)", iOS or Android is
+   * For a reader without See PII: one to four people used the platform - or, for the mobile total, iOS or Android is
    * withheld, which it would bound.
    */
   withheld?: boolean;

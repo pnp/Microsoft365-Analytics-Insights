@@ -291,6 +291,14 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.adoption.devices.note': 'Las proporciones suman más del 100% a propósito: la mayoría usa más de una plataforma. El alcance móvil es el que debe observarse para personal de primera línea y sin escritorio.',
   'teamsExplorer.adoption.devices.withheldNote':
     'Las plataformas que usan menos de {count} personas no se muestran para proteger la privacidad, ni tampoco el total de móviles cuando se oculta una de las plataformas móviles.',
+  'teamsExplorer.adoption.devices.platform.windows': 'Windows',
+  'teamsExplorer.adoption.devices.platform.mac': 'Mac',
+  'teamsExplorer.adoption.devices.platform.web': 'Web',
+  'teamsExplorer.adoption.devices.platform.ios': 'iOS',
+  'teamsExplorer.adoption.devices.platform.android': 'Android',
+  'teamsExplorer.adoption.devices.platform.linux': 'Linux',
+  'teamsExplorer.adoption.devices.platform.chromeOs': 'Chrome OS',
+  'teamsExplorer.adoption.devices.platform.mobile': 'Móvil (cualquiera)',
   'teamsExplorer.adoption.valueLabel.usersLower': 'usuarios',
 
   'teamsExplorer.meetings.utcCaveat': 'Las horas de llamada se registran en UTC y la base de datos no contiene zona horaria por usuario, por lo que una organización realmente global mostrará alta actividad fuera del horario laboral. Compare departamentos entre sí en lugar de contra un objetivo absoluto.',

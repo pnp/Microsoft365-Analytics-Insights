@@ -842,7 +842,17 @@ namespace Common.Entities.TeamsExplorer
         /// <summary>The <see cref="Platform"/> of the people seen on iOS or Android or both.</summary>
         public const string AnyMobile = "Mobile (any)";
 
+        /// <summary>
+        /// The platform's English name: what the portal shows only for a <see cref="PlatformKey"/> it does not know.
+        /// </summary>
         public string Platform { get; set; }
+
+        /// <summary>
+        /// A stable key the portal words the platform from, in the reader's language (#850): <c>windows</c>, <c>mac</c>,
+        /// <c>web</c>, <c>ios</c>, <c>android</c>, <c>linux</c>, <c>chromeOs</c>, or <c>mobile</c> for
+        /// <see cref="AnyMobile"/>. The API reports facts; the UI writes the sentences.
+        /// </summary>
+        public string PlatformKey { get; set; }
 
         /// <summary>Null when <see cref="Withheld"/>.</summary>
         public int? Users { get; set; } = 0;
@@ -862,7 +872,8 @@ namespace Common.Entities.TeamsExplorer
         public bool Withheld { get; set; }
 
         /// <summary>This row with its figures withheld. A new row: the list is cached and shared between readers.</summary>
-        internal TeamsDeviceRow AsWithheld() => new TeamsDeviceRow { Platform = Platform, Users = null, SharePct = null, Withheld = true };
+        internal TeamsDeviceRow AsWithheld() =>
+            new TeamsDeviceRow { Platform = Platform, PlatformKey = PlatformKey, Users = null, SharePct = null, Withheld = true };
 
         /// <summary>This row without its share. A copy.</summary>
         internal TeamsDeviceRow WithoutShare()

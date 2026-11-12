@@ -27,7 +27,12 @@ import {
 import { SITE_TOKEN_ERROR_KEYS } from '../../auth/siteToken';
 import { ERROR_CODE_KEYS as USER_IMPORT_CHECKPOINT_ERROR_KEYS } from '../../api/userImportCheckpointApi';
 import { routesForArea } from '../../navigation';
-import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_QUERY_ERROR_CODE_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
+import {
+  TEAMS_MEETING_BUCKET_LABEL_KEYS,
+  TEAMS_PLATFORM_LABEL_KEYS,
+  TEAMS_QUERY_ERROR_CODE_KEYS,
+  TEAMS_SEGMENT_TEXT_KEYS,
+} from '../../components/teamsExplorer/teamsShared';
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
 import { JUDGEMENT_VALUE_FORMATS as WEB_ACTIVITY_JUDGEMENT_VALUE_FORMATS } from '../../components/webActivity/webActivityShared';
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
@@ -1785,6 +1790,65 @@ describe('Teams Explorer segment and meeting bucket labels', () => {
       expect(sortedUnique(Object.keys(TEAMS_MEETING_BUCKET_LABEL_KEYS[group]))).toEqual(server[group]);
       expect(Object.values(TEAMS_MEETING_BUCKET_LABEL_KEYS[group]).filter((key) => !(key in EN_CATALOG))).toEqual([]);
     }
+  });
+});
+
+/**
+ * The Adoption tab's people per platform (#850). `SqlTeamsExplorerStore.BuildDevices` sends a stable key beside each
+ * platform's English name, and the page names the platform from that key (`TEAMS_PLATFORM_LABEL_KEYS`), showing the
+ * English only for a key this build does not know. So a platform added on the server with no catalog entry would put its
+ * English name on a Spanish page, as "Mobile (any)" did before the key existed.
+ */
+const TEAMS_EXPLORER_MODELS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'TeamsExplorer', 'TeamsExplorerModels.cs');
+
+/** `new { Key = "mobile", Platform = TeamsDeviceRow.AnyMobile, ... }` -> `{ mobile: 'Mobile (any)' }`. */
+function teamsPlatformsFromStore(): Record<string, string> {
+  const store = readFileSync(TEAMS_EXPLORER_STORE, 'utf8');
+  const block = store.match(/List<TeamsDeviceRow> BuildDevices\([\s\S]*?var platforms = new\[\]\s*\{([\s\S]*?)\};/)?.[1] ?? '';
+  const models = readFileSync(TEAMS_EXPLORER_MODELS, 'utf8');
+  const start = models.indexOf('class TeamsDeviceRow');
+  expect(start, 'TeamsExplorerModels.cs has no class TeamsDeviceRow').toBeGreaterThanOrEqual(0);
+  const deviceRow = models.slice(start, models.indexOf(' class ', start + 'class TeamsDeviceRow'.length));
+  const constants = new Map([...deviceRow.matchAll(/public\s+const\s+string\s+(\w+)\s*=\s*"([^"]+)"/g)].map((m) => [m[1], m[2]]));
+
+  return Object.fromEntries(
+    [...block.matchAll(/Key\s*=\s*"([^"]+)",\s*Platform\s*=\s*(?:"([^"]+)"|TeamsDeviceRow\.(\w+))/g)].map((m) => [
+      m[1],
+      m[2] ?? constants.get(m[3]) ?? `TeamsDeviceRow.${m[3]}`,
+    ]),
+  );
+}
+
+describe('Teams Explorer platform names', () => {
+  it('finds every platform the store sends', () => {
+    // A reshaped BuildDevices would otherwise make every assertion below vacuously pass.
+    expect(Object.keys(teamsPlatformsFromStore()).length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("names every platform the server can send, with the server's English as the English entry", () => {
+    const server = teamsPlatformsFromStore();
+    const spa: Record<string, TranslationKey> = TEAMS_PLATFORM_LABEL_KEYS;
+    const serverKeys = sortedUnique(Object.keys(server));
+    const spaKeys = sortedUnique(Object.keys(spa));
+
+    expect(
+      {
+        missing: serverKeys.filter((key) => !spaKeys.includes(key)),
+        orphans: spaKeys.filter((key) => !serverKeys.includes(key)),
+        notInCatalog: Object.values(spa).filter((key) => !(key in EN_CATALOG)),
+        wrongEnglish: serverKeys
+          .filter((key) => key in spa && EN_CATALOG[spa[key]] !== server[key])
+          .map((key) => `${key}: server "${server[key]}" vs catalog "${EN_CATALOG[spa[key]]}"`),
+      },
+      'SqlTeamsExplorerStore.BuildDevices and TEAMS_PLATFORM_LABEL_KEYS (teamsShared.tsx) must match both ways, and each\n' +
+        "English catalog entry must be the server's name for the platform. Add a new platform to\n" +
+        'src/i18n/catalog/{en,es}/teamsExplorer.ts.',
+    ).toEqual({ missing: [], orphans: [], notInCatalog: [], wrongEnglish: [] });
+  });
+
+  it('has no catalog entry for a platform the server no longer sends', () => {
+    const mapped = new Set<string>(Object.values(TEAMS_PLATFORM_LABEL_KEYS));
+    expect(catalogKeys('teamsExplorer.adoption.devices.platform.').filter((key) => !mapped.has(key))).toEqual([]);
   });
 });
 

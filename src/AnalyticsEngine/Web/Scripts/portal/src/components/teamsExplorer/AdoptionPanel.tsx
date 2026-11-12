@@ -14,6 +14,7 @@ import {
   formatCount,
   formatDecimal,
   formatPct,
+  platformLabel,
   queryFor,
   reachTone,
   useTeamsStyles,
@@ -208,7 +209,7 @@ export default function AdoptionPanel({
     value: row.activeUsers,
   }));
 
-  const deviceCategories = data.devices.flatMap((row) => (row.users == null ? [] : [{ label: row.platform, value: row.users }]));
+  const deviceCategories = data.devices.flatMap((row) => (row.users == null ? [] : [{ label: platformLabel(t, row), value: row.users }]));
   const minimumText = formatCount(minimumGroupSize ?? 5);
   const devicesWithheldNote = data.devices.some((row) => row.withheld)
     ? t('teamsExplorer.adoption.devices.withheldNote', { count: minimumText })

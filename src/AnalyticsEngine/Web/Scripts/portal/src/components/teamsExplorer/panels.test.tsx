@@ -146,6 +146,32 @@ describe('AdoptionPanel', () => {
     expect(screen.queryByText(/combined into one row/)).not.toBeInTheDocument();
     expect(screen.queryByText(/smaller group/)).not.toBeInTheDocument();
   });
+
+  it("names each platform in the reader's language from the key the server sends, and a platform it does not know by the server's name", async () => {
+    await loadCatalog('es');
+    renderWithProvider(
+      <AdoptionPanel
+        data={adoption({
+          devices: [
+            { platform: 'Windows', platformKey: 'windows', users: 38, sharePct: 95 },
+            { platform: 'Mobile (any)', platformKey: 'mobile', users: 11, sharePct: 27.5 },
+            { platform: 'Contoso Visor', platformKey: 'contosoVisor', users: 6, sharePct: 15 },
+          ],
+        })}
+        groupBy="jobTitle"
+        onGroupByChange={noop}
+        demographicsAvailable
+      />,
+      { language: 'es' },
+    );
+
+    // The section's own title proves the Spanish catalog is in force before the platforms are read.
+    expect(await screen.findByText('Dónde usan Teams las personas', undefined, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByText('Móvil (cualquiera)')).toBeInTheDocument();
+    expect(screen.queryByText('Mobile (any)')).not.toBeInTheDocument();
+    expect(screen.getByText('Windows')).toBeInTheDocument();
+    expect(screen.getByText('Contoso Visor')).toBeInTheDocument();
+  });
 });
 
 describe('ConversationsPanel', () => {
