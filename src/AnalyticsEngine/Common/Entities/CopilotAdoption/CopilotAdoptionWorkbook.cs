@@ -110,11 +110,13 @@ namespace Common.Entities.CopilotAdoption
                 WriteAgentGrowthSheet(workbook, summary);
                 WriteUnlicensedSheet(workbook, summary);
                 WriteActionPlanSheet(workbook, summary);
-                if (includeIndividualData) WriteLicensedUsersSheet(workbook, analysis);
-                WriteCoworkSheet(workbook, analysis, includeIndividualData);
+                // The per-person sheets are given their people from the analysis, and every figure from the reader's summary
+                // above: the cached one has not been floored for a reader without See PII (#844), so no sheet may read it.
+                if (includeIndividualData) WriteLicensedUsersSheet(workbook, summary, analysis.LicensedUsers);
+                WriteCoworkSheet(workbook, summary, analysis.CoworkReadiness, includeIndividualData);
                 WriteCoworkEstimateSheet(workbook, summary, configured, modelOptions);
                 WriteSeatHolderTimeSavedSheet(workbook, summary, configured, modelOptions);
-                if (includeIndividualData) WriteOpportunitiesSheet(workbook, analysis);
+                if (includeIndividualData) WriteOpportunitiesSheet(workbook, summary, analysis.Opportunities);
                 WriteLicenceEstimateSheet(workbook, summary, configured, modelOptions);
                 WriteMethodSheet(workbook, summary, includeIndividualData);
                 WriteLeadershipSheet(workbook, leadership);
@@ -1877,12 +1879,11 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddChart(chart);
         }
 
-        private static void WriteLicensedUsersSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis)
+        private static void WriteLicensedUsersSheet(XlsxWriter workbook, CopilotAdoptionSummary summary, List<LicensedUserAdoptionRow> people)
         {
-            var users = analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>();
+            var users = people ?? new List<LicensedUserAdoptionRow>();
             if (users.Count == 0) return;
 
-            var summary = analysis.Summary;
             var cap = RowCap(summary);
             var sheet = workbook.AddSheet("Licensed users");
 
@@ -1929,13 +1930,18 @@ namespace Common.Entities.CopilotAdoption
         /// The Cowork readiness view: who already uses Cowork, who should be enabled next, and the
         /// department order to roll it out in.
         /// </summary>
-        private static void WriteCoworkSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis, bool includeIndividualData)
+        /// <param name="summary">
+        /// The reader's summary, which every figure on the sheet comes from: the tiers, the scored seat holders, the
+        /// rollout order and the quadrant. For a reader without See PII it is the floored copy, so the sheet leaves out
+        /// the departments the screen does (#844); the cached summary would give them back.
+        /// </param>
+        /// <param name="people">The scored seat holders, listed by name only when <paramref name="includeIndividualData"/>.</param>
+        private static void WriteCoworkSheet(
+            XlsxWriter workbook, CopilotAdoptionSummary summary, List<CoworkReadinessRow> people, bool includeIndividualData)
         {
-            var summary = analysis.Summary;
-            if (!summary.CoworkReadinessAvailable) return;
+            if (!summary.CoworkReadinessAvailable || summary.CoworkScoredUsers == 0) return;
 
-            var rows = analysis.CoworkReadiness ?? new List<CoworkReadinessRow>();
-            if (rows.Count == 0) return;
+            var rows = people ?? new List<CoworkReadinessRow>();
 
             var sheet = workbook.AddSheet("Cowork readiness");
 
@@ -2101,7 +2107,10 @@ namespace Common.Entities.CopilotAdoption
                     + $"high fluency (at or above {summary.Options.CoworkLoadMinScore} and "
                     + $"{summary.Options.CoworkFluencyMinScore}) is where a rollout starts; high load with low "
                     + "fluency needs Copilot practice first; low load means Cowork has little to absorb however "
-                    + "fluent people are."));
+                    + "fluent people are."
+                    + (summary.SmallestGroupsWithheld?.Contains(CopilotAdoptionWithheldBreakdowns.Departments) == true
+                        ? " " + DepartmentLeftOutNote("seat holders")
+                        : string.Empty)));
                 sheet.AddHeaderRow(
                     "Department", "Copilot seats", "Coordination load", "Copilot fluency",
                     "Prime candidates", "Regular Cowork users");
@@ -2453,13 +2462,12 @@ namespace Common.Entities.CopilotAdoption
             return value.ToString("0.###############", CultureInfo.InvariantCulture);
         }
 
-        private static void WriteOpportunitiesSheet(XlsxWriter workbook, CopilotAdoptionAnalysis analysis)
+        private static void WriteOpportunitiesSheet(XlsxWriter workbook, CopilotAdoptionSummary summary, List<LicenceOpportunityRow> people)
         {
-            var candidates = analysis.Opportunities ?? new List<LicenceOpportunityRow>();
+            var candidates = people ?? new List<LicenceOpportunityRow>();
             if (candidates.Count == 0) return;
 
             var sheet = workbook.AddSheet("Licence opportunities");
-            var summary = analysis.Summary;
             var cap = RowCap(summary);
 
             if (candidates.Count > cap)
