@@ -621,7 +621,8 @@ namespace Tests.UnitTests
             // WebActivityAPIController: the cache holds the complete section, and a reader without See PII is sent a trimmed copy
             // of it (#844, G2). Every list is floored on the distinct people behind each row, over the first rows it can hold
             // (WebActivityQuery.MaximumTop, fetched with one row more to tell a list cut at that cap) and then cut to the rows
-            // asked for; only the search terms are withheld.
+            // asked for; only the search terms are withheld. How many rows a list left out is counted over that whole floored
+            // list, the same whatever top is asked for (#844, the final review of #881).
             ["WebActivityAPIController.Availability"] = NoGroupedFigures(
                 "Whether the tracker is collecting, when it last saw a page view, and whether search and click tracking are in use."),
             ["WebActivityAPIController.Overview"] = Floored(
@@ -629,7 +630,8 @@ namespace Tests.UnitTests
                     + "people out of the segment mix, each with the smallest one shown, so none can be worked out from the page-view "
                     + "or visitor total. The sites are floored over the first 500 sites the list can hold - any site past them "
                     + "counting as one left out - and then cut to the rows shown, so the rows left out never depend on how many were "
-                    + "asked for.")
+                    + "asked for."
+                    + " How many rows each list left out is counted over the whole list, the same whatever rows are asked for.")
                 .By(typeof(WebActivityOverview), nameof(WebActivityOverview.WithoutSmallGroups))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRowsWithinCap))
@@ -638,6 +640,7 @@ namespace Tests.UnitTests
                 .ProvenBy(
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesVisitsAndOverview_WithoutSeePii_LeaveOutPagesAndSitesOfFewerThanFivePeople_WithTheSmallestShown)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryLeftOutCount_WithoutSeePii_IsTheWholeListsWhateverTopIsAskedFor_SoNoneSaysWhereARowIsLeftOut)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_WithOneSmallRowPastTheCap_LeavesOutItsSmallestShownToo)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRowsWithinCap_TakesNoRowWhenNoneLiesPastTheCap_AndNoSecondRowWhenOneIsLeftOutAlready)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut)))
@@ -648,7 +651,8 @@ namespace Tests.UnitTests
                     + "floored over the first 500 rows it can hold - any row past them counting as one left out - and then cut to the "
                     + "rows asked for; a site the list leaves out is folded into '(other sites)' over time - matched by the site's id, "
                     + "so another site with the same title is folded too. A page's visits are its unique page views, which the Pages "
-                    + "tab does not send this reader, so they are shown only here.")
+                    + "tab does not send this reader, so they are shown only here."
+                    + " How many rows each list left out is counted over the whole list, the same whatever rows are asked for.")
                 .By(typeof(WebActivityVisits), nameof(WebActivityVisits.WithoutSmallGroups))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRowsWithinCap))
@@ -661,6 +665,7 @@ namespace Tests.UnitTests
                 .ProvenBy(
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesVisitsAndOverview_WithoutSeePii_LeaveOutPagesAndSitesOfFewerThanFivePeople_WithTheSmallestShown)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryLeftOutCount_WithoutSeePii_IsTheWholeListsWhateverTopIsAskedFor_SoNoneSaysWhereARowIsLeftOut)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_WithOneSmallRowPastTheCap_LeavesOutItsSmallestShownToo)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.UniquePageViews_WithoutSeePii_AreLeftOffThePagesTab_SoAPageTheVisitsTabLeavesOutCannotBeReadThere)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.SiteOverTime_WithoutSeePii_IsFoldedBySite_NotByATitleTwoSitesShare)),
@@ -680,7 +685,8 @@ namespace Tests.UnitTests
                     + "page views, so every quiet page is left out. The most viewed, slowest and quiet pages share each page's page "
                     + "views, so they leave out one combined set of pages. No page carries a figure counted in visits: its unique page "
                     + "views are the Visits tab's visits by page, and its entries, exits and bounces the Journeys tab's, each floored "
-                    + "on its own tab.")
+                    + "on its own tab."
+                    + " How many rows each list left out is counted over the whole list, the same whatever rows are asked for.")
                 .By(typeof(WebActivityPages), nameof(WebActivityPages.WithoutSmallGroups))
                 .By(typeof(WebActivityPageRow), nameof(WebActivityPageRow.VisitFiguresWithheld))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
@@ -693,6 +699,7 @@ namespace Tests.UnitTests
                 .ProvenBy(
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.PagesVisitsAndOverview_WithoutSeePii_LeaveOutPagesAndSitesOfFewerThanFivePeople_WithTheSmallestShown)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryLeftOutCount_WithoutSeePii_IsTheWholeListsWhateverTopIsAskedFor_SoNoneSaysWhereARowIsLeftOut)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_WithOneSmallRowPastTheCap_LeavesOutItsSmallestShownToo)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EntryExitAndBouncePages_WithoutSeePii_LeaveOutOneCombinedSetOfPages_SoNoPageIsShownWhereAnotherListHidesIt)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.MostViewedSlowestAndQuietPages_WithoutSeePii_LeaveOutOneCombinedSetOfPages_SoNoPageIsShownWhereAnotherListHidesIt)),
@@ -717,7 +724,8 @@ namespace Tests.UnitTests
                     + "row's. The entry, exit and bounce pages, which share each page's entries, exits and bounces, leave out one "
                     + "combined set of pages, and no flow that starts or ends on one is shown; a step of fewer than 5 people is left "
                     + "out with the smallest step out of the same page, whose share it is of, and that smallest step goes too when the "
-                    + "page's steps go on past the list.")
+                    + "page's steps go on past the list."
+                    + " How many rows each list left out is counted over the whole list, the same whatever rows are asked for.")
                 .By(typeof(WebActivityJourneys), nameof(WebActivityJourneys.WithoutSmallGroups))
                 .By(typeof(WebActivityJourneys), nameof(WebActivityJourneys.StepsGoOnPastTheList))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
@@ -732,6 +740,7 @@ namespace Tests.UnitTests
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Journeys_WithoutSeePii_LeaveOutSmallRows_WithTheSmallestShown_AndASmallStepWithTheSmallestStepOutOfItsPage)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EntryExitAndBouncePages_WithoutSeePii_LeaveOutOneCombinedSetOfPages_SoNoPageIsShownWhereAnotherListHidesIt)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryLeftOutCount_WithoutSeePii_IsTheWholeListsWhateverTopIsAskedFor_SoNoneSaysWhereARowIsLeftOut)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_WithOneSmallRowPastTheCap_LeavesOutItsSmallestShownToo)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.StepsOutOfAPage_LoseTheirSmallestShownOnlyWhenThatPagesStepsGoOnPastTheCap)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRowsInEachGroup_LeavesOutTheSmallestShownRowOfTheSmallRowsOwnGroup_AndKeepsTheOrder)),
@@ -748,7 +757,8 @@ namespace Tests.UnitTests
                     "Countries, provinces and cities fewer than 5 people visited from are left out, each list with its smallest place "
                     + "shown, floored over the first 500 places it can hold - any place past them counting as one left out - and then "
                     + "cut to the rows asked for, so no place can be worked out from the located page views; a country the list "
-                    + "leaves out is folded into '(other countries)' over time.")
+                    + "leaves out is folded into '(other countries)' over time."
+                    + " How many rows each list left out is counted over the whole list, the same whatever rows are asked for.")
                 .By(typeof(WebActivityGeography), nameof(WebActivityGeography.WithoutSmallGroups))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRowsWithinCap))
@@ -758,6 +768,7 @@ namespace Tests.UnitTests
                 .ProvenBy(
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Geography_WithoutSeePii_LeavesOutPlacesOfFewerThanFiveVisitors_AndWhatIsLeftOutIsNeverOneSmallPlace)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryLeftOutCount_WithoutSeePii_IsTheWholeListsWhateverTopIsAskedFor_SoNoneSaysWhereARowIsLeftOut)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_WithOneSmallRowPastTheCap_LeavesOutItsSmallestShownToo)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut)))
                 .WithKnownGap("#881 decision, not fixed: a country or province with one city carries that city's figures, so a city the "
@@ -777,7 +788,8 @@ namespace Tests.UnitTests
                     + "5 visitors, each list with its smallest row shown, floored over the first 500 rows it can hold - any row past "
                     + "them counting as one left out - and then cut to the rows asked for; a device the list leaves out is folded into "
                     + "'(other devices)' over time. The detail names only the cities Geography shows for the same window and scope, so "
-                    + "a city Geography leaves out cannot be taken back out of its remainder.")
+                    + "a city Geography leaves out cannot be taken back out of its remainder."
+                    + " How many rows each list left out is counted over the whole list, the same whatever rows are asked for.")
                 .By(typeof(WebActivityTechnology), nameof(WebActivityTechnology.WithoutSmallGroups))
                 .By(typeof(WebActivityGeography), nameof(WebActivityGeography.CityNamesShownWithoutSeePii))
                 .By(typeof(WebActivitySmallGroups), nameof(WebActivitySmallGroups.WithoutSmallRows))
@@ -789,6 +801,7 @@ namespace Tests.UnitTests
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Technology_WithoutSeePii_LeavesOutDetailRowsAndPlatformsOfFewerThanFiveVisitors)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.Technology_WithoutSeePii_NamesOnlyCitiesGeographyShows_OnScreenAndInTheExport)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_IsTheFirstRowsOfOneFlooredList_SoAShortAnswerNeverShowsARowALongerOneLeavesOut)),
+                    Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryLeftOutCount_WithoutSeePii_IsTheWholeListsWhateverTopIsAskedFor_SoNoneSaysWhereARowIsLeftOut)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.EveryFlooredList_WithoutSeePii_WithOneSmallRowPastTheCap_LeavesOutItsSmallestShownToo)),
                     Test<WebActivityPrivacyFloorTests>(nameof(WebActivityPrivacyFloorTests.WithoutSmallRows_LeavesOutTheSmallestShownRowWithTheSmallOnes_ChosenByPeopleThenName_SoNoRowCanBeWorkedOut)))
                 .WithKnownGap("#881 decision, not fixed: a row is floored on its own people, but a figure inside a shown row can describe "

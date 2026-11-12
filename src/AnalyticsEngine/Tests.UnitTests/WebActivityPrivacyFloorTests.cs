@@ -490,7 +490,7 @@ namespace Tests.UnitTests
                         var shortRows = Names(shortAnswer[list.List], list.NameField);
                         CollectionAssert.AreEqual(expected.Take(15).Select(r => list.Prefix + " " + r.ToString("00")).ToArray(), shortRows,
                             label + ": the first 15 rows of the one floored list - rank 10, the smallest the 20 rows leave out, is out of these 15 too.");
-                        Assert.AreEqual(1, (int)shortAnswer[list.Withheld], label + ": one of the first 15 ranks is left out.");
+                        Assert.AreEqual(2, (int)shortAnswer[list.Withheld], label + ": the whole list's rows left out, ranks 10 and 18, however few are shown.");
 
                         if (longAnswer == null) continue;
                         var longRows = Names(longAnswer[list.List], list.NameField);
@@ -517,6 +517,48 @@ namespace Tests.UnitTests
                 host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
                 var full = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/pages?days=28&top=15"));
                 CollectionAssert.AreEqual(Ranks.Take(15).Select(r => "Viewed page " + r.ToString("00")).ToArray(), Names(full["topPages"], "title"));
+            });
+        }
+
+        /// <summary>
+        /// The final review of #881: a count of the rows left out of only the first <c>top</c> rows changed, top by top,
+        /// exactly at the rank of each row left out - and a list ranked by its figure then brackets that row's figure between
+        /// its shown neighbours, exactly on a tie. Every list here holds 20 rows, ranks 10 and 18 left out: each count is the
+        /// whole list's, the same at every top a reader can ask for, so none of them says where a row is left out.
+        /// </summary>
+        [TestMethod]
+        public async Task EveryLeftOutCount_WithoutSeePii_IsTheWholeListsWhateverTopIsAskedFor_SoNoneSaysWhereARowIsLeftOut()
+        {
+            var store = TwentyRowStore();
+            await WithHost(store, Enumerable.Empty<string>(), async host =>
+            {
+                IEnumerable<JProperty> Counts(JObject section) => section.Properties().Where(p => p.Name.StartsWith("withheld", StringComparison.Ordinal));
+
+                // The Overview takes no top - its busiest sites are always the first 15 - so it comes last, beside the others.
+                foreach (var tab in TwentyRowLists.GroupBy(l => l.Tab).OrderBy(t => t.Key == "overview"))
+                {
+                    var tops = tab.Key == "overview" ? new[] { (int?)null } : new int?[] { 1, 15, 499, 500 };
+                    var answers = new List<JObject>();
+                    foreach (var top in tops)
+                        answers.Add(JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/" + tab.Key + "?days=28" + (top == null ? string.Empty : "&top=" + top))));
+
+                    var countsByTop = answers.Select(a => string.Join(", ", Counts(a).Select(p => p.Name + "=" + p.Value))).ToList();
+                    Assert.AreEqual(
+                        1,
+                        countsByTop.Distinct().Count(),
+                        tab.Key + ": every count is the same at every top - " + string.Join(" | ", tops.Zip(countsByTop, (top, counts) => "top=" + top + ": " + counts)));
+                    foreach (var list in tab)
+                        Assert.AreEqual(2, (int)answers[0][list.Withheld], tab.Key + "." + list.List + ": ranks 10 and 18, wherever they rank.");
+                }
+
+                // A See PII reader's answer is as it was: built for the rows they ask for, nothing left out at any top.
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                foreach (var top in new[] { 1, 500 })
+                {
+                    var full = JObject.Parse(await host.Client.GetStringAsync("api/WebActivity/geography?days=28&top=" + top));
+                    Assert.IsTrue(Counts(full).All(p => (int)p.Value == 0), "top=" + top);
+                    Assert.AreEqual(Math.Min(top, Ranks.Length), ((JArray)full["cities"]).Count, "top=" + top);
+                }
             });
         }
 
@@ -739,7 +781,7 @@ namespace Tests.UnitTests
                             expected.Select(r => list.Prefix + " " + r.ToString("00")).ToArray(),
                             Names(longAnswer[list.List], list.NameField),
                             label + ": 499 of the 500 rows a reader can be shown, and never the row past them.");
-                        Assert.AreEqual(1, (int)longAnswer[list.Withheld], label + ": rank 7; the row past the cap was never in view.");
+                        Assert.AreEqual(1, (int)longAnswer[list.Withheld], label + ": rank 7; the row past the cap is not one of the list's.");
                         var shown = longAnswer[list.List].Sum(r => (long)r[list.Figure]);
                         Assert.AreEqual(Figure(7) + Figure(WebActivityQuery.FloorTop), total - shown, label + ": what is left is never the row past the cap alone.");
                     }

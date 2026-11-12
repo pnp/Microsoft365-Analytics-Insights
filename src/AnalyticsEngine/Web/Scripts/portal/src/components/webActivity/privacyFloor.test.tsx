@@ -231,7 +231,10 @@ function overview(overrides: Partial<WebActivityOverview> = {}): WebActivityOver
 
 const SEARCH_TERMS_WITHHELD_EN = /^Hidden to protect privacy: search terms are text people typed/;
 const NO_PEOPLE_COUNT_EN = /^Hidden to protect privacy: nothing recorded says how many people are behind each row/;
-const TWO_LEFT_OUT_EN = /\b2 rows are left out to protect privacy: those with fewer than 5 people behind them/;
+const TWO_LEFT_OUT_EN = /\b2 rows are left out to protect privacy, so that no group of fewer than 5 people can be seen or worked out/;
+const ONE_LEFT_OUT_EN = 'One row is left out to protect privacy, so that no group of fewer than 5 people can be seen or worked out from the totals.';
+const ONE_LEFT_OUT_ES =
+  'Se omite una fila para proteger la privacidad, de modo que ningún grupo de menos de 5 personas pueda verse ni deducirse de los totales.';
 
 describe('Web activity for a reader without See PII', () => {
   it('says search terms and searches by site are withheld, and offers no export of them', () => {
@@ -260,21 +263,21 @@ describe('Web activity for a reader without See PII', () => {
     // The countries note is on the countries ring, the reach chart and the countries-over-time chart.
     expect(
       screen.getAllByText(
-        '2 rows are left out to protect privacy: those with fewer than 5 people behind them, together with enough of the smallest other rows that none can be worked out from the totals.',
+        '2 rows are left out to protect privacy, so that no group of fewer than 5 people can be seen or worked out from the totals.',
       ),
     ).toHaveLength(3);
-    expect(screen.getByText(/^3 rows are left out to protect privacy: those with fewer than 5 people/)).toBeInTheDocument();
-    expect(screen.getByText('One row is left out to protect privacy: fewer than 5 people are behind it.')).toBeInTheDocument();
+    expect(screen.getByText(/^3 rows are left out to protect privacy, so that no group of fewer than 5 people/)).toBeInTheDocument();
+    expect(screen.getByText(ONE_LEFT_OUT_EN)).toBeInTheDocument();
     unmount();
 
     await loadCatalog('es');
     renderWithProvider(<GeographyPanel data={geography({ withheldCities: 12345 })} />, { language: 'es' });
     expect(
-      await screen.findByText(/^Se omiten 12\.345 filas para proteger la privacidad: las que tienen menos de 5 personas detrás/, undefined, {
+      await screen.findByText(/^Se omiten 12\.345 filas para proteger la privacidad, de modo que ningún grupo de menos de 5 personas/, undefined, {
         timeout: 5000,
       }),
     ).toBeInTheDocument();
-    expect(screen.getByText('Se omite una fila para proteger la privacidad: hay menos de 5 personas detrás de ella.')).toBeInTheDocument();
+    expect(screen.getByText(ONE_LEFT_OUT_ES)).toBeInTheDocument();
   });
 
   it('shows the floored journeys with how many rows were left out, and says so in place of a list that lost every row', () => {
@@ -293,7 +296,7 @@ describe('Web activity for a reader without See PII', () => {
     // Entry and exit pages, the bounce pages (whose every row was left out) and the routes.
     expect(screen.getAllByText(TWO_LEFT_OUT_EN)).toHaveLength(4);
     expect(screen.getByText(/^3 rows are left out to protect privacy/)).toBeInTheDocument();
-    expect(screen.getByText('One row is left out to protect privacy: fewer than 5 people are behind it.')).toBeInTheDocument();
+    expect(screen.getByText(ONE_LEFT_OUT_EN)).toBeInTheDocument();
     expect(screen.queryByText(NO_PEOPLE_COUNT_EN)).not.toBeInTheDocument();
     // A list that lost every row does not claim the period had none.
     expect(screen.queryByText('No entry page had enough entries to rank by bounce rate.')).not.toBeInTheDocument();
@@ -337,7 +340,7 @@ describe('Web activity for a reader without See PII', () => {
     );
 
     expect(
-      await screen.findByText(/^Se omiten 12\.345 filas para proteger la privacidad: las que tienen menos de 5 personas detrás/, undefined, {
+      await screen.findByText(/^Se omiten 12\.345 filas para proteger la privacidad, de modo que ningún grupo de menos de 5 personas/, undefined, {
         timeout: 5000,
       }),
     ).toBeInTheDocument();
@@ -365,7 +368,7 @@ describe('Web activity for a reader without See PII', () => {
       { language: 'es' },
     );
     expect(
-      await screen.findByText('Se omite una fila para proteger la privacidad: hay menos de 5 personas detrás de ella.', undefined, { timeout: 5000 }),
+      await screen.findByText(ONE_LEFT_OUT_ES, undefined, { timeout: 5000 }),
     ).toBeInTheDocument();
     expect(screen.getByText(/^Se omiten 3 filas para proteger la privacidad/)).toBeInTheDocument();
     expect(screen.queryByText('No se pudo emparejar ninguna visita de este periodo con una página de inicio y otra de fin.')).not.toBeInTheDocument();
