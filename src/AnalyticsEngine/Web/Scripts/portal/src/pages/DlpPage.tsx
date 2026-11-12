@@ -386,6 +386,7 @@ function ImpactTable({
   rows,
   showUsers,
   expandable,
+  withheld,
 }: {
   title: string;
   description: string;
@@ -394,6 +395,8 @@ function ImpactTable({
   showUsers: boolean;
   /** Allow an agent row to expand into the policies that affected it. */
   expandable?: boolean;
+  /** Rows the server left out for a reader without See PII: a table that lists none then says so, not that there was nothing. */
+  withheld?: number;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -422,7 +425,7 @@ function ImpactTable({
       </Text>
       {safeRows.length === 0 ? (
         <Text size={200} className={styles.muted}>
-          {t('dlp.table.empty')}
+          {(withheld ?? 0) > 0 ? t('dlp.table.allWithheld') : t('dlp.table.empty')}
         </Text>
       ) : (
         <Table size="small" aria-label={title}>
@@ -691,6 +694,7 @@ export default function DlpPage() {
             rows={summary.topAgents}
             showUsers
             expandable
+            withheld={summary.withheldRowsByTable?.agents}
           />
           {seePii ? (
             <ImpactTable
@@ -708,6 +712,7 @@ export default function DlpPage() {
             nameHeader={t('dlp.column.policy')}
             rows={summary.topPolicies}
             showUsers
+            withheld={summary.withheldRowsByTable?.policies}
           />
           <ImpactTable
             title={t('dlp.affected.sensitivityLabels.title')}
@@ -715,6 +720,7 @@ export default function DlpPage() {
             nameHeader={t('dlp.column.sensitivityLabel')}
             rows={summary.topSensitivityLabels}
             showUsers
+            withheld={summary.withheldRowsByTable?.sensitivityLabels}
           />
 
           <GovernanceSection
@@ -753,6 +759,7 @@ export default function DlpPage() {
                 nameHeader={t('dlp.column.policy')}
                 rows={summary.tenantTopPolicies}
                 showUsers={false}
+                withheld={summary.withheldRowsByTable?.tenantPolicies}
               />
             </>
           )}
