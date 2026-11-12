@@ -169,6 +169,22 @@ describe('copilotAdoptionApi polling', () => {
     await expect(fetchAdoptionFilters(28, undefined, undefined, null, { generationId: runId }))
       .rejects.toBeInstanceOf(AdoptionGenerationChangedError);
   });
+
+  it('reports a replacement that ended unpublished when the summary is still the generation it was to replace', async () => {
+    const kept = jsonResponse({ generatedUtc: '2026-01-01T00:00:00Z' });
+    kept.headers.set('X-CopilotAdoption-GenerationId', runId);
+    mockedFetch.mockResolvedValueOnce(kept);
+    const error = await fetchAdoptionSummary(28, undefined, undefined, null, null, null, { after: runId }).catch(e => e);
+    expect(error).toBeInstanceOf(AdoptionRequestError);
+    expect(adoptionFailure(error, 'copilotAdoption.loading.state.failed')).toEqual({ key: 'copilotAdoption.error.rebuildNotCompleted' });
+    expect(canRetryAdoptionRequest(error)).toBe(true);
+
+    const replaced = jsonResponse({ generatedUtc: '2026-01-02T00:00:00Z' });
+    replaced.headers.set('X-CopilotAdoption-GenerationId', '00000000000000000000000000000010');
+    mockedFetch.mockResolvedValueOnce(replaced);
+    await expect(fetchAdoptionSummary(28, undefined, undefined, null, null, null, { after: runId }))
+      .resolves.toMatchObject({ generatedUtc: '2026-01-02T00:00:00Z' });
+  });
 });
 
 describe('copilotAdoptionApi failures a page keeps', () => {

@@ -452,8 +452,14 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
                 if (_cache.TryGet(cacheKey, out var cached))
                 {
+                    // Followed only while it runs. A replacement that ended without publishing - failed, abandoned, or
+                    // refused because it lost complete headline figures - leaves the report it was asked to replace in
+                    // place, and that is what a later request is given; the SPA, handed back the generation it asked to be
+                    // after, says the replacement did not complete. Handing back the stored failure instead answered every
+                    // "Check again" with the same error until the old report expired. A request already waiting on the
+                    // replacement still sees how it ended.
                     if (after != null && after == cached.Summary.Diagnostics.GenerationId
-                        && _rebuilds.TryGetValue(cached, out var retry) && retry.Attempt != null)
+                        && _rebuilds.TryGetValue(cached, out var retry) && retry.Attempt != null && IsRunning(retry.Attempt))
                     {
                         joinedGeneration = retry.Attempt;
                         interest = retry.Attempt.Interest;
@@ -536,6 +542,9 @@ namespace Web.AnalyticsWeb.Models.CopilotAdoption
 
         internal static bool HasFailedSteps(CopilotAdoptionAnalysis analysis) =>
             analysis?.Summary?.Diagnostics?.Steps?.Any(step => step.Failed) == true;
+
+        private static bool IsRunning(Generation generation) =>
+            generation.Work.IsValueCreated && !generation.Work.Value.IsCompleted;
 
         private Generation NewGeneration(
             string cacheKey, CopilotAdoptionDateRange range, List<int> ids, CopilotAdoptionEffectiveScoreSettings settings,
