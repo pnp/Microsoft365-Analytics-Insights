@@ -27,8 +27,14 @@ import {
 import { SITE_TOKEN_ERROR_KEYS } from '../../auth/siteToken';
 import { ERROR_CODE_KEYS as USER_IMPORT_CHECKPOINT_ERROR_KEYS } from '../../api/userImportCheckpointApi';
 import { routesForArea } from '../../navigation';
-import { TEAMS_MEETING_BUCKET_LABEL_KEYS, TEAMS_QUERY_ERROR_CODE_KEYS, TEAMS_SEGMENT_TEXT_KEYS } from '../../components/teamsExplorer/teamsShared';
+import {
+  TEAMS_MEETING_BUCKET_LABEL_KEYS,
+  TEAMS_PLATFORM_LABEL_KEYS,
+  TEAMS_QUERY_ERROR_CODE_KEYS,
+  TEAMS_SEGMENT_TEXT_KEYS,
+} from '../../components/teamsExplorer/teamsShared';
 import { WEB_ACTIVITY_AVAILABILITY_REASON_KEYS } from '../../components/webActivity/AvailabilityBar';
+import { JUDGEMENT_VALUE_FORMATS as WEB_ACTIVITY_JUDGEMENT_VALUE_FORMATS } from '../../components/webActivity/webActivityShared';
 import { USER_DATA_WORKLOADS_BY_FLAG } from '../../components/userlookup/CategoryRow';
 import { USER_ORG_MESSAGE_KEYS } from '../../components/userOrgs/userOrgShared';
 import { BLOCKING_KEYS, CSV_DELIMITER_KEYS, ROW_PROBLEM_KEYS } from '../../components/userOrgs/CsvImportPanel';
@@ -36,7 +42,7 @@ import { ACCOUNTABILITY_DIMENSION_TEXT, ACCOUNTABILITY_EMPTY_SEGMENT_KEYS } from
 import { LEADERSHIP_REASON_KEYS, LEADERSHIP_STATUS_KEYS } from '../../components/copilotAdoption/LeadershipComparisonCard';
 import { LEADERSHIP_ERROR_KEYS, LEADERSHIP_FAILURE_KIND_KEYS, LEADERSHIP_REFRESH_STATUS_KEYS } from '../../pages/LeadershipCohortPage';
 import { ENABLED_IMPORT_LABELS_BY_SETTING_PROPERTY } from '../../pages/InsightsOverviewPage';
-import { OFFICE_PLATFORM_LABEL_KEYS } from '../../pages/ReportsPage';
+import { OFFICE_PLATFORM_LABEL_KEYS, USAGE_WARNING_KEYS } from '../../pages/ReportsPage';
 import { GUIDANCE_LINK_TITLE_KEYS } from '../../components/copilotAdoption/serverText';
 import { WORKLOADS } from '../../types/licenceActivity';
 import { PORTAL_PERMISSION_ERROR_CODE } from '../../access';
@@ -388,7 +394,7 @@ const CHART_KEY_CONST = /const\s+string\s+key\s*=\s*"([^"]+)"/g;
 const EXTRA_REPORT_CHART_FIELDS: Record<string, string[]> = {
   'copilot-key-phrases': ['warning'],
   'copilot-languages': ['warning'],
-  'usage-active-users': ['warning'],
+  'usage-active-users': ['warning', 'warning.incompleteWeeks', 'warning.seriesUnavailableAndIncompleteWeeks'],
   'office-apps-platform-matrix': ['rowLabel', 'columnLabel'],
   'office-apps-by-department': ['rowLabel', 'columnLabel'],
   'office-apps-department-adoption': ['description.groupFiltered', 'warning'],
@@ -611,6 +617,75 @@ describe('Teams Explorer server-authored judgements', () => {
       'These have catalog entries but are not defined in TeamsExplorerScoring - either the\n' +
         'judgement was removed, or its key was renamed and the card is now falling back to English.',
     ).toEqual([]);
+  });
+});
+
+/**
+ * Web activity's Overview judgements are worded by the SPA too. `WebActivityScoring` sends a stable
+ * key for each sentence (`reach.headline.share`) and the figures it quotes, unformatted; its English
+ * is only the fallback for a key this build does not know. (`WEB_ACTIVITY_SCORING`, the path of that
+ * file, is declared with the bucket-label checks below.)
+ */
+function webActivityJudgementSource(): string {
+  const source = readFileSync(WEB_ACTIVITY_SCORING, 'utf8');
+  const start = source.indexOf('#region Judgements');
+  expect(start, 'WebActivityScoring.cs has no "#region Judgements"').toBeGreaterThanOrEqual(0);
+  return source.slice(start, source.indexOf('#endregion', start));
+}
+
+function webActivitySentenceKeys(): string[] {
+  const sentence = /"([a-z][a-z-]*\.(?:headline|detail)(?:\.[A-Za-z]+)?)"/g;
+  return sortedUnique([...webActivityJudgementSource().matchAll(sentence)].map((m) => m[1]));
+}
+
+function webActivityValueNames(): string[] {
+  return sortedUnique([...webActivityJudgementSource().matchAll(/\["([A-Za-z][A-Za-z0-9]*)"\]\s*=/g)].map((m) => m[1]));
+}
+
+describe('Web activity server-authored judgements', () => {
+  it('finds the sentence keys and figures in the scoring file', () => {
+    expect(webActivitySentenceKeys().length).toBeGreaterThanOrEqual(39);
+    expect(webActivityValueNames().length).toBeGreaterThanOrEqual(11);
+  });
+
+  it('words every judgement sentence the server can send', () => {
+    const missing = webActivitySentenceKeys()
+      .map((key) => `webActivity.judgement.${key}`)
+      .filter((key) => !(key in EN_CATALOG));
+
+    expect(
+      missing,
+      'These Web activity judgement sentences are sent by WebActivityScoring but have no catalog\n' +
+        "entry, so the Overview shows the server's English in every language. Add them to\n" +
+        'src/i18n/catalog/{en,es}/webActivity.ts:\n  ' +
+        missing.join('\n  '),
+    ).toEqual([]);
+  });
+
+  it('has no catalog entry for a sentence the server no longer sends', () => {
+    const known = new Set(webActivitySentenceKeys());
+    const orphans = catalogKeys('webActivity.judgement.')
+      .map((key) => key.slice('webActivity.judgement.'.length))
+      .filter((key) => !known.has(key));
+
+    expect(
+      orphans,
+      'These have catalog entries but WebActivityScoring no longer sends them - the sentence was\n' +
+        'removed, or its key was renamed and the Overview is now falling back to English.',
+    ).toEqual([]);
+  });
+
+  it('formats every figure the server sends, and quotes no figure it does not send', () => {
+    const sent = webActivityValueNames();
+    const unformatted = sent.filter((name) => !(name in WEB_ACTIVITY_JUDGEMENT_VALUE_FORMATS));
+    const unsent = catalogKeys('webActivity.judgement.').flatMap((key) =>
+      [...EN_CATALOG[key].matchAll(/\{(\w+)\}/g)]
+        .map((m) => m[1])
+        .filter((name) => !sent.includes(name))
+        .map((name) => `${key}: {${name}}`),
+    );
+
+    expect({ unformatted, unsent }).toEqual({ unformatted: [], unsent: [] });
   });
 });
 
@@ -1719,6 +1794,65 @@ describe('Teams Explorer segment and meeting bucket labels', () => {
 });
 
 /**
+ * The Adoption tab's people per platform (#850). `SqlTeamsExplorerStore.BuildDevices` sends a stable key beside each
+ * platform's English name, and the page names the platform from that key (`TEAMS_PLATFORM_LABEL_KEYS`), showing the
+ * English only for a key this build does not know. So a platform added on the server with no catalog entry would put its
+ * English name on a Spanish page, as "Mobile (any)" did before the key existed.
+ */
+const TEAMS_EXPLORER_MODELS = join(process.cwd(), '..', '..', '..', 'Common', 'Entities', 'TeamsExplorer', 'TeamsExplorerModels.cs');
+
+/** `new { Key = "mobile", Platform = TeamsDeviceRow.AnyMobile, ... }` -> `{ mobile: 'Mobile (any)' }`. */
+function teamsPlatformsFromStore(): Record<string, string> {
+  const store = readFileSync(TEAMS_EXPLORER_STORE, 'utf8');
+  const block = store.match(/List<TeamsDeviceRow> BuildDevices\([\s\S]*?var platforms = new\[\]\s*\{([\s\S]*?)\};/)?.[1] ?? '';
+  const models = readFileSync(TEAMS_EXPLORER_MODELS, 'utf8');
+  const start = models.indexOf('class TeamsDeviceRow');
+  expect(start, 'TeamsExplorerModels.cs has no class TeamsDeviceRow').toBeGreaterThanOrEqual(0);
+  const deviceRow = models.slice(start, models.indexOf(' class ', start + 'class TeamsDeviceRow'.length));
+  const constants = new Map([...deviceRow.matchAll(/public\s+const\s+string\s+(\w+)\s*=\s*"([^"]+)"/g)].map((m) => [m[1], m[2]]));
+
+  return Object.fromEntries(
+    [...block.matchAll(/Key\s*=\s*"([^"]+)",\s*Platform\s*=\s*(?:"([^"]+)"|TeamsDeviceRow\.(\w+))/g)].map((m) => [
+      m[1],
+      m[2] ?? constants.get(m[3]) ?? `TeamsDeviceRow.${m[3]}`,
+    ]),
+  );
+}
+
+describe('Teams Explorer platform names', () => {
+  it('finds every platform the store sends', () => {
+    // A reshaped BuildDevices would otherwise make every assertion below vacuously pass.
+    expect(Object.keys(teamsPlatformsFromStore()).length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("names every platform the server can send, with the server's English as the English entry", () => {
+    const server = teamsPlatformsFromStore();
+    const spa: Record<string, TranslationKey> = TEAMS_PLATFORM_LABEL_KEYS;
+    const serverKeys = sortedUnique(Object.keys(server));
+    const spaKeys = sortedUnique(Object.keys(spa));
+
+    expect(
+      {
+        missing: serverKeys.filter((key) => !spaKeys.includes(key)),
+        orphans: spaKeys.filter((key) => !serverKeys.includes(key)),
+        notInCatalog: Object.values(spa).filter((key) => !(key in EN_CATALOG)),
+        wrongEnglish: serverKeys
+          .filter((key) => key in spa && EN_CATALOG[spa[key]] !== server[key])
+          .map((key) => `${key}: server "${server[key]}" vs catalog "${EN_CATALOG[spa[key]]}"`),
+      },
+      'SqlTeamsExplorerStore.BuildDevices and TEAMS_PLATFORM_LABEL_KEYS (teamsShared.tsx) must match both ways, and each\n' +
+        "English catalog entry must be the server's name for the platform. Add a new platform to\n" +
+        'src/i18n/catalog/{en,es}/teamsExplorer.ts.',
+    ).toEqual({ missing: [], orphans: [], notInCatalog: [], wrongEnglish: [] });
+  });
+
+  it('has no catalog entry for a platform the server no longer sends', () => {
+    const mapped = new Set<string>(Object.values(TEAMS_PLATFORM_LABEL_KEYS));
+    expect(catalogKeys('teamsExplorer.adoption.devices.platform.').filter((key) => !mapped.has(key))).toEqual([]);
+  });
+});
+
+/**
  * Web Activity availability reasons are still serialized as English for API compatibility; the SPA
  * renders catalogued wording from the same availability facts. One legacy branch ("configuration
  * unreadable") is not distinguishable from the booleans on the wire, so the SPA map includes a
@@ -2196,9 +2330,13 @@ describe('Service Configuration webhook status details', () => {
     // The non-literal assignments carry data, not sentences: the cached detail and an exception message.
     expect(assigned.filter((value) => !value.startsWith('"')).sort()).toEqual(['cached.Detail', 'ex.Message']);
     const sentences = assigned.filter((value) => value.startsWith('"')).map((value) => csharpStringLiteralValue(value.slice(1, -1)));
-    expect(sentences).toEqual(["WebAppURL is not configured, so the webhook subscription URL can't be determined."]);
+    expect(sentences).toEqual([
+      "WebAppURL is not configured, so the webhook subscription URL can't be determined.",
+      "Microsoft Graph answered without a readable list of subscriptions, so the webhook couldn't be checked. Reload the page to try again.",
+    ]);
     expect(sortedUnique(Object.keys(WEBHOOK_STATUS_DETAIL_TEXT)), 'WEBHOOK_STATUS_DETAIL_TEXT must translate exactly these').toEqual(sortedUnique(sentences));
     expect(EN_CATALOG['admin.serviceConfiguration.webhook.detail.webAppUrlMissing']).toBe(sentences[0]);
+    expect(EN_CATALOG['admin.serviceConfiguration.webhook.detail.subscriptionsUnreadable']).toBe(sentences[1]);
   });
 });
 
@@ -2629,6 +2767,16 @@ describe('Reports partial-data warning facts', () => {
       missing,
       'ReportsAPIController added a structured chart error key without a matching catalog entry.',
     ).toEqual([]);
+  });
+
+  it('words every chart-level warning key the server can send', () => {
+    const source = readFileSync(join(process.cwd(), '..', '..', 'Controllers', 'ReportsAPIController.cs'), 'utf8');
+    const statements = [...source.matchAll(/WarningKey\s*=[^;]+;/g)].map((m) => m[0]).join('\n');
+    const keys = sortedUnique([...statements.matchAll(/"([^"]+)"/g)].map((m) => m[1]));
+
+    expect(keys).toEqual(['incompleteWeeks', 'seriesUnavailable', 'seriesUnavailableAndIncompleteWeeks']);
+    expect(Object.keys(USAGE_WARNING_KEYS).sort()).toEqual(keys);
+    expect(Object.values(USAGE_WARNING_KEYS).filter((key) => !(key in EN_CATALOG))).toEqual([]);
   });
 });
 

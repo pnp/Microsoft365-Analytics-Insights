@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithProvider } from '../../test/renderWithProvider';
+import { loadCatalog } from '../../i18n';
 import LicensedUsersPanel from './LicensedUsersPanel';
 import { AdoptionBand } from '../../types/copilotAdoption';
 import type { CopilotAdoptionOptions, LicensedUserAdoptionRow, LicensedUserPage } from '../../types/copilotAdoption';
 import { fetchLicensedUsers } from '../../api/copilotAdoptionApi';
 import { PRINT_ROW_LIMIT, requestPrint, resetPrintPreparation } from '../shared/printPreparation';
 
-vi.mock('../../api/copilotAdoptionApi', () => ({
+vi.mock('../../api/copilotAdoptionApi', async importOriginal => ({
+  ...await importOriginal<typeof import('../../api/copilotAdoptionApi')>(),
   fetchLicensedUsers: vi.fn(),
   licensedUsersExportUrl: vi.fn(() => '#export'),
 }));
@@ -144,6 +146,25 @@ function row(over: Partial<LicensedUserAdoptionRow>): LicensedUserAdoptionRow {
 
 describe('LicensedUsersPanel source reconciliation', () => {
   beforeEach(() => vi.mocked(fetchLicensedUsers).mockReset());
+
+  it('refreshes a mounted list when its summary generation changes and ignores the replaced request', async () => {
+    const first: LicensedUserPage = { total: 1, skip: 0, take: 50, warnings: [], rows: [row({ userPrincipalName: 'old@contoso.com' })] };
+    const latest: LicensedUserPage = { ...first, rows: [row({ userPrincipalName: 'latest@contoso.com' })] };
+    let release!: (page: LicensedUserPage) => void;
+    const delayed = new Promise<LicensedUserPage>(resolve => { release = resolve; });
+    vi.mocked(fetchLicensedUsers).mockReturnValueOnce(delayed).mockResolvedValueOnce(latest);
+    const render = (generationId: string) => (
+      <LicensedUsersPanel windowDays={28} filterOptions={null} actionPlan={[]} options={OPTIONS} generationId={generationId} />
+    );
+    const view = renderWithProvider(render('00000000000000000000000000000001'));
+    await waitFor(() => expect(fetchLicensedUsers).toHaveBeenCalledTimes(1));
+    view.rerender(render('00000000000000000000000000000002'));
+    expect(await screen.findByText('latest@contoso.com')).toBeVisible();
+    await act(async () => { release(first); await delayed; });
+    expect(screen.queryByText('old@contoso.com')).not.toBeInTheDocument();
+    expect(vi.mocked(fetchLicensedUsers).mock.lastCall?.[7]).toEqual({ generationId: '00000000000000000000000000000002' });
+    expect(vi.mocked(fetchLicensedUsers).mock.calls[0][5]?.aborted).toBe(true);
+  });
 
   it('keeps the signal out of the table, and shows both source figures in the expanded row of a user covered by both', async () => {
     const page: LicensedUserPage = {
@@ -309,13 +330,38 @@ describe('LicensedUsersPanel source reconciliation', () => {
 
     renderWithProvider(<LicensedUsersPanel windowDays={28} filterOptions={null} actionPlan={[]} options={OPTIONS} />, { language: 'es' });
 
-    // The Spanish catalog arrives after the first render, and the list reloads when it does, so the row
-    // is looked up afresh on every attempt rather than held from before the switch.
+    // The Spanish catalog arrives after the first render, and the rows re-render in Spanish when it does,
+    // so the row is looked up afresh on every attempt rather than held from before the switch.
     await waitFor(() => {
       const starter = within(screen.getByText('starter@contoso.com').closest('tr')!);
       expect(starter.getAllByText('Revisar antes de recuperar')).toHaveLength(1);
       expect(starter.queryByText('Review before reclaim')).toBeNull();
     });
+  });
+
+  it('explains the engagement score in whole Spanish sentences, with Spanish decimal commas', async () => {
+    vi.mocked(fetchLicensedUsers).mockResolvedValue({
+      total: 1,
+      skip: 0,
+      take: 50,
+      warnings: [],
+      rows: [row({ userPrincipalName: 'decimal@contoso.com' })],
+    });
+    await loadCatalog('es');
+    // The server's own default weights are fractions of one.
+    const options = { ...OPTIONS, frequencyWeight: 0.5, depthWeight: 0.3, breadthWeight: 0.2, depthTargetInteractionsPerActiveDay: 2.5 };
+    renderWithProvider(<LicensedUsersPanel windowDays={28} filterOptions={null} actionPlan={[]} options={options} />, { language: 'es' });
+    await screen.findByText('decimal@contoso.com', undefined, { timeout: 5000 });
+
+    fireEvent.click(screen.getByRole('button', { name: 'C\u00f3mo se calcula \u00abPuntuaci\u00f3n de interacci\u00f3n\u00bb' }));
+    expect(await screen.findByText(/puntuacion = \(frecuencia x 0,5 \+ profundidad x 0,3 \+ amplitud x 0,2\) x 100/, undefined, { timeout: 5000 })).toBeVisible();
+    expect(screen.getByText(/profundidad = min\(1, interacciones \/ diasActivos \/ 2,5\) x confianza/)).toBeVisible();
+    expect(screen.getByText('Cu\u00e1nto: profundidad (30%)').closest('li')!.textContent).toBe(
+      'Cu\u00e1nto: profundidad (30%). Interacciones en cada d\u00eda en que lo us\u00f3, frente a un objetivo de 2,5.',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'C\u00f3mo se calcula \u00abD\u00edas activos\u00bb' }));
+    expect(await screen.findByText('expectedActiveDays = 28 d\u00edas x (5/7) x 0,6', undefined, { timeout: 5000 })).toBeVisible();
   });
 });
 

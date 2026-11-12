@@ -92,6 +92,8 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.overview.balanceGaps': '{unknown} con un importe que la fuente no indicó y {partial} lecturas parciales: desconocido, no cero.',
   'copilotSpend.overview.unresolved':
     'Además, {accounts} cuentas que la importación de usuarios no asoció a ninguna persona, con {credits} créditos (incluidos en el total).',
+  'copilotSpend.overview.unresolvedWithheld':
+    'Además, {accounts} cuentas que la importación de usuarios no asoció a ninguna persona. Sus créditos no se muestran, ni el total que los incluye, porque menos de {count} de esas cuentas tienen alguno.',
   'copilotSpend.balances.periodUnverified': 'Periodo sin confirmar por la fuente',
   'copilotSpend.balances.notCollecting': 'La recopilación de créditos de Copilot consumidos está desactivada: esto es el historial ya recopilado.',
   'copilotSpend.balances.snapshotBeforeWindow':
@@ -115,6 +117,7 @@ const copilotSpend: Record<keyof typeof en, string> = {
   'copilotSpend.balances.facts.notEntitled': 'Sin derecho',
   'copilotSpend.balances.facts.unresolved': 'Cuentas sin asociar a una persona',
   'copilotSpend.balances.facts.unresolvedValue': '{accounts} cuentas, {credits} créditos',
+  'copilotSpend.balances.facts.unresolvedValueWithheld': '{accounts} cuentas; créditos ocultos (menos de {count} de ellas tienen alguno)',
   'copilotSpend.balances.trendTitle': 'Créditos consumidos en cada fecha de lectura',
   'copilotSpend.balances.trendDescription':
     'Cada punto son los créditos consumidos leídos en esa fecha. Las lecturas de fechas distintas pueden volver a contar el mismo consumo, así que nunca se suman.',

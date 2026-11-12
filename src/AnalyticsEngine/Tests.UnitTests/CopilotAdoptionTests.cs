@@ -1991,6 +1991,103 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, analysis.Summary.SeatLicenceTypes.Single(l => l.SkuPartNumber == "Microsoft_365_Copilot_EDU").AssignedIdleUsers);
         }
 
+        /// <summary>
+        /// #844 G4: the SKU table must not tell a reader without See PII how many of a Copilot seat's one to four holders
+        /// left it unused - nor let the reclaimable headline, less the counts shown, give that figure back.
+        /// </summary>
+        [TestMethod]
+        public void SeatIdleCounts_OfACopilotSeatHeldByOneToFourPeople_AreWithheldWithoutSeePii_AndShownWithIt()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.SeatLicenceTypes.AddRange(new[]
+            {
+                new LicenceTypeClassification { Id = 1, Name = "Microsoft 365 Copilot", SkuPartNumber = "Microsoft_365_Copilot", AssignedUsers = 12, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 2, Name = "Contoso Copilot pilot", SkuPartNumber = "CONTOSO_COPILOT_PILOT", AssignedUsers = 3, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 3, Name = "Microsoft 365 Copilot EDU", SkuPartNumber = "Microsoft_365_Copilot_EDU", AssignedUsers = 5, IsCopilotSeat = true },
+                new LicenceTypeClassification { Id = 4, Name = "Office 365 E3", SkuPartNumber = "ENTERPRISEPACK", AssignedUsers = 2, IsCopilotSeat = false },
+            });
+            void Holders(int licenceId, int idle, int active)
+            {
+                for (var i = 0; i < idle + active; i++)
+                {
+                    var user = i < idle
+                        ? ScoredUser($"idle{licenceId}-{i}@contoso.com", 0, AdoptionBand.NeverUsed)
+                        : ScoredUser($"active{licenceId}-{i}@contoso.com", 60, AdoptionBand.Established);
+                    user.SeatLicenceTypeIds.Add(licenceId);
+                    analysis.LicensedUsers.Add(user);
+                }
+            }
+            Holders(1, idle: 4, active: 8);
+            Holders(2, idle: 2, active: 1);
+            Holders(3, idle: 1, active: 4);
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count;
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+            Assert.AreEqual(7, summary.ReclaimableSeats, "fixture: every idle holder counts towards the headline");
+
+            var trimmed = summary.WithoutIndividualData();
+            LicenceTypeClassification Row(CopilotAdoptionSummary s, int id) => s.SeatLicenceTypes.Single(l => l.Id == id);
+
+            var pilot = Row(trimmed, 2);
+            Assert.IsNull(pilot.AssignedIdleUsers, "Withheld is withheld - never a 0 standing in for it.");
+            Assert.IsTrue(pilot.AssignedIdleWithheld);
+            Assert.AreEqual(SeatIdleWithheldReasons.FewHolders, pilot.AssignedIdleWithheldReason);
+            Assert.AreEqual(5, pilot.MinimumHolders);
+            Assert.AreEqual(3, pilot.AssignedUsers, "How many hold it stays, as Licence activity keeps it.");
+
+            // Five holders are not too few: the EDU seat is withheld only because the headline would give the pilot back.
+            var edu = Row(trimmed, 3);
+            Assert.IsNull(edu.AssignedIdleUsers);
+            Assert.AreEqual(SeatIdleWithheldReasons.RevealsSmallerSeat, edu.AssignedIdleWithheldReason);
+            Assert.AreEqual(4, Row(trimmed, 1).AssignedIdleUsers);
+            Assert.IsFalse(Row(trimmed, 1).AssignedIdleWithheld);
+            Assert.AreEqual(0, Row(trimmed, 4).AssignedIdleUsers, "A licence that is not a Copilot seat has no idle count to withhold.");
+            Assert.IsFalse(Row(trimmed, 4).AssignedIdleWithheld);
+
+            var shown = trimmed.SeatLicenceTypes.Where(l => l.IsCopilotSeat && !l.AssignedIdleWithheld).Sum(l => l.AssignedIdleUsers.Value);
+            Assert.AreNotEqual(Row(summary, 2).AssignedIdleUsers, trimmed.ReclaimableSeats - shown,
+                "The reclaimable headline less the counts shown must not be the pilot's own figure.");
+            Assert.IsTrue(trimmed.SeatLicenceTypes.Where(l => l.AssignedIdleWithheld).Sum(l => l.AssignedUsers) >= 5);
+            Assert.AreEqual(summary.ReclaimableSeats, trimmed.ReclaimableSeats, "The headline stays for every reader.");
+
+            // A reader with See PII is given the cached summary, which was never edited.
+            Assert.AreEqual(2, Row(summary, 2).AssignedIdleUsers);
+            Assert.AreEqual(1, Row(summary, 3).AssignedIdleUsers);
+            Assert.IsFalse(summary.SeatLicenceTypes.Any(l => l.AssignedIdleWithheld || l.AssignedIdleWithheldReason != null || l.MinimumHolders != null));
+        }
+
+        [TestMethod]
+        public void SeatIdleWithholding_WithholdsTheSmallestSeatThatWouldGiveASmallOneBack_AndNothingWhenNoSeatIsSmall()
+        {
+            LicenceTypeClassification Seat(int id, int holders, bool copilot = true) =>
+                new LicenceTypeClassification { Id = id, AssignedUsers = holders, AssignedIdleUsers = holders / 2, IsCopilotSeat = copilot };
+            Dictionary<int, string> Reasons(List<LicenceTypeClassification> licences) =>
+                LicenceTypeClassification.WithoutSmallSeatIdleCounts(licences, 5)
+                    .Where(l => l.AssignedIdleWithheld)
+                    .ToDictionary(l => l.Id, l => l.AssignedIdleWithheldReason);
+
+            // Two small seats: one person can hold both, so their counts together prove nothing about how many different
+            // people they cover. The next seat of at least five holders is withheld with them, the smallest of those.
+            CollectionAssert.AreEquivalent(
+                new Dictionary<int, string>
+                {
+                    [1] = SeatIdleWithheldReasons.FewHolders,
+                    [2] = SeatIdleWithheldReasons.FewHolders,
+                    [4] = SeatIdleWithheldReasons.RevealsSmallerSeat,
+                },
+                Reasons(new List<LicenceTypeClassification> { Seat(1, 3), Seat(2, 4), Seat(3, 40), Seat(4, 9), Seat(5, 1, copilot: false) }));
+
+            // The only Copilot seat, held by few: withheld, with nothing else that could give it back.
+            CollectionAssert.AreEquivalent(
+                new Dictionary<int, string> { [1] = SeatIdleWithheldReasons.FewHolders },
+                Reasons(new List<LicenceTypeClassification> { Seat(1, 4), Seat(2, 300, copilot: false) }));
+
+            // Five holders, and nobody, are not a handful of people: the same list comes back.
+            var noneSmall = new List<LicenceTypeClassification> { Seat(1, 5), Seat(2, 0), Seat(3, 40) };
+            Assert.AreSame(noneSmall, LicenceTypeClassification.WithoutSmallSeatIdleCounts(noneSmall, 5));
+        }
+
         [TestMethod]
         public void Funnel_NarrowsMonotonically()
         {
@@ -2411,6 +2508,322 @@ namespace Tests.UnitTests
             Assert.AreEqual("Legal", candidates.Single().Label);
             Assert.AreEqual(5d, candidates.Single().Value);
             Assert.AreEqual(7, analysis.Summary.RecommendedForLicence, "The tenant total still counts everyone.");
+        }
+
+        [TestMethod]
+        public void DepartmentCandidateCounts_WithoutSeePii_NeverLetTheTotalLessTheCountsShownGiveBackAWithheldDepartment()
+        {
+            // The league table's rows and the candidate chart publish each department's count once it reaches five, beside
+            // the tenant's recommended candidates. Sales 8 and Finance 6 shown, Legal's 2 withheld: 16 - 14 = 2 was
+            // Legal's count, given back. For a reader without See PII the smallest count shown goes too.
+            var analysis = new CopilotAdoptionAnalysis();
+            foreach (var department in new[] { "Sales", "Finance", "Legal" })
+            {
+                analysis.LicensedUsers.AddRange(Enumerable.Range(0, 6)
+                    .Select(i => Departmental($"{department.ToLowerInvariant()}{i}@contoso.com", department, 40)));
+            }
+
+            var id = 100;
+            foreach (var (department, count) in new[] { ("Sales", 8), ("Finance", 6), ("Legal", 2) })
+            {
+                analysis.Opportunities.AddRange(Enumerable.Range(0, count)
+                    .Select(i => new LicenceOpportunityRow { UserId = id++, Department = department, Recommended = true }));
+            }
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+            int? Count(IEnumerable<AdoptionSegmentRow> rows, string department) => rows.Single(r => r.Segment == department).RecommendedCandidates;
+
+            Assert.AreEqual(16, summary.RecommendedForLicence);
+            Assert.AreEqual(6, Count(summary.HabitByDepartment, "Finance"), "The control: with See PII, every count of five or more is shown.");
+            Assert.IsNull(Count(summary.HabitByDepartment, "Legal"));
+            CollectionAssert.AreEquivalent(new[] { "Sales", "Finance" }, summary.OpportunityByDepartment.Select(c => c.Label).ToList());
+
+            var trimmed = summary.WithoutIndividualData();
+
+            foreach (var rows in new[] { trimmed.HabitByDepartment, trimmed.AdoptionByDepartment })
+            {
+                Assert.IsNull(Count(rows, "Finance"), "Withheld, never 0: with the total it would give Legal's two back.");
+                Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, rows.Single(r => r.Segment == "Finance").RecommendedCandidatesWithheld);
+                Assert.AreEqual(8, Count(rows, "Sales"), "One more is enough: the difference now holds eight people.");
+                Assert.IsNull(Count(rows, "Legal"));
+                Assert.IsNull(rows.Single(r => r.Segment == "Legal").RecommendedCandidatesWithheld, "Legal's own floor applies to every reader, as before.");
+            }
+
+            CollectionAssert.AreEqual(new[] { "Sales" }, trimmed.OpportunityByDepartment.Select(c => c.Label).ToList(),
+                "The chart is a third place the count is shown, so it leaves Finance out too.");
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, trimmed.OpportunityByDepartmentWithheld);
+            Assert.AreEqual(16, trimmed.RecommendedForLicence, "The headline stays.");
+
+            var shown = trimmed.HabitByDepartment.Concat(trimmed.AdoptionByDepartment)
+                .Where(r => r.RecommendedCandidates.HasValue)
+                .GroupBy(r => r.Segment)
+                .Sum(g => g.First().RecommendedCandidates.Value);
+            Assert.IsTrue(trimmed.RecommendedForLicence - shown >= 5, "The total less the counts shown holds at least five people.");
+
+            Assert.AreEqual(6, Count(summary.HabitByDepartment, "Finance"), "The cached summary must never be edited for one reader.");
+            Assert.AreEqual(2, summary.OpportunityByDepartment.Count);
+            Assert.IsNull(summary.OpportunityByDepartmentWithheld);
+
+            // Nothing to protect: with no department withheld and nothing left over, every count stays.
+            var none = new CopilotAdoptionAnalysis();
+            none.LicensedUsers.AddRange(analysis.LicensedUsers.Where(u => u.Department != "Legal"));
+            none.Opportunities.AddRange(analysis.Opportunities.Where(o => o.Department != "Legal"));
+            new CopilotAdoptionService().FinaliseSummary(none);
+            Assert.AreSame(none.Summary.HabitByDepartment, none.Summary.WithoutIndividualData().HabitByDepartment);
+        }
+
+        [TestMethod]
+        public void DepartmentBreakdowns_WithoutSeePii_LeaveOutTheSmallestListedDepartmentFromEveryView_WhenTheyLeaveOneOut()
+        {
+            // Sales 12, Support 8 and Finance 6 seat holders are listed; Legal's 3 are left out for every reader. The scored
+            // seat holders less the departments listed - 29 - 26 - are Legal's three, given back with their figures. For a
+            // reader without See PII the smallest listed department, Finance, goes too, from every view of the breakdown.
+            var analysis = new CopilotAdoptionAnalysis();
+            var id = 0;
+            foreach (var (department, seats) in new[] { ("Sales", 12), ("Support", 8), ("Finance", 6), ("Legal", 3) })
+            {
+                analysis.LicensedUsers.AddRange(Enumerable.Range(0, seats)
+                    .Select(i => Departmentalise(ActiveUser($"user{id++}@contoso.com", activeDays: 4, interactions: 20), department)));
+            }
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions
+            {
+                AccountabilityDimension = CopilotAdoptionAccountabilityDimensions.Department,
+            }).FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+
+            var views = new (string Name, Func<CopilotAdoptionSummary, IEnumerable<string>> Shown)[]
+            {
+                ("adoption", s => s.AdoptionByDepartment.Select(r => r.Segment)),
+                ("habit (the league table)", s => s.HabitByDepartment.Select(r => r.Segment)),
+                ("intensity", s => s.IntensityByDepartment.Select(r => r.Segment)),
+                ("accountability", s => s.AccountabilityRollup.Select(r => r.Segment)),
+                ("licensed side", s => s.CombinedByDepartment.Where(r => r.LicensedUsers.HasValue).Select(r => r.Segment)),
+            };
+
+            foreach (var (name, shown) in views)
+            {
+                CollectionAssert.AreEquivalent(new[] { "Sales", "Support", "Finance" }, shown(summary).ToList(),
+                    $"The control: with See PII every department of five or more is in the {name} view.");
+            }
+
+            Assert.IsNull(summary.SmallestGroupsWithheld);
+
+            var trimmed = summary.WithoutIndividualData();
+
+            foreach (var (name, shown) in views)
+            {
+                CollectionAssert.AreEquivalent(new[] { "Sales", "Support" }, shown(trimmed).ToList(),
+                    $"Finance goes from the {name} view too, so no view shows a department another hides.");
+            }
+
+            var finance = trimmed.CombinedByDepartment.Single(r => r.Segment == "Finance");
+            Assert.IsNull(finance.LicensedUsers, "Withheld, never 0.");
+            Assert.IsNull(finance.LicensedActiveUsers);
+            Assert.IsNull(finance.InteractionsPerLicensedUser);
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, finance.LicensedWithheld);
+            Assert.AreEqual(29, trimmed.ScoredUsers, "The headline stays.");
+            Assert.AreEqual(9, trimmed.ScoredUsers - trimmed.AdoptionByDepartment.Sum(r => r.LicensedUsers),
+                "The total less the departments shown now holds Finance's six as well as Legal's three.");
+            CollectionAssert.AreEquivalent(
+                new[] { CopilotAdoptionWithheldBreakdowns.Departments, CopilotAdoptionWithheldBreakdowns.Accountability },
+                trimmed.SmallestGroupsWithheld);
+
+            Assert.AreEqual(3, summary.AdoptionByDepartment.Count, "The cached summary must never be edited for one reader.");
+            Assert.AreEqual(6, summary.CombinedByDepartment.Single(r => r.Segment == "Finance").LicensedUsers);
+            Assert.IsNull(summary.CombinedByDepartment.Single(r => r.Segment == "Finance").LicensedWithheld);
+
+            // Nothing left out, nothing more withheld: without Legal every department is listed.
+            var none = new CopilotAdoptionAnalysis();
+            none.LicensedUsers.AddRange(analysis.LicensedUsers.Where(u => u.Department != "Legal"));
+            new CopilotAdoptionService().FinaliseSummary(none);
+            var noneTrimmed = none.Summary.WithoutIndividualData();
+            Assert.AreSame(none.Summary.AdoptionByDepartment, noneTrimmed.AdoptionByDepartment);
+            Assert.AreSame(none.Summary.CombinedByDepartment, noneTrimmed.CombinedByDepartment);
+            Assert.IsNull(noneTrimmed.SmallestGroupsWithheld);
+        }
+
+        [TestMethod]
+        public void CountryAndOfficeBreakdowns_WithoutSeePii_LeaveOutTheirSmallestListedGroup_WhenTheyLeaveOneOut()
+        {
+            // Countries: the United Kingdom 10, Spain 7 and France 5 are listed, Portugal's 2 left out. Offices: Leeds 9,
+            // Madrid 8 and Paris 5 listed, Lisbon's 2 left out. Each table leaves out its smallest listed group too.
+            var analysis = new CopilotAdoptionAnalysis();
+            var id = 0;
+            foreach (var (country, office, seats) in new[]
+            {
+                ("United Kingdom", "Leeds", 9), ("United Kingdom", "Madrid", 1), ("Spain", "Madrid", 7),
+                ("France", "Paris", 5), ("Portugal", "Lisbon", 2),
+            })
+            {
+                analysis.LicensedUsers.AddRange(Enumerable.Range(0, seats).Select(i =>
+                {
+                    var user = ActiveUser($"user{id++}@contoso.com", activeDays: 4, interactions: 20);
+                    user.Country = country;
+                    user.OfficeLocation = office;
+                    return user;
+                }));
+            }
+
+            new CopilotAdoptionService(new CopilotAdoptionOptions
+            {
+                AccountabilityDimension = CopilotAdoptionAccountabilityDimensions.Office,
+            }).FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+            CollectionAssert.AreEquivalent(new[] { "United Kingdom", "Spain", "France" }, summary.AdoptionByCountry.Select(r => r.Segment).ToList());
+            CollectionAssert.AreEquivalent(new[] { "Leeds", "Madrid", "Paris" }, summary.AccountabilityRollup.Select(r => r.Segment).ToList());
+
+            var trimmed = summary.WithoutIndividualData();
+
+            CollectionAssert.AreEquivalent(new[] { "United Kingdom", "Spain" }, trimmed.AdoptionByCountry.Select(r => r.Segment).ToList(),
+                "France, the smallest listed, goes: 24 - 17 is now Portugal's two and France's five.");
+            CollectionAssert.AreEquivalent(new[] { "Leeds", "Madrid" }, trimmed.AccountabilityRollup.Select(r => r.Segment).ToList(),
+                "Paris, the smallest listed office, goes for the same reason.");
+            CollectionAssert.AreEquivalent(
+                new[] { CopilotAdoptionWithheldBreakdowns.Countries, CopilotAdoptionWithheldBreakdowns.Accountability },
+                trimmed.SmallestGroupsWithheld);
+            Assert.AreEqual(3, summary.AdoptionByCountry.Count, "The cached summary must never be edited for one reader.");
+        }
+
+        [TestMethod]
+        public void UnlicensedSide_WithoutSeePii_LeavesOutTheSmallestListedDepartment_InTheTableAndTheUseByDepartmentChart()
+        {
+            // Unlicensed Copilot Chat users: Sales 10, Support 7 and Finance 6 are listed in the side-by-side table and the
+            // chart of their use by department; Legal's 3 are withheld from the table and left out of the chart. The
+            // tenant's 26 less the 23 shown would be Legal's three.
+            var analysis = new CopilotAdoptionAnalysis();
+            var id = 0;
+            foreach (var (department, seats, chat) in new[] { ("Sales", 8, 10), ("Support", 6, 7), ("Finance", 6, 6), ("Legal", 6, 3) })
+            {
+                analysis.LicensedUsers.AddRange(Enumerable.Range(0, seats)
+                    .Select(i => Departmentalise(ActiveUser($"seat{id++}@contoso.com", activeDays: 4, interactions: 20), department)));
+                analysis.UnlicensedUsers.AddRange(Enumerable.Range(0, chat)
+                    .Select(i => Unlicensed($"chat{id++}@contoso.com", department, activeDays: 3, interactions: 10)));
+            }
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+            Assert.IsNull(summary.CombinedByDepartment.Single(r => r.Segment == "Legal").UnlicensedActiveUsers, "Legal's three: withheld for every reader.");
+            Assert.AreEqual(6, summary.CombinedByDepartment.Single(r => r.Segment == "Finance").UnlicensedActiveUsers);
+
+            var trimmed = summary.WithoutIndividualData();
+
+            var finance = trimmed.CombinedByDepartment.Single(r => r.Segment == "Finance");
+            Assert.IsNull(finance.UnlicensedActiveUsers, "Withheld, never 0.");
+            Assert.IsNull(finance.InteractionsPerUnlicensedUser);
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, finance.UnlicensedWithheld);
+            Assert.AreEqual(6, finance.LicensedUsers, "Its seat holders are another population, listed with every department.");
+            CollectionAssert.AreEquivalent(new[] { "Sales", "Support" }, trimmed.Unlicensed.UsageByDepartment.Select(c => c.Label).ToList(),
+                "The chart is the other view of the same people, so Finance goes from it too.");
+            Assert.AreEqual(26, trimmed.Unlicensed.ActiveUsers, "The headline stays.");
+            Assert.AreEqual(9, trimmed.Unlicensed.ActiveUsers - trimmed.CombinedByDepartment.Sum(r => r.UnlicensedActiveUsers ?? 0));
+            CollectionAssert.Contains(trimmed.SmallestGroupsWithheld, CopilotAdoptionWithheldBreakdowns.UnlicensedDepartments);
+            CollectionAssert.DoesNotContain(trimmed.SmallestGroupsWithheld, CopilotAdoptionWithheldBreakdowns.Departments,
+                "Every department's seat holders are listed, so their tables are untouched.");
+
+            Assert.AreEqual(3, summary.Unlicensed.UsageByDepartment.Count, "The cached summary must never be edited for one reader.");
+            Assert.AreEqual(6, summary.CombinedByDepartment.Single(r => r.Segment == "Finance").UnlicensedActiveUsers);
+        }
+
+        [TestMethod]
+        public void Breakdowns_WithoutSeePii_NeverLetATotalLessTheGroupsShownIsolateASmallGroup_AndEveryViewAgrees()
+        {
+            // Random tenants: departments of 0-15 seat holders and 0-11 unlicensed Chat users, in five countries, grouped
+            // for accountability by department or by country. For a reader without See PII, in every breakdown and every
+            // view of it, the total less the groups shown is nobody or at least five people; a group one view withholds no
+            // other view shows; and the cached summary is never edited.
+            var random = new Random(844);
+            var countries = new[] { "United Kingdom", "Spain", "France", "Portugal", "Ireland" };
+            for (var trial = 0; trial < 300; trial++)
+            {
+                var analysis = new CopilotAdoptionAnalysis();
+                var id = 0;
+                for (var d = random.Next(1, 14); d > 0; d--)
+                {
+                    var department = "Department " + d;
+                    for (var i = random.Next(0, 16); i > 0; i--)
+                    {
+                        var user = Departmentalise(ActiveUser($"seat{id++}@contoso.com", activeDays: random.Next(0, 20), interactions: random.Next(0, 200)), department);
+                        user.Country = countries[random.Next(countries.Length)];
+                        analysis.LicensedUsers.Add(user);
+                    }
+
+                    for (var i = random.Next(0, 12); i > 0; i--)
+                    {
+                        analysis.UnlicensedUsers.Add(Unlicensed($"chat{id++}@contoso.com", department, activeDays: 3, interactions: 10));
+                    }
+                }
+
+                var byDepartment = random.Next(2) == 0;
+                new CopilotAdoptionService(new CopilotAdoptionOptions
+                {
+                    AccountabilityDimension = byDepartment
+                        ? CopilotAdoptionAccountabilityDimensions.Department
+                        : CopilotAdoptionAccountabilityDimensions.Country,
+                }).FinaliseSummary(analysis);
+                var summary = analysis.Summary;
+                var cached = JsonConvert.SerializeObject(summary);
+
+                var trimmed = summary.WithoutIndividualData();
+                Assert.AreEqual(cached, JsonConvert.SerializeObject(summary), $"Trial {trial}: the cached summary must never be edited for one reader.");
+
+                var rollup = trimmed.AccountabilityRollup.Select(r => (r.Segment, r.LicensedUsers));
+                var none = Enumerable.Empty<(string, int)>();
+                AssertNoSmallComplement($"Trial {trial}, seat holders by department", trimmed.ScoredUsers,
+                    trimmed.AdoptionByDepartment.Select(r => (r.Segment, r.LicensedUsers)),
+                    trimmed.HabitByDepartment.Select(r => (r.Segment, r.LicensedUsers)),
+                    trimmed.CombinedByDepartment.Where(r => r.LicensedUsers > 0).Select(r => (r.Segment, r.LicensedUsers.Value)),
+                    byDepartment ? rollup : none);
+                AssertNoSmallComplement($"Trial {trial}, seat holders by department (intensity)", trimmed.ScoredUsers - trimmed.UsageReportSourcedUsers,
+                    trimmed.IntensityByDepartment.Select(r => (r.Segment, r.LicensedUsers)));
+                AssertNoSmallComplement($"Trial {trial}, seat holders by country", trimmed.ScoredUsers,
+                    trimmed.AdoptionByCountry.Select(r => (r.Segment, r.LicensedUsers)),
+                    byDepartment ? none : rollup);
+                AssertNoSmallComplement($"Trial {trial}, unlicensed users by department", trimmed.Unlicensed.ActiveUsers,
+                    trimmed.CombinedByDepartment.Where(r => r.UnlicensedActiveUsers > 0).Select(r => (r.Segment, r.UnlicensedActiveUsers.Value)),
+                    trimmed.Unlicensed.UsageByDepartment.Select(c => (c.Label, c.People)));
+
+                // Every view agrees: the departments this reader is not shown are one set, gone from every seat-holder view,
+                // the licensed side included, and nothing else in those views changes.
+                var departmentViews = new Func<CopilotAdoptionSummary, IEnumerable<string>>[]
+                {
+                    s => s.AdoptionByDepartment.Select(r => r.Segment),
+                    s => s.HabitByDepartment.Select(r => r.Segment),
+                    s => s.IntensityByDepartment.Select(r => r.Segment),
+                    s => s.CombinedByDepartment.Where(r => r.LicensedUsers > 0).Select(r => r.Segment),
+                };
+                var withheld = departmentViews.SelectMany(view => view(summary))
+                    .Except(departmentViews.SelectMany(view => view(trimmed)))
+                    .ToList();
+                foreach (var view in departmentViews)
+                {
+                    CollectionAssert.AreEquivalent(view(summary).Except(withheld).ToList(), view(trimmed).ToList(), $"Trial {trial}: every view agrees.");
+                }
+
+                Assert.AreEqual(withheld.Count > 0, trimmed.SmallestGroupsWithheld?.Contains(CopilotAdoptionWithheldBreakdowns.Departments) == true,
+                    $"Trial {trial}: the summary says when a department is withheld, and only then.");
+                Assert.IsTrue(withheld.Count <= 2, $"Trial {trial}: one department more than the floor leaves out, or one per population that needs it.");
+            }
+        }
+
+        /// <summary>
+        /// Each view on its own, and every view together, against the total beside them: the total less the groups shown
+        /// is nobody, or at least five people - never one to four, which would be a small group's figures given back. A
+        /// view that lists nobody leaves the total itself, the headline every reader is given.
+        /// </summary>
+        private static void AssertNoSmallComplement(string breakdown, int total, params IEnumerable<(string Name, int People)>[] views)
+        {
+            foreach (var view in views.Append(views.SelectMany(v => v)))
+            {
+                var shown = view
+                    .GroupBy(g => g.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+                    .Sum(g => g.Max(x => x.People));
+                if (shown == 0) continue;
+
+                var leftOver = total - shown;
+                Assert.IsFalse(leftOver > 0 && leftOver < 5, $"{breakdown}: the total less the groups shown is {leftOver} people.");
+            }
         }
 
         [TestMethod]

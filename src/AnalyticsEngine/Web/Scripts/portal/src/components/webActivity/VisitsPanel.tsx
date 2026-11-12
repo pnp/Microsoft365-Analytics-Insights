@@ -16,6 +16,8 @@ import {
   formatDecimal,
   formatHour,
   formatPct,
+  flooredCard,
+  leftOutNote,
   queryFor,
   toCategories,
   toStackedSeries,
@@ -39,6 +41,11 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
   // Listed devices plus the visits they do not account for, so the ring cannot imply it covers
   // every visit when the device list was truncated.
   const deviceCategories = withRemainder(toCategories(data.byDevice), kpis.visits, t('webActivity.common.otherUnknown'));
+
+  // Without See PII, sites, pages, devices and browsers of too few visitors are left out, each list with its smallest row
+  // shown. Each card says so.
+  const sitesLeftOut = leftOutNote(t, data.minimumGroupSize, data.withheldSites);
+  const pages = flooredCard(t, data.minimumGroupSize, data.withheldPages, data.byPage.length);
 
   const items: KpiDefinition[] = [
     {
@@ -133,6 +140,7 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
       <div className={styles.grid}>
         <SectionCard
           title={t('webActivity.visits.bySite.title')}
+          note={sitesLeftOut}
           query={queryFor(data.queries, 'visits-sites')}
           isEmpty={data.bySite.length === 0}
         >
@@ -142,14 +150,17 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
         <SectionCard
           title={t('webActivity.visits.byPage.title')}
           description={t('webActivity.visits.byPage.description')}
+          note={pages.note}
           query={queryFor(data.queries, 'visits-pages')}
           isEmpty={data.byPage.length === 0}
+          emptyMessage={pages.emptyMessage}
         >
           <CategoryBarChart categories={toCategories(data.byPage)} valueLabel={t('webActivity.common.visits')} />
         </SectionCard>
 
         <SectionCard
           title={t('webActivity.visits.byDevice.title')}
+          note={leftOutNote(t, data.minimumGroupSize, data.withheldDevices)}
           query={queryFor(data.queries, 'visits-devices')}
           isEmpty={data.byDevice.length === 0}
           emptyMessage={t('webActivity.visits.byDevice.empty')}
@@ -164,6 +175,7 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
 
         <SectionCard
           title={t('webActivity.visits.byBrowser.title')}
+          note={leftOutNote(t, data.minimumGroupSize, data.withheldBrowsers)}
           query={queryFor(data.queries, 'visits-browsers')}
           isEmpty={data.byBrowser.length === 0}
         >
@@ -204,6 +216,7 @@ export default function VisitsPanel({ data }: { data: WebActivityVisits }) {
         <SectionCard
           title={t('webActivity.visits.siteMix.title')}
           description={t('webActivity.visits.siteMix.description')}
+          note={sitesLeftOut}
           query={queryFor(data.queries, 'visits-site-over-time')}
           isEmpty={data.siteOverTime.length === 0}
         >

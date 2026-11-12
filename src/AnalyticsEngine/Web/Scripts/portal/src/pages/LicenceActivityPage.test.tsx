@@ -344,6 +344,59 @@ describe('LicenceActivityPage - who sees the people', () => {
     expect(screen.queryByRole('tab', { name: 'Licences' })).not.toBeInTheDocument();
   });
 
+  /** A reader without See PII: F3 is hidden because, with the rest of the table, it would give a small licence back. */
+  function complementOverview(): LicenceActivityOverview {
+    return overview({
+      query: { ...echo, minimumGroupSize: 5 },
+      allLicences: everyone(),
+      licences: [
+        { licenceTypeId: 10, name: 'E5', skuId: 'ENTERPRISEPREMIUM', assignedUsers: 100, workloads: WORKLOADS.map((w) => dist(w.key)) },
+        { licenceTypeId: 20, name: 'F3', skuId: 'DESKLESSPACK', assignedUsers: 17, withheld: true, withheldReason: 'revealsFewPeople', workloads: [] },
+        { licenceTypeId: 30, name: 'Contoso Add-on', skuId: 'CONTOSO_ADDON', assignedUsers: 3, withheld: true, withheldReason: 'fewHolders', workloads: [] },
+      ],
+    });
+  }
+
+  it('tells a reader without See PII why a licence that enough people hold is hidden, in the table and its detail', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    mockOverview.mockResolvedValue(complementOverview());
+    renderWithProvider(<LicenceActivityPage />, { access: { administration: false, seePii: false } });
+
+    expect(
+      await screen.findByText('Hidden: with the other figures in this table, it would reveal the activity of fewer than 5 people'),
+    ).toBeInTheDocument();
+    const panel = screen.getByRole('tabpanel');
+    fireEvent.click(within(panel).getByRole('button', { name: /F3/ }));
+    expect(within(panel).getByText('Each service for F3')).toBeVisible();
+    expect(
+      within(panel).getByText(
+        'Enough people hold this licence, but with the other figures in this report its figures would reveal how much fewer than 5 people use their services, so they are hidden to protect those people\u2019s privacy.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('tells a Spanish reader the same', async () => {
+    mockAvailability.mockResolvedValue(availability());
+    mockOverview.mockResolvedValue(complementOverview());
+    await loadCatalog('es');
+    renderWithProvider(<LicenceActivityPage />, { language: 'es', access: { administration: false, seePii: false } });
+
+    expect(
+      await screen.findByText(
+        'Oculto: junto con las demás cifras de esta tabla, revelaría la actividad de menos de 5 personas',
+        undefined,
+        { timeout: 5000 },
+      ),
+    ).toBeInTheDocument();
+    const panel = screen.getByRole('tabpanel');
+    fireEvent.click(within(panel).getByRole('button', { name: /F3/ }));
+    expect(
+      await within(panel).findByText(
+        'Suficientes personas tienen esta licencia, pero junto con las demás cifras de este informe sus cifras revelarían cuánto usan sus servicios menos de 5 personas, así que se ocultan para proteger la privacidad de esas personas.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('keeps the people list on screen through a transient users failure', async () => {
     mockAvailability.mockResolvedValue(availability());
     mockUsers.mockResolvedValueOnce(usersResponse()).mockRejectedValueOnce(

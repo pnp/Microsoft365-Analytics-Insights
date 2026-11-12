@@ -22,6 +22,12 @@
     both windows should not be shipped: it costs every customer an offline build on a large table for
     nothing, and index builds are not free to undo.
 
+    -Compare MembershipHorizon measures a query change instead of an index: the three statements that
+    find each team's latest membership snapshot (TeamsExplorerSql.LatestTeamMembers, in the channel
+    leaderboard and the sentiment by team and by channel), reading the whole of team_membership_log as
+    they did and only the last seven days as they do now, with the production indexes in place. It
+    reports the reads on team_membership_log beside each statement's total.
+
 .PARAMETER SyntheticUsers
     Distinct synthetic users. Use a large value for a 200k-user-tenant shape.
 
@@ -31,8 +37,19 @@
 .PARAMETER SyntheticDays
     Days of history, so the 28-day and 365-day windows are genuinely different selectivities.
 
+.PARAMETER SyntheticMembersPerTeam
+    Members of each of the fixture's 500 Teams, logged every day as the importer logs them. With
+    2,000 users, 40 gives ten Team memberships per user: the 200,000-user design point at 1:100.
+
+.PARAMETER Compare
+    Indexes (the default) measures each candidate index; MembershipHorizon measures the
+    LatestTeamMembers query change.
+
 .EXAMPLE
     .\Invoke-TeamsExplorerIndexBenchmark.ps1 -SyntheticUsers 20000 -SyntheticCalls 300000 -SyntheticDays 400
+
+.EXAMPLE
+    .\Invoke-TeamsExplorerIndexBenchmark.ps1 -Compare MembershipHorizon -SyntheticUsers 2000 -SyntheticCalls 20000 -SyntheticDays 400 -SyntheticMembersPerTeam 40
 
 .NOTES
     Creates and drops its own throwaway LocalDB database. Never point it at a customer database, and
@@ -43,6 +60,9 @@ param(
     [int]$SyntheticUsers = 20000,
     [int]$SyntheticCalls = 300000,
     [int]$SyntheticDays = 400,
+    [int]$SyntheticMembersPerTeam = 5,
+    [ValidateSet('Indexes', 'MembershipHorizon')]
+    [string]$Compare = 'Indexes',
     [int[]]$WindowDays = @(28, 365),
     [int]$Repeats = 4,
     [string]$SqlcmdPath = "C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\SQLCMD.EXE",
@@ -300,6 +320,8 @@ function Measure-Query {
         $command.CommandTimeout = 0
         $command.Parameters.Add("@from", [System.Data.SqlDbType]::Date).Value = $From.Date
         $command.Parameters.Add("@to", [System.Data.SqlDbType]::Date).Value = $To.Date
+        # TeamsExplorerQuery.DefaultTop. SQL Server accepts a parameter a statement does not use, as the product relies on.
+        $command.Parameters.Add("@top", [System.Data.SqlDbType]::Int).Value = 20
 
         $reader = $command.ExecuteReader()
         while ($reader.Read()) { }
@@ -315,9 +337,13 @@ function Measure-Query {
 
     $reads = 0
     $elapsed = 0
+    $tableReads = @{}
     foreach ($message in $messages) {
         foreach ($match in [regex]::Matches($message, 'logical reads (\d+)')) {
             $reads += [int]$match.Groups[1].Value
+        }
+        foreach ($match in [regex]::Matches($message, "Table '([^']+)'\. Scan count \d+, logical reads (\d+)")) {
+            $tableReads[$match.Groups[1].Value] = [int]$tableReads[$match.Groups[1].Value] + [int]$match.Groups[2].Value
         }
         # MAX, not last. SQL Server emits an execution-times block for parse/compile, one for the
         # statement, and another for the `SET STATISTICS ... OFF` statement itself - which runs while
@@ -329,17 +355,19 @@ function Measure-Query {
         }
     }
 
-    return [pscustomobject]@{ Reads = $reads; ElapsedMs = $elapsed }
+    return [pscustomobject]@{ Reads = $reads; ElapsedMs = $elapsed; TableReads = $tableReads }
 }
 
-<# The physical operator used against a named table, taken from the actual execution plan. #>
+<# The physical operator used against a named table, taken from the actual execution plan. With -WithRows, each access
+   to the table with the rows it read across its executions: a seek repeated once per team is not one seek. #>
 function Get-PlanOperator {
     param(
         [System.Data.SqlClient.SqlConnection]$Connection,
         [string]$Sql,
         [datetime]$From,
         [datetime]$To,
-        [string]$Table
+        [string]$Table,
+        [switch]$WithRows
     )
 
     Invoke-NonQuery -Connection $Connection -Sql "SET STATISTICS XML ON;"
@@ -349,6 +377,7 @@ function Get-PlanOperator {
         $command.CommandTimeout = 0
         $command.Parameters.Add("@from", [System.Data.SqlDbType]::Date).Value = $From.Date
         $command.Parameters.Add("@to", [System.Data.SqlDbType]::Date).Value = $To.Date
+        $command.Parameters.Add("@top", [System.Data.SqlDbType]::Int).Value = 20
 
         $plan = ""
         $reader = $command.ExecuteReader()
@@ -366,6 +395,22 @@ function Get-PlanOperator {
     }
 
     if (-not $plan) { return "(plan unavailable)" }
+
+    if ($WithRows) {
+        [xml]$xml = $plan
+        $ns = New-Object System.Xml.XmlNamespaceManager $xml.NameTable
+        $ns.AddNamespace('s', 'http://schemas.microsoft.com/sqlserver/2004/07/showplan')
+        $accesses = foreach ($op in $xml.SelectNodes("//s:RelOp[s:IndexScan/s:Object[@Table='[$Table]']]", $ns)) {
+            $rows = 0; $executions = 0
+            foreach ($thread in $op.SelectNodes('s:RunTimeInformation/s:RunTimeCountersPerThread', $ns)) {
+                $rows += [long]$thread.ActualRowsRead
+                $executions += [long]$thread.ActualExecutions
+            }
+            "{0} ({1:N0} rows read, {2:N0} executions)" -f $op.PhysicalOp, $rows, $executions
+        }
+        if (-not $accesses) { return "(table not referenced)" }
+        return ($accesses -join ' + ')
+    }
 
     $operators = New-Object System.Collections.Generic.HashSet[string]
     foreach ($match in [regex]::Matches($plan, '<RelOp[^>]*PhysicalOp="([^"]+)"[^>]*>(.*?)</RelOp>', 'Singleline')) {
@@ -390,18 +435,21 @@ function Get-Median {
 
 <#
     Median reads and elapsed over $Repeats runs, discarding the first (cold) run and clearing the
-    plan cache before each one so a cached plan for a different window cannot leak in.
+    plan cache before each one so a cached plan for a different window cannot leak in. With -Table,
+    also the median reads on that one table.
 #>
 function Measure-Case {
     param(
         [System.Data.SqlClient.SqlConnection]$Connection,
         [string]$Sql,
         [datetime]$From,
-        [datetime]$To
+        [datetime]$To,
+        [string]$Table
     )
 
     $reads = @()
     $elapsed = @()
+    $tableReads = @()
 
     for ($run = 0; $run -le $Repeats; $run++) {
         Invoke-NonQuery -Connection $Connection -Sql "DBCC FREEPROCCACHE WITH NO_INFOMSGS;"
@@ -409,11 +457,222 @@ function Measure-Case {
         if ($run -eq 0) { continue }   # cold run, discarded
         $reads += $sample.Reads
         $elapsed += $sample.ElapsedMs
+        if ($Table) { $tableReads += [int]$sample.TableReads[$Table] }
     }
 
     return [pscustomobject]@{
-        Reads     = Get-Median -Values $reads
-        ElapsedMs = Get-Median -Values $elapsed
+        Reads      = Get-Median -Values $reads
+        ElapsedMs  = Get-Median -Values $elapsed
+        TableReads = if ($Table) { Get-Median -Values $tableReads } else { $null }
+    }
+}
+
+# ------------------------------------------------------------------------------------------------
+# -Compare MembershipHorizon: the LatestTeamMembers query change, with the production indexes.
+#
+# The three statements MIRROR ChannelLeaderboard, SentimentByTeam and SentimentByChannel in
+# Common/Entities/TeamsExplorer/TeamsExplorerSql.cs, with {MEMBERS} standing for LatestTeamMembers:
+# before, each team's latest snapshot found in the whole of team_membership_log; after, in the seven
+# days that end with the window.
+# ------------------------------------------------------------------------------------------------
+
+$membersWholeHistory = @"
+LatestMembership AS (
+    SELECT m.team_id, MAX(m.[date]) AS LatestDate
+    FROM dbo.team_membership_log AS m
+    GROUP BY m.team_id
+),
+Members AS (
+    SELECT m.team_id, COUNT(DISTINCT m.user_id) AS Members
+    FROM dbo.team_membership_log AS m
+    INNER JOIN LatestMembership AS l ON l.team_id = m.team_id AND l.LatestDate = m.[date]
+    GROUP BY m.team_id
+)
+"@
+
+$membersLastSevenDays = @"
+LatestMembership AS (
+    SELECT m.team_id, MAX(m.[date]) AS LatestDate
+    FROM dbo.team_membership_log AS m
+    WHERE m.[date] >= DATEADD(DAY, -7, @to) AND m.[date] < @to
+    GROUP BY m.team_id
+),
+Members AS (
+    SELECT m.team_id, COUNT(DISTINCT m.user_id) AS Members
+    FROM dbo.team_membership_log AS m
+    INNER JOIN LatestMembership AS l ON l.team_id = m.team_id AND l.LatestDate = m.[date]
+    WHERE m.[date] >= DATEADD(DAY, -7, @to) AND m.[date] < @to
+    GROUP BY m.team_id
+)
+"@
+
+$membershipStatements = @(
+    [pscustomobject]@{
+        Key = 'collab-channels'
+        Sql = @"
+WITH {MEMBERS},
+Stats AS (
+    SELECT s.channel_id,
+           SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)) AS Messages,
+           SUM(CASE WHEN ISNULL(s.chats_count, 0) > 0 THEN 1 ELSE 0 END) AS MessageDays,
+           SUM(CASE WHEN s.sentiment_score IS NULL THEN 0
+                    ELSE s.sentiment_score * ISNULL(s.chats_count, 0) END) AS SentimentWeight,
+           SUM(CASE WHEN s.sentiment_score IS NULL THEN 0
+                    ELSE CAST(ISNULL(s.chats_count, 0) AS bigint) END)     AS ScoredMessages
+    FROM dbo.teams_channel_stats_log AS s
+    WHERE s.[date] >= @from AND s.[date] < @to
+    GROUP BY s.channel_id
+),
+Reactions AS (
+    SELECT r.channel_id,
+           COUNT_BIG(*) AS Reactions,
+           COUNT(DISTINCT r.user_id) AS ReactingUsers
+    FROM dbo.teams_user_channel_reactions AS r
+    WHERE r.[date] >= @from AND r.[date] < @to
+    GROUP BY r.channel_id
+),
+Tabs AS (
+    SELECT tl.channel_id, COUNT(DISTINCT tl.tab_id) AS Tabs
+    FROM dbo.teams_channel_tabs_log AS tl
+    WHERE tl.[date] >= @from AND tl.[date] < @to
+    GROUP BY tl.channel_id
+)
+SELECT TOP (@top)
+    ch.id                       AS Id,
+    ch.[name]                   AS Name,
+    t.[name]                    AS TeamName,
+    ISNULL(tab.Tabs, 0)         AS Tabs,
+    ISNULL(st.Messages, 0)      AS Messages,
+    ISNULL(re.Reactions, 0)     AS Reactions,
+    ISNULL(re.ReactingUsers, 0) AS ReactingUsers,
+    CASE WHEN ISNULL(st.ScoredMessages, 0) > 0
+         THEN st.SentimentWeight / st.ScoredMessages END AS Sentiment,
+    ISNULL(st.MessageDays, 0)   AS ActiveDays,
+    ISNULL(mem.Members, 0)      AS TeamMembers
+FROM dbo.teams_channels AS ch
+INNER JOIN dbo.teams AS t ON t.id = ch.team_id
+LEFT JOIN Members   AS mem ON mem.team_id = ch.team_id
+LEFT JOIN Stats     AS st  ON st.channel_id = ch.id
+LEFT JOIN Reactions AS re  ON re.channel_id = ch.id
+LEFT JOIN Tabs      AS tab ON tab.channel_id = ch.id
+ORDER BY ISNULL(st.Messages, 0) DESC, ISNULL(re.Reactions, 0) DESC, ch.[name]
+OPTION (RECOMPILE);
+"@
+    },
+    [pscustomobject]@{
+        Key = 'conv-sentiment-team'
+        Sql = @"
+WITH {MEMBERS}
+SELECT TOP (@top)
+    t.[name] AS Name,
+    SUM(s.sentiment_score * ISNULL(s.chats_count, 0))
+        / NULLIF(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0) AS Sentiment,
+    ISNULL(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0)       AS Messages,
+    ISNULL(MAX(mem.Members), 0)                                    AS Members
+FROM dbo.teams_channel_stats_log AS s
+INNER JOIN dbo.teams_channels AS ch ON ch.id = s.channel_id
+INNER JOIN dbo.teams AS t ON t.id = ch.team_id
+LEFT JOIN Members AS mem ON mem.team_id = t.id
+WHERE s.[date] >= @from AND s.[date] < @to
+  AND s.sentiment_score IS NOT NULL
+  AND ISNULL(s.chats_count, 0) > 0
+GROUP BY t.[name]
+ORDER BY Messages DESC
+OPTION (RECOMPILE);
+"@
+    },
+    [pscustomobject]@{
+        Key = 'conv-sentiment-channel'
+        Sql = @"
+WITH {MEMBERS}
+SELECT TOP (@top)
+    t.[name] + N' / ' + ch.[name] AS Name,
+    SUM(s.sentiment_score * ISNULL(s.chats_count, 0))
+        / NULLIF(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0) AS Sentiment,
+    ISNULL(SUM(CAST(ISNULL(s.chats_count, 0) AS bigint)), 0)       AS Messages,
+    ISNULL(MAX(mem.Members), 0)                                    AS Members
+FROM dbo.teams_channel_stats_log AS s
+INNER JOIN dbo.teams_channels AS ch ON ch.id = s.channel_id
+INNER JOIN dbo.teams AS t ON t.id = ch.team_id
+LEFT JOIN Members AS mem ON mem.team_id = t.id
+WHERE s.[date] >= @from AND s.[date] < @to
+  AND s.sentiment_score IS NOT NULL
+  AND ISNULL(s.chats_count, 0) > 0
+GROUP BY t.[name] + N' / ' + ch.[name]
+ORDER BY Messages DESC
+OPTION (RECOMPILE);
+"@
+    }
+)
+
+function Invoke-MembershipHorizonComparison {
+    $connection = New-BenchConnection
+    $results = @()
+
+    try {
+        # The date indexes production has (IndexTeamsExplorerQueries) on the tables these statements read.
+        foreach ($key in @('channel_stats_by_date', 'reactions_by_date', 'membership_by_date')) {
+            $candidate = $candidates[$key]
+            Invoke-NonQuery -Connection $connection -Sql `
+                "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.$($candidate.Table)') AND name = N'$($candidate.Name)') $($candidate.Create)"
+        }
+
+        $sizeCommand = $connection.CreateCommand()
+        $sizeCommand.CommandText = @"
+SELECT SUM(ps.row_count), SUM(ps.used_page_count), (SELECT COUNT(DISTINCT [date]) FROM dbo.team_membership_log)
+FROM sys.dm_db_partition_stats AS ps
+INNER JOIN sys.indexes AS i ON i.object_id = ps.object_id AND i.index_id = ps.index_id
+WHERE ps.object_id = OBJECT_ID(N'dbo.team_membership_log') AND i.name = N'IX_team_membership_log_date';
+"@
+        $reader = $sizeCommand.ExecuteReader()
+        [void]$reader.Read()
+        $indexRows = [long]$reader.GetValue(0); $indexPages = [long]$reader.GetValue(1); $historyDays = [int]$reader.GetValue(2)
+        $reader.Close()
+        $sizeCommand.Dispose()
+
+        $to = (Get-Date).Date.AddDays(1)
+        foreach ($statement in $membershipStatements) {
+            foreach ($days in $WindowDays) {
+                $from = $to.AddDays(-$days)
+                foreach ($variant in @(
+                        [pscustomobject]@{ Name = 'whole history'; Members = $membersWholeHistory },
+                        [pscustomobject]@{ Name = 'last 7 days'; Members = $membersLastSevenDays })) {
+                    $sql = $statement.Sql.Replace('{MEMBERS}', $variant.Members.Trim())
+                    $metrics = Measure-Case -Connection $connection -Sql $sql -From $from -To $to -Table 'team_membership_log'
+                    $operator = Get-PlanOperator -Connection $connection -Sql $sql -From $from -To $to -Table 'team_membership_log' -WithRows
+
+                    $results += [pscustomobject]@{
+                        Statement       = $statement.Key
+                        WindowDays      = $days
+                        Membership      = $variant.Name
+                        Reads           = $metrics.Reads
+                        MembershipReads = $metrics.TableReads
+                        ElapsedMs       = $metrics.ElapsedMs
+                        Plan            = $operator
+                    }
+
+                    Write-Host ("  {0,-24} {1,4}d  {2,-14} reads {3,9} (membership {4,9})  {5,6} ms  {6}" -f `
+                        $statement.Key, $days, $variant.Name, $metrics.Reads, $metrics.TableReads, $metrics.ElapsedMs, $operator)
+                }
+            }
+        }
+    }
+    finally {
+        $connection.Close()
+        $connection.Dispose()
+    }
+
+    $results | Export-Csv -NoTypeInformation -Path (Join-Path $artifactRoot "teams-explorer-membership-horizon.csv")
+
+    Write-Host ""
+    Write-Host ("IX_team_membership_log_date: {0:N0} rows on {1:N0} pages over {2} days of history - {3:N0} rows and {4:N0} pages a day, {5:N0} rows a page." -f `
+        $indexRows, $indexPages, $historyDays, ($indexRows / $historyDays), ($indexPages / $historyDays), ($indexRows / $indexPages))
+    Write-Host ""
+    Write-Host "| Statement | Window | Membership read | Logical reads (team_membership_log) | Elapsed | Accesses to team_membership_log |"
+    Write-Host "|---|---|---|---|---|---|"
+    foreach ($row in $results) {
+        Write-Host ("| {0} | {1}d | {2} | {3:N0} ({4:N0}) | {5} ms | {6} |" -f `
+            $row.Statement, $row.WindowDays, $row.Membership, $row.Reads, $row.MembershipReads, $row.ElapsedMs, $row.Plan)
     }
 }
 
@@ -430,13 +689,20 @@ if (-not $SkipFixture) {
     & $SqlcmdPath -S $LocalDbInstance -d master -b -Q "IF DB_ID(N'$DatabaseName') IS NOT NULL BEGIN ALTER DATABASE [$DatabaseName] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$DatabaseName]; END; CREATE DATABASE [$DatabaseName] COLLATE Latin1_General_CI_AS;"
     if ($LASTEXITCODE -ne 0) { throw "Could not create the benchmark database." }
 
-    Write-Host "Seeding the fixture (users=$SyntheticUsers, calls=$SyntheticCalls, days=$SyntheticDays)..."
+    Write-Host "Seeding the fixture (users=$SyntheticUsers, calls=$SyntheticCalls, days=$SyntheticDays, membersPerTeam=$SyntheticMembersPerTeam)..."
     $fixtureLog = Join-Path $artifactRoot "fixture.txt"
     & $SqlcmdPath -S $LocalDbInstance -d $DatabaseName -b -i $fixturePath `
-        -v SyntheticUsers="$SyntheticUsers" SyntheticCalls="$SyntheticCalls" SyntheticDays="$SyntheticDays" `
+        -v SyntheticUsers="$SyntheticUsers" SyntheticCalls="$SyntheticCalls" SyntheticDays="$SyntheticDays" SyntheticMembersPerTeam="$SyntheticMembersPerTeam" `
         -o $fixtureLog
     if ($LASTEXITCODE -ne 0) { Get-Content $fixtureLog -Tail 40; throw "Fixture seeding failed." }
     Get-Content $fixtureLog -Tail 20
+}
+
+if ($Compare -eq 'MembershipHorizon') {
+    Invoke-MembershipHorizonComparison
+    Write-Host ""
+    Write-Host "Artifacts written under $artifactRoot"
+    return
 }
 
 # ------------------------------------------------------------------------------------------------

@@ -136,6 +136,13 @@ namespace Common.Entities.TeamsExplorer
         public const double TopDecileFraction = 0.10;
 
         /// <summary>
+        /// The judgements worded from the usage-report figures - how many people were active, what they wrote and how many
+        /// meetings they attended - rather than from calls or teams. A reader without See PII is not given them when those
+        /// figures are withheld (<see cref="TeamsOverview.WithoutSmallGroups"/>).
+        /// </summary>
+        public static readonly IReadOnlyCollection<string> UsageJudgementKeys = new[] { "reach", "open-collaboration", "meeting-load" };
+
+        /// <summary>
         /// Working days (Mon-Fri) in a half-open UTC window. This is the denominator for the segment
         /// thresholds.
         /// </summary>

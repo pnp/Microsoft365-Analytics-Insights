@@ -1160,6 +1160,53 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// SqlClient reports a script cancelled in flight as a SqlException ("Operation cancelled by user"). That is the
+        /// user pressing Cancel, not the grant for that person failing, so it must stop the run rather than be logged as
+        /// "Could not grant database access" and move on to the next person (#852 R11-12). A real refusal still costs only
+        /// the person it was for.
+        /// </summary>
+        [TestMethod]
+        public async System.Threading.Tasks.Task ConfiguredUsers_ACancelDuringAGrant_IsNotReportedAsThatGrantFailing()
+        {
+            var logger = new FakeLoaderClasses.RecordingLogger();
+            var task = new App.ControlPanel.Engine.InstallerTasks.SqlDatabaseUserGrantTask(logger, null);
+            var resolved = new[]
+            {
+                new System.Collections.Generic.KeyValuePair<SqlDatabaseUser, Guid>(new SqlDatabaseUser { Login = "refused@contoso.com" }, Guid.NewGuid()),
+                new System.Collections.Generic.KeyValuePair<SqlDatabaseUser, Guid>(new SqlDatabaseUser { Login = "cancelled@contoso.com" }, Guid.NewGuid()),
+                new System.Collections.Generic.KeyValuePair<SqlDatabaseUser, Guid>(new SqlDatabaseUser { Login = "never-reached@contoso.com" }, Guid.NewGuid()),
+            };
+            var scripts = 0;
+            var granted = 0;
+
+            using (var cancellation = new CancellationTokenSource())
+            {
+                Exception thrown = null;
+                try
+                {
+                    await task.GrantEachAsync(resolved, sql =>
+                    {
+                        // The first is refused by SQL Server; the user presses Cancel while the second runs.
+                        if (++scripts == 2) cancellation.Cancel();
+                        throw (SqlException)System.Runtime.Serialization.FormatterServices.GetUninitializedObject(typeof(SqlException));
+                    }, () => granted++, cancellation.Token);
+                }
+                catch (Exception ex)
+                {
+                    thrown = ex;
+                }
+
+                Assert.IsNotNull(thrown, "A Cancel must stop the run.");
+            }
+
+            Assert.AreEqual(2, scripts, "Nothing may run after the Cancel.");
+            Assert.AreEqual(0, granted);
+            var warnings = logger.Entries.Where(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning).Select(e => e.Message).ToList();
+            Assert.AreEqual(1, warnings.Count, string.Join(Environment.NewLine, warnings));
+            StringAssert.Contains(warnings[0], "refused@contoso.com");
+        }
+
+        /// <summary>
         /// A managed identity is a service principal, so its contained user must carry its application
         /// (client) ID. The resource's own identity block reports only the object ID of a system-assigned
         /// identity, which is a different GUID - writing that one produces a user that can never sign in.

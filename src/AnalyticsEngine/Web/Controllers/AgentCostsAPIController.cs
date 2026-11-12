@@ -26,6 +26,11 @@ namespace Web.AnalyticsWeb.Controllers
     /// nothing here is apportioned or inferred. <b>Azure spend has no per-user view and cannot have one</b> -
     /// Azure billing is resource-scoped and no Cost Management surface, including the full cost-details
     /// export, carries a user identity.</para>
+    ///
+    /// <para><b>A reader without See PII is held to the privacy floor (#844)</b> on every Copilot Studio figure: the
+    /// summary, trend, breakdowns, billed lines and pickers add up only the slices Microsoft reports five or more people
+    /// on (<see cref="ForReader"/>). An agent or a developer's own environment that one to four people use is one row
+    /// without a name or figures, and narrowing to it gets its figures withheld - never shown as zero.</para>
     /// </summary>
     [Authorize]
     [RoutePrefix("api/AgentCosts")]
@@ -76,7 +81,7 @@ namespace Web.AnalyticsWeb.Controllers
             string search = null)
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, search);
+                var query = ForReader(BuildQuery(from, to, agentId, environmentId, harness, feature, search));
                 return Ok(await _store.GetSummaryAsync(query));
             });
 
@@ -86,7 +91,7 @@ namespace Web.AnalyticsWeb.Controllers
             string search = null)
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, search);
+                var query = ForReader(BuildQuery(from, to, agentId, environmentId, harness, feature, search));
                 return Ok(await _store.GetDailyTrendAsync(query));
             });
 
@@ -109,7 +114,7 @@ namespace Web.AnalyticsWeb.Controllers
                     });
                 }
 
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, search);
+                var query = ForReader(BuildQuery(from, to, agentId, environmentId, harness, feature, search));
                 return Ok(await _store.GetBreakdownAsync(query, dimension, top));
             });
 
@@ -121,7 +126,7 @@ namespace Web.AnalyticsWeb.Controllers
             int page = 1, int pageSize = 50, string sort = "credits", string direction = "desc")
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, agentId, environmentId, harness, feature, search);
+                var query = ForReader(BuildQuery(from, to, agentId, environmentId, harness, feature, search));
                 query.Page = page;
                 query.PageSize = pageSize;
                 query.Sort = sort;
@@ -152,7 +157,7 @@ namespace Web.AnalyticsWeb.Controllers
         public Task<IHttpActionResult> Filters(string from = null, string to = null)
             => Execute(async () =>
             {
-                var query = BuildQuery(from, to, null, null, null, null, null);
+                var query = ForReader(BuildQuery(from, to, null, null, null, null, null));
                 return Ok(await _store.GetFilterOptionsAsync(query));
             });
 
@@ -179,6 +184,22 @@ namespace Web.AnalyticsWeb.Controllers
             });
 
         /// <summary>
+        /// The privacy floor (#844), for a reader without See PII: only the slices Microsoft reports at least
+        /// <see cref="ReportScopeResolver.MinimumPeopleWithoutSeePii"/> people on count towards any credit figure, picker
+        /// value or billed line (<see cref="AgentCostQuery.MinPeoplePerSlice"/>). The narrowing parameters stay open to that
+        /// reader because of it: an agent, environment, harness, feature or search whose slices are all smaller has no
+        /// figures to give, so narrowing to it gets them withheld. A reader with See PII is answered from every slice.
+        /// </summary>
+        internal AgentCostQuery ForReader(AgentCostQuery query)
+        {
+            if (!PortalAccess.Evaluate(Request, User).SeePii)
+            {
+                query.MinPeoplePerSlice = ReportScopeResolver.MinimumPeopleWithoutSeePii;
+            }
+            return query;
+        }
+
+        /// <summary>
         /// Parses the window and filters. Dates are read as UTC dates: the underlying data has a daily grain
         /// stamped in UTC, so interpreting a query-string date in the server's local zone would shift the
         /// whole report by a day for anyone not on UTC.
@@ -202,10 +223,11 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             // Clamped rather than rejected: a too-wide window is a reasonable thing for someone to ask for,
-            // and silently answering the widest supported window beats an error page.
-            if ((toDate - fromDate).TotalDays > MaxDays)
+            // and silently answering the widest supported window beats an error page. Both ends are inclusive
+            // dates, so the window spans (to - from) + 1 of them: 2026-01-01 to 2026-06-30 is 181 dates, not 180.
+            if ((toDate - fromDate).TotalDays + 1 > MaxDays)
             {
-                fromDate = toDate.AddDays(-MaxDays);
+                fromDate = toDate.AddDays(-(MaxDays - 1));
             }
 
             return new AgentCostQuery

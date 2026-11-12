@@ -40,7 +40,7 @@ namespace Common.Entities.LicenceActivity
                 var minimum = overview.Query.MinimumGroupSize;
                 if (minimum.HasValue)
                     report.AddRow("Smallest group shown", minimum.Value, XlsxCell.Wrapped(
-                        "No activity figure here describes fewer people than this, so nobody can be singled out: a licence held by fewer people shows only how many hold it, and smaller departments and countries are combined into one row."));
+                        "No activity figure here describes fewer people than this, so nobody can be singled out: a licence held by fewer people shows only how many hold it, and so does a licence that, with \"Everyone holding a licence\" and the other licences, would reveal the activity of fewer people. Smaller departments and countries are combined into one row."));
                 if (overview.Suppressed)
                     report.AddRow("Figures withheld", true, XlsxCell.Wrapped(
                         "So few people hold a licence in this selection that every activity figure would describe individuals, so only the number of people is shown."));
@@ -60,7 +60,7 @@ namespace Common.Entities.LicenceActivity
                 {
                     if (sku.Withheld)
                     {
-                        licences.AddRow(sku.Name, sku.SkuId, sku.AssignedUsers, null, WithheldLabel(minimum),
+                        licences.AddRow(sku.Name, sku.SkuId, sku.AssignedUsers, null, WithheldLabel(sku.WithheldReason, minimum),
                             null, null, null, null, null);
                         continue;
                     }
@@ -148,9 +148,12 @@ namespace Common.Entities.LicenceActivity
             FormatTable(sheet, 9);
         }
 
-        /// <summary>The Service column of a licence whose activity is withheld from a reader without See PII.</summary>
-        private static string WithheldLabel(int? minimum) =>
-            string.Format(CultureInfo.InvariantCulture, "Not shown: fewer than {0} people hold this licence", minimum);
+        /// <summary>The Service column of a licence whose activity is withheld from a reader without See PII, saying why.</summary>
+        private static string WithheldLabel(string reason, int? minimum) =>
+            reason == LicenceActivityWithheldReasons.RevealsFewPeople
+                ? string.Format(CultureInfo.InvariantCulture,
+                    "Not shown: with \"Everyone holding a licence\" and the other licences, it would reveal the activity of fewer than {0} people", minimum)
+                : string.Format(CultureInfo.InvariantCulture, "Not shown: fewer than {0} people hold this licence", minimum);
 
         private static void WriteUsers(XlsxWriter book, string name, IEnumerable<LicenceActivityUser> users)
         {

@@ -1,6 +1,6 @@
 import { makeStyles, tokens, Text } from '@fluentui/react-components';
 import type { ReportMatrix } from '../../types/reports';
-import { useT } from '../../i18n';
+import { formatNumber, useT } from '../../i18n';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import { formatValue, formatCompact } from './chartCommon';
 
@@ -8,6 +8,8 @@ type MatrixChartProps = {
   matrix: ReportMatrix;
   /** Unit for the cell tooltip, e.g. "People". */
   valueLabel: string;
+  /** For a reader without See PII, the fewest people a cell may describe; withheld cells say so. */
+  withheldMinimum?: number | null;
 };
 
 const useStyles = makeStyles({
@@ -112,26 +114,34 @@ const useStyles = makeStyles({
  * appears in two cells of the Word row, so summing that row would report more Word users than
  * exist. Rather than print a total that is right on one grid and wrong on another, none is shown.
  */
-export default function MatrixChart({ matrix, valueLabel }: MatrixChartProps) {
+export default function MatrixChart({ matrix, valueLabel, withheldMinimum }: MatrixChartProps) {
   const t = useT();
   const styles = useStyles();
 
   const { rows, columns, cells, rowLabel, columnLabel, shadeByRow } = matrix;
 
+  // A cell withheld from a reader without See PII is a dash that says why - never a zero, which is what an absent cell
+  // means - and it takes no part in the shading.
   const values = new Map<string, number>();
+  const withheld = new Set<string>();
   let total = 0;
   for (const cell of cells) {
     const key = `${cell.row}\u0000${cell.column}`;
+    if (cell.withheld || cell.value === null) {
+      withheld.add(key);
+      continue;
+    }
     const next = (values.get(key) ?? 0) + cell.value;
     values.set(key, next);
     total += cell.value;
   }
 
-  if (rows.length === 0 || columns.length === 0 || total <= 0) {
+  if (rows.length === 0 || columns.length === 0 || (total <= 0 && withheld.size === 0)) {
     return <div className={styles.empty}>{t('charts.empty.noDataForPeriod')}</div>;
   }
 
   const valueAt = (row: string, column: string): number => values.get(`${row}\u0000${column}`) ?? 0;
+  const isWithheld = (row: string, column: string): boolean => withheld.has(`${row}\u0000${column}`);
 
   const gridMax = Math.max(...rows.flatMap((r) => columns.map((c) => valueAt(r, c))), 0);
   const rowMax = new Map<string, number>(
@@ -164,13 +174,33 @@ export default function MatrixChart({ matrix, valueLabel }: MatrixChartProps) {
                     {rowText}
                   </th>
                   {columns.map((column) => {
+                    const columnText = serverPlaceholderText(t, column);
+                    if (isWithheld(row, column)) {
+                      const reason = t('charts.matrix.cellWithheld', {
+                        row: rowText,
+                        column: columnText,
+                        count: formatNumber(withheldMinimum ?? 5),
+                      });
+                      return (
+                        <td
+                          key={column}
+                          className={styles.cell}
+                          style={{ backgroundColor: shade(0, max), color: textColour(0, max) }}
+                          title={reason}
+                          aria-label={reason}
+                          data-withheld="true"
+                        >
+                          {'\u2014'}
+                        </td>
+                      );
+                    }
                     const value = valueAt(row, column);
                     return (
                       <td
                         key={column}
                         className={styles.cell}
                         style={{ backgroundColor: shade(value, max), color: textColour(value, max) }}
-                        title={t('charts.matrix.cellTitle', { row: rowText, column: serverPlaceholderText(t, column), value: formatValue(value), valueLabel })}
+                        title={t('charts.matrix.cellTitle', { row: rowText, column: columnText, value: formatValue(value), valueLabel })}
                       >
                         {value > 0 ? formatCompact(value) : ''}
                       </td>

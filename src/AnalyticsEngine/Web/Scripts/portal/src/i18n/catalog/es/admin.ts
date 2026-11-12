@@ -74,6 +74,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.costConnection.sourceNotFound': 'No se encontró el recurso de costes o se restringió el acceso. Esto no representa un saldo vacío.',
   'admin.costConnection.resetWarning': 'Restablezca la prueba finalizada para poder ejecutarla de nuevo. Los resultados guardados se conservan. Esto no inicia una prueba nueva; después seleccione Ejecutar o reanudar comprobación de datos.',
   'admin.costConnection.stop': 'Detener tras el paso actual',
+  'admin.costConnection.stoppedAtLimit': 'La comprobación de datos se detuvo tras {count} pasos para que no siga ejecutándose sin supervisión. Su progreso está guardado: seleccione {action} para continuar.',
   'admin.costConnection.cancel': 'Cancelar',
   'admin.costConnection.confirm': 'Confirmar',
   'admin.costConnection.disconnectWarning': 'La desconexión elimina la conexión activa y la caché de tokens. Una lectura ya iniciada puede terminar. Se conservan los datos históricos de SQL. El consentimiento y las sesiones del inquilino se deben revocar por separado. Desconecte primero para seleccionar otro lector.',
@@ -266,6 +267,9 @@ const admin: Record<keyof typeof en, string> = {
   'admin.teams.teamList.columnAuthorised': '¿Autorizado?',
   'admin.teams.teamList.columnGraphId': 'Id. de Graph',
   'admin.teams.teamList.columnTeamName': 'Nombre del equipo',
+  'admin.teams.teamList.connectRequired':
+    'El portal no tiene una conexión con Microsoft Teams para su cuenta, así que no puede leer ni cambiar qué equipos están autorizados. Vuelva a cargar esta página y seleccione Conectar con Microsoft Teams; después, inténtelo de nuevo.',
+  'admin.teams.teamList.retry': 'Reintentar',
   'admin.teams.teamList.saveSuccess':
     'Los Teams seleccionados se han habilitado correctamente para análisis detallados. Los metadatos adicionales pueden tardar varias horas en aparecer en los informes.',
   'admin.teams.teamList.storageNotConfigured': 'No se pueden habilitar los análisis detallados de Teams porque Azure Storage no está configurado en esta implementación. Añada una cadena de conexión de Storage para poder almacenar los tokens de autorización de Teams.',
@@ -431,6 +435,8 @@ const admin: Record<keyof typeof en, string> = {
   'admin.serviceConfiguration.webhook.active': 'Activo',
   'admin.serviceConfiguration.webhook.callRecordsPermission': 'CallRecords.Read.All',
   'admin.serviceConfiguration.webhook.couldNotCheck': 'No se pudo comprobar',
+  'admin.serviceConfiguration.webhook.detail.subscriptionsUnreadable':
+    'Microsoft Graph respondió sin una lista legible de suscripciones, por lo que no se pudo comprobar el webhook. Vuelva a cargar la página para intentarlo de nuevo.',
   'admin.serviceConfiguration.webhook.detail.webAppUrlMissing': 'WebAppURL no está configurado, por lo que no se puede determinar la dirección URL de suscripción del webhook.',
   'admin.serviceConfiguration.webhook.missingHelp':
     'El trabajo web de importación registra y renueva esta suscripción en cada ciclo de importación. Si sigue faltando, compruebe que el trabajo web de importación se está ejecutando y que su registro de aplicación tiene el permiso de aplicación {permission} de Microsoft Graph.',

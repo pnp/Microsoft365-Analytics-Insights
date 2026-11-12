@@ -37,6 +37,17 @@ namespace Common.Entities.SpoWebActivity
         }
 
         /// <summary>
+        /// True when the screen withholds <paramref name="section"/>'s rows from a reader without the portal's See PII
+        /// permission, so the file is refused to them too (#844): search terms are text people typed, which can name
+        /// someone however many people searched. Every other file carries the screen's rows, floored by the number of
+        /// people behind each.
+        /// </summary>
+        public static bool WithheldWithoutSeePii(string section)
+        {
+            return string.Equals(section, "search-terms", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// The full page statistics, for the most-viewed export.
         /// </summary>
         /// <remarks>
@@ -44,24 +55,22 @@ namespace Common.Entities.SpoWebActivity
         /// slow-page and quiet-page queries do not - they hard-code those columns to zero because
         /// ranking by load time or by obscurity does not need an ordered pass over each visit - and
         /// exporting a placeholder zero under a heading like "Bounces" states a fact the query never
-        /// established.
+        /// established. Without <paramref name="includeVisitFigures"/> - for a reader without See PII (#844) - the figures
+        /// counted in visits are left out: the unique page views, entries, exits and bounces
+        /// (<see cref="WebActivityPageRow.VisitFiguresWithheld"/>).
         /// </remarks>
-        public static IReadOnlyList<CsvColumn<WebActivityPageRow>> PageColumns()
+        public static IReadOnlyList<CsvColumn<WebActivityPageRow>> PageColumns(bool includeVisitFigures = true)
         {
-            return new List<CsvColumn<WebActivityPageRow>>
+            var columns = new List<CsvColumn<WebActivityPageRow>>(PageTrafficColumns(includeVisitFigures));
+            if (includeVisitFigures)
             {
-                new CsvColumn<WebActivityPageRow>("Page title", r => r.Title),
-                new CsvColumn<WebActivityPageRow>("URL", r => r.Url),
-                new CsvColumn<WebActivityPageRow>("Site", r => r.Site),
-                new CsvColumn<WebActivityPageRow>("Page views", r => r.PageViews),
-                new CsvColumn<WebActivityPageRow>("Unique page views (once per visit)", r => r.UniquePageViews),
-                new CsvColumn<WebActivityPageRow>("Average seconds on page", r => r.AverageSecondsOnPage),
-                new CsvColumn<WebActivityPageRow>("Average load seconds", r => r.AverageLoadSeconds),
-                new CsvColumn<WebActivityPageRow>("Visits entering here", r => r.Entries),
-                new CsvColumn<WebActivityPageRow>("Visits ending here", r => r.Exits),
-                new CsvColumn<WebActivityPageRow>("Bounces (entered and left without going further)", r => r.Bounces),
-                new CsvColumn<WebActivityPageRow>("Bounce rate (% of entries)", r => r.BouncePct),
-            };
+                columns.Add(new CsvColumn<WebActivityPageRow>("Visits entering here", r => r.Entries));
+                columns.Add(new CsvColumn<WebActivityPageRow>("Visits ending here", r => r.Exits));
+                columns.Add(new CsvColumn<WebActivityPageRow>("Bounces (entered and left without going further)", r => r.Bounces));
+                columns.Add(new CsvColumn<WebActivityPageRow>("Bounce rate (% of entries)", r => r.BouncePct));
+            }
+
+            return columns;
         }
 
         /// <summary>
@@ -70,20 +79,27 @@ namespace Common.Entities.SpoWebActivity
         /// <remarks>
         /// Deliberately omits entries, exits and bounces: those queries do not compute them, so the
         /// model carries zeros. A spreadsheet column of zeros under "Bounces" is indistinguishable
-        /// from a measurement, and someone pruning content would act on it.
+        /// from a measurement, and someone pruning content would act on it. Without
+        /// <paramref name="includeVisitFigures"/> - for a reader without See PII (#844) - the unique page views are left out
+        /// too: they are the Visits tab's visits by page, which that tab floors on its own
+        /// (<see cref="WebActivityPageRow.VisitFiguresWithheld"/>).
         /// </remarks>
-        public static IReadOnlyList<CsvColumn<WebActivityPageRow>> PageTrafficColumns()
+        public static IReadOnlyList<CsvColumn<WebActivityPageRow>> PageTrafficColumns(bool includeVisitFigures = true)
         {
-            return new List<CsvColumn<WebActivityPageRow>>
+            var columns = new List<CsvColumn<WebActivityPageRow>>
             {
                 new CsvColumn<WebActivityPageRow>("Page title", r => r.Title),
                 new CsvColumn<WebActivityPageRow>("URL", r => r.Url),
                 new CsvColumn<WebActivityPageRow>("Site", r => r.Site),
                 new CsvColumn<WebActivityPageRow>("Page views", r => r.PageViews),
-                new CsvColumn<WebActivityPageRow>("Unique page views (once per visit)", r => r.UniquePageViews),
-                new CsvColumn<WebActivityPageRow>("Average seconds on page", r => r.AverageSecondsOnPage),
-                new CsvColumn<WebActivityPageRow>("Average load seconds", r => r.AverageLoadSeconds),
             };
+
+            if (includeVisitFigures)
+                columns.Add(new CsvColumn<WebActivityPageRow>("Unique page views (once per visit)", r => r.UniquePageViews));
+
+            columns.Add(new CsvColumn<WebActivityPageRow>("Average seconds on page", r => r.AverageSecondsOnPage));
+            columns.Add(new CsvColumn<WebActivityPageRow>("Average load seconds", r => r.AverageLoadSeconds));
+            return columns;
         }
 
         /// <summary>

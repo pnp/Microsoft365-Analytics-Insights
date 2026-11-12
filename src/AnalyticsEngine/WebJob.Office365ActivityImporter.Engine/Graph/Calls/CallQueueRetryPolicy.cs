@@ -58,7 +58,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             }
 
             var chain = Flatten(failure).ToList();
-            if (chain.OfType<CallRecordSessionPagingException>().Any(p => p.IsPermanent))
+            if (chain.OfType<CallRecordSessionPagingException>().Any(p => p.IsPermanent)
+                || chain.OfType<CallRecordPayloadException>().Any(p => p.IsPermanent))
             {
                 return CallImportFailureKind.Permanent;
             }

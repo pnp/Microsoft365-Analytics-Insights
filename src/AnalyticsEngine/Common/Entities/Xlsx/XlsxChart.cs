@@ -485,7 +485,8 @@ namespace Common.Entities.Xlsx
               .Append(XlsxXml.Int(values.Count)).Append("\"/>");
             for (int i = 0; i < values.Count; i++)
             {
-                if (TryToDouble(values[i], out double number))
+                // A non-finite value is a gap, like a blank cell: its cell is written blank too.
+                if (TryToDouble(values[i], out double number) && XlsxXml.IsFinite(number))
                 {
                     sb.Append("<c:pt idx=\"").Append(XlsxXml.Int(i)).Append("\"><c:v>")
                       .Append(XlsxXml.Num(number)).Append("</c:v></c:pt>");

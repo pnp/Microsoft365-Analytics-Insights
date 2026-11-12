@@ -12,12 +12,13 @@ import {
   Text,
   Title3,
   makeStyles,
+  mergeClasses,
   tokens,
   type SelectTabEventHandler,
 } from '@fluentui/react-components';
 import { ArrowClockwise16Regular, ArrowDownload16Regular } from '@fluentui/react-icons';
 
-import { useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
+import { plural, useT, useTNode, type TFunction, type TranslationKey } from '../i18n';
 import {
   fetchAllDetailRows,
   fetchAvailability,
@@ -67,6 +68,7 @@ import {
 import { usePortalAccess } from '../access';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
 import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
+import { SortableTh } from '../components/copilotAdoption/adoptionShared';
 
 const WINDOW_OPTIONS: { value: number; labelKey: TranslationKey }[] = [
   { value: 7, labelKey: 'agentCosts.window.last7Days' },
@@ -151,7 +153,6 @@ const useStyles = makeStyles({
     whiteSpace: 'nowrap',
   },
   thNumeric: { textAlign: 'right' },
-  thSortable: { cursor: 'pointer', userSelect: 'none' },
   td: {
     padding: '6px 10px',
     borderBottomWidth: '1px',
@@ -516,21 +517,19 @@ export default function AgentCostsPage() {
   const detail = detailResult?.ok ? detailResult.value : null;
   const azure = azureResult?.ok ? azureResult.value : null;
 
-  const toggleSort = useCallback(
-    (column: DetailSort) => {
-      if (sort === column) {
-        setDirection((d) => (d === 'asc' ? 'desc' : 'asc'));
-      } else {
-        setSort(column);
-        setDirection('desc');
-      }
-      setPage(1);
-    },
-    [sort],
-  );
+  // SortableTh works out the direction: the opposite one for the column already sorted by, otherwise
+  // descending, which is the most useful first answer for every column here.
+  const sortBy = useCallback((column: string, descending: boolean) => {
+    setSort(column as DetailSort);
+    setDirection(descending ? 'desc' : 'asc');
+    setPage(1);
+  }, []);
 
   const categories = useMemo(
-    () => (breakdown ?? []).map((r) => ({ label: labelFor(dimension, r.label ?? r.key, t), value: r.billedCredits })),
+    () => (breakdown ?? [])
+      // The withheld row has no figures to draw; the table below says what it stands for.
+      .filter((r) => !r.withheld)
+      .map((r) => ({ label: labelFor(dimension, r.label ?? r.key, t), value: r.billedCredits ?? 0 })),
     [breakdown, dimension, t],
   );
 
@@ -539,8 +538,14 @@ export default function AgentCostsPage() {
   // to 100% while omitting everything below the cut - overstating each one. Both are for the scope on
   // screen, so a breakdown is never divided by another period's total; without a summary there is no share.
   const shareTotal = summary?.billedCredits ?? 0;
-  const breakdownShown = useMemo(() => (breakdown ?? []).reduce((sum, r) => sum + r.billedCredits, 0), [breakdown]);
+  const breakdownShown = useMemo(() => (breakdown ?? []).reduce((sum, r) => sum + (r.billedCredits ?? 0), 0), [breakdown]);
   const hasHiddenRows = shareTotal > 0 && breakdownShown < shareTotal - 0.0000005;
+
+  // The privacy floor (#844): for a reader without See PII the server leaves billed lines of too few people out of every
+  // figure, and says so. The page says so too, and writes a withheld figure as withheld - never as zero.
+  const floor = summary?.minPeoplePerSlice ?? detail?.minPeoplePerSlice ?? null;
+  const floorCount = floor === null ? '' : formatCount(floor);
+  const withheldOr = (value: string): string => (summary?.withheld ? t('agentCosts.state.withheld') : value);
 
   const trendMax = useMemo(() => Math.max(...(trend ?? []).map((p) => p.billedCredits), 1), [trend]);
 
@@ -704,27 +709,40 @@ export default function AgentCostsPage() {
               <FiguresPending result={summaryResult} />
             ) : (
               <>
+                {summary.withheld ? (
+                  <div className={styles.messages}>
+                    <MessageBar intent="info">
+                      <MessageBarBody>{t('agentCosts.floor.allWithheld', { count: floorCount })}</MessageBarBody>
+                    </MessageBar>
+                  </div>
+                ) : summary.smallSlicesWithheld ? (
+                  <div className={styles.messages}>
+                    <MessageBar intent="info">
+                      <MessageBarBody>{t('agentCosts.floor.note', { count: floorCount })}</MessageBarBody>
+                    </MessageBar>
+                  </div>
+                ) : null}
                 <div className={`${styles.kpiGrid} ${styles.body}`}>
                   <div className={styles.kpi}>
-                    <span className={styles.kpiValue}>{formatCredits(summary.billedCredits)}</span>
+                    <span className={styles.kpiValue}>{withheldOr(formatCredits(summary.billedCredits))}</span>
                     <span className={styles.kpiLabel}>{t('agentCosts.kpi.creditsBilled')}</span>
                     <span className={styles.kpiHint}>{t('agentCosts.kpi.creditsBilled.hint')}</span>
                   </div>
                   <div className={styles.kpi}>
-                    <span className={styles.kpiValue}>{formatCredits(summary.nonBilledCredits)}</span>
+                    <span className={styles.kpiValue}>{withheldOr(formatCredits(summary.nonBilledCredits))}</span>
                     <span className={styles.kpiLabel}>{t('agentCosts.kpi.creditsNotCharged')}</span>
                     <span className={styles.kpiHint}>{t('agentCosts.kpi.creditsNotCharged.hint')}</span>
                   </div>
                   <div className={styles.kpi}>
-                    <span className={styles.kpiValue}>{formatCount(summary.distinctAgents)}</span>
+                    <span className={styles.kpiValue}>{withheldOr(formatCount(summary.distinctAgents))}</span>
                     <span className={styles.kpiLabel}>{t('agentCosts.kpi.agentsWithSpend')}</span>
                   </div>
                   <div className={styles.kpi}>
-                    <span className={styles.kpiValue}>{formatCount(summary.distinctEnvironments)}</span>
+                    <span className={styles.kpiValue}>{withheldOr(formatCount(summary.distinctEnvironments))}</span>
                     <span className={styles.kpiLabel}>{t('agentCosts.kpi.environments')}</span>
                   </div>
                   <div className={styles.kpi}>
-                    <span className={styles.kpiValue}>{formatCount(summary.peakDistinctUsersOnASlice)}</span>
+                    <span className={styles.kpiValue}>{withheldOr(formatCount(summary.peakDistinctUsersOnASlice))}</span>
                     <span className={styles.kpiLabel}>{t('agentCosts.kpi.busiestSlice')}</span>
                     <span className={styles.kpiHint}>{t('agentCosts.kpi.busiestSlice.hint')}</span>
                   </div>
@@ -794,18 +812,27 @@ export default function AgentCostsPage() {
             {!trend ? (
               <FiguresPending result={trendResult} />
             ) : trend.length === 0 ? (
-              <div className={styles.empty}>{t('agentCosts.trend.empty')}</div>
+              <div className={styles.empty}>
+                {summary?.withheld ? t('agentCosts.floor.allWithheld', { count: floorCount }) : t('agentCosts.trend.empty')}
+              </div>
             ) : (
               <>
-                <div className={styles.trendRow}>
-                  {trend.map((p) => (
-                    <div
-                      key={p.date}
-                      className={styles.trendBar}
-                      style={{ height: `${Math.max(2, (p.billedCredits / trendMax) * 100)}%` }}
-                      title={t('agentCosts.trend.barTitle', { day: formatDay(p.date), credits: formatCredits(p.billedCredits) })}
-                    />
-                  ))}
+                {/* A list with a label per day, as CreditsPanel does: the heights alone say nothing to a
+                    screen reader, and a title is read by few of them and by no keyboard user. */}
+                <div className={styles.trendRow} role="list" aria-label={t('agentCosts.trend.title')}>
+                  {trend.map((p) => {
+                    const label = t('agentCosts.trend.barTitle', { day: formatDay(p.date), credits: formatCredits(p.billedCredits) });
+                    return (
+                      <div
+                        key={p.date}
+                        role="listitem"
+                        aria-label={label}
+                        className={styles.trendBar}
+                        style={{ height: `${Math.max(2, (p.billedCredits / trendMax) * 100)}%` }}
+                        title={label}
+                      />
+                    );
+                  })}
                 </div>
                 <Text className={styles.muted} size={200}>
                   {t('agentCosts.trend.caption', {
@@ -814,6 +841,11 @@ export default function AgentCostsPage() {
                     peak: formatCredits(trendMax),
                   })}
                 </Text>
+                {summary?.smallSlicesWithheld && (
+                  <Text block className={styles.muted} size={200}>
+                    {t('agentCosts.trend.smallDaysLeftOut', { count: floorCount })}
+                  </Text>
+                )}
               </>
             )}
           </Card>
@@ -920,24 +952,38 @@ export default function AgentCostsPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {breakdown.map((r) => (
-                          <tr key={r.key ?? NOT_REPORTED}>
-                            <td className={`${styles.td} ${r.key ? '' : styles.tdMuted}`}>{labelFor(dimension, r.label ?? r.key, t)}</td>
-                            <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.billedCredits)}</td>
-                            <td className={`${styles.td} ${styles.tdNumeric}`}>
-                              {shareTotal > 0 ? formatShare(r.billedCredits / shareTotal) : DASH}
-                            </td>
-                            <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.nonBilledCredits)}</td>
-                            <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(r.activeDays)}</td>
-                            <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(r.peakDistinctUsers)}</td>
-                          </tr>
-                        ))}
+                        {breakdown.map((r) =>
+                          r.withheld ? (
+                            <tr key="withheld">
+                              <td className={`${styles.td} ${styles.tdMuted}`}>
+                                {t(plural(r.folded, 'agentCosts.breakdown.withheldRow.one', 'agentCosts.breakdown.withheldRow.other'), {
+                                  count: formatCount(r.folded),
+                                  min: floorCount,
+                                })}
+                              </td>
+                              {[0, 1, 2, 3, 4].map((cell) => (
+                                <td key={cell} className={`${styles.td} ${styles.tdNumeric} ${styles.tdMuted}`}>{t('agentCosts.state.withheld')}</td>
+                              ))}
+                            </tr>
+                          ) : (
+                            <tr key={r.key ?? NOT_REPORTED}>
+                              <td className={`${styles.td} ${r.key ? '' : styles.tdMuted}`}>{labelFor(dimension, r.label ?? r.key, t)}</td>
+                              <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.billedCredits)}</td>
+                              <td className={`${styles.td} ${styles.tdNumeric}`}>
+                                {shareTotal > 0 && r.billedCredits !== null ? formatShare(r.billedCredits / shareTotal) : DASH}
+                              </td>
+                              <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCredits(r.nonBilledCredits)}</td>
+                              <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(r.activeDays)}</td>
+                              <td className={`${styles.td} ${styles.tdNumeric}`}>{formatCount(r.peakDistinctUsers)}</td>
+                            </tr>
+                          ),
+                        )}
                       </tbody>
                     </table>
                     {hasHiddenRows && (
                       <Text className={styles.muted} size={200}>
                         {t('agentCosts.breakdown.hiddenRows', {
-                          count: formatCount(breakdown.length),
+                          count: formatCount(breakdown.filter((r) => !r.withheld).length),
                           credits: formatCredits(shareTotal),
                         })}
                       </Text>
@@ -982,37 +1028,30 @@ export default function AgentCostsPage() {
             {!detail ? (
               <FiguresPending result={detailResult} />
             ) : detail.rows.length === 0 ? (
-              <div className={styles.empty}>{t('agentCosts.detail.empty')}</div>
+              <div className={styles.empty}>
+                {detail.smallSlicesWithheld
+                  ? t('agentCosts.floor.allWithheld', { count: formatCount(detail.minPeoplePerSlice) })
+                  : t('agentCosts.detail.empty')}
+              </div>
             ) : (
               <>
+                {detail.smallSlicesWithheld && (
+                  <Text block className={mergeClasses(styles.muted, styles.body)} size={200}>
+                    {t('agentCosts.detail.smallLinesLeftOut', { count: formatCount(detail.minPeoplePerSlice) })}
+                  </Text>
+                )}
                 <div className={`${styles.wrap} ${styles.body}`}>
                   <table className={styles.table}>
                     <thead>
                       <tr>
-                        <th className={`${styles.th} ${styles.thSortable}`} onClick={() => toggleSort('date')}>
-                          {t('agentCosts.table.day')}{sort === 'date' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
-                        </th>
-                        <th className={`${styles.th} ${styles.thSortable}`} onClick={() => toggleSort('agent')}>
-                          {t('agentCosts.table.agent')}{sort === 'agent' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
-                        </th>
+                        <SortableTh label={t('agentCosts.table.day')} sortKey="date" activeKey={sort} descending={direction === 'desc'} onSort={sortBy} defaultDescending />
+                        <SortableTh label={t('agentCosts.table.agent')} sortKey="agent" activeKey={sort} descending={direction === 'desc'} onSort={sortBy} defaultDescending />
                         <th className={styles.th}>{t('agentCosts.table.environment')}</th>
                         <th className={styles.th}>{t('agentCosts.table.harness')}</th>
-                        <th className={`${styles.th} ${styles.thSortable}`} onClick={() => toggleSort('feature')}>
-                          {t('agentCosts.table.billingFeature')}{sort === 'feature' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
-                        </th>
-                        <th
-                          className={`${styles.th} ${styles.thNumeric} ${styles.thSortable}`}
-                          onClick={() => toggleSort('credits')}
-                        >
-                          {t('agentCosts.table.credits')}{sort === 'credits' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
-                        </th>
+                        <SortableTh label={t('agentCosts.table.billingFeature')} sortKey="feature" activeKey={sort} descending={direction === 'desc'} onSort={sortBy} defaultDescending />
+                        <SortableTh label={t('agentCosts.table.credits')} sortKey="credits" activeKey={sort} descending={direction === 'desc'} onSort={sortBy} defaultDescending numeric />
                         <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.notCharged')}</th>
-                        <th
-                          className={`${styles.th} ${styles.thNumeric} ${styles.thSortable}`}
-                          onClick={() => toggleSort('users')}
-                        >
-                          {t('agentCosts.table.people')}{sort === 'users' ? (direction === 'asc' ? ' \u2191' : ' \u2193') : ''}
-                        </th>
+                        <SortableTh label={t('agentCosts.table.people')} sortKey="users" activeKey={sort} descending={direction === 'desc'} onSort={sortBy} defaultDescending numeric />
                       </tr>
                     </thead>
                     <tbody>

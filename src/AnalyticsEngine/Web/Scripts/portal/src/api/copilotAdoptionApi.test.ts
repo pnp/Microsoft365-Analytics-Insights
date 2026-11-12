@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { apiFetch } from './http';
-import { fetchAdoptionSummary, workbookExportUrl } from './copilotAdoptionApi';
-import { loadCatalog, setActiveLanguage } from '../i18n';
+import { apiFetch, PortalPermissionError, ReportScopeError, SessionExpiredError, UnexpectedServerError } from './http';
+import {
+  AdoptionGenerationChangedError, AdoptionRequestError, adoptionFailure, adoptionFailureText, canRetryAdoptionRequest,
+  fetchAdoptionFilters, fetchAdoptionSummary, rebuildAdoption, workbookExportUrl,
+} from './copilotAdoptionApi';
+import { loadCatalog, setActiveLanguage, translateActive, translateStatic } from '../i18n';
 
-vi.mock('./http', () => ({ apiFetch: vi.fn() }));
+vi.mock('./http', async importOriginal => ({
+  ...await importOriginal<typeof import('./http')>(),
+  apiFetch: vi.fn(),
+}));
 
 const mockedFetch = vi.mocked(apiFetch);
 
@@ -103,5 +109,122 @@ describe('copilotAdoptionApi polling', () => {
 
     expect(error.message).toContain(runId);
     expect(error.message).toMatch(/referencia/);
+  });
+
+  it('reports real progress and retains the after-generation hint without starting another rebuild', async () => {
+    const onProgress = vi.fn();
+    const progress = { generationId: runId, phase: 'analysing', elapsedMs: 5000, percentComplete: 40, steps: [] };
+    mockedFetch.mockResolvedValueOnce(jsonResponse({ retryAfterSeconds: 1, progress }, 202))
+      .mockResolvedValueOnce(jsonResponse({ generatedUtc: '2026-01-01T00:00:00Z' }));
+    const result = fetchAdoptionSummary(28, undefined, undefined, null, null, null, { after: runId, onProgress });
+    await vi.advanceTimersByTimeAsync(1000);
+    await result;
+    expect(onProgress).toHaveBeenCalledWith(progress);
+    for (const [url, init] of mockedFetch.mock.calls) {
+      expect(new URL(String(url)).searchParams.get('after')).toBe(runId);
+      expect(new URL(String(url)).searchParams.get('includeProgress')).toBe('true');
+      expect(init?.method).toBe('GET');
+    }
+  });
+
+  it('aborts progress polling without issuing a new request', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({ retryAfterSeconds: 5 }, 202));
+    const controller = new AbortController();
+    const result = fetchAdoptionSummary(28, undefined, controller.signal).catch(error => error);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    expect((await result).name).toBe('AbortError');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses a one-shot POST for rebuild and preserves typed cooldown errors', async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse({ generationId: runId }, 202));
+    await rebuildAdoption(28, runId);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(mockedFetch.mock.calls[0][1]).toMatchObject({
+      method: 'POST', body: JSON.stringify({ expectedGenerationId: runId }),
+    });
+    mockedFetch.mockResolvedValueOnce(jsonResponse({ code: 'copilotAdoption.error.rebuildCooldown', retryAfterSeconds: 45 }, 429));
+    const error = await rebuildAdoption(28, runId).catch(error => error);
+    expect(error).toBeInstanceOf(AdoptionRequestError);
+    expect(error.retryAfterSeconds).toBe(45);
+    expect(canRetryAdoptionRequest(error)).toBe(true);
+    expect(canRetryAdoptionRequest(new PortalPermissionError('seePii', 'Portal.SeePII'))).toBe(false);
+  });
+
+  it.each([200, 503])('returns a safe retryable error for non-JSON rebuild responses (HTTP %i)', async status => {
+    mockedFetch.mockResolvedValueOnce(new Response('<html>Temporary failure</html>', { status }));
+    const error = await rebuildAdoption(28, runId).catch(error => error);
+    expect(error).toBeInstanceOf(AdoptionRequestError);
+    expect(error.message).not.toContain('<html>');
+    expect(canRetryAdoptionRequest(error)).toBe(true);
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a supporting response from a different report generation', async () => {
+    const response = jsonResponse({ emailDomains: ['contoso.com'] });
+    response.headers.set('X-CopilotAdoption-GenerationId', '00000000000000000000000000000010');
+    mockedFetch.mockResolvedValueOnce(response);
+    await expect(fetchAdoptionFilters(28, undefined, undefined, null, { generationId: runId }))
+      .rejects.toBeInstanceOf(AdoptionGenerationChangedError);
+  });
+
+  it('reports a replacement that ended unpublished when the summary is still the generation it was to replace', async () => {
+    const kept = jsonResponse({ generatedUtc: '2026-01-01T00:00:00Z' });
+    kept.headers.set('X-CopilotAdoption-GenerationId', runId);
+    mockedFetch.mockResolvedValueOnce(kept);
+    const error = await fetchAdoptionSummary(28, undefined, undefined, null, null, null, { after: runId }).catch(e => e);
+    expect(error).toBeInstanceOf(AdoptionRequestError);
+    expect(adoptionFailure(error, 'copilotAdoption.loading.state.failed')).toEqual({ key: 'copilotAdoption.error.rebuildNotCompleted' });
+    expect(canRetryAdoptionRequest(error)).toBe(true);
+
+    const replaced = jsonResponse({ generatedUtc: '2026-01-02T00:00:00Z' });
+    replaced.headers.set('X-CopilotAdoption-GenerationId', '00000000000000000000000000000010');
+    mockedFetch.mockResolvedValueOnce(replaced);
+    await expect(fetchAdoptionSummary(28, undefined, undefined, null, null, null, { after: runId }))
+      .resolves.toMatchObject({ generatedUtc: '2026-01-02T00:00:00Z' });
+  });
+});
+
+describe('copilotAdoptionApi failures a page keeps', () => {
+  afterEach(() => setActiveLanguage('en'));
+
+  it('keeps the catalog key a failed request was worded from, so the page can word it in another language', async () => {
+    await loadCatalog('es');
+    mockedFetch.mockResolvedValueOnce(jsonResponse({}, 500));
+    const error = await fetchAdoptionFilters(28).catch((e: unknown) => e);
+    expect((error as Error).message).toBe("Couldn't load the Copilot adoption filters (500).");
+
+    const failure = adoptionFailure(error, 'copilotAdoption.loading.state.failed');
+    expect(failure).toEqual({ key: 'errors.copilotAdoption.filtersFailed', values: { status: 500 } });
+    expect(adoptionFailureText((key, values) => translateStatic('es', key, values), failure))
+      .toBe('No se han podido cargar los filtros de adopci\u00f3n de Copilot (500).');
+  });
+
+  it('words each apiFetch failure from the same catalog key its own message comes from, in every language', async () => {
+    await loadCatalog('es');
+    for (const language of ['en', 'es'] as const) {
+      setActiveLanguage(language);
+      for (const error of [
+        new SessionExpiredError(),
+        new PortalPermissionError('administration', 'Portal.Administration'),
+        new PortalPermissionError('seePii', 'Portal.SeePII'),
+        new ReportScopeError('globalFilterUnavailable', 'errors.globalFilter.unavailable'),
+        new UnexpectedServerError('00000000-0000-0000-0000-000000000000'),
+        new AdoptionGenerationChangedError(),
+      ]) {
+        const failure = adoptionFailure(error, 'copilotAdoption.page.errors.loadSummary');
+        expect('key' in failure, `${error.name} kept as text`).toBe(true);
+        expect(adoptionFailureText(translateActive, failure)).toBe(error.message);
+      }
+    }
+  });
+
+  it('keeps the text of an error the portal did not word, and words anything else from the fallback', () => {
+    expect(adoptionFailure(new TypeError('Failed to fetch'), 'copilotAdoption.page.errors.loadSummary'))
+      .toEqual({ text: 'Failed to fetch' });
+    expect(adoptionFailure('not an error', 'copilotAdoption.page.errors.loadSummary'))
+      .toEqual({ key: 'copilotAdoption.page.errors.loadSummary' });
   });
 });

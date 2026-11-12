@@ -31,8 +31,9 @@ namespace Common.Entities.LicenceActivity
 
         /// <summary>
         /// For a reader without See PII, the fewest people a figure may describe: the overview's licences, departments
-        /// and countries held by fewer people than this have their activity withheld or folded together, and a
-        /// selection of fewer people has every figure withheld (<see cref="LicenceActivityOverview.Suppressed"/>).
+        /// and countries held by fewer people than this have their activity withheld or folded together, as does a
+        /// licence the figures beside it would give such a group back through (<see cref="LicenceActivityComplements"/>),
+        /// and a selection of fewer people has every figure withheld (<see cref="LicenceActivityOverview.Suppressed"/>).
         /// <c>null</c> for a reader with See PII, who sees every group. Part of the cache key, so the two kinds of
         /// reader never share an overview.
         /// </summary>

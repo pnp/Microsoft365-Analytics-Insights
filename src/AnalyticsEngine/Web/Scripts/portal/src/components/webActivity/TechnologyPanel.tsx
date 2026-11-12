@@ -26,10 +26,12 @@ import {
   formatDuration,
   formatPct,
   formatSeconds,
+  leftOutNote,
   loadTone,
   queryFor,
   toStackedSeries,
   useWebActivityStyles,
+  withNote,
   withRemainder,
 } from './webActivityShared';
 
@@ -67,6 +69,11 @@ export default function TechnologyPanel({
     kpis.pageViews,
     t('webActivity.common.otherUnknown'),
   );
+
+  // Without See PII, browsers, systems, devices and detail rows of too few visitors are left out - with the smallest shown,
+  // so none can be worked out from the totals - and fall into the remainders. Each card says how many.
+  const browsersLeftOut = leftOutNote(t, data.minimumGroupSize, data.withheldBrowsers);
+  const devicesLeftOut = leftOutNote(t, data.minimumGroupSize, data.withheldDevices);
 
   const items: KpiDefinition[] = [
     {
@@ -146,6 +153,7 @@ export default function TechnologyPanel({
         <SectionCard
           title={t('webActivity.technology.browsers')}
           description={t('webActivity.technology.browsersDescription')}
+          note={browsersLeftOut}
           query={queryFor(data.queries, 'tech-browsers')}
           isEmpty={data.browsers.length === 0}
         >
@@ -154,6 +162,7 @@ export default function TechnologyPanel({
 
         <SectionCard
           title={t('webActivity.technology.devices')}
+          note={devicesLeftOut}
           query={queryFor(data.queries, 'tech-devices')}
           isEmpty={data.devices.length === 0}
         >
@@ -167,6 +176,7 @@ export default function TechnologyPanel({
 
         <SectionCard
           title={t('webActivity.technology.operatingSystems')}
+          note={leftOutNote(t, data.minimumGroupSize, data.withheldOperatingSystems)}
           query={queryFor(data.queries, 'tech-os')}
           isEmpty={data.operatingSystems.length === 0}
         >
@@ -176,7 +186,7 @@ export default function TechnologyPanel({
         <SectionCard
           title={t('webActivity.technology.loadByBrowser.title')}
           description={t('webActivity.technology.loadByBrowser.description')}
-          note={t('webActivity.technology.loadByBrowser.note')}
+          note={withNote(t('webActivity.technology.loadByBrowser.note'), browsersLeftOut)}
           query={queryFor(data.queries, 'tech-browsers')}
           isEmpty={data.browsers.every((b) => b.averageLoadSeconds === null)}
         >
@@ -193,6 +203,7 @@ export default function TechnologyPanel({
         <SectionCard
           title={t('webActivity.technology.deviceMix.title')}
           description={t('webActivity.technology.deviceMix.description')}
+          note={devicesLeftOut}
           query={queryFor(data.queries, 'tech-device-over-time')}
           isEmpty={data.deviceOverTime.length === 0}
         >
@@ -202,7 +213,7 @@ export default function TechnologyPanel({
         <SectionCard
           title={t('webActivity.technology.detail.title')}
           description={t('webActivity.technology.detail.description')}
-          note={dwellCaveat(t)}
+          note={withNote(dwellCaveat(t), leftOutNote(t, data.minimumGroupSize, data.withheldDetailRows))}
           query={queryFor(data.queries, 'tech-detail')}
           isEmpty={data.detail.length === 0}
           actions={

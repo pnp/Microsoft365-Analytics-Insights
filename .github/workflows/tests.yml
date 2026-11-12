@@ -70,7 +70,7 @@ jobs:
       - name: Validate workflow syntax
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --location \
+          curl --fail --silent --show-error --location --retry 3 --retry-all-errors --retry-delay 5 \
             https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
             -o "$RUNNER_TEMP/actionlint.tar.gz"
           cd "$RUNNER_TEMP"
@@ -191,6 +191,9 @@ jobs:
           TEST_FILTER: ${{ matrix.filter }}
           SHARD: ${{ matrix.name }}
           GITHUB_TOKEN: ${{ github.token }}
+          # Dependabot and fork pull requests get no repository secrets, so there the tests that need a live
+          # credential are Inconclusive and the summary lists them. Anywhere else a missing secret fails them.
+          REQUIRE_LIVE_CREDENTIALS: ${{ github.event_name != 'pull_request' || (github.event.pull_request.user.login != 'dependabot[bot]' && !github.event.pull_request.head.repo.fork) }}
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
           $vs = & $vswhere -latest -products * -property installationPath

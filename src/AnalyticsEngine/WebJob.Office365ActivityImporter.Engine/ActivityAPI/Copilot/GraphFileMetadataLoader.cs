@@ -969,6 +969,13 @@ namespace ActivityImporter.Engine.ActivityAPI.Copilot
             try
             {
                 var drives = await scope.Next().GetSiteDocumentLibraryDrivesAsync(spSiteId, MaxDocumentLibrariesToSearch);
+                if (drives == null)
+                {
+                    // A 200 without the drives collection: the site's libraries are unknown, not absent. Read as "none" it was
+                    // cached for the run, and every context relying on this fallback was cached as unresolvable (#847).
+                    _logger.LogWarning("Graph answered a document library enumeration without its drives collection; contexts depending on this fallback will not be cached as unresolvable");
+                    return DocumentLibraryDrivesResult.TransientFailure;
+                }
                 _documentLibraryDrivesBySite.TryAdd(spSiteId, drives);
                 return DocumentLibraryDrivesResult.Found(drives);
             }

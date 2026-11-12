@@ -13,6 +13,7 @@ import {
   WindowNote,
   formatCount,
   formatPct,
+  leftOutNote,
   queryFor,
   toStackedSeries,
   useWebActivityStyles,
@@ -40,6 +41,10 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
     kpis.countryPageViews,
     t('webActivity.geography.otherCountries'),
   );
+
+  // Without See PII, places fewer than the minimum people visited from are left out - with the smallest shown, so none
+  // can be worked out from the totals - and fall into the remainder. Each card says how many.
+  const countriesLeftOut = leftOutNote(t, data.minimumGroupSize, data.withheldCountries);
 
   const items: KpiDefinition[] = [
     {
@@ -112,6 +117,7 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
       <div className={styles.grid}>
         <SectionCard
           title={t('webActivity.geography.countries')}
+          note={countriesLeftOut}
           query={queryFor(data.queries, 'geo-countries')}
           isEmpty={data.countries.length === 0}
           emptyMessage={t('webActivity.geography.countriesEmpty')}
@@ -126,6 +132,7 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
 
         <SectionCard
           title={t('webActivity.geography.cities')}
+          note={leftOutNote(t, data.minimumGroupSize, data.withheldCities)}
           query={queryFor(data.queries, 'geo-cities')}
           isEmpty={data.cities.length === 0}
         >
@@ -134,6 +141,7 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
 
         <SectionCard
           title={t('webActivity.geography.regions')}
+          note={leftOutNote(t, data.minimumGroupSize, data.withheldProvinces)}
           query={queryFor(data.queries, 'geo-provinces')}
           isEmpty={data.provinces.length === 0}
           emptyMessage={t('webActivity.geography.regionsEmpty')}
@@ -144,6 +152,7 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
         <SectionCard
           title={t('webActivity.geography.countryReach.title')}
           description={t('webActivity.geography.countryReach.description')}
+          note={countriesLeftOut}
           query={queryFor(data.queries, 'geo-countries')}
           isEmpty={data.countries.length === 0}
         >
@@ -155,6 +164,7 @@ export default function GeographyPanel({ data }: { data: WebActivityGeography })
         <SectionCard
           title={t('webActivity.geography.countryMix.title')}
           description={t('webActivity.geography.countryMix.description')}
+          note={countriesLeftOut}
           query={queryFor(data.queries, 'geo-country-over-time')}
           isEmpty={data.countryOverTime.length === 0}
         >

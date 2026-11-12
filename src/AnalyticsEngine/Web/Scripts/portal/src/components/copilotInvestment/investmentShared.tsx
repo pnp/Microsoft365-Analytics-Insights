@@ -583,7 +583,10 @@ export function trustText(t: TFunction, reason: InvestmentTrustReason): string |
     case 'creditsPartial':
       return t('copilotInvestment.trust.creditsPartial', { share: formatShare(n(v, 'share')) });
     case 'creditsUnresolved':
-      return t('copilotInvestment.trust.creditsUnresolved', { credits: formatCredits(n(v, 'credits')), objects: count(n(v, 'objects')) });
+      // Withheld from a reader without See PII when one to four unmatched objects hold the balances: said, never a 0.
+      return v.credits === null
+        ? t('copilotInvestment.trust.creditsUnresolvedWithheld', { objects: count(n(v, 'objects')) })
+        : t('copilotInvestment.trust.creditsUnresolved', { credits: formatCredits(n(v, 'credits')), objects: count(n(v, 'objects')) });
     case 'creditsMissing':
       return t('copilotInvestment.trust.creditsMissing');
     case 'creditsUnavailable':

@@ -2,6 +2,7 @@ import { makeStyles, mergeClasses, Card, MessageBar, MessageBarBody, Text } from
 import type { CopilotAdoptionSummary } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
+import { SmallestGroupWithheldNote } from './adoptionShared';
 import { formatNumber, plural, useT, type TranslationKey } from '../../i18n';
 import {
   SEAT_HOLDER_ACTION_ASSUMPTION,
@@ -311,6 +312,7 @@ export default function SeatHolderTimeSavedModel({
               </tbody>
             </table>
           </div>
+          <SmallestGroupWithheldNote withheld={summary.smallestGroupsWithheld} breakdowns={['departments']} />
         </Card>
       )}
     </div>

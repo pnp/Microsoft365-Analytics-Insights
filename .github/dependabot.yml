@@ -15,6 +15,12 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    # TypeScript 7 (the native compiler) fails the build: the translation gate, src/i18n/lint/hardcodedStrings.ts,
+    # walks the TypeScript compiler API, which TypeScript 7 does not expose the same way (TS2694/TS2339, #836).
+    # Take it in a deliberate upgrade once that lint supports it.
+    ignore:
+      - dependency-name: typescript
+        versions: [">=7.0.0"]
     groups:
       development-dependencies:
         dependency-type: development
@@ -30,6 +36,11 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 3
+    # ts-jest 29 does not accept TypeScript 7, so npm ci fails with ERESOLVE (#840). Upgrade TypeScript, jest and
+    # ts-jest together in a deliberate change, not through the development-dependencies group.
+    ignore:
+      - dependency-name: typescript
+        versions: [">=7.0.0"]
     groups:
       development-dependencies:
         dependency-type: development

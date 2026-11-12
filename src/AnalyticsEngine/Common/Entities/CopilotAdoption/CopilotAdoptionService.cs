@@ -185,6 +185,8 @@ namespace Common.Entities.CopilotAdoption
 
             if (licenceTypes == null || licenceTypes.Count == 0)
             {
+                (_telemetry as ICopilotAdoptionProgressPlan)?.SetPlan(
+                    new[] { CopilotAdoptionSteps.LicenceTypes }, blocked: licenceTypes == null);
                 if (licenceTypes == null)
                 {
                     // The query FAILED, which is not the same as a tenant with no licence data. Without
@@ -354,23 +356,10 @@ namespace Common.Entities.CopilotAdoption
                 }
             }
 
-            probeWatch.Stop();
-
             // Six to eight sequential round trips (the two report-period probes run only when a snapshot
             // exists), each of which can gate a whole section of the report. Left sequential on purpose: they
             // are cheap existence probes, and the licensed-user and opportunity queries below cannot be
             // shaped until their answers are known.
-            var probesFailed = _firstStepFailures.TryGetValue(
-                CopilotAdoptionSteps.DataSourceProbes, out var probesFailure);
-            summary.Diagnostics.Record(
-                CopilotAdoptionSteps.DataSourceProbes, probeWatch.ElapsedMilliseconds, probesFailed);
-            _telemetry.StepCompleted(
-                probesOperation,
-                CopilotAdoptionSteps.DataSourceProbes,
-                probeWatch.ElapsedMilliseconds,
-                probesFailed,
-                probesFailure);
-
             if (summary.DataSources.CopilotUsageReportObfuscated)
             {
                 CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.CopilotUsageReportConcealed);
@@ -403,6 +392,15 @@ namespace Common.Entities.CopilotAdoption
                     new SqlParameter("@from", CopilotAdoptionScoring.WindowStartUtc(nowUtc, agentProbeHistoryDays)),
                     new SqlParameter("@toExclusive", nowUtc)) == 1;
             }
+
+            probeWatch.Stop();
+            var probesFailed = _firstStepFailures.TryGetValue(
+                CopilotAdoptionSteps.DataSourceProbes, out var probesFailure);
+            summary.Diagnostics.Record(
+                CopilotAdoptionSteps.DataSourceProbes, probeWatch.ElapsedMilliseconds, probesFailed);
+            _telemetry.StepCompleted(
+                probesOperation, CopilotAdoptionSteps.DataSourceProbes,
+                probeWatch.ElapsedMilliseconds, probesFailed, probesFailure);
 
             // ----- 3-5. The heavy steps ---------------------------------------------------------
             // These run CONCURRENTLY. Every one of them depends only on the seat ids and the data-source
@@ -469,6 +467,19 @@ namespace Common.Entities.CopilotAdoption
             steps.Add(new AnalysisStep(CopilotAdoptionSteps.MicrosoftReportFigures,
                 output => BuildMicrosoftReportFiguresAsync(analysis, output, microsoftReportTo, cancellationToken)));
 
+            var auditProbeFailed = summary.WarningDetails.Any(detail =>
+                detail.Key == CopilotAdoptionWarningKeys.CouldNotLoad
+                && detail.Values.TryGetValue("query", out var query)
+                && Equals(query, CopilotAdoptionQueries.AuditDataProbe));
+            (_telemetry as ICopilotAdoptionProgressPlan)?.SetPlan(
+                new[] { CopilotAdoptionSteps.LicenceTypes, CopilotAdoptionSteps.DataSourceProbes }
+                    .Concat(steps.Select(step => step.Name))
+                    .Concat(new[] { CopilotAdoptionSteps.Scoring }),
+                blockedSteps: auditProbeFailed ? new[]
+                {
+                    CopilotAdoptionSteps.UnlicensedPopulation, CopilotAdoptionSteps.ResourceTypes,
+                    CopilotAdoptionSteps.AgentEstate,
+                } : null);
             await RunStepsAsync(analysis, steps, _maxConcurrentSteps, cancellationToken);
 
             var scoringOperation = _telemetry.StepStarted(CopilotAdoptionSteps.Scoring);
@@ -2310,7 +2321,9 @@ namespace Common.Entities.CopilotAdoption
         /// all</b> but does have unlicensed users or licence candidates, because that is the single most
         /// actionable thing this view can find: an acquired business that was never given Copilot and is
         /// using Chat anyway. The same <see cref="CopilotAdoptionOptions.MinSeatsPerSegment"/> floor is
-        /// applied to the combined population so one person in a domain is still not a data point.</para>
+        /// applied to the combined population so one person in a domain is still not a data point. A reader
+        /// without See PII is given each population floored on its own as well
+        /// (<see cref="CopilotAdoptionSmallGroups.EmailDomainsWithoutSmallPopulations"/>).</para>
         /// </remarks>
         private List<AdoptionDomainRow> BuildEmailDomains(CopilotAdoptionAnalysis analysis)
         {
@@ -2396,10 +2409,10 @@ namespace Common.Entities.CopilotAdoption
             // they represent instead. Ties break on size, so a large mediocre org outranks a tiny
             // terrible one.
             return rows
-                .OrderBy(r => r.LicensedUsers == 0 ? 1 : 0)
-                .ThenBy(r => r.LicensedUsers == 0 ? 0 : r.AdoptionRatePct)
-                .ThenByDescending(r => r.LicensedUsers)
-                .ThenByDescending(r => r.UnlicensedActiveUsers)
+                .OrderBy(r => r.LicensedUsers.GetValueOrDefault() == 0 ? 1 : 0)
+                .ThenBy(r => r.LicensedUsers.GetValueOrDefault() == 0 ? 0 : r.AdoptionRatePct.GetValueOrDefault())
+                .ThenByDescending(r => r.LicensedUsers.GetValueOrDefault())
+                .ThenByDescending(r => r.UnlicensedActiveUsers.GetValueOrDefault())
                 .ThenBy(r => r.Segment, StringComparer.OrdinalIgnoreCase)
                 .Take(_options.TopSegments)
                 .ToList();
@@ -3372,7 +3385,7 @@ namespace Common.Entities.CopilotAdoption
             unlicensed.UsageByDepartment = rows
                 .GroupBy(r => string.IsNullOrWhiteSpace(r.Department) ? "(no department)" : r.Department.Trim())
                 .Where(g => g.Count() >= _options.MinSeatsPerSegment)
-                .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Sum(r => (double)r.Interactions) })
+                .Select(g => new AdoptionCategory { Label = g.Key, Value = g.Sum(r => (double)r.Interactions), People = g.Count() })
                 .OrderByDescending(c => c.Value)
                 .Take(_options.TopSegments)
                 .ToList();

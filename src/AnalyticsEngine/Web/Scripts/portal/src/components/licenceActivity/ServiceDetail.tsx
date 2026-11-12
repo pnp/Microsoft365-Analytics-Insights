@@ -7,7 +7,7 @@ import { useT } from '../../i18n';
 import WorkloadDistributions, { type DistributionComparison } from './WorkloadDistributions';
 import LicenceScopePicker from './LicenceScopePicker';
 import AdoptionScoreBar, { AdoptionScoreInfo } from './AdoptionScoreBar';
-import { formatCount, formatScore, licenceName } from './format';
+import { formatCount, formatScore, licenceName, withheldText } from './format';
 import {
   ALL_LICENCES,
   scopeAssignedUsers,
@@ -112,9 +112,9 @@ function ServiceDetail({ overview, scope, onScopeChange, onShowPeople }: Service
   const everyoneScore = overview.allLicences?.adoptionScore ?? null;
   const rank = licence ? scoreRank(overview.licences, licence.licenceTypeId) : null;
   const workloads = scopeWorkloads(overview, scope);
-  // A reader without See PII, and a licence so few people hold that its figures would be theirs.
+  // A reader without See PII, and a licence whose figures would be, or would give back, a handful of people's.
   const withheldNote = licence?.withheld
-    ? t('licenceActivity.withheld.detail', { count: formatCount(overview.query.minimumGroupSize ?? 0) })
+    ? withheldText(t, licence, overview.query.minimumGroupSize, true)
     : null;
 
   return (

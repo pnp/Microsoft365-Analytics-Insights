@@ -121,9 +121,35 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>
         /// People in this department who created, published or shared a Copilot Studio agent in the period
         /// (#647). Null when no Copilot Studio authoring events have been imported, so a missing feed is
-        /// not read as "nobody here builds agents".
+        /// not read as "nobody here builds agents" - or, with <see cref="AgentBuildersWithheld"/>, when withheld.
         /// </summary>
         [JsonProperty("agentBuilders")]
         public int? AgentBuilders { get; set; }
+
+        /// <summary>
+        /// Why the licensed side is withheld when it has enough people: one of <see cref="SmallGroupWithheldReasons"/>,
+        /// for a reader without See PII only (#844). Left out of the JSON otherwise, as are the three below.
+        /// </summary>
+        [JsonProperty("licensedWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string LicensedWithheld { get; set; }
+
+        /// <summary>Why the unlicensed side is withheld when it has enough people.</summary>
+        [JsonProperty("unlicensedWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string UnlicensedWithheld { get; set; }
+
+        /// <summary>Why the agent figures are withheld when <see cref="AgentFiguresWithheld"/> is not their own size.</summary>
+        [JsonProperty("agentFiguresWithheldReason", NullValueHandling = NullValueHandling.Ignore)]
+        public string AgentFiguresWithheldReason { get; set; }
+
+        /// <summary>Why <see cref="AgentBuilders"/> is withheld from a reader without See PII.</summary>
+        [JsonProperty("agentBuildersWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string AgentBuildersWithheld { get; set; }
+
+        /// <summary>The fewest people a figure on this row may describe, when any of them is withheld for a reader without See PII.</summary>
+        [JsonProperty("minimumPeople", NullValueHandling = NullValueHandling.Ignore)]
+        public int? MinimumPeople { get; set; }
+
+        /// <summary>A copy, so a reader's trimmed summary never edits the cached row.</summary>
+        internal AdoptionCombinedSegmentRow Clone() => (AdoptionCombinedSegmentRow)MemberwiseClone();
     }
 }

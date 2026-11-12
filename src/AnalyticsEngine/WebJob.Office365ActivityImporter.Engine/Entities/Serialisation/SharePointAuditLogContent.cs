@@ -50,7 +50,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Entities.Serialisation
             }
             catch (KeyNotFoundException)
             {
-                logger.LogWarning($"Could not find SP event for audit-log content ID {this.Id} in cached SP events when assigning web for URL {url}");
+                // By content id: the URL is a file's or a site's address, tenant content (#853)
+                logger.LogWarning($"Could not find SP event for audit-log content ID {this.Id} in cached SP events when assigning web for its {(createIfNotFound ? "site" : "item")} URL");
             }
         }
     }

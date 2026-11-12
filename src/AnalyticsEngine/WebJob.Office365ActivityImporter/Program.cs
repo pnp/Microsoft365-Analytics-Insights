@@ -213,6 +213,9 @@ namespace WebJob.Office365ActivityImporter
 
                 var auth = new GraphAppIndentityOAuthContext(logger, configuredSettings.ClientID, configuredSettings.TenantGUID.ToString(), configuredSettings.ClientSecret, configuredSettings.KeyVaultUrl, configuredSettings.UseClientCertificate);
 
+                // Creds is null until this has run, and the mode used to pass it anyway (#853)
+                await auth.InitClientCredential();
+
                 var newCall = await Engine.Entities.Serialisation.CallRecordDTO.SaveNewCallToDB(
                     commandLine.CallId,
                     new Engine.Graph.ManualGraphCallClient(auth, logger),
@@ -354,6 +357,10 @@ namespace WebJob.Office365ActivityImporter
             // take longer than the subscription lives, and a failed create must be retried in minutes, not a cycle later.
             var callSubscriptionMaintainer = CallSubscriptionMaintainer.StartIfEnabled(configuredSettings, webHookUrl, logger);
 
+            // Administrators' requests from the portal's Service configuration page to reprocess or clear the Teams calls dead-letter
+            // queue: checked about once a minute on their own timer, independently of the cycle. Null without calls import or Storage.
+            var callDeadLetterRequests = CallDeadLetterRequestPoller.StartIfEnabled(configuredSettings);
+
             // Run app
             var stages = StageTracker.Process;
             using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.ActivityJob))
@@ -392,7 +399,16 @@ namespace WebJob.Office365ActivityImporter
                                 if (callQueueProcessor == null)
                                 {
                                     var newProcessor = new CallQueueProcessor(configuredSettings, configuredSettings.TenantGUID.ToString(), userScopeProvider);
-                                    await newProcessor.Init();
+                                    try
+                                    {
+                                        await newProcessor.Init();
+                                    }
+                                    catch
+                                    {
+                                        // Tried again next cycle with a new processor: don't leave this one's Service Bus client open (#847).
+                                        newProcessor.Dispose();
+                                        throw;
+                                    }
                                     callQueueProcessor = newProcessor;
                                 }
 

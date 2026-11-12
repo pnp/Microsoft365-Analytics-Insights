@@ -15,6 +15,7 @@ export const charts = {
 
   // Donut chart
   'charts.donut.sliceTitle': '{label}: {value} ({percent}%)',
+  'charts.donut.sliceTitleWithoutShare': '{label}: {value}',
   'charts.donut.legendValue': '{value} ({percent}%)',
 
   // Gauge chart
@@ -31,6 +32,7 @@ export const charts = {
 
   // Matrix chart
   'charts.matrix.cellTitle': '{row} / {column}: {value} {valueLabel}',
+  'charts.matrix.cellWithheld': '{row} / {column}: withheld - fewer than {count} people, so it is not shown',
   'charts.matrix.legendShadedByRow': '{columnLabel} \u00b7 shaded within each row \u00b7 none',
   'charts.matrix.legendShadedOverall': '{columnLabel} \u00b7 none',
   'charts.matrix.most': 'most',

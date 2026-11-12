@@ -308,6 +308,132 @@ namespace Tests.UnitTests
 
         #endregion
 
+        #region Small populations, for a reader without See PII (#844)
+
+        [TestMethod]
+        public void WithoutSeePii_ADomainOf20SeatHoldersAnd3ChatUsers_WithholdsTheChatCount_AndKeepsTheSeatHolders()
+        {
+            // The row is listed, because 23 people are on it, but its Chat count is about three of them. It used to be
+            // floored on the two populations together, so the three were published.
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.Options = new CopilotAdoptionOptions { WindowDays = 28 };
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 20).Select(i =>
+                Scored($"seat{i}@contoso.com", i < 12 ? 60 : 0, i < 12 ? AdoptionBand.Established : AdoptionBand.NeverUsed)));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 3).Select(i => Scored($"seat{i}@fabrikam.com", 30, AdoptionBand.Developing)));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 8).Select(i => Scored($"seat{i}@northwind.example", 50, AdoptionBand.Developing)));
+            analysis.UnlicensedUsers.AddRange(Enumerable.Range(0, 3).Select(i => Unlicensed($"chat{i}@contoso.com", 40)));
+            analysis.UnlicensedUsers.AddRange(Enumerable.Range(0, 20).Select(i => Unlicensed($"chat{i}@fabrikam.com", 15)));
+            analysis.UnlicensedUsers.AddRange(Enumerable.Range(0, 9).Select(i => Unlicensed($"chat{i}@northwind.example", 25)));
+
+            Service().FinaliseSummary(analysis);
+            var cached = analysis.Summary.EmailDomains.ToDictionary(d => d.Segment);
+            Assert.AreEqual(3, cached["contoso.com"].UnlicensedActiveUsers, "The control: the cached row, and a reader with See PII, has the three.");
+            Assert.AreEqual(3, cached["fabrikam.com"].LicensedUsers);
+
+            var floored = analysis.Summary.WithoutIndividualData().EmailDomains.ToDictionary(d => d.Segment);
+
+            var contoso = floored["contoso.com"];
+            Assert.IsNull(contoso.UnlicensedActiveUsers, "Three Chat users: withheld, never 0.");
+            Assert.AreEqual(SmallGroupWithheldReasons.FewPeople, contoso.UnlicensedUsersWithheld);
+            Assert.AreEqual(5, contoso.MinimumPeople);
+            Assert.AreEqual(20, contoso.LicensedUsers, "Twenty seat holders are enough on their own.");
+            Assert.AreEqual(12, contoso.ActiveUsers);
+            Assert.AreEqual(60d, contoso.AdoptionRatePct);
+            Assert.IsNull(contoso.SeatHoldersWithheld);
+
+            // The mirror image: three seat holders beside twenty Chat users. Every seat-holder figure goes, the count too.
+            var fabrikam = floored["fabrikam.com"];
+            Assert.AreEqual(SmallGroupWithheldReasons.FewPeople, fabrikam.SeatHoldersWithheld);
+            foreach (var figure in new object[]
+            {
+                fabrikam.LicensedUsers, fabrikam.ActiveUsers, fabrikam.HabitualUsers, fabrikam.NeverUsedUsers, fabrikam.AdoptionRatePct,
+                fabrikam.AverageAdoptionScore, fabrikam.ReclaimableSeats, fabrikam.InteractionsPerLicensedUser, fabrikam.CoworkPrimeCandidates,
+            })
+            {
+                Assert.IsNull(figure, "A withheld seat holder's figure is withheld, never 0.");
+            }
+
+            // The tenant's totals are published, so with a domain's few withheld, the totals less the rows shown would give
+            // them back: in each column the smallest other domain shown goes too - here northwind, in both - and the
+            // largest stays, the difference already holding eleven seat holders and twelve Chat users.
+            var northwind = floored["northwind.example"];
+            Assert.IsNull(northwind.LicensedUsers);
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, northwind.SeatHoldersWithheld);
+            Assert.IsNull(northwind.UnlicensedActiveUsers);
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, northwind.UnlicensedUsersWithheld);
+            Assert.AreEqual(20, fabrikam.UnlicensedActiveUsers);
+
+            Assert.AreEqual(3, analysis.Summary.EmailDomains.Single(d => d.Segment == "contoso.com").UnlicensedActiveUsers,
+                "The cached summary is shared between readers and must never be edited for one.");
+            Assert.IsNull(analysis.Summary.EmailDomains.Single(d => d.Segment == "contoso.com").UnlicensedUsersWithheld);
+        }
+
+        [TestMethod]
+        public void WithoutSeePii_NoDomainTotalLessTheRowsShown_GivesBackAFewPeople_AndTheCachedRowsAreNeverEdited()
+        {
+            // Every column a reader without See PII is given answers to a total published beside it: the scored seat
+            // holders, the unlicensed users counted and the recommended candidates. Whatever the tenant, that total less
+            // the rows shown - the withheld rows together with every domain the table leaves out - is nobody or at least
+            // five people (unless no row shows any of them, when it is the total itself), and no figure shown describes
+            // one to four.
+            var random = new Random(844);
+            for (var tenant = 0; tenant < 300; tenant++)
+            {
+                var analysis = new CopilotAdoptionAnalysis();
+                analysis.Summary.Options = new CopilotAdoptionOptions { WindowDays = 28 };
+                var domains = random.Next(1, 14);
+                for (var d = 0; d < domains; d++)
+                {
+                    var domain = $"org{d}.example";
+                    var seats = random.Next(0, 4) == 0 ? random.Next(1, 5) : random.Next(0, 25);
+                    var chat = random.Next(0, 3) == 0 ? random.Next(1, 5) : random.Next(0, 12);
+                    var candidates = random.Next(0, 3) == 0 ? random.Next(1, 5) : random.Next(0, 9);
+                    analysis.LicensedUsers.AddRange(Enumerable.Range(0, seats).Select(i =>
+                        Scored($"seat{i}@{domain}", random.Next(0, 90), (AdoptionBand)random.Next(0, 6))));
+                    analysis.UnlicensedUsers.AddRange(Enumerable.Range(0, chat).Select(i => Unlicensed($"chat{i}@{domain}", random.Next(1, 90))));
+                    analysis.Opportunities.AddRange(Enumerable.Range(0, candidates).Select(i => Candidate($"candidate{i}@{domain}", recommended: true)));
+                }
+
+                Service().FinaliseSummary(analysis);
+                var summary = analysis.Summary;
+                var before = Newtonsoft.Json.JsonConvert.SerializeObject(summary.EmailDomains);
+                var rows = summary.WithoutIndividualData().EmailDomains;
+
+                Assert.AreEqual(before, Newtonsoft.Json.JsonConvert.SerializeObject(summary.EmailDomains),
+                    $"Tenant {tenant}: the cached rows, which a reader with See PII is given, are untouched.");
+                Assert.AreEqual(summary.EmailDomains.Count, rows.Count, $"Tenant {tenant}: a withheld row is shown as withheld, not dropped.");
+
+                AssertNothingGivesBackAFew(tenant, "seat holders", summary.ScoredUsers, rows.Select(r => r.LicensedUsers));
+                AssertNothingGivesBackAFew(tenant, "Chat users", summary.Unlicensed.ActiveUsers, rows.Select(r => r.UnlicensedActiveUsers));
+                AssertNothingGivesBackAFew(tenant, "candidates", summary.RecommendedForLicence, rows.Select(r => r.RecommendedForLicence));
+
+                foreach (var row in rows)
+                {
+                    Assert.AreEqual(row.LicensedUsers == null, row.ActiveUsers == null, $"Tenant {tenant}: a seat holder's figures go together.");
+                    Assert.AreEqual(row.LicensedUsers == null, row.SeatHoldersWithheld != null);
+                    Assert.AreEqual(row.UnlicensedActiveUsers == null, row.UnlicensedUsersWithheld != null);
+                    Assert.AreEqual(row.RecommendedForLicence == null, row.LicenceCandidatesWithheld != null);
+                }
+            }
+        }
+
+        private static void AssertNothingGivesBackAFew(int tenant, string population, int total, IEnumerable<int?> shown)
+        {
+            var counts = shown.ToList();
+            Assert.IsFalse(counts.Any(n => n > 0 && n < 5), $"Tenant {tenant}: a {population} figure of one to four people is shown.");
+
+            // With none of them shown, the difference is the total itself: a figure over the reader's whole scope, which
+            // describes the same people whatever the table shows (#872's judgement call 1).
+            var shownPeople = counts.Sum(n => n ?? 0);
+            if (shownPeople == 0) return;
+
+            var givenBack = total - shownPeople;
+            Assert.IsFalse(givenBack > 0 && givenBack < 5,
+                $"Tenant {tenant}: the {population} total less the rows shown is {givenBack} people - a withheld row, given back.");
+        }
+
+        #endregion
+
         #region Narrowing the whole report
 
         [TestMethod]

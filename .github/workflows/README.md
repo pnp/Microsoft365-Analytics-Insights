@@ -109,6 +109,13 @@ If it fails, rebuild the extension and commit the package, as
   New tests automatically join a shard; no category or test is dropped.
 * Each runner has its own LocalDB instance and Azurite. Separate catalogs on one shared SQL
   instance would not isolate the global staging tables.
+* `Start-LocalDb.ps1` starts LocalDB before the tests and prints the sector size of every volume it
+  writes to. Some runner VMs have disks that report physical sectors larger than 4 KB, which no
+  version of SQL Server supports ([Learn](https://learn.microsoft.com/en-us/troubleshoot/sql/database-engine/database-file-operations/troubleshoot-os-4kb-disk-sector-size)).
+  On those, it moves LocalDB's instances, its default database location and the test binaries'
+  folder to a virtual disk, which reports 4 KB sectors, before LocalDB starts. If it can't, the
+  step fails at once and says to re-run the job. Set `LOCALDB_FORCE_RELOCATION=true` to move the
+  files on any runner, to test the move.
 * Runs the `TimeZone` test category again in Romance Standard Time (UTC+1, or UTC+2 in summer) at
   the end of the `migrations` shard, which finishes well before `core`. The runners' clock is UTC,
   where a local and a UTC timestamp have the same ticks, so in the main run these tests are
@@ -118,10 +125,19 @@ If it fails, rebuild the extension and commit the package, as
   every step limited to one shard names a shard that exists, so such a step can't silently stop running.
 * Downloadable test binaries contain synthetic configuration only. Credentials are substituted
   into the executing runner's config after download, and that config is never re-uploaded.
+* Dependabot and fork pull requests get no repository secrets, so their runs have no client secret.
+  A test that never calls the test tenant must not need one: give it its dependencies without a
+  credential (`OfflineSqlActivityPersistence` for the audit-event SQL path). A test that does call it
+  starts with `LiveCredentials.RequireGraphClientSecret`, which makes it Inconclusive without a secret.
+  Every other run sets `REQUIRE_LIVE_CREDENTIALS=true`, which turns that skip into a failure. Don't
+  add the secrets as Dependabot secrets: dependency code, npm lifecycle scripts included, would run
+  beside them.
 * Runs portal production/test type checks and the complete Vitest suite independently on Linux.
   The i18n suite is included. `npm run typecheck:tests` uses `tsconfig.tests.json`, because
   production TypeScript excludes test files and Vitest alone does not type-check them.
-* Uploads per-shard TRX and portal JUnit results, with slow .NET tests in each job summary.
+* Uploads per-shard TRX and portal JUnit results. Each shard's job summary lists its slowest .NET
+  tests and every test that did not run, with the reason it gave, and warns when a test that needs
+  a live credential was skipped, so a green run doesn't overstate what ran.
 * Preserves required checks `test_dotnet (Release)` and `test_aitracker`. The former is a final
   gate that fails if any applicable build, shard, portal or CI-helper check fails or is cancelled.
   `workflow-contract.test.mjs` pins those names (and `gitleaks`), that their workflows report on
@@ -129,6 +145,9 @@ If it fails, rebuild the extension and commit the package, as
   that the `ci` and `pr` path triggers cover everything `ci-paths.json` selects tests for.
 * Cancels superseded PR runs; jobs have explicit timeouts. CI helpers and actionlint run without
   tenant credentials. NuGet caches are keyed on dependency manifests, not build outputs.
+* Downloaded tools are pinned by SHA-256 and their downloads retry a transient failure: actionlint
+  here, gitleaks in `secret-scan.yml`. Change a tool's version and its checksum together, taking the
+  checksum from that release's published checksums file.
 
 All workflow actions are pinned to immutable commits. Dependabot proposes updates against `dev`:
 actions weekly, and the four npm packages (the portal, AITracker, the SPFx extension and the
@@ -143,6 +162,11 @@ its own. Two of them need more than a green build before merging, as
   Dependabot proposes no major update and no new SPFx release (SPFx ships each release as a semver
   minor), because the SPFx generator chose those versions together. Take them in a deliberate SPFx
   upgrade.
+
+Dependabot also proposes no TypeScript 7 for the portal or AITracker. The portal's translation gate
+(`src/i18n/lint/hardcodedStrings.ts`) uses the TypeScript compiler API, which TypeScript 7 doesn't
+expose the same way, and AITracker's `ts-jest` 29 doesn't accept it (#836, #840). Take it in a
+deliberate upgrade.
 
 To validate workflow changes locally:
 

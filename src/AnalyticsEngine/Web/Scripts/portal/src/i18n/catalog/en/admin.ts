@@ -72,6 +72,7 @@ export const admin = {
   'admin.costConnection.sourceNotFound': 'The cost resource was not found or access was trimmed. This is not an empty balance.',
   'admin.costConnection.resetWarning': 'Reset the completed test so you can run it again. Saved test results are kept. This does not start a new test; select Run or resume data check afterwards.',
   'admin.costConnection.stop': 'Stop after current step',
+  'admin.costConnection.stoppedAtLimit': 'The data check stopped after {count} steps so that it does not keep running unattended. Its progress is saved: select {action} to continue.',
   'admin.costConnection.cancel': 'Cancel',
   'admin.costConnection.confirm': 'Confirm',
   'admin.costConnection.disconnectWarning': 'Disconnect removes the active connection and token cache. A read already in flight may finish. Historical SQL data is preserved. Tenant consent and sessions must be revoked separately. Disconnect first to select a different reader.',
@@ -264,6 +265,9 @@ export const admin = {
   'admin.teams.teamList.columnAuthorised': 'Authorised?',
   'admin.teams.teamList.columnGraphId': 'Graph ID',
   'admin.teams.teamList.columnTeamName': 'Team Name',
+  'admin.teams.teamList.connectRequired':
+    "The portal doesn't hold a Microsoft Teams connection for your account, so it can't read or change which Teams are authorised. Reload this page and select Connect to Microsoft Teams, then try again.",
+  'admin.teams.teamList.retry': 'Try again',
   'admin.teams.teamList.saveSuccess':
     'Selected Teams enabled for deep analytics successfully. It may take several hours before the extra metadata appears in any reports.',
   'admin.teams.teamList.storageNotConfigured': "Teams deep analytics can't be enabled because Azure Storage is not configured for this deployment. Add a Storage connection string so Teams authorisation tokens can be stored.",
@@ -428,6 +432,8 @@ export const admin = {
   'admin.serviceConfiguration.webhook.active': 'Active',
   'admin.serviceConfiguration.webhook.callRecordsPermission': 'CallRecords.Read.All',
   'admin.serviceConfiguration.webhook.couldNotCheck': "Couldn't check",
+  'admin.serviceConfiguration.webhook.detail.subscriptionsUnreadable':
+    "Microsoft Graph answered without a readable list of subscriptions, so the webhook couldn't be checked. Reload the page to try again.",
   'admin.serviceConfiguration.webhook.detail.webAppUrlMissing': "WebAppURL is not configured, so the webhook subscription URL can't be determined.",
   'admin.serviceConfiguration.webhook.missingHelp':
     'The importer web-job registers and renews this on every import cycle. If it stays missing, check the importer web-job is running and that its app registration has the {permission} Microsoft Graph application permission.',

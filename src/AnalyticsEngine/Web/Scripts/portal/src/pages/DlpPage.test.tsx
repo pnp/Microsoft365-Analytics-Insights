@@ -67,6 +67,9 @@ const summary = (over: Partial<DlpSummary> = {}): DlpSummary => ({
   tenantTopPolicies: [],
   tenantBlockedCount: 3,
   tenantAuditedCount: 1,
+  minimumGroupSize: null,
+  withheldRows: 0,
+  withheldRowsByTable: null,
   ...over,
 });
 
@@ -96,6 +99,65 @@ beforeEach(() => {
 });
 
 describe('DlpPage', () => {
+  it('says that agents, policies and labels of fewer than five people are left out, and the smallest beside them, for a reader without See PII', async () => {
+    mockSummary.mockResolvedValue(summary({ minimumGroupSize: 5, withheldRows: 2, topUsers: [] }));
+    renderWithProvider(<DlpPage />);
+
+    expect(
+      await screen.findByText(
+        'An agent, policy or sensitivity label that affected fewer than 5 people is not listed, nor is a policy under an agent that affected fewer. When a table or an agent’s policies leave one out, or a table has more rows than it can list, the one that affected the fewest people of those still listed is left out too, so that none can be worked out from the totals.',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'A policy that matched the activity of fewer than 5 people is not listed. When one is left out, or there are more policies than can be listed, the one that matched the activity of the fewest people of those still listed is left out too, so that none can be worked out from the totals.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('says a table whose every row is left out lists nothing to protect people, not that the period was empty', async () => {
+    mockSummary.mockResolvedValue(
+      summary({
+        minimumGroupSize: 5,
+        withheldRows: 2,
+        withheldRowsByTable: { agents: 0, policies: 2, sensitivityLabels: 0, tenantPolicies: 0 },
+        topUsers: [],
+        topPolicies: [],
+      }),
+    );
+    renderWithProvider(<DlpPage />, { access: { administration: false, seePii: false } });
+
+    expect(
+      await screen.findByText('Nothing is listed: every row in this period is left out so that nobody can be singled out.'),
+    ).toBeInTheDocument();
+    // The labels and tenant policies tables left nothing out: they really are empty.
+    expect(screen.getAllByText('Nothing in this period.')).toHaveLength(2);
+  });
+
+  it('says the same in Spanish', async () => {
+    await loadCatalog('es');
+    mockSummary.mockResolvedValue(
+      summary({
+        minimumGroupSize: 5,
+        withheldRows: 1,
+        withheldRowsByTable: { agents: 0, policies: 0, sensitivityLabels: 0, tenantPolicies: 1 },
+        topUsers: [],
+      }),
+    );
+    renderWithProvider(<DlpPage />, { language: 'es', access: { administration: false, seePii: false } });
+
+    expect(await screen.findByText(translateStatic('es', 'dlp.table.allWithheld'))).toBeInTheDocument();
+    expect(screen.getByText(translateStatic('es', 'dlp.affected.withheldNote', { count: formatNumber(5) }))).toBeInTheDocument();
+    expect(screen.getByText(translateStatic('es', 'dlp.tenant.withheldNote', { count: formatNumber(5) }))).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('Nothing is listed');
+  });
+
+  it('says nothing is left out to a reader with See PII', async () => {
+    renderWithProvider(<DlpPage />);
+
+    expect(await screen.findByText('Contoso HR Agent')).toBeInTheDocument();
+    expect(screen.queryByText(/is not listed/)).not.toBeInTheDocument();
+  });
   it('shows the blocked/audited split, the agents that were affected, and the policies responsible', async () => {
     renderWithProvider(<DlpPage />);
 

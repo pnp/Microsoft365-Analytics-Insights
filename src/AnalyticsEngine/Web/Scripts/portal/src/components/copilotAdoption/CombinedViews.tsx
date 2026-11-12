@@ -51,6 +51,9 @@ export type AgentAdoptionTotals = Pick<
 
 const NOT_MEASURED = '\u2014';
 
+/** The server's floor for a reader without See PII (`SmallPopulations.MinPeopleWithoutSeePii`), when a row does not carry it. */
+const WITHHELD_FLOOR = 5;
+
 /** A one-decimal figure in the reader's number format, or a dash when it was not measured. */
 function formatTenth(value: number | null | undefined): string {
   return value === null || value === undefined
@@ -223,7 +226,7 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
                 users: formatCount(b.users),
                 interactions: formatCount(b.interactions),
                 pct: formatPct(b.sharePct),
-                perUser: b.interactionsPerUser,
+                perUser: formatTenth(b.interactionsPerUser),
               })}
             >
               {b.sharePct >= 8 ? formatPct(b.sharePct) : ''}
@@ -243,7 +246,7 @@ export function ConcentrationBar({ bands }: { bands: AdoptionConcentrationBand[]
             <Text size={200}>
               <strong>{concentrationLabel(t, b.label)}</strong>{' '}
               <span className={styles.muted}>
-                {t('copilotAdoption.combinedViews.concentration.legendDetail', { users: formatCount(b.users), perUser: b.interactionsPerUser })}
+                {t('copilotAdoption.combinedViews.concentration.legendDetail', { users: formatCount(b.users), perUser: formatTenth(b.interactionsPerUser) })}
               </span>
             </Text>
           </div>
@@ -288,6 +291,23 @@ export function CombinedSegmentTable({
   const maxUnlicensed = Math.max(...rows.map((r) => r.interactionsPerUnlicensedUser ?? 0), 1);
   // A side with fewer than the minimum people behind it arrives null: withheld, not unmeasured.
   const withheld = t('copilotAdoption.shared.segmentTable.withheld');
+  // For a reader without See PII a larger side, the agent figures or the builders can be withheld too, when with the
+  // tenant's figures they would give back a department too small to list (#844).
+  const complementWithheld = t('copilotAdoption.combinedViews.segment.withheld.revealsSmallerGroup');
+  const buildersWithheld = (r: AdoptionCombinedSegmentRow): string | undefined => {
+    const count = formatCount(r.minimumPeople ?? WITHHELD_FLOOR);
+    switch (r.agentBuildersWithheld) {
+      case undefined:
+      case null:
+        return undefined;
+      case 'fewPeople':
+        return t('copilotAdoption.combinedViews.segment.builders.fewPeople', { count });
+      case 'revealsSmallerGroup':
+        return t('copilotAdoption.combinedViews.segment.builders.revealsSmallerGroup', { count });
+      default:
+        return withheld;
+    }
+  };
 
   // Conditional shading rather than a bar: this table is read by scanning for the outliers, and a
   // colour ramp finds them faster than eight columns of numbers.
@@ -335,9 +355,16 @@ export function CombinedSegmentTable({
           </thead>
           <tbody>
             {rows.map((r) => {
-              const licensedTitle = r.licensedUsers === null ? withheld : undefined;
-              const unlicensedTitle = r.unlicensedActiveUsers === null ? withheld : undefined;
-              const agentTitle = r.agentFiguresWithheld ? withheld : undefined;
+              const licensedTitle = r.licensedWithheld === 'revealsSmallerGroup'
+                ? complementWithheld
+                : r.licensedUsers === null ? withheld : undefined;
+              const unlicensedTitle = r.unlicensedWithheld === 'revealsSmallerGroup'
+                ? complementWithheld
+                : r.unlicensedActiveUsers === null ? withheld : undefined;
+              const agentTitle = r.agentFiguresWithheldReason === 'revealsSmallerGroup'
+                ? complementWithheld
+                : r.agentFiguresWithheld ? withheld : undefined;
+              const buildersTitle = buildersWithheld(r);
               return (
                 <tr key={r.segment}>
                   <td className={table.td}>{serverPlaceholderText(t, r.segment)}</td>
@@ -351,7 +378,7 @@ export function CombinedSegmentTable({
                         borderRadius: '3px',
                       }}
                     >
-                      {r.interactionsPerLicensedUser ?? NOT_MEASURED}
+                      {formatTenth(r.interactionsPerLicensedUser)}
                     </span>
                   </td>
                   <td className={`${table.td} ${table.tdNumeric}`} title={licensedTitle}>{formatOptionalPct(r.licensedAgentUserPct)}</td>
@@ -364,7 +391,7 @@ export function CombinedSegmentTable({
                         borderRadius: '3px',
                       }}
                     >
-                      {r.interactionsPerUnlicensedUser ?? NOT_MEASURED}
+                      {formatTenth(r.interactionsPerUnlicensedUser)}
                     </span>
                   </td>
                   <td className={`${table.td} ${table.tdNumeric}`} title={unlicensedTitle}>{formatOptionalPct(r.unlicensedAgentUserPct)}</td>
@@ -385,7 +412,9 @@ export function CombinedSegmentTable({
                   <td className={`${table.td} ${table.tdNumeric}`} title={agentTitle}>{formatOptionalCount(r.distinctAgents)}</td>
                   <td className={`${table.td} ${table.tdNumeric}`} title={agentTitle}>{formatTenth(r.agentsPer100ActiveUsers)}</td>
                   <td className={`${table.td} ${table.tdNumeric}`} title={agentTitle}>{formatTenth(r.interactionsPerActiveAgent)}</td>
-                  <td className={`${table.td} ${table.tdNumeric}`}>{formatOptionalCount(r.agentBuilders)}</td>
+                  <td className={`${table.td} ${table.tdNumeric}`} title={buildersTitle}>
+                    {buildersTitle ? NOT_MEASURED : formatOptionalCount(r.agentBuilders)}
+                  </td>
                 </tr>
               );
             })}

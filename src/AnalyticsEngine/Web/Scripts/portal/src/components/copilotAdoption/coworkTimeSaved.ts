@@ -47,8 +47,6 @@ import { formatNumber, type TFunction } from '../../i18n';
 /** The three kinds of observed work the licence estimate converts into time. */
 export type TimeSavedActivity = 'meetings' | 'email' | 'documents';
 
-export const TIME_SAVED_ACTIVITIES: readonly TimeSavedActivity[] = ['meetings', 'email', 'documents'];
-
 /**
  * The kinds of work Cowork could take on, in the order the server publishes and SUMS them
  * (`CoworkActivities.All`). Summing in the same order is what keeps the two floating-point totals - and

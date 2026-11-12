@@ -30,14 +30,12 @@ namespace App.ControlPanel.Engine
     {
         private readonly string _installedByUsername;
         private readonly SoftwareReleaseConfig _softwareConfig;
-        private readonly string _configPassword;
 
         public ConfigureAzureComponentsTasks(SolutionInstallConfig config, ILogger logger, InstallerProxyConfig proxyConfig, string installedByUsername,
-            SoftwareReleaseConfig softwareConfig, string configPassword) : base(config, logger, proxyConfig)
+            SoftwareReleaseConfig softwareConfig) : base(config, logger, proxyConfig)
         {
             _installedByUsername = installedByUsername;
             _softwareConfig = softwareConfig;
-            _configPassword = configPassword;
         }
 
         /// <summary>
@@ -96,7 +94,7 @@ namespace App.ControlPanel.Engine
             // Find downloaded installer app
             var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel));
 
-            var sqlInstallerTasks = new SqlInstallerTasks(Config, installerExeFile, dbInfo, _logger, _installedByUsername, _configPassword,
+            var sqlInstallerTasks = new SqlInstallerTasks(Config, installerExeFile, dbInfo, _logger, _installedByUsername,
                 async (connectionString) => await VerifySqlWithFirewallSelfHeal(connectionString, repairFirewall));
             sqlInstallerTasks.CancellationToken = CancellationToken;
             await RunUpgradeDeploymentAsync(Config.TasksConfig.InstallLatestSolutionContent, Config.TasksConfig.UpgradeSchema,
@@ -115,7 +113,7 @@ namespace App.ControlPanel.Engine
                 async () => { await webApp.StopAsync(CancellationToken); },
                 // Recovery must finish even when the operation was cancelled after stopping the site.
                 async () => { await webApp.StartAsync(); },
-                () => sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLogEvents),
+                () => sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLog),
                 () => InstallSolutionContent(solutionSources, subscription, automationAccount), _logger, CancellationToken,
                 () => sqlInstallerTasks.SchemaUpgradeDeferred,
                 () => sqlInstallerTasks.CheckDownloadedBuildBeforeUpgradeAsync());
@@ -247,7 +245,9 @@ namespace App.ControlPanel.Engine
                 logger.LogInformation("UpgradeDeployment: stage=complete outcome=Succeeded elapsedMs={ElapsedMs} schemaSelected={SchemaSelected} contentSelected={ContentSelected}.",
                     elapsed.ElapsedMilliseconds, upgradeSchema, installContent);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            // The token decides, not the exception type: a Cancel during the database step can arrive as a SqlException
+            // ("Operation cancelled by user"), and logging that as a failed upgrade is what an operator would act on.
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
             {
                 logger.LogWarning("UpgradeDeployment: stage={Stage} outcome=Cancelled; no further deployment tasks will run. If WebJobs were paused, keep WEBJOBS_STOPPED=1 until the schema and matching binaries are verified; re-run the installer to complete the upgrade.",
                     stage);

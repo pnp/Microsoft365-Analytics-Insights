@@ -204,7 +204,7 @@ namespace Common.Entities.CopilotInvestment
             sheet.AddRow(words.W("credits.observed"), XlsxCell.Number(source.ObservedUsers));
             sheet.AddRow(words.W("credits.partial"), XlsxCell.Number(source.PartialUsers));
             sheet.AddRow(words.W("credits.unresolvedObjects"), source.UnresolvedObjects);
-            sheet.AddRow(words.W("credits.unresolvedCredits"), source.UnresolvedCredits);
+            sheet.AddRow(words.W("credits.unresolvedCredits"), Shown(source.UnresolvedCredits, source.UnresolvedCreditsWithheld, WithheldText(summary, words)));
             sheet.AddRow(words.W("credits.sweeps"), XlsxCell.Number(source.SweepsInWindow));
             sheet.AddRow(words.W("credits.sweepsCompleted"), XlsxCell.Number(source.CompletedSweepsInWindow));
             sheet.AddRow(words.W("credits.directoryUsers"), source.DirectoryUsers);

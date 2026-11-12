@@ -244,6 +244,7 @@
     <Compile Include="Controllers\AgentCostConnectionAPIController.cs" />
     <Compile Include="Controllers\ActivityAnalysisAPIController.cs" />
     <Compile Include="Controllers\BaseAPIController.cs" />
+    <Compile Include="Controllers\CallDeadLettersAPIController.cs" />
     <Compile Include="Controllers\CopilotAuditBackfillAPIController.cs" />
     <Compile Include="Controllers\LeadershipCohortAPIController.cs" />
     <Compile Include="Controllers\CopilotAdoptionSettingsAPIController.cs" />
@@ -311,6 +312,9 @@
     <Compile Include="Models\ReportsModels.cs" />
     <Compile Include="Models\SystemStatus.cs" />
     <Compile Include="Models\Calls\CallNotificationServiceBus.cs" />
+    <Compile Include="Models\Calls\CallDeadLetterModels.cs" />
+    <Compile Include="Models\Calls\CallDeadLetterService.cs" />
+    <Compile Include="Models\Calls\CallQueueDepth.cs" />
     <Compile Include="Models\Calls\GraphRestCallRecordSubscriptionReader.cs" />
     <Compile Include="Models\Health\HealthDataSectionRules.cs" />
     <Compile Include="Models\Health\HealthModels.cs" />
@@ -351,9 +355,7 @@
     <Content Include="Views\Shared\_LoginPartial.cshtml" />
     <Content Include="Views\Web.config" />
     <Content Include="Views\_ViewStart.cshtml" />
-    <Content Include="Views\Account\CredentialsInvalid.cshtml" />
     <None Include="Properties\PublishProfiles\SPOInsightsDemoTeams - Web Deploy.pubxml" />
-    <Content Include="Views\Home\YammerAuth.cshtml" />
     <Content Include="Web.config" />
     <None Include="Web.Debug.config">
       <DependentUpon>Web.Template.config</DependentUpon>

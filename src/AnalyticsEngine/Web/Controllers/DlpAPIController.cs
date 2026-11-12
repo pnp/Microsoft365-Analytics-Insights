@@ -1,5 +1,7 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.CopilotAdoption;
+using Common.Entities.SpoWebActivity;
 using Common.Entities.UserFilters;
 using DataUtils.Sql;
 using Microsoft.Data.SqlClient;
@@ -51,13 +53,18 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>Windows the UI offers. Anything else snaps to the nearest, so a hand-edited URL cannot force a huge scan.</summary>
         private static readonly int[] AllowedWindowDays = { 7, 28, 90, 180 };
 
-        /// <summary>Rows returned per ranked table. Small - these are "top offenders" lists, not exports.</summary>
-        private const int TopN = 20;
+        /// <summary>
+        /// Rows returned per ranked table. Small - these are "top offenders" lists, not exports. Each table is read one
+        /// row longer, so that a reader without See PII's floor can tell one that goes on past what it lists
+        /// (<see cref="WithoutSmallGroups"/>); that row is never sent.
+        /// </summary>
+        internal const int TopN = 20;
 
         private readonly IAnalyticsDbContextFactory _contextFactory;
         private readonly ReportScopeResolver _scopes;
         private readonly Models.SharedComputation<DlpSummary> _summaries;
         private readonly Models.SharedComputation<DlpGovernanceSummary> _governance;
+        private readonly Func<DateTime> _utcNow;
 
         /// <summary>
         /// SQL timeout for each statement behind the page. The default context has none (it is sized for importer
@@ -89,16 +96,28 @@ namespace Web.AnalyticsWeb.Controllers
         /// Testable entry point. The queries below are EF LINQ, so a translation failure (an unsupported
         /// expression, a bad navigation) only appears when they actually run - which is why the
         /// integration test points this at a real, migrated database rather than trusting a compile.
-        /// No global filter unless <paramref name="scopes"/> supplies one.
+        /// No global filter unless <paramref name="scopes"/> supplies one, and the real clock unless <paramref name="utcNow"/>
+        /// supplies one.
         /// </summary>
         internal DlpAPIController(IAnalyticsDbContextFactory contextFactory, ReportScopeResolver scopes = null,
-            Models.SharedComputation<DlpSummary> summaries = null, Models.SharedComputation<DlpGovernanceSummary> governance = null)
+            Models.SharedComputation<DlpSummary> summaries = null, Models.SharedComputation<DlpGovernanceSummary> governance = null,
+            Func<DateTime> utcNow = null)
         {
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
             _scopes = scopes ?? new ReportScopeResolver(GlobalFilterProviders.None, CachedUserDirectorySource.Default);
             _summaries = summaries ?? SharedSummaries;
             _governance = governance ?? SharedGovernance;
+            _utcNow = utcNow ?? (() => DateTime.UtcNow);
         }
+
+        /// <summary>
+        /// Inclusive start of the "Last N days" window that ends at <paramref name="nowUtc"/>: midnight N-1 days ago, so the
+        /// window covers N calendar dates including today. It is Copilot Adoption's convention
+        /// (<see cref="CopilotAdoptionScoring.WindowStartUtc"/>), so the same label means the same dates on both pages;
+        /// midnight N days ago, as this page used to start, spans N+1 dates.
+        /// </summary>
+        internal static DateTime WindowStartUtc(DateTime nowUtc, int windowDays) =>
+            CopilotAdoptionScoring.WindowStartUtc(nowUtc, windowDays);
 
         // GET: api/Dlp/availability
         [HttpGet]
@@ -141,7 +160,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>
         /// The whole page in one call: KPIs, the ranked tables and the trend. The "top users" table names
         /// people, so a reader without the portal's See PII permission gets it empty (#661) - and the query
-        /// behind it is not run for them at all.
+        /// behind it is not run for them at all. Such a reader's summary is built under its own cache key and
+        /// also leaves out every agent, policy and label row of fewer than five people, together with the
+        /// smallest row listed beside one, so the totals cannot give it back (#844, <see cref="WithoutSmallGroups"/>).
         /// </summary>
         // GET: api/Dlp/summary?days=28
         [HttpGet]
@@ -217,8 +238,8 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             var windowDays = SnapWindow(days);
-            var toUtc = DateTime.UtcNow;
-            var fromUtc = toUtc.Date.AddDays(-windowDays);
+            var toUtc = _utcNow();
+            var fromUtc = WindowStartUtc(toUtc, windowDays);
 
             using (var db = _contextFactory.Create())
             {
@@ -254,12 +275,12 @@ namespace Web.AnalyticsWeb.Controllers
                         Audited = g.Count(e => !e.IsBlocked),
                         Users = g.Where(e => e.RelatedChat.UserId != null).Select(e => e.RelatedChat.UserId).Distinct().Count(),
                     })
-                    .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
-                    .Take(TopN).ToListAsync(cancellationToken), countUsers: true);
+                    .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited).ThenBy(r => r.Id)
+                    .Take(TopN + 1).ToListAsync(cancellationToken), countUsers: true);
 
                 // "Which policies blocked THIS agent" - the cross-tab the four independent tables
                 // cannot answer on their own.
-                await AttachAgentPolicyBreakdownAsync(events, summary.TopAgents, cancellationToken);
+                await AttachAgentPolicyBreakdownAsync(events, Listed(summary.TopAgents), cancellationToken);
 
                 summary.TopPolicies = ToRows(await events
                     .Where(e => e.DlpPolicyId != null)
@@ -272,8 +293,8 @@ namespace Web.AnalyticsWeb.Controllers
                         Audited = g.Count(e => !e.IsBlocked),
                         Users = g.Where(e => e.RelatedChat.UserId != null).Select(e => e.RelatedChat.UserId).Distinct().Count(),
                     })
-                    .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
-                    .Take(TopN).ToListAsync(cancellationToken), countUsers: true);
+                    .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited).ThenBy(r => r.Id)
+                    .Take(TopN + 1).ToListAsync(cancellationToken), countUsers: true);
 
                 summary.TopSensitivityLabels = ToRows(await events
                     .Where(e => e.SensitivityLabelId != null)
@@ -286,8 +307,8 @@ namespace Web.AnalyticsWeb.Controllers
                         Audited = g.Count(e => !e.IsBlocked),
                         Users = g.Where(e => e.RelatedChat.UserId != null).Select(e => e.RelatedChat.UserId).Distinct().Count(),
                     })
-                    .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
-                    .Take(TopN).ToListAsync(cancellationToken), countUsers: true);
+                    .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited).ThenBy(r => r.Id)
+                    .Take(TopN + 1).ToListAsync(cancellationToken), countUsers: true);
 
                 // copilot_chats carries only the user's integer id (there is no User navigation on it),
                 // so the UPN is joined in here. The grouping is still done in SQL.
@@ -351,10 +372,12 @@ namespace Web.AnalyticsWeb.Controllers
                         Name = g.Key.Name,
                         Blocked = g.Count(m => m.IsBlocked),
                         Audited = g.Count(m => !m.IsBlocked),
+                        Users = g.Where(m => m.AuditEvent.UserId != null).Select(m => m.AuditEvent.UserId).Distinct().Count(),
                     })
-                    .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited)
-                    .Take(TopN).ToListAsync(cancellationToken), countUsers: false);
+                    .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited).ThenBy(r => r.Id)
+                    .Take(TopN + 1).ToListAsync(cancellationToken), countUsers: false);
 
+                ForReader(summary, includeIndividuals);
                 return summary;
             }
         }
@@ -403,6 +426,7 @@ namespace Web.AnalyticsWeb.Controllers
             public string Name { get; set; }
             public int Blocked { get; set; }
             public int Audited { get; set; }
+            public int Users { get; set; }
         }
 
         /// <summary>The narrowed DLP.All totals.</summary>
@@ -442,7 +466,8 @@ GROUP BY a.agent_id, a.name;";
         internal const string ScopedAgentPoliciesSql = @"
 SELECT a.agent_id AS AgentId, p.policy_id AS PolicyId, p.name AS Name,
        SUM(CASE WHEN e.is_blocked = 1 THEN 1 ELSE 0 END) AS Blocked,
-       SUM(CASE WHEN e.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited
+       SUM(CASE WHEN e.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited,
+       COUNT(DISTINCT c.user_id) AS Users
 FROM dbo.copilot_dlp_events AS e
 INNER JOIN dbo.copilot_chats AS c ON c.event_id = e.copilot_chat_id
 INNER JOIN dbo.copilot_agents AS a ON a.id = c.agent_id
@@ -504,7 +529,7 @@ WHERE ae.time_stamp >= @from AND ae.time_stamp <= @to AND ae.user_id IS NOT NULL
 SELECT p.policy_id AS Id, p.name AS Name,
        SUM(CASE WHEN m.is_blocked = 1 THEN 1 ELSE 0 END) AS Blocked,
        SUM(CASE WHEN m.is_blocked = 0 THEN 1 ELSE 0 END) AS Audited,
-       0 AS Users
+       COUNT(DISTINCT ae.user_id) AS Users
 FROM dbo.dlp_rule_matches AS m
 INNER JOIN dbo.audit_events AS ae ON ae.id = m.event_id
 INNER JOIN dbo.dlp_policies AS p ON p.id = m.dlp_policy_id
@@ -530,8 +555,8 @@ GROUP BY p.policy_id, p.name;";
             CancellationToken cancellationToken)
         {
             var windowDays = SnapWindow(days);
-            var toUtc = DateTime.UtcNow;
-            var fromUtc = toUtc.Date.AddDays(-windowDays);
+            var toUtc = _utcNow();
+            var fromUtc = WindowStartUtc(toUtc, windowDays);
 
             using (var db = _contextFactory.Create())
             {
@@ -566,7 +591,8 @@ GROUP BY p.policy_id, p.name;";
 
                 // Which policies affected each ranked agent - the same cross-tab as the unfiltered summary's,
                 // counted over the matches of people in scope only.
-                var agentIds = summary.TopAgents.Select(a => a.Id).Where(id => !string.IsNullOrEmpty(id)).ToList();
+                var listedAgents = Listed(summary.TopAgents);
+                var agentIds = listedAgents.Select(a => a.Id).Where(id => !string.IsNullOrEmpty(id)).ToList();
                 if (agentIds.Count > 0)
                 {
                     var agentParameters = agentIds
@@ -576,13 +602,14 @@ GROUP BY p.policy_id, p.name;";
                         ScopedAgentPoliciesSql.Replace("{agentIds}", string.Join(", ", agentParameters.Select(p => p.ParameterName))),
                         agentParameters);
 
-                    AttachPolicies(summary.TopAgents, breakdown.Select(r => new PolicyBreakdownRow
+                    AttachPolicies(listedAgents, breakdown.Select(r => new PolicyBreakdownRow
                     {
                         Key = r.AgentId,
                         PolicyId = r.PolicyId,
                         Name = r.Name,
                         Blocked = r.Blocked,
                         Audited = r.Audited,
+                        Users = r.Users,
                     }));
                 }
 
@@ -624,19 +651,112 @@ GROUP BY p.policy_id, p.name;";
                 summary.TenantAuditedCount = tenant.Audited;
                 summary.TenantTopPolicies = Rank(await QueryAsync<RankProjection>(ScopedTenantPoliciesSql), countUsers: false);
 
+                ForReader(summary, includeIndividuals);
                 return summary;
             }
         }
 
         /// <summary>
+        /// Finishes a summary for its reader. Each ranked table was read one row longer than it lists: a reader with See PII
+        /// is shown the first <see cref="TopN"/> rows of each, as before, and a reader without it what
+        /// <see cref="WithoutSmallGroups"/> leaves of them.
+        /// </summary>
+        private static void ForReader(DlpSummary summary, bool includeIndividuals)
+        {
+            if (!includeIndividuals)
+            {
+                WithoutSmallGroups(summary, ReportScopeResolver.MinimumPeopleWithoutSeePii);
+                return;
+            }
+
+            summary.TopAgents = Listed(summary.TopAgents);
+            summary.TopPolicies = Listed(summary.TopPolicies);
+            summary.TopSensitivityLabels = Listed(summary.TopSensitivityLabels);
+            summary.TenantTopPolicies = Listed(summary.TenantTopPolicies);
+        }
+
+        /// <summary>The rows a ranked table lists: its first <see cref="TopN"/>. A new list of the same rows.</summary>
+        private static List<DlpImpactRow> Listed(List<DlpImpactRow> ranked) =>
+            (ranked ?? new List<DlpImpactRow>()).Take(TopN).ToList();
+
+        /// <summary>
+        /// The summary for a reader who does not hold the portal's See PII permission (#844). An agent, policy, sensitivity
+        /// label or tenant-wide policy that affected fewer than <paramref name="minimumPeople"/> people is left out of its
+        /// table - its counts would be those few people's own. The KPI totals beside each table, less the rows it lists, are
+        /// the rows it leaves out, together; so whenever a table leaves a row out, or ranks more rows than the
+        /// <see cref="TopN"/> it lists (those can be a small one's too), its smallest row still listed - by people, then id -
+        /// is left out as well. The totals less the rows listed then always include a row of at least
+        /// <paramref name="minimumPeople"/> people, never one small row's figures: the rule of
+        /// <see cref="WebActivitySmallGroups.WithoutSmallRows{T}"/>. The policies under each listed agent are held the same way
+        /// against that agent's own figures. The top-users table is never built for such a reader. Edits
+        /// <paramref name="summary"/>: it was built for readers without the permission alone, under its own cache key, so no
+        /// reader with it is ever served this object.
+        /// </summary>
+        /// <remarks>
+        /// Each table arrives as ranked, up to <see cref="TopN"/> + 1 rows long: a row past <see cref="TopN"/> only says that
+        /// the table goes on, and is never shown. Every policy under an agent is read, so an agent's policies never go on past
+        /// what they list. One person can be behind several rows, so their people are never added up: the row left out with a
+        /// small one holds the minimum on its own.
+        /// </remarks>
+        internal static void WithoutSmallGroups(DlpSummary summary, int minimumPeople)
+        {
+            List<DlpImpactRow> Floor(List<DlpImpactRow> ranked, out int leftOut)
+            {
+                var listed = Listed(ranked);
+                var shown = WithoutSmallRows(listed, goesOnPastTheList: ranked != null && ranked.Count > TopN, minimumPeople);
+                leftOut = listed.Count - shown.Count;
+                return shown;
+            }
+
+            summary.TopAgents = Floor(summary.TopAgents, out var agents);
+            foreach (var agent in summary.TopAgents)
+            {
+                if (agent.Policies != null) agent.Policies = WithoutSmallRows(agent.Policies, goesOnPastTheList: false, minimumPeople);
+            }
+
+            summary.TopPolicies = Floor(summary.TopPolicies, out var policies);
+            summary.TopSensitivityLabels = Floor(summary.TopSensitivityLabels, out var labels);
+            summary.TenantTopPolicies = Floor(summary.TenantTopPolicies, out var tenantPolicies);
+            summary.MinimumGroupSize = minimumPeople;
+            summary.WithheldRowsByTable = new DlpWithheldRows
+            {
+                Agents = agents,
+                Policies = policies,
+                SensitivityLabels = labels,
+                TenantPolicies = tenantPolicies,
+            };
+            summary.WithheldRows = agents + policies + labels + tenantPolicies;
+        }
+
+        /// <summary>
+        /// The rows of one table, or of one agent's policies, that <see cref="WithoutSmallGroups"/> shows: none of fewer than
+        /// <paramref name="minimumPeople"/> people and, whenever one is left out or the table
+        /// <paramref name="goesOnPastTheList"/>, not the smallest row shown either. A new list, in the table's order.
+        /// </summary>
+        private static List<DlpImpactRow> WithoutSmallRows(List<DlpImpactRow> rows, bool goesOnPastTheList, int minimumPeople)
+        {
+            var shown = WebActivitySmallGroups.WithoutSmallRows(rows, r => r.People, SmallestRowName, minimumPeople, out var leftOut);
+            if (leftOut == 0 && goesOnPastTheList && shown.Count > 0)
+            {
+                shown.Remove(shown.OrderBy(r => r.People).ThenBy(SmallestRowName, StringComparer.Ordinal).First());
+            }
+
+            return shown;
+        }
+
+        /// <summary>What tells two rows of as many people apart when the smallest is chosen: the id, then the name.</summary>
+        private static string SmallestRowName(DlpImpactRow row) => (row.Id ?? string.Empty) + "\u0000" + (row.Name ?? string.Empty);
+
+        /// <summary>
         /// The narrowed equivalent of a ranked query: every agent, policy or label's figures - grouped in SQL,
         /// so one row each - ranked by blocked, then audited, then id, so equal rows always come in the same order.
+        /// The first <see cref="TopN"/> + 1, as the unfiltered summary reads them (<see cref="ForReader"/>).
         /// </summary>
         private static List<DlpImpactRow> Rank(List<RankProjection> rows, bool countUsers)
         {
             return ToRows(rows
                 .OrderByDescending(r => r.Blocked).ThenByDescending(r => r.Audited).ThenBy(r => r.Id, StringComparer.Ordinal)
-                .Take(TopN)
+                .Take(TopN + 1)
                 .ToList(), countUsers);
         }
 
@@ -649,6 +769,9 @@ GROUP BY p.policy_id, p.name;";
             public string Name { get; set; }
             public int Blocked { get; set; }
             public int Audited { get; set; }
+
+            /// <summary>Distinct people behind the pair; 0 where nobody asks (the people's own breakdown).</summary>
+            public int Users { get; set; }
         }
 
         /// <summary>
@@ -688,6 +811,7 @@ GROUP BY p.policy_id, p.name;";
                     g.Key.Name,
                     Blocked = g.Count(e => e.IsBlocked),
                     Audited = g.Count(e => !e.IsBlocked),
+                    Users = g.Where(e => e.RelatedChat.UserId != null).Select(e => e.RelatedChat.UserId).Distinct().Count(),
                 })
                 .ToListAsync(cancellationToken);
 
@@ -698,6 +822,7 @@ GROUP BY p.policy_id, p.name;";
                 Name = r.Name,
                 Blocked = r.Blocked,
                 Audited = r.Audited,
+                Users = r.Users,
             }));
         }
 
@@ -789,6 +914,7 @@ GROUP BY p.policy_id, p.name;";
                         Name = string.IsNullOrEmpty(r.Name) ? r.PolicyId : r.Name,
                         BlockedCount = r.Blocked,
                         AuditedCount = r.Audited,
+                        People = r.Users,
                     })
                     .ToList();
             }
@@ -805,6 +931,7 @@ GROUP BY p.policy_id, p.name;";
                 BlockedCount = p.Blocked,
                 AuditedCount = p.Audited,
                 UsersAffected = countUsers ? (int?)p.Users : null,
+                People = p.Users,
             }).ToList();
         }
 
@@ -1018,8 +1145,8 @@ OPTION (RECOMPILE);";
             CancellationToken cancellationToken = default(CancellationToken))
         {
             var windowDays = SnapWindow(days);
-            var toUtc = DateTime.UtcNow;
-            var fromUtc = toUtc.Date.AddDays(-windowDays);
+            var toUtc = _utcNow();
+            var fromUtc = WindowStartUtc(toUtc, windowDays);
             var restricted = scope != null && scope.IsRestricted;
             var effectiveScope = restricted ? scope : ReportUserScope.Everyone;
 

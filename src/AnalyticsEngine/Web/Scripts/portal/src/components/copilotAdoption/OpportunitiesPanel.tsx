@@ -21,7 +21,14 @@ import {
   Clock20Regular,
   PeopleList20Regular,
 } from '@fluentui/react-icons';
-import { fetchOpportunities, opportunitiesExportUrl } from '../../api/copilotAdoptionApi';
+import {
+  AdoptionGenerationChangedError,
+  adoptionFailure,
+  adoptionFailureText,
+  fetchOpportunities,
+  opportunitiesExportUrl,
+  type AdoptionFailure,
+} from '../../api/copilotAdoptionApi';
 import type {
   AdoptionFilterOptions,
   AdoptionGuidanceLink,
@@ -55,7 +62,7 @@ import TroubleshootUserLink from '../userlookup/TroubleshootUserLink';
 import { usePrintAllRows } from '../shared/printPreparation';
 import PiiHiddenNote from '../shared/PiiHiddenNote';
 import { formatCount, formatDate } from '../shared/KpiGrid';
-import { useT, useTNode } from '../../i18n';
+import { formatNumber, useT, useTNode } from '../../i18n';
 import { copilotAdoptionWarningText, guidanceLinkTitle, isLicenceOpportunityWarning, opportunityRationale, opportunityTierLabel } from './serverText';
 import LicenceTimeSavedHero from './LicenceTimeSavedHero';
 import LicenceTimeSavedModel from './LicenceTimeSavedModel';
@@ -197,6 +204,8 @@ export default function OpportunitiesPanel({
   userFilter,
   canSeePii = true,
   hiddenListNote,
+  onGenerationChanged,
+  onLoadingChange,
 }: {
   windowDays: number;
   dateRange?: DateRange | null;
@@ -222,6 +231,8 @@ export default function OpportunitiesPanel({
    * range passes its own note, because there the list is hidden for a different reason.
    */
   hiddenListNote?: ReactNode;
+  onGenerationChanged?: () => boolean;
+  onLoadingChange?: (loading: boolean) => void;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -233,7 +244,8 @@ export default function OpportunitiesPanel({
   // basis period to the selected window. Shown as the computation rather than a rounded product: a
   // rounded denominator puts the published arithmetic on the wrong side of the recommendation bar for a
   // candidate sitting exactly on it. `approx` is for prose only, never for the formula.
-  const opportunityCopilotTargetExpression = `${options.opportunityCopilotTarget} x ${windowDays} / ${options.opportunityCopilotTargetBasisDays}`;
+  const opportunityCopilotTargetExpression =
+    `${formatNumber(options.opportunityCopilotTarget)} x ${formatNumber(windowDays)} / ${formatNumber(options.opportunityCopilotTargetBasisDays)}`;
   const opportunityCopilotTargetApprox =
     Math.round(
       Math.max(
@@ -264,7 +276,7 @@ export default function OpportunitiesPanel({
   const [page, setPage] = useState(0);
   const [data, setData] = useState<LicenceOpportunityPage | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AdoptionFailure | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const { isExpanded, toggle: toggleRow, resetRows, expandAll, collapseAll, allExpanded } = useRowExpansion();
 
@@ -330,18 +342,22 @@ export default function OpportunitiesPanel({
     let cancelled = false;
     const controller = new AbortController();
     setLoading(true);
+    onLoadingChange?.(true);
     setError(null);
+    setData(null);
 
-    fetchOpportunities(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal, ...(dateRange ? [dateRange] as const : []))
+    fetchOpportunities(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal,
+      dateRange, { generationId: summary.diagnostics?.generationId })
       .then((result) => {
         if (!cancelled) setData(result);
       })
       .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
-        setError(e instanceof Error ? e.message : t('copilotAdoptionUsers.opportunities.loadError'));
+        if (e instanceof AdoptionGenerationChangedError && onGenerationChanged?.()) return;
+        setError(adoptionFailure(e, 'copilotAdoptionUsers.opportunities.loadError'));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) { setLoading(false); onLoadingChange?.(false); }
       });
 
     return () => {
@@ -349,8 +365,11 @@ export default function OpportunitiesPanel({
       // These requests poll while the analysis is building, so cleanup has to actually stop them -
       // a bare `cancelled` flag would only suppress the state update and leave the loop running.
       controller.abort();
+      onLoadingChange?.(false);
     };
-  }, [canSeePii, windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
+    // Not keyed on the language: a switch re-renders the rows already loaded, it does not fetch them again.
+  }, [canSeePii, windowDays, dateRange, filters, page, seatLicenceTypeIds, reloadKey,
+    summary.diagnostics?.generationId, onGenerationChanged, onLoadingChange]);
 
   /**
    * Applies a column-header sort. The effect above already resets the page whenever `filters`
@@ -464,7 +483,7 @@ export default function OpportunitiesPanel({
 
       {error && (
         <MessageBar intent="error">
-          <MessageBarBody>{error}</MessageBarBody>
+          <MessageBarBody>{adoptionFailureText(t, error)}</MessageBarBody>
         </MessageBar>
       )}
 
@@ -572,31 +591,31 @@ export default function OpportunitiesPanel({
                   infoTitle={t('copilotAdoptionUsers.opportunities.businessCaseTitle')}
                   info={{
                     what: t('copilotAdoptionUsers.opportunities.businessCaseWhat', {
-                      days: options.opportunityProvenDemandMinActiveDays,
-                      score: options.opportunityRecommendScore,
+                      days: formatNumber(options.opportunityProvenDemandMinActiveDays),
+                      score: formatNumber(options.opportunityRecommendScore),
                     }),
                     how: t('copilotAdoptionUsers.opportunities.businessCaseHow', {
-                      copilotWeight: options.opportunityUnlicensedCopilotWeight,
-                      collaborationWeight: options.opportunityCollaborationWeight,
-                      emailWeight: options.opportunityEmailWeight,
-                      documentWeight: options.opportunityDocumentWeight,
+                      copilotWeight: formatNumber(options.opportunityUnlicensedCopilotWeight),
+                      collaborationWeight: formatNumber(options.opportunityCollaborationWeight),
+                      emailWeight: formatNumber(options.opportunityEmailWeight),
+                      documentWeight: formatNumber(options.opportunityDocumentWeight),
                     }),
                     formula: t('copilotAdoptionUsers.opportunities.businessCaseFormula', {
                       copilotTarget: opportunityCopilotTargetExpression,
-                      collaborationTarget: options.opportunityCollaborationTarget,
-                      emailTarget: options.opportunityEmailTarget,
-                      documentTarget: options.opportunityDocumentTarget,
-                      copilotWeight: options.opportunityUnlicensedCopilotWeight,
-                      collaborationWeight: options.opportunityCollaborationWeight,
-                      emailWeight: options.opportunityEmailWeight,
-                      documentWeight: options.opportunityDocumentWeight,
-                      provenDemandDays: options.opportunityProvenDemandMinActiveDays,
-                      recommendScore: options.opportunityRecommendScore,
+                      collaborationTarget: formatNumber(options.opportunityCollaborationTarget),
+                      emailTarget: formatNumber(options.opportunityEmailTarget),
+                      documentTarget: formatNumber(options.opportunityDocumentTarget),
+                      copilotWeight: formatNumber(options.opportunityUnlicensedCopilotWeight),
+                      collaborationWeight: formatNumber(options.opportunityCollaborationWeight),
+                      emailWeight: formatNumber(options.opportunityEmailWeight),
+                      documentWeight: formatNumber(options.opportunityDocumentWeight),
+                      provenDemandDays: formatNumber(options.opportunityProvenDemandMinActiveDays),
+                      recommendScore: formatNumber(options.opportunityRecommendScore),
                     }),
                     source: t('copilotAdoptionUsers.opportunities.businessCaseSource', {
-                      target: options.opportunityCopilotTarget,
-                      basisDays: options.opportunityCopilotTargetBasisDays,
-                      approx: opportunityCopilotTargetApprox,
+                      target: formatNumber(options.opportunityCopilotTarget),
+                      basisDays: formatNumber(options.opportunityCopilotTargetBasisDays),
+                      approx: formatNumber(opportunityCopilotTargetApprox),
                     }),
                   }}
                 >
@@ -695,22 +714,22 @@ export default function OpportunitiesPanel({
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.copilotDemand')}
                                 value={Math.round(row.copilotDemandScore)}
-                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: options.opportunityUnlicensedCopilotWeight })}
+                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: formatNumber(options.opportunityUnlicensedCopilotWeight) })}
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.collaboration')}
                                 value={Math.round(row.collaborationScore)}
-                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: options.opportunityCollaborationWeight })}
+                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: formatNumber(options.opportunityCollaborationWeight) })}
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.email')}
                                 value={Math.round(row.emailScore)}
-                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: options.opportunityEmailWeight })}
+                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: formatNumber(options.opportunityEmailWeight) })}
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.documents')}
                                 value={Math.round(row.documentScore)}
-                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: options.opportunityDocumentWeight })}
+                                sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: formatNumber(options.opportunityDocumentWeight) })}
                               />
                             </DetailStats>
                           </DetailSection>
@@ -720,17 +739,17 @@ export default function OpportunitiesPanel({
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.teamsMessages')}
                                 value={formatCount(row.teamsMessages)}
-                                sub={t('copilotAdoptionUsers.opportunities.withMeetingsTarget', { meetings: formatCount(row.teamsMeetings), target: options.opportunityCollaborationTarget })}
+                                sub={t('copilotAdoptionUsers.opportunities.withMeetingsTarget', { meetings: formatCount(row.teamsMeetings), target: formatNumber(options.opportunityCollaborationTarget) })}
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.emailsSent')}
                                 value={formatCount(row.emailsSent)}
-                                sub={t('copilotAdoptionUsers.opportunities.readTarget', { read: formatCount(row.emailsRead), target: options.opportunityEmailTarget })}
+                                sub={t('copilotAdoptionUsers.opportunities.readTarget', { read: formatCount(row.emailsRead), target: formatNumber(options.opportunityEmailTarget) })}
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.files')}
                                 value={formatCount(row.filesViewedOrEdited)}
-                                sub={t('copilotAdoptionUsers.opportunities.viewedOrEditedTarget', { target: options.opportunityDocumentTarget })}
+                                sub={t('copilotAdoptionUsers.opportunities.viewedOrEditedTarget', { target: formatNumber(options.opportunityDocumentTarget) })}
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.lastM365Header')}
@@ -744,12 +763,12 @@ export default function OpportunitiesPanel({
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.interactions')}
                                 value={formatCount(row.unlicensedCopilotInteractions)}
-                                sub={t('copilotAdoptionUsers.opportunities.targetThisPeriod', { target: opportunityCopilotTargetApprox })}
+                                sub={t('copilotAdoptionUsers.opportunities.targetThisPeriod', { target: formatNumber(opportunityCopilotTargetApprox) })}
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.activeDays')}
                                 value={formatCount(row.unlicensedCopilotActiveDays)}
-                                sub={t('copilotAdoptionUsers.opportunities.provenDemandAt', { days: options.opportunityProvenDemandMinActiveDays })}
+                                sub={t('copilotAdoptionUsers.opportunities.provenDemandAt', { days: formatNumber(options.opportunityProvenDemandMinActiveDays) })}
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.lastCopilotUse')}
@@ -761,7 +780,7 @@ export default function OpportunitiesPanel({
                                   opportunityTierLabel(t, row.qualificationTier, row.qualificationTierLabel)
                                   || (row.recommended ? t('copilotAdoptionUsers.opportunities.recommended') : t('copilotAdoptionUsers.opportunities.notRecommended'))
                                 }
-                                sub={t('copilotAdoptionUsers.opportunities.recommendAt', { score: options.opportunityRecommendScore })}
+                                sub={t('copilotAdoptionUsers.opportunities.recommendAt', { score: formatNumber(options.opportunityRecommendScore) })}
                               />
                             </DetailStats>
                           </DetailSection>

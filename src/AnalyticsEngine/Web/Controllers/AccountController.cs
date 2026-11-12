@@ -9,13 +9,6 @@ namespace Web.AnalyticsWeb.Controllers
 {
     public class AccountController : Controller
     {
-
-        [HttpGet]
-        public ActionResult CredentialsInvalid()
-        {
-            return View();
-        }
-
         public void SignIn()
         {
             // Send an OpenID Connect sign-in request.
@@ -31,14 +24,17 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         /// <remarks>
         /// Signing in no longer requests these, so a tenant that hasn't granted them - often because it doesn't use
-        /// Teams deep analytics - can still use the portal. The Teams permissions page links here when the site has
+        /// Teams deep analytics - can still use the portal. The Teams permissions page posts here when the site has
         /// no Graph token for the admin. This re-runs the OIDC challenge with the Teams scopes. The callback redeems
         /// the code for them (<see cref="DelegatedGraphTokenCapture"/>) and returns to the Teams permissions page,
         /// with an outcome key if Entra ID said no. The return address is fixed, so this can't be used as an open
-        /// redirect.
+        /// redirect. A POST from this site only: with consent already granted Entra ID asks nothing, so a link on
+        /// another site used to be able to run it (#853).
         /// </remarks>
+        [HttpPost]
         [Authorize]
         [RequirePortalMvcPermission(PortalPermission.Administration)]
+        [RequireSameOriginFormPost]
         public void ConnectTeams()
         {
             HttpContext.GetOwinContext().Authentication.Challenge(
@@ -57,6 +53,9 @@ namespace Web.AnalyticsWeb.Controllers
             return new HttpUnauthorizedResult();
         }
 
+        /// <summary>Signs out of the portal and of Entra ID. A POST from this site only, so another site can't sign anyone out (#853).</summary>
+        [HttpPost]
+        [RequireSameOriginFormPost]
         public void SignOut()
         {
             string callbackUrl = Url.Action("SignOutCallback", "Account", routeValues: null, protocol: Request.Url.Scheme);

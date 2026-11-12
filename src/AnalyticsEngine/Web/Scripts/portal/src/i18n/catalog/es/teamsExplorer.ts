@@ -39,6 +39,11 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.shared.noData': 'No hay datos para este periodo.',
   'teamsExplorer.shared.callDataCovers': 'Los datos de llamadas cubren {range}.',
   'teamsExplorer.shared.usageReportFiguresCover': 'Las cifras de informes de uso cubren {range} \u2013 Microsoft las publica con unos días de retraso, por lo que la ventana se desplaza hacia atrás en lugar de quedar medio vacía.',
+  // Lo que se indica, y se muestra, a un lector sin Ver PII en lugar de una cifra sobre una a cuatro personas (#844).
+  'teamsExplorer.privacy.readerNote':
+    'Para proteger la privacidad, estas cifras solo cuentan a las personas cuya cuenta está habilitada en el directorio y omiten los grupos de menos de {count} personas, así que sus totales pueden diferir ligeramente de los que ve alguien con el permiso Ver PII.',
+  'teamsExplorer.privacy.withheld': 'Oculto: menos de {count} personas',
+  'teamsExplorer.privacy.withheldHint': 'Oculto para proteger la privacidad',
 
   'teamsExplorer.source.usageReports': 'Informes de uso de Microsoft 365.',
   'teamsExplorer.source.graphCallRecords': 'Notificaciones de cambios de registros de llamadas de Graph (la importación de llamadas de Teams).',
@@ -133,6 +138,10 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.overview.engagementMix.description': 'Con qué hábito usan Teams las personas durante los días laborables del periodo.',
   'teamsExplorer.overview.engagementMix.empty': 'No apareció ningún usuario en los informes de uso de Teams para este periodo.',
   'teamsExplorer.overview.engagementMix.centreLabel': 'usuarios medidos',
+  'teamsExplorer.overview.engagementMix.withheldNote':
+    'Los segmentos de menos de {count} personas se ocultan para proteger la privacidad, junto con el segmento de personas activas más pequeño de los demás, para que ninguno pueda deducirse de los totales.',
+  'teamsExplorer.overview.engagementMix.allWithheld':
+    'Hay demasiado pocas personas en estos segmentos para mostrarlos sin identificar a alguien, así que este gráfico se oculta para proteger su privacidad.',
   // Por qué las personas con licencia sin actividad en Teams no se consideran inactivas (TeamsDormancy.Reason).
   'teamsExplorer.dormancy.incompleteImport': 'No se pueden identificar las personas inactivas en este periodo. Se importaron informes de uso de Teams de {imported} de sus {expected} días, y solo incluyen a las personas activas cada día, así que alguien sin actividad registrada pudo estar activo un día que falta.',
   'teamsExplorer.dormancy.groupFiltered': 'No se pueden identificar las personas inactivas. La importación de uso se limita a los miembros de determinados grupos, así que alguien sin actividad registrada puede no haberse importado nunca.',
@@ -140,6 +149,7 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.dormancy.noTeamsLicences': 'No se pueden identificar las personas inactivas. Según las licencias importadas, nadie aquí tiene una licencia que incluya Teams. Compruebe que la importación de usuarios está activada.',
   'teamsExplorer.dormancy.notChecked': 'No se pueden identificar las personas inactivas, porque no se completó la comprobación de que se importaron todos los días de este periodo.',
   'teamsExplorer.dormancy.unmeasured': 'Personas con licencia de Teams sin actividad registrada que quedan fuera de esta combinación: {count}.',
+  'teamsExplorer.dormancy.unmeasuredWithheld': 'Personas con licencia de Teams sin actividad registrada que quedan fuera de esta combinación: menos de {count}.',
   'teamsExplorer.overview.weeklyActiveUsers.title': 'Usuarios activos semanales',
   'teamsExplorer.overview.weeklyActiveUsers.description': 'Personas distintas que hicieron algo en Teams cada semana.',
   'teamsExplorer.overview.valueLabel.users': 'Usuarios',
@@ -147,6 +157,10 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.overview.whatPeopleAreDoing.description': 'Mensajes de canal, chat privado y reuniones asistidas cada semana.',
   'teamsExplorer.overview.valueLabel.count': 'Recuento',
   'teamsExplorer.overview.noActiveUsersWarning': 'El directorio tiene usuarios, pero ninguno estuvo activo en Teams en este periodo. Es lo bastante inusual como para comprobar la importación antes de extraer conclusiones.',
+  'teamsExplorer.overview.usageWithheld':
+    'Menos de {count} personas usaron Teams en este periodo, así que las cifras sobre ellas se ocultan para proteger su privacidad.',
+  'teamsExplorer.overview.weeksWithheldNote':
+    'Las semanas en las que estuvieron activas menos de {count} personas se dejan en blanco para proteger la privacidad, junto con la semana más tranquila de las demás, para que ninguna pueda deducirse de los totales.',
 
   // Etiquetas de segmentos y cubos de reuniones redactadas por el servidor para Teams Explorer.
   'teamsExplorer.segment.Power.label': 'Avanzado',
@@ -249,6 +263,8 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.adoption.engagementOverTime.title': 'Interacción a lo largo del tiempo',
   'teamsExplorer.adoption.engagementOverTime.description': 'Cómo cambia semana a semana la distribución entre usuarios avanzados, regulares y ligeros.',
   'teamsExplorer.adoption.engagementOverTime.note': 'Cada semana se evalúa frente a su propio número de días laborables, por lo que una primera o última semana corta no empuja a todo el mundo a la banda ligera.',
+  'teamsExplorer.adoption.engagementOverTime.withheldNote':
+    'Las semanas en las que un segmento tiene menos de {count} personas se dejan en blanco para proteger la privacidad.',
   'teamsExplorer.adoption.valueLabel.users': 'Usuarios',
   'teamsExplorer.adoption.reachBy.title': 'Alcance por {group}',
   'teamsExplorer.adoption.reachBy.description': 'Dónde ha llegado Teams y dónde no.',
@@ -273,6 +289,16 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.adoption.devices.description': 'Usuarios distintos vistos en cada plataforma cliente.',
   'teamsExplorer.adoption.devices.empty': 'No se informó uso de dispositivos para este periodo.',
   'teamsExplorer.adoption.devices.note': 'Las proporciones suman más del 100% a propósito: la mayoría usa más de una plataforma. El alcance móvil es el que debe observarse para personal de primera línea y sin escritorio.',
+  'teamsExplorer.adoption.devices.withheldNote':
+    'Las plataformas que usan menos de {count} personas no se muestran para proteger la privacidad, ni tampoco el total de móviles cuando se oculta una de las plataformas móviles.',
+  'teamsExplorer.adoption.devices.platform.windows': 'Windows',
+  'teamsExplorer.adoption.devices.platform.mac': 'Mac',
+  'teamsExplorer.adoption.devices.platform.web': 'Web',
+  'teamsExplorer.adoption.devices.platform.ios': 'iOS',
+  'teamsExplorer.adoption.devices.platform.android': 'Android',
+  'teamsExplorer.adoption.devices.platform.linux': 'Linux',
+  'teamsExplorer.adoption.devices.platform.chromeOs': 'Chrome OS',
+  'teamsExplorer.adoption.devices.platform.mobile': 'Móvil (cualquiera)',
   'teamsExplorer.adoption.valueLabel.usersLower': 'usuarios',
 
   'teamsExplorer.meetings.utcCaveat': 'Las horas de llamada se registran en UTC y la base de datos no contiene zona horaria por usuario, por lo que una organización realmente global mostrará alta actividad fuera del horario laboral. Compare departamentos entre sí en lugar de contra un objetivo absoluto.',
@@ -329,6 +355,16 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.meetings.modalities.description': '¿Se usa algo más que audio?',
   'teamsExplorer.meetings.modalities.note': 'Contado por sesión de asistente, y una sesión puede usar varias modalidades, por lo que no suman el número de llamadas.',
   'teamsExplorer.meetings.modalities.centreLabel': 'sesiones',
+  'teamsExplorer.meetings.modalities.other.one': '1 modalidad menos usada, combinada',
+  'teamsExplorer.meetings.modalities.other.other': '{count} modalidades menos usadas, combinadas',
+  'teamsExplorer.meetings.modalities.otherNote':
+    'Las modalidades que usaron menos de {count} personas se combinan en un solo sector para que no se pueda identificar a nadie.',
+  'teamsExplorer.meetings.modalities.allSmall':
+    'Cada modalidad la usaron menos de {count} personas, así que este gráfico se oculta para proteger su privacidad.',
+  'teamsExplorer.meetings.withheld.weeksNote':
+    'Las semanas en las que menos de {count} personas asistieron a llamadas se dejan en blanco para que no se pueda identificar a nadie, junto con la semana más tranquila de las demás, para que ninguna pueda deducirse de los totales.',
+  'teamsExplorer.meetings.withheld.distributions':
+    'Menos de {count} personas asistieron a las llamadas de esta vista, así que el desglose de sus reuniones se oculta para proteger su privacidad.',
   'teamsExplorer.meetings.topOrganisers.title': 'Principales organizadores',
   'teamsExplorer.meetings.topOrganisers.description': 'Quién dirige las reuniones.',
   'teamsExplorer.meetings.valueLabel.meetings': 'reuniones',
@@ -396,6 +432,19 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.collaboration.appsTabs.description': '¿Teams es un área de trabajo o solo una aplicación de chat?',
   'teamsExplorer.collaboration.reactionsUsed.title': 'Reacciones usadas',
   'teamsExplorer.collaboration.reactionsUsed.description': 'Cómo responden las personas cuando no tienen nada que añadir.',
+  'teamsExplorer.collaboration.reactionsUsed.other.one': '1 reacción menos usada, combinada',
+  'teamsExplorer.collaboration.reactionsUsed.other.other': '{count} reacciones menos usadas, combinadas',
+  'teamsExplorer.collaboration.reactionsUsed.otherNote':
+    'Las reacciones que usaron menos de {count} personas se combinan en una sola barra para que no se pueda identificar a nadie.',
+  'teamsExplorer.collaboration.reactionsUsed.allSmall':
+    'Cada reacción la usaron menos de {count} personas, así que este gráfico se oculta para proteger su privacidad.',
+  'teamsExplorer.collaboration.teamLeaderboard.withheldNote':
+    'Los equipos con menos de {count} miembros no se muestran. Cuando se omite alguno, o hay más equipos de los que se pueden mostrar, también se omite el equipo más pequeño que se mostraría, para que ningún equipo pequeño se pueda deducir de los totales. Las reacciones de menos de {count} personas aparecen como un guion, y, cuando hace falta por el mismo motivo, también las de un equipo más.',
+  'teamsExplorer.collaboration.channelLeaderboard.withheldNote':
+    'Los canales de equipos con menos de {count} miembros no se muestran. Cuando se omite alguno, o hay más canales de los que se pueden mostrar, también se omite el canal del equipo más pequeño que se mostraría, para que ningún equipo pequeño se pueda deducir de los totales. Las reacciones de menos de {count} personas aparecen como un guion, y, cuando hace falta por el mismo motivo, también las de un canal más.',
+  'teamsExplorer.collaboration.reactionsWithheld': 'Oculto: reaccionaron menos de {count} personas, o mostrarlo permitiría deducir un recuento así',
+  'teamsExplorer.collaboration.appsTabs.withheld':
+    'Oculto para proteger la privacidad: una pestaña puede llamarse como la haya escrito un miembro, y nada de lo registrado indica cuántas personas la usan.',
   'teamsExplorer.collaboration.membership.title': 'Actividad de pertenencia',
   'teamsExplorer.collaboration.membership.description': 'Personas distintas vistas en la pertenencia a equipos cada semana.',
   'teamsExplorer.collaboration.membershipSnapshotNote': 'La pertenencia a equipos se lee desde la instantánea de pertenencia más reciente por equipo, no desde todo el historial; de lo contrario, se contaría a cada persona que alguna vez haya sido miembro.',
@@ -405,17 +454,25 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.conversations.keywords.title': 'De qué hablan las personas',
   'teamsExplorer.conversations.keywords.description': 'Las frases clave extraídas de la conversación de canal.',
   'teamsExplorer.conversations.keywords.empty': 'No se extrajeron frases clave para este periodo.',
+  'teamsExplorer.conversations.keywords.withheld':
+    'Oculto para proteger la privacidad: las frases clave se toman de lo que escribieron las personas, y nada de lo registrado indica cuántas personas escribieron cada una.',
   'teamsExplorer.conversations.sentimentOverTime.title': 'Sentimiento a lo largo del tiempo',
   'teamsExplorer.conversations.sentimentOverTime.description': 'Ponderado por recuento de mensajes, semana a semana.',
   'teamsExplorer.conversations.sentimentOverTime.empty': 'No hay conversación puntuada en este periodo.',
   'teamsExplorer.conversations.languages.title': 'Idiomas en uso',
   'teamsExplorer.conversations.languages.description': 'En qué escribe realmente la organización.',
+  'teamsExplorer.conversations.languages.withheld':
+    'Oculto para proteger la privacidad: nada de lo registrado indica cuántas personas escriben en cada idioma, así que un idioma que solo usa una persona mostraría lo que escribió.',
   'teamsExplorer.conversations.sentimentByTeam.title': 'Sentimiento por equipo',
   'teamsExplorer.conversations.sentimentByTeam.description': 'Dónde la conversación es positiva y dónde no.',
   'teamsExplorer.conversations.sentimentByTeam.aria': 'Sentimiento por equipo',
+  'teamsExplorer.conversations.sentimentByTeam.withheldNote':
+    'Los equipos con menos de {count} miembros no se muestran. Cuando se omite alguno, o hay más equipos de los que se pueden mostrar, también se omite el equipo más pequeño que se mostraría, para que ningún equipo pequeño se pueda identificar ni deducir de los totales.',
   'teamsExplorer.conversations.sentimentByChannel.title': 'Sentimiento por canal',
   'teamsExplorer.conversations.sentimentByChannel.description': 'La misma lectura, un nivel más abajo.',
   'teamsExplorer.conversations.sentimentByChannel.aria': 'Sentimiento por canal',
+  'teamsExplorer.conversations.sentimentByChannel.withheldNote':
+    'Los canales de equipos con menos de {count} miembros no se muestran. Cuando se omite alguno, o hay más canales de los que se pueden mostrar, también se omite el canal del equipo más pequeño que se mostraría, para que ningún equipo pequeño se pueda identificar ni deducir de los totales.',
   'teamsExplorer.conversations.scoredChannelDays': '{count} días de canal de este periodo tienen una puntuación de sentimiento. La puntuación solo cubre equipos autorizados para análisis profundos.',
 
   'teamsExplorer.people.usageReportsOff': 'La importación de informes de uso de Microsoft 365 está desactivada, por lo que no hay actividad de Teams por usuario y nadie se puede clasificar. Active {importName} en el instalador y conceda a la aplicación en tiempo de ejecución {permission}.',
@@ -435,6 +492,8 @@ const teamsExplorer: Record<keyof typeof en, string> = {
   'teamsExplorer.people.championDepartments.note': 'Un usuario avanzado está activo en más del 60% de los días laborables del periodo. Los departamentos con muchos son donde un programa de promotores ya tiene base.',
   'teamsExplorer.people.championDepartments.otherNote':
     'Los departamentos con menos de {count} usuarios avanzados se combinan en una sola fila para que no se pueda identificar a nadie.',
+  'teamsExplorer.people.championDepartments.leftOutNote':
+    'Los departamentos con menos de {count} usuarios avanzados se omiten, junto con el departamento más pequeño de los demás cuando hace falta y sin una fila combinada, para que ninguno se pueda deducir de los usuarios avanzados contados en otras partes.',
   'teamsExplorer.people.championDepartments.allSmall':
     'Todos los departamentos tienen menos de {count} usuarios avanzados, así que este gráfico se oculta para proteger su privacidad.',
   'teamsExplorer.people.championDepartments.other.one': '1 departamento más pequeño, combinado',

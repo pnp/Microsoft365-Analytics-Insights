@@ -87,6 +87,47 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// #847 (R10-12): a run a WebJob restart interrupted never completes, and completing a later run only removed the rows
+        /// of completed runs, so its packages and elements were kept for ever. A later run now closes it as failed and removes
+        /// its rows - but only once it is too old to still be running.
+        /// </summary>
+        [TestMethod]
+        public async Task BeginImport_ClosesARunARestartInterrupted_OnceItCannotStillBeRunning_AndRemovesItsRows()
+        {
+            using (var scratch = ScratchDatabase.Create("Agent365Interrupted"))
+            {
+                scratch.Execute(Agent365PackageCatalog.Up_Sql);
+                var store = new Agent365PackageCatalogStore(new ScratchContextFactory(scratch.ConnectionString));
+                var start = new DateTime(2026, 10, 1, 0, 15, 0, DateTimeKind.Utc);
+                var interrupted = await store.BeginImportAsync(start);
+                await store.SavePageAsync(interrupted, new[] { PackageWithElement("contoso-interrupted") });
+
+                var recent = await store.BeginImportAsync(start.AddHours(23));
+                await store.SavePageAsync(recent, new[] { PackageWithElement("contoso-recent") });
+                Assert.AreEqual(1, RunRows(scratch, interrupted), "Not yet a day old: it may still be running, so it is left alone.");
+
+                await store.BeginImportAsync(start.AddHours(25));
+
+                Assert.AreEqual(0, RunRows(scratch, interrupted), "The interrupted run's packages and elements are removed.");
+                Assert.AreEqual(0, (int)scratch.Scalar($"SELECT COUNT(*) FROM dbo.copilot_agent_package_elements WHERE import_run_id = '{interrupted}';"));
+                Assert.AreEqual(1, RunRows(scratch, recent), "A run younger than a day is never touched.");
+                Assert.AreEqual(0, (int)scratch.Scalar($"SELECT COUNT(*) FROM dbo.copilot_agent_catalog_import_log WHERE run_id = '{interrupted}' AND (completed_utc IS NULL OR is_success = 1);"),
+                    "Closed as failed.");
+                Assert.IsNull(scratch.Scalar($"SELECT completed_utc FROM dbo.copilot_agent_catalog_import_log WHERE run_id = '{recent}';") as DateTime?);
+            }
+        }
+
+        private static Agent365Package PackageWithElement(string packageId) => new Agent365Package
+        {
+            PackageId = packageId,
+            DisplayName = "Contoso agent",
+            Elements = { new Agent365PackageElement { ElementType = "bot", ElementId = packageId + "-element" } },
+        };
+
+        private static int RunRows(ScratchDatabase scratch, Guid runId)
+            => (int)scratch.Scalar($"SELECT COUNT(*) FROM dbo.copilot_agent_packages WHERE import_run_id = '{runId}';");
+
         [TestMethod]
         public async Task ApiFakeStore_UnspecifiedAndUtcDatesHaveTheSameUtcContract_AndNullsRemainUnknown()
         {

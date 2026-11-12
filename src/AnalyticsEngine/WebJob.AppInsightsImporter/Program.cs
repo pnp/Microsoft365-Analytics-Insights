@@ -58,7 +58,13 @@ namespace WebJob.AppInsightsImporter
 
             var saveRestResponses = parsedArgs.Has(ARG_SAVE_REST_RESPONSES);
             var debugSwitchDetected = saveRestResponses || daysBeforeReadOverride > 0;
-            if (saveRestResponses) Console.WriteLine("DEBUG: Will save Application Insights responses to temp disk location.");
+            if (saveRestResponses)
+            {
+                // The dumps hold raw telemetry (page URLs, user names) but no credentials - see AppInsightsAPIClient
+                Console.WriteLine("DEBUG: Will save Application Insights responses under " +
+                    System.IO.Path.Combine(System.IO.Path.GetTempPath(), "AppInsightsImporter", "REST") + ". They hold raw telemetry " +
+                    "(page URLs, user names): delete them as soon as you have finished, and within 7 days at most.");
+            }
             if (daysBeforeReadOverride > 0) Console.WriteLine($"DEBUG: Will request App Insights data from '{daysBeforeReadOverride}' days before today...");
 
             var exitCode = HostRuntime.RunGuarded("AppInsightsImporter.Main", () => Task.FromResult(Run(saveRestResponses, debugSwitchDetected, daysBeforeReadOverride)));

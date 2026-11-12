@@ -23,6 +23,8 @@ import {
   formatDuration,
   formatPct,
   formatSeconds,
+  flooredCard,
+  leftOutNote,
   loadTone,
   queryFor,
   toStackedSeries,
@@ -52,6 +54,29 @@ export default function PagesPanel({
   const styles = useWebActivityStyles();
   const t = useT();
   const kpis = data.kpis;
+
+  // Without See PII, pages and sites of too few visitors are left out of each list, with the smallest row shown - and a
+  // quiet page is by design one that one, two or three people opened, so every quiet page is. Each card says so. Nor
+  // does this reader get any page's figures counted in visits here - unique page views, entries, exits and bounces: they
+  // are the Visits and Journeys tabs' figures.
+  const visitFiguresWithheld = data.visitFiguresWithheld === true;
+  const top = flooredCard(t, data.minimumGroupSize, data.withheldTopPages, data.topPages.length, {
+    note: visitFiguresWithheld ? t('webActivity.pages.mostViewed.visitFiguresWithheld') : undefined,
+  });
+  const slowest = flooredCard(t, data.minimumGroupSize, data.withheldSlowestPages, data.slowestPages.length, {
+    note: t('webActivity.pages.slowest.note'),
+    empty: t('webActivity.pages.slowest.empty'),
+  });
+  const quiet = flooredCard(t, data.minimumGroupSize, data.withheldQuietPages, data.quietPages.length, {
+    note: t('webActivity.pages.quiet.note'),
+    empty: t('webActivity.pages.quiet.empty'),
+  });
+  const sitesLeftOut = leftOutNote(t, data.minimumGroupSize, data.withheldSites);
+  const exportButton = (onClick: () => void) => (
+    <Button appearance="subtle" size="small" icon={<ArrowDownload16Regular />} onClick={onClick} disabled={exporting}>
+      {t('webActivity.common.export')}
+    </Button>
+  );
 
   const items: KpiDefinition[] = [
     {
@@ -130,24 +155,23 @@ export default function PagesPanel({
         <SectionCard
           title={t('webActivity.pages.mostViewed.title')}
           description={t('webActivity.pages.mostViewed.description', { top: data.window.top })}
+          note={top.note}
           query={queryFor(data.queries, 'pages-top')}
           isEmpty={data.topPages.length === 0}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportPages}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          emptyMessage={top.emptyMessage}
+          actions={top.exportable ? exportButton(onExportPages) : undefined}
         >
           <PageTable
             rows={data.topPages}
             label={t('webActivity.pages.mostViewed.title')}
-            columns={{ site: true, uniquePageViews: true, dwell: true, load: true, entries: true, bounce: true }}
+            columns={{
+              site: true,
+              uniquePageViews: !visitFiguresWithheld,
+              dwell: true,
+              load: true,
+              entries: !visitFiguresWithheld,
+              bounce: !visitFiguresWithheld,
+            }}
             dwellFootnote
           />
         </SectionCard>
@@ -155,21 +179,11 @@ export default function PagesPanel({
         <SectionCard
           title={t('webActivity.pages.slowest.title')}
           description={t('webActivity.pages.slowest.description', { minimumViews: data.window.minimumViews })}
-          note={t('webActivity.pages.slowest.note')}
+          note={slowest.note}
           query={queryFor(data.queries, 'pages-slowest')}
           isEmpty={data.slowestPages.length === 0}
-          emptyMessage={t('webActivity.pages.slowest.empty')}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportSlow}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          emptyMessage={slowest.emptyMessage}
+          actions={slowest.exportable ? exportButton(onExportSlow) : undefined}
         >
           <PageTable
             rows={data.slowestPages}
@@ -181,32 +195,23 @@ export default function PagesPanel({
         <SectionCard
           title={t('webActivity.pages.quiet.title')}
           description={t('webActivity.pages.quiet.description')}
-          note={t('webActivity.pages.quiet.note')}
+          note={quiet.note}
           query={queryFor(data.queries, 'pages-quiet')}
           isEmpty={data.quietPages.length === 0}
-          emptyMessage={t('webActivity.pages.quiet.empty')}
-          actions={
-            <Button
-              appearance="subtle"
-              size="small"
-              icon={<ArrowDownload16Regular />}
-              onClick={onExportQuiet}
-              disabled={exporting}
-            >
-              {t('webActivity.common.export')}
-            </Button>
-          }
+          emptyMessage={quiet.emptyMessage}
+          actions={quiet.exportable ? exportButton(onExportQuiet) : undefined}
         >
           <PageTable
             rows={data.quietPages}
             label={t('webActivity.pages.quiet.title')}
-            columns={{ site: true, uniquePageViews: true, dwell: true, load: false }}
+            columns={{ site: true, uniquePageViews: !visitFiguresWithheld, dwell: true, load: false }}
             dwellFootnote
           />
         </SectionCard>
 
         <SectionCard
           title={t('webActivity.pages.bySite.title')}
+          note={sitesLeftOut}
           query={queryFor(data.queries, 'pages-sites')}
           isEmpty={data.bySite.length === 0}
         >

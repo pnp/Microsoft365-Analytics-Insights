@@ -23,7 +23,14 @@ import {
   DataScatter20Regular,
   PeopleList20Regular,
 } from '@fluentui/react-icons';
-import { fetchCowork, coworkExportUrl } from '../../api/copilotAdoptionApi';
+import {
+  AdoptionGenerationChangedError,
+  adoptionFailure,
+  adoptionFailureText,
+  fetchCowork,
+  coworkExportUrl,
+  type AdoptionFailure,
+} from '../../api/copilotAdoptionApi';
 import type {
   AdoptionFilterOptions,
   CopilotAdoptionOptions,
@@ -48,6 +55,7 @@ import {
   PartialPrintNote,
   PrintedFilters,
   ScoreBar,
+  SmallestGroupWithheldNote,
   printedSearch,
   revealElement,
   useAdoptionTableStyles,
@@ -330,6 +338,8 @@ export default function CoworkPanel({
   userFilter,
   canSeePii = true,
   hiddenListNote,
+  onGenerationChanged,
+  onLoadingChange,
 }: {
   windowDays: number;
   dateRange?: DateRange | null;
@@ -353,6 +363,8 @@ export default function CoworkPanel({
    * range passes its own note, because there the list is hidden for a different reason.
    */
   hiddenListNote?: ReactNode;
+  onGenerationChanged?: () => boolean;
+  onLoadingChange?: (loading: boolean) => void;
 }) {
   const styles = useStyles();
   const table = useAdoptionTableStyles();
@@ -381,7 +393,7 @@ export default function CoworkPanel({
   const [page, setPage] = useState(0);
   const [data, setData] = useState<CoworkReadinessPage | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AdoptionFailure | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const { isExpanded, toggle: toggleRow, resetRows, expandAll, collapseAll, allExpanded } = useRowExpansion();
   const [section, setSection] = useState<CoworkSection>('timeSaved');
@@ -420,26 +432,33 @@ export default function CoworkPanel({
     let cancelled = false;
     const controller = new AbortController();
     setLoading(true);
+    onLoadingChange?.(true);
     setError(null);
+    setData(null);
 
-    fetchCowork(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal, ...(dateRange ? [dateRange] as const : []))
+    fetchCowork(windowDays, filters, page * PAGE_SIZE, PAGE_SIZE, seatLicenceTypeIds, controller.signal,
+      dateRange, { generationId: summary.diagnostics?.generationId })
       .then((result) => {
         if (!cancelled) setData(result);
       })
       .catch((e: any) => {
         if (cancelled || controller.signal.aborted) return;
-        setError(e instanceof Error ? e.message : t('copilotAdoptionCowork.error.loadReadinessList'));
+        if (e instanceof AdoptionGenerationChangedError && onGenerationChanged?.()) return;
+        setError(adoptionFailure(e, 'copilotAdoptionCowork.error.loadReadinessList'));
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) { setLoading(false); onLoadingChange?.(false); }
       });
 
     return () => {
       cancelled = true;
       // These requests poll while the analysis is building, so cleanup has to actually stop them.
       controller.abort();
+      onLoadingChange?.(false);
     };
-  }, [available, canSeePii, windowDays, filters, page, seatLicenceTypeIds, reloadKey, t]);
+    // Not keyed on the language: a switch re-renders the rows already loaded, it does not fetch them again.
+  }, [available, canSeePii, windowDays, dateRange, filters, page, seatLicenceTypeIds, reloadKey,
+    summary.diagnostics?.generationId, onGenerationChanged, onLoadingChange]);
 
   const sortValue = `${filters.sortBy}:${filters.sortDesc ? 'desc' : 'asc'}`;
   const exportUrl = useMemo(
@@ -639,13 +658,13 @@ export default function CoworkPanel({
             content={{
               what: t('copilotAdoptionCowork.departmentReadiness.info.what'),
               how: t('copilotAdoptionCowork.departmentReadiness.info.how', {
-                load: options.coworkLoadMinScore,
-                fluency: options.coworkFluencyMinScore,
-                meetings: options.coworkMeetingWeight,
-                email: options.coworkEmailWeight,
-                messages: options.coworkCollaborationWeight,
-                documents: options.coworkDocumentWeight,
-                uplift: options.coworkAgentFamiliarityUplift,
+                load: formatNumber(options.coworkLoadMinScore),
+                fluency: formatNumber(options.coworkFluencyMinScore),
+                meetings: formatNumber(options.coworkMeetingWeight),
+                email: formatNumber(options.coworkEmailWeight),
+                messages: formatNumber(options.coworkCollaborationWeight),
+                documents: formatNumber(options.coworkDocumentWeight),
+                uplift: formatNumber(options.coworkAgentFamiliarityUplift),
               }),
               source: t('copilotAdoptionCowork.departmentReadiness.info.source'),
             }}
@@ -655,6 +674,7 @@ export default function CoworkPanel({
           {t('copilotAdoptionCowork.departmentReadiness.guidance')}
         </Text>
         <CoworkQuadrant points={summary.coworkQuadrant} options={options} />
+        <SmallestGroupWithheldNote withheld={summary.smallestGroupsWithheld} breakdowns={['departments']} />
       </Card>
       </div>
 
@@ -715,6 +735,7 @@ export default function CoworkPanel({
               </tbody>
             </table>
           </div>
+          <SmallestGroupWithheldNote withheld={summary.smallestGroupsWithheld} breakdowns={['departments']} />
         </Card>
       )}
 
@@ -912,7 +933,7 @@ export default function CoworkPanel({
 
         {error && (
           <MessageBar intent="error">
-            <MessageBarBody>{error}</MessageBarBody>
+            <MessageBarBody>{adoptionFailureText(t, error)}</MessageBarBody>
           </MessageBar>
         )}
 
@@ -969,9 +990,9 @@ export default function CoworkPanel({
                         content={{
                           what: t('copilotAdoptionCowork.people.verdictInfo.what'),
                           how: t('copilotAdoptionCowork.people.verdictInfo.how', {
-                            days: options.coworkRegularMinActiveDays,
-                            load: options.coworkLoadMinScore,
-                            fluency: options.coworkFluencyMinScore,
+                            days: formatNumber(options.coworkRegularMinActiveDays),
+                            load: formatNumber(options.coworkLoadMinScore),
+                            fluency: formatNumber(options.coworkFluencyMinScore),
                           }),
                           source: t('copilotAdoptionCowork.people.verdictInfo.source'),
                         }}
@@ -986,20 +1007,20 @@ export default function CoworkPanel({
                         content={{
                           what: t('copilotAdoptionCowork.metric.coordinationLoadInfo.what'),
                           how: t('copilotAdoptionCowork.metric.coordinationLoadInfo.how', {
-                            meetings: options.coworkMeetingWeight,
-                            email: options.coworkEmailWeight,
-                            messages: options.coworkCollaborationWeight,
-                            documents: options.coworkDocumentWeight,
+                            meetings: formatNumber(options.coworkMeetingWeight),
+                            email: formatNumber(options.coworkEmailWeight),
+                            messages: formatNumber(options.coworkCollaborationWeight),
+                            documents: formatNumber(options.coworkDocumentWeight),
                           }),
                           formula: t('copilotAdoptionCowork.metric.coordinationLoadInfo.formula', {
-                            meetingTarget: options.coworkMeetingTarget,
-                            emailTarget: options.coworkEmailTarget,
-                            collaborationTarget: options.coworkCollaborationTarget,
-                            documentTarget: options.coworkDocumentTarget,
-                            meetingWeight: options.coworkMeetingWeight,
-                            emailWeight: options.coworkEmailWeight,
-                            collaborationWeight: options.coworkCollaborationWeight,
-                            documentWeight: options.coworkDocumentWeight,
+                            meetingTarget: formatNumber(options.coworkMeetingTarget),
+                            emailTarget: formatNumber(options.coworkEmailTarget),
+                            collaborationTarget: formatNumber(options.coworkCollaborationTarget),
+                            documentTarget: formatNumber(options.coworkDocumentTarget),
+                            meetingWeight: formatNumber(options.coworkMeetingWeight),
+                            emailWeight: formatNumber(options.coworkEmailWeight),
+                            collaborationWeight: formatNumber(options.coworkCollaborationWeight),
+                            documentWeight: formatNumber(options.coworkDocumentWeight),
                           }),
                           source: t('copilotAdoptionCowork.metric.coordinationLoadInfo.source'),
                         }}
@@ -1014,7 +1035,7 @@ export default function CoworkPanel({
                         content={{
                           what: t('copilotAdoptionCowork.metric.copilotFluencyInfo.what'),
                           how: t('copilotAdoptionCowork.metric.copilotFluencyInfo.how', {
-                            uplift: options.coworkAgentFamiliarityUplift,
+                            uplift: formatNumber(options.coworkAgentFamiliarityUplift),
                           }),
                           source: t('copilotAdoptionCowork.metric.copilotFluencyInfo.source'),
                         }}
@@ -1105,7 +1126,7 @@ export default function CoworkPanel({
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.meetings')}
                                   value={formatCount(row.teamsMeetings)}
-                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.meetingScore), target: options.coworkMeetingTarget })}
+                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.meetingScore), target: formatNumber(options.coworkMeetingTarget) })}
                                 />
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.email')}
@@ -1115,12 +1136,12 @@ export default function CoworkPanel({
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.teamsMessages')}
                                   value={formatCount(row.teamsMessages)}
-                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.collaborationScore), target: options.coworkCollaborationTarget })}
+                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.collaborationScore), target: formatNumber(options.coworkCollaborationTarget) })}
                                 />
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.files')}
                                   value={formatCount(row.filesViewedOrEdited)}
-                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.documentScore), target: options.coworkDocumentTarget })}
+                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.documentScore), target: formatNumber(options.coworkDocumentTarget) })}
                                 />
                               </DetailStats>
                             </DetailSection>
@@ -1137,7 +1158,7 @@ export default function CoworkPanel({
                                   value={formatCount(row.agentsUsed)}
                                   sub={
                                     row.agentsUsed > 0
-                                      ? t('copilotAdoptionCowork.detail.upToFamiliarity', { uplift: options.coworkAgentFamiliarityUplift })
+                                      ? t('copilotAdoptionCowork.detail.upToFamiliarity', { uplift: formatNumber(options.coworkAgentFamiliarityUplift) })
                                       : t('copilotAdoptionCowork.detail.noFamiliarityUplift')
                                   }
                                 />
@@ -1167,7 +1188,7 @@ export default function CoworkPanel({
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.auditInteractions')}
                                   value={formatCount(row.coworkInteractions)}
-                                  sub={t('copilotAdoptionCowork.detail.onDaysRegularAt', { days: formatCount(row.coworkActiveDays), regular: options.coworkRegularMinActiveDays })}
+                                  sub={t('copilotAdoptionCowork.detail.onDaysRegularAt', { days: formatCount(row.coworkActiveDays), regular: formatNumber(options.coworkRegularMinActiveDays) })}
                                 />
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.lastAuditInteraction')}

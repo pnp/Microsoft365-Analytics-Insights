@@ -133,6 +133,58 @@ namespace Common.Entities.TeamsExplorer
             return copy;
         }
 
+        /// <summary>
+        /// True when a section's lists of groups are read in full, whatever <see cref="Top"/> its lists of people are read with.
+        /// See <see cref="WithEveryGroup"/>.
+        /// </summary>
+        public bool EveryGroup { get; private set; }
+
+        /// <summary>
+        /// This window reading every group - the People tab's departments - while its lists of people keep <see cref="Top"/>. For
+        /// a reader without See PII the departments are folded (<c>TeamsPeople.WithoutIndividualData</c>) and they add up to the
+        /// power users published beside them, so a department the cut left out would be left out of the fold too, and the total
+        /// less the rows shown would be it: one to four people, when the departments beyond the cut hold one such (#844, P4-1).
+        /// </summary>
+        public TeamsExplorerQuery WithEveryGroup()
+        {
+            var copy = (TeamsExplorerQuery)MemberwiseClone();
+            copy.EveryGroup = true;
+            return copy;
+        }
+
+        /// <summary>
+        /// This window reading one row more than the longest list a reader can ask for (<see cref="MaximumTop"/>): the lists a
+        /// reader without See PII is shown are floored over that export-sized list and only then cut to the rows asked for, so
+        /// that two requests with different tops never leave out different rows; the extra row says whether more exist beyond
+        /// it, which the floor then treats as left out (<c>TeamsSmallGroups.WithoutSmallRowsOfList</c>).
+        /// </summary>
+        public TeamsExplorerQuery WithListProbe()
+        {
+            var copy = (TeamsExplorerQuery)MemberwiseClone();
+            copy.Top = MaximumTop + 1;
+            return copy;
+        }
+
+        /// <summary>
+        /// True when the usage-report figures are read over the directory population only. See <see cref="WithDirectoryPopulation"/>.
+        /// </summary>
+        public bool DirectoryPopulation { get; private set; }
+
+        /// <summary>
+        /// This window with every usage-report figure read over the directory population - the enabled (or unknown) directory
+        /// users that reach is measured against and the Adoption breakdown is made of - for a reader without See PII (#844,
+        /// S4-1). Read as written, the overview's totals and trend, the rhythm, the lifecycle, the engagement trend and the
+        /// people per platform also count the activity of accounts disabled since, which the breakdown never contains, so a
+        /// total less the breakdown's rows was those accounts' own: one person's, when one was disabled. A reader with See PII
+        /// keeps the figures as they always were, and the two are cached apart (<see cref="CacheKey"/>).
+        /// </summary>
+        public TeamsExplorerQuery WithDirectoryPopulation()
+        {
+            var copy = (TeamsExplorerQuery)MemberwiseClone();
+            copy.DirectoryPopulation = true;
+            return copy;
+        }
+
         /// <summary>Inclusive last UTC date of the live-data window, for display.</summary>
         public DateTime ToInclusiveUtc => ToExclusiveUtc.AddDays(-1);
 
@@ -213,7 +265,9 @@ namespace Common.Entities.TeamsExplorer
         /// Cache key for one section of the page. Includes the UTC date rather than the full
         /// timestamp, so a cached entry is reused across a day but can never be served after the
         /// window has rolled over to a new day - and, when the report is narrowed, the scope, so two
-        /// readers the global filter treats differently never share an entry.
+        /// readers the global filter treats differently never share an entry; and the population, so a section read over the
+        /// directory population for a reader without See PII is never served to a reader with it, or the other way round; and
+        /// whether its groups were read in full (<see cref="WithEveryGroup"/>).
         /// </summary>
         public string CacheKey(string section)
         {
@@ -227,7 +281,9 @@ namespace Common.Entities.TeamsExplorer
                 NowUtc.Date);
 
             return key + "::scope=" + (UserScope.IsRestricted ? UserScope.Key : "all")
-                + (UsageReportsGroupFiltered ? "::groupFiltered" : string.Empty);
+                + (UsageReportsGroupFiltered ? "::groupFiltered" : string.Empty)
+                + (DirectoryPopulation ? "::population=directory" : string.Empty)
+                + (EveryGroup ? "::groups=all" : string.Empty);
         }
     }
 }

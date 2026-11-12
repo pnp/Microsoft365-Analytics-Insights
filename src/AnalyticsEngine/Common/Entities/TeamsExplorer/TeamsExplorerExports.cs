@@ -27,7 +27,9 @@ namespace Common.Entities.TeamsExplorer
         /// added later - and the champions list the export switch falls back to - is treated as personal
         /// until someone decides otherwise. The adoption breakdown is exported to a reader without See PII as
         /// the page shows it to them: with the groups too small to name folded together
-        /// (<see cref="TeamsAdoption.WithoutSmallGroups"/>).
+        /// (<see cref="TeamsAdoption.WithoutSmallGroups"/>); the team and channel leaderboards likewise without the teams
+        /// of fewer than five members and with reactions of one to four people blank
+        /// (<see cref="TeamsCollaboration.WithoutSmallGroups"/>).
         /// </remarks>
         public static readonly string[] AggregateSections = { "teams", "channels", "adoption" };
 

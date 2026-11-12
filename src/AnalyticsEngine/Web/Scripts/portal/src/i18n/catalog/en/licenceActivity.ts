@@ -188,6 +188,13 @@ export const licenceActivity = {
   'licenceActivity.withheld.cell': 'Hidden: fewer than {count} people hold this licence',
   'licenceActivity.withheld.detail':
     'Fewer than {count} people hold this licence, so how much they use their services is hidden to protect their privacy.',
+  'licenceActivity.withheld.revealsFewPeople.cell':
+    'Hidden: with the other figures in this table, it would reveal the activity of fewer than {count} people',
+  'licenceActivity.withheld.revealsFewPeople.detail':
+    'Enough people hold this licence, but with the other figures in this report its figures would reveal how much fewer than {count} people use their services, so they are hidden to protect those people\u2019s privacy.',
+  'licenceActivity.withheld.other.cell': 'Hidden to protect the privacy of the people who hold it',
+  'licenceActivity.withheld.other.detail':
+    'How much the people holding this licence use their services is hidden to protect their privacy.',
   'licenceActivity.suppressed.title': 'Figures hidden',
   'licenceActivity.suppressed.body':
     'So few people hold a licence in this selection that every figure would describe individuals, so the figures are hidden to protect their privacy.',

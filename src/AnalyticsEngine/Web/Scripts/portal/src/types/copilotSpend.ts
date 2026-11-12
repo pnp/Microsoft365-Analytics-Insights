@@ -121,7 +121,10 @@ export interface SpendBalances {
   notEntitledPeople: number;
   /** Tenant-wide; null in a filtered view. */
   unresolvedAccounts: number | null;
+  /** Null in a filtered view, or when `unresolvedCreditsWithheld`. */
   unresolvedCredits: number | null;
+  /** For a reader without See PII: one to four unmatched accounts hold the balances, so they are withheld - never 0. */
+  unresolvedCreditsWithheld?: boolean;
   sweepsInWindow: number;
   completedSweepsInWindow: number;
   services: InvestmentServiceRow[];

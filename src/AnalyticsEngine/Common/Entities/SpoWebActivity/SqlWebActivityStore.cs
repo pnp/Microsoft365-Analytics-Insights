@@ -289,7 +289,7 @@ namespace Common.Entities.SpoWebActivity
                 .ToList();
 
             model.TopSites = WithShare(
-                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.PageViews }),
+                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.PageViews, People = r.Visitors, Key = r.WebId }),
                 kpi.PageViews);
 
             var search = searchTask.Result.Rows.FirstOrDefault() ?? new SearchKpiRow();
@@ -345,11 +345,11 @@ namespace Common.Entities.SpoWebActivity
             var kpiTask = RunAsync<VisitKpiRow>("visits-kpis", WebActivitySql.VisitKpis, query);
             var trendTask = RunAsync<TrendRow>("visits-trend", WebActivitySql.OverviewTrend, query);
             var siteTask = RunAsync<SiteRow>("visits-sites", SiteByVisitsSql, query);
-            var pageTask = RunAsync<NamedCountRow>("visits-pages", WebActivitySql.VisitsByPage, query);
+            var pageTask = RunAsync<NamedPeopleCountRow>("visits-pages", WebActivitySql.VisitsByPage, query);
             var deviceTask = RunAsync<PlatformRow>("visits-devices", DeviceByVisitsSql, query);
             var browserTask = RunAsync<PlatformRow>("visits-browsers", BrowserByVisitsSql, query);
             var heatTask = RunAsync<HeatCellRow>("visits-heatmap", WebActivitySql.Heatmap, query);
-            var siteTimeTask = RunAsync<StackRow>("visits-site-over-time", WebActivitySql.SiteOverTime, query);
+            var siteTimeTask = RunAsync<SiteStackRow>("visits-site-over-time", WebActivitySql.SiteOverTime, query);
 
             await Task.WhenAll(kpiTask, trendTask, siteTask, pageTask, deviceTask, browserTask, heatTask, siteTimeTask)
                 .ConfigureAwait(false);
@@ -381,16 +381,16 @@ namespace Common.Entities.SpoWebActivity
             // top N. A share recomputed over a truncated leaderboard always sums to 100% and quietly
             // hides the tail, which is the same mistake in every ranked chart on the page.
             model.BySite = WithShare(
-                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }),
+                siteTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits, People = r.Visitors, Key = r.WebId }),
                 kpi.Visits);
             model.ByPage = WithShare(
-                pageTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Count }),
+                pageTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Count, People = r.People }),
                 kpi.Visits);
             model.ByDevice = WithShare(
-                deviceTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }),
+                deviceTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits, People = r.Visitors }),
                 kpi.Visits);
             model.ByBrowser = WithShare(
-                browserTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits }),
+                browserTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Visits, People = r.Visitors }),
                 kpi.Visits);
 
             var cells = heatTask.Result.Rows;
@@ -398,7 +398,7 @@ namespace Common.Entities.SpoWebActivity
             model.ByHour = BuildHourBuckets(cells);
             model.ByPeriodOfDay = BuildPeriodBuckets(cells);
 
-            model.SiteOverTime = OnSpine(siteTimeTask.Result.Rows, query);
+            model.SiteOverTime = OnSpine(siteTimeTask.Result.Rows, query, r => ((SiteStackRow)r).WebId);
 
             return model;
         }
@@ -484,7 +484,7 @@ namespace Common.Entities.SpoWebActivity
             var bounceTask = RunAsync<PageRow>("journeys-bounce", WebActivitySql.BouncePages, query);
             var transitionTask = RunAsync<TransitionRow>("journeys-transitions", WebActivitySql.Transitions, query);
             var flowTask = RunAsync<StartEndFlowRow>("journeys-flows", WebActivitySql.StartEndFlows, query);
-            var clickTask = RunAsync<NamedCountRow>("journeys-clicks", WebActivitySql.ClickedElements, query);
+            var clickTask = RunAsync<NamedPeopleCountRow>("journeys-clicks", WebActivitySql.ClickedElements, query);
             var clickCountTask = RunAsync<ClickCountRow>("journeys-click-count", WebActivitySql.ClickCount, query);
 
             await Task.WhenAll(
@@ -502,7 +502,8 @@ namespace Common.Entities.SpoWebActivity
             var visits = depth.Sum(r => r.Visits);
             var pageViews = depth.Sum(r => r.Pages * r.Visits);
             var bounces = depth.Where(r => r.Pages == 1).Sum(r => r.Visits);
-            var measuredDwell = depth.Where(r => r.Seconds.HasValue).ToList();
+            var measuredVisits = depth.Sum(r => r.MeasuredVisits);
+            var measuredSeconds = depth.Where(r => r.Seconds.HasValue).Sum(r => r.Seconds.Value);
 
             model.Kpis = new WebActivityJourneyKpis
             {
@@ -511,11 +512,14 @@ namespace Common.Entities.SpoWebActivity
                 BouncePct = WebActivityScoring.Percentage(bounces, visits),
                 PagesPerVisit = visits > 0 ? (double)pageViews / visits : 0,
                 MedianPagesPerVisit = MedianPages(depth),
-                // Null rather than zero when nothing reported a dwell time: a confident "0s average
-                // visit" is the same missing-data failure the timing KPIs were just fixed for.
-                AverageVisitSeconds = measuredDwell.Count > 0 && visits > 0
-                    ? (double?)(measuredDwell.Sum(r => r.Seconds.Value) / visits)
+                // Over the visits that reported a dwell time, which are the visits the seconds were summed from: dividing
+                // by every visit counted each unmeasured one as a zero-second visit and shortened the average (#851).
+                // Null rather than zero when nothing reported a dwell time: a confident "0s average visit" is the same
+                // missing-data failure the timing KPIs were just fixed for.
+                AverageVisitSeconds = measuredVisits > 0
+                    ? (double?)(measuredSeconds / measuredVisits)
                     : null,
+                MeasuredVisits = measuredVisits,
                 Clicks = clickCountTask.Result.Rows.FirstOrDefault()?.Clicks ?? 0,
             };
 
@@ -544,6 +548,7 @@ namespace Common.Entities.SpoWebActivity
                     // Compared on URL, not on title: two different pages can share a title, and the
                     // diagram draws this one as a "came back to where it started" band.
                     EndedWhereItStarted = string.Equals(r.StartUrl, r.EndUrl, StringComparison.Ordinal),
+                    People = r.People,
                 })
                 .ToList();
 
@@ -561,13 +566,14 @@ namespace Common.Entities.SpoWebActivity
                     ToUrl = r.ToUrl,
                     Count = r.Count,
                     SharePct = r.SharePct ?? 0,
+                    People = r.People,
                 })
                 .ToList();
 
             model.Depth = BuildDepthBuckets(depth);
 
             model.ClickedElements = WithShare(
-                clickTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Count }),
+                clickTask.Result.Rows.Select(r => new WebActivityNamedCount { Name = r.Name, Count = r.Count, People = r.People }),
                 model.Kpis.Clicks);
 
             return model;
@@ -862,6 +868,7 @@ namespace Common.Entities.SpoWebActivity
                 BouncePct = row.Entries > 0
                     ? (double?)WebActivityScoring.Percentage(row.Bounces, row.Entries)
                     : null,
+                People = row.People,
             };
         }
 
@@ -987,9 +994,11 @@ namespace Common.Entities.SpoWebActivity
         }
 
         /// <summary>Fills a stacked series onto the week spine, so every series covers every week.</summary>
+        /// <param name="key">The id of each row's series, carried onto its points (and its gap-filling zeros); none when null.</param>
         private static List<WebActivityStackPoint> OnSpine(
             IEnumerable<StackRow> rows,
-            WebActivityQuery query)
+            WebActivityQuery query,
+            Func<StackRow, int?> key = null)
         {
             var points = (rows ?? Enumerable.Empty<StackRow>())
                 .Select(r => new WebActivityStackPoint
@@ -997,12 +1006,14 @@ namespace Common.Entities.SpoWebActivity
                     WeekStart = AsUtc(r.WeekStart),
                     Name = r.Name,
                     Count = r.Count,
+                    Key = key?.Invoke(r),
                 })
                 .ToList();
 
             var names = points.Select(p => p.Name).Distinct(StringComparer.Ordinal).ToList();
             if (names.Count == 0) return points;
 
+            var keys = points.GroupBy(p => p.Name, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First().Key, StringComparer.Ordinal);
             var present = new HashSet<string>(
                 points.Select(p => p.Name + "|" + p.WeekStart.Ticks), StringComparer.Ordinal);
 
@@ -1011,7 +1022,7 @@ namespace Common.Entities.SpoWebActivity
                 foreach (var name in names)
                 {
                     if (present.Contains(name + "|" + week.Ticks)) continue;
-                    points.Add(new WebActivityStackPoint { WeekStart = week, Name = name, Count = 0 });
+                    points.Add(new WebActivityStackPoint { WeekStart = week, Name = name, Count = 0, Key = keys[name] });
                 }
             }
 
