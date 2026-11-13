@@ -12,10 +12,11 @@ import type {
 } from '../../types/copilotAdoption';
 
 const fetchCowork = vi.fn();
+const coworkExportUrl = vi.fn((..._args: unknown[]) => '/api/CopilotAdoption/cowork/export?windowDays=28');
 
 vi.mock('../../api/copilotAdoptionApi', () => ({
   fetchCowork: (...args: unknown[]) => fetchCowork(...args),
-  coworkExportUrl: () => '/api/CopilotAdoption/cowork/export?windowDays=28',
+  coworkExportUrl: (...args: unknown[]) => coworkExportUrl(...args),
 }));
 
 // Imported after the mock so the panel picks up the stubbed module.
@@ -262,7 +263,7 @@ describe('CoworkPanel', () => {
     const user = userEvent.setup();
     render(summary());
 
-    const people = await openSection(user, /People to enable/);
+    const people = await openSection(user, /^People$/);
     expect(within(people).getByText(/no licence of its own/)).toBeTruthy();
     expect(within(people).getByText(/spending policy scoped to users or groups/)).toBeTruthy();
   });
@@ -290,19 +291,79 @@ describe('CoworkPanel', () => {
     fetchCowork.mockClear();
     await user.click(within(readiness).getByText('Established').closest('button') as HTMLElement);
 
-    expect(screen.getByRole('tabpanel', { name: /People to enable/ })).toBeTruthy();
+    expect(screen.getByRole('tabpanel', { name: /^People$/ })).toBeTruthy();
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
     expect((fetchCowork.mock.calls.at(-1)![1] as { tiers: string[] }).tiers).toEqual(['established']);
     expect(
-      (screen.getByRole('combobox', { name: 'Filter Cowork candidates by verdict' }) as HTMLSelectElement).value,
+      (screen.getByRole('combobox', { name: 'Show' }) as HTMLSelectElement).value,
     ).toBe('established');
+  });
+
+  it('defaults to the recommended policy list and explains it without needing a tooltip', async () => {
+    const user = userEvent.setup();
+    render(summary());
+    const people = await openSection(user, /^People$/);
+
+    const show = within(people).getByRole('combobox', { name: 'Show' });
+    expect(show).toHaveValue('recommended');
+    expect(show).toHaveAccessibleDescription(/A suggested policy list, not a record of policy assignments/);
+    expect(within(people).getByText(/Prime candidates plus people already using Cowork/)).toBeVisible();
+    expect(within(people).getByText(/Merge the CSV into your existing policy scope; never replace the scope with it/)).toBeVisible();
+    expect(within(people).queryAllByRole('checkbox')).toHaveLength(0);
+    await waitFor(() => expect(fetchCowork.mock.calls.at(-1)![1]).toMatchObject({
+      tiers: [], recommendedOnly: true, coworkUsersOnly: false,
+    }));
+  });
+
+  it('replaces the whole population filter and keeps the CSV on the same list', async () => {
+    const user = userEvent.setup();
+    render(summary());
+    const people = await openSection(user, /^People$/);
+    const show = within(people).getByRole('combobox', { name: 'Show' });
+
+    for (const [population, expected] of [
+      ['usingCowork', { tiers: [], recommendedOnly: true, coworkUsersOnly: true }],
+      ['newCandidates', { tiers: ['primeCandidate'], recommendedOnly: true, coworkUsersOnly: false }],
+      ['all', { tiers: [], recommendedOnly: false, coworkUsersOnly: false }],
+      ['primeCandidate', { tiers: ['primeCandidate'], recommendedOnly: false, coworkUsersOnly: false }],
+      ['established', { tiers: ['established'], recommendedOnly: false, coworkUsersOnly: false }],
+      ['recommended', { tiers: [], recommendedOnly: true, coworkUsersOnly: false }],
+    ] as const) {
+      await user.selectOptions(show, population);
+      await waitFor(() => expect(fetchCowork.mock.calls.at(-1)![1]).toMatchObject(expected));
+      expect(coworkExportUrl.mock.calls.at(-1)![1]).toBe(fetchCowork.mock.calls.at(-1)![1]);
+    }
+
+    await user.selectOptions(show, 'newCandidates');
+    expect(show).toHaveAccessibleDescription(/They may already have access/);
+    await user.selectOptions(show, 'all');
+    expect(show).toHaveAccessibleDescription(/including known-disabled accounts and people not recommended/);
+  });
+
+  it('clears the search and observed-use restriction when a verdict card opens its full population', async () => {
+    const user = userEvent.setup();
+    render(summary());
+    const people = await openSection(user, /^People$/);
+    await user.selectOptions(within(people).getByRole('combobox', { name: 'Show' }), 'usingCowork');
+    await user.type(within(people).getByRole('textbox', { name: 'Search Cowork candidates' }), 'finance{Enter}');
+    await waitFor(() => expect(fetchCowork.mock.calls.at(-1)![1]).toMatchObject({
+      search: 'finance', coworkUsersOnly: true,
+    }));
+    const readiness = await openSection(user, /Readiness/);
+    await user.click(within(readiness).getByText('Prime candidate').closest('button') as HTMLElement);
+
+    await waitFor(() => expect(fetchCowork.mock.calls.at(-1)![1]).toMatchObject({
+      search: '', tiers: ['primeCandidate'], recommendedOnly: false, coworkUsersOnly: false,
+    }));
+    expect(within(people).getByRole('combobox', { name: 'Show' })).toHaveValue('primeCandidate');
+    expect(within(people).getByRole('textbox', { name: 'Search Cowork candidates' })).toHaveValue('');
   });
 
   it('marks a predicted row in the table as predicted', async () => {
     const user = userEvent.setup();
     render(summary());
 
-    const people = await openSection(user, /People to enable/);
+    const people = await openSection(user, /^People$/);
     await waitFor(() => expect(within(people).getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
     const table = within(people).getByRole('table');
@@ -359,7 +420,7 @@ describe('CoworkPanel', () => {
       }),
     );
 
-    const people = await openSection(user, /People to enable/);
+    const people = await openSection(user, /^People$/);
     await waitFor(() => expect(within(people).getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
     const header = within(within(people).getByRole('table')).getAllByRole('columnheader');
@@ -373,7 +434,7 @@ describe('CoworkPanel', () => {
   it('omits the per-user credit figures entirely when no per-user rows exist', async () => {
     const user = userEvent.setup();
     render(summary());
-    const people = await openSection(user, /People to enable/);
+    const people = await openSection(user, /^People$/);
     await waitFor(() => expect(within(people).getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
     expect(screen.queryByText('Copilot Studio Credits')).toBeNull();
@@ -401,7 +462,7 @@ describe('CoworkPanel', () => {
     fetchCowork.mockResolvedValue(page([row({ rationale: LONG })]));
 
     render(summary());
-    const people = await openSection(user, /People to enable/);
+    const people = await openSection(user, /^People$/);
     await waitFor(() => expect(within(people).getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
     expect(screen.queryByText(LONG)).toBeNull();
@@ -426,7 +487,7 @@ describe('CoworkPanel', () => {
     );
 
     render(summary());
-    const people = await openSection(user, /People to enable/);
+    const people = await openSection(user, /^People$/);
     await waitFor(() => expect(within(people).getByText('aisha.rahman@contoso.com')).toBeTruthy());
     expect(within(people).getByText('12 audit interactions in 3d')).toBeTruthy();
 
@@ -457,7 +518,7 @@ describe('CoworkPanel', () => {
       }),
     );
 
-    const people = await openSection(user, /People to enable/);
+    const people = await openSection(user, /^People$/);
     await waitFor(() => expect(within(people).getByText('aisha.rahman@contoso.com')).toBeTruthy());
 
     await user.click(within(people).getByRole('button', { name: /Show the full assessment/ }));
@@ -931,7 +992,7 @@ describe('CoworkPanel headline actions', () => {
   it('opens the Time saved section from any other section to do it', async () => {
     const user = userEvent.setup();
     await renderSettled(withEstimates());
-    await openSection(user, /People to enable/);
+    await openSection(user, /^People$/);
     expect(screen.queryByRole('spinbutton', { name: 'Share of meetings organised handed to Cowork, in percent' })).toBeNull();
 
     await user.click(screen.getByRole('button', { name: 'Adjust the assumptions' }));
@@ -946,9 +1007,9 @@ describe('CoworkPanel headline actions', () => {
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
     fetchCowork.mockClear();
 
-    await user.click(screen.getByRole('button', { name: 'See the 40 people to enable' }));
+    await user.click(screen.getByRole('button', { name: 'See the 40 recommended people' }));
 
-    expect(screen.getByRole('tab', { name: /People to enable/, selected: true })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /^People$/, selected: true })).toBeTruthy();
     expect(scrollIntoView).toHaveBeenCalled();
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
     expect((fetchCowork.mock.calls.at(-1)![1] as { recommendedOnly: boolean }).recommendedOnly).toBe(true);
@@ -963,7 +1024,7 @@ describe('CoworkPanel headline actions', () => {
 
     await user.click(screen.getByRole('button', { name: 'See all 400 Copilot seat holders' }));
 
-    expect(screen.getByRole('tab', { name: /People to enable/, selected: true })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /^People$/, selected: true })).toBeTruthy();
     expect(scrollIntoView).toHaveBeenCalled();
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
     const filters = fetchCowork.mock.calls.at(-1)![1] as { recommendedOnly: boolean; coworkUsersOnly: boolean; tiers: string[] };
@@ -987,12 +1048,12 @@ describe('CoworkPanel without See PII', () => {
 
     // The headline still leads - it is modelled from totals - but offers no list to open.
     expect(screen.getByRole('tab', { name: /Time saved/, selected: true })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'See the 40 people to enable' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'See the 40 recommended people' })).toBeNull();
 
     const readiness = await openSection(user, /Readiness/);
     expect(within(readiness).getByText('Established')).toBeTruthy();
 
-    const people = await openSection(user, /People to enable/);
+    const people = await openSection(user, /^People$/);
     expect(within(people).getByText('Individual details are hidden')).toBeTruthy();
     expect(within(people).queryByText('aisha.rahman@contoso.com')).toBeNull();
     expect(fetchCowork).not.toHaveBeenCalled();
@@ -1016,7 +1077,7 @@ describe('CoworkPanel language switch', () => {
         <CoworkPanel windowDays={28} summary={summary()} options={OPTIONS} />
       </>,
     );
-    const people = await openSection(user, /People to enable/);
+    const people = await openSection(user, /^People$/);
     await user.type(within(people).getByRole('textbox', { name: 'Search Cowork candidates' }), 'contoso{Enter}');
     await waitFor(() => expect(fetchCowork.mock.calls.at(-1)![1]).toMatchObject({ search: 'contoso' }));
     const requests = fetchCowork.mock.calls.length;
@@ -1024,7 +1085,9 @@ describe('CoworkPanel language switch', () => {
     await user.click(screen.getByRole('button', { name: /Language: English/ }));
     await user.click(await screen.findByRole('menuitemradio', { name: 'Espa\u00f1ol' }, { timeout: 5000 }));
 
-    expect(await screen.findByRole('tab', { name: /Personas que habilitar/, selected: true }, { timeout: 5000 })).toBeVisible();
+    expect(await screen.findByRole('tab', { name: /^Personas$/, selected: true }, { timeout: 5000 })).toBeVisible();
+    expect(screen.getByRole('combobox', { name: 'Mostrar' })).toHaveValue('recommended');
+    expect(screen.getByText(/Es una lista sugerida para la directiva/)).toBeVisible();
     expect(screen.getByRole('textbox', { name: 'Buscar candidatos para Cowork' })).toHaveValue('contoso');
     expect(fetchCowork).toHaveBeenCalledTimes(requests);
   });
@@ -1074,15 +1137,18 @@ describe('CoworkPanel page-wide scope', () => {
     );
 
     await screen.findByText('No Copilot seat holders match these filters.');
-    await user.click(screen.getByRole('tab', { name: /People to enable/ }));
+    await user.click(screen.getByRole('tab', { name: /^People$/ }));
     fetchCowork.mockClear();
 
-    await user.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await user.click(screen.getByRole('button', { name: 'Show all Copilot seat holders' }));
 
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
     for (const call of fetchCowork.mock.calls) {
       expect((call[1] as { userFilter: string }).userFilter).toBe(FABRIKAM);
     }
+    expect(fetchCowork.mock.calls.at(-1)![1]).toMatchObject({
+      tiers: [], recommendedOnly: false, coworkUsersOnly: false, search: '',
+    });
   });
 });
 
@@ -1119,7 +1185,7 @@ describe('CoworkPanel printing', { timeout: 30000 }, () => {
     serve(total);
     const user = userEvent.setup();
     render(summary());
-    const people = await openSection(user, /People to enable/);
+    const people = await openSection(user, /^People$/);
     await waitFor(() => expect(listed(people)).toBe(Math.min(total, 50)));
     return { user, people };
   }
@@ -1238,7 +1304,7 @@ describe('CoworkPanel printing', { timeout: 30000 }, () => {
     const onPaper = (element: Element) => element.closest('[data-print="hide"]') === null;
 
     for (const control of within(people).getAllByRole('combobox')) expect(onPaper(control)).toBe(false);
-    for (const control of within(people).getAllByRole('checkbox')) expect(onPaper(control)).toBe(false);
+    expect(within(people).queryAllByRole('checkbox')).toHaveLength(0);
     for (const name of ['Search', 'Expand all', 'Refresh', 'Previous', 'Next']) {
       expect(onPaper(within(people).getByRole('button', { name }))).toBe(false);
     }
@@ -1255,20 +1321,19 @@ describe('CoworkPanel printing', { timeout: 30000 }, () => {
     const printedFilters = () => people.querySelector('[data-print="only"]')?.textContent;
 
     expect(printedFilters()).toBe(
-      'Filters: Verdict: All verdicts \u00b7 Sorted by: Most coordination load',
+      'Filters: Show: Recommended for the policy \u00b7 Sorted by: Most coordination load',
     );
 
     await user.selectOptions(
-      within(people).getByRole('combobox', { name: 'Filter Cowork candidates by verdict' }),
-      'primeCandidate',
+      within(people).getByRole('combobox', { name: 'Show' }),
+      'usingCowork',
     );
-    await user.click(within(people).getByRole('checkbox', { name: 'Already using Cowork' }));
     await user.type(within(people).getByRole('textbox', { name: 'Search Cowork candidates' }), 'finance{Enter}');
 
     await waitFor(() =>
       expect(printedFilters()).toBe(
-        'Filters: Search: \u201cfinance\u201d \u00b7 Verdict: Prime candidate'
-          + ' \u00b7 Sorted by: Most coordination load \u00b7 Already using Cowork',
+        'Filters: Search: \u201cfinance\u201d \u00b7 Show: Recommended - already using Cowork'
+          + ' \u00b7 Sorted by: Most coordination load',
       ),
     );
   });
