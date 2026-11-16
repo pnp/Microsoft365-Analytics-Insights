@@ -157,6 +157,9 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public List<CoworkReadinessSignalRow> CoworkSignals { get; set; } = new List<CoworkReadinessSignalRow>();
 
+        /// <summary>The audit-backed Cowork query completed, including a genuinely empty result.</summary>
+        internal bool CoworkAuditAssessed { get; set; }
+
         /// <summary>
         /// True when this analysis is a slice of one whose Cowork assessment ran, so an empty
         /// <see cref="CoworkSignals"/> means "nobody in this slice", not "the assessment did not run".

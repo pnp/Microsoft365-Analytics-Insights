@@ -254,6 +254,7 @@ function applyCoworkFilters(params: URLSearchParams, filters: CoworkFilters): UR
   if (filters.userFilter) params.set('userFilter', filters.userFilter);
   if (filters.recommendedOnly) params.set('recommendedOnly', 'true');
   if (filters.coworkUsersOnly) params.set('coworkUsersOnly', 'true');
+  if (filters.prospectiveOnly) params.set('prospectiveOnly', 'true');
   params.set('sortBy', filters.sortBy);
   params.set('sortDesc', String(filters.sortDesc));
   return params;

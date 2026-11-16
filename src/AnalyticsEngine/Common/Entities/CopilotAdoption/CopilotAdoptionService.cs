@@ -1112,6 +1112,9 @@ namespace Common.Entities.CopilotAdoption
 
             if (usage == null) return;
 
+            analysis.Summary.DataSources.AuditHistoryStartUtc =
+                usage.Select(r => r.FirstCopilotInteractionUtc).FirstOrDefault(d => d.HasValue);
+
             output.Sql["agentGrowthBilling"] = CopilotAdoptionSql.ForDisplay(CopilotAdoptionSql.AgentGrowthBillingSql, parameters);
 
             var billing = await SafeAsync(
@@ -1894,6 +1897,7 @@ namespace Common.Entities.CopilotAdoption
             // the engagement scores are available to join against - the same raw-then-finalise shape the
             // unlicensed population already uses.
             analysis.CoworkSignals = rows;
+            analysis.CoworkAuditAssessed = includeAudit;
         }
 
         /// <summary>
@@ -2177,6 +2181,7 @@ namespace Common.Entities.CopilotAdoption
             FinaliseAgents(analysis);
             FinaliseUnlicensed(analysis);
             FinaliseCowork(analysis);
+            CopilotAdoptionCoworkOpportunity.Apply(analysis, _options);
             FinaliseSeatHolderTimeSaved(analysis);
             var agentFigures = BuildAgentAdoptionFigures(analysis);
             summary.CombinedByDepartment = BuildCombinedSegments(analysis, agentFigures);

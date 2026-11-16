@@ -19,6 +19,48 @@ namespace Common.Entities.CopilotAdoption
     /// </remarks>
     internal static class CopilotAdoptionSmallGroups
     {
+        internal static void WithholdCoworkOpportunity(
+            CopilotAdoptionSummary summary, Func<CopilotAdoptionSummary> writable, int minPeople)
+        {
+            var ready = summary.CoworkNewAdoptionEstimate;
+            var ceiling = summary.CoworkNonUserCeilingEstimate;
+            var total = summary.CoworkScoredUsers;
+            if (ready != null && (SmallPopulations.IsSmall(ready.CohortUsers, minPeople)
+                || SmallPopulations.IsSmall(total - ready.CohortUsers, minPeople)
+                || SmallPopulations.IsSmall(summary.CoworkRecommendedForPolicy - ready.CohortUsers, minPeople)
+                || (ceiling != null && SmallPopulations.IsSmall(ceiling.CohortUsers - ready.CohortUsers, minPeople))))
+            {
+                var copy = writable();
+                copy.CoworkNewAdoptionEstimate = null;
+                copy.CoworkNewAdoptionWithheld = SmallGroupWithheldReasons.RevealsSmallerGroup;
+            }
+            if (ceiling != null && (SmallPopulations.IsSmall(ceiling.CohortUsers, minPeople)
+                || SmallPopulations.IsSmall(total - ceiling.CohortUsers, minPeople)))
+            {
+                var copy = writable();
+                copy.CoworkNonUserCeilingEstimate = null;
+                copy.CoworkNonUserCeilingWithheld = SmallGroupWithheldReasons.RevealsSmallerGroup;
+            }
+            if (summary.CoworkWithoutLicenceEstimate != null
+                && SmallPopulations.IsSmall(summary.CoworkWithoutLicenceEstimate.CohortUsers, minPeople))
+            {
+                var copy = writable();
+                copy.CoworkWithoutLicenceEstimate = null;
+                copy.CoworkWithoutLicenceWithheld = SmallGroupWithheldReasons.FewPeople;
+            }
+
+            var observed = summary.CoworkObservedUsage;
+            if (observed?.Available == true && observed.Users.HasValue
+                && (SmallPopulations.IsSmall(observed.Users.Value, minPeople)
+                    || SmallPopulations.IsSmall((observed.AssessedUsers ?? 0) - observed.Users.Value, minPeople)))
+            {
+                writable().CoworkObservedUsage = new CoworkObservedUsage
+                {
+                    WithheldReason = SmallGroupWithheldReasons.RevealsSmallerGroup,
+                };
+            }
+        }
+
         #region Breakdowns that leave a group out
 
         /// <summary>

@@ -141,6 +141,9 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Only people who have actually used Cowork - the evidence-backed rows.</summary>
         public bool CoworkUsersOnly { get; set; }
 
+        /// <summary>Not-known-disabled seat holders with no Cowork use observed in this period.</summary>
+        public bool ProspectiveOnly { get; set; }
+
         public double? MinCoordinationLoad { get; set; }
 
         public double? MinFluency { get; set; }
@@ -519,6 +522,7 @@ namespace Common.Entities.CopilotAdoption
         {
             if (q.RecommendedOnly && !row.RecommendForPolicy) return false;
             if (q.CoworkUsersOnly && !row.UsedCowork) return false;
+            if (q.ProspectiveOnly && (row.UsedCowork || row.CoworkInteractions > 0 || row.AccountEnabled == false)) return false;
             if (q.MinCoordinationLoad.HasValue && row.CoordinationLoadScore < q.MinCoordinationLoad.Value) return false;
             if (q.MinFluency.HasValue && row.FluencyScore < q.MinFluency.Value) return false;
 

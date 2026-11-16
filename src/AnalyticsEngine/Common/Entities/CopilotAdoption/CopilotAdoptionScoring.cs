@@ -1878,9 +1878,30 @@ namespace Common.Entities.CopilotAdoption
                     + "days a month.");
             }
 
-            estimate.Assumptions.Add(
-                "Everyone here is modelled from the work they already do by hand, including people already "
-                + "using Cowork.");
+            var newAdoption = who == CoworkEstimateCohort.NewAdoption || who == CoworkEstimateCohort.NonUserCeiling;
+            if (newAdoption)
+            {
+                estimate.Assumptions.Add(
+                    "Covers only people with no Cowork use observed in the selected reporting period, excluding "
+                    + "known-disabled accounts. This does not establish lifetime non-use or lack of access.");
+                if (who == CoworkEstimateCohort.NewAdoption)
+                {
+                    estimate.Assumptions.Add(
+                        "Recommended prime candidates only: sufficient coordination load and Copilot fluency.");
+                }
+                else
+                {
+                    estimate.Assumptions.Add(
+                        "Broader non-user scenario, not a target: includes people not yet ready and assumes the "
+                        + "same delegation shares, which they may not achieve.");
+                }
+            }
+            else
+            {
+                estimate.Assumptions.Add(
+                    "Everyone here is modelled from the work they already do by hand, including people already "
+                    + "using Cowork.");
+            }
 
             estimate.Assumptions.Add(
                 "The minutes are Cowork's increment over Copilot alone. For work Copilot already speeds up - a "
@@ -1888,16 +1909,20 @@ namespace Common.Entities.CopilotAdoption
 
             estimate.Assumptions.Add(
                 "Only work Microsoft's usage reports count is modelled. Research, searches, replies to "
-                + "invitations and scheduled automations are left out, so the estimate understates what Cowork "
-                + "does rather than inventing it.");
+                + "invitations and scheduled automations are left out. This is a limited workload scenario, "
+                + "not a complete account of Cowork work.");
 
-            estimate.Assumptions.Add(
-                $"The lower bound applies {Num(lowerRatio * 100d)}% of the minutes saved; the upper bound applies "
-                + "them in full.");
+            estimate.Assumptions.Add(newAdoption
+                ? $"The conservative scenario applies {Num(lowerRatio * 100d)}% of the assumed minutes; the "
+                  + "other scenario applies them in full. These are not confidence intervals or guaranteed bounds."
+                : $"The lower bound applies {Num(lowerRatio * 100d)}% of the minutes saved; the upper bound applies "
+                  + "them in full.");
 
-            estimate.Assumptions.Add(
-                "This is the potential at full use, not the gain over today: people already using Cowork may be "
-                + "realising part of it now.");
+            estimate.Assumptions.Add(newAdoption
+                ? "Modelled additional potential over Copilot alone, not measured savings. Never add it to "
+                  + "existing-user assisted hours, licence-opportunity hours or existing-seat-holder hours."
+                : "This is the potential at full use, not the gain over today: people already using Cowork may be "
+                  + "realising part of it now.");
 
             estimate.Assumptions.Add(
                 "Time saved is NOT measured by this product and cannot be. These figures are a model for "
@@ -2040,7 +2065,7 @@ namespace Common.Entities.CopilotAdoption
                 $"Counts observed Copilot audit actions by Copilot seat holders in the selected period, restated as a {Math.Max(1, o.HabitBucketNormalisationDays)}-day month.",
                 $"Credits Outlook actions at {Num(estimate.Credits.OutlookMinutesPerAction)} minutes each, Word/PowerPoint/Excel actions at {Num(estimate.Credits.OfficeMinutesPerAction)} minutes each, and Teams meeting recap or summarise actions at {Num(estimate.Credits.TeamsMeetingMinutesPerAction)} minutes each.",
                 "Microsoft's Copilot assisted-hours method credits meeting summarisation from meeting duration; this import does not reliably carry duration, so the Teams meeting credit is a visible fixed fallback.",
-                $"Copilot Chat and other non-agent surfaces default to {Num(estimate.Credits.UncreditedMinutesPerAction)} minutes here unless the reader overrides it. Agent and Cowork activity is excluded from this figure; Cowork has its own estimate and is never added to this one.",
+                $"Copilot Chat and other non-agent surfaces default to {Num(estimate.Credits.UncreditedMinutesPerAction)} minutes here unless the reader overrides it. Agent and Cowork activity is excluded from this figure; existing-user Cowork benefit is not estimated and is never added to this one.",
             };
             if (estimate.ExcludedUsageReportSourcedUsers > 0)
             {

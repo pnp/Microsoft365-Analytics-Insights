@@ -113,7 +113,13 @@ namespace Common.Entities.CopilotAdoption
     public enum CoworkEstimateCohort
     {
         /// <summary>Copilot seat holders - the people ready for Cowork now, or every seat holder.</summary>
-        SeatHolders,
+        SeatHolders = 0,
+
+        /// <summary>Recommended prime candidates with no Cowork use observed in the reporting window.</summary>
+        NewAdoption = 2,
+
+        /// <summary>Assessed, not-known-disabled seat holders with no observed Cowork use, ready or not.</summary>
+        NonUserCeiling = 3,
 
         /// <summary>
         /// People without a Copilot seat: every licence candidate. Cowork needs a Microsoft 365 Copilot
@@ -121,7 +127,7 @@ namespace Common.Entities.CopilotAdoption
         /// on top of the licence's own time saved, which the licence estimate sizes and which is never
         /// added to this.
         /// </summary>
-        WithoutLicence,
+        WithoutLicence = 1,
     }
 
     /// <summary>

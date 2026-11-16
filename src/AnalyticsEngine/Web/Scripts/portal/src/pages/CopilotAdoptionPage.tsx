@@ -93,6 +93,7 @@ import {
 import {
   compactHoursRange,
   projectCoworkTimeSaved,
+  projectCoworkAdoption,
   projectLicenceTimeSaved,
   projectSeatHolderTimeSaved,
   timeSavedExportParams,
@@ -2969,22 +2970,22 @@ function buildTimeSavedKpis(
   }
 
   if (summary.coworkReadinessAvailable) {
-    // The people ready now lead, as on the Cowork tab: that is the spending-policy decision. When the
-    // reader chose every seat holder, or nobody is ready, the ceiling stands in - and says it is every
-    // seat holder, not the ready few.
+    const { ready, full } = projectCoworkAdoption(summary, assumptions, o);
     const coworkCohort = resolveTimeSavedCohort(
       cohorts.cowork,
-      projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, o),
-      projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, o),
+      ready,
+      full,
       projectCoworkTimeSaved(summary.coworkWithoutLicenceEstimate, assumptions, o),
     );
     if (coworkCohort) {
       const cowork = coworkCohort.projection;
       items.push({
         key: 'coworkTimeSaved',
-        label: t('copilotAdoption.page.kpi.coworkTimeSaved.label'),
+        label: t(coworkCohort.cohort === 'withoutLicence'
+          ? 'copilotAdoptionCowork.timeSaved.hero.licensingEyebrow'
+          : 'copilotAdoption.page.kpi.coworkTimeSaved.label'),
         value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, cowork.hoursLow, cowork.hoursHigh) }),
-        hint:
+        hint: (
           coworkCohort.cohort === 'recommended'
             ? t(
                 plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.other'),
@@ -2998,14 +2999,18 @@ function buildTimeSavedKpis(
               : t(
                   plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
                   { users: formatCount(cowork.cohortUsers) },
-                ),
+                )) + ' ' + t('copilotAdoptionCowork.coverage.period', {
+                  from: formatDate(summary.fromUtc), to: formatDate(summary.toUtc),
+                }),
         tone: 'opportunity',
         modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
         action: onOpenTab
           ? { label: t('copilotAdoption.page.kpi.coworkTimeSaved.open'), onClick: () => onOpenTab('cowork') }
           : undefined,
         info: {
-          what: t('copilotAdoption.page.kpi.coworkTimeSaved.what'),
+          what: t(coworkCohort.cohort === 'withoutLicence'
+            ? 'copilotAdoptionCowork.timeSaved.hero.info.whatWithoutLicence'
+            : 'copilotAdoption.page.kpi.coworkTimeSaved.what'),
           how: t('copilotAdoption.page.kpi.coworkTimeSaved.how'),
           formula: t('copilotAdoption.page.kpi.coworkTimeSaved.formula', {
             percent,

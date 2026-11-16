@@ -1450,14 +1450,21 @@ namespace Tests.UnitTests
 
             // ...and what it says about comparing this file with a full export has to hold.
             StringAssert.Contains(string.Join("\n", method), "accountabilityRollup.count");
-            var fullFacts = SheetCells(full, "Snapshot facts");
-            var trimmedFacts = SheetCells(trimmed, "Snapshot facts");
-            Assert.AreEqual(fullFacts.Count, trimmedFacts.Count, "Every Snapshot fact must still be there, in the same order.");
-            var rollupCountCell = fullFacts.IndexOf("accountabilityRollup.count") + 1;
-            Assert.AreNotEqual(0, rollupCountCell, "The roll-up's row count is missing from Snapshot facts.");
-            var differing = Enumerable.Range(0, fullFacts.Count).Where(i => fullFacts[i] != trimmedFacts[i]).ToList();
-            CollectionAssert.AreEqual(new List<int> { rollupCountCell }, differing,
-                "Only accountabilityRollup.count may differ from a full export, as the method sheet says.");
+            var fullFacts = SnapshotFactValues(full);
+            var trimmedFacts = SnapshotFactValues(trimmed);
+            CollectionAssert.AreEqual(SnapshotFactKeyColumn(full), SnapshotFactKeyColumn(trimmed),
+                "Every Snapshot fact key must still be there, in the same order.");
+            foreach (var key in fullFacts.Keys)
+            {
+                if (key == "accountabilityRollup.count" || key.StartsWith("coworkWithoutLicence", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                Assert.AreEqual(fullFacts[key], trimmedFacts[key], "An unrelated aggregate changed: " + key);
+            }
+            Assert.AreEqual("0", trimmedFacts["accountabilityRollup.count"]);
+            Assert.AreEqual(SmallGroupWithheldReasons.FewPeople, trimmedFacts["coworkWithoutLicenceWithheld"]);
+            Assert.AreEqual(string.Empty, trimmedFacts["coworkWithoutLicenceEstimate.hoursPerMonthHigh"]);
 
             Assert.IsTrue(analysis.Summary.AccountabilityRollup.Count > 0, "The cached analysis must never be edited for one reader.");
         }
@@ -1593,7 +1600,7 @@ namespace Tests.UnitTests
 
             var expectedRows = new List<string>
             {
-                "Ready now", "Every Copilot seat holder", "People covered", "People modelled from their own work",
+                "Ready candidates - no observed use", "All eligible non-users", "People covered", "People modelled from their own work",
                 "Pieces of work handed to Cowork a month",
                 "CHECKING THE SHARES AFTER A PILOT", "Pieces of work handed to Cowork a month per person",
                 "Cowork hours a month (low)", "Cowork hours a month (high)",
@@ -1631,11 +1638,11 @@ namespace Tests.UnitTests
             StringAssert.Contains(pilotCheck, "Microsoft 365 admin centre (Copilot > Cowork > Usage)");
             StringAssert.Contains(pilotCheck, "This product does not import that report.");
 
-            var ready = analysis.Summary.CoworkValueEstimate;
-            var full = analysis.Summary.CoworkFullRolloutEstimate;
+            var ready = analysis.Summary.CoworkNewAdoptionEstimate;
+            var full = analysis.Summary.CoworkNonUserCeilingEstimate;
             Assert.IsTrue(full.CohortUsers > 0, "The synthetic analysis must exercise the full-adoption cohort.");
             Assert.IsTrue(analysis.Summary.CoworkEstablishedUsers + analysis.Summary.CoworkTriallingUsers > 0,
-                "The synthetic analysis must include people already using Cowork, who are modelled like everyone else.");
+                "The synthetic analysis includes existing users so their exclusion is exercised.");
             AssertFollowedBy(cells, "People covered", ready.CohortUsers.ToString(CultureInfo.InvariantCulture));
             AssertFollowedBy(cells, "People modelled from their own work", ready.CohortUsers.ToString(CultureInfo.InvariantCulture));
             AssertFollowedBy(cells, "Cowork hours a month (high)", ready.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture));
@@ -1834,7 +1841,7 @@ namespace Tests.UnitTests
         public void Workbook_AppliesThePortalsTimeSavedFigures_WithoutTouchingTheCachedAnalysis()
         {
             var analysis = SyntheticAnalysis();
-            var cachedCoworkHours = analysis.Summary.CoworkFullRolloutEstimate.HoursPerMonthHigh;
+            var cachedCoworkHours = analysis.Summary.CoworkNonUserCeilingEstimate.HoursPerMonthHigh;
             var cachedLicenceHours = analysis.Summary.LicenceOpportunityEstimate.HoursPerMonthHigh;
             var overrides = new TimeSavedOverrides { MinutesSavedPerMeeting = 50 };
             overrides.CoworkShares[CoworkActivities.SendEmail] = 0.5;
@@ -1857,7 +1864,7 @@ namespace Tests.UnitTests
             Assert.IsTrue(licenceCells.Any(c => c.StartsWith("ASSUMPTIONS ENTERED IN THE PORTAL", StringComparison.Ordinal)));
 
             // ...and the email share and minutes restate the Cowork estimate, from its published inputs.
-            var full = analysis.Summary.CoworkFullRolloutEstimate;
+            var full = analysis.Summary.CoworkNonUserCeilingEstimate;
             var inputs = new CoworkTaskInputs();
             foreach (var activity in CoworkActivities.All)
             {
@@ -1870,9 +1877,9 @@ namespace Tests.UnitTests
             var coworkCells = SheetCells(customised, "Cowork estimate (modelled)");
             AssertFollowedBy(coworkCells, "Cowork hours a month (high)",
                 CopilotAdoptionScoring.ModelCoworkValue(
-                    analysis.Summary.CoworkValueEstimate.CohortUsers,
+                    analysis.Summary.CoworkNewAdoptionEstimate.CohortUsers,
                     model,
-                    InputsOf(analysis.Summary.CoworkValueEstimate)).HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture));
+                    InputsOf(analysis.Summary.CoworkNewAdoptionEstimate)).HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture));
             CollectionAssert.Contains(coworkCells, expectedCowork.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture),
                 "The Cowork estimate must be restated under the reader's share and minutes.");
             Assert.IsTrue(coworkCells.Any(c => c.StartsWith("ASSUMPTIONS ENTERED IN THE PORTAL", StringComparison.Ordinal)),
@@ -1881,7 +1888,7 @@ namespace Tests.UnitTests
             // Nothing the next caller reads may have moved: the analysis is cached and shared.
             Assert.AreEqual(5d, analysis.Summary.Options.CopilotMinutesSavedPerMeeting);
             Assert.AreEqual(0.05d, analysis.Summary.Options.CoworkSendEmailShare);
-            Assert.AreEqual(cachedCoworkHours, analysis.Summary.CoworkFullRolloutEstimate.HoursPerMonthHigh);
+            Assert.AreEqual(cachedCoworkHours, analysis.Summary.CoworkNonUserCeilingEstimate.HoursPerMonthHigh);
             Assert.AreEqual(cachedLicenceHours, analysis.Summary.LicenceOpportunityEstimate.HoursPerMonthHigh);
 
             // The Settings sheet records the reader's figure against the same key, on the same row, so two
@@ -1903,6 +1910,64 @@ namespace Tests.UnitTests
                 inputs.ActivityVolumes[activity.Key] = CopilotAdoptionScoring.CoworkVolume(estimate, activity.Key);
             }
             return inputs;
+        }
+
+        [TestMethod]
+        public void Workbook_NewAdoptionUnavailable_DoesNotSubstituteLegacyHours_AndKeepsObservedFacts()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.DataSources.AuditHistoryStartUtc = null;
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            Assert.IsTrue(analysis.Summary.CoworkValueEstimate.HoursPerMonthHigh > 0, "The legacy forecast is a nonzero control.");
+            var bytes = CopilotAdoptionWorkbook.Build(analysis);
+            var forecast = SheetCells(bytes, "Cowork estimate (modelled)");
+            CollectionAssert.Contains(forecast, "Unavailable");
+            CollectionAssert.DoesNotContain(forecast, "Cowork hours a month (high)");
+            var observed = SheetCells(bytes, "Cowork observed use");
+            AssertFollowedBy(observed, "People with observed Cowork use",
+                analysis.Summary.CoworkObservedUsage.Users.Value.ToString(CultureInfo.InvariantCulture));
+            AssertFollowedBy(observed, "Existing-user assisted hours", "Not estimated");
+            Assert.IsTrue(observed.Any(c => c.Contains("Conversation/task coverage")));
+        }
+
+        [TestMethod]
+        public void Workbook_NewAdoptionPrivacyFloor_LeavesWithheldHoursBlank_NotZero()
+        {
+            var analysis = SyntheticAnalysis();
+            var summary = analysis.Summary;
+            summary.CoworkScoredUsers = 20;
+            summary.CoworkRecommendedForPolicy = 10;
+            var inputs = new CoworkTaskInputs { ActivityVolumes = { [CoworkActivities.SendEmail] = 1000 } };
+            summary.CoworkNewAdoptionEstimate = CopilotAdoptionScoring.ModelCoworkValue(4, summary.Options, inputs, CoworkEstimateCohort.NewAdoption);
+            summary.CoworkNonUserCeilingEstimate = CopilotAdoptionScoring.ModelCoworkValue(10, summary.Options, inputs, CoworkEstimateCohort.NonUserCeiling);
+            var cached = summary.CoworkNewAdoptionEstimate;
+            var bytes = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            var cells = SheetCellElements(bytes, "Cowork estimate (modelled)");
+            string TextOf(XElement cell) => cell == null ? string.Empty
+                : string.Concat(cell.Descendants().Where(e => !e.HasElements).Select(e => e.Value));
+            var label = cells.Single(c => TextOf(c) == "Cowork hours a month (high)");
+            var row = ((string)label.Attribute("r")).Substring(1);
+            Assert.AreEqual(string.Empty, TextOf(cells.SingleOrDefault(c => (string)c.Attribute("r") == "B" + row)));
+            Assert.AreEqual(summary.CoworkNonUserCeilingEstimate.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture),
+                TextOf(cells.Single(c => (string)c.Attribute("r") == "C" + row)));
+            Assert.AreSame(cached, summary.CoworkNewAdoptionEstimate, "The cached estimate cannot be replaced.");
+            Assert.AreEqual(4, cached.CohortUsers);
+        }
+
+        [TestMethod]
+        public void Workbook_SeparateLicensingScenarioUsesThePortalsOwnCoworkAssumptions()
+        {
+            var analysis = SyntheticAnalysis();
+            var inputs = new CoworkTaskInputs { ActivityVolumes = { [CoworkActivities.SendEmail] = 1000 } };
+            analysis.Summary.CoworkWithoutLicenceEstimate = CopilotAdoptionScoring.ModelCoworkValue(
+                10, analysis.Summary.Options, inputs, CoworkEstimateCohort.WithoutLicence);
+            var own = new TimeSavedOverrides();
+            own.CoworkShares[CoworkActivities.SendEmail] = 0.5;
+            own.CoworkMinutes[CoworkActivities.SendEmail] = 12;
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis, own), "Cowork licensing scenario");
+            AssertFollowedBy(cells, "Cowork hours a month (high)", "100");
+            Assert.IsTrue(cells.Any(c => c.Contains("not the observed-use adoption split")));
+            Assert.IsTrue(cells.Any(c => c.Contains("Unknown Cowork spend is not zero")));
         }
 
         /// <summary>
@@ -1941,8 +2006,8 @@ namespace Tests.UnitTests
         {
             var analysis = SyntheticAnalysis();
             var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Cowork estimate (modelled)");
-            var ready = analysis.Summary.CoworkValueEstimate;
-            var full = analysis.Summary.CoworkFullRolloutEstimate;
+            var ready = analysis.Summary.CoworkNewAdoptionEstimate;
+            var full = analysis.Summary.CoworkNonUserCeilingEstimate;
 
             var high = cells.IndexOf("Cowork hours a month (high)");
             Assert.IsTrue(high >= 0);
@@ -2468,6 +2533,8 @@ namespace Tests.UnitTests
             summary.ToUtc = Now;
             summary.Options = options;
             summary.DataSources.AuditAvailable = true;
+            summary.DataSources.AuditHistoryStartUtc = Now.AddDays(-365);
+            analysis.CoworkAuditAssessed = true;
             summary.DataSources.CopilotUsageReportAvailable = true;
             summary.DataSources.CopilotUsageReportDate = new DateTime(2026, 8, 20, 0, 0, 0, DateTimeKind.Utc);
             summary.DataSources.CopilotUsageReportPeriodDays = 28;
@@ -2475,6 +2542,7 @@ namespace Tests.UnitTests
             // The licence estimate multiplies the Microsoft 365 usage-report volumes, and is only modelled
             // when they exist.
             summary.DataSources.M365UsageReportsAvailable = true;
+            summary.DataSources.M365UsageReportDate = Now.AddDays(-2).Date;
             summary.Warnings.Add("Synthetic warning containing an ampersand & an <element>.");
 
             summary.SeatLicenceTypes.Add(new LicenceTypeClassification

@@ -677,6 +677,29 @@ export function projectCoworkTimeSaved(
   };
 }
 
+export function coworkAdoptionReason(summary: CopilotAdoptionSummary): string | null {
+  if (summary.coworkAdoptionUnavailableReason) return summary.coworkAdoptionUnavailableReason;
+  if (!summary.dataSources?.auditAvailable) return 'auditMissing';
+  if (summary.figuresIncomplete) return 'incomplete';
+  if (!summary.dataSources.auditHistoryStartUtc) return 'historyUnknown';
+  if (!summary.dataSources.m365UsageReportsAvailable) return 'workloadMissing';
+  if (summary.coworkNewAdoptionEstimate === undefined && summary.coworkNonUserCeilingEstimate === undefined) return 'notAssessed';
+  return null;
+}
+
+/** Never fall back to the legacy whole-policy forecast when the observation split is unavailable. */
+export function projectCoworkAdoption(
+  summary: CopilotAdoptionSummary,
+  assumptions: TimeSavedAssumptions,
+  options: CopilotAdoptionOptions,
+): { ready: CoworkProjection | null; full: CoworkProjection | null } {
+  if (coworkAdoptionReason(summary)) return { ready: null, full: null };
+  return {
+    ready: projectCoworkTimeSaved(summary.coworkNewAdoptionEstimate, assumptions, options),
+    full: projectCoworkTimeSaved(summary.coworkNonUserCeilingEstimate, assumptions, options),
+  };
+}
+
 // ---------------------------------------------------------------------------------------------
 // The reader's own figures, in session storage.
 // ---------------------------------------------------------------------------------------------

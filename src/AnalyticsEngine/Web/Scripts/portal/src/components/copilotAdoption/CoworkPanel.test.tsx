@@ -99,6 +99,13 @@ function row(overrides: Partial<CoworkReadinessRow>): CoworkReadinessRow {
 function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdoptionSummary {
   return {
     options: OPTIONS,
+    fromUtc: '2025-03-04T00:00:00Z',
+    toUtc: '2025-03-31T00:00:00Z',
+    generatedUtc: '2025-04-01T00:00:00Z',
+    dataSources: {
+      auditAvailable: true, auditHistoryStartUtc: '2025-01-01T00:00:00Z',
+      m365UsageReportsAvailable: true, m365UsageReportDate: '2025-03-29T00:00:00Z',
+    } as CopilotAdoptionSummary['dataSources'],
     coworkReadinessAvailable: true,
     coworkScoredUsers: 2,
     coworkEstablishedUsers: 1,
@@ -202,10 +209,20 @@ const FULL_ESTIMATE = {
 /** A summary carrying both Cowork cohorts, as the server sends one for a tenant with readiness data. */
 function withEstimates(overrides: Partial<CopilotAdoptionSummary> = {}) {
   return summary({
-    coworkScoredUsers: 400,
-    coworkRecommendedForPolicy: 40,
-    coworkValueEstimate: ESTIMATE,
-    coworkFullRolloutEstimate: FULL_ESTIMATE,
+    coworkScoredUsers: 440,
+    coworkPrimeCandidates: 40,
+    coworkRecommendedForPolicy: 80,
+    coworkNewAdoptionEstimate: ESTIMATE,
+    coworkNonUserCeilingEstimate: FULL_ESTIMATE,
+    coworkAdoptionUnavailableReason: null,
+    // Deliberately different: using a legacy forecast as the headline must fail these tests.
+    coworkValueEstimate: { ...ESTIMATE, cohortUsers: 80,
+      activities: ESTIMATE.activities.map((a) => ({ ...a, volumePerMonth: a.volumePerMonth * 2 })) },
+    coworkFullRolloutEstimate: { ...FULL_ESTIMATE, cohortUsers: 440 },
+    coworkObservedUsage: {
+      available: true, assessedUsers: 440, users: 40, interactions: 120, activeUserDays: 60,
+      lastInteractionUtc: '2025-03-27T00:00:00Z', partial: false, assistedHours: null,
+    },
     ...overrides,
   });
 }
@@ -532,13 +549,13 @@ describe('CoworkPanel', () => {
     ).toBeTruthy();
   });
 
-  it('leads with the people ready now, and shows every seat holder as the ceiling', async () => {
+  it('leads with ready non-users, not the policy audience, and shows the eligible non-user ceiling', async () => {
     await renderSettled(withEstimates());
 
     const hero = screen.getByRole('region', { name: '85\u2013169 hours a month' });
-    expect(within(hero).getByText('from the 40 people ready for Cowork now')).toBeTruthy();
+    expect(within(hero).getByText('from the 40 ready candidates with no Cowork use observed in this period')).toBeTruthy();
     expect(within(hero).getByText('931\u20131,861 h')).toBeTruthy();
-    expect(within(hero).getByText('a month if all 400 Copilot seat holders used Cowork')).toBeTruthy();
+    expect(within(hero).getByText('a month across 400 eligible non-users')).toBeTruthy();
     expect(within(hero).getByText(/^The ceiling, not a target/)).toBeTruthy();
     // Modelled pieces of work, not Cowork tasks: the product has no Cowork task count (#692).
     expect(
@@ -617,7 +634,7 @@ describe('CoworkPanel', () => {
     await renderSettled(
       withEstimates({
         coworkRecommendedForPolicy: 0,
-        coworkValueEstimate: {
+        coworkNewAdoptionEstimate: {
           ...ESTIMATE,
           cohortUsers: 0,
           activities: [],
@@ -629,15 +646,15 @@ describe('CoworkPanel', () => {
     );
 
     const hero = screen.getByRole('region', { name: '931\u20131,861 hours a month' });
-    expect(within(hero).getByText('if all 400 Copilot seat holders used Cowork')).toBeTruthy();
-    expect(within(hero).getByText('a working day, for each Copilot seat holder')).toBeTruthy();
+    expect(within(hero).getByText('if all 400 eligible seat holders with no observed Cowork use adopted it')).toBeTruthy();
+    expect(within(hero).getByText('a working day, for each eligible non-user')).toBeTruthy();
     // No second ceiling beside a headline that already is one, and no list of nobody to open.
     expect(within(hero).queryByText(/^a month if all/)).toBeNull();
     expect(within(hero).queryByRole('button', { name: /to enable/ })).toBeNull();
     // It says why it is modelling every seat holder, and that nobody ready is not the reader's choice.
-    expect(within(hero).getByText(/^Nobody is ready for Cowork yet in this period, so this models every Copilot seat holder instead/)).toBeTruthy();
-    expect(within(hero).getByRole('radio', { name: 'Ready now (0)' })).toBeDisabled();
-    expect(within(hero).getByRole('radio', { name: 'All Copilot seat holders (400)' })).toBeChecked();
+    expect(within(hero).getByText(/^No ready candidate with no observed Cowork use was identified/)).toBeTruthy();
+    expect(within(hero).getByRole('radio', { name: 'Ready candidates - no observed use (0)' })).toBeDisabled();
+    expect(within(hero).getByRole('radio', { name: 'All eligible non-users (400)' })).toBeChecked();
     expect(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY)).toBeNull();
   });
 
@@ -649,26 +666,26 @@ describe('CoworkPanel', () => {
     const user = userEvent.setup();
     await renderSettled(withEstimates());
 
-    expect(screen.getByRole('radio', { name: 'Ready now (40)' })).toBeChecked();
-    await user.click(screen.getByRole('radio', { name: 'All Copilot seat holders (400)' }));
+    expect(screen.getByRole('radio', { name: 'Ready candidates - no observed use (40)' })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: 'All eligible non-users (400)' }));
 
     const hero = screen.getByRole('region', { name: '931\u20131,861 hours a month' });
-    expect(within(hero).getByText('if all 400 Copilot seat holders used Cowork')).toBeTruthy();
-    expect(within(hero).getByText(/^Modelling every Copilot seat holder, not only the people ready now/)).toBeTruthy();
+    expect(within(hero).getByText('if all 400 eligible seat holders with no observed Cowork use adopted it')).toBeTruthy();
+    expect(within(hero).getByText(/^Modelling all eligible non-users, not only ready candidates/)).toBeTruthy();
     // Where a rollout starts, in place of the ceiling it has become.
     expect(within(hero).getByText('85\u2013169 h')).toBeTruthy();
-    expect(within(hero).getByText('a month from the 40 people ready for Cowork now')).toBeTruthy();
-    expect(within(hero).queryByText('a month if all 400 Copilot seat holders used Cowork')).toBeNull();
-    expect(within(hero).getByText('a working day, for each Copilot seat holder')).toBeTruthy();
+    expect(within(hero).getByText('a month from 40 ready candidates with no observed Cowork use')).toBeTruthy();
+    expect(within(hero).queryByText('a month across 400 eligible non-users')).toBeNull();
+    expect(within(hero).getByText('a working day, for each eligible non-user')).toBeTruthy();
     expect(JSON.parse(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY) ?? '{}')).toEqual({ cowork: 'all' });
 
     // The working follows the headline.
-    expect(screen.getByRole('radio', { name: 'All 400 Copilot seat holders' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'All 400 eligible non-users' })).toBeChecked();
     expect(screen.getByText('158,400')).toBeTruthy();
 
-    await user.click(screen.getByRole('radio', { name: 'Ready now (40)' }));
+    await user.click(screen.getByRole('radio', { name: 'Ready candidates - no observed use (40)' }));
     expect(screen.getByRole('region', { name: '85\u2013169 hours a month' })).toBeTruthy();
-    expect(screen.getByRole('radio', { name: 'The 40 people ready now' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'The 40 ready candidates' })).toBeChecked();
     expect(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY)).toBeNull();
   });
 
@@ -702,14 +719,17 @@ describe('CoworkPanel', () => {
     expect(screen.getByRole('radio', { name: 'The 250 people without a Copilot licence' })).toBeChecked();
   });
 
-  it('shows the Cowork use already observed in the Copilot audit log, badged as observed', async () => {
+  it('shows observed facts separately without manufacturing an existing-user benefit', async () => {
+    const user = userEvent.setup();
     await renderSettled(withEstimates({ coworkDetected: true, coworkUsers: 4, coworkInteractions: 120 }));
 
-    const hero = screen.getByRole('region', { name: '85\u2013169 hours a month' });
-    expect(within(hero).getByText('Observed')).toBeTruthy();
-    expect(within(hero).getByText('Already happening: the Copilot audit log shows 4 people using Cowork in this period.')).toBeTruthy();
-    // Interactions are not Cowork tasks, so no task count is claimed (#692).
-    expect(within(hero).queryAllByText(/running \d+ tasks/)).toHaveLength(0);
+    const observed = await openSection(user, /Observed use & benefit/);
+    expect(within(observed).getByText('People with observed Cowork use')).toBeTruthy();
+    expect(within(observed).getByText('120')).toBeTruthy();
+    expect(within(observed).getByText('Active user-days')).toBeTruthy();
+    expect(within(observed).getByText('Existing-user assisted hours: Not estimated')).toBeTruthy();
+    expect(within(observed).getByText(/Conversation\/task coverage, credit units and model provenance/)).toBeTruthy();
+    expect(within(observed).queryByText(/0 hours/)).toBeNull();
   });
 
   /**
@@ -751,14 +771,14 @@ describe('CoworkPanel', () => {
       ),
     ).toBeTruthy();
     expect(
-      screen.getByText('Everyone here is modelled from the work they already do by hand, including people already using Cowork.'),
+      screen.getByText('Only people with no Cowork use observed in this period are modelled, excluding known-disabled accounts. This does not establish lifetime non-use or lack of access.'),
     ).toBeTruthy();
     expect(screen.getByText(/^The minutes are Cowork's increment over Copilot alone\./)).toBeTruthy();
     expect(screen.getByText(/^Only work Microsoft's usage reports count is modelled\./)).toBeTruthy();
     expect(
-      screen.getByText('The lower bound applies 50% of the minutes saved; the upper bound applies them in full.'),
+      screen.getByText('The conservative scenario applies 50% of the assumed minutes; the other applies them in full. These are not confidence intervals or guaranteed bounds.'),
     ).toBeTruthy();
-    expect(screen.getByText(/potential at full use, not the gain over today/)).toBeTruthy();
+    expect(screen.queryByText(/potential at full use, not the gain over today/)).toBeNull();
     expect(screen.getByText(/These figures are a model for sizing a Cowork rollout, not a result\./)).toBeTruthy();
     expect(screen.getByText(/This report reports seats, people and hours - never money\./)).toBeTruthy();
   });
@@ -767,8 +787,8 @@ describe('CoworkPanel', () => {
     const user = userEvent.setup();
     await renderSettled(withEstimates());
 
-    expect(screen.getByRole('radio', { name: 'The 40 people ready now' })).toBeChecked();
-    await user.click(screen.getByRole('radio', { name: 'All 400 Copilot seat holders' }));
+    expect(screen.getByRole('radio', { name: 'The 40 ready candidates' })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: 'All 400 eligible non-users' }));
 
     expect(
       screen.getByText(
@@ -791,6 +811,65 @@ describe('CoworkPanel', () => {
     expect(document.body.textContent).not.toMatch(/[£$€]\s?\d/);
   });
 
+  it.each(['auditMissing', 'historyUnknown', 'historyLimited', 'incomplete'])(
+    'withholds adoption hours for %s while preserving the separate observed-use section', async (reason) => {
+      const user = userEvent.setup();
+      await renderSettled(withEstimates({
+        coworkNewAdoptionEstimate: null, coworkNonUserCeilingEstimate: null,
+        coworkAdoptionUnavailableReason: reason,
+      }));
+      expect(screen.queryByRole('region', { name: /hours a month/ })).toBeNull();
+      expect(screen.getAllByText('New-adoption potential unavailable').length).toBeGreaterThan(0);
+      const observed = await openSection(user, /Observed use & benefit/);
+      expect(within(observed).getByText('120')).toBeTruthy();
+      expect(within(observed).getByText('Existing-user assisted hours: Not estimated')).toBeTruthy();
+    },
+  );
+
+  it('keeps report dates, the counterfactual and incomplete-coverage limits visible beside the forecast', async () => {
+    await renderSettled(withEstimates());
+    const hero = screen.getByRole('region', { name: '85\u2013169 hours a month' });
+    expect(within(hero).getByText(/Reporting window:/)).toHaveTextContent(/2025/);
+    expect(within(hero).getByText(/Earliest retained Copilot audit record:/)).toHaveTextContent(/not proof of continuous import coverage/);
+    expect(within(hero).getByText(/Hours are modelled additional monthly potential over Copilot alone/)).toBeTruthy();
+    expect(within(hero).getByText(/Only retained, imported evidence is observed/)).toBeTruthy();
+  });
+
+  it('opens all observed accounts, including disabled-account diagnostics, without changing the forecast', async () => {
+    const user = userEvent.setup();
+    await renderSettled(withEstimates());
+    const observed = await openSection(user, /Observed use & benefit/);
+    await user.click(within(observed).getByRole('button', { name: 'See people with observed Cowork use' }));
+    await waitFor(() => expect(fetchCowork.mock.calls.at(-1)![1]).toMatchObject({
+      coworkUsersOnly: true, recommendedOnly: false, prospectiveOnly: false,
+    }));
+    expect(screen.getByRole('region', { name: '85\u2013169 hours a month' })).toBeTruthy();
+    expect(screen.getByText(/These controls filter the people list and CSV, not the estimate/)).toBeTruthy();
+  });
+
+  it('shows unknown facts as unavailable, never as zero assisted hours', async () => {
+    const user = userEvent.setup();
+    await renderSettled(withEstimates({
+      coworkObservedUsage: { available: false, assessedUsers: null, users: null, interactions: null,
+        activeUserDays: null, lastInteractionUtc: null, partial: true, assistedHours: null },
+    }));
+    const observed = await openSection(user, /Observed use & benefit/);
+    expect(within(observed).getByText(/Observed Cowork facts are unavailable/)).toBeTruthy();
+    expect(within(observed).getByText('Existing-user assisted hours: Not estimated')).toBeTruthy();
+    expect(within(observed).queryByText(/^0$/)).toBeNull();
+  });
+
+  it('does not label a privacy-withheld ready cohort as zero when the broader scenario can be shown', async () => {
+    await renderSettled(withEstimates({
+      coworkNewAdoptionEstimate: null, coworkNewAdoptionWithheld: 'revealsSmallerGroup',
+    }));
+    const hero = screen.getByRole('region', { name: '931\u20131,861 hours a month' });
+    expect(within(hero).getByRole('radio', { name: 'Ready candidates - figures withheld' })).toBeDisabled();
+    expect(within(hero).queryByRole('radio', { name: /use \(0\)/ })).toBeNull();
+    expect(within(hero).getByText(/Figures are withheld because a cohort or its complement/)).toBeTruthy();
+    expect(within(hero).queryByText(/No ready candidate.*was identified/)).toBeNull();
+  });
+
   it('shows no headline for an empty cohort', async () => {
     render(summary());
 
@@ -802,10 +881,11 @@ describe('CoworkPanel', () => {
     await renderSettled(
       summary({
         dataSources: { m365UsageReportsAvailable: false } as CopilotAdoptionSummary['dataSources'],
+        coworkAdoptionUnavailableReason: 'workloadMissing',
       }),
     );
 
-    expect(screen.getByText(/None have been imported for this period, so there is nothing to model yet\./)).toBeTruthy();
+    expect(screen.getAllByText(/None have been imported for this period, so there is nothing to model yet\./).length).toBeGreaterThan(0);
     expect(screen.queryByText(/^There is nobody to model yet/)).toBeNull();
   });
 });
@@ -880,12 +960,12 @@ describe('CoworkPanel time-saved assumptions', () => {
     expect(sessionStorage.getItem(TIME_SAVED_STORAGE_KEY)).toBeNull();
   });
 
-  it('models everyone from their work, people already using Cowork included, and says so', async () => {
+  it('states that observed users are excluded from the prospective workload forecast', async () => {
     await renderSettled(withEstimates({ coworkDetected: true, coworkUsers: 4, coworkInteractions: 120 }));
 
     expect(screen.getByText('85\u2013169 hours a month')).toBeTruthy();
     expect(
-      screen.getByText('Everyone here is modelled from the work they already do by hand, including people already using Cowork.'),
+      screen.getByText('Only people with no Cowork use observed in this period are modelled, excluding known-disabled accounts. This does not establish lifetime non-use or lack of access.'),
     ).toBeTruthy();
     expect(screen.queryAllByText('Cowork tasks already running')).toHaveLength(0);
   });
@@ -1001,28 +1081,28 @@ describe('CoworkPanel headline actions', () => {
     expect(screen.getByRole('spinbutton', { name: 'Share of meetings organised handed to Cowork, in percent' })).toHaveFocus();
   });
 
-  it('opens the policy list, scrolled into view, from the headline', async () => {
+  it('opens ready non-users, not the entire policy list, from the headline', async () => {
     const user = userEvent.setup();
     await renderSettled(withEstimates());
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
     fetchCowork.mockClear();
 
-    await user.click(screen.getByRole('button', { name: 'See the 40 recommended people' }));
+    await user.click(screen.getByRole('button', { name: 'See the 40 ready candidates' }));
 
     expect(screen.getByRole('tab', { name: /^People$/, selected: true })).toBeTruthy();
     expect(scrollIntoView).toHaveBeenCalled();
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
-    expect((fetchCowork.mock.calls.at(-1)![1] as { recommendedOnly: boolean }).recommendedOnly).toBe(true);
+    expect(fetchCowork.mock.calls.at(-1)![1]).toMatchObject({ recommendedOnly: true, tiers: ['primeCandidate'], coworkUsersOnly: false });
   });
 
   it('opens every seat holder, with the list\u2019s filters lifted, when the headline models them all', async () => {
     const user = userEvent.setup();
     await renderSettled(withEstimates());
-    await user.click(screen.getByRole('radio', { name: 'All Copilot seat holders (400)' }));
+    await user.click(screen.getByRole('radio', { name: 'All eligible non-users (400)' }));
     await waitFor(() => expect(fetchCowork).toHaveBeenCalled());
     fetchCowork.mockClear();
 
-    await user.click(screen.getByRole('button', { name: 'See all 400 Copilot seat holders' }));
+    await user.click(screen.getByRole('button', { name: 'See all 400 eligible non-users' }));
 
     expect(screen.getByRole('tab', { name: /^People$/, selected: true })).toBeTruthy();
     expect(scrollIntoView).toHaveBeenCalled();
@@ -1031,6 +1111,7 @@ describe('CoworkPanel headline actions', () => {
     expect(filters.recommendedOnly).toBe(false);
     expect(filters.coworkUsersOnly).toBe(false);
     expect(filters.tiers).toEqual([]);
+    expect(fetchCowork.mock.calls.at(-1)![1]).toMatchObject({ prospectiveOnly: true });
   });
 });
 
@@ -1048,7 +1129,7 @@ describe('CoworkPanel without See PII', () => {
 
     // The headline still leads - it is modelled from totals - but offers no list to open.
     expect(screen.getByRole('tab', { name: /Time saved/, selected: true })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'See the 40 recommended people' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'See the 40 ready candidates' })).toBeNull();
 
     const readiness = await openSection(user, /Readiness/);
     expect(within(readiness).getByText('Established')).toBeTruthy();
@@ -1210,6 +1291,27 @@ describe('CoworkPanel printing', { timeout: 30000 }, () => {
   afterEach(() => {
     vi.restoreAllMocks();
     resetPrintPreparation();
+  });
+
+  it('prints the same customised prospective cohort and assumptions as the screen, never the legacy policy forecast', async () => {
+    resetTimeSavedCohortStore();
+    fetchCowork.mockResolvedValue(page([]));
+    const user = userEvent.setup();
+    await renderSettled(withEstimates());
+    await user.click(screen.getByRole('radio', { name: 'All eligible non-users (400)' }));
+    const input = screen.getByRole('spinbutton', { name: 'Minutes saved on each email Cowork sends' });
+    await user.clear(input);
+    await user.type(input, '12');
+    let printed = '';
+    vi.spyOn(window, 'print').mockImplementation(() => {
+      printed = screen.getByRole('region', { name: '1,327\u20132,653 hours a month' }).textContent ?? '';
+    });
+    await act(async () => { await expect(requestPrint()).resolves.toEqual({ kind: 'printed' }); });
+    expect(printed).toContain('if all 400 eligible seat holders with no observed Cowork use adopted it');
+    expect(printed).toContain('Using your figures');
+    expect(printed).toContain('Reporting window:');
+    expect(printed).not.toContain('440 eligible');
+    expect(screen.getByRole('region', { name: '1,327\u20132,653 hours a month' })).toBeTruthy();
   });
 
   it('prints every seat holder rather than the page on screen, then returns to that page', async () => {

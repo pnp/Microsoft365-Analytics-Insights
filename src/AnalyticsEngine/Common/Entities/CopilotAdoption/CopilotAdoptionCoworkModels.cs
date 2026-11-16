@@ -449,10 +449,48 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
+    /// Audit facts for the assessed seat-holder population, not completed tasks or measured benefit.
+    /// Active user-days sum each person's distinct active days; they are not distinct days for the cohort.
+    /// </summary>
+    public class CoworkObservedUsage
+    {
+        [JsonProperty("available")]
+        public bool Available { get; set; }
+
+        [JsonProperty("assessedUsers")]
+        public int? AssessedUsers { get; set; }
+
+        [JsonProperty("users")]
+        public int? Users { get; set; }
+
+        [JsonProperty("interactions")]
+        public long? Interactions { get; set; }
+
+        [JsonProperty("activeUserDays")]
+        public long? ActiveUserDays { get; set; }
+
+        [JsonProperty("lastInteractionUtc")]
+        public DateTime? LastInteractionUtc { get; set; }
+
+        [JsonProperty("partial")]
+        public bool Partial { get; set; }
+
+        /// <summary>
+        /// Not estimated until conversation/task coverage, credit units and model provenance are validated
+        /// (#897 Stage B). Neither workload volumes nor arbitrary interaction credits establish this benefit.
+        /// </summary>
+        [JsonProperty("assistedHours")]
+        public double? AssistedHours => null;
+
+        [JsonProperty("withheldReason", NullValueHandling = NullValueHandling.Ignore)]
+        public string WithheldReason { get; set; }
+
+    }
+
+    /// <summary>
     /// The modelled Cowork estimate for one cohort: the time Cowork could give back ON TOP of what
-    /// Microsoft 365 Copilot already saves, for the people ready for Cowork now
-    /// (<see cref="CopilotAdoptionSummary.CoworkValueEstimate"/>) or every Copilot seat holder
-    /// (<see cref="CopilotAdoptionSummary.CoworkFullRolloutEstimate"/>).
+    /// Microsoft 365 Copilot already saves. The new-adoption estimates select eligible people with no
+    /// observed Cowork use; the legacy API forecasts still accept the complete policy audience.
     ///
     /// <b>Every hour here is derived from an assumption and none of it is measured.</b> The observed
     /// input - the work the cohort already does by hand (<see cref="Activities"/>) - is real; the share of
@@ -468,11 +506,9 @@ namespace Common.Entities.CopilotAdoption
     /// (<see cref="CoworkActivities"/>). A flat tasks-a-person projection could not say where the time
     /// was, and modelled the busiest and the quietest person alike.</para>
     ///
-    /// <para><b>People already using Cowork are modelled like everyone else.</b> The Copilot audit log
-    /// records their Cowork interactions, and an interaction is not a unit of work the model can count,
-    /// so the estimate is the potential at full use, not the gain over today. Before #692 people with
-    /// Cowork tasks in a Graph Cowork usage report were counted at those tasks instead, but that report
-    /// does not exist in Graph and was never imported, so every tenant was already modelled this way.</para>
+    /// <para><b>Not an existing-user benefit model.</b> Legacy forecasts may model existing users'
+    /// workloads for compatibility. The new-adoption forecasts exclude those users, and observed-use
+    /// assisted hours remain unestimated until the evidence gates in #897 Stage B are met.</para>
     ///
     /// <para><b>Cowork only, on purpose.</b> This is the figure a tenant uses to justify Copilot
     /// Credits: the value of enabling Cowork for people who already hold a Copilot licence. It used to
