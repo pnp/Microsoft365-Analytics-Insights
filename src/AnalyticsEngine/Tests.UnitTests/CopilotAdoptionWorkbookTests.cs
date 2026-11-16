@@ -1456,7 +1456,10 @@ namespace Tests.UnitTests
                 "Every Snapshot fact key must still be there, in the same order.");
             foreach (var key in fullFacts.Keys)
             {
-                if (key == "accountabilityRollup.count" || key.StartsWith("coworkWithoutLicence", StringComparison.Ordinal))
+                if (key == "accountabilityRollup.count"
+                    || key.StartsWith("coworkWithoutLicence", StringComparison.Ordinal)
+                    || key.StartsWith("coworkNewAdoption", StringComparison.Ordinal)
+                    || key.StartsWith("coworkNonUserCeiling", StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -1465,6 +1468,16 @@ namespace Tests.UnitTests
             Assert.AreEqual("0", trimmedFacts["accountabilityRollup.count"]);
             Assert.AreEqual(SmallGroupWithheldReasons.FewPeople, trimmedFacts["coworkWithoutLicenceWithheld"]);
             Assert.AreEqual(string.Empty, trimmedFacts["coworkWithoutLicenceEstimate.hoursPerMonthHigh"]);
+            var reader = analysis.Summary.WithoutIndividualData();
+            foreach (var estimate in new[]
+            {
+                (Key: "coworkNewAdoptionEstimate", Value: reader.CoworkNewAdoptionEstimate),
+                (Key: "coworkNonUserCeilingEstimate", Value: reader.CoworkNonUserCeilingEstimate),
+            })
+            {
+                Assert.AreEqual(estimate.Value == null ? string.Empty : fullFacts[estimate.Key + ".hoursPerMonthHigh"],
+                    trimmedFacts[estimate.Key + ".hoursPerMonthHigh"]);
+            }
 
             Assert.IsTrue(analysis.Summary.AccountabilityRollup.Count > 0, "The cached analysis must never be edited for one reader.");
         }
@@ -1933,25 +1946,70 @@ namespace Tests.UnitTests
         [TestMethod]
         public void Workbook_NewAdoptionPrivacyFloor_LeavesWithheldHoursBlank_NotZero()
         {
-            var analysis = SyntheticAnalysis();
-            var summary = analysis.Summary;
-            summary.CoworkScoredUsers = 20;
-            summary.CoworkRecommendedForPolicy = 10;
-            var inputs = new CoworkTaskInputs { ActivityVolumes = { [CoworkActivities.SendEmail] = 1000 } };
-            summary.CoworkNewAdoptionEstimate = CopilotAdoptionScoring.ModelCoworkValue(4, summary.Options, inputs, CoworkEstimateCohort.NewAdoption);
-            summary.CoworkNonUserCeilingEstimate = CopilotAdoptionScoring.ModelCoworkValue(10, summary.Options, inputs, CoworkEstimateCohort.NonUserCeiling);
-            var cached = summary.CoworkNewAdoptionEstimate;
+            var analysis = CopilotAdoptionCoworkTests.JointCoworkCohortAnalysis(
+                0, 0, readyCandidates: 4, otherNonUsers: 6);
+            var cached = analysis.Summary.CoworkNewAdoptionEstimate;
             var bytes = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
-            var cells = SheetCellElements(bytes, "Cowork estimate (modelled)");
-            string TextOf(XElement cell) => cell == null ? string.Empty
-                : string.Concat(cell.Descendants().Where(e => !e.HasElements).Select(e => e.Value));
-            var label = cells.Single(c => TextOf(c) == "Cowork hours a month (high)");
-            var row = ((string)label.Attribute("r")).Substring(1);
-            Assert.AreEqual(string.Empty, TextOf(cells.SingleOrDefault(c => (string)c.Attribute("r") == "B" + row)));
-            Assert.AreEqual(summary.CoworkNonUserCeilingEstimate.HoursPerMonthHigh.ToString(CultureInfo.InvariantCulture),
-                TextOf(cells.Single(c => (string)c.Attribute("r") == "C" + row)));
-            Assert.AreSame(cached, summary.CoworkNewAdoptionEstimate, "The cached estimate cannot be replaced.");
+            var facts = SnapshotFactValues(bytes);
+            Assert.AreEqual(string.Empty, facts["coworkNewAdoptionEstimate.hoursPerMonthHigh"]);
+            Assert.AreEqual(string.Empty, facts["coworkNonUserCeilingEstimate.hoursPerMonthHigh"],
+                "Both new forecasts are withheld so the remaining one cannot reconstruct the small cohort.");
+            var cells = SheetCells(bytes, "Cowork estimate (modelled)");
+            CollectionAssert.Contains(cells, "Unavailable");
+            CollectionAssert.DoesNotContain(cells, "Cowork hours a month (high)");
+            Assert.AreSame(cached, analysis.Summary.CoworkNewAdoptionEstimate, "The cached estimate cannot be replaced.");
             Assert.AreEqual(4, cached.CohortUsers);
+        }
+
+        [DataTestMethod]
+        [DataRow(1, 0, 5)]
+        [DataRow(0, 0, 1)]
+        [DataRow(4, 1, 5)]
+        public void Workbook_JointCoworkForecastsCannotReconstructWithheldPopulations(
+            int disabledNonUsers, int disabledObserved, int readyCandidates)
+        {
+            var analysis = CopilotAdoptionCoworkTests.JointCoworkCohortAnalysis(
+                disabledNonUsers, disabledObserved, readyCandidates: readyCandidates, disabledNonUsersReady: false);
+            var cached = analysis.Summary.CoworkNonUserCeilingEstimate;
+            var full = CopilotAdoptionWorkbook.Build(analysis);
+            var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            var fullFacts = SnapshotFactValues(full);
+            var facts = SnapshotFactValues(trimmed);
+            const string volume = ".activities.sendEmail";
+            Assert.AreNotEqual(string.Empty, fullFacts["coworkNonUserCeilingEstimate" + volume]);
+            Assert.AreEqual(string.Empty, facts["coworkNonUserCeilingEstimate" + volume],
+                "Snapshot facts must not bypass the joint-cohort privacy floor.");
+            Assert.AreEqual(string.Empty, facts["coworkNonUserCeilingEstimate.hoursPerMonthHigh"]);
+            Assert.AreEqual(fullFacts["coworkValueEstimate" + volume], facts["coworkValueEstimate" + volume]);
+            Assert.AreEqual(fullFacts["coworkFullRolloutEstimate" + volume], facts["coworkFullRolloutEstimate" + volume]);
+            Assert.AreEqual(string.Empty, facts["coworkNewAdoptionEstimate" + volume]);
+            Assert.AreEqual(string.Empty, facts["coworkNewAdoptionEstimate.hoursPerMonthHigh"]);
+            var cells = SheetCells(trimmed, "Cowork estimate (modelled)");
+            CollectionAssert.Contains(cells, "Unavailable");
+            CollectionAssert.DoesNotContain(cells, "Cowork hours a month (high)");
+            Assert.AreSame(cached, analysis.Summary.CoworkNonUserCeilingEstimate,
+                "A See PII reader must still get the unmodified forecast.");
+        }
+
+        [DataTestMethod]
+        [DataRow(1, 0)]
+        [DataRow(1, 1)]
+        public void Workbook_CoworkObservationsCannotExposeAFewUnmatchedLicensedAuditUsers(
+            int excludedUsers, int assessedOnlyUsers)
+        {
+            var analysis = CopilotAdoptionCoworkTests.CoworkObservationPopulationAnalysis(excludedUsers, assessedOnlyUsers);
+            var full = SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
+            var bytes = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            var facts = SnapshotFactValues(bytes);
+            Assert.AreEqual(full["coworkInteractions"], facts["coworkInteractions"],
+                "The legacy audit total remains compatible.");
+            Assert.AreEqual(string.Empty, facts["coworkObservedUsage.users"]);
+            Assert.AreEqual(string.Empty, facts["coworkObservedUsage.interactions"]);
+            Assert.IsFalse(facts.Keys.Any(key => key.IndexOf("auditPopulationParts", StringComparison.OrdinalIgnoreCase) >= 0));
+            var cells = SheetCells(bytes, "Cowork observed use");
+            CollectionAssert.Contains(cells, "Unavailable");
+            CollectionAssert.DoesNotContain(cells, "Cowork audit interactions");
+            Assert.IsTrue(analysis.Summary.CoworkObservedUsage.Available);
         }
 
         [TestMethod]

@@ -485,6 +485,10 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("withheldReason", NullValueHandling = NullValueHandling.Ignore)]
         public string WithheldReason { get; set; }
 
+        /// <summary>Shared, assessed-only and licensed-audit-only people; private privacy-floor provenance.</summary>
+        [JsonIgnore]
+        internal int[] AuditPopulationParts { get; set; }
+
     }
 
     /// <summary>

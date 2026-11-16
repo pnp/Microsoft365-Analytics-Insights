@@ -172,6 +172,7 @@ const copilotAdoptionCowork: Record<keyof typeof en, string> = {
   // Tiempo ahorrado: a quién modela el titular
   'copilotAdoptionCowork.timeSaved.cohort.ready': 'Candidatos preparados - sin uso observado ({users})',
   'copilotAdoptionCowork.timeSaved.cohort.readyWithheld': 'Candidatos preparados - cifras ocultas',
+  'copilotAdoptionCowork.timeSaved.cohort.readyUnavailable': 'Candidatos preparados - no disponibles',
   'copilotAdoptionCowork.timeSaved.cohort.all': 'Todas las personas aptas sin uso observado ({users})',
   'copilotAdoptionCowork.timeSaved.hero.info.whatAll': 'Un escenario más amplio sobre los titulares de licencia de Copilot evaluados sin uso de Cowork observado en el periodo seleccionado, excluyendo las cuentas que constan como deshabilitadas. Incluye a personas aún no preparadas, supone las mismas proporciones de delegación y modela potencial adicional sobre Copilot por sí solo, no ahorro medido.',
   'copilotAdoptionCowork.timeSaved.hero.allNotice': 'Se modela a todas las personas aptas sin uso observado, no solo a los candidatos preparados. No se observó uso en este periodo; se desconocen el acceso y el uso anterior. Este escenario más amplio incluye a personas aún no preparadas y aplica las mismas proporciones de delegación, que quizá no alcancen.',

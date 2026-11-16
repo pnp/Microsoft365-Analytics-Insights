@@ -719,6 +719,35 @@ describe('CoworkPanel', () => {
     expect(screen.getByRole('radio', { name: 'The 250 people without a Copilot licence' })).toBeChecked();
   });
 
+  it.each(['empty', 'unavailable', 'withheld'])(
+    'keeps the separate licensing scenario explicitly selectable when adoption potential is %s', async (state) => {
+      const user = userEvent.setup();
+      const empty = { ...ESTIMATE, cohortUsers: 0, activities: [], hoursPerMonthLow: 0,
+        hoursPerMonthHigh: 0, projectedCoworkTasks: 0 };
+      await renderSettled(withEstimates({
+        coworkNewAdoptionEstimate: state === 'empty' ? empty : null,
+        coworkNonUserCeilingEstimate: state === 'empty' ? empty : null,
+        coworkAdoptionUnavailableReason: state === 'unavailable' ? 'historyUnknown' : null,
+        coworkNewAdoptionWithheld: state === 'withheld' ? 'revealsSmallerGroup' : null,
+        coworkNonUserCeilingWithheld: state === 'withheld' ? 'revealsSmallerGroup' : null,
+        coworkWithoutLicenceEstimate: { ...ESTIMATE, cohortUsers: 250 },
+      }));
+      expect(screen.queryByRole('region', { name: /hours a month/ })).toBeNull();
+      expect(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY)).toBeNull();
+      await user.click(screen.getByRole('radio', { name: 'People without a Copilot licence (250)' }));
+      const hero = screen.getByRole('region', { name: '85\u2013169 hours a month' });
+      expect(within(hero).getByText('Separate Cowork licensing scenario')).toBeTruthy();
+      expect(within(hero).getByText('if the 250 people without a Copilot licence were licensed and used Cowork')).toBeTruthy();
+      expect(within(hero).queryByText(/Readiness assessed for \d+ seat holders/)).toBeNull();
+      expect(screen.getByRole('spinbutton', { name: 'Minutes saved on each email Cowork sends' })).toHaveValue(6);
+      expect(screen.getByText(/^A separate licensing what-if over every licence candidate/)).toBeTruthy();
+      expect(JSON.parse(sessionStorage.getItem(TIME_SAVED_COHORT_STORAGE_KEY) ?? '{}')).toEqual({ cowork: 'withoutLicence' });
+      if (state === 'unavailable') {
+        expect(within(hero).queryByRole('radio', { name: /use \(0\)/ })).toBeNull();
+      }
+    },
+  );
+
   it('shows observed facts separately without manufacturing an existing-user benefit', async () => {
     const user = userEvent.setup();
     await renderSettled(withEstimates({ coworkDetected: true, coworkUsers: 4, coworkInteractions: 120 }));

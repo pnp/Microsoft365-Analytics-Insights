@@ -32,6 +32,14 @@ namespace Common.Entities.CopilotAdoption
                     observed.ActiveUserDays = users.Sum(s => (long)s.CoworkActiveDays);
                     observed.LastInteractionUtc = users.Select(s => s.LastCoworkInteractionUtc).Max();
                     observed.Partial = summary.FiguresIncomplete || historyLimited || capped;
+                    var assessedIds = new HashSet<int>(users.Select(s => s.UserId));
+                    var licensedIds = new HashSet<int>((analysis.LicensedUsers ?? new List<LicensedUserAdoptionRow>())
+                        .Where(u => u.CoworkInteractions > 0).Select(u => u.UserId));
+                    var shared = assessedIds.Count(licensedIds.Contains);
+                    observed.AuditPopulationParts = new[]
+                    {
+                        shared, assessedIds.Count - shared, licensedIds.Count - shared,
+                    };
                 }
             }
             summary.CoworkObservedUsage = observed;

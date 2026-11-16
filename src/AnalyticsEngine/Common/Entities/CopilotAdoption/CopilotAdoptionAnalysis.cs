@@ -172,9 +172,10 @@ namespace Common.Entities.CopilotAdoption
         public bool CoworkAssessedForWholePopulation { get; set; }
 
         /// <summary>
-        /// True when this analysis is a slice of one whose Cowork assessment ran but stopped at
+        /// True when the raw Cowork assessment stopped at
         /// <see cref="CopilotAdoptionOptions.MaxCoworkUsersScored"/>, so an empty slice means "not
-        /// assessed" - neither a measured zero nor a missing import - and is explained as such.
+        /// assessed" - neither a measured zero nor a missing import. Kept even when missing fluency
+        /// prevents readiness scoring, and inherited by every narrower slice.
         /// </summary>
         public bool CoworkAssessmentCapped { get; set; }
 

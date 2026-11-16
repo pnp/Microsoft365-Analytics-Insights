@@ -24,20 +24,13 @@ namespace Common.Entities.CopilotAdoption
         {
             var ready = summary.CoworkNewAdoptionEstimate;
             var ceiling = summary.CoworkNonUserCeilingEstimate;
-            var total = summary.CoworkScoredUsers;
-            if (ready != null && (SmallPopulations.IsSmall(ready.CohortUsers, minPeople)
-                || SmallPopulations.IsSmall(total - ready.CohortUsers, minPeople)
-                || SmallPopulations.IsSmall(summary.CoworkRecommendedForPolicy - ready.CohortUsers, minPeople)
-                || (ceiling != null && SmallPopulations.IsSmall(ceiling.CohortUsers - ready.CohortUsers, minPeople))))
+            // These are a joint release: the legacy forecasts and audit/tier totals can recover a
+            // withheld part from the other new cohort. Do not leave one half of that reconstruction.
+            if ((ready != null || ceiling != null) && !CoworkJointPopulationsAreSafe(summary, ready, ceiling, minPeople))
             {
                 var copy = writable();
                 copy.CoworkNewAdoptionEstimate = null;
                 copy.CoworkNewAdoptionWithheld = SmallGroupWithheldReasons.RevealsSmallerGroup;
-            }
-            if (ceiling != null && (SmallPopulations.IsSmall(ceiling.CohortUsers, minPeople)
-                || SmallPopulations.IsSmall(total - ceiling.CohortUsers, minPeople)))
-            {
-                var copy = writable();
                 copy.CoworkNonUserCeilingEstimate = null;
                 copy.CoworkNonUserCeilingWithheld = SmallGroupWithheldReasons.RevealsSmallerGroup;
             }
@@ -52,13 +45,35 @@ namespace Common.Entities.CopilotAdoption
             var observed = summary.CoworkObservedUsage;
             if (observed?.Available == true && observed.Users.HasValue
                 && (SmallPopulations.IsSmall(observed.Users.Value, minPeople)
-                    || SmallPopulations.IsSmall((observed.AssessedUsers ?? 0) - observed.Users.Value, minPeople)))
+                    || SmallPopulations.IsSmall((observed.AssessedUsers ?? 0) - observed.Users.Value, minPeople)
+                    || observed.AuditPopulationParts == null
+                    || observed.AuditPopulationParts.Any(people => people < 0 || SmallPopulations.IsSmall(people, minPeople))))
             {
                 writable().CoworkObservedUsage = new CoworkObservedUsage
                 {
                     WithheldReason = SmallGroupWithheldReasons.RevealsSmallerGroup,
                 };
             }
+        }
+
+        private static bool CoworkJointPopulationsAreSafe(
+            CopilotAdoptionSummary summary, CoworkValueEstimate ready, CoworkValueEstimate ceiling, int minPeople)
+        {
+            if (ready == null || ceiling == null || summary.CoworkTiers == null
+                || (summary.CoworkScoredUsers > 0 && summary.CoworkTiers.Count == 0)) return false;
+            var observed = summary.CoworkEstablishedUsers + summary.CoworkTriallingUsers;
+            var disabledPrime = summary.CoworkPrimeCandidates - ready.CohortUsers;
+            var parts = new[]
+            {
+                ready.CohortUsers,
+                ceiling.CohortUsers - ready.CohortUsers,
+                summary.CoworkRecommendedForPolicy - ready.CohortUsers,
+                disabledPrime,
+                observed - summary.CoworkRecommendedForPolicy + ready.CohortUsers,
+                summary.CoworkScoredUsers - observed - ceiling.CohortUsers - disabledPrime,
+            };
+            return parts.All(people => people >= 0 && !SmallPopulations.IsSmall(people, minPeople))
+                && summary.CoworkTiers.All(tier => !SmallPopulations.IsSmall(tier.Users, minPeople));
         }
 
         #region Breakdowns that leave a group out

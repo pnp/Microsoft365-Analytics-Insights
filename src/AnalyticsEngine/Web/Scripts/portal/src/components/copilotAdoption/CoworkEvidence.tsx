@@ -1,4 +1,5 @@
 import { Button, Card, MessageBar, MessageBarBody, Text, makeStyles, tokens } from '@fluentui/react-components';
+import type { ReactNode } from 'react';
 import type { CopilotAdoptionSummary } from '../../types/copilotAdoption';
 import { useT, type TranslationKey } from '../../i18n';
 import { formatCount, formatDate } from '../shared/KpiGrid';
@@ -34,7 +35,7 @@ export function CoworkEvidenceNote({
       <Text size={200}>{t('copilotAdoptionCowork.coverage.period', {
         from: formatDate(summary.fromUtc), to: formatDate(summary.toUtc),
       })}</Text>
-      {summary.coworkReadinessAvailable && <Text size={200}>{t('copilotAdoptionCowork.coverage.assessed', {
+      {model && summary.coworkReadinessAvailable && <Text size={200}>{t('copilotAdoptionCowork.coverage.assessed', {
         users: formatCount(summary.coworkScoredUsers ?? 0),
       })}</Text>}
       <Text size={200} className={styles.note}>{source?.auditHistoryStartUtc
@@ -50,7 +51,9 @@ export function CoworkEvidenceNote({
   );
 }
 
-export function CoworkAdoptionUnavailable({ summary }: { summary: CopilotAdoptionSummary }) {
+export function CoworkAdoptionUnavailable({
+  summary, children,
+}: { summary: CopilotAdoptionSummary; children?: ReactNode }) {
   const t = useT();
   const reason = coworkAdoptionReason(summary);
   const knownEmpty = reason == null
@@ -66,6 +69,7 @@ export function CoworkAdoptionUnavailable({ summary }: { summary: CopilotAdoptio
         : REASONS[reason ?? 'notAssessed']
           ?? 'copilotAdoptionCowork.coverage.notAssessed')}</Text>
       <CoworkEvidenceNote summary={summary} />
+      {children}
     </Card>
   );
 }

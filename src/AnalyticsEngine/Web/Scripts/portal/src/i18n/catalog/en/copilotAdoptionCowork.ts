@@ -170,6 +170,7 @@ export const copilotAdoptionCowork = {
   // Time saved - who the headline models
   'copilotAdoptionCowork.timeSaved.cohort.ready': 'Ready candidates - no observed use ({users})',
   'copilotAdoptionCowork.timeSaved.cohort.readyWithheld': 'Ready candidates - figures withheld',
+  'copilotAdoptionCowork.timeSaved.cohort.readyUnavailable': 'Ready candidates - unavailable',
   'copilotAdoptionCowork.timeSaved.cohort.all': 'All eligible non-users ({users})',
   'copilotAdoptionCowork.timeSaved.hero.info.whatAll': 'A broader scenario over assessed Copilot seat holders with no Cowork use observed in the selected period, excluding known-disabled accounts. It includes people not yet ready, assumes the same delegation shares and models additional potential over Copilot alone, not measured savings.',
   'copilotAdoptionCowork.timeSaved.hero.allNotice': 'Modelling all eligible non-users, not only ready candidates. No use was observed in this period; access and lifetime use are unknown. This broader scenario includes people not yet ready and applies the same delegation shares, which they may not achieve.',

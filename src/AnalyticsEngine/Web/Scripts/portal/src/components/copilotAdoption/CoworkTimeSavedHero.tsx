@@ -133,7 +133,33 @@ export default function CoworkTimeSavedHero({
   const { ready, full } = projectCoworkAdoption(summary, assumptions, options);
   const withoutLicence = projectCoworkTimeSaved(summary.coworkWithoutLicenceEstimate, assumptions, options);
   const resolved = resolveTimeSavedCohort(cohort, ready, full, withoutLicence);
-  if (!resolved) return <CoworkAdoptionUnavailable summary={summary} />;
+  const picker = full || withoutLicence ? (
+    <CohortPicker
+      value={resolved?.cohort ?? cohort}
+      onChange={onCohortChange}
+      options={[
+        {
+          value: 'recommended',
+          label: summary.coworkNewAdoptionWithheld
+            ? t('copilotAdoptionCowork.timeSaved.cohort.readyWithheld')
+            : summary.coworkNewAdoptionEstimate == null
+              ? t('copilotAdoptionCowork.timeSaved.cohort.readyUnavailable')
+              : t('copilotAdoptionCowork.timeSaved.cohort.ready', { users: formatCount(ready?.cohortUsers ?? 0) }),
+          disabled: !ready,
+        },
+        ...(full
+          ? [{ value: 'all' as const, label: t('copilotAdoptionCowork.timeSaved.cohort.all', { users: formatCount(full.cohortUsers) }) }]
+          : []),
+        ...(withoutLicence
+          ? [{
+              value: 'withoutLicence' as const,
+              label: t('copilotAdoptionCowork.timeSaved.cohort.withoutLicence', { users: formatCount(withoutLicence.cohortUsers) }),
+            }]
+          : []),
+      ]}
+    />
+  ) : undefined;
+  if (!resolved) return <CoworkAdoptionUnavailable summary={summary}>{picker}</CoworkAdoptionUnavailable>;
   const { projection: headline, cohort: shown, fallback } = resolved;
   const everyone = shown === 'all';
   // People without a Copilot seat: a what-if on top of a licence, said as one wherever it is quoted.
@@ -292,34 +318,7 @@ export default function CoworkTimeSavedHero({
         }),
         source: t('copilotAdoptionCowork.timeSaved.hero.info.source'),
       }}
-      picker={
-        full || withoutLicence ? (
-          <CohortPicker
-            value={shown}
-            onChange={onCohortChange}
-            options={[
-              {
-                value: 'recommended',
-                label: summary.coworkNewAdoptionWithheld
-                  ? t('copilotAdoptionCowork.timeSaved.cohort.readyWithheld')
-                  : t('copilotAdoptionCowork.timeSaved.cohort.ready', { users: formatCount(ready?.cohortUsers ?? 0) }),
-                disabled: !ready,
-              },
-              ...(full
-                ? [{ value: 'all' as const, label: t('copilotAdoptionCowork.timeSaved.cohort.all', { users: formatCount(full.cohortUsers) }) }]
-                : []),
-              ...(withoutLicence
-                ? [
-                    {
-                      value: 'withoutLicence' as const,
-                      label: t('copilotAdoptionCowork.timeSaved.cohort.withoutLicence', { users: formatCount(withoutLicence.cohortUsers) }),
-                    },
-                  ]
-                : []),
-            ]}
-          />
-        ) : undefined
-      }
+      picker={picker}
       headline={t('copilotAdoptionTimeSaved.hero.hoursRange', { range: hours(headline) })}
       subline={
         unlicensed
