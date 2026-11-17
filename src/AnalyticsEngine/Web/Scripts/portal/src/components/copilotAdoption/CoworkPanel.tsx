@@ -571,7 +571,7 @@ export default function CoworkPanel({
 
     return (
       <div>
-      <CoworkObservedUsagePanel summary={summary} />
+      <CoworkObservedUsagePanel summary={summary} showEvidence />
       <Card>
         <div className={styles.emptyState}>
           <Text weight="semibold" block>

@@ -31,7 +31,7 @@ import {
   useCalculatorFocus,
   useModelStyles,
 } from './timeSavedShared';
-import { CoworkAdoptionUnavailable, CoworkEvidenceNote } from './CoworkEvidence';
+import { CoworkAdoptionUnavailable } from './CoworkEvidence';
 
 type Scenario = 'ready' | 'full' | 'withoutLicence';
 
@@ -116,7 +116,7 @@ export default function CoworkTimeSavedModel({
   if (!projection) {
     // Without the usage reports there is no work to model, which is a missing import, not a finding
     // that Cowork has nothing to take on - so it is said as one.
-    return <CoworkAdoptionUnavailable summary={summary} />;
+    return <CoworkAdoptionUnavailable summary={summary} showEvidence={false} />;
   }
 
   const conservativePercent = formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 });
@@ -140,8 +140,6 @@ export default function CoworkTimeSavedModel({
               ? 'copilotAdoptionCowork.timeSaved.model.introWithoutLicence'
               : 'copilotAdoptionCowork.timeSaved.model.intro')}
           </Text>
-          <CoworkEvidenceNote summary={summary} model={!modellingWithoutLicence} />
-
           {[ready, full, withoutLicence].filter(Boolean).length > 1 && (
             <ScenarioPicker<Scenario>
               value={scenario}

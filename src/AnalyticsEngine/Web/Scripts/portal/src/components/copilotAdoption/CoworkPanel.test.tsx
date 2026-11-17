@@ -756,8 +756,17 @@ describe('CoworkPanel', () => {
     expect(within(observed).getByText('People with observed Cowork use')).toBeTruthy();
     expect(within(observed).getByText('120')).toBeTruthy();
     expect(within(observed).getByText('Active user-days')).toBeTruthy();
-    expect(within(observed).getByText('Existing-user assisted hours: Not estimated')).toBeTruthy();
-    expect(within(observed).getByText(/Conversation\/task coverage, credit units and model provenance/)).toBeTruthy();
+    expect(within(observed).getByText('Existing-user assisted hours: Not estimated')).toBeVisible();
+    const explanation = within(observed).getByText(/Conversation\/task coverage, credit units and model provenance/);
+    expect(explanation).not.toBeVisible();
+    const details = within(observed).getByRole('button', { name: 'Definitions and benefit limitations' });
+    expect(details).toHaveAttribute('aria-expanded', 'false');
+    act(() => details.focus());
+    await user.keyboard('{Enter}');
+    expect(details).toHaveAttribute('aria-expanded', 'true');
+    expect(explanation).toBeVisible();
+    await user.keyboard(' ');
+    expect(explanation).not.toBeVisible();
     expect(within(observed).queryByText(/0 hours/)).toBeNull();
   });
 
@@ -855,13 +864,47 @@ describe('CoworkPanel', () => {
     },
   );
 
-  it('keeps report dates, the counterfactual and incomplete-coverage limits visible beside the forecast', async () => {
+  it('keeps reporting facts visible and shares one optional evidence disclosure across sections', async () => {
+    const user = userEvent.setup();
     await renderSettled(withEstimates());
     const hero = screen.getByRole('region', { name: '85\u2013169 hours a month' });
-    expect(within(hero).getByText(/Reporting window:/)).toHaveTextContent(/2025/);
+    for (const label of ['Reporting window', 'Seat holders assessed for readiness', 'Latest workload report', 'Analysis refreshed']) {
+      expect(within(hero).getByText(label)).toBeVisible();
+    }
+    expect(within(hero).getByText('440')).toBeVisible();
+    expect(within(hero).getByText('Modelled additional potential over Copilot alone - not measured benefit.')).toBeVisible();
+    expect(screen.getAllByRole('button', { name: 'Sources and limitations', hidden: true })).toHaveLength(1);
+    const limitations = screen.getByText(/Only retained, imported evidence is observed/);
+    expect(limitations).not.toBeVisible();
+    const toggle = within(hero).getByRole('button', { name: 'Sources and limitations' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toContainElement(limitations);
+    act(() => toggle.focus());
+    await user.keyboard('{Enter}');
+    expect(limitations).toBeVisible();
     expect(within(hero).getByText(/Earliest retained Copilot audit record:/)).toHaveTextContent(/not proof of continuous import coverage/);
-    expect(within(hero).getByText(/Hours are modelled additional monthly potential over Copilot alone/)).toBeTruthy();
-    expect(within(hero).getByText(/Only retained, imported evidence is observed/)).toBeTruthy();
+    await openSection(user, /Observed use & benefit/);
+    expect(screen.getAllByText(/Only retained, imported evidence is observed/)).toHaveLength(1);
+    expect(screen.getAllByText('Reporting window')).toHaveLength(1);
+    await user.click(toggle);
+    expect(limitations).not.toBeVisible();
+  });
+
+  it('does not repeat evidence when the adoption calculator is unavailable', async () => {
+    await renderSettled(withEstimates({
+      coworkNewAdoptionEstimate: null, coworkNonUserCeilingEstimate: null,
+      coworkAdoptionUnavailableReason: 'historyUnknown',
+    }));
+    expect(screen.getAllByRole('button', { name: 'Sources and limitations', hidden: true })).toHaveLength(1);
+    expect(screen.getAllByText(/Only retained, imported evidence is observed/)).toHaveLength(1);
+  });
+
+  it('retains the single evidence disclosure when readiness is unavailable', () => {
+    render(withEstimates({ coworkReadinessAvailable: false }));
+    expect(screen.getAllByRole('button', { name: 'Sources and limitations' })).toHaveLength(1);
+    expect(screen.getAllByText('Reporting window')).toHaveLength(1);
+    expect(screen.getByText(/Only retained, imported evidence is observed/)).not.toBeVisible();
+    expect(screen.queryByText('Seat holders assessed for readiness')).toBeNull();
   });
 
   it('opens all observed accounts, including disabled-account diagnostics, without changing the forecast', async () => {
@@ -1338,7 +1381,7 @@ describe('CoworkPanel printing', { timeout: 30000 }, () => {
     await act(async () => { await expect(requestPrint()).resolves.toEqual({ kind: 'printed' }); });
     expect(printed).toContain('if all 400 eligible seat holders with no observed Cowork use adopted it');
     expect(printed).toContain('Using your figures');
-    expect(printed).toContain('Reporting window:');
+    expect(printed).toContain('Reporting window');
     expect(printed).not.toContain('440 eligible');
     expect(screen.getByRole('region', { name: '1,327\u20132,653 hours a month' })).toBeTruthy();
   });
