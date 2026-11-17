@@ -33,7 +33,7 @@
 
     <PropertyGroup>
       <_RequiredNodeVersionRaw>@(_NodeVersionFileLine)</_RequiredNodeVersionRaw>
-      <!-- Tolerates the plain forms nvm accepts: "26", "v26", "26.13.0". Aliases such as
+      <!-- Tolerates the plain forms nvm accepts: "26", "v26", "26.13.1". Aliases such as
            "lts/lithium" are deliberately not supported - the pin must name a major. -->
       <RequiredNodeMajor>$([System.Text.RegularExpressions.Regex]::Match($(_RequiredNodeVersionRaw), '[0-9]+').Value)</RequiredNodeMajor>
     </PropertyGroup>
