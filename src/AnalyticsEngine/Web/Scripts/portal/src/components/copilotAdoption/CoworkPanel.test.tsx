@@ -899,6 +899,26 @@ describe('CoworkPanel', () => {
     expect(screen.getAllByText(/Only retained, imported evidence is observed/)).toHaveLength(1);
   });
 
+  it.each([
+    { label: 'Sources and limitations', observed: false },
+    { label: 'Definitions and benefit limitations', observed: true },
+  ])('keeps the print-only heading for $label off screen', async ({ label, observed }) => {
+    const user = userEvent.setup();
+    await renderSettled(withEstimates());
+    if (observed) await openSection(user, /Observed use & benefit/);
+
+    const toggle = screen.getByRole('button', { name: label });
+    const printHeading = screen.getAllByText(label).find((node) => node.closest('[data-print="only"]'));
+    expect(printHeading).toBeDefined();
+    expect(toggle).toBeVisible();
+    expect(printHeading).not.toBeVisible();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toBeVisible();
+    expect(printHeading).not.toBeVisible();
+  });
+
   it('retains the single evidence disclosure when readiness is unavailable', () => {
     render(withEstimates({ coworkReadinessAvailable: false }));
     expect(screen.getAllByRole('button', { name: 'Sources and limitations' })).toHaveLength(1);

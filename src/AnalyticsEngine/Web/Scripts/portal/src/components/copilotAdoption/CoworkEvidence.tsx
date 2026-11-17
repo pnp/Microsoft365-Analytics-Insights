@@ -9,6 +9,7 @@ import { coworkAdoptionReason } from './coworkTimeSaved';
 const useStyles = makeStyles({
   stack: { display: 'flex', flexDirection: 'column', gap: '8px' },
   note: { color: tokens.colorNeutralForeground2 },
+  printOnly: { display: 'none' },
   evidence: {
     display: 'flex',
     flexDirection: 'column',
@@ -84,7 +85,7 @@ function EvidenceDisclosure({ labelKey, children }: { labelKey: TranslationKey; 
       >
         {t(labelKey)}
       </Button>
-      <Text data-print="only" weight="semibold">{t(labelKey)}</Text>
+      <Text className={styles.printOnly} data-print="only" weight="semibold">{t(labelKey)}</Text>
       {/* Keep caveats on paper even when the reader leaves them collapsed on screen. */}
       <div id={id} role="region" aria-labelledby={`${id}-button`} hidden={!expanded} className={styles.disclosureBody}>
         <div className={styles.stack}>{children}</div>
