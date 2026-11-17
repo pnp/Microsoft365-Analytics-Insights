@@ -560,6 +560,13 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("auditAvailable")]
         public bool AuditAvailable { get; set; }
 
+        /// <summary>
+        /// Earliest retained Copilot interaction, reused from the agent-growth source check.
+        /// An observed boundary, not proof that every intervening day was imported.
+        /// </summary>
+        [JsonProperty("auditHistoryStartUtc")]
+        public DateTime? AuditHistoryStartUtc { get; set; }
+
         /// <summary>Microsoft's own per-user Copilot usage report has been imported.</summary>
         [JsonProperty("copilotUsageReportAvailable")]
         public bool CopilotUsageReportAvailable { get; set; }
@@ -647,6 +654,7 @@ namespace Common.Entities.CopilotAdoption
 
             // First, because they decide which department rows the floors below are read from.
             CopilotAdoptionSmallGroups.WithholdSmallestListedGroups(reader, Writable, minPeople);
+            CopilotAdoptionSmallGroups.WithholdCoworkOpportunity(reader, Writable, minPeople);
 
             var seats = LicenceTypeClassification.WithoutSmallSeatIdleCounts(reader.SeatLicenceTypes, minPeople);
             if (!ReferenceEquals(seats, reader.SeatLicenceTypes)) Writable().SeatLicenceTypes = seats;
@@ -1081,17 +1089,47 @@ namespace Common.Entities.CopilotAdoption
         public CoworkCreditPosition CoworkCreditPosition { get; set; } = new CoworkCreditPosition();
 
         /// <summary>
-        /// The modelled Cowork estimate for the recommended cohort - the people ready for Cowork now, and
-        /// the Cowork tab's headline. Cowork only: the time Cowork could give back on top of what these
-        /// people's Copilot licences already save. Every figure inside is an assumption applied to
-        /// observed volume - see <see cref="CoworkValueEstimate"/>.
+        /// Additional potential over Copilot alone for recommended prime candidates with no Cowork use
+        /// observed in the reporting window. Null when the observation split cannot be supported.
+        /// </summary>
+        [JsonProperty("coworkNewAdoptionEstimate")]
+        public CoworkValueEstimate CoworkNewAdoptionEstimate { get; set; }
+
+        /// <summary>
+        /// The broader scenario over assessed seat holders with no observed Cowork use, excluding
+        /// known-disabled accounts. Includes people who are not ready; never includes existing users.
+        /// </summary>
+        [JsonProperty("coworkNonUserCeilingEstimate")]
+        public CoworkValueEstimate CoworkNonUserCeilingEstimate { get; set; }
+
+        /// <summary>A stable reason key, not display text. Null when the split is available.</summary>
+        [JsonProperty("coworkAdoptionUnavailableReason")]
+        public string CoworkAdoptionUnavailableReason { get; set; } = "notAssessed";
+
+        [JsonProperty("coworkNewAdoptionWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string CoworkNewAdoptionWithheld { get; set; }
+
+        [JsonProperty("coworkNonUserCeilingWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string CoworkNonUserCeilingWithheld { get; set; }
+
+        [JsonProperty("coworkWithoutLicenceWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string CoworkWithoutLicenceWithheld { get; set; }
+
+        /// <summary>Observed use among assessed seat holders, including accounts disabled today.</summary>
+        [JsonProperty("coworkObservedUsage")]
+        public CoworkObservedUsage CoworkObservedUsage { get; set; } = new CoworkObservedUsage();
+
+        /// <summary>
+        /// Legacy workload forecast over the complete recommended policy audience, including existing
+        /// Cowork users. Retained for API compatibility; not a new-adoption or existing-benefit estimate.
+        /// The portal and workbook use <see cref="CoworkNewAdoptionEstimate"/> instead.
         /// </summary>
         [JsonProperty("coworkValueEstimate")]
         public CoworkValueEstimate CoworkValueEstimate { get; set; } = new CoworkValueEstimate();
 
         /// <summary>
-        /// The same model over EVERY scored Copilot seat holder: the ceiling if every seat holder used
-        /// Cowork, rather than only the people ready for it today.
+        /// Legacy workload forecast over every scored seat holder, retained for API compatibility.
+        /// The new-adoption ceiling is <see cref="CoworkNonUserCeilingEstimate"/>.
         /// </summary>
         /// <remarks>
         /// Published next to <see cref="CoworkValueEstimate"/> so the page can say both "where to start"

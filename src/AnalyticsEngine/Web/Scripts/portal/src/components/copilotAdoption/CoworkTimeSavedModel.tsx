@@ -9,6 +9,7 @@ import {
   customisesAny,
   formatModelled,
   projectCoworkTimeSaved,
+  projectCoworkAdoption,
   type TimeSavedAssumptionKey,
   type TimeSavedAssumptionState,
 } from './coworkTimeSaved';
@@ -30,6 +31,7 @@ import {
   useCalculatorFocus,
   useModelStyles,
 } from './timeSavedShared';
+import { CoworkAdoptionUnavailable } from './CoworkEvidence';
 
 type Scenario = 'ready' | 'full' | 'withoutLicence';
 
@@ -89,8 +91,7 @@ export default function CoworkTimeSavedModel({
   const tNode = useTNode();
   const { assumptions, defaults, customised, setAssumption, resetAssumption } = timeSaved;
 
-  const ready = projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, options);
-  const full = projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, options);
+  const { ready, full } = projectCoworkAdoption(summary, assumptions, options);
   const withoutLicence = projectCoworkTimeSaved(summary.coworkWithoutLicenceEstimate, assumptions, options);
   // The cohort the headline models - the people ready now unless the reader chose every seat holder or
   // the people without a licence, or nobody is ready.
@@ -115,17 +116,7 @@ export default function CoworkTimeSavedModel({
   if (!projection) {
     // Without the usage reports there is no work to model, which is a missing import, not a finding
     // that Cowork has nothing to take on - so it is said as one.
-    const noActivity = summary.coworkReadinessAvailable && summary.dataSources?.m365UsageReportsAvailable === false;
-    return (
-      <Card>
-        <Text weight="semibold" block>
-          {t('copilotAdoptionCowork.timeSaved.model.title')}
-        </Text>
-        <Text size={200} className={styles.note}>
-          {t(noActivity ? 'copilotAdoptionCowork.timeSaved.model.noActivity' : 'copilotAdoptionCowork.timeSaved.model.empty')}
-        </Text>
-      </Card>
-    );
+    return <CoworkAdoptionUnavailable summary={summary} showEvidence={false} />;
   }
 
   const conservativePercent = formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 });
@@ -145,9 +136,10 @@ export default function CoworkTimeSavedModel({
             {t('copilotAdoptionCowork.timeSaved.model.title')}
           </Text>
           <Text size={200} className={styles.note}>
-            {t('copilotAdoptionCowork.timeSaved.model.intro')}
+            {t(modellingWithoutLicence
+              ? 'copilotAdoptionCowork.timeSaved.model.introWithoutLicence'
+              : 'copilotAdoptionCowork.timeSaved.model.intro')}
           </Text>
-
           {[ready, full, withoutLicence].filter(Boolean).length > 1 && (
             <ScenarioPicker<Scenario>
               value={scenario}
@@ -502,8 +494,13 @@ export default function CoworkTimeSavedModel({
               </li>
             )}
             <li key="estimate-assumption-everyoneModelled">
-              <Text size={200}>{t('copilotAdoptionCowork.estimate.assumption.everyoneModelled')}</Text>
+              <Text size={200}>{t(modellingWithoutLicence
+                ? 'copilotAdoptionCowork.estimate.assumption.everyoneModelled'
+                : 'copilotAdoptionCowork.estimate.assumption.prospectiveOnly')}</Text>
             </li>
+            {!modellingWithoutLicence && <li><Text size={200}>{t(scenario === 'full'
+              ? 'copilotAdoptionCowork.estimate.assumption.nonUserCeiling'
+              : 'copilotAdoptionCowork.estimate.assumption.readyOnly')}</Text></li>}
             <li key="estimate-assumption-increment">
               <Text size={200}>{t('copilotAdoptionCowork.estimate.assumption.increment')}</Text>
             </li>
@@ -516,7 +513,9 @@ export default function CoworkTimeSavedModel({
               </Text>
             </li>
             <li key="estimate-assumption-potential">
-              <Text size={200}>{t('copilotAdoptionCowork.estimate.assumption.potential')}</Text>
+              <Text size={200}>{t(modellingWithoutLicence
+                ? 'copilotAdoptionCowork.estimate.assumption.potential'
+                : 'copilotAdoptionCowork.coverage.baseline')}</Text>
             </li>
             <li key="estimate-assumption-notMeasured">
               <Text size={200}>{t('copilotAdoptionCowork.estimate.assumption.notMeasured')}</Text>

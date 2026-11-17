@@ -18,6 +18,7 @@ import {
   defaultTimeSavedAssumptions,
   parseTimeSavedOverrides,
   projectCoworkTimeSaved,
+  projectCoworkAdoption,
   projectLicenceTimeSaved,
   projectSeatHolderSegment,
   projectSeatHolderTimeSaved,
@@ -92,6 +93,34 @@ const SUMMARY = {
 } as Pick<CopilotAdoptionSummary, 'options' | 'coworkValueEstimate' | 'coworkFullRolloutEstimate'>;
 
 const defaults = () => defaultTimeSavedAssumptions(OPTIONS);
+
+describe('projectCoworkAdoption', () => {
+  const evidence = {
+    auditAvailable: true, auditHistoryStartUtc: '2025-01-01T00:00:00Z',
+    m365UsageReportsAvailable: true,
+  } as CopilotAdoptionSummary['dataSources'];
+
+  it('reads only the explicitly prospective cohorts, not legacy policy-audience forecasts', () => {
+    const summary = { ...SUMMARY, dataSources: evidence,
+      coworkNewAdoptionEstimate: coworkEstimate({ cohortUsers: 3 }),
+      coworkNonUserCeilingEstimate: coworkEstimate({ cohortUsers: 6 }),
+    } as CopilotAdoptionSummary;
+    const result = projectCoworkAdoption(summary, defaults(), OPTIONS);
+    expect(result.ready?.cohortUsers).toBe(3);
+    expect(result.full?.cohortUsers).toBe(6);
+    expect(projectCoworkAdoption({ ...SUMMARY, dataSources: evidence } as CopilotAdoptionSummary, defaults(), OPTIONS))
+      .toEqual({ ready: null, full: null });
+  });
+
+  it('does not turn missing audit or incomplete analysis into an adoption forecast', () => {
+    const summary = { ...SUMMARY, dataSources: { ...evidence, auditAvailable: false },
+      coworkNewAdoptionEstimate: coworkEstimate(), coworkNonUserCeilingEstimate: coworkEstimate(),
+    } as CopilotAdoptionSummary;
+    expect(projectCoworkAdoption(summary, defaults(), OPTIONS)).toEqual({ ready: null, full: null });
+    expect(projectCoworkAdoption({ ...summary, dataSources: evidence, figuresIncomplete: true }, defaults(), OPTIONS))
+      .toEqual({ ready: null, full: null });
+  });
+});
 
 describe('projectLicenceTimeSaved', () => {
   /**

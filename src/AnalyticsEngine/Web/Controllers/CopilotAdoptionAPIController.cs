@@ -1060,6 +1060,7 @@ namespace Web.AnalyticsWeb.Controllers
             int skip = 0,
             int take = DefaultTake,
             string userFilter = null,
+            bool prospectiveOnly = false,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilter(filterError);
@@ -1073,7 +1074,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             var query = BuildCoworkQuery(
                 search, tiers, department, country, recommendedOnly, coworkUsersOnly,
-                minLoad, minFluency, sortBy, sortDesc);
+                minLoad, minFluency, sortBy, sortDesc, prospectiveOnly);
 
             var matched = CopilotAdoptionExports.Apply(analysis.CoworkReadiness, query);
 
@@ -1114,6 +1115,7 @@ namespace Web.AnalyticsWeb.Controllers
             string sortBy = CoworkSortFields.CoordinationLoad,
             bool sortDesc = true,
             string userFilter = null,
+            bool prospectiveOnly = false,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             if (!TryParseUserFilter(userFilter, out var filter, out var filterError)) return InvalidFilterResponse(filterError);
@@ -1126,7 +1128,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             var query = BuildCoworkQuery(
                 search, tiers, department, country, recommendedOnly, coworkUsersOnly,
-                minLoad, minFluency, sortBy, sortDesc);
+                minLoad, minFluency, sortBy, sortDesc, prospectiveOnly);
 
             var rows = CopilotAdoptionExports.Apply(analysis.CoworkReadiness, query).Take(MaxCsvRows).ToList();
 
@@ -1534,7 +1536,7 @@ namespace Web.AnalyticsWeb.Controllers
         private static CoworkReadinessQuery BuildCoworkQuery(
             string search, string tiers, string department, string country,
             bool recommendedOnly, bool coworkUsersOnly, double? minLoad, double? minFluency,
-            string sortBy, bool sortDesc)
+            string sortBy, bool sortDesc, bool prospectiveOnly)
         {
             return new CoworkReadinessQuery
             {
@@ -1544,6 +1546,7 @@ namespace Web.AnalyticsWeb.Controllers
                 Country = country,
                 RecommendedOnly = recommendedOnly,
                 CoworkUsersOnly = coworkUsersOnly,
+                ProspectiveOnly = prospectiveOnly,
                 MinCoordinationLoad = minLoad,
                 MinFluency = minFluency,
                 SortBy = sortBy,

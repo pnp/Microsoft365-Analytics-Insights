@@ -941,7 +941,7 @@ namespace Tests.UnitTests
         /// and adding them would count the same time twice.
         /// </summary>
         [TestMethod]
-        public void Estimate_ModelsPeopleAlreadyUsingCowork_FromTheirWorkLikeEveryoneElse()
+        public void LegacyForecast_ModelsPeopleAlreadyUsingCowork_WithoutTreatingItAsExistingBenefit()
         {
             var withUsers = Cohort(4);
             withUsers[0].CoworkInteractions = 14;
@@ -958,7 +958,496 @@ namespace Tests.UnitTests
             Assert.AreEqual(188d, estimate.ProjectedCoworkTasks);
             Assert.AreEqual(19d, estimate.HoursPerMonthHigh);
             Assert.AreEqual(withoutUsers.HoursPerMonthHigh, estimate.HoursPerMonthHigh,
-                "Cowork interactions in the audit log must not move the modelled hours.");
+                "The legacy workload forecast remains compatible; it is not the new-adoption estimate.");
+        }
+
+        private static CopilotAdoptionAnalysis OpportunityAnalysis(params CoworkReadinessSignalRow[] signals)
+        {
+            var analysis = new CopilotAdoptionAnalysis
+            {
+                CoworkSignals = signals.ToList(),
+                CoworkAuditAssessed = true,
+                LicensedUsers = signals.Select(s => new LicensedUserAdoptionRow
+                {
+                    UserId = s.UserId, UserPrincipalName = s.UserPrincipalName, EmailDomain = s.EmailDomain,
+                    AdoptionScore = s.AdoptionScore,
+                }).ToList(),
+            };
+            analysis.Summary.FromUtc = new DateTime(2025, 3, 4, 0, 0, 0, DateTimeKind.Utc);
+            analysis.Summary.ToUtc = new DateTime(2025, 3, 31, 0, 0, 0, DateTimeKind.Utc);
+            analysis.Summary.DataSources.AuditAvailable = true;
+            analysis.Summary.DataSources.AuditHistoryStartUtc = new DateTime(2025, 1, 1);
+            analysis.Summary.DataSources.M365UsageReportsAvailable = true;
+            analysis.Summary.DataSources.M365UsageReportDate = new DateTime(2025, 3, 29);
+            return analysis;
+        }
+
+        private static CoworkReadinessSignalRow OpportunitySignal(
+            int id, int activeDays = 0, bool? enabled = true, double fluency = 80)
+        {
+            var row = HeavyCoordinator();
+            row.UserId = id;
+            row.UserPrincipalName = $"person{id}@contoso.com";
+            row.EmailDomain = "contoso.com";
+            row.AccountEnabled = enabled;
+            row.AdoptionScore = fluency;
+            row.CoworkActiveDays = activeDays;
+            row.CoworkInteractions = activeDays * 2;
+            row.LastCoworkInteractionUtc = activeDays > 0 ? new DateTime(2025, 3, 20).AddDays(id) : (DateTime?)null;
+            return row;
+        }
+
+        [TestMethod]
+        public void NewAdoption_ExistingUsersAndDisabledAccountsNeverIncreaseEitherForecast()
+        {
+            var baseline = OpportunityAnalysis(OpportunitySignal(1), OpportunitySignal(2, fluency: 5),
+                OpportunitySignal(3, enabled: null));
+            var mixed = OpportunityAnalysis(baseline.CoworkSignals.Concat(new[]
+            {
+                OpportunitySignal(4, activeDays: 10), OpportunitySignal(5, activeDays: 2),
+                OpportunitySignal(6, enabled: false), OpportunitySignal(7, activeDays: 3, enabled: false),
+            }).ToArray());
+            var service = new CopilotAdoptionService();
+            service.FinaliseSummary(baseline);
+            service.FinaliseSummary(mixed);
+
+            Assert.AreEqual(2, mixed.Summary.CoworkNewAdoptionEstimate.CohortUsers);
+            Assert.AreEqual(3, mixed.Summary.CoworkNonUserCeilingEstimate.CohortUsers);
+            Assert.AreEqual(baseline.Summary.CoworkNewAdoptionEstimate.HoursPerMonthHigh,
+                mixed.Summary.CoworkNewAdoptionEstimate.HoursPerMonthHigh);
+            Assert.AreEqual(baseline.Summary.CoworkNonUserCeilingEstimate.HoursPerMonthHigh,
+                mixed.Summary.CoworkNonUserCeilingEstimate.HoursPerMonthHigh);
+            CollectionAssert.AreEquivalent(new[] { 1, 3, 4, 5 },
+                mixed.CoworkReadiness.Where(r => r.RecommendForPolicy).Select(r => r.UserId).ToArray(),
+                "The policy audience retains established and trialling users, and keeps nullable account status.");
+            Assert.AreEqual(3, mixed.Summary.CoworkObservedUsage.Users);
+            Assert.AreEqual(30L, mixed.Summary.CoworkObservedUsage.Interactions);
+            Assert.AreEqual(15L, mixed.Summary.CoworkObservedUsage.ActiveUserDays);
+            Assert.AreEqual(new DateTime(2025, 3, 27), mixed.Summary.CoworkObservedUsage.LastInteractionUtc,
+                "An account disabled today still contributes historical observations.");
+            Assert.IsNull(mixed.Summary.CoworkObservedUsage.AssistedHours);
+            Assert.IsTrue(mixed.Summary.CoworkValueEstimate.CohortUsers > baseline.Summary.CoworkValueEstimate.CohortUsers,
+                "The legacy policy forecast remains compatible, but is no longer the adoption headline.");
+            Assert.IsFalse(mixed.Summary.CoworkNewAdoptionEstimate.Assumptions.Any(a => a.Contains("including people already using Cowork")));
+            Assert.IsTrue(mixed.Summary.CoworkNewAdoptionEstimate.Assumptions.Any(a => a.Contains("2025-03-04 to 2025-03-31")));
+            Assert.IsTrue(mixed.Summary.CoworkNonUserCeilingEstimate.Assumptions.Any(a => a.Contains("not a target")));
+        }
+
+        [DataTestMethod]
+        [DataRow("auditMissing")]
+        [DataRow("historyUnknown")]
+        [DataRow("historyLimited")]
+        [DataRow("incomplete")]
+        [DataRow("workloadMissing")]
+        [DataRow("notAssessed")]
+        public void NewAdoption_UnavailableEvidenceNeverBecomesNonUseOrZeroHours(string reason)
+        {
+            var analysis = OpportunityAnalysis(OpportunitySignal(1), OpportunitySignal(2, activeDays: 3));
+            if (reason == "auditMissing") analysis.Summary.DataSources.AuditAvailable = false;
+            if (reason == "historyUnknown") analysis.Summary.DataSources.AuditHistoryStartUtc = null;
+            if (reason == "historyLimited") analysis.Summary.DataSources.AuditHistoryStartUtc = analysis.Summary.FromUtc.AddDays(1);
+            if (reason == "incomplete") analysis.Summary.MarkFiguresIncomplete("synthetic audit backfill");
+            if (reason == "workloadMissing") analysis.Summary.DataSources.M365UsageReportsAvailable = false;
+            if (reason == "notAssessed") analysis.LicensedUsers.Clear();
+
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+
+            Assert.AreEqual(reason, analysis.Summary.CoworkAdoptionUnavailableReason);
+            Assert.IsNull(analysis.Summary.CoworkNewAdoptionEstimate);
+            Assert.IsNull(analysis.Summary.CoworkNonUserCeilingEstimate);
+            Assert.AreEqual(Newtonsoft.Json.Linq.JTokenType.Null,
+                JObject.FromObject(analysis.Summary)["coworkNewAdoptionEstimate"].Type);
+            Assert.IsNull(analysis.Summary.CoworkObservedUsage.AssistedHours);
+            if (reason != "auditMissing")
+            {
+                Assert.IsTrue(analysis.Summary.CoworkObservedUsage.Available,
+                    "Positive retained observations remain useful even when adoption or fluency cannot be assessed.");
+                Assert.AreEqual(1, analysis.Summary.CoworkObservedUsage.Users);
+            }
+        }
+
+        [TestMethod]
+        public void NewAdoption_KnownZeroObservationsAreDistinctFromMissingHistory()
+        {
+            var analysis = OpportunityAnalysis(OpportunitySignal(1));
+            var service = new CopilotAdoptionService();
+            service.FinaliseSummary(analysis);
+            Assert.IsTrue(analysis.Summary.CoworkObservedUsage.Available);
+            Assert.AreEqual(0, analysis.Summary.CoworkObservedUsage.Users);
+            Assert.IsTrue(analysis.Summary.CoworkNewAdoptionEstimate.HoursPerMonthHigh > 0);
+
+            analysis.Summary.DataSources.AuditHistoryStartUtc = null;
+            service.FinaliseSummary(analysis);
+            Assert.IsFalse(analysis.Summary.CoworkObservedUsage.Available);
+            Assert.IsNull(analysis.Summary.CoworkObservedUsage.Users);
+            Assert.IsNull(analysis.Summary.CoworkNewAdoptionEstimate);
+        }
+
+        [TestMethod]
+        public void NewAdoption_StaleWorkloadReportsAreUnavailable_NotAnEmptyWorkload()
+        {
+            var analysis = OpportunityAnalysis(OpportunitySignal(1));
+            analysis.Summary.DataSources.M365UsageReportDate = analysis.Summary.FromUtc.AddDays(-1);
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            Assert.AreEqual("workloadMissing", analysis.Summary.CoworkAdoptionUnavailableReason);
+            Assert.IsNull(analysis.Summary.CoworkNewAdoptionEstimate);
+            Assert.IsTrue(analysis.Summary.CoworkObservedUsage.Available);
+        }
+
+        [TestMethod]
+        public void NewAdoption_ScopedSummariesRebuildBothCohortsAndKeepEvidenceBoundaries()
+        {
+            var analysis = OpportunityAnalysis(OpportunitySignal(1), OpportunitySignal(2, activeDays: 4),
+                OpportunitySignal(3, fluency: 5));
+            analysis.CoworkSignals[2].EmailDomain = "fabrikam.com";
+            analysis.LicensedUsers[2].EmailDomain = "fabrikam.com";
+            var service = new CopilotAdoptionService();
+            service.FinaliseSummary(analysis);
+            var scoped = CopilotAdoptionScopeFilter.Apply(
+                analysis, CopilotAdoptionScope.ForEmailDomain("contoso.com"), service.FinaliseSummary).Summary;
+            Assert.AreEqual(1, scoped.CoworkNewAdoptionEstimate.CohortUsers);
+            Assert.AreEqual(1, scoped.CoworkNonUserCeilingEstimate.CohortUsers);
+            Assert.AreEqual(1, scoped.CoworkObservedUsage.Users);
+            Assert.AreEqual(2, scoped.CoworkObservedUsage.AssessedUsers);
+            Assert.AreEqual(analysis.Summary.DataSources.AuditHistoryStartUtc, scoped.DataSources.AuditHistoryStartUtc);
+            Assert.AreEqual(2, analysis.Summary.CoworkNonUserCeilingEstimate.CohortUsers, "The cached tenant is unchanged.");
+        }
+
+        [TestMethod]
+        public void NewAdoption_WithoutSeePii_WithholdsSmallCohortsAndComplements_OnACopy()
+        {
+            var analysis = OpportunityAnalysis(Enumerable.Range(1, 20)
+                .Select(id => OpportunitySignal(id, activeDays: id <= 3 ? 2 : 0, fluency: id <= 8 ? 80 : 5)).ToArray());
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var summary = analysis.Summary;
+            var before = JObject.FromObject(summary);
+            var reader = summary.WithoutIndividualData();
+            Assert.IsFalse(reader.CoworkObservedUsage.Available);
+            Assert.IsNull(reader.CoworkObservedUsage.Users);
+            Assert.IsNotNull(reader.CoworkObservedUsage.WithheldReason);
+            Assert.IsNull(reader.CoworkNewAdoptionEstimate,
+                "The legacy policy audience less the ready cohort would reveal the three observed users' workload.");
+            Assert.IsNull(reader.CoworkNonUserCeilingEstimate,
+                "The full assessed workload less the ceiling would reveal three observed users' workload.");
+            Assert.IsTrue(JToken.DeepEquals(before, JObject.FromObject(summary)), "No cached field may be edited.");
+
+            var safe = OpportunityAnalysis(Enumerable.Range(1, 20)
+                .Select(id => OpportunitySignal(id, activeDays: id <= 5 ? 2 : 0, fluency: id <= 10 ? 80 : 5)).ToArray());
+            new CopilotAdoptionService().FinaliseSummary(safe);
+            reader = safe.Summary.WithoutIndividualData();
+            Assert.IsNotNull(reader.CoworkNewAdoptionEstimate, "A cohort of five with safe complements stays.");
+            Assert.IsNotNull(reader.CoworkNonUserCeilingEstimate);
+            Assert.IsTrue(reader.CoworkObservedUsage.Available);
+
+            var complement = OpportunityAnalysis(Enumerable.Range(1, 12)
+                .Select(id => OpportunitySignal(id, activeDays: id <= 10 ? 2 : 0)).ToArray());
+            new CopilotAdoptionService().FinaliseSummary(complement);
+            reader = complement.Summary.WithoutIndividualData();
+            Assert.IsFalse(reader.CoworkObservedUsage.Available,
+                "Ten observed users beside twelve assessed users would give back two non-users.");
+            Assert.IsNull(reader.CoworkNonUserCeilingEstimate);
+        }
+
+        internal static CopilotAdoptionAnalysis JointCoworkCohortAnalysis(
+            int disabledNonUsers, int disabledObserved, int readyCandidates = 5, int otherNonUsers = 10,
+            bool disabledNonUsersReady = true)
+        {
+            var signals = new List<CoworkReadinessSignalRow>();
+            void Add(int people, bool observed, bool enabled, double fluency)
+            {
+                for (var i = 0; i < people; i++)
+                {
+                    var signal = OpportunitySignal(signals.Count + 1, activeDays: observed ? 2 : 0,
+                        enabled: enabled, fluency: fluency);
+                    signal.EmailsSentPerActiveDay = signal.UserId + 1;
+                    signal.LastCoworkInteractionUtc = observed ? new DateTime(2025, 3, 20) : (DateTime?)null;
+                    signals.Add(signal);
+                }
+            }
+            Add(5, observed: true, enabled: true, fluency: 80);
+            Add(readyCandidates, observed: false, enabled: true, fluency: 80);
+            Add(otherNonUsers, observed: false, enabled: true, fluency: 5);
+            Add(disabledObserved, observed: true, enabled: false, fluency: 80);
+            Add(disabledNonUsers, observed: false, enabled: false, fluency: disabledNonUsersReady ? 80 : 5);
+            var analysis = OpportunityAnalysis(signals.ToArray());
+            analysis.Summary.Options = Options();
+            analysis.Summary.WindowDays = analysis.Summary.Options.WindowDays;
+            analysis.Summary.GeneratedUtc = new DateTime(2025, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            return analysis;
+        }
+
+        [DataTestMethod]
+        [DataRow(1, 0)]
+        [DataRow(4, 0)]
+        [DataRow(0, 1)]
+        [DataRow(2, 2)]
+        [DataRow(4, 1)]
+        [DataRow(1, 4)]
+        [DataRow(5, 0)]
+        [DataRow(0, 5)]
+        [DataRow(5, 5)]
+        [DataRow(0, 0)]
+        public void NewAdoption_JointForecastDifferencesCannotRevealAFewDisabledAccounts(
+            int disabledNonUsers, int disabledObserved)
+        {
+            var analysis = JointCoworkCohortAnalysis(disabledNonUsers, disabledObserved);
+            var summary = analysis.Summary;
+            double Email(CoworkValueEstimate estimate) =>
+                CopilotAdoptionScoring.CoworkVolume(estimate, CoworkActivities.SendEmail);
+            var before = JObject.FromObject(summary);
+            var reconstructed = Email(summary.CoworkFullRolloutEstimate) - Email(summary.CoworkNonUserCeilingEstimate)
+                - Email(summary.CoworkValueEstimate) + Email(summary.CoworkNewAdoptionEstimate);
+            var expected = analysis.CoworkSignals.Where(s => s.AccountEnabled == false)
+                .Sum(s => s.EmailsSentPerActiveDay) * CopilotAdoptionScoring.WorkingDaysPerMonth(summary.Options);
+            Assert.AreEqual(expected, reconstructed,
+                "The four full-permission forecasts together isolate the disabled accounts' workload.");
+            var reader = summary.WithoutIndividualData();
+            if ((disabledNonUsers > 0 && disabledNonUsers < 5) || (disabledObserved > 0 && disabledObserved < 5))
+            {
+                Assert.IsNull(reader.CoworkNewAdoptionEstimate,
+                    "The ready count plus the public policy/prime/observed totals reveals disabled status subcohorts.");
+                Assert.IsNull(reader.CoworkNonUserCeilingEstimate,
+                    "Do not leave a forecast that reconstructs another withheld joint population.");
+                Assert.AreEqual(JTokenType.Null, JObject.FromObject(reader)["coworkNonUserCeilingEstimate"].Type);
+                Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, reader.CoworkNonUserCeilingWithheld);
+            }
+            else
+            {
+                Assert.IsNotNull(reader.CoworkNewAdoptionEstimate);
+                Assert.IsNotNull(reader.CoworkNonUserCeilingEstimate,
+                    "A residual of zero or at least five people must not hide a safe ceiling.");
+            }
+            Assert.IsTrue(JToken.DeepEquals(before, JObject.FromObject(summary)), "Never edit the shared cached summary.");
+            Assert.IsTrue(JToken.DeepEquals(JObject.FromObject(reader), JObject.FromObject(reader.WithoutIndividualData())),
+                "Applying the floor again must preserve the same redaction.");
+        }
+
+        [TestMethod]
+        public void NewAdoption_WithheldReadyCannotBeReconstructedFromTheRemainingForecasts()
+        {
+            var summary = JointCoworkCohortAnalysis(0, 0, readyCandidates: 1).Summary;
+            var reader = summary.WithoutIndividualData();
+            Assert.IsNull(reader.CoworkNewAdoptionEstimate);
+            var fullPermissionReady = CopilotAdoptionScoring.CoworkVolume(summary.CoworkValueEstimate, CoworkActivities.SendEmail)
+                + CopilotAdoptionScoring.CoworkVolume(summary.CoworkNonUserCeilingEstimate, CoworkActivities.SendEmail)
+                - CopilotAdoptionScoring.CoworkVolume(summary.CoworkFullRolloutEstimate, CoworkActivities.SendEmail);
+            Assert.AreEqual(CopilotAdoptionScoring.CoworkVolume(summary.CoworkNewAdoptionEstimate, CoworkActivities.SendEmail),
+                fullPermissionReady, "With no disabled residual, the other three forecasts reconstruct the singleton.");
+            Assert.IsTrue(fullPermissionReady > 0);
+            Assert.IsNull(reader.CoworkNonUserCeilingEstimate,
+                "Withholding the ready object alone must not leave the same workload reconstructable.");
+        }
+
+        [TestMethod]
+        public void NewAdoption_MixedDisabledSubcohortsAreProtectedEvenWhenTogetherTheyReachFive()
+        {
+            var summary = JointCoworkCohortAnalysis(4, 1, disabledNonUsersReady: false).Summary;
+            var observed = summary.CoworkEstablishedUsers + summary.CoworkTriallingUsers;
+            Assert.AreEqual(1, observed - summary.CoworkRecommendedForPolicy + summary.CoworkNewAdoptionEstimate.CohortUsers);
+            Assert.AreEqual(4, summary.CoworkScoredUsers - observed - summary.CoworkNonUserCeilingEstimate.CohortUsers);
+            var reader = summary.WithoutIndividualData();
+            Assert.IsNull(reader.CoworkNewAdoptionEstimate);
+            Assert.IsNull(reader.CoworkNonUserCeilingEstimate);
+            Assert.IsTrue(reader.CoworkObservedUsage.Available, "Keep safe observed evidence separate from the withheld forecasts.");
+            Assert.AreEqual(6, reader.CoworkObservedUsage.Users);
+        }
+
+        [TestMethod]
+        public void NewAdoption_JointFloorAlsoProtectsSmallObservedTiers()
+        {
+            var analysis = JointCoworkCohortAnalysis(0, 5);
+            analysis.CoworkSignals[0].CoworkActiveDays = 6;
+            analysis.CoworkSignals[0].CoworkInteractions = 12;
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            Assert.AreEqual(1, analysis.Summary.CoworkEstablishedUsers);
+            var reader = analysis.Summary.WithoutIndividualData();
+            Assert.IsNull(reader.CoworkNewAdoptionEstimate);
+            Assert.IsNull(reader.CoworkNonUserCeilingEstimate);
+            Assert.IsNotNull(analysis.Summary.CoworkNewAdoptionEstimate, "See PII retains the full figures.");
+        }
+
+        internal static CopilotAdoptionAnalysis CoworkObservationPopulationAnalysis(int excludedUsers, int assessedOnlyUsers)
+        {
+            var analysis = JointCoworkCohortAnalysis(0, 0);
+            for (var i = 0; i < analysis.LicensedUsers.Count; i++)
+            {
+                analysis.LicensedUsers[i].CoworkInteractions = analysis.CoworkSignals[i].CoworkInteractions;
+            }
+            for (var i = 0; i < excludedUsers; i++)
+            {
+                analysis.LicensedUsers.Add(new LicensedUserAdoptionRow
+                {
+                    UserId = 21 + i, UserPrincipalName = $"guest{i}_contoso.com#EXT#@contoso.onmicrosoft.com",
+                    EmailDomain = "contoso.onmicrosoft.com", AdoptionScore = 80, CoworkInteractions = 13,
+                });
+            }
+            for (var i = 0; i < assessedOnlyUsers; i++)
+            {
+                var signal = OpportunitySignal(2000 + i, activeDays: 2);
+                signal.LastCoworkInteractionUtc = new DateTime(2025, 3, 20);
+                analysis.CoworkSignals.Add(signal);
+            }
+            var options = analysis.Summary.Options.Clone();
+            if (assessedOnlyUsers > 0)
+            {
+                options.MaxLicensedUsersScored = analysis.LicensedUsers.Count;
+                analysis.LicensedUsersCapped = true;
+            }
+            analysis.Summary.Options = options;
+            analysis.Summary.LicensedUsers = analysis.LicensedUsers.Count + assessedOnlyUsers;
+            new CopilotAdoptionService(options: options).FinaliseSummary(analysis);
+            return analysis;
+        }
+
+        [DataTestMethod]
+        [DataRow(0, 0, true)]
+        [DataRow(1, 0, false)]
+        [DataRow(4, 0, false)]
+        [DataRow(5, 0, true)]
+        [DataRow(0, 1, false)]
+        [DataRow(0, 4, false)]
+        [DataRow(0, 5, true)]
+        [DataRow(1, 1, false)]
+        [DataRow(5, 5, true)]
+        public void CoworkObservations_ProtectComplementsAgainstTheLicensedAuditPopulation(
+            int excludedUsers, int assessedOnlyUsers, bool shown)
+        {
+            var summary = CoworkObservationPopulationAnalysis(excludedUsers, assessedOnlyUsers).Summary;
+            var before = JObject.FromObject(summary);
+            Assert.AreEqual(5 + excludedUsers, summary.CoworkAuditUsers);
+            Assert.AreEqual(5 + assessedOnlyUsers, summary.CoworkObservedUsage.Users);
+            Assert.AreEqual(20L + 13L * excludedUsers, summary.CoworkInteractions);
+            Assert.AreEqual(20L + 4L * assessedOnlyUsers, summary.CoworkObservedUsage.Interactions);
+            var reader = summary.WithoutIndividualData();
+            Assert.AreEqual(shown, reader.CoworkObservedUsage.Available,
+                "The assessed population and all-seat audit totals must not expose either source's few unmatched users.");
+            if (shown)
+            {
+                Assert.AreEqual(summary.CoworkObservedUsage.Interactions, reader.CoworkObservedUsage.Interactions);
+            }
+            else
+            {
+                Assert.IsNull(reader.CoworkObservedUsage.Users);
+                Assert.IsNull(reader.CoworkObservedUsage.Interactions);
+                Assert.IsNull(reader.CoworkObservedUsage.ActiveUserDays);
+                Assert.IsNull(reader.CoworkObservedUsage.LastInteractionUtc);
+                Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, reader.CoworkObservedUsage.WithheldReason);
+            }
+            Assert.IsTrue(JObject.FromObject(reader).ToString().IndexOf("auditPopulationParts", StringComparison.OrdinalIgnoreCase) < 0,
+                "Source-overlap provenance is internal, not an additional disclosure.");
+            Assert.IsTrue(JToken.DeepEquals(before, JObject.FromObject(summary)), "The cached full-permission facts must remain.");
+        }
+
+        [TestMethod]
+        public void NewAdoption_EmptySliceOfAnUnscorableCappedAssessmentIsUnknown_NotZero()
+        {
+            var options = Options().Clone();
+            options.MaxCoworkUsersScored = 2;
+            options.MaxLicensedUsersScored = 2;
+            var analysis = OpportunityAnalysis(OpportunitySignal(3, activeDays: 2), OpportunitySignal(4, activeDays: 2));
+            analysis.Summary.Options = options;
+            foreach (var signal in analysis.CoworkSignals) signal.EmailDomain = "fabrikam.com";
+            analysis.LicensedUsers = new List<LicensedUserAdoptionRow>
+            {
+                new LicensedUserAdoptionRow
+                {
+                    UserId = 1, UserPrincipalName = "person1@contoso.com", EmailDomain = "contoso.com",
+                    CoworkInteractions = 4, AdoptionScore = 80,
+                },
+                new LicensedUserAdoptionRow
+                {
+                    UserId = 2, UserPrincipalName = "person2@contoso.com", EmailDomain = "contoso.com", AdoptionScore = 80,
+                },
+            };
+            analysis.LicensedUsersCapped = true;
+            var service = new CopilotAdoptionService(options: options);
+            service.FinaliseSummary(analysis);
+            Assert.IsFalse(analysis.Summary.CoworkReadinessAvailable, "The independently capped queries have no common person.");
+            Assert.AreEqual(4L, analysis.LicensedUsers.Sum(u => u.CoworkInteractions), "The slice is not known to be unused.");
+            var scope = CopilotAdoptionScope.ForEmailDomain("contoso.com");
+            var rows = CopilotAdoptionScopeFilter.FilterRows(analysis, scope);
+            Assert.IsTrue(rows.CoworkAssessmentCapped, "Capping is a source fact, independent of successful readiness scoring.");
+            foreach (var narrowed in new[] { rows, CopilotAdoptionScopeFilter.FilterRows(rows, scope) })
+            {
+                service.FinaliseSummary(narrowed);
+                Assert.IsFalse(narrowed.Summary.CoworkObservedUsage.Available);
+                Assert.IsNull(narrowed.Summary.CoworkObservedUsage.Users);
+                Assert.IsNull(narrowed.Summary.CoworkObservedUsage.Interactions);
+                Assert.IsNull(narrowed.Summary.CoworkNewAdoptionEstimate);
+            }
+        }
+
+        [TestMethod]
+        public void NewAdoption_EmptySliceOfACompleteAssessmentRetainsAKnownZero()
+        {
+            var analysis = OpportunityAnalysis(OpportunitySignal(1, activeDays: 2));
+            var service = new CopilotAdoptionService();
+            service.FinaliseSummary(analysis);
+            var scoped = CopilotAdoptionScopeFilter.Apply(
+                analysis, CopilotAdoptionScope.ForEmailDomain("fabrikam.com"), service.FinaliseSummary);
+            Assert.IsTrue(scoped.Summary.CoworkObservedUsage.Available);
+            Assert.AreEqual(0, scoped.Summary.CoworkObservedUsage.Users);
+            Assert.AreEqual(0L, scoped.Summary.CoworkObservedUsage.Interactions);
+            Assert.IsFalse(scoped.Summary.CoworkObservedUsage.Partial);
+        }
+
+        [TestMethod]
+        public void ProspectiveFilter_OpensExactlyTheNonUserCeiling_AndLeavesObservedDisabledUsersInDiagnostics()
+        {
+            var analysis = OpportunityAnalysis(OpportunitySignal(1), OpportunitySignal(2, enabled: null),
+                OpportunitySignal(3, activeDays: 2), OpportunitySignal(4, enabled: false),
+                OpportunitySignal(5, activeDays: 2, enabled: false));
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            var prospective = CopilotAdoptionExports.Apply(analysis.CoworkReadiness,
+                new CoworkReadinessQuery { ProspectiveOnly = true });
+            CollectionAssert.AreEquivalent(new[] { 1, 2 }, prospective.Select(r => r.UserId).ToArray());
+            Assert.AreEqual(analysis.Summary.CoworkNonUserCeilingEstimate.CohortUsers, prospective.Count);
+            var observed = CopilotAdoptionExports.Apply(analysis.CoworkReadiness,
+                new CoworkReadinessQuery { CoworkUsersOnly = true });
+            CollectionAssert.AreEquivalent(new[] { 3, 5 }, observed.Select(r => r.UserId).ToArray());
+        }
+
+        [TestMethod]
+        public void NewAdoption_AggregatesAtSyntheticTenantScale()
+        {
+            foreach (var count in new[] { 50000, 200000 })
+            {
+                var options = Options().Clone();
+                options.MaxCoworkUsersScored = count + 1;
+                var analysis = OpportunityAnalysis();
+                analysis.Summary.CoworkReadinessAvailable = true;
+                analysis.Summary.CoworkScoredUsers = count;
+                analysis.CoworkReadiness = Enumerable.Range(0, count).Select(id => new CoworkReadinessRow
+                {
+                    UserId = id, AccountEnabled = true, UsedCowork = id % 4 == 0,
+                    CoworkInteractions = id % 4 == 0 ? 2 : 0,
+                    Tier = id % 4 == 1 ? CopilotAdoptionScoring.CoworkTiers.PrimeCandidate : CopilotAdoptionScoring.CoworkTiers.NotIndicated,
+                    RecommendForPolicy = id % 4 == 1, EmailsSentPerActiveDay = 1,
+                }).ToList();
+                analysis.CoworkSignals = analysis.CoworkReadiness.Select(r => new CoworkReadinessSignalRow
+                {
+                    UserId = r.UserId, CoworkInteractions = r.CoworkInteractions,
+                    CoworkActiveDays = r.UsedCowork ? 1 : 0,
+                }).ToList();
+                analysis.LicensedUsers = analysis.CoworkReadiness.Select(r => new LicensedUserAdoptionRow
+                {
+                    UserId = r.UserId, CoworkInteractions = r.CoworkInteractions,
+                }).ToList();
+                var elapsed = new List<double>();
+                for (var run = 0; run < 6; run++)
+                {
+                    var watch = System.Diagnostics.Stopwatch.StartNew();
+                    CopilotAdoptionCoworkOpportunity.Apply(analysis, options);
+                    watch.Stop();
+                    if (run > 0) elapsed.Add(watch.Elapsed.TotalMilliseconds);
+                }
+                Assert.AreEqual(count / 4, analysis.Summary.CoworkNewAdoptionEstimate.CohortUsers);
+                Assert.AreEqual(count * 3 / 4, analysis.Summary.CoworkNonUserCeilingEstimate.CohortUsers);
+                Assert.AreEqual((long)count / 2, analysis.Summary.CoworkObservedUsage.Interactions);
+                Console.WriteLine("Synthetic {0:N0} assessed users: median aggregation {1:F1} ms (5 warm runs, no new SQL).",
+                    count, elapsed.OrderBy(t => t).ElementAt(2));
+            }
         }
 
         [TestMethod]

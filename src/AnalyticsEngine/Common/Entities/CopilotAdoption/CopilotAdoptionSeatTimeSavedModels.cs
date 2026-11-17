@@ -11,8 +11,8 @@ namespace Common.Entities.CopilotAdoption
     /// metric definitions: email and document actions carry a fixed credit, and Teams meeting summaries
     /// use meeting duration when available. This product's audit import does not carry meeting duration,
     /// so the meeting credit is a documented fixed fallback. Copilot Chat, agents and Cowork default to
-    /// zero here because Microsoft does not publish a per-prompt credit for this model, and Cowork has its
-    /// own estimate.
+    /// zero here because Microsoft does not publish a per-prompt credit for this model. Cowork is excluded
+    /// altogether; existing-user Cowork benefit is not estimated.
     ///
     /// Sources: https://learn.microsoft.com/en-us/viva/insights/advanced/reference/metrics and
     /// https://learn.microsoft.com/en-us/viva/insights/org-team-insights/copilot-dashboard#details-on-the-copilot-assisted-hours-metric.

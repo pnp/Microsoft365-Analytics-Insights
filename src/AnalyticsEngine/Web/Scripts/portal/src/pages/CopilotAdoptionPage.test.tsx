@@ -1500,6 +1500,10 @@ describe('CopilotAdoptionPage modelled time saved', () => {
       coworkRecommendedForPolicy: 20,
       coworkValueEstimate: coworkReady,
       coworkFullRolloutEstimate: coworkCeiling,
+      coworkNewAdoptionEstimate: coworkReady,
+      coworkNonUserCeilingEstimate: coworkCeiling,
+      coworkAdoptionUnavailableReason: null,
+      dataSources: { ...summary().dataSources, auditHistoryStartUtc: '2025-01-01T00:00:00Z' },
       licenceOpportunityEstimate: licenceEstimate,
       seatHolderTimeSavedEstimate: seatHolderEstimate,
       licenceChatUsersEstimate: {
@@ -1551,7 +1555,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(within(licence).getByText('1,800\u20133,600 h')).toBeVisible();
     expect(within(licence).getByText('a month if all 40 licence candidates were licensed')).toBeVisible();
     // The Cowork tile keeps its own choice: the people ready now.
-    expect(within(await tile('Time back from Cowork')).getByText('15\u201330 h')).toBeVisible();
+    expect(within(await tile('New Cowork adoption potential')).getByText('15\u201330 h')).toBeVisible();
   });
 
   it('quotes every Copilot seat holder on the Cowork tile when the reader chose to model them all', async () => {
@@ -1560,9 +1564,9 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     await renderPage();
 
-    const cowork = await tile('Time back from Cowork');
+    const cowork = await tile('New Cowork adoption potential');
     expect(within(cowork).getByText('75\u2013150 h')).toBeVisible();
-    expect(within(cowork).getByText('a month if all 100 Copilot seat holders used Cowork')).toBeVisible();
+    expect(within(cowork).getByText(/a month across 100 eligible non-users - broader scenario/)).toBeVisible();
     expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
   });
 
@@ -1631,7 +1635,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     const model = screen.getByRole('tabpanel', { name: 'Time saved' });
     expect(within(model).getByText('Time already saved by seat holders')).toBeVisible();
     expect(within(model).getByText(/Copilot Chat and other non-agent surfaces default to zero minutes/)).toBeVisible();
-    expect(within(model).getByText(/Agent and Cowork activity is left out of this figure/)).toBeVisible();
+    expect(within(model).getByText(/Agent and Cowork activity is left out; existing-user Cowork benefit is not estimated/)).toBeVisible();
 
     const other = within(model).getByText('Copilot Chat and other apps').closest('tr') as HTMLElement;
     expect(within(other).getByText('20')).toBeVisible();
@@ -1761,10 +1765,10 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(within(licence).getByText('1,200\u20132,400 h')).toBeVisible();
     expect(within(licence).getByText('a month if the 9 recommended people were licensed')).toBeVisible();
 
-    const cowork = await tile('Time back from Cowork');
+    const cowork = await tile('New Cowork adoption potential');
     expect(within(cowork).getByText('Modelled')).toBeVisible();
     expect(within(cowork).getByText('15\u201330 h')).toBeVisible();
-    expect(within(cowork).getByText('a month if the 20 people ready used Cowork')).toBeVisible();
+    expect(within(cowork).getByText(/a month from 20 ready candidates with no observed Cowork use/)).toBeVisible();
   });
 
   /**
@@ -1789,7 +1793,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(
       withEstimate({
         coworkRecommendedForPolicy: 0,
-        coworkValueEstimate: {
+        coworkNewAdoptionEstimate: {
           ...coworkReady,
           cohortUsers: 0,
           projectedCoworkTasks: 0,
@@ -1801,9 +1805,9 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     await renderPage();
 
-    const cowork = await tile('Time back from Cowork');
+    const cowork = await tile('New Cowork adoption potential');
     expect(within(cowork).getByText('75\u2013150 h')).toBeVisible();
-    expect(within(cowork).getByText('a month if all 100 Copilot seat holders used Cowork')).toBeVisible();
+    expect(within(cowork).getByText(/a month across 100 eligible non-users - broader scenario/)).toBeVisible();
   });
 
   it('links each tile to the tab that explains it', async () => {
@@ -1815,7 +1819,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(await screen.findByRole('tab', { name: 'Licence opportunities', selected: true })).toBeVisible();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Executive view' }));
-    fireEvent.click(within(await tile('Time back from Cowork')).getByRole('button', { name: 'See the Cowork tab' }));
+    fireEvent.click(within(await tile('New Cowork adoption potential')).getByRole('button', { name: 'See the Cowork tab' }));
     expect(await screen.findByRole('tab', { name: 'Cowork', selected: true })).toBeVisible();
   });
 
@@ -1866,7 +1870,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     await screen.findAllByText('Where we stand');
 
     expect(screen.queryByText('Time back from licensing')).not.toBeInTheDocument();
-    expect(screen.queryByText('Time back from Cowork')).not.toBeInTheDocument();
+    expect(screen.queryByText('New Cowork adoption potential')).not.toBeInTheDocument();
   });
 
   it('shows the licensing figure on its own when Cowork readiness could not be assessed', async () => {
@@ -1875,7 +1879,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     await renderPage();
 
     expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
-    expect(screen.queryByText('Time back from Cowork')).not.toBeInTheDocument();
+    expect(screen.queryByText('New Cowork adoption potential')).not.toBeInTheDocument();
   });
 
   it('keeps a large range short, with its unit on the same line', async () => {
@@ -1900,7 +1904,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     // 2,000 x 16 + 100,000 + 24,000 = 156,000 minutes = 2,600 hours, 1,300 conservative.
     expect(within(await tile('Time back from licensing')).getByText('1,300\u20132,600 h')).toBeVisible();
-    expect(within(await tile('Time back from Cowork')).getByText('15\u201330 h')).toBeVisible();
+    expect(within(await tile('New Cowork adoption potential')).getByText('15\u201330 h')).toBeVisible();
     // The link has no href until the filters and SQL have loaded too (reportBusy), which can be after the tiles.
     const url = await waitFor(() => new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href), { timeout: 5000 });
     expect(url.searchParams.get('copilotMinutesSavedPerMeeting')).toBe('16');
@@ -1916,7 +1920,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     await renderPage();
 
     // 6,000 emails x 10% = 600 handed over x 6 = 3,600 minutes = 60 hours, 30 conservative.
-    expect(within(await tile('Time back from Cowork')).getByText('30\u201360 h')).toBeVisible();
+    expect(within(await tile('New Cowork adoption potential')).getByText('30\u201360 h')).toBeVisible();
     expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
     // The link has no href until the filters and SQL have loaded too (reportBusy), which can be after the tiles.
     const url = await waitFor(() => new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href), { timeout: 5000 });
@@ -1961,9 +1965,9 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(within(licence).getByText('Modelado')).toBeVisible();
     expect(within(licence).getByText('al mes si las 5000 personas recomendadas tuvieran licencia')).toBeVisible();
 
-    const cowork = await tile('Tiempo recuperado con Cowork');
+    const cowork = await tile('Potencial de nueva adopción de Cowork');
     expect(within(cowork).getByText('15\u201330 h')).toBeVisible();
-    expect(within(cowork).getByText('al mes si las 20 personas preparadas usaran Cowork')).toBeVisible();
+    expect(within(cowork).getByText(/al mes de 20 candidatos preparados sin uso observado de Cowork/)).toBeVisible();
   });
 });
 

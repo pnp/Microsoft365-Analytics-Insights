@@ -77,6 +77,11 @@ namespace Tests.UnitTests
             {
                 LicenceOpportunityEstimate = CopilotAdoptionScoring.ModelLicenceValue(1, 60, 0, 0, CopilotAdoptionOptions.Default),
                 CoworkValueEstimate = CopilotAdoptionScoring.ModelCoworkValue(1, CopilotAdoptionOptions.Default, new CoworkTaskInputs { ActivityVolumes = { [CoworkActivities.SendEmail] = 200 } }),
+                CoworkNewAdoptionEstimate = CopilotAdoptionScoring.ModelCoworkValue(1, CopilotAdoptionOptions.Default,
+                    new CoworkTaskInputs { ActivityVolumes = { [CoworkActivities.SendEmail] = 400 } }, CoworkEstimateCohort.NewAdoption),
+                CoworkNonUserCeilingEstimate = CopilotAdoptionScoring.ModelCoworkValue(2, CopilotAdoptionOptions.Default,
+                    new CoworkTaskInputs { ActivityVolumes = { [CoworkActivities.SendEmail] = 800 } }, CoworkEstimateCohort.NonUserCeiling),
+                CoworkObservedUsage = new CoworkObservedUsage { Available = true, Users = 1, Interactions = 100, ActiveUserDays = 10 },
                 SeatHolderTimeSavedEstimate = CopilotAdoptionScoring.ModelSeatHolderTimeSaved(1, 0, 10, 0, 0, 0, CopilotAdoptionOptions.Default),
             };
 
@@ -84,9 +89,11 @@ namespace Tests.UnitTests
             Assert.IsFalse(fields.Any(f => f.IndexOf("combined", StringComparison.OrdinalIgnoreCase) >= 0 && f.IndexOf("time", StringComparison.OrdinalIgnoreCase) >= 0),
                 "The summary must not publish a combined time-saved figure across separate decisions.");
             Assert.AreNotEqual(
-                summary.SeatHolderTimeSavedEstimate.HoursPerMonthHigh + summary.LicenceOpportunityEstimate.HoursPerMonthHigh + summary.CoworkValueEstimate.HoursPerMonthHigh,
+                summary.SeatHolderTimeSavedEstimate.HoursPerMonthHigh + summary.LicenceOpportunityEstimate.HoursPerMonthHigh
+                    + summary.CoworkNewAdoptionEstimate.HoursPerMonthHigh + summary.CoworkNonUserCeilingEstimate.HoursPerMonthHigh,
                 summary.SeatHolderTimeSavedEstimate.HoursPerMonthHigh,
                 "Control: the estimates are distinct non-zero values, so a combined field would be detectable.");
+            Assert.IsNull(summary.CoworkObservedUsage.AssistedHours, "Observed-use evidence must not become an automatic saving.");
         }
 
         [TestMethod]

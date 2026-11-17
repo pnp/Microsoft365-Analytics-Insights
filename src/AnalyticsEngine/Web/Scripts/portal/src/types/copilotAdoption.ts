@@ -101,6 +101,8 @@ export interface AdoptionResourceTypeRow {
 /** Which imports supplied the data, so no headline number is quoted without its caveats. */
 export interface AdoptionDataSources {
   auditAvailable: boolean;
+  /** Earliest retained record, not proof of continuous import coverage. */
+  auditHistoryStartUtc?: string | null;
   copilotUsageReportAvailable: boolean;
   m365UsageReportsAvailable: boolean;
   userMetadataAvailable: boolean;
@@ -704,13 +706,21 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
   coworkQuadrant: CoworkQuadrantPoint[];
   coworkByDepartment: CoworkSegmentRow[];
   coworkCreditPosition: CoworkCreditPosition;
+  /** New-adoption potential, never the legacy policy-audience forecast. Missing/null means unavailable. */
+  coworkNewAdoptionEstimate?: CoworkValueEstimate | null;
+  coworkNonUserCeilingEstimate?: CoworkValueEstimate | null;
+  coworkAdoptionUnavailableReason?: string | null;
+  coworkNewAdoptionWithheld?: string | null;
+  coworkNonUserCeilingWithheld?: string | null;
+  coworkWithoutLicenceWithheld?: string | null;
+  coworkObservedUsage?: CoworkObservedUsage;
   /**
-   * The modelled Cowork estimate for the people ready for Cowork now (the recommended policy cohort):
-   * the time Cowork could give back on top of what their Copilot licences already save.
+   * Legacy workload forecast for the full recommended policy audience, including observed users.
+   * Retained for compatibility, not used as new-adoption potential or existing-user benefit.
    */
   coworkValueEstimate: CoworkValueEstimate;
   /**
-   * The same model over every scored Copilot seat holder - the ceiling if everyone used Cowork.
+   * Legacy workload forecast over every scored seat holder, not the non-user adoption ceiling.
    * Optional only so a fixture written before it existed still type-checks; the server always sends it.
    */
   coworkFullRolloutEstimate?: CoworkValueEstimate;
@@ -719,7 +729,7 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
    * add for them once licensed and enabled. Cowork needs a Copilot licence, and the time that licence
    * would give back is the licence estimate - never added to this. Absent from an older server.
    */
-  coworkWithoutLicenceEstimate?: CoworkValueEstimate;
+  coworkWithoutLicenceEstimate?: CoworkValueEstimate | null;
 
   unlicensedActiveUsers: number;
   recommendedForLicence: number;
@@ -1193,6 +1203,20 @@ export interface CoworkValueEstimate {
   assumptions: string[];
 }
 
+export interface CoworkObservedUsage {
+  available: boolean;
+  assessedUsers: number | null;
+  users: number | null;
+  interactions: number | null;
+  /** Sum of each person's distinct active days, not distinct days for the whole cohort. */
+  activeUserDays: number | null;
+  lastInteractionUtc: string | null;
+  partial: boolean;
+  /** Stage B's evidence gates have not been met; no automatic numeric benefit is published. */
+  assistedHours: null;
+  withheldReason?: string | null;
+}
+
 /**
  * The modelled licence estimate: the time Microsoft 365 Copilot could give back to people recommended
  * for a licence - observed meetings, emails and documents times the minutes Copilot is assumed to save
@@ -1282,6 +1306,7 @@ export interface CoworkFilters {
   userFilter?: string;
   recommendedOnly: boolean;
   coworkUsersOnly: boolean;
+  prospectiveOnly?: boolean;
   sortBy: string;
   sortDesc: boolean;
 }
