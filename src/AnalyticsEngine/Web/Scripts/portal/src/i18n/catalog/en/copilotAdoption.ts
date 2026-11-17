@@ -6,6 +6,7 @@
  */
 export const copilotAdoption = {
   'copilotAdoption.loading.ready': 'Report ready',
+  'copilotAdoption.loading.hideStatus': 'Hide report status',
   'copilotAdoption.loading.attention': 'Report needs attention',
   'copilotAdoption.loading.rebuilding': 'Retrying the analysis',
   'copilotAdoption.loading.percent': '{percent}% of stages processed',

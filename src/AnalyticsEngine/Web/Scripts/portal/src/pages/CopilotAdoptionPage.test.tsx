@@ -322,6 +322,53 @@ describe('CopilotAdoptionPage loading and recovery', () => {
   }
 
   it.each([
+    { language: 'en' as const, ready: 'Report ready', hide: 'Hide report status', heading: 'Where we stand' },
+    { language: 'es' as const, ready: 'Informe listo', hide: 'Ocultar el estado del informe', heading: 'Dónde estamos' },
+  ])('dismisses a successful report status locally in $language without hiding the report', async ({ language, ready, hide, heading }) => {
+    const user = userEvent.setup();
+    await renderPage({ language });
+    const dismiss = await screen.findByRole('button', { name: hide }, { timeout: 5000 });
+    expect(screen.getByText(ready)).toBeVisible();
+
+    await user.click(dismiss);
+
+    expect(screen.queryByText(ready)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: hide })).not.toBeInTheDocument();
+    expect(screen.getAllByText(heading)[0]).toBeVisible();
+    expect(fetchAdoptionSummary).toHaveBeenCalledTimes(1);
+    expect(fetchAdoptionFilters).toHaveBeenCalledTimes(1);
+    expect(fetchAdoptionSql).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows ready status again for a new period even when the generation is cached', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      diagnostics: { generationId, totalMs: 100, steps: [], progress: resultProgress() },
+    }));
+    await renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Hide report status' }));
+    expect(screen.queryByText('Report ready')).not.toBeInTheDocument();
+
+    choosePeriod('90');
+
+    expect(await screen.findByRole('button', { name: 'Hide report status' }, { timeout: 5000 })).toBeVisible();
+    expect(screen.getByText('Report ready')).toBeVisible();
+    expect(fetchAdoptionSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for supporting requests before allowing dismissal', async () => {
+    let resolve!: (queries: Record<string, string>) => void;
+    const pending = new Promise<Record<string, string>>(done => { resolve = done; });
+    vi.mocked(fetchAdoptionSql).mockImplementationOnce(() => pending);
+    await renderPage();
+    expect(await screen.findByText('Preparing the report')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Hide report status' })).not.toBeInTheDocument();
+
+    await act(async () => { resolve({}); await pending; });
+
+    expect(await screen.findByRole('button', { name: 'Hide report status' })).toBeVisible();
+  });
+
+  it.each([
     { language: 'en' as const, percent: '25% of stages processed', progressLabel: 'Analysis stages processed' },
     { language: 'es' as const, percent: '25% de etapas procesadas', progressLabel: 'Etapas del análisis procesadas' },
   ])('shows live stage progress in $language without pretending the report is ready', async ({ language, percent, progressLabel }) => {
@@ -344,6 +391,9 @@ describe('CopilotAdoptionPage loading and recovery', () => {
     expect(screen.queryByText('Where we stand')).not.toBeInTheDocument();
     expect(fetchAdoptionFilters).not.toHaveBeenCalled();
     expect(rebuildAdoption).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', {
+      name: language === 'es' ? 'Ocultar el estado del informe' : 'Hide report status',
+    })).not.toBeInTheDocument();
   });
 
   it('keeps a partial report visible during a rebuild and reconciles supporting data after publication', async () => {
@@ -385,17 +435,20 @@ describe('CopilotAdoptionPage loading and recovery', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
     expect(await screen.findByText(/This is a failed section, not evidence/)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Retry failed analysis' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Hide report status' })).not.toBeInTheDocument();
   });
 
   it('retries a failed filter request without rebuilding SQL or retrying successful requests', async () => {
     vi.mocked(fetchAdoptionFilters).mockRejectedValueOnce(new Error('Synthetic filter request failure'));
     await renderPage();
     expect(await screen.findByText('Synthetic filter request failure')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Hide report status' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry request' }));
     await waitFor(() => expect(fetchAdoptionFilters).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText('Synthetic filter request failure')).not.toBeInTheDocument());
     expect(fetchAdoptionSql).toHaveBeenCalledTimes(1);
     expect(rebuildAdoption).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'Hide report status' })).toBeVisible();
   });
 
   it('checks a failed summary request again without issuing a rebuild', async () => {

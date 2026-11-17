@@ -8,6 +8,7 @@
  */
 const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.loading.ready': 'Informe listo',
+  'copilotAdoption.loading.hideStatus': 'Ocultar el estado del informe',
   'copilotAdoption.loading.attention': 'El informe requiere atención',
   'copilotAdoption.loading.rebuilding': 'Reintentando el análisis',
   'copilotAdoption.loading.percent': '{percent}% de etapas procesadas',
