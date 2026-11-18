@@ -220,7 +220,7 @@ const copilotAdoptionTimeSaved: Record<keyof typeof en, string> = {
   'copilotAdoptionTimeSaved.seat.volume.other': 'Cualquier otra interacción con Copilot, como Copilot Chat; sin agentes ni Cowork',
   'copilotAdoptionTimeSaved.seat.input.outlook': 'Minutos de Outlook por acción',
   'copilotAdoptionTimeSaved.seat.input.office': 'Minutos de Word, PowerPoint y Excel por acción',
-  'copilotAdoptionTimeSaved.seat.input.meeting': 'Minutos de reunión de Teams por acción',
+  'copilotAdoptionTimeSaved.seat.input.meeting': 'Minutos por reunión de Teams y persona',
   'copilotAdoptionTimeSaved.seat.input.other': 'Minutos por acción de otras superficies',
   'copilotAdoptionTimeSaved.seat.departments.title': 'Dónde se ahorra el tiempo, por departamento',
   'copilotAdoptionTimeSaved.seat.departments.note': 'Hasta {top} departamentos, elegidos por el tiempo ahorrado con los valores predeterminados del producto, entre los departamentos con al menos {minSeats} titulares de licencia con detalle por acción. Sus horas siguen los minutos de arriba.',

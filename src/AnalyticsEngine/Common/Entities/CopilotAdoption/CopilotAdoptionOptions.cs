@@ -560,14 +560,13 @@ namespace Common.Entities.CopilotAdoption
         public double CopilotSeatOfficeMinutesPerAction { get; set; } = 6;
 
         /// <summary>
-        /// Minutes credited to one observed Teams meeting recap/summarise action when the imported audit
-        /// data cannot supply meeting duration.
+        /// Assumed minutes credited to a Teams meeting with Copilot context, counted once per person.
         /// </summary>
         /// <remarks>
         /// Microsoft's Copilot assisted-hours method credits the elapsed meeting duration for meeting
-        /// summarisation or recap actions. The audit data imported here links a Copilot action to a meeting
-        /// but does not reliably carry that duration, so this fixed 30-minute fallback is visible and
-        /// reader-overridable.
+        /// summarisation or recap actions. The audit data imported here identifies a meeting context, not
+        /// the action's intent, and does not reliably carry duration. This model therefore uses a visible,
+        /// reader-overridable 30-minute default per person-meeting context, not a measured recap credit.
         /// </remarks>
         [JsonProperty("copilotSeatMeetingMinutesPerAction")]
         public double CopilotSeatMeetingMinutesPerAction { get; set; } = 30;
