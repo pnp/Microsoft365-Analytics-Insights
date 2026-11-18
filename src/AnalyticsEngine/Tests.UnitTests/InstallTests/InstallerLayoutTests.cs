@@ -18,6 +18,87 @@ namespace Tests.UnitTests.InstallTests
     public class InstallerLayoutTests
     {
         [DataTestMethod]
+        [DataRow(560, 480, 1.0f)]
+        [DataRow(480, 360, 1.0f)]
+        [DataRow(900, 650, 1.5f)]
+        [DataRow(1028, 620, 2.0f)]
+        public void DatabaseUpgrade_ActionsStayVisibleAndContentRemainsReachable(int width, int height, float scale)
+        {
+            RunOnSta(() =>
+            {
+                using (var form = new DatabaseUpgradeForm())
+                {
+                    form.StartPosition = FormStartPosition.Manual;
+                    form.Location = new Point(-3000, -3000);
+                    form.Show();
+                    if (scale != 1.0f)
+                    {
+                        form.Scale(new SizeF(scale, scale));
+                        foreach (var control in form.Controls.Cast<Control>())
+                            control.Font = new Font(control.Font.FontFamily, control.Font.Size * scale);
+                    }
+                    var confirm = Find<CheckBox>(form, "chkConfirm");
+                    var upgrade = Find<Button>(form, "btnUpgrade");
+                    var close = Find<Button>(form, "btnCancel");
+                    Assert.IsFalse(upgrade.Enabled, "Opening the dialog must not bypass confirmation.");
+                    foreach (var size in new[] { new Size(width, height), new Size(width + 200, height + 200), new Size(width, height) })
+                    {
+                        form.ClientSize = size;
+                        Application.DoEvents();
+                        foreach (var control in new Control[] { confirm, upgrade, close })
+                        {
+                            var bounds = form.RectangleToClient(control.Parent.RectangleToScreen(control.Bounds));
+                            Assert.IsTrue(form.ClientRectangle.Contains(bounds),
+                                control.Name + " must stay entirely inside the dialog: " + bounds);
+                            Assert.IsTrue(control.Height >= control.GetPreferredSize(new Size(control.Width, 0)).Height,
+                                control.Name + " must not clip its text.");
+                        }
+                        var viewport = Find<Panel>(form, "upgradeViewport");
+                        foreach (var name in new[] { "txtConnectionString", "txtEntraSecret", "txtLog" })
+                        {
+                            var field = Find<TextBox>(form, name);
+                            viewport.ScrollControlIntoView(field);
+                            Application.DoEvents();
+                            var bounds = viewport.RectangleToClient(field.Parent.RectangleToScreen(field.Bounds));
+                            Assert.IsTrue(viewport.ClientRectangle.Contains(bounds),
+                                name + " must be reachable by scrolling: field=" + bounds + "; viewport=" + viewport.ClientRectangle
+                                + "; group=" + field.Parent.Bounds + "; scroll=" + viewport.AutoScrollPosition);
+                            Assert.IsTrue(field.Width >= 100, name + " must retain a usable editing width.");
+                        }
+                        Assert.IsFalse(viewport.HorizontalScroll.Visible, "The dialog must not require horizontal scrolling.");
+                        var footer = Find<TableLayoutPanel>(form, "upgradeFooter");
+                        Assert.IsFalse(viewport.Bounds.IntersectsWith(footer.Bounds), "Scrolling must not obscure the actions.");
+                    }
+                    Find<TextBox>(form, "txtConnectionString").Text =
+                        "data source=contoso.database.windows.net;initial catalog=Analytics;";
+                    Assert.IsTrue(Find<GroupBox>(form, "grpEntra").Enabled);
+                    confirm.Checked = true;
+                    Assert.IsTrue(upgrade.Enabled);
+                    var setLoading = typeof(DatabaseUpgradeForm).GetMethod("SetLoadingState", BindingFlags.Instance | BindingFlags.NonPublic);
+                    setLoading.Invoke(form, new object[] { true });
+                    Assert.IsFalse(upgrade.Enabled);
+                    Assert.IsTrue(close.Enabled, "Read-only autodetection must remain abandonable.");
+                    var progress = Find<ProgressBar>(form, "progressBar");
+                    Assert.IsTrue(form.ClientRectangle.Contains(form.RectangleToClient(progress.Parent.RectangleToScreen(progress.Bounds))));
+                    setLoading.Invoke(form, new object[] { false });
+                    Assert.IsTrue(upgrade.Enabled);
+                    Assert.IsTrue(upgrade.Focus(), "The upgrade action must remain keyboard-reachable.");
+                    var directory = Environment.GetEnvironmentVariable("INSTALLER_PREVIEW_DIR");
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        using (var image = new Bitmap(form.Width, form.Height))
+                        {
+                            form.DrawToBitmap(image, new Rectangle(Point.Empty, form.Size));
+                            image.Save(System.IO.Path.Combine(directory, $"schema-upgrade-{width}-{height}.png"));
+                        }
+                    }
+                    close.PerformClick();
+                    Assert.IsFalse(form.Visible, "The visible Close action must still work.");
+                }
+            });
+        }
+
+        [DataTestMethod]
         [DataRow(null)]
         [DataRow("  preserved invalid disabled value  ")]
         public void HealthMonitoring_DisabledEmailRoundTripsWithoutNormalisation(string email)
