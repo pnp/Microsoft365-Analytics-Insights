@@ -325,6 +325,7 @@ export const copilotAdoptionUsers = {
   'copilotAdoptionUsers.server.reclaimEligibility.review': 'review',
   'copilotAdoptionUsers.server.reclaimEligibility.excluded': 'excluded',
   'copilotAdoptionUsers.server.tenureBasis.accountAge': 'accountAge',
+  'copilotAdoptionUsers.server.tenureBasis.seatObservedLowerBound': 'recorded seat-tenure lower bound',
   'copilotAdoptionUsers.server.tenureBasis.unknown': 'unknown',
   'copilotAdoptionUsers.server.reclaimReason.excluded': 'Excluded by admin: {reason}.',
   'copilotAdoptionUsers.server.reclaimReason.disabled': 'Disabled account still holds a Copilot seat. Reclaim immediately.',

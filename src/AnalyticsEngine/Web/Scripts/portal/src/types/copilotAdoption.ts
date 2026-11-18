@@ -886,6 +886,7 @@ export interface LicensedUserAdoptionRow {
   accountEnabled: boolean | null;
   accountCreatedUtc: string | null;
   tenureStartUtc: string | null;
+  seatObservationSource?: number | null;
   tenureBasis: string | null;
   daysSinceTenureStart: number | null;
   tooNewToJudge: boolean;

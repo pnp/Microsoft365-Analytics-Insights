@@ -1438,10 +1438,27 @@ namespace Common.Entities.CopilotAdoption
                 analysis.LicensedUsersCapped = true;
             }
 
+            var tenureSql = CopilotAdoptionSql.CurrentSeatTenureSql(seatIds);
+            output.Sql["currentSeatTenure"] = CopilotAdoptionSql.ForDisplay(
+                tenureSql, new Dictionary<string, object> { { "@asOf", nowUtc } });
+            var tenure = await SafeAsync(
+                () => QueryAsync<LicensedUserUsageRow>(tenureSql, cancellationToken, new SqlParameter("@asOf", nowUtc)),
+                CopilotAdoptionSteps.LicensedUsers,
+                CopilotAdoptionQueries.CurrentSeatTenure,
+                output,
+                "current Copilot seat tenure", cancellationToken);
+            // Missing history or a failed read leaves tenure unknown, never inferred from account age.
+            var tenureByUser = (tenure ?? new List<LicensedUserUsageRow>()).ToDictionary(r => r.UserId);
+
             foreach (var row in rows)
             {
                 string licences;
                 row.SeatLicences = licencesByUser.TryGetValue(row.UserId, out licences) ? licences : null;
+                if (tenureByUser.TryGetValue(row.UserId, out var holding))
+                {
+                    row.SeatObservedFromUtc = holding.SeatObservedFromUtc;
+                    row.SeatObservationSource = holding.SeatObservationSource;
+                }
                 if (assignmentsByUser.TryGetValue(row.UserId, out var userAssignments))
                 {
                     row.SeatLicenceTypeIds = userAssignments

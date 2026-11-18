@@ -352,13 +352,14 @@ export function reclaimEligibilityLabel(t: TFunction, tier: string | null): stri
 
 export const TENURE_BASIS_LABEL_KEYS = {
   accountAge: 'copilotAdoptionUsers.server.tenureBasis.accountAge',
+  seatObservedLowerBound: 'copilotAdoptionUsers.server.tenureBasis.seatObservedLowerBound',
   unknown: 'copilotAdoptionUsers.server.tenureBasis.unknown',
 } as const satisfies Record<string, TranslationKey>;
 
 function tenureBasisLabel(t: TFunction, basis: string | null): string {
   if (!basis) return '';
   const key = TENURE_BASIS_LABEL_KEYS[basis as keyof typeof TENURE_BASIS_LABEL_KEYS];
-  return key ? catalogText(t, key, basis) : basis;
+  return key ? t(key) : basis;
 }
 
 export function reclaimEligibilityReason(t: TFunction, row: LicensedUserAdoptionRow, options: CopilotAdoptionOptions): string {

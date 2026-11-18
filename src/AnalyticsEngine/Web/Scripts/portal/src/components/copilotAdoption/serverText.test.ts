@@ -101,6 +101,16 @@ describe('Copilot Adoption server-authored text reproduction', () => {
     )).toContain('futureSignal');
   });
 
+  it('explains recent recorded seat lower bounds in both languages, not account age or an assignment date', () => {
+    const row = licensed({ tooNewToJudge: true, tenureBasis: 'seatObservedLowerBound', daysSinceTenureStart: 4 });
+    setActiveLanguage('en');
+    expect(reclaimEligibilityReason(tEn, row, OPTIONS)).toContain('recorded seat-tenure lower bound');
+    expect(recommendedActionText(tEn, row, OPTIONS)).toContain('recorded seat-tenure lower bound');
+    setActiveLanguage('es');
+    expect(reclaimEligibilityReason(tEs, row, OPTIONS)).toContain('límite inferior registrado de antigüedad de la licencia');
+    expect(recommendedActionText(tEs, row, OPTIONS)).not.toContain('seatObservedLowerBound');
+  });
+
   it('advises another app from the server\u2019s needsBroadening fact, not a breadth score that only held at a target of 3', () => {
     // A breadth score of 40 is two apps of a target of five: below the old fixed threshold for Established
     // (50) but above Developing's (34), so the two bands disagreed. The server decides; the text follows it.

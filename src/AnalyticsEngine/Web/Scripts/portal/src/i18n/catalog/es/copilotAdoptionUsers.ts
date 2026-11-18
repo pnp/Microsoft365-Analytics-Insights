@@ -327,6 +327,7 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.server.reclaimEligibility.review': 'revisión',
   'copilotAdoptionUsers.server.reclaimEligibility.excluded': 'excluido',
   'copilotAdoptionUsers.server.tenureBasis.accountAge': 'la antigüedad de la cuenta',
+  'copilotAdoptionUsers.server.tenureBasis.seatObservedLowerBound': 'el límite inferior registrado de antigüedad de la licencia',
   'copilotAdoptionUsers.server.tenureBasis.unknown': 'la antigüedad desconocida',
   'copilotAdoptionUsers.server.reclaimReason.excluded': 'Excluido por un administrador: {reason}.',
   'copilotAdoptionUsers.server.reclaimReason.disabled': 'La cuenta deshabilitada sigue ocupando un puesto de Copilot. Recupérelo inmediatamente.',
