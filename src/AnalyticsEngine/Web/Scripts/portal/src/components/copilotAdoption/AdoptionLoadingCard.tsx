@@ -2,6 +2,7 @@ import {
   Accordion, AccordionHeader, AccordionItem, AccordionPanel,
   Button, Card, MessageBar, MessageBarBody, ProgressBar, Text, makeStyles, tokens,
 } from '@fluentui/react-components';
+import { Dismiss16Regular } from '@fluentui/react-icons';
 import type { AdoptionProgress } from '../../types/copilotAdoption';
 import { adoptionFailureText, type AdoptionFailure } from '../../api/copilotAdoptionApi';
 import { formatNumber, useT, type TranslationKey } from '../../i18n';
@@ -49,7 +50,9 @@ export type OptionalAdoptionLoad = {
 
 const useStyles = makeStyles({
   card: { marginTop: '16px', gap: '12px' },
-  heading: { display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' },
+  heading: { display: 'flex', alignItems: 'center', gap: '12px' },
+  status: { display: 'flex', flex: 1, minWidth: 0, justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' },
+  dismiss: { minWidth: '44px', minHeight: '44px' },
   muted: { color: tokens.colorNeutralForeground2 },
   rows: { listStyleType: 'none', padding: 0, margin: 0 },
   row: {
@@ -62,7 +65,7 @@ const useStyles = makeStyles({
 
 export default function AdoptionLoadingCard({
   progress, busy, keepingReport, error, filters, sql, onCheckAgain, onRebuild,
-  onRetryFilters, onRetrySql, cooldownSeconds,
+  onRetryFilters, onRetrySql, cooldownSeconds, onDismiss,
 }: {
   progress: AdoptionProgress | null;
   busy: boolean;
@@ -75,6 +78,7 @@ export default function AdoptionLoadingCard({
   onRetryFilters: () => void;
   onRetrySql: () => void;
   cooldownSeconds: number;
+  onDismiss?: () => void;
 }) {
   const styles = useStyles();
   const t = useT();
@@ -89,13 +93,25 @@ export default function AdoptionLoadingCard({
 
   return (
     <Card className={styles.card} data-print="hide" aria-busy={busy || optionalBusy}>
-      <div className={styles.heading} role="status" aria-live="polite">
-        <Text weight="semibold">{title}</Text>
-        {progress && (
-          <Text className={styles.muted}>
-            {percent != null && <>{t('copilotAdoption.loading.percent', { percent: formatNumber(percent) })}{' · '}</>}
-            {t('copilotAdoption.loading.elapsed', { seconds: formatNumber(Math.floor(progress.elapsedMs / 1000)) })}
-          </Text>
+      <div className={styles.heading}>
+        <div className={styles.status} role="status" aria-live="polite">
+          <Text weight="semibold">{title}</Text>
+          {progress && (
+            <Text className={styles.muted}>
+              {percent != null && <>{t('copilotAdoption.loading.percent', { percent: formatNumber(percent) })}{' · '}</>}
+              {t('copilotAdoption.loading.elapsed', { seconds: formatNumber(Math.floor(progress.elapsedMs / 1000)) })}
+            </Text>
+          )}
+        </div>
+        {onDismiss && (
+          <Button
+            appearance="transparent"
+            className={styles.dismiss}
+            icon={<Dismiss16Regular />}
+            aria-label={t('copilotAdoption.loading.hideStatus')}
+            title={t('copilotAdoption.loading.hideStatus')}
+            onClick={onDismiss}
+          />
         )}
       </div>
       {(busy || optionalBusy) && (

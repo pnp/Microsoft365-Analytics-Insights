@@ -496,6 +496,7 @@ function CopilotAdoptionView({
   );
   const userFilterParam = serializeUserFilter(userFilter);
   const userFilterScope = userFilterParam ?? '';
+  const scopeKey = `${windowDays}::${dateRange?.from ?? 'rolling'}::${dateRange?.to ?? 'rolling'}::${userFilterScope}`;
   const selectedEmailDomain = singleValueFor(userFilter, EMAIL_DOMAIN_DIMENSION);
   const selectEmailDomain = (domain: string | null) => {
     const next = withDimensionValue(userFilter, EMAIL_DOMAIN_DIMENSION, domain);
@@ -534,6 +535,7 @@ function CopilotAdoptionView({
   const [sqlAttempt, setSqlAttempt] = useState(0);
   const [listLoading, setListLoading] = useState(false);
   const [generationMismatch, setGenerationMismatch] = useState(false);
+  const [dismissedStatusKey, setDismissedStatusKey] = useState<string | null>(null);
   const lastSummaryScope = useRef<string | null>(null);
   const lastRebuildAttempt = useRef(-1);
   const autoReconciled = useRef(false);
@@ -596,7 +598,6 @@ function CopilotAdoptionView({
     // scope loads kept the Excel button pointing at one population and enabled against another -
     // and if the new request then failed, the page went on rendering the previous organisation's
     // figures underneath a heading naming the newly selected one.
-    const scopeKey = `${windowDays}::${dateRange?.from ?? 'rolling'}::${dateRange?.to ?? 'rolling'}::${userFilterScope}`;
     const sameScope = lastSummaryScope.current === scopeKey;
     const startRebuild = loadRequest.rebuild && loadRequest.after && sameScope
       && lastRebuildAttempt.current !== loadRequest.attempt;
@@ -652,7 +653,7 @@ function CopilotAdoptionView({
       cancelled = true;
       controller.abort();
     };
-  }, [availability, windowDays, dateRange, userFilterScope, loadRequest]);
+  }, [availability, windowDays, dateRange, userFilterScope, scopeKey, loadRequest]);
 
   const generationId = summary?.diagnostics?.generationId;
 
@@ -705,6 +706,12 @@ function CopilotAdoptionView({
 
   const cooldownSeconds = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
   const hasFailedAnalysis = summary?.diagnostics?.steps.some(step => step.failed) ?? false;
+  const statusKey = JSON.stringify([scopeKey, loadRequest.attempt, progress?.generationId ?? generationId ?? null]);
+  const canDismissStatus = !!summary && lastSummaryScope.current === scopeKey
+    && !summaryLoading && !summaryError && !hasFailedAnalysis && !generationMismatch
+    && !progress?.steps.some(step => step.state === 'failed')
+    && filtersLoad.state === 'loaded' && !filtersLoad.error
+    && sqlLoad.state === 'loaded' && !sqlLoad.error;
   const reportBusy = summaryLoading || listLoading
     || filtersLoad.state === 'running' || filtersLoad.state === 'pending'
     || sqlLoad.state === 'running' || sqlLoad.state === 'pending';
@@ -890,26 +897,29 @@ function CopilotAdoptionView({
             </TabList>
           </div>
 
-          <AdoptionLoadingCard
-            progress={progress}
-            busy={summaryLoading}
-            keepingReport={!!summary}
-            error={summaryError}
-            filters={filtersLoad}
-            sql={sqlLoad}
-            onCheckAgain={(summaryError && summaryRetryable) || generationMismatch
-              ? () => {
-                autoReconciled.current = false;
-                setGenerationMismatch(false);
-                // Reads the report as it stands, never "the replacement for" an earlier one: after a failed retry, asking
-                // for that replacement again only ever repeated its failure.
-                setLoadRequest(request => ({ attempt: request.attempt + 1 }));
-              } : undefined}
-            onRebuild={hasFailedAnalysis && generationId ? retryAnalysis : undefined}
-            onRetryFilters={() => setFiltersAttempt(attempt => attempt + 1)}
-            onRetrySql={() => setSqlAttempt(attempt => attempt + 1)}
-            cooldownSeconds={cooldownSeconds}
-          />
+          {(!canDismissStatus || dismissedStatusKey !== statusKey) && (
+            <AdoptionLoadingCard
+              progress={progress}
+              busy={summaryLoading}
+              keepingReport={!!summary}
+              error={summaryError}
+              filters={filtersLoad}
+              sql={sqlLoad}
+              onCheckAgain={(summaryError && summaryRetryable) || generationMismatch
+                ? () => {
+                  autoReconciled.current = false;
+                  setGenerationMismatch(false);
+                  // Reads the report as it stands, never "the replacement for" an earlier one: after a failed retry, asking
+                  // for that replacement again only ever repeated its failure.
+                  setLoadRequest(request => ({ attempt: request.attempt + 1 }));
+                } : undefined}
+              onRebuild={hasFailedAnalysis && generationId ? retryAnalysis : undefined}
+              onRetryFilters={() => setFiltersAttempt(attempt => attempt + 1)}
+              onRetrySql={() => setSqlAttempt(attempt => attempt + 1)}
+              cooldownSeconds={cooldownSeconds}
+              onDismiss={canDismissStatus ? () => setDismissedStatusKey(statusKey) : undefined}
+            />
+          )}
 
           {summary && (
             <div className={styles.stack} data-print="flow" inert={summaryLoading || undefined}>
