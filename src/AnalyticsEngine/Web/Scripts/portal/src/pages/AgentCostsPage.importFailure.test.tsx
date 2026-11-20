@@ -9,6 +9,7 @@ import { CapacityUsedHint, ImportFailureBar } from './AgentCostsPage';
 describe('ImportFailureBar', () => {
   it.each([
     ['agentCosts.import.reconnectNeeded', 'tiene que volver a conectar'],
+    ['agentCosts.import.routeRefused', 'rutas de consumo por usuario'],
     ['agentCosts.import.tokenUnavailable', 'no estaba disponible temporalmente'],
     ['agentCosts.import.connectionRequired', 'ningún administrador de facturación conectado'],
   ])(

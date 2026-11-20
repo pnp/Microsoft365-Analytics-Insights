@@ -178,6 +178,7 @@ export function importFailureWarning(t: TFunction, kind: 'copilotStudio' | 'azur
 
 export function importFailureDetail(t: TFunction, error: string): string {
   if (error === 'agentCosts.import.reconnectNeeded') return t('agentCosts.import.reconnectNeeded');
+  if (error === 'agentCosts.import.routeRefused') return t('agentCosts.import.routeRefused');
   if (error === 'agentCosts.import.tokenUnavailable') return t('agentCosts.import.tokenUnavailable');
   if (error === 'agentCosts.import.connectionRequired') return t('agentCosts.import.connectionRequired');
   return error;

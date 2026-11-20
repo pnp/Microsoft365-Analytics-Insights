@@ -40,6 +40,7 @@ namespace Common.Entities.State
             if (await _store.ExistsAsync(ErrorKey(head.Version)).ConfigureAwait(false)
                 || !await _store.ExistsAsync(CacheKey(head.Version)).ConfigureAwait(false))
                 return "reconnectNeeded";
+            if (await IsRouteRefusedAsync(head.Version).ConfigureAwait(false)) return "routeRefused";
             return "connected";
         }
 
@@ -70,6 +71,7 @@ namespace Common.Entities.State
             {
                 await _store.DeleteAsync(CacheKey(old.Version)).ConfigureAwait(false);
                 await _store.DeleteAsync(ErrorKey(old.Version)).ConfigureAwait(false);
+                await _store.DeleteAsync(RouteRefusedKey(old.Version)).ConfigureAwait(false);
             }
         }
 
@@ -79,6 +81,16 @@ namespace Common.Entities.State
         public Task RequireReconnectAsync(string version) =>
             _store.SetStringAsync(ErrorKey(version), "reconnectNeeded", CacheLifetime);
         public Task<bool> NeedsReconnectAsync(string version) => _store.ExistsAsync(ErrorKey(version));
+
+        /// <summary>
+        /// The token was accepted but Microsoft refused the licensing route (HTTP 403). Deliberately separate from
+        /// <see cref="RequireReconnectAsync"/>: the sign-in is still valid, so token acquisition must keep working and
+        /// the next successful read clears this.
+        /// </summary>
+        public Task RefuseRouteAsync(string version) =>
+            _store.SetStringAsync(RouteRefusedKey(version), "routeRefused", CacheLifetime);
+        public Task ClearRouteRefusedAsync(string version) => _store.DeleteAsync(RouteRefusedKey(version));
+        public Task<bool> IsRouteRefusedAsync(string version) => _store.ExistsAsync(RouteRefusedKey(version));
 
         public async Task<CostApiHealth> GetHealthAsync(string version)
         {
@@ -99,6 +111,7 @@ namespace Common.Entities.State
 
         private static string CacheKey(string version) => "Cache_" + version;
         private static string ErrorKey(string version) => "Error_" + version;
+        private static string RouteRefusedKey(string version) => "RouteRefused_" + version;
     }
 
     public sealed class AgentCostConnectionHead

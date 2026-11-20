@@ -561,6 +561,10 @@ namespace Web.AnalyticsWeb.Models.Health
                         row.ReasonKey = "agentCostConnection.reconnectNeeded";
                         row.Detail = "The Power Platform billing administrator connection needs renewal. Reconnect in Administration > Agent costs.";
                         break;
+                    case "routeRefused":
+                        row.ReasonKey = "agentCostConnection.routeRefused";
+                        row.Detail = "The Power Platform billing administrator is still signed in, but Microsoft refused the Copilot Studio usage request (HTTP 403). The account may have lost the Power Platform Administrator role, or Microsoft may have restricted the per-user consumption routes it has marked as deprecated. Reconnecting alone will not fix this. Copilot Credits capacity and Azure costs are unaffected.";
+                        break;
                     default:
                         throw new InvalidOperationException("Unknown Power Platform connection status.");
                 }
