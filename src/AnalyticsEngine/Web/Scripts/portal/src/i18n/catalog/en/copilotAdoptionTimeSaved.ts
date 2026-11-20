@@ -219,7 +219,7 @@ export const copilotAdoptionTimeSaved = {
   'copilotAdoptionTimeSaved.seat.volume.other': 'Every other Copilot interaction, such as Copilot Chat - agents and Cowork excluded',
   'copilotAdoptionTimeSaved.seat.input.outlook': 'Outlook minutes per action',
   'copilotAdoptionTimeSaved.seat.input.office': 'Word, PowerPoint and Excel minutes per action',
-  'copilotAdoptionTimeSaved.seat.input.meeting': 'Teams meeting minutes per action',
+  'copilotAdoptionTimeSaved.seat.input.meeting': 'Minutes per Teams meeting per person',
   'copilotAdoptionTimeSaved.seat.input.other': 'Other-surface minutes per action',
   'copilotAdoptionTimeSaved.seat.departments.title': 'Where the time is saved, by department',
   'copilotAdoptionTimeSaved.seat.departments.note': 'Up to {top} departments, chosen by the time saved at the product defaults, among departments with at least {minSeats} seat holders with per-action detail. Their hours follow the minutes above.',

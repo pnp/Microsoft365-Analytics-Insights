@@ -71,7 +71,7 @@ export interface TimeSavedAssumptions {
   seatOutlookMinutes: number;
   /** Minutes credited to one Word/PowerPoint/Excel Copilot action by the already-licensed estimate. */
   seatOfficeMinutes: number;
-  /** Minutes credited to one Teams meeting recap/summarise action by the already-licensed estimate. */
+  /** Assumed minutes per Teams meeting with Copilot context, counted once per licensed person. */
   seatMeetingMinutes: number;
   /** Minutes credited to Copilot Chat and other uncredited actions by the already-licensed estimate. */
   seatUncreditedMinutes: number;

@@ -3690,6 +3690,7 @@ namespace Tests.UnitTests
                 "https://adoption.microsoft.com/en-us/" + "scenarios/",
                 "https://adoption.microsoft.com/en-us/copilot/" + "plan/",
                 "https://adoption.microsoft.com/en-us/copilot/" + "adopt/",
+                "https://adoption.microsoft.com/en-us/copilot/" + "essential-guide/",
                 "https://aka.ms/" + "CopilotAdoptionPlaybook",
                 // Renders the WorkLab home page with HTTP 200 for any path, so it reads as working to a
                 // link checker while never showing the report (#643).

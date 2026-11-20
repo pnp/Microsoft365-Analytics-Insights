@@ -2015,8 +2015,8 @@ namespace Common.Entities.CopilotAdoption
         #region Already-licensed seat-holder time saved (MODELLED - not measured)
 
         /// <summary>
-        /// Applies Microsoft's published Copilot assisted-hours credits to observed Copilot actions from
-        /// people who already hold a seat. Hours only, never money, and never added to the licence or
+        /// Applies editable minutes assumptions to observed Copilot interactions and distinct person-meeting
+        /// contexts for people who already hold a seat. Hours only, never money, and never added to the licence or
         /// Cowork estimates: this answers "what are the seats we already pay for giving back?".
         /// </summary>
         public static SeatHolderTimeSavedEstimate ModelSeatHolderTimeSaved(
@@ -2062,9 +2062,9 @@ namespace Common.Entities.CopilotAdoption
 
             var assumptions = new List<string>
             {
-                $"Counts observed Copilot audit actions by Copilot seat holders in the selected period, restated as a {Math.Max(1, o.HabitBucketNormalisationDays)}-day month.",
-                $"Credits Outlook actions at {Num(estimate.Credits.OutlookMinutesPerAction)} minutes each, Word/PowerPoint/Excel actions at {Num(estimate.Credits.OfficeMinutesPerAction)} minutes each, and Teams meeting recap or summarise actions at {Num(estimate.Credits.TeamsMeetingMinutesPerAction)} minutes each.",
-                "Microsoft's Copilot assisted-hours method credits meeting summarisation from meeting duration; this import does not reliably carry duration, so the Teams meeting credit is a visible fixed fallback.",
+                $"Counts observed Copilot audit interactions and distinct person-meeting contexts for Copilot seat holders in the selected period, restated as a {Math.Max(1, o.HabitBucketNormalisationDays)}-day month.",
+                $"Credits Outlook actions at {Num(estimate.Credits.OutlookMinutesPerAction)} minutes each, Word/PowerPoint/Excel actions at {Num(estimate.Credits.OfficeMinutesPerAction)} minutes each, and meetings with Copilot context, counted once per person, at {Num(estimate.Credits.TeamsMeetingMinutesPerAction)} assumed minutes each.",
+                "The audit import does not identify a recap or summarisation action or reliably carry meeting duration. Microsoft's Copilot assisted-hours method uses duration for meeting summarisation; this model instead uses an editable fixed credit per person-meeting context.",
                 $"Copilot Chat and other non-agent surfaces default to {Num(estimate.Credits.UncreditedMinutesPerAction)} minutes here unless the reader overrides it. Agent and Cowork activity is excluded from this figure; existing-user Cowork benefit is not estimated and is never added to this one.",
             };
             if (estimate.ExcludedUsageReportSourcedUsers > 0)

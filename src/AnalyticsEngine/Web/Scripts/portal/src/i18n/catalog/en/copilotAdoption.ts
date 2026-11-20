@@ -947,7 +947,7 @@ export const copilotAdoption = {
   'copilotAdoption.server.guidance.copilotAcademy': 'Copilot Academy',
   'copilotAdoption.server.guidance.scenarioLibrary': 'Microsoft Scenario Library',
   'copilotAdoption.server.guidance.successKit': 'Copilot Success Kit',
-  'copilotAdoption.server.guidance.essentialGuide': 'The essential guide to Microsoft 365 Copilot adoption',
+  'copilotAdoption.server.guidance.copilotChampions': 'Microsoft Copilot for Champions',
   'copilotAdoption.server.guidance.aiCouncil': 'Creating an AI Council',
   'copilotAdoption.server.guidance.workTrendIndex2026': '2026 Work Trend Index',
   'copilotAdoption.server.guidance.frontierFirmResources': 'Frontier Firm resources',
