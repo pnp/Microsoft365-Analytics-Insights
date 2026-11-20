@@ -926,6 +926,55 @@ namespace Tests.UnitTests
             }
         }
 
+        [TestMethod]
+        public void RecordedTenureAndStaleReports_AgreeAcrossHeadlineDrillthroughCsvAndWorkbook()
+        {
+            var options = new CopilotAdoptionOptions { WindowDays = 7 };
+            var inputs = new[]
+            {
+                new LicensedUserUsageRow { UserId = 1, UserPrincipalName = "recent@contoso.com",
+                    SeatObservedFromUtc = Now.AddDays(-5), SeatObservationSource = 1 },
+                new LicensedUserUsageRow { UserId = 2, UserPrincipalName = "mature@contoso.com",
+                    SeatObservedFromUtc = Now.AddDays(-120), SeatObservationSource = 0 },
+                new LicensedUserUsageRow { UserId = 3, UserPrincipalName = "historical@contoso.com",
+                    ReportActiveDays = 10, ReportPrompts = 60, ReportLastActivityUtc = Now.AddDays(-15) },
+            };
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.Options = options;
+            analysis.Summary.WindowDays = 7;
+            analysis.Summary.LicensedUsers = 3;
+            analysis.Summary.DataSources.CopilotUsageReportPeriodDays = 28;
+            foreach (var input in inputs)
+            {
+                input.AccountEnabled = true;
+                input.AccountCreatedUtc = Now.AddDays(-1000);
+                input.HoldsSeatToday = true;
+                analysis.LicensedUsers.Add(CopilotAdoptionScoring.Score(input, Now.AddDays(-6), Now, true, options));
+            }
+            new CopilotAdoptionService(options).FinaliseSummary(analysis);
+            var reclaim = CopilotAdoptionExports.Apply(analysis.LicensedUsers,
+                new LicensedUserQuery { Actions = new List<string> { "reclaim" } });
+            Assert.AreEqual(1, analysis.Summary.ReclaimableSeats);
+            CollectionAssert.AreEqual(new[] { 2 }, reclaim.Select(r => r.UserId).ToArray());
+            Assert.AreEqual(0, CopilotAdoptionExports.Apply(analysis.LicensedUsers,
+                new LicensedUserQuery { Bands = new List<AdoptionBand> { AdoptionBand.Champion } }).Count);
+            var columns = CopilotAdoptionExports.LicensedUserColumns();
+            var csv = CsvSerialiser.ToCsv(analysis.LicensedUsers, columns);
+            var cells = SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Licensed users");
+            foreach (var row in analysis.LicensedUsers)
+            {
+                StringAssert.Contains(csv, row.ReclaimEligibilityReason);
+                CollectionAssert.Contains(cells, row.ReclaimEligibilityReason);
+            }
+            Assert.AreEqual(Now.AddDays(-120),
+                columns.Single(c => c.Header == "Seat observed from (UTC lower bound)").Value(reclaim.Single()));
+            CollectionAssert.Contains(cells, "seatObservedLowerBound");
+            CollectionAssert.Contains(cells, "Dormant");
+            StringAssert.Contains(csv, "Seat observation source (0 initial / 1 tenant refresh / 2 user refresh)");
+            Assert.AreEqual(0, analysis.Summary.ActiveUsers);
+            Assert.AreEqual(0, analysis.Summary.HabitualUsers);
+        }
+
         /// <summary>
         /// Dates must stay dates. Written as text they sort alphabetically under the auto-filter, which
         /// puts 2026-01 after 2025-12 but also puts every "-" placeholder in the middle of the range.
@@ -1599,6 +1648,22 @@ namespace Tests.UnitTests
 
             // The seat inventory itself is still reported - those are counts, not prices.
             StringAssert.Contains(text, "Purchased Copilot seats");
+        }
+
+        [TestMethod]
+        public void Workbook_SeatHolderAssumptionsDescribeMeetingContextsNotRecapActions()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.SeatHolderTimeSavedEstimate =
+                CopilotAdoptionScoring.ModelSeatHolderTimeSaved(12, 0, 0, 0, 4, 0, analysis.Summary.Options);
+            var text = string.Join(" ", SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Seat holders time saved"));
+
+            StringAssert.Contains(text, "meetings with Copilot context, counted once per person");
+            StringAssert.Contains(text, "does not identify a recap or summarisation action");
+            StringAssert.Contains(text, "Teams meeting contexts a month");
+            StringAssert.Contains(text, "Minutes per person-meeting context");
+            Assert.IsFalse(text.Contains("Teams meeting recap or summarise actions"));
+            Assert.IsFalse(text.Contains("Teams meeting actions a month"));
         }
 
         [TestMethod]

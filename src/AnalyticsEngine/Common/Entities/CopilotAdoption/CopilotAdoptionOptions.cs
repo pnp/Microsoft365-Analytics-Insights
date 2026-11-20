@@ -168,10 +168,9 @@ namespace Common.Entities.CopilotAdoption
         public int AgentNewDays { get; set; } = 30;
 
         /// <summary>
-        /// How long a newly-created Entra user is protected from reclaim recommendations. This is an
-        /// account-age proxy for the future seat-tenure history (#277): a new starter with five days of
-        /// Copilot ownership must not be judged against a full-window target, and a new starter with no
-        /// prompts yet belongs in "too new to judge", not in a list of seats to take away.
+        /// Minimum recorded current-seat holding age before absent use can support Probable reclaim.
+        /// Observed holdings (including initial seeds) supply lower bounds, never exact assignment
+        /// dates. A recent observation or unknown tenure stays Review; account age cannot mature a seat.
         /// </summary>
         [JsonProperty("reclaimGraceDays")]
         public int ReclaimGraceDays { get; set; } = 30;
@@ -560,14 +559,13 @@ namespace Common.Entities.CopilotAdoption
         public double CopilotSeatOfficeMinutesPerAction { get; set; } = 6;
 
         /// <summary>
-        /// Minutes credited to one observed Teams meeting recap/summarise action when the imported audit
-        /// data cannot supply meeting duration.
+        /// Assumed minutes credited to a Teams meeting with Copilot context, counted once per person.
         /// </summary>
         /// <remarks>
         /// Microsoft's Copilot assisted-hours method credits the elapsed meeting duration for meeting
-        /// summarisation or recap actions. The audit data imported here links a Copilot action to a meeting
-        /// but does not reliably carry that duration, so this fixed 30-minute fallback is visible and
-        /// reader-overridable.
+        /// summarisation or recap actions. The audit data imported here identifies a meeting context, not
+        /// the action's intent, and does not reliably carry duration. This model therefore uses a visible,
+        /// reader-overridable 30-minute default per person-meeting context, not a measured recap credit.
         /// </remarks>
         [JsonProperty("copilotSeatMeetingMinutesPerAction")]
         public double CopilotSeatMeetingMinutesPerAction { get; set; } = 30;

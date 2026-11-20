@@ -308,6 +308,8 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<LicensedUserAdoptionRow>("Account enabled", r => r.AccountEnabled),
                 new CsvColumn<LicensedUserAdoptionRow>("Account created (UTC)", r => r.AccountCreatedUtc),
                 new CsvColumn<LicensedUserAdoptionRow>("Tenure basis", r => r.TenureBasis),
+                new CsvColumn<LicensedUserAdoptionRow>("Seat observed from (UTC lower bound)", r => r.TenureStartUtc),
+                new CsvColumn<LicensedUserAdoptionRow>("Seat observation source (0 initial / 1 tenant refresh / 2 user refresh)", r => r.SeatObservationSource),
                 new CsvColumn<LicensedUserAdoptionRow>("Days since tenure start", r => r.DaysSinceTenureStart),
                 new CsvColumn<LicensedUserAdoptionRow>("Too new to judge", r => r.TooNewToJudge),
                 new CsvColumn<LicensedUserAdoptionRow>("Reclaim eligibility", r => r.ReclaimEligibility),

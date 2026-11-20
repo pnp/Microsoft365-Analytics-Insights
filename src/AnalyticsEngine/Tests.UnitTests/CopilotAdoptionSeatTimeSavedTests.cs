@@ -34,6 +34,21 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Estimate_DescribesMeetingContextsWithoutClaimingRecapActions()
+        {
+            var options = CopilotAdoptionOptions.Default.Clone();
+            options.CopilotSeatMeetingMinutesPerAction = 12;
+            var estimate = CopilotAdoptionScoring.ModelSeatHolderTimeSaved(10, 0, 0, 0, 10, 0, options);
+            var assumptions = string.Join(" ", estimate.Assumptions);
+
+            StringAssert.Contains(assumptions, "meetings with Copilot context, counted once per person");
+            StringAssert.Contains(assumptions, "12 assumed minutes");
+            StringAssert.Contains(assumptions, "does not identify a recap or summarisation action");
+            Assert.IsFalse(assumptions.Contains("Teams meeting recap or summarise actions"));
+            Assert.AreEqual(2d, estimate.HoursPerMonthHigh, "The wording correction must not change the fixed-credit arithmetic.");
+        }
+
+        [TestMethod]
         public void Estimate_NeverProducesAMonetaryFigure()
         {
             var estimate = CopilotAdoptionScoring.ModelSeatHolderTimeSaved(10, 2, 100, 50, 4, 999, CopilotAdoptionOptions.Default);

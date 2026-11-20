@@ -527,7 +527,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Reclaim - certain", summary.ReclaimCertainSeats,
                 "Disabled accounts still holding seats. Act immediately unless there is a known exception.");
             AddMeta(sheet, "Reclaim - probable", summary.ReclaimProbableSeats,
-                $"No observed use, account enabled, and the account-age tenure proxy is beyond the {summary.Options.ReclaimGraceDays}-day grace period.");
+                $"No observed use, account enabled, and a recorded current-seat holding proves at least the {summary.Options.ReclaimGraceDays}-day grace period. History observations are lower bounds, not assignment dates; account age is not used.");
             AddMeta(sheet, "Reclaim - review", summary.ReclaimReviewSeats,
                 "Dormant, too new, or missing enough account state/tenure context to judge automatically.");
             AddMeta(sheet, "Reclaim exclusions", summary.ReclaimExcludedUsers,
@@ -545,7 +545,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Reclaimable but still active", summary.ReclaimSeatsFromActiveBands,
                 "Reclaimable seats that are not never-used or dormant - disabled accounts that were still active when they were disabled. Never used + Dormant + this = Reclaimable + all held-back figures.");
             AddMeta(sheet, "Too new to judge", summary.TooNewToJudgeUsers,
-                $"Seats held for less than the {summary.Options.ReclaimGraceDays}-day grace period. Counted separately because an unused brand-new seat has not failed - it has not started, and reclaiming it would take a licence back from someone who was only just given one.");
+                $"Current seats observed for less than the {summary.Options.ReclaimGraceDays}-day grace period. An initial observation may represent an older assignment, but does not yet prove mature tenure. These seats stay Review; missing history also stays Review.");
             if (!string.IsNullOrWhiteSpace(summary.ReclaimCaveat))
             {
                 AddMeta(sheet, "Reclaim caveat", string.Empty, summary.ReclaimCaveat);
@@ -2706,8 +2706,8 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddTitle("Time already saved by Copilot seat holders - MODELLED, NOT MEASURED");
             sheet.AddRow(XlsxCell.Wrapped(
                 "This sheet answers how much time the seats already paid for may be giving back. It uses "
-                + "observed Copilot audit actions by seat holders, multiplied by visible Microsoft-published "
-                + "per-action credits. It is aggregate only, never per person, never money, and never added to "
+                + "observed Copilot audit interactions and distinct person-meeting contexts for seat holders, "
+                + "multiplied by visible, editable minutes assumptions. It is aggregate only, never per person, never money, and never added to "
                 + "the licence or Cowork estimates."));
             sheet.AddRow(XlsxCell.Wrapped(customised
                 ? "ASSUMPTIONS ENTERED IN THE PORTAL: figures on this sheet were entered by the person who downloaded this file."
@@ -2719,11 +2719,11 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddRow("Excluded usage-report-sourced users", XlsxCell.Number(estimate.ExcludedUsageReportSourcedUsers), XlsxCell.Wrapped("Seat holders whose engagement came only from Microsoft's usage report. They have prompt counts, not per-action detail."));
             sheet.AddRow("Outlook actions a month", XlsxCell.Number(estimate.ObservedOutlookActions), XlsxCell.Wrapped("OBSERVED. Outlook app-host Copilot actions, normalised to the report month."));
             sheet.AddRow("Word/PowerPoint/Excel actions a month", XlsxCell.Number(estimate.ObservedOfficeActions), XlsxCell.Wrapped("OBSERVED. Office document-work Copilot actions, normalised to the report month."));
-            sheet.AddRow("Teams meeting actions a month", XlsxCell.Number(estimate.ObservedTeamsMeetingActions), XlsxCell.Wrapped("OBSERVED. Actions linked to a Teams meeting context, normalised to the report month."));
+            sheet.AddRow("Teams meeting contexts a month", XlsxCell.Number(estimate.ObservedTeamsMeetingActions), XlsxCell.Wrapped("OBSERVED. Meetings with Copilot context, counted once per person and normalised to the report month. Not a count of recap or summarisation actions."));
             sheet.AddRow("Uncredited actions a month", XlsxCell.Number(estimate.ObservedUncreditedActions), XlsxCell.Wrapped("OBSERVED. Copilot Chat and other surfaces. Defaults to zero credit because no per-prompt credit is published."));
             sheet.AddRow("Outlook minutes per action", estimate.Credits.OutlookMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Microsoft-published email action credit."));
             sheet.AddRow("Office minutes per action", estimate.Credits.OfficeMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Microsoft-published document drafting/summarising credit."));
-            sheet.AddRow("Teams meeting minutes per action", estimate.Credits.TeamsMeetingMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Fixed fallback because meeting duration is not reliably imported here."));
+            sheet.AddRow("Minutes per person-meeting context", estimate.Credits.TeamsMeetingMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Editable fixed credit; neither a recap action nor meeting duration is established by this import."));
             sheet.AddRow("Uncredited minutes per action", estimate.Credits.UncreditedMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Defaults to zero."));
             sheet.AddRow("Lower bound", XlsxCell.Percent(estimate.Credits.LowerBoundRatio), XlsxCell.Wrapped("ASSUMPTION. Conservative share applied to every credit."));
             sheet.AddRow("Modelled hours a month (low)", XlsxCell.Number(estimate.HoursPerMonthLow), XlsxCell.Wrapped("MODELLED. Conservative end."));
