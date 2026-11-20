@@ -521,6 +521,10 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkPrimeCandidates")]
         public int? CoworkPrimeCandidates { get; set; }
 
+        /// <summary>Why this domain's Cowork prime-candidate count is withheld; uses the same reason values as <see cref="SeatHoldersWithheld"/>.</summary>
+        [JsonProperty("coworkPrimeCandidatesWithheld", NullValueHandling = NullValueHandling.Ignore)]
+        public string CoworkPrimeCandidatesWithheld { get; set; }
+
         /// <summary>
         /// True when the seats in this domain belong to external guests rather than to members of the
         /// tenant. Worth flagging because it changes what the row means: a guest domain is a partner
@@ -530,7 +534,7 @@ namespace Common.Entities.CopilotAdoption
         public bool External { get; set; }
 
         /// <summary>
-        /// Why the seat holders' figures - <see cref="LicensedUsers"/> to <see cref="CoworkPrimeCandidates"/> - are withheld:
+        /// Why the seat holders' figures - <see cref="LicensedUsers"/> to <see cref="InteractionsPerLicensedUser"/> - are withheld:
         /// one of <see cref="SmallGroupWithheldReasons"/>. Set for a reader without See PII only, and left out of the JSON
         /// when they are shown.
         /// </summary>
@@ -638,6 +642,8 @@ namespace Common.Entities.CopilotAdoption
         /// every view of them whenever they leave a group out; then the email-domain table, each of whose populations is
         /// floored on its own; the departments' licence-candidate counts beside the tenant's recommended candidates; and
         /// the departments' manager figures beside the whole population's - each read from the rows the breakdowns left.
+        /// Cowork audit and readiness figures, including their legacy estimates, are withheld together when a Cowork cohort
+        /// or one of its complements would be smaller than five.
         /// When nothing applies the summary is returned as it is.</para>
         /// </remarks>
         public CopilotAdoptionSummary WithoutIndividualData()
@@ -999,7 +1005,7 @@ namespace Common.Entities.CopilotAdoption
         /// The same people as <see cref="CoworkAuditUsers"/>.
         /// </summary>
         [JsonProperty("coworkUsers")]
-        public int CoworkUsers { get; set; }
+        public int? CoworkUsers { get; set; }
 
         [JsonProperty("coworkAdoptionPct")]
         public double? CoworkAdoptionPct { get; set; }
@@ -1012,11 +1018,11 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Licensed users with at least one Cowork interaction in the Copilot audit log.</summary>
         [JsonProperty("coworkAuditUsers")]
-        public int CoworkAuditUsers { get; set; }
+        public int? CoworkAuditUsers { get; set; }
 
         /// <summary>Cowork interactions by licensed users in the window, from the Copilot audit log.</summary>
         [JsonProperty("coworkInteractions")]
-        public long CoworkInteractions { get; set; }
+        public long? CoworkInteractions { get; set; }
 
         /// <summary>
         /// False when nothing in the data identifies Cowork at all - which on a tenant that has not
@@ -1037,17 +1043,21 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("coworkReadinessAvailable")]
         public bool CoworkReadinessAvailable { get; set; }
 
+        /// <summary>True when the readiness figures were withheld to protect a group smaller than five.</summary>
+        [JsonProperty("coworkReadinessWithheld")]
+        public bool CoworkReadinessWithheld { get; set; }
+
         /// <summary>Seat holders scored for Cowork readiness.</summary>
         [JsonProperty("coworkScoredUsers")]
-        public int CoworkScoredUsers { get; set; }
+        public int? CoworkScoredUsers { get; set; }
 
         /// <summary>Seat holders using Cowork on enough separate days to count as regular use.</summary>
         [JsonProperty("coworkEstablishedUsers")]
-        public int CoworkEstablishedUsers { get; set; }
+        public int? CoworkEstablishedUsers { get; set; }
 
         /// <summary>Seat holders who have used Cowork but not yet regularly.</summary>
         [JsonProperty("coworkTriallingUsers")]
-        public int CoworkTriallingUsers { get; set; }
+        public int? CoworkTriallingUsers { get; set; }
 
         /// <summary>
         /// The headline number: fluent Copilot users carrying a heavy coordination load who are not yet
@@ -1066,7 +1076,7 @@ namespace Common.Entities.CopilotAdoption
         /// revoke access from the people already proving the capability works.
         /// </summary>
         [JsonProperty("coworkRecommendedForPolicy")]
-        public int CoworkRecommendedForPolicy { get; set; }
+        public int? CoworkRecommendedForPolicy { get; set; }
 
         /// <summary>Mean coordination load across scored seat holders.</summary>
         [JsonProperty("coworkAverageCoordinationLoad")]
@@ -1074,7 +1084,7 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Mean Copilot fluency across scored seat holders.</summary>
         [JsonProperty("coworkAverageFluency")]
-        public double CoworkAverageFluency { get; set; }
+        public double? CoworkAverageFluency { get; set; }
 
         /// <summary>Every Cowork tier with its population, in report order.</summary>
         [JsonProperty("coworkTiers")]

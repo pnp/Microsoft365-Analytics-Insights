@@ -160,10 +160,10 @@ export interface AdoptionSegmentRow {
  * business case. Neither is visible when the same people are split across departments that span
  * every company in the tenant.
  *
- * Three populations share a row - the seat holders (every figure from `licensedUsers` to
- * `coworkPrimeCandidates`), the unlicensed Copilot Chat users and the licence candidates - and for a reader
- * without See PII each is floored on its own (#844): a withheld population's figures are null, with the reason
- * beside them. Never render a withheld figure as 0, and never read withheld seat holders as "no seats".
+ * Four populations share a row - seat holders, unlicensed Copilot Chat users, licence candidates and
+ * Cowork prime candidates - and for a reader without See PII each is floored on its own (#844): a
+ * withheld population's figures are null, with the reason beside them. Never render a withheld figure
+ * as 0, and never read withheld seat holders as "no seats".
  */
 export interface AdoptionDomainRow {
   segment: string;
@@ -194,6 +194,8 @@ export interface AdoptionDomainRow {
   unlicensedUsersWithheld?: SmallGroupWithheldReason | null;
   /** Why `recommendedForLicence` is withheld. Absent when it is shown. */
   licenceCandidatesWithheld?: SmallGroupWithheldReason | null;
+  /** Why `coworkPrimeCandidates` is withheld. Absent when it is shown. */
+  coworkPrimeCandidatesWithheld?: SmallGroupWithheldReason | null;
   /** The fewest people a figure on this row may describe, when any of them is withheld. */
   minimumPeople?: number | null;
 }
@@ -698,12 +700,12 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
   microsoftReportAveragePromptsPerActiveUser?: number | null;
 
   // Cowork use, from the Copilot audit log only: interactions, never tasks (#692).
-  coworkUsers: number;
+  coworkUsers: number | null;
   coworkAdoptionPct: number | null;
   coworkEligibilityKnown: boolean;
   coworkEligibleUsers: number | null;
-  coworkAuditUsers: number;
-  coworkInteractions: number;
+  coworkAuditUsers: number | null;
+  coworkInteractions: number | null;
   coworkDetected: boolean;
 
   /**
@@ -711,14 +713,15 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
    * than render an empty quadrant, which reads as "nobody is a candidate" - a finding, not a fault.
    */
   coworkReadinessAvailable: boolean;
-  coworkScoredUsers: number;
-  coworkEstablishedUsers: number;
-  coworkTriallingUsers: number;
+  coworkReadinessWithheld: boolean;
+  coworkScoredUsers: number | null;
+  coworkEstablishedUsers: number | null;
+  coworkTriallingUsers: number | null;
   coworkPrimeCandidates: number | null;
   coworkBuildFluencyFirst: number | null;
-  coworkRecommendedForPolicy: number;
+  coworkRecommendedForPolicy: number | null;
   coworkAverageCoordinationLoad: number | null;
-  coworkAverageFluency: number;
+  coworkAverageFluency: number | null;
   coworkTiers: CoworkTierSummary[];
   coworkQuadrant: CoworkQuadrantPoint[];
   coworkByDepartment: CoworkSegmentRow[];
@@ -735,12 +738,12 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
    * Legacy workload forecast for the full recommended policy audience, including observed users.
    * Retained for compatibility, not used as new-adoption potential or existing-user benefit.
    */
-  coworkValueEstimate: CoworkValueEstimate;
+  coworkValueEstimate: CoworkValueEstimate | null;
   /**
    * Legacy workload forecast over every scored seat holder, not the non-user adoption ceiling.
    * Optional only so a fixture written before it existed still type-checks; the server always sends it.
    */
-  coworkFullRolloutEstimate?: CoworkValueEstimate;
+  coworkFullRolloutEstimate?: CoworkValueEstimate | null;
   /**
    * The same model over the people WITHOUT a Copilot seat - every licence candidate: what Cowork could
    * add for them once licensed and enabled. Cowork needs a Copilot licence, and the time that licence

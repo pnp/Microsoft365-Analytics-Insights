@@ -600,14 +600,22 @@ namespace Common.Entities.CopilotAdoption
 
             if (summary.CoworkReadinessAvailable)
             {
-                AddMeta(sheet, "Cowork established users", summary.CoworkEstablishedUsers,
-                    $"Using Cowork on at least {summary.Options.CoworkRegularMinActiveDays} separate days - a habit, not a trial.");
-                AddMeta(sheet, "Cowork prime candidates", summary.CoworkPrimeCandidates,
-                    "PREDICTED, not measured. Copilot-fluent seat holders with a heavy coordination load who are not "
-                    + "yet using Cowork. The population a rollout should target first.");
-                AddMeta(sheet, "To add to the Cowork policy", summary.CoworkRecommendedForPolicy,
-                    "Prime candidates plus everyone already using Cowork. Cowork access is granted by a spending "
-                    + "policy scoped to users, and existing users must stay in scope or they lose access.");
+                if (summary.CoworkReadinessWithheld)
+                {
+                    AddMeta(sheet, "Cowork readiness", "Withheld",
+                        "Figures are withheld because a cohort or its complement could identify fewer than five people. This is not zero potential or zero use.");
+                }
+                else
+                {
+                    AddMeta(sheet, "Cowork established users", summary.CoworkEstablishedUsers,
+                        $"Using Cowork on at least {summary.Options.CoworkRegularMinActiveDays} separate days - a habit, not a trial.");
+                    AddMeta(sheet, "Cowork prime candidates", summary.CoworkPrimeCandidates,
+                        "PREDICTED, not measured. Copilot-fluent seat holders with a heavy coordination load who are not "
+                        + "yet using Cowork. The population a rollout should target first.");
+                    AddMeta(sheet, "To add to the Cowork policy", summary.CoworkRecommendedForPolicy,
+                        "Prime candidates plus everyone already using Cowork. Cowork access is granted by a spending "
+                        + "policy scoped to users, and existing users must stay in scope or they lose access.");
+                }
             }
 
             var chart = new XlsxChart
@@ -1031,13 +1039,14 @@ namespace Common.Entities.CopilotAdoption
                 "Guests are attributed to their HOME organisation, not to this tenant, so an invited "
                 + "partner appears under its own domain and is flagged External. Interactions per licence "
                 + "divides by every licence including idle ones, and is normalised to a month."));
-            if (domains.Any(d => d.SeatHoldersWithheld != null || d.UnlicensedUsersWithheld != null || d.LicenceCandidatesWithheld != null))
+            if (domains.Any(d => d.SeatHoldersWithheld != null || d.UnlicensedUsersWithheld != null
+                || d.LicenceCandidatesWithheld != null || d.CoworkPrimeCandidatesWithheld != null))
             {
                 sheet.AddRow(XlsxCell.Wrapped(
-                    "This file was exported without the See PII permission. Each row holds three groups of people - its "
-                    + "seat holders, its unlicensed Copilot Chat users and its licence candidates - and a group of fewer "
-                    + $"than {MinimumPeople(domains)} people has its figures left blank: for the seat holders, every column "
-                    + "from Seats to Interactions per licence, and the Cowork prime candidates. So does the smallest other "
+                    "This file was exported without the See PII permission. Each row holds four groups of people - its "
+                    + "seat holders, its unlicensed Copilot Chat users, its licence candidates and its prime Cowork candidates - "
+                    + $"and a group of fewer than {MinimumPeople(domains)} people has its figures left blank: for the seat holders, "
+                    + "every column from Seats to Interactions per licence. So does the smallest other "
                     + "group of the same kind when the tenant's total, less the figures shown, would otherwise give a blank "
                     + "one back. Blank means not shown, never 0."));
             }
@@ -1069,7 +1078,8 @@ namespace Common.Entities.CopilotAdoption
             chart.AddSeries("Adoption rate %", sheet.RangeReference(first, 6, last, 6));
             sheet.AddChart(chart);
 
-            if (summary.CoworkReadinessAvailable && domains.Any(d => d.CoworkPrimeCandidates > 0))
+            if (summary.CoworkReadinessAvailable
+                && domains.Any(d => d.CoworkPrimeCandidates > 0 || d.CoworkPrimeCandidatesWithheld != null))
             {
                 sheet.AddBlankRow();
                 sheet.AddRow(XlsxCell.Wrapped(
@@ -1951,7 +1961,9 @@ namespace Common.Entities.CopilotAdoption
         private static void WriteCoworkSheet(
             XlsxWriter workbook, CopilotAdoptionSummary summary, List<CoworkReadinessRow> people, bool includeIndividualData)
         {
-            if (!summary.CoworkReadinessAvailable || summary.CoworkScoredUsers == 0) return;
+            if (!summary.CoworkReadinessAvailable
+                || (!summary.CoworkReadinessWithheld && summary.CoworkScoredUsers == 0))
+                return;
 
             var rows = people ?? new List<CoworkReadinessRow>();
 
@@ -1975,6 +1987,13 @@ namespace Common.Entities.CopilotAdoption
                 + "prerequisite and is then billed by usage against Copilot Credits, with access granted by a "
                 + "spending policy scoped to users or groups. So this is not a list of licences to buy - it is "
                 + "a list of people to put in that policy."));
+            if (summary.CoworkReadinessWithheld)
+            {
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "Readiness figures are withheld because a cohort or its complement could identify fewer than five people. "
+                    + "This is not zero potential or zero use."));
+                return;
+            }
             sheet.AddBlankRow();
 
             sheet.AddHeaderRow("Measure", "Value", "What it means");

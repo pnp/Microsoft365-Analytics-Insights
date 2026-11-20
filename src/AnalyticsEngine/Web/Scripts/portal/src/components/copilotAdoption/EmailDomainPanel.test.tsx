@@ -261,6 +261,21 @@ describe('EmailDomainPanel for a reader without See PII (#844)', () => {
     }),
   ];
 
+  const COWORK_WITHHELD: AdoptionDomainRow[] = [
+    domain({
+      segment: 'contoso.com',
+      coworkPrimeCandidates: null,
+      coworkPrimeCandidatesWithheld: 'fewPeople',
+      minimumPeople: 5,
+    }),
+    domain({
+      segment: 'fabrikam.com',
+      coworkPrimeCandidates: null,
+      coworkPrimeCandidatesWithheld: 'revealsSmallerGroup',
+      minimumPeople: 5,
+    }),
+  ];
+
   it('shows a hidden population as hidden and says why - never 0, and hidden seat holders are not "no seats"', () => {
     renderPanel(WITHHELD);
 
@@ -295,6 +310,31 @@ describe('EmailDomainPanel for a reader without See PII (#844)', () => {
       'Oculto: con el total del inquilino, este recuento revelaría un dominio en el que menos de 5 personas usaron Copilot Chat sin licencia',
     )).toBeTruthy();
     expect(screen.getByText(/un grupo de menos de 5 personas se oculta/)).toBeTruthy();
+    expect(screen.queryByText(/Hidden/)).toBeNull();
+  });
+
+  it('explains withheld Cowork domain counts in English and Spanish', async () => {
+    const summary = summaryWith(COWORK_WITHHELD, { coworkReadinessAvailable: true });
+
+    const { unmount } = renderWithProvider(<EmailDomainPanel summary={summary} />);
+
+    expect(within(rowFor('contoso.com')).getByLabelText(
+      'Hidden: fewer than 5 people on this domain are prime Cowork candidates',
+    )).toHaveTextContent('\u2014');
+    expect(within(rowFor('fabrikam.com')).getByLabelText(
+      'Hidden: with the tenant total, this count would reveal a domain with fewer than 5 prime Cowork candidates',
+    )).toHaveTextContent('\u2014');
+    expect(screen.getByText(/four groups of people/)).toBeTruthy();
+
+    unmount();
+    await loadCatalog('es');
+    renderWithProvider(<EmailDomainPanel summary={summary} />, { language: 'es' });
+    expect(within(rowFor('contoso.com')).getByLabelText(
+      'Oculto: menos de 5 personas de este dominio son candidatas prioritarias para Cowork',
+    )).toHaveTextContent('\u2014');
+    expect(within(rowFor('fabrikam.com')).getByLabelText(
+      'Oculto: con el total del inquilino, este recuento revelaría un dominio con menos de 5 candidatas prioritarias para Cowork',
+    )).toHaveTextContent('\u2014');
     expect(screen.queryByText(/Hidden/)).toBeNull();
   });
 

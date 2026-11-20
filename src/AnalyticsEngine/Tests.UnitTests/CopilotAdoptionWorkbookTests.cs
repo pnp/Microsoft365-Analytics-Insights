@@ -1101,6 +1101,18 @@ namespace Tests.UnitTests
             }
 
             new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            analysis.Summary.CoworkReadinessAvailable = true;
+            analysis.Summary.CoworkScoredUsers = 40;
+            analysis.Summary.CoworkEstablishedUsers = 10;
+            analysis.Summary.CoworkTriallingUsers = 10;
+            analysis.Summary.CoworkPrimeCandidates = 8;
+            analysis.Summary.CoworkRecommendedForPolicy = 20;
+            analysis.Summary.CoworkTiers = new List<CoworkTierSummary> { new CoworkTierSummary { Users = 40 } };
+            analysis.Summary.CoworkByDepartment = new List<CoworkSegmentRow>();
+            analysis.Summary.CoworkNewAdoptionEstimate = null;
+            analysis.Summary.CoworkNonUserCeilingEstimate = null;
+            analysis.Summary.EmailDomains.Single(d => d.Segment == "fabrikam.example").CoworkPrimeCandidates = 3;
+            analysis.Summary.EmailDomains.Single(d => d.Segment == "contoso.com").CoworkPrimeCandidates = 5;
 
             Dictionary<string, string> Row(byte[] workbook, string domain)
             {
@@ -1112,6 +1124,16 @@ namespace Tests.UnitTests
                     .ToDictionary(c => Regex.Match((string)c.Attribute("r"), "^[A-Z]+").Value, Text);
             }
 
+            Dictionary<string, string> CoworkRow(byte[] workbook, string domain)
+            {
+                string Text(XElement c) => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
+                string RowOf(XElement c) => Regex.Match((string)c.Attribute("r"), @"\d+$").Value;
+                var cells = SheetCellElements(workbook, "Email domains");
+                var row = RowOf(cells.Last(c => Text(c) == domain));
+                return cells.Where(c => RowOf(c) == row)
+                    .ToDictionary(c => Regex.Match((string)c.Attribute("r"), "^[A-Z]+").Value, Text);
+            }
+
             // Columns: A domain, B seats, C active, ..., J unlicensed users, K licence candidates, L external.
             var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
             var fabrikam = Row(trimmed, "fabrikam.example");
@@ -1119,6 +1141,8 @@ namespace Tests.UnitTests
             Assert.AreEqual("20", fabrikam["B"], "Twenty seat holders are enough on their own.");
             Assert.IsFalse(Row(trimmed, "contoso.com").ContainsKey("J"), "The count that would give the three back is blank too.");
             Assert.IsTrue(SheetCells(trimmed, "Email domains").Any(c => c.Contains("a group of fewer than 5 people has its figures left blank")));
+            Assert.IsFalse(CoworkRow(trimmed, "fabrikam.example").ContainsKey("C"), "Three Cowork candidates: blank, never 0.");
+            Assert.IsFalse(CoworkRow(trimmed, "contoso.com").ContainsKey("C"), "The complement that would give the three back is blank too.");
 
             // The file says exactly what the screen does: blank wherever the summary served without See PII is null.
             var screen = analysis.Summary.WithoutIndividualData().EmailDomains;
@@ -1130,12 +1154,17 @@ namespace Tests.UnitTests
                     Assert.AreEqual(value?.ToString(CultureInfo.InvariantCulture), cells.TryGetValue(column, out var cell) ? cell : null,
                         $"{domain.Segment}, column {column}: the workbook and the screen must agree.");
                 }
+                Assert.AreEqual(domain.CoworkPrimeCandidates?.ToString(CultureInfo.InvariantCulture),
+                    CoworkRow(trimmed, domain.Segment).TryGetValue("C", out var cowork) ? cowork : null,
+                    $"{domain.Segment}, Cowork column: the workbook and the screen must agree.");
             }
 
             var full = CopilotAdoptionWorkbook.Build(analysis);
             string Cell(Dictionary<string, string> row, string column) => row.TryGetValue(column, out var cell) ? cell : null;
             Assert.AreEqual("3", Cell(Row(full, "fabrikam.example"), "J"), "With See PII every figure is written, as before.");
             Assert.AreEqual("17", Cell(Row(full, "contoso.com"), "J"));
+            Assert.AreEqual("3", Cell(CoworkRow(full, "fabrikam.example"), "C"));
+            Assert.AreEqual("5", Cell(CoworkRow(full, "contoso.com"), "C"));
             Assert.IsFalse(SheetCells(full, "Email domains").Any(c => c.Contains("left blank")));
             Assert.AreEqual(3, analysis.Summary.EmailDomains.Single(d => d.Segment == "fabrikam.example").UnlicensedActiveUsers,
                 "The cached analysis must never be edited for one reader.");
@@ -1210,60 +1239,43 @@ namespace Tests.UnitTests
             var cached = analysis.Summary;
             var screen = cached.WithoutIndividualData();
             Assert.AreEqual(5, cached.CoworkByDepartment.Single(r => r.Segment == "Finance").LicensedUsers, "The control: the cached summary lists Finance.");
-            Assert.IsFalse(screen.CoworkByDepartment.Any(r => r.Segment == "Finance"), "The control: the screen does not.");
-            Assert.IsFalse(screen.CoworkQuadrant.Any(p => p.Segment == "Finance"));
-            Assert.AreEqual(8, screen.CoworkScoredUsers - screen.CoworkByDepartment.Sum(r => r.LicensedUsers));
+            Assert.IsTrue(screen.CoworkReadinessWithheld,
+                "The full readiness breakdown is withheld when a small department and its complement can be reconstructed.");
+            Assert.IsNull(screen.CoworkScoredUsers);
+            Assert.AreEqual(0, screen.CoworkByDepartment.Count);
+            Assert.AreEqual(0, screen.CoworkQuadrant.Count);
 
-            // The Cowork sheet's rows whose first column holds the text, keyed by column letter. A department heads a row of
-            // the rollout order and one of the quadrant; the named list, written only with See PII, starts with a sign-in name.
-            List<Dictionary<string, string>> Rows(byte[] workbook, string first)
-            {
-                string Text(XElement c) => string.Concat(c.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
-                string RowOf(XElement c) => Regex.Match((string)c.Attribute("r"), @"\d+$").Value;
-                var cells = SheetCellElements(workbook, "Cowork readiness");
-                return cells.Where(c => Text(c) == first && ((string)c.Attribute("r")).StartsWith("A", StringComparison.Ordinal))
-                    .Select(c => cells.Where(other => RowOf(other) == RowOf(c))
-                        .ToDictionary(other => Regex.Match((string)other.Attribute("r"), "^[A-Z]+").Value, Text))
-                    .ToList();
-            }
-
-            string Count(int? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
-
-            // Without See PII: the scored seat holders, the rollout order (department, seats, prime candidates) and the quadrant
-            // (department, seats, ..., prime candidates in E) are the screen's, and Finance is in neither table.
+            // The workbook keeps the sheet and its explanation, but not any part of the withheld breakdown.
             var trimmed = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
-            Assert.AreEqual(0, Rows(trimmed, "Finance").Count, "The file must not list a department the screen leaves out.");
-            Assert.AreEqual(0, Rows(trimmed, "Tiny").Count);
-            Assert.AreEqual(Count(screen.CoworkScoredUsers), Rows(trimmed, "Seat holders scored").Single()["B"]);
-            foreach (var department in screen.CoworkByDepartment)
-            {
-                var rows = Rows(trimmed, department.Segment);
-                Assert.AreEqual(2, rows.Count, $"{department.Segment}: one row in the rollout order and one in the quadrant.");
-                Assert.IsTrue(rows.Any(r => r["B"] == Count(department.LicensedUsers) && r["C"] == Count(department.PrimeCandidates)),
-                    $"{department.Segment}: the rollout order agrees with the screen.");
-            }
+            var withheld = SheetCells(trimmed, "Cowork readiness");
+            CollectionAssert.Contains(withheld,
+                "Readiness figures are withheld because a cohort or its complement could identify fewer than five people. This is not zero potential or zero use.");
+            Assert.IsFalse(withheld.Any(c => c == "Finance" || c == "Tiny"));
+            Assert.IsFalse(withheld.Contains("Seat holders scored"));
 
-            foreach (var point in screen.CoworkQuadrant)
-            {
-                Assert.IsTrue(Rows(trimmed, point.Segment).Any(r => r["B"] == Count(point.LicensedUsers) && r.TryGetValue("E", out var prime) && prime == Count(point.PrimeCandidates)),
-                    $"{point.Segment}: the quadrant agrees with the screen.");
-            }
-
-            Assert.AreEqual(2, SheetCells(trimmed, "Cowork readiness").Count(c => c.Contains("one more department is left out - the smallest listed")),
-                "The rollout order and the quadrant each say why a department is missing.");
-
-            // With See PII nothing changes: Finance's five are in both tables, and nothing says a department is left out.
+            // With See PII nothing changes: Finance and Tiny remain available in the full breakdown.
             var full = CopilotAdoptionWorkbook.Build(analysis);
-            Assert.AreEqual(2, Rows(full, "Finance").Count(r => r["B"] == "5"), "With See PII the rollout order and the quadrant list Finance, as before.");
-            foreach (var department in cached.CoworkByDepartment)
-            {
-                Assert.IsTrue(Rows(full, department.Segment).Any(r => r["B"] == Count(department.LicensedUsers) && r["C"] == Count(department.PrimeCandidates)),
-                    $"{department.Segment}: the full file lists every department the cached summary does.");
-            }
-
-            Assert.IsFalse(SheetCells(full, "Cowork readiness").Any(c => c.Contains("one more department is left out")));
+            var fullSheet = SheetCells(full, "Cowork readiness");
+            Assert.IsTrue(fullSheet.Contains("Finance"));
+            Assert.IsTrue(fullSheet.Contains("Tiny"));
+            Assert.IsFalse(fullSheet.Any(c => c.Contains("Readiness figures are withheld")));
             Assert.AreEqual(5, cached.CoworkByDepartment.Single(r => r.Segment == "Finance").LicensedUsers,
                 "The cached analysis must never be edited for one reader.");
+        }
+
+        [TestMethod]
+        public void CoworkSheet_WithoutSeePii_WithholdsSmallReadinessFiguresAndExplainsWhy()
+        {
+            var analysis = CopilotAdoptionCoworkTests.CoworkObservationPopulationAnalysis(0, 0);
+            analysis.Summary.CoworkEstablishedUsers = 3;
+
+            var workbook = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
+            var cells = SheetCells(workbook, "Cowork readiness");
+
+            Assert.IsTrue(cells.Any(cell => cell.Contains(
+                "Readiness figures are withheld because a cohort or its complement could identify fewer than five people.")));
+            Assert.IsFalse(cells.Any(cell => cell.Contains("Seat holders scored")));
+            Assert.IsFalse(cells.Any(cell => cell == "Established"));
         }
 
         [TestMethod]
@@ -1503,15 +1515,26 @@ namespace Tests.UnitTests
             var names = WorkbookSheetNames(trimmed);
             CollectionAssert.DoesNotContain(names, "Licensed users");
             CollectionAssert.DoesNotContain(names, "Licence opportunities");
-            foreach (var aggregate in WorkbookSheetNames(full).Except(new[] { "Licensed users", "Licence opportunities" }))
-            {
-                CollectionAssert.Contains(names, aggregate, "Only the per-person sheets may be left out.");
-            }
+            var missingAggregates = WorkbookSheetNames(full)
+                .Except(new[] { "Licensed users", "Licence opportunities" })
+                .Except(names)
+                .ToArray();
+            Assert.AreEqual(0, missingAggregates.Length,
+                "Only per-person sheets may be left out: " + string.Join(", ", missingAggregates));
 
-            // Cowork keeps its tiers and department order, and says where the named list went.
+            // Cowork keeps its aggregate sections unless their population floor withholds them, and says why.
             var cowork = SheetCells(trimmed, "Cowork readiness");
-            CollectionAssert.Contains(cowork, "Rollout order by department");
-            Assert.IsTrue(cowork.Any(c => c.Contains("needs the See PII permission")));
+            if (analysis.Summary.WithoutIndividualData().CoworkReadinessWithheld)
+            {
+                CollectionAssert.Contains(cowork,
+                    "Readiness figures are withheld because a cohort or its complement could identify fewer than five people. This is not zero potential or zero use.");
+                CollectionAssert.DoesNotContain(cowork, "Rollout order by department");
+            }
+            else
+            {
+                CollectionAssert.Contains(cowork, "Rollout order by department");
+                Assert.IsTrue(cowork.Any(c => c.Contains("needs the See PII permission")));
+            }
 
             // The cover sheet says so, so a reader comparing it with a colleague's full export does not
             // take the missing sheets for missing data.
@@ -1537,9 +1560,7 @@ namespace Tests.UnitTests
             foreach (var key in fullFacts.Keys)
             {
                 if (key == "accountabilityRollup.count"
-                    || key.StartsWith("coworkWithoutLicence", StringComparison.Ordinal)
-                    || key.StartsWith("coworkNewAdoption", StringComparison.Ordinal)
-                    || key.StartsWith("coworkNonUserCeiling", StringComparison.Ordinal))
+                    || key.StartsWith("cowork", StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -2076,8 +2097,10 @@ namespace Tests.UnitTests
             Assert.AreEqual(string.Empty, facts["coworkNonUserCeilingEstimate" + volume],
                 "Snapshot facts must not bypass the joint-cohort privacy floor.");
             Assert.AreEqual(string.Empty, facts["coworkNonUserCeilingEstimate.hoursPerMonthHigh"]);
-            Assert.AreEqual(fullFacts["coworkValueEstimate" + volume], facts["coworkValueEstimate" + volume]);
-            Assert.AreEqual(fullFacts["coworkFullRolloutEstimate" + volume], facts["coworkFullRolloutEstimate" + volume]);
+            Assert.AreEqual(string.Empty, facts["coworkValueEstimate" + volume],
+                "The legacy estimate is withheld with readiness figures when the same cohorts could reconstruct a small group.");
+            Assert.AreEqual(string.Empty, facts["coworkFullRolloutEstimate" + volume],
+                "The full-rollout estimate is withheld with readiness figures when the same cohorts could reconstruct a small group.");
             Assert.AreEqual(string.Empty, facts["coworkNewAdoptionEstimate" + volume]);
             Assert.AreEqual(string.Empty, facts["coworkNewAdoptionEstimate.hoursPerMonthHigh"]);
             var cells = SheetCells(trimmed, "Cowork estimate (modelled)");
@@ -2097,8 +2120,10 @@ namespace Tests.UnitTests
             var full = SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
             var bytes = CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false);
             var facts = SnapshotFactValues(bytes);
-            Assert.AreEqual(full["coworkInteractions"], facts["coworkInteractions"],
-                "The legacy audit total remains compatible.");
+            Assert.AreNotEqual(string.Empty, full["coworkInteractions"],
+                "The control: the full export contains the audit total.");
+            Assert.AreEqual(string.Empty, facts["coworkInteractions"],
+                "The legacy audit total is withheld when unmatched users could identify a small group.");
             Assert.AreEqual(string.Empty, facts["coworkObservedUsage.users"]);
             Assert.AreEqual(string.Empty, facts["coworkObservedUsage.interactions"]);
             Assert.IsFalse(facts.Keys.Any(key => key.IndexOf("auditPopulationParts", StringComparison.OrdinalIgnoreCase) >= 0));
