@@ -47,10 +47,19 @@ namespace Common.Entities.CopilotAdoption
         public bool? HoldsSeatToday { get; set; }
 
         /// <summary>
-        /// Entra user.createdDateTime persisted by the user import. Used as the current account-age proxy
-        /// for Copilot seat tenure until real assignment history exists.
+        /// Entra user.createdDateTime persisted by the user import. Bounds the possible observation
+        /// window for frequency, but is not evidence of Copilot seat tenure.
         /// </summary>
         public DateTime? AccountCreatedUtc { get; set; }
+
+        /// <summary>
+        /// Earliest recorded start among currently held Copilot SKUs. A lower bound on holding age,
+        /// never an assignment timestamp; closed holdings and non-seat SKUs cannot establish it.
+        /// </summary>
+        public DateTime? SeatObservedFromUtc { get; set; }
+
+        /// <summary>The selected holding's original <c>user_license_history.from_source</c>.</summary>
+        public byte? SeatObservationSource { get; set; }
 
         /// <summary>Reason on the current reclaim exclusion, if this user has one.</summary>
         public string ReclaimExclusionReason { get; set; }
@@ -188,6 +197,9 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("tenureBasis")]
         public string TenureBasis { get; set; }
+
+        [JsonProperty("seatObservationSource")]
+        public byte? SeatObservationSource { get; set; }
 
         [JsonProperty("daysSinceTenureStart")]
         public int? DaysSinceTenureStart { get; set; }

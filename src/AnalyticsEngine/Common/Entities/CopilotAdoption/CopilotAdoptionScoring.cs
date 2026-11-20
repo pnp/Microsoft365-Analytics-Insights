@@ -31,11 +31,17 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Score built from Microsoft's per-user Copilot usage report.</summary>
         public const string SignalSourceUsageReport = "usageReport";
 
-        /// <summary>The current tenure signal is Entra account age, not true Copilot seat tenure.</summary>
+        /// <summary>Legacy basis retained for older API consumers; no longer used for reclaim decisions.</summary>
         public const string TenureBasisAccountAge = "accountAge";
+
+        /// <summary>Recorded current holding age is a lower bound, not an exact assignment age.</summary>
+        public const string TenureBasisSeatObservedLowerBound = "seatObservedLowerBound";
 
         /// <summary>No tenure signal was available, so reclaim confidence is deliberately lowered.</summary>
         public const string TenureBasisUnknown = "unknown";
+
+        private static string TenureBasisDescription(string basis) =>
+            basis == TenureBasisSeatObservedLowerBound ? "recorded seat-tenure lower bound" : basis;
 
         public static class ReclaimEligibilityTiers
         {
@@ -98,10 +104,9 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// Frequency target adjusted for a new user's actual observation window. Until issue #277 adds
-        /// real seat-tenure history, <c>users.created_utc</c> is the best cheap proxy we have. Only the
-        /// early-tenure case is prorated; established users still use the full-window target so the
-        /// metric remains comparable across the population.
+        /// Frequency target adjusted for a new account's possible observation window. The account
+        /// cannot predate creation, but a seat can predate its first observation. Do not prorate from
+        /// a holding's lower bound: an initial history seed is not a new assignment.
         /// </summary>
         /// <remarks>
         /// Prorated against the REPORTING WINDOW, not against <see cref="CopilotAdoptionOptions.ReclaimGraceDays"/>.
@@ -139,11 +144,19 @@ namespace Common.Entities.CopilotAdoption
             return Math.Max(0, (int)(nowUtc.Date - tenureStartUtc.Value.Date).TotalDays);
         }
 
-        /// <summary>Whether the only tenure signal says the user is still inside the grace period.</summary>
+        private static DateTime? RecordedSeatStart(LicensedUserUsageRow row, DateTime nowUtc)
+        {
+            if (row?.SeatObservedFromUtc == null || row.SeatObservedFromUtc > nowUtc
+                || !row.SeatObservationSource.HasValue || row.SeatObservationSource.Value > 2)
+                return null;
+            return row.SeatObservedFromUtc;
+        }
+
+        /// <summary>Whether the recorded lower bound is not yet enough to establish mature holding tenure.</summary>
         public static bool IsTooNewToJudge(LicensedUserUsageRow row, DateTime nowUtc, CopilotAdoptionOptions options)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
-            var days = DaysSinceTenureStart(row?.AccountCreatedUtc, nowUtc);
+            var days = DaysSinceTenureStart(RecordedSeatStart(row, nowUtc), nowUtc);
             return days.HasValue && days.Value < Math.Max(1, o.ReclaimGraceDays);
         }
 
@@ -183,10 +196,15 @@ namespace Common.Entities.CopilotAdoption
                 || row.ReportPrompts.HasValue
                 || row.ReportLastActivityUtc.HasValue;
             var useReport = (!auditAvailable || !auditHasSignal) && reportHasSignal;
+            // Report totals describe its native period, not a distribution we can clip to this window.
+            // A known latest date before the window rules out using those totals as current activity.
+            // With no latest date, retain the explicitly labelled report-native fallback (not "never used").
+            var staleReport = row.ReportLastActivityUtc.HasValue
+                && row.ReportLastActivityUtc.Value < windowStartUtc;
 
-            var activeDays = useReport ? (row.ReportActiveDays ?? 0) : row.ActiveDays;
-            var interactions = useReport ? (row.ReportPrompts ?? 0) : row.Interactions;
-            var appsUsed = useReport ? (row.ReportAppsUsed ?? 0) : row.AppsUsed;
+            var activeDays = useReport ? (staleReport ? 0 : row.ReportActiveDays ?? 0) : row.ActiveDays;
+            var interactions = useReport ? (staleReport ? 0 : row.ReportPrompts ?? 0) : row.Interactions;
+            var appsUsed = useReport ? (staleReport ? 0 : row.ReportAppsUsed ?? 0) : row.AppsUsed;
             var lastUse = useReport
                 ? row.ReportLastActivityUtc
                 : (row.LastInteractionUtc ?? row.ReportLastActivityUtc);
@@ -228,6 +246,7 @@ namespace Common.Entities.CopilotAdoption
                 || (row.FirstInteractionUtc.HasValue && row.FirstInteractionUtc.Value < windowStartUtc);
 
             var band = BandFor(score, usedInWindow, usedBeforeWindow, o);
+            var seatStart = RecordedSeatStart(row, nowUtc);
 
             var scored = new LicensedUserAdoptionRow
             {
@@ -246,9 +265,10 @@ namespace Common.Entities.CopilotAdoption
                 AccountEnabled = row.AccountEnabled,
                 HoldsSeatToday = row.HoldsSeatToday,
                 AccountCreatedUtc = row.AccountCreatedUtc,
-                TenureStartUtc = row.AccountCreatedUtc,
-                TenureBasis = row.AccountCreatedUtc.HasValue ? TenureBasisAccountAge : TenureBasisUnknown,
-                DaysSinceTenureStart = DaysSinceTenureStart(row.AccountCreatedUtc, nowUtc),
+                TenureStartUtc = seatStart,
+                TenureBasis = seatStart.HasValue ? TenureBasisSeatObservedLowerBound : TenureBasisUnknown,
+                SeatObservationSource = seatStart.HasValue ? row.SeatObservationSource : null,
+                DaysSinceTenureStart = DaysSinceTenureStart(seatStart, nowUtc),
                 TooNewToJudge = IsTooNewToJudge(row, nowUtc, o),
                 ReclaimExclusionReason = row.ReclaimExclusionReason,
                 ReclaimExclusionNote = row.ReclaimExclusionNote,
@@ -335,12 +355,12 @@ namespace Common.Entities.CopilotAdoption
                 if (row.TooNewToJudge)
                 {
                     row.ReclaimEligibility = ReclaimEligibilityTiers.Review;
-                    row.ReclaimEligibilityReason = $"Too new to judge: {row.TenureBasis} is below the {o.ReclaimGraceDays}-day grace period.";
+                    row.ReclaimEligibilityReason = $"Too new to judge: {TenureBasisDescription(row.TenureBasis)} is below the {o.ReclaimGraceDays}-day grace period.";
                 }
                 else if (row.AccountEnabled == true && row.DaysSinceTenureStart.HasValue)
                 {
                     row.ReclaimEligibility = ReclaimEligibilityTiers.Probable;
-                    row.ReclaimEligibilityReason = $"No observed Copilot use and {row.TenureBasis} is beyond the {o.ReclaimGraceDays}-day grace period.";
+                    row.ReclaimEligibilityReason = $"No observed Copilot use and {TenureBasisDescription(row.TenureBasis)} is beyond the {o.ReclaimGraceDays}-day grace period.";
                 }
                 else
                 {
@@ -591,7 +611,7 @@ namespace Common.Entities.CopilotAdoption
 
             if (row.TooNewToJudge && row.Band == AdoptionBand.NeverUsed)
             {
-                return $"Review before reclaim - Too new to judge: {row.TenureBasis} is below the {o.ReclaimGraceDays}-day grace period. Do not reclaim yet; check again after onboarding has had time to work.";
+                return $"Review before reclaim - Too new to judge: {TenureBasisDescription(row.TenureBasis)} is below the {o.ReclaimGraceDays}-day grace period. Do not reclaim yet; check again after onboarding has had time to work.";
             }
 
             if (row.ReclaimEligibility == ReclaimEligibilityTiers.Review && row.Band == AdoptionBand.NeverUsed)
@@ -762,8 +782,8 @@ namespace Common.Entities.CopilotAdoption
                          + "still holding a seat is the clearest reclaim there is whatever its usage looked "
                          + "like before it was disabled - no enablement effort is worthwhile on an account "
                          + $"nobody can sign into. The rest had no Copilot activity anywhere in the last {o.HistoryDays} "
-                         + "days - the whole history this analysis reads - and have enough account tenure to judge: "
-                         + "confirm the licence is still needed before renewal. New starters inside the grace period "
+                         + "days - the whole history this analysis reads - and have enough recorded current-seat tenure to judge: "
+                         + "confirm the licence is still needed before renewal. Recent seat observations inside the grace period "
                          + "and users with no tenure evidence are NOT here; they are under 'Review before reclaim'.";
 
                 case AdoptionActionCodes.Reengage:

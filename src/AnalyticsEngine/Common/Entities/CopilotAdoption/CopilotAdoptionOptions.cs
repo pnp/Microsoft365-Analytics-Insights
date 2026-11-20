@@ -168,10 +168,9 @@ namespace Common.Entities.CopilotAdoption
         public int AgentNewDays { get; set; } = 30;
 
         /// <summary>
-        /// How long a newly-created Entra user is protected from reclaim recommendations. This is an
-        /// account-age proxy for the future seat-tenure history (#277): a new starter with five days of
-        /// Copilot ownership must not be judged against a full-window target, and a new starter with no
-        /// prompts yet belongs in "too new to judge", not in a list of seats to take away.
+        /// Minimum recorded current-seat holding age before absent use can support Probable reclaim.
+        /// Observed holdings (including initial seeds) supply lower bounds, never exact assignment
+        /// dates. A recent observation or unknown tenure stays Review; account age cannot mature a seat.
         /// </summary>
         [JsonProperty("reclaimGraceDays")]
         public int ReclaimGraceDays { get; set; } = 30;

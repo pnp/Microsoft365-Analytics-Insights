@@ -517,7 +517,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Reclaim - certain", summary.ReclaimCertainSeats,
                 "Disabled accounts still holding seats. Act immediately unless there is a known exception.");
             AddMeta(sheet, "Reclaim - probable", summary.ReclaimProbableSeats,
-                $"No observed use, account enabled, and the account-age tenure proxy is beyond the {summary.Options.ReclaimGraceDays}-day grace period.");
+                $"No observed use, account enabled, and a recorded current-seat holding proves at least the {summary.Options.ReclaimGraceDays}-day grace period. History observations are lower bounds, not assignment dates; account age is not used.");
             AddMeta(sheet, "Reclaim - review", summary.ReclaimReviewSeats,
                 "Dormant, too new, or missing enough account state/tenure context to judge automatically.");
             AddMeta(sheet, "Reclaim exclusions", summary.ReclaimExcludedUsers,
@@ -535,7 +535,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Reclaimable but still active", summary.ReclaimSeatsFromActiveBands,
                 "Reclaimable seats that are not never-used or dormant - disabled accounts that were still active when they were disabled. Never used + Dormant + this = Reclaimable + all held-back figures.");
             AddMeta(sheet, "Too new to judge", summary.TooNewToJudgeUsers,
-                $"Seats held for less than the {summary.Options.ReclaimGraceDays}-day grace period. Counted separately because an unused brand-new seat has not failed - it has not started, and reclaiming it would take a licence back from someone who was only just given one.");
+                $"Current seats observed for less than the {summary.Options.ReclaimGraceDays}-day grace period. An initial observation may represent an older assignment, but does not yet prove mature tenure. These seats stay Review; missing history also stays Review.");
             if (!string.IsNullOrWhiteSpace(summary.ReclaimCaveat))
             {
                 AddMeta(sheet, "Reclaim caveat", string.Empty, summary.ReclaimCaveat);
