@@ -14,6 +14,7 @@ namespace Common.Entities.State
     /// Exact outcomes of daily user-detail imports, independent of fact-row presence and cadence stamps.
     /// Keys are v1:{source}:yyyyMMdd, in UsageReportCoverage; no user identifiers are stored.
     /// Only a whole, identifiable, tenant-wide report saved after the settlement delay certifies a day.
+    /// Day outcomes: partial (in progress / unsettled), incomplete, scopeUnverified, complete, empty.
     /// Older cadence stamps are deliberately not promoted: they contain neither dates nor scope.
     /// This records importer commits, not SQL recovery: clear this partition after restoring/replacing
     /// the usage dataset. It cannot detect manual SQL deletion or out-of-band database replacement.
@@ -50,32 +51,80 @@ namespace Common.Entities.State
             return "v1:" + source + ":" + day.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         }
 
-        /// <summary>
-        /// Invalidate BEFORE any SQL write. An unreachable durable store throws: allowing the write would leave
-        /// a previous success certifying a partly overwritten day. A failed download before this changes nothing.
-        /// </summary>
-        public Task BeginDayAsync(string source, DateTime day)
-            => _store.SetStringAsync(Key(source, day), "partial", TimeSpan.FromDays(400));
+        /// <summary>In progress, or saved before the day settled: not final, so the importer downloads it again.</summary>
+        public const string Partial = "partial";
+        /// <summary>Settled, but not every row Graph returned was saved (concealed or blank identities). Final.</summary>
+        public const string Incomplete = "incomplete";
+        /// <summary>Saved under a user scope (UserGroupsFilter), so it cannot show the whole tenant. Final.</summary>
+        public const string ScopeUnverified = "scopeUnverified";
+        public const string Complete = "complete";
+        public const string Empty = "empty";
 
+        /// <summary>
+        /// Marks the day in progress BEFORE any SQL write, so a first download that fails midway is never certified.
+        /// A day already certified complete/empty keeps its outcome while it is downloaded again: the upsert
+        /// never deletes stored rows, so a re-download cannot leave fewer users stored than were certified.
+        /// An unreachable durable store throws, and the SQL write does not start.
+        /// </summary>
+        public async Task BeginDayAsync(string source, DateTime day)
+        {
+            var key = Key(source, day);
+            var outcome = await _store.GetStringAsync(key).ConfigureAwait(false);
+            if (outcome == Complete || outcome == Empty) return;
+            await _store.SetStringAsync(key, Partial, TimeSpan.FromDays(400)).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Records the outcome of a saved day. <paramref name="settlementDays"/> is the analysis' settlement lag
+        /// (CopilotAdoptionOptions.UsageReportLagDays, 3 by default): the analysis on day T first assesses
+        /// T - lag. A day with rows is certified when saved at least lag - 1 days after it, so the import of
+        /// day T - 1 has already certified the newest day the analysis on day T reads, at any time of day T.
+        /// A successfully EMPTY day needs the full lag: Graph answers a day it has not published yet with
+        /// 200 and no rows, so zero rows inside the lag cannot be told from "not available yet".
+        /// </summary>
         public Task CompleteDayAsync(string source, DateTime day, bool wholeTenant, bool allRowsSaved,
             bool empty, DateTime importedUtc, int settlementDays)
         {
-            var settled = day.Date <= importedUtc.Date.AddDays(-Math.Max(1, settlementDays));
-            var status = !wholeTenant ? "scopeUnverified"
-                : !allRowsSaved || !settled ? "partial"
-                : empty ? "empty" : "complete";
+            var lag = Math.Max(2, settlementDays);
+            var settled = day.Date <= importedUtc.Date.AddDays(-(empty ? lag : lag - 1));
+            var status = !wholeTenant ? ScopeUnverified
+                : !settled ? Partial
+                : !allRowsSaved ? Incomplete
+                : empty ? Empty : Complete;
             return _store.SetStringAsync(Key(source, day), status, TimeSpan.FromDays(400));
         }
 
         /// <summary>
-        /// True only for a day with a durable complete or successfully empty outcome. The importer uses this so
-        /// a stored day is never skipped while unverified: days imported before this ledger existed, or while
-        /// still inside the refreshable window, are downloaded once more and then certified.
+        /// True only for a day with a durable complete or successfully empty outcome.
         /// </summary>
         public async Task<bool> IsDayVerifiedAsync(string source, DateTime day, CancellationToken cancellationToken = default)
         {
             var outcome = await _store.GetStringAsync(Key(source, day), cancellationToken).ConfigureAwait(false);
-            return outcome == "complete" || outcome == "empty";
+            return outcome == Complete || outcome == Empty;
+        }
+
+        /// <summary>
+        /// Whether a stored, finalized day should be downloaded again so it can get a final outcome: only when it
+        /// has none (imported before this ledger existed) or is still in progress (a download that never
+        /// finished). Final outcomes - complete, empty, incomplete, scopeUnverified - are skipped like before,
+        /// so a filtered or concealing tenant does not re-download its whole window every cycle. A
+        /// scopeUnverified day is retried once the importer runs tenant-wide again.
+        /// </summary>
+        public async Task<bool> NeedsReimportAsync(string source, DateTime day, bool wholeTenant,
+            CancellationToken cancellationToken = default)
+        {
+            var outcome = await _store.GetStringAsync(Key(source, day), cancellationToken).ConfigureAwait(false);
+            switch (outcome)
+            {
+                case Complete:
+                case Empty:
+                case Incomplete:
+                    return false;
+                case ScopeUnverified:
+                    return wholeTenant;
+                default:
+                    return true;
+            }
         }
 
         /// <summary>
@@ -119,17 +168,19 @@ namespace Common.Entities.State
                             })).ConfigureAwait(false);
                             foreach (var outcome in outcomes)
                             {
-                                if (outcome == "complete" || outcome == "empty") result.VerifiedDays++;
-                                if (outcome == "empty") result.EmptyDays++;
-                                if (outcome == "partial") result.PartialDays++;
-                                if (outcome == "scopeUnverified") result.ScopeUnverifiedDays++;
+                                if (outcome == Complete || outcome == Empty) result.VerifiedDays++;
+                                if (outcome == Empty) result.EmptyDays++;
+                                if (outcome == Partial) result.PartialDays++;
+                                if (outcome == Incomplete) result.IncompleteDays++;
+                                if (outcome == ScopeUnverified) result.ScopeUnverifiedDays++;
                             }
                         }
                         result.Status = result.VerifiedDays == count
                             ? result.EmptyDays == count ? "empty" : "complete"
-                            : result.VerifiedDays + result.PartialDays > 0 ? "partial" : "unverified";
+                            : result.VerifiedDays + result.PartialDays + result.IncompleteDays > 0 ? "partial" : "unverified";
                         result.Reason = result.IsComplete ? null
-                            : result.ScopeUnverifiedDays > 0 ? "scopeUnverified" : "outcomesMissing";
+                            : result.ScopeUnverifiedDays > 0 ? ScopeUnverified
+                            : result.IncompleteDays > 0 ? Incomplete : "outcomesMissing";
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                     catch (Exception)
@@ -154,6 +205,7 @@ namespace Common.Entities.State
         [JsonProperty("verifiedDays")] public int VerifiedDays { get; set; }
         [JsonProperty("emptyDays")] public int EmptyDays { get; set; }
         [JsonProperty("partialDays")] public int PartialDays { get; set; }
+        [JsonProperty("incompleteDays")] public int IncompleteDays { get; set; }
         [JsonProperty("scopeUnverifiedDays")] public int ScopeUnverifiedDays { get; set; }
         [JsonIgnore] public bool IsComplete => Status == "complete" || Status == "empty";
     }

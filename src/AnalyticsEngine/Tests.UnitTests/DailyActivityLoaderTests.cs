@@ -1,4 +1,5 @@
 using Common.Entities.LookupCaches;
+using Common.Entities.CopilotAdoption;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -440,6 +441,122 @@ namespace Tests.UnitTests
                 "Without durable state nothing can be certified, so the existing skip behaviour is kept.");
         }
 
+        private static InMemoryDailyActivityLoader CoverageLoader(DateTime nowUtc, UsageReportCoverageStore coverage,
+            InMemoryUsageReportStore<FakeUserUsageActivityLog> sql, bool wholeTenant = true)
+        {
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                Clock = new FixedClock(nowUtc),
+                StorageInspector = new FakeUsageReportStorageInspector(hasLeadingDateIndex: true),
+                CoverageStore = coverage, CoverageSource = "teams", CoverageWholeTenant = wholeTenant,
+            };
+            loader.ReportStore = sql;
+            return loader;
+        }
+
+        private static async Task ImportCycleAsync(InMemoryDailyActivityLoader loader, int daysBack, DateTime? lastSuccessfulImport)
+        {
+            var skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBack, lastSuccessfulImport);
+            await loader.LoadAndSaveEachDateAsync(daysBack, skip, null, SeededIdCache(), new UserCache(null));
+        }
+
+        [TestMethod]
+        public async Task DailyCoverage_AnalysisOnDayT_BeforeDayTsImport_SeesTheNewestAssessedDayVerified()
+        {
+            // #899 review: the analysis on day T reads through T - UsageReportLagDays. The import of day T - 1
+            // must already have certified that day, or every workload is unverified until day T's import ends.
+            var dayT = new DateTime(2026, 6, 20, 0, 0, 0, DateTimeKind.Utc);
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var sql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            var yesterday = CoverageLoader(dayT.AddDays(-1).AddHours(10), coverage, sql);
+            for (var day = 2; day <= 10; day++)
+                yesterday.PagesByDate[dayT.AddDays(-day)] = new List<FakeUserActivityDetail> { Page(UserA, day) };
+            await ImportCycleAsync(yesterday, 9, null);
+
+            var settled = CopilotAdoptionAgentGrowth.LastSettledDay(dayT.AddMinutes(30), CopilotAdoptionOptions.Default);
+            Assert.AreEqual(dayT.AddDays(-3), settled);
+            var teams = (await coverage.ReadAsync(dayT.AddDays(-9), settled)).Single(c => c.Source == "teams");
+            Assert.IsTrue(teams.IsComplete, $"Expected the whole assessed window verified, got {teams.Status}/{teams.Reason}.");
+            var withUnsettled = (await coverage.ReadAsync(dayT.AddDays(-9), dayT.AddDays(-2))).Single(c => c.Source == "teams");
+            Assert.AreEqual(1, withUnsettled.ExpectedDays - withUnsettled.VerifiedDays,
+                "T - 2 is not settled for the analysis yet and stays uncertified.");
+
+            // Day T's import is under way: it re-downloads T - 3 (still in the refresh window). The upsert never
+            // deletes, so the certified day stays verified while the download is in progress.
+            await coverage.BeginDayAsync("teams", settled);
+            Assert.IsTrue((await coverage.ReadAsync(dayT.AddDays(-9), settled)).Single(c => c.Source == "teams").IsComplete);
+        }
+
+        [TestMethod]
+        public async Task DailyCoverage_AnEmptyDayInsideTheLag_IsNotCertifiedEmpty_UntilItSettles()
+        {
+            // Graph answers a day it has not published yet with 200 and no rows, so zero rows inside the lag
+            // cannot be told apart from "not available yet".
+            var dayT = new DateTime(2026, 6, 20, 0, 0, 0, DateTimeKind.Utc);
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var sql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            await ImportCycleAsync(CoverageLoader(dayT.AddDays(-1).AddHours(10), coverage, sql), 3, null);
+            var newest = (await coverage.ReadAsync(dayT.AddDays(-3), dayT.AddDays(-2))).Single(c => c.Source == "teams");
+            Assert.AreEqual(0, newest.VerifiedDays);
+            Assert.AreEqual(0, newest.EmptyDays);
+            Assert.AreEqual(2, newest.PartialDays);
+
+            await ImportCycleAsync(CoverageLoader(dayT.AddHours(10), coverage, sql), 3, null);
+            var settled = (await coverage.ReadAsync(dayT.AddDays(-3), dayT.AddDays(-3))).Single(c => c.Source == "teams");
+            Assert.AreEqual("empty", settled.Status, "Once fully settled, a day Graph still reports empty is successfully empty.");
+        }
+
+        [TestMethod]
+        public async Task DailyCoverage_AFirstDownloadThatFailsMidway_IsNotCertified()
+        {
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveBatchSize = 1 };
+            loader.CoverageStore = coverage;
+            loader.CoverageSource = "teams";
+            loader.CoverageWholeTenant = true;
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail> { Page(UserA, 1), Page(UserB, 2) };
+            loader.ReportStore = new FailOnSaveNumberUsageReportStore(2);
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(
+                () => loader.SaveLoadedReportsToSql(SeededIdCache(), new UserCache(null)));
+            Assert.IsFalse(await coverage.IsDayVerifiedAsync("teams", Day1));
+            Assert.IsTrue(await coverage.NeedsReimportAsync("teams", Day1, true), "An unfinished first download is retried.");
+        }
+
+        [TestMethod]
+        public async Task DailyCoverage_FilteredOrConcealingTenant_KeepsTheSkipWindow_AndStaysUnverified()
+        {
+            // #899 review: final, never-certifiable outcomes must not defeat #375 by re-downloading the whole
+            // skip window every cycle.
+            var now = new DateTime(2026, 6, 20, 10, 0, 0, DateTimeKind.Utc);
+            var today = now.Date;
+            foreach (var filtered in new[] { true, false })
+            {
+                var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+                var sql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+                var loader = CoverageLoader(now, coverage, sql, wholeTenant: !filtered);
+                if (filtered) loader.InScopeRule = upn => upn != UserB;
+                for (var day = 1; day <= 10; day++)
+                {
+                    loader.PagesByDate[today.AddDays(-day)] = new List<FakeUserActivityDetail>
+                    {
+                        Page(UserA, day), Page(filtered || day != 6 ? UserB : "hash@hash", day),
+                    };
+                }
+
+                await ImportCycleAsync(loader, 10, null);
+                Assert.AreEqual(10, loader.GraphRequests.Count);
+                loader.GraphRequests.Clear();
+                await ImportCycleAsync(loader, 10, now);
+                CollectionAssert.AreEquivalent(new[] { today.AddDays(-1), today.AddDays(-2), today.AddDays(-3) },
+                    loader.GraphRequests.ToArray(), "Only the refresh window is downloaded again.");
+
+                var teams = (await coverage.ReadAsync(today.AddDays(-10), today.AddDays(-3))).Single(c => c.Source == "teams");
+                Assert.IsFalse(teams.IsComplete);
+                Assert.AreEqual(filtered ? UsageReportCoverageStore.ScopeUnverified : UsageReportCoverageStore.Incomplete, teams.Reason);
+                Assert.AreEqual(filtered ? 0 : 1, teams.IncompleteDays);
+            }
+        }
+
 
 
         [TestMethod]
@@ -556,7 +673,9 @@ namespace Tests.UnitTests
             var sql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
             sql.Seed(StoredRow(Day1, UserAId, 5));
             await SaveAsync(loader, sql);
-            Assert.AreEqual("partial", (await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams").Status);
+            var retained = (await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams");
+            Assert.AreEqual("partial", retained.Status);
+            Assert.AreEqual(UsageReportCoverageStore.Incomplete, retained.Reason);
             loader.CoverageWholeTenant = false;
             await SaveAsync(loader, new InMemoryUsageReportStore<FakeUserUsageActivityLog>());
             Assert.AreEqual("scopeUnverified", (await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams").Reason);
@@ -588,7 +707,6 @@ namespace Tests.UnitTests
         {
             var state = new CoverageWriteFailureStore();
             var coverage = new UsageReportCoverageStore(state, true);
-            await coverage.CompleteDayAsync("teams", Day1, true, true, false, Day1.AddDays(3), 3);
             state.FailWrites = true;
             var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
             {
@@ -599,8 +717,8 @@ namespace Tests.UnitTests
             await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => SaveAsync(loader, sql));
             Assert.AreEqual(0, sql.RowsLoadedForDates.Count, "Invalidation must precede even loading rows for modification.");
             Assert.AreEqual(0, sql.SaveCount);
-            Assert.IsTrue((await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams").IsComplete,
-                "The old certificate is still valid because the blocked rewrite changed no SQL data.");
+            Assert.IsFalse((await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams").IsComplete,
+                "A first download that could not mark itself in progress wrote nothing and certified nothing.");
         }
 
         private sealed class CoverageWriteFailureStore : IKeyValueStore
@@ -735,7 +853,6 @@ namespace Tests.UnitTests
         public async Task DailyActivityLoader_RetryAfterIntermediateBatchFailure_IsIdempotentAndStampedByHealthyRun()
         {
             var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
-            await coverage.CompleteDayAsync("teams", Day1, true, true, false, Day1.AddDays(3), 3);
             CountingUserActivityDetail.ResolveAsync = upn => Task.FromResult(int.Parse(upn.Substring(4, 1)));
             var failingInstrumentation = new RecordingUsageReportSaveInstrumentation();
             var failingLoader = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveBatchSize = 2, SaveInstrumentation = failingInstrumentation };

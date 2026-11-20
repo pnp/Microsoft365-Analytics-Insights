@@ -124,6 +124,8 @@ export interface WorkloadCoverage {
   verifiedDays: number;
   emptyDays: number;
   partialDays: number;
+  /** Settled days not every row of which could be saved (concealed or missing identities). Final. */
+  incompleteDays?: number;
   scopeUnverifiedDays: number;
 }
 

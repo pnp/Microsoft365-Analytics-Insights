@@ -168,7 +168,7 @@ namespace Tests.UnitTests
             var store = new UsageReportCoverageStore(state, true);
             await store.CompleteDayAsync("teams", Day, true, true, false, Day.AddDays(3), 3);
             await store.CompleteDayAsync("outlook", Day, false, true, true, Day.AddDays(3), 3);
-            await store.CompleteDayAsync("sharepoint", Day, true, true, false, Day.AddDays(2), 3);
+            await store.CompleteDayAsync("sharepoint", Day, true, true, false, Day.AddDays(1), 3);
             await state.SetStringAsync("usage-report:onedrive", Day.AddDays(4).ToString("O"));
             await state.SetStringAsync("v1:onedrive:20260510", "unknownFutureOutcome");
             var coverage = await store.ReadAsync(Day, Day.AddDays(1));
@@ -181,13 +181,24 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task InterruptedRewrite_RevokesPreviousSuccess()
+        public async Task ReDownloadOfAVerifiedDay_StaysVerified_ButAFirstDownloadIsInProgress()
         {
             var store = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
-            await store.CompleteDayAsync("teams", Day, true, true, false, Day.AddDays(3), 3);
-            Assert.IsTrue((await store.ReadAsync(Day, Day)).Single(c => c.Source == "teams").IsComplete);
+            await store.CompleteDayAsync("teams", Day, true, true, false, Day.AddDays(2), 3);
+            Assert.IsTrue((await store.ReadAsync(Day, Day)).Single(c => c.Source == "teams").IsComplete,
+                "A day with rows is certified lag - 1 days after it, before the analysis first assesses it.");
             await store.BeginDayAsync("teams", Day);
-            Assert.AreEqual("partial", (await store.ReadAsync(Day, Day)).Single(c => c.Source == "teams").Status);
+            Assert.IsTrue((await store.ReadAsync(Day, Day)).Single(c => c.Source == "teams").IsComplete,
+                "The upsert never deletes, so a re-download in progress cannot leave fewer users stored.");
+            Assert.IsFalse(await store.NeedsReimportAsync("teams", Day, true));
+
+            await store.BeginDayAsync("outlook", Day);
+            Assert.AreEqual("partial", (await store.ReadAsync(Day, Day)).Single(c => c.Source == "outlook").Status);
+            Assert.IsTrue(await store.NeedsReimportAsync("outlook", Day, true));
+
+            await store.CompleteDayAsync("sharepoint", Day, false, true, false, Day.AddDays(3), 3);
+            Assert.IsFalse(await store.NeedsReimportAsync("sharepoint", Day, false), "Final under the same filter.");
+            Assert.IsTrue(await store.NeedsReimportAsync("sharepoint", Day, true), "Retried once the import is tenant-wide again.");
         }
 
         [TestMethod]

@@ -18,7 +18,7 @@ export const copilotAdoption = {
   'copilotAdoption.workload.sharepoint': 'SharePoint',
   'copilotAdoption.workload.onedrive': 'OneDrive',
   'copilotAdoption.workload.details': 'Why coverage may be unverified',
-  'copilotAdoption.workload.migration': 'Coverage builds from newly verified daily imports. Older completion stamps, retained rows and filtered imports do not prove complete coverage. A backfill can only verify dates Microsoft Graph still serves. Check the usage-report importer and runtime Storage access; no durable state means no verified coverage.',
+  'copilotAdoption.workload.migration': 'Coverage builds from daily imports verified by this version. Days imported before the upgrade are downloaded once more to verify them, but Microsoft Graph only serves about the last 28 days, so a longer period (such as 90 or 180 days) stays unverified until its older days have left the period: up to about 62 or 152 days after the upgrade. Imports limited to a user scope (UserGroupsFilter), and days with concealed or missing identities, are never verified. Check the usage-report importer and runtime Storage access; no durable state means no verified coverage.',
   'copilotAdoption.workload.assessmentUnavailable': 'Workload assessment unavailable',
   'copilotAdoption.workload.provenDemand': 'Proven Copilot demand is retained. Workload coverage is unverified; workload score and prospective hours are withheld.',
   'copilotAdoption.workload.observedCowork': 'Observed Cowork use is retained. Workload coverage is unverified; coordination load and prospective hours are withheld.',
