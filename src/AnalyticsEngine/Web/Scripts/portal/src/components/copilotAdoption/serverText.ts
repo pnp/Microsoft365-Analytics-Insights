@@ -38,6 +38,7 @@ export const COPILOT_ADOPTION_WARNING_KEYS = {
   LicenceCandidatesAuditOnly: 'licenceCandidatesAuditOnly',
   CoworkReadinessNoSources: 'coworkReadinessNoSources',
   CoworkM365UsageMissing: 'coworkM365UsageMissing',
+  WorkloadCoverageUnverified: 'workloadCoverageUnverified',
   CoworkAuditMissing: 'coworkAuditMissing',
   UsageReportSourcedUsers: 'usageReportSourcedUsers',
   UsageReportWindowMismatch: 'usageReportWindowMismatch',
@@ -59,6 +60,7 @@ export const COPILOT_ADOPTION_WARNING_KEYS = {
 } as const;
 
 const COWORK_WARNING_KEYS = new Set<string>([
+  COPILOT_ADOPTION_WARNING_KEYS.WorkloadCoverageUnverified,
   COPILOT_ADOPTION_WARNING_KEYS.CoworkReadinessNoSources,
   COPILOT_ADOPTION_WARNING_KEYS.CoworkM365UsageMissing,
   COPILOT_ADOPTION_WARNING_KEYS.CoworkAuditMissing,
@@ -71,6 +73,7 @@ const COWORK_WARNING_KEYS = new Set<string>([
 ]);
 
 const OPPORTUNITY_WARNING_KEYS = new Set<string>([
+  COPILOT_ADOPTION_WARNING_KEYS.WorkloadCoverageUnverified,
   COPILOT_ADOPTION_WARNING_KEYS.LicenceOpportunitiesNoSources,
   COPILOT_ADOPTION_WARNING_KEYS.LicenceCandidatesAuditOnly,
   COPILOT_ADOPTION_WARNING_KEYS.NoCopilotData,
@@ -185,7 +188,6 @@ export const INCOMPLETE_DATASET_KEYS: readonly TranslationKey[] = [
   'copilotAdoption.server.dataset.copilotInteractionsAwaitingBackfill',
   'copilotAdoption.server.dataset.copilotUsageReport',
   'copilotAdoption.server.dataset.copilotUsageReportSnapshotPeriod',
-  'copilotAdoption.server.dataset.m365UsageReports',
   'copilotAdoption.server.dataset.copilotUsageReportAnonymisationCheck',
   'copilotAdoption.server.dataset.licenceHistoryAvailability',
   'copilotAdoption.server.dataset.copilotLicenceAssignments',
@@ -443,6 +445,8 @@ export function recommendedActionText(t: TFunction, row: LicensedUserAdoptionRow
 
 export function opportunityTierLabel(t: TFunction, tier: string | null, fallback: string | null): string {
   switch (tier) {
+    case 'workloadUnavailable':
+      return t('copilotAdoption.workload.assessmentUnavailable');
     case 'provenDemand':
       return t('copilotAdoptionUsers.server.opportunityTier.provenDemand');
     case 'workloadInferred':
@@ -455,6 +459,11 @@ export function opportunityTierLabel(t: TFunction, tier: string | null, fallback
 }
 
 export function opportunityRationale(t: TFunction, row: LicenceOpportunityRow): string {
+  if (row.workloadUnavailableReason) {
+    return t(row.qualificationTier === 'provenDemand'
+      ? 'copilotAdoption.workload.provenDemand'
+      : 'copilotAdoption.workload.warning');
+  }
   const reasons: string[] = [];
   if (row.unlicensedCopilotInteractions > 0) {
     reasons.push(t(
@@ -470,19 +479,19 @@ export function opportunityRationale(t: TFunction, row: LicenceOpportunityRow): 
       },
     ));
   }
-  if (row.teamsMessages + row.teamsMeetings > 0) {
+  if ((row.teamsMessages ?? 0) + (row.teamsMeetings ?? 0) > 0) {
     reasons.push(t('copilotAdoptionUsers.server.opportunityRationale.teams', {
       messages: formatCount(row.teamsMessages),
       meetings: formatCount(row.teamsMeetings),
     }));
   }
-  if (row.emailsSent + row.emailsRead > 0) {
+  if ((row.emailsSent ?? 0) + (row.emailsRead ?? 0) > 0) {
     reasons.push(t('copilotAdoptionUsers.server.opportunityRationale.email', {
       sent: formatCount(row.emailsSent),
       read: formatCount(row.emailsRead),
     }));
   }
-  if (row.filesViewedOrEdited > 0) {
+  if (row.filesViewedOrEdited != null && row.filesViewedOrEdited > 0) {
     reasons.push(t('copilotAdoptionUsers.server.opportunityRationale.files', {
       files: formatCount(row.filesViewedOrEdited),
     }));
@@ -543,6 +552,7 @@ export function agentOriginLabel(t: TFunction, origin: string | null | undefined
 }
 
 export const COWORK_TIER_LABEL_KEYS = {
+  workloadUnavailable: 'copilotAdoptionCowork.tier.workloadUnavailable.label',
   established: 'copilotAdoptionCowork.tier.established.label',
   trialling: 'copilotAdoptionCowork.tier.trialling.label',
   primeCandidate: 'copilotAdoptionCowork.tier.primeCandidate.label',
@@ -565,8 +575,8 @@ function countPhrase(
   return t(value === 1 ? oneKey : otherKey, { count: countText(value) });
 }
 
-function scoreText(value: number): string {
-  return formatNumber(value, { maximumFractionDigits: 15 });
+function scoreText(value: number | null): string {
+  return value == null ? '\u2014' : formatNumber(value, { maximumFractionDigits: 15 });
 }
 
 function countText(value: number): string {
@@ -575,7 +585,7 @@ function countText(value: number): string {
 
 function coworkWorkloadPhrase(t: TFunction, row: CoworkReadinessRow): string {
   const workload: string[] = [];
-  if (row.teamsMeetings > 0) {
+  if (row.teamsMeetings != null && row.teamsMeetings > 0) {
     workload.push(countPhrase(
       t,
       row.teamsMeetings,
@@ -583,7 +593,7 @@ function coworkWorkloadPhrase(t: TFunction, row: CoworkReadinessRow): string {
       'copilotAdoptionCowork.server.rationale.workload.meeting.other',
     ));
   }
-  if (row.teamsMessages > 0) {
+  if (row.teamsMessages != null && row.teamsMessages > 0) {
     workload.push(countPhrase(
       t,
       row.teamsMessages,
@@ -591,7 +601,7 @@ function coworkWorkloadPhrase(t: TFunction, row: CoworkReadinessRow): string {
       'copilotAdoptionCowork.server.rationale.workload.teamsMessage.other',
     ));
   }
-  const mail = row.emailsSent + row.emailsRead;
+  const mail = (row.emailsSent ?? 0) + (row.emailsRead ?? 0);
   if (mail > 0) {
     workload.push(countPhrase(
       t,
@@ -600,7 +610,7 @@ function coworkWorkloadPhrase(t: TFunction, row: CoworkReadinessRow): string {
       'copilotAdoptionCowork.server.rationale.workload.email.other',
     ));
   }
-  if (row.filesViewedOrEdited > 0) {
+  if (row.filesViewedOrEdited != null && row.filesViewedOrEdited > 0) {
     workload.push(countPhrase(
       t,
       row.filesViewedOrEdited,
@@ -615,6 +625,11 @@ function coworkWorkloadPhrase(t: TFunction, row: CoworkReadinessRow): string {
 }
 
 export function coworkRationaleText(t: TFunction, row: CoworkReadinessRow, options: CopilotAdoptionOptions): string {
+  if (row.workloadUnavailableReason) {
+    return t(row.usedCowork
+      ? 'copilotAdoption.workload.observedCowork'
+      : 'copilotAdoption.workload.warning');
+  }
   if (activeLocale().startsWith('en')) return row.rationale;
 
   const regularDays = Math.max(1, options.coworkRegularMinActiveDays);

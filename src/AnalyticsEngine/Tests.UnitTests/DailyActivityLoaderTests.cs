@@ -5,10 +5,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using Common.Entities;
+using Common.Entities.State;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using UnitTests.FakeLoaderClasses;
@@ -496,6 +498,97 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task DailyCoverage_EmptySuccessIsDurable_NotAFactRow()
+        {
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                CoverageStore = coverage, CoverageSource = "teams", CoverageWholeTenant = true,
+            };
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail>();
+            var sql = await SaveAsync(loader, new InMemoryUsageReportStore<FakeUserUsageActivityLog>());
+            Assert.AreEqual(0, sql.Stored.Count);
+            var result = (await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams");
+            Assert.AreEqual("empty", result.Status);
+            Assert.AreEqual(1, result.EmptyDays);
+        }
+
+        [TestMethod]
+        public async Task DailyCoverage_RetainedRowsOrFilteredScopeCannotCertifySuccessfulEmpty()
+        {
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                CoverageStore = coverage, CoverageSource = "teams", CoverageWholeTenant = true,
+            };
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail>();
+            var sql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            sql.Seed(StoredRow(Day1, UserAId, 5));
+            await SaveAsync(loader, sql);
+            Assert.AreEqual("partial", (await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams").Status);
+            loader.CoverageWholeTenant = false;
+            await SaveAsync(loader, new InMemoryUsageReportStore<FakeUserUsageActivityLog>());
+            Assert.AreEqual("scopeUnverified", (await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams").Reason);
+        }
+
+        [DataTestMethod]
+        [DataRow(null)]
+        [DataRow("hash@hash")]
+        [DataRow(UserB)]
+        public async Task DailyCoverage_SkippedIdentitiesLeavePartialEvidence(string skippedIdentity)
+        {
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                CoverageStore = coverage, CoverageSource = "teams", CoverageWholeTenant = true,
+                InScopeRule = upn => upn != UserB,
+            };
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail>
+            {
+                Page(UserA, 5), Page(skippedIdentity, 2),
+            };
+            var sql = await SaveAsync(loader, new InMemoryUsageReportStore<FakeUserUsageActivityLog>());
+            Assert.AreEqual(1, sql.Stored.Count);
+            Assert.AreEqual("partial", (await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams").Status);
+        }
+
+        [TestMethod]
+        public async Task DailyCoverage_FailedInvalidationPreventsSqlWritesAndStaleSuccess()
+        {
+            var state = new CoverageWriteFailureStore();
+            var coverage = new UsageReportCoverageStore(state, true);
+            await coverage.CompleteDayAsync("teams", Day1, true, true, false, Day1.AddDays(3), 3);
+            state.FailWrites = true;
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                CoverageStore = coverage, CoverageSource = "teams", CoverageWholeTenant = true,
+            };
+            loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail> { Page(UserA, 10) };
+            var sql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => SaveAsync(loader, sql));
+            Assert.AreEqual(0, sql.RowsLoadedForDates.Count, "Invalidation must precede even loading rows for modification.");
+            Assert.AreEqual(0, sql.SaveCount);
+            Assert.IsTrue((await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams").IsComplete,
+                "The old certificate is still valid because the blocked rewrite changed no SQL data.");
+        }
+
+        private sealed class CoverageWriteFailureStore : IKeyValueStore
+        {
+            private readonly InMemoryKeyValueStore _inner = new InMemoryKeyValueStore();
+            public bool FailWrites;
+            public string Description => "Synthetic coverage write failure";
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default)
+                => _inner.GetStringAsync(key, cancellationToken);
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default)
+                => FailWrites ? Task.FromException(new InvalidOperationException("Synthetic write outage"))
+                    : _inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+            public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
+                => _inner.DeleteAsync(key, cancellationToken);
+            public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default)
+                => _inner.ExistsAsync(key, cancellationToken);
+        }
+
+        [TestMethod]
         public async Task DailyActivityLoader_InstrumentationCountsDuplicateConcurrentMissesAcrossLoaders()
         {
             var instrumentation = new RecordingUsageReportSaveInstrumentation();
@@ -610,9 +703,14 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task DailyActivityLoader_RetryAfterIntermediateBatchFailure_IsIdempotentAndStampedByHealthyRun()
         {
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            await coverage.CompleteDayAsync("teams", Day1, true, true, false, Day1.AddDays(3), 3);
             CountingUserActivityDetail.ResolveAsync = upn => Task.FromResult(int.Parse(upn.Substring(4, 1)));
             var failingInstrumentation = new RecordingUsageReportSaveInstrumentation();
             var failingLoader = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveBatchSize = 2, SaveInstrumentation = failingInstrumentation };
+            failingLoader.CoverageStore = coverage;
+            failingLoader.CoverageSource = "teams";
+            failingLoader.CoverageWholeTenant = true;
             var rows = Enumerable.Range(1, 5)
                 .Select(i => new CountingUserActivityDetail($"user{i}@contoso.com", i))
                 .Cast<FakeUserActivityDetail>()
@@ -625,15 +723,20 @@ namespace Tests.UnitTests
                 () => failingLoader.SaveLoadedReportsToSql(new ConcurrentLookupDbIdsCache(), new UserCache(null)));
             Assert.IsTrue(failingInstrumentation.Events.Any(e => e.Stage == UsageReportSaveStageIds.SaveFailed));
             Assert.AreEqual(2, failingStore.Stored.Count, "Only the first healthy batch should remain committed after the injected failure.");
+            Assert.AreEqual("partial", (await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams").Status);
 
             var retryInstrumentation = new RecordingUsageReportSaveInstrumentation();
             var retryLoader = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveBatchSize = 2, SaveInstrumentation = retryInstrumentation };
+            retryLoader.CoverageStore = coverage;
+            retryLoader.CoverageSource = "teams";
+            retryLoader.CoverageWholeTenant = true;
             retryLoader.LoadedReportPages[Day1] = rows;
             var retryStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>()
                 .Seed(failingStore.Stored.Select(CloneRow).ToArray());
             retryLoader.ReportStore = retryStore;
 
             await retryLoader.SaveLoadedReportsToSql(new ConcurrentLookupDbIdsCache(), new UserCache(null));
+            Assert.AreEqual("complete", (await coverage.ReadAsync(Day1, Day1)).Single(c => c.Source == "teams").Status);
 
             Assert.AreEqual(5, retryStore.Stored.Count);
             CollectionAssert.AreEqual(new[] { 1, 2, 3, 4, 5 }, retryStore.Stored.OrderBy(r => r.UserID).Select(r => r.UserID).ToArray());

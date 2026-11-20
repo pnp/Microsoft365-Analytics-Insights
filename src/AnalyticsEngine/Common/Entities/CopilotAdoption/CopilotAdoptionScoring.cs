@@ -1418,6 +1418,7 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public static class CoworkTiers
         {
+            public const string WorkloadUnavailable = "workloadUnavailable";
             /// <summary>Regular, habitual Cowork use. Evidence.</summary>
             public const string Established = "established";
 
@@ -1440,6 +1441,7 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Whether a tier rests on observed Cowork use or on inference.</summary>
         public static class CoworkBasis
         {
+            public const string Unavailable = "unavailable";
             /// <summary>The user has actually used Cowork - this is observed, not inferred.</summary>
             public const string Evidence = "evidence";
 
@@ -1456,6 +1458,7 @@ namespace Common.Entities.CopilotAdoption
             CoworkTiers.BuildFluencyFirst,
             CoworkTiers.LowCoordinationLoad,
             CoworkTiers.NotIndicated,
+            CoworkTiers.WorkloadUnavailable,
         };
 
         /// <summary>
@@ -1483,6 +1486,8 @@ namespace Common.Entities.CopilotAdoption
                 return CoworkTiers.Trialling;
             }
 
+            if (!row.CoordinationLoadScore.HasValue) return CoworkTiers.WorkloadUnavailable;
+
             var fluent = row.FluencyScore >= o.CoworkFluencyMinScore;
             var loaded = row.CoordinationLoadScore >= o.CoworkLoadMinScore;
 
@@ -1503,6 +1508,7 @@ namespace Common.Entities.CopilotAdoption
                 case CoworkTiers.BuildFluencyFirst: return "Build fluency first";
                 case CoworkTiers.LowCoordinationLoad: return "Low coordination load";
                 case CoworkTiers.NotIndicated: return "Not indicated";
+                case CoworkTiers.WorkloadUnavailable: return "Workload assessment unavailable";
                 default: return string.Empty;
             }
         }
@@ -1512,6 +1518,8 @@ namespace Common.Entities.CopilotAdoption
         {
             switch (tier)
             {
+                case CoworkTiers.WorkloadUnavailable:
+                    return CoworkBasis.Unavailable;
                 case CoworkTiers.Established:
                 case CoworkTiers.Trialling:
                     return CoworkBasis.Evidence;
@@ -1528,6 +1536,8 @@ namespace Common.Entities.CopilotAdoption
 
             switch (tier)
             {
+                case CoworkTiers.WorkloadUnavailable:
+                    return "Workload coverage is unverified. Missing values are unknown, not zero; workload-fit classification and prospective hours are withheld.";
                 case CoworkTiers.Established:
                     return $"Using Cowork on at least {days} separate days in this period. These people have "
                          + "already made it part of how they work - keep them in scope, and use them as the "
@@ -1579,23 +1589,23 @@ namespace Common.Entities.CopilotAdoption
 
             if (row.TeamsMeetings > 0)
             {
-                workload.Add($"{row.TeamsMeetings:N0} meeting{Plural(row.TeamsMeetings)} a day");
+                workload.Add($"{row.TeamsMeetings:N0} meeting{Plural(row.TeamsMeetings.Value)} a day");
             }
 
             if (row.TeamsMessages > 0)
             {
-                workload.Add($"{row.TeamsMessages:N0} Teams message{Plural(row.TeamsMessages)} a day");
+                workload.Add($"{row.TeamsMessages:N0} Teams message{Plural(row.TeamsMessages.Value)} a day");
             }
 
             var mail = row.EmailsSent + row.EmailsRead;
             if (mail > 0)
             {
-                workload.Add($"{mail:N0} email{Plural(mail)} a day");
+                workload.Add($"{mail:N0} email{Plural(mail.Value)} a day");
             }
 
             if (row.FilesViewedOrEdited > 0)
             {
-                workload.Add($"{row.FilesViewedOrEdited:N0} file{Plural(row.FilesViewedOrEdited)} a day");
+                workload.Add($"{row.FilesViewedOrEdited:N0} file{Plural(row.FilesViewedOrEdited.Value)} a day");
             }
 
             var workloadPhrase = workload.Count > 0
@@ -1619,7 +1629,7 @@ namespace Common.Entities.CopilotAdoption
 
                 case CoworkTiers.PrimeCandidate:
                     return $"Predicted fit - not yet measured: Copilot fluency {Num(row.FluencyScore)}/100 "
-                         + $"and a coordination load of {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}). "
+                         + $"and a coordination load of {row.CoordinationLoadScore?.ToString("0.###############", CultureInfo.InvariantCulture)}/100 ({workloadPhrase}). "
                          + "Recommended for the Cowork spending policy.";
 
                 case CoworkTiers.BuildFluencyFirst:
@@ -1629,12 +1639,12 @@ namespace Common.Entities.CopilotAdoption
 
                 case CoworkTiers.LowCoordinationLoad:
                     return $"Fluent with Copilot ({Num(row.FluencyScore)}/100) but a coordination load of "
-                         + $"only {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}). Little for Cowork "
+                         + $"only {row.CoordinationLoadScore?.ToString("0.###############", CultureInfo.InvariantCulture)}/100 ({workloadPhrase}). Little for Cowork "
                          + "to take on.";
 
                 default:
                     return $"No case on current evidence: Copilot fluency {Num(row.FluencyScore)}/100, "
-                         + $"coordination load {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}).";
+                         + $"coordination load {row.CoordinationLoadScore?.ToString("0.###############", CultureInfo.InvariantCulture)}/100 ({workloadPhrase}).";
             }
         }
 
@@ -1714,7 +1724,7 @@ namespace Common.Entities.CopilotAdoption
         {
             var o = options ?? CopilotAdoptionOptions.Default;
 
-            if (cohort == null || cohort.Count == 0)
+            if (cohort == null || cohort.Count == 0 || cohort.Any(row => row.WorkloadUnavailableReason != null))
             {
                 return new CoworkValueEstimate();
             }
@@ -1754,7 +1764,7 @@ namespace Common.Entities.CopilotAdoption
             IReadOnlyCollection<LicenceOpportunityRow> candidates,
             CopilotAdoptionOptions options = null)
         {
-            if (candidates == null || candidates.Count == 0)
+            if (candidates == null || candidates.Count == 0 || candidates.Any(row => row.WorkloadUnavailableReason != null))
             {
                 return new CoworkValueEstimate();
             }
@@ -2137,7 +2147,8 @@ namespace Common.Entities.CopilotAdoption
         {
             var o = options ?? CopilotAdoptionOptions.Default;
 
-            if (candidates == null || candidates.Count == 0)
+            if (candidates == null || candidates.Count == 0 || candidates.Any(row => row.WorkloadUnavailableReason != null
+                || !row.TeamsMeetings.HasValue || !row.EmailsSent.HasValue || !row.EmailsRead.HasValue || !row.FilesViewedOrEdited.HasValue))
             {
                 return new LicenceValueEstimate { CandidatesCapped = candidatesCapped };
             }
@@ -2150,9 +2161,9 @@ namespace Common.Entities.CopilotAdoption
             double meetings = 0, mail = 0, documents = 0;
             foreach (var row in candidates)
             {
-                meetings += row.TeamsMeetings * workingDaysPerMonth;
-                mail += (row.EmailsSent + row.EmailsRead) * workingDaysPerMonth;
-                documents += row.FilesViewedOrEdited * workingDaysPerMonth;
+                meetings += row.TeamsMeetings.Value * workingDaysPerMonth;
+                mail += (row.EmailsSent.Value + row.EmailsRead.Value) * workingDaysPerMonth;
+                documents += row.FilesViewedOrEdited.Value * workingDaysPerMonth;
             }
 
             return ModelLicenceValue(candidates.Count, meetings, mail, documents, o, candidatesCapped, cohort);

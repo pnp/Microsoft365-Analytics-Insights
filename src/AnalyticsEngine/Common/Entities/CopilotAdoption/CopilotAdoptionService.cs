@@ -1,5 +1,6 @@
 ﻿using Common.Entities.Copilot;
 using Common.Entities.AgentCosts;
+using Common.Entities.State;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -84,6 +85,7 @@ namespace Common.Entities.CopilotAdoption
         private readonly IAnalyticsDbContextFactory _contextFactory;
         private readonly int _maxConcurrentSteps;
         private readonly ICopilotAdoptionRunTelemetry _telemetry;
+        private readonly UsageReportCoverageStore _usageReportCoverage;
 
         /// <summary>
         /// The first swallowed failure of each step in the current analysis. The sequential steps' queries go
@@ -98,12 +100,14 @@ namespace Common.Entities.CopilotAdoption
             CopilotAdoptionOptions options = null,
             IAnalyticsDbContextFactory contextFactory = null,
             int? maxConcurrentSteps = null,
-            ICopilotAdoptionRunTelemetry telemetry = null)
+            ICopilotAdoptionRunTelemetry telemetry = null,
+            UsageReportCoverageStore usageReportCoverage = null)
         {
             _options = options ?? CopilotAdoptionOptions.Default;
             _contextFactory = contextFactory ?? DefaultAnalyticsDbContextFactory.Instance;
             _maxConcurrentSteps = Math.Max(1, maxConcurrentSteps ?? MaxConcurrentSteps);
             _telemetry = telemetry ?? NullCopilotAdoptionRunTelemetry.Instance;
+            _usageReportCoverage = usageReportCoverage;
         }
 
         public CopilotAdoptionOptions Options => _options;
@@ -299,17 +303,32 @@ namespace Common.Entities.CopilotAdoption
                     new SqlParameter("@windowDays", _options.WindowDays));
             }
 
-            summary.DataSources.M365UsageReportDate = await SafeDateAsync(
-                CopilotAdoptionSql.LatestM365ReportDateSql,
-                CopilotAdoptionSteps.DataSourceProbes,
-                CopilotAdoptionQueries.M365ReportDate,
-                summary.Warnings,
-                summary.WarningDetails,
-                "Microsoft 365 usage-report snapshot date",
-                () => summary.MarkFiguresIncomplete("Microsoft 365 usage reports"),
-                cancellationToken,
-                new SqlParameter("@settled", settled));
-            summary.DataSources.M365UsageReportsAvailable = summary.DataSources.M365UsageReportDate.HasValue;
+            // This is the assessed daily-report window, not a MAX(fact date) completeness claim.
+            // The same settlement boundary is used by the queries and the exact per-day outcome reader.
+            summary.DataSources.M365UsageReportDate = settled;
+            try
+            {
+                summary.DataSources.WorkloadCoverage = await (_usageReportCoverage ?? UsageReportCoverageStore
+                    .Open(new Config.AppConfig())).ReadAsync(windowStart.Date, settled, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception)
+            {
+                // Configuration/client construction can fail before the store's bounded reader is reached.
+                // That cannot certify a workload or prevent independent audit-based analysis.
+                summary.DataSources.WorkloadCoverage = UsageReportCoverageStore.Sources.Select(source => new UsageReportCoverage
+                {
+                    Source = source, FromUtc = windowStart.Date, ThroughUtc = settled.Date,
+                    ExpectedDays = Math.Max(0, (settled.Date - windowStart.Date).Days + 1),
+                    Reason = "durableStateUnavailable",
+                }).ToList();
+            }
+            summary.DataSources.M365UsageReportsAvailable =
+                CopilotAdoptionWorkloadEvidence.Complete(summary.DataSources.WorkloadCoverage);
+            if (!summary.DataSources.M365UsageReportsAvailable)
+            {
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.WorkloadCoverageUnverified);
+            }
 
             summary.DataSources.CopilotUsageReportObfuscated = await SafeScalarAsync(
                 CopilotAdoptionSql.CopilotReportObfuscatedSql,
@@ -1692,13 +1711,9 @@ namespace Common.Entities.CopilotAdoption
             }
 
             var includeAudit = summary.DataSources.AuditAvailable;
-            var includeM365 = summary.DataSources.M365UsageReportsAvailable;
-
-            if (!includeAudit && !includeM365)
-            {
-                output.AddWarning(CopilotAdoptionWarningKeys.LicenceOpportunitiesNoSources);
-                return;
-            }
+            // Read retained observations from every workload, even when Teams is absent.
+            // Publication gates below distinguish partial positives from verified zeros.
+            var includeM365 = true;
 
             var sql = CopilotAdoptionSql.LicenceOpportunitiesSql(seatIds, _options, includeAudit, includeM365, useLicenceHistory);
             var parameters = new Dictionary<string, object>
@@ -1749,7 +1764,8 @@ namespace Common.Entities.CopilotAdoption
             analysis.OpportunitiesCapped = rows.Count >= _options.MaxOpportunityCandidates;
 
             analysis.Opportunities = rows
-                .Select(r => CopilotAdoptionScoring.ScoreOpportunity(r, _options))
+                .Select(r => CopilotAdoptionWorkloadEvidence.Apply(
+                    CopilotAdoptionScoring.ScoreOpportunity(r, _options), summary.DataSources.WorkloadCoverage))
                 // Proven demand first. The SQL deliberately sorts proven-demand candidates into the
                 // TOP (@maxRows) window ahead of merely busy users so the cap cannot truncate them;
                 // ordering on score alone here would quietly undo that in the list the reader sees,
@@ -1791,13 +1807,7 @@ namespace Common.Entities.CopilotAdoption
         {
             var summary = analysis.Summary;
             var includeAudit = summary.DataSources.AuditAvailable;
-            var includeM365 = summary.DataSources.M365UsageReportsAvailable;
-
-            if (!includeAudit && !includeM365)
-            {
-                output.AddWarning(CopilotAdoptionWarningKeys.CoworkReadinessNoSources);
-                return;
-            }
+            var includeM365 = true;
 
             var coworkAgentIds = new List<IntValueRow>();
             if (includeAudit)
@@ -2398,7 +2408,7 @@ namespace Common.Entities.CopilotAdoption
 
                     UnlicensedActiveUsers = chat.Count,
                     RecommendedForLicence = recommended,
-                    CoworkPrimeCandidates = primeCandidates,
+                    CoworkPrimeCandidates = analysis.Summary.DataSources.M365UsageReportsAvailable ? (int?)primeCandidates : null,
 
                     // Guests are attributed to their home organisation, so an all-guest domain is a
                     // partner rather than part of this business. Judged on the seat holders when there
@@ -3174,7 +3184,8 @@ namespace Common.Entities.CopilotAdoption
                     withoutFluency++;
                 }
 
-                rows.Add(CopilotAdoptionScoring.ScoreCoworkReadiness(signal, _options));
+                rows.Add(CopilotAdoptionWorkloadEvidence.Apply(
+                    CopilotAdoptionScoring.ScoreCoworkReadiness(signal, _options), summary.DataSources.WorkloadCoverage));
             }
 
             if (withoutFluency > 0)
@@ -3223,14 +3234,15 @@ namespace Common.Entities.CopilotAdoption
                 rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.Established);
             summary.CoworkTriallingUsers =
                 rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.Trialling);
-            summary.CoworkPrimeCandidates =
-                rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.PrimeCandidate);
-            summary.CoworkBuildFluencyFirst =
-                rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.BuildFluencyFirst);
+            summary.CoworkPrimeCandidates = summary.DataSources.M365UsageReportsAvailable
+                ? (int?)rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.PrimeCandidate) : null;
+            summary.CoworkBuildFluencyFirst = summary.DataSources.M365UsageReportsAvailable
+                ? (int?)rows.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.BuildFluencyFirst) : null;
             summary.CoworkRecommendedForPolicy = rows.Count(r => r.RecommendForPolicy);
 
-            summary.CoworkAverageCoordinationLoad = Math.Round(
-                rows.Average(r => r.CoordinationLoadScore), 1, MidpointRounding.AwayFromZero);
+            var averageLoad = rows.Average(r => r.CoordinationLoadScore);
+            summary.CoworkAverageCoordinationLoad = averageLoad.HasValue
+                ? (double?)Math.Round(averageLoad.Value, 1, MidpointRounding.AwayFromZero) : null;
             summary.CoworkAverageFluency = Math.Round(
                 rows.Average(r => r.FluencyScore), 1, MidpointRounding.AwayFromZero);
 
@@ -3268,10 +3280,10 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkScoredUsers = 0;
             summary.CoworkEstablishedUsers = 0;
             summary.CoworkTriallingUsers = 0;
-            summary.CoworkPrimeCandidates = 0;
-            summary.CoworkBuildFluencyFirst = 0;
+            summary.CoworkPrimeCandidates = summary.DataSources.M365UsageReportsAvailable ? (int?)0 : null;
+            summary.CoworkBuildFluencyFirst = summary.DataSources.M365UsageReportsAvailable ? (int?)0 : null;
             summary.CoworkRecommendedForPolicy = 0;
-            summary.CoworkAverageCoordinationLoad = 0;
+            summary.CoworkAverageCoordinationLoad = summary.DataSources.M365UsageReportsAvailable ? (double?)0 : null;
             summary.CoworkAverageFluency = 0;
             summary.CoworkTiers = BuildCoworkTiers(none);
             summary.CoworkByDepartment = new List<CoworkSegmentRow>();
@@ -3321,17 +3333,20 @@ namespace Common.Entities.CopilotAdoption
                 {
                     var prime = g.Count(r => r.Tier == CopilotAdoptionScoring.CoworkTiers.PrimeCandidate);
                     var regular = g.Count(r => r.RegularCoworkUser);
+                    var verified = g.All(r => r.CoordinationLoadScore.HasValue);
 
                     return new CoworkSegmentRow
                     {
                         Segment = g.Key,
                         LicensedUsers = g.Count(),
-                        PrimeCandidates = prime,
-                        PrimeCandidateRatePct = CopilotAdoptionScoring.Percentage(prime, g.Count()),
+                        PrimeCandidates = verified ? (int?)prime : null,
+                        PrimeCandidateRatePct = verified
+                            ? (double?)CopilotAdoptionScoring.Percentage(prime, g.Count()) : null,
                         RegularCoworkUsers = regular,
                         CoworkAdoptionPct = CopilotAdoptionScoring.Percentage(regular, g.Count()),
-                        AverageCoordinationLoad = Math.Round(
-                            g.Average(r => r.CoordinationLoadScore), 1, MidpointRounding.AwayFromZero),
+                        AverageCoordinationLoad = verified
+                            ? (double?)Math.Round(g.Average(r => r.CoordinationLoadScore.Value), 1, MidpointRounding.AwayFromZero)
+                            : null,
                         AverageFluency = Math.Round(
                             g.Average(r => r.FluencyScore), 1, MidpointRounding.AwayFromZero),
                     };
@@ -3350,14 +3365,15 @@ namespace Common.Entities.CopilotAdoption
         private List<CoworkQuadrantPoint> BuildCoworkQuadrant(IEnumerable<CoworkSegmentRow> segments)
         {
             return segments
+                .Where(s => s.AverageCoordinationLoad.HasValue)
                 .Select(s => new CoworkQuadrantPoint
                 {
                     Segment = s.Segment,
                     LicensedUsers = s.LicensedUsers,
-                    CoordinationLoadScore = s.AverageCoordinationLoad,
+                    CoordinationLoadScore = s.AverageCoordinationLoad.Value,
                     FluencyScore = s.AverageFluency,
                     RegularCoworkUsers = s.RegularCoworkUsers,
-                    PrimeCandidates = s.PrimeCandidates,
+                    PrimeCandidates = s.PrimeCandidates.Value,
                 })
                 .ToList();
         }

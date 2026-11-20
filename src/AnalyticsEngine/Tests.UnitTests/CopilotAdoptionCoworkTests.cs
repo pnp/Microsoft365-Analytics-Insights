@@ -1,6 +1,7 @@
 extern alias AnalyticsWeb;
 
 using Common.Entities.CopilotAdoption;
+using Common.Entities.State;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -26,6 +27,13 @@ namespace Tests.UnitTests
     [TestClass]
     public class CopilotAdoptionCoworkTests
     {
+        private static void VerifyWorkloads(CopilotAdoptionSummary summary)
+        {
+            summary.DataSources.M365UsageReportsAvailable = true;
+            summary.DataSources.WorkloadCoverage = UsageReportCoverageStore.Sources
+                .Select(source => new UsageReportCoverage { Source = source, Status = "complete" }).ToList();
+        }
+
         private static CopilotAdoptionOptions Options()
         {
             return CopilotAdoptionOptions.Default;
@@ -79,7 +87,7 @@ namespace Tests.UnitTests
         {
             var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(HeavyCoordinator(), Options());
 
-            Assert.AreEqual(100d, scored.CoordinationLoadScore, 0.01,
+            Assert.AreEqual(100d, scored.CoordinationLoadScore.Value, 0.01,
                 "The four component weights must sum to 100 so the score reads as a percentage.");
         }
 
@@ -93,7 +101,7 @@ namespace Tests.UnitTests
 
             var scored = CopilotAdoptionScoring.ScoreCoworkReadiness(row, Options());
 
-            Assert.AreEqual(Options().CoworkEmailWeight, scored.CoordinationLoadScore, 0.01,
+            Assert.AreEqual(Options().CoworkEmailWeight, scored.CoordinationLoadScore.Value, 0.01,
                 "A single saturated component must contribute only its own weight, never more.");
             Assert.IsTrue(scored.CoordinationLoadScore < Options().CoworkLoadMinScore,
                 "One signal alone must not clear the coordination-load bar.");
@@ -332,8 +340,9 @@ namespace Tests.UnitTests
                 var basis = CopilotAdoptionScoring.CoworkTierBasis(tier);
                 Assert.IsTrue(
                     basis == CopilotAdoptionScoring.CoworkBasis.Evidence
-                    || basis == CopilotAdoptionScoring.CoworkBasis.Inference,
-                    $"Tier '{tier}' must declare whether it rests on evidence or inference.");
+                    || basis == CopilotAdoptionScoring.CoworkBasis.Inference
+                    || basis == CopilotAdoptionScoring.CoworkBasis.Unavailable,
+                    $"Tier '{tier}' must declare evidence, inference or unavailable evidence.");
             }
         }
 
@@ -977,7 +986,7 @@ namespace Tests.UnitTests
             analysis.Summary.ToUtc = new DateTime(2025, 3, 31, 0, 0, 0, DateTimeKind.Utc);
             analysis.Summary.DataSources.AuditAvailable = true;
             analysis.Summary.DataSources.AuditHistoryStartUtc = new DateTime(2025, 1, 1);
-            analysis.Summary.DataSources.M365UsageReportsAvailable = true;
+            VerifyWorkloads(analysis.Summary);
             analysis.Summary.DataSources.M365UsageReportDate = new DateTime(2025, 3, 29);
             return analysis;
         }
@@ -1472,7 +1481,7 @@ namespace Tests.UnitTests
                     new LicensedUserAdoptionRow { UserId = 2, UserPrincipalName = "novice@contoso.com", AdoptionScore = 5 },
                 },
             };
-            analysis.Summary.DataSources.M365UsageReportsAvailable = true;
+            VerifyWorkloads(analysis.Summary);
 
             new CopilotAdoptionService().FinaliseSummary(analysis);
             var ready = analysis.Summary.CoworkValueEstimate;
@@ -1507,7 +1516,7 @@ namespace Tests.UnitTests
                     new LicensedUserAdoptionRow { UserId = 2, UserPrincipalName = "novice@contoso.com", AdoptionScore = 5 },
                 },
             };
-            analysis.Summary.DataSources.M365UsageReportsAvailable = true;
+            VerifyWorkloads(analysis.Summary);
 
             new CopilotAdoptionService().FinaliseSummary(analysis);
             var summary = analysis.Summary;

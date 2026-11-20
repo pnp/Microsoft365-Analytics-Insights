@@ -1,5 +1,6 @@
 using Common.Entities;
 using Common.Entities.ActivityReports;
+using Common.Entities.State;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -100,6 +101,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// read when the two straddle UTC midnight.
         /// </summary>
         public IClock Clock { get; set; } = SystemClock.Instance;
+
+        public UsageReportCoverageStore CoverageStore { get; set; }
+        public string CoverageSource { get; set; }
+        public bool CoverageWholeTenant { get; set; }
 
         /// <summary>
         /// Opt-in, privacy-safe stage diagnostics for the daily usage-report save path. The default is a
@@ -582,6 +587,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         private async Task SaveDateAsync(SaveRun run, DateTime dateTime, List<TUserActivityUserDetail> rows,
             ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache)
         {
+            if (CoverageStore != null)
+            {
+                await CoverageStore.BeginDayAsync(CoverageSource, dateTime.Date);
+            }
             var store = run.Store;
             var instrumentation = run.Instrumentation;
             var instrumentationEnabled = run.InstrumentationEnabled;
@@ -609,6 +618,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             var duplicateRows = 0;
             var outOfScopeRows = 0;
             var missingLookupRows = 0;
+            var concealedRows = 0;
 
             if (instrumentationEnabled)
             {
@@ -646,6 +656,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // Counted and reported once for the whole report.
                 if (IsConcealed(reportPage))
                 {
+                    concealedRows++;
                     dateMetrics?.RecordConcealedIdentity();
                     totals?.RecordConcealedIdentity();
                     continue;
@@ -837,6 +848,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 });
             }
             run.DateIndex++;
+            if (CoverageStore != null)
+            {
+                // An upsert does not remove previously retained rows missing from a corrected report.
+                // Such a day is not an authoritative empty/complete snapshot.
+                var allRowsSaved = missingLookupRows == 0 && concealedRows == 0 && outOfScopeRows == 0
+                    && existingRows.All(row => seenLookupIds.Contains(row.AssociatedLookupId));
+                await CoverageStore.CompleteDayAsync(CoverageSource, dateTime.Date, CoverageWholeTenant,
+                    allRowsSaved, rows.Count == 0, Clock.UtcNow, RefreshableRecentDays);
+            }
         }
 
         private void CompleteSave(SaveRun run)

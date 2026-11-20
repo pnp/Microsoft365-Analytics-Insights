@@ -375,7 +375,7 @@ namespace Common.Entities.CopilotAdoption
         {
             if (q.RecommendedOnly && !row.Recommended) return false;
             if (q.ExistingCopilotUsersOnly && row.UnlicensedCopilotInteractions <= 0) return false;
-            if (q.MinScore.HasValue && row.OpportunityScore < q.MinScore.Value) return false;
+            if (q.MinScore.HasValue && (!row.OpportunityScore.HasValue || row.OpportunityScore < q.MinScore.Value)) return false;
 
             if (!EqualsOrEmpty(q.Department, row.Department)) return false;
             if (!EqualsOrEmpty(q.Country, row.Country)) return false;
@@ -396,11 +396,11 @@ namespace Common.Entities.CopilotAdoption
                 case LicenceOpportunitySortFields.CopilotUse:
                     return OrderThenUpn(rows, r => (double)r.UnlicensedCopilotInteractions, q.SortDescending);
                 case LicenceOpportunitySortFields.Collaboration:
-                    return OrderThenUpn(rows, r => (double)(r.TeamsMessages + r.TeamsMeetings), q.SortDescending);
+                    return OrderThenUpn(rows, r => (double?)(r.TeamsMessages + r.TeamsMeetings), q.SortDescending);
                 case LicenceOpportunitySortFields.Email:
-                    return OrderThenUpn(rows, r => (double)(r.EmailsSent + r.EmailsRead), q.SortDescending);
+                    return OrderThenUpn(rows, r => (double?)(r.EmailsSent + r.EmailsRead), q.SortDescending);
                 case LicenceOpportunitySortFields.Documents:
-                    return OrderThenUpn(rows, r => (double)r.FilesViewedOrEdited, q.SortDescending);
+                    return OrderThenUpn(rows, r => (double?)r.FilesViewedOrEdited, q.SortDescending);
                 case LicenceOpportunitySortFields.Department:
                     return Order(rows, r => r.Department ?? string.Empty, q.SortDescending);
                 case LicenceOpportunitySortFields.LastM365Activity:
@@ -417,7 +417,8 @@ namespace Common.Entities.CopilotAdoption
                     // Applied as the primary key of one composite sort, not as a separate pass: a
                     // later OrderBy would discard it except within exact score ties.
                     return ProvenDemandFirst(rows)
-                        .ThenBy(r => r.OpportunityScore, Direction(q.SortDescending))
+                        .ThenBy(r => !r.OpportunityScore.HasValue)
+                        .ThenBy(r => r.OpportunityScore ?? 0, Direction(q.SortDescending))
                         .ThenBy(r => r.UserPrincipalName ?? string.Empty, StringComparer.OrdinalIgnoreCase);
             }
         }
@@ -497,6 +498,7 @@ namespace Common.Entities.CopilotAdoption
                 new CsvColumn<LicenceOpportunityRow>("Document score", r => r.DocumentScore),
 
                 new CsvColumn<LicenceOpportunityRow>("Justification", r => r.Rationale),
+                new CsvColumn<LicenceOpportunityRow>("Workload evidence unavailable reason", r => r.WorkloadUnavailableReason),
                 new CsvColumn<LicenceOpportunityRow>("Microsoft guidance resources", r => CopilotAdoptionGuidanceCatalogue.TitlesForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)),
                 new CsvColumn<LicenceOpportunityRow>("Microsoft guidance URLs", r => CopilotAdoptionGuidanceCatalogue.UrlsForAction(CopilotAdoptionGuidanceCatalogue.UnlicensedActionCode)),
             };
@@ -523,7 +525,7 @@ namespace Common.Entities.CopilotAdoption
             if (q.RecommendedOnly && !row.RecommendForPolicy) return false;
             if (q.CoworkUsersOnly && !row.UsedCowork) return false;
             if (q.ProspectiveOnly && (row.UsedCowork || row.CoworkInteractions > 0 || row.AccountEnabled == false)) return false;
-            if (q.MinCoordinationLoad.HasValue && row.CoordinationLoadScore < q.MinCoordinationLoad.Value) return false;
+            if (q.MinCoordinationLoad.HasValue && (!row.CoordinationLoadScore.HasValue || row.CoordinationLoadScore < q.MinCoordinationLoad.Value)) return false;
             if (q.MinFluency.HasValue && row.FluencyScore < q.MinFluency.Value) return false;
 
             if (q.Tiers != null && q.Tiers.Count > 0
@@ -555,7 +557,7 @@ namespace Common.Entities.CopilotAdoption
                 case CoworkSortFields.CoworkActiveDays:
                     return OrderThenUpn(rows, r => (double)r.CoworkActiveDays, q.SortDescending);
                 case CoworkSortFields.Meetings:
-                    return OrderThenUpn(rows, r => (double)r.TeamsMeetings, q.SortDescending);
+                    return OrderThenUpn(rows, r => (double?)r.TeamsMeetings, q.SortDescending);
                 case CoworkSortFields.Department:
                     return Order(rows, r => r.Department ?? string.Empty, q.SortDescending);
                 case CoworkSortFields.Tier:
@@ -650,6 +652,7 @@ namespace Common.Entities.CopilotAdoption
                     r => r.TotalCopilotCredits),
 
                 new CsvColumn<CoworkReadinessRow>("Justification", r => r.Rationale),
+                new CsvColumn<CoworkReadinessRow>("Workload evidence unavailable reason", r => r.WorkloadUnavailableReason),
             };
         }
 

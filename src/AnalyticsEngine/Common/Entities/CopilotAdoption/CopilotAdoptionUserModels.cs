@@ -459,38 +459,41 @@ namespace Common.Entities.CopilotAdoption
         public DateTime? LastCopilotInteractionUtc { get; set; }
 
         [JsonProperty("teamsMessages")]
-        public long TeamsMessages { get; set; }
+        public long? TeamsMessages { get; set; }
 
         [JsonProperty("teamsMeetings")]
-        public long TeamsMeetings { get; set; }
+        public long? TeamsMeetings { get; set; }
 
         [JsonProperty("emailsSent")]
-        public long EmailsSent { get; set; }
+        public long? EmailsSent { get; set; }
 
         [JsonProperty("emailsRead")]
-        public long EmailsRead { get; set; }
+        public long? EmailsRead { get; set; }
 
         [JsonProperty("filesViewedOrEdited")]
-        public long FilesViewedOrEdited { get; set; }
+        public long? FilesViewedOrEdited { get; set; }
 
         [JsonProperty("lastM365ActivityUtc")]
         public DateTime? LastM365ActivityUtc { get; set; }
 
         /// <summary>0-100. Higher means a stronger business case for giving this person a seat.</summary>
         [JsonProperty("opportunityScore")]
-        public double OpportunityScore { get; set; }
+        public double? OpportunityScore { get; set; }
+
+        [JsonProperty("workloadUnavailableReason")]
+        public string WorkloadUnavailableReason { get; set; }
 
         [JsonProperty("copilotDemandScore")]
         public double CopilotDemandScore { get; set; }
 
         [JsonProperty("collaborationScore")]
-        public double CollaborationScore { get; set; }
+        public double? CollaborationScore { get; set; }
 
         [JsonProperty("emailScore")]
-        public double EmailScore { get; set; }
+        public double? EmailScore { get; set; }
 
         [JsonProperty("documentScore")]
-        public double DocumentScore { get; set; }
+        public double? DocumentScore { get; set; }
 
         /// <summary>True when the score clears <see cref="CopilotAdoptionOptions.OpportunityRecommendScore"/>.</summary>
         [JsonProperty("recommended")]

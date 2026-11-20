@@ -290,6 +290,16 @@ namespace Common.Entities.CopilotAdoption
                     ? $"Daily reports read across the whole period, up to {summary.DataSources.M365UsageReportDate.Value:yyyy-MM-dd}. "
                       + "Per-user figures are an average across the days that user was active."
                     : "Not imported.");
+            foreach (var coverage in summary.DataSources.WorkloadCoverage)
+            {
+                AddMeta(sheet, coverage.Source + " daily import coverage", coverage.Status,
+                    $"{coverage.FromUtc:yyyy-MM-dd} to {coverage.ThroughUtc:yyyy-MM-dd}: "
+                    + $"{coverage.VerifiedDays} of {coverage.ExpectedDays} days verified; "
+                    + $"{coverage.EmptyDays} successfully empty days. "
+                    + (coverage.IsComplete ? "Tenant-wide settled imports verified."
+                        : "Missing values are unknown, not zero. Positive observations are partial; workload-fit scores and prospective hours are withheld. "
+                          + $"Reason: {coverage.Reason}. Legacy cadence stamps cannot establish this coverage."));
+            }
             AddMeta(sheet, "User metadata", YesNo(summary.DataSources.UserMetadataAvailable),
                 "Supplies the licensed population and every department breakdown.");
             AddMeta(sheet, "Subscribed SKU inventory", YesNo(summary.SubscribedSkusAvailable),
@@ -2369,7 +2379,7 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddRow("Reporting window (UTC)", $"{summary.FromUtc:yyyy-MM-dd} to {summary.ToUtc:yyyy-MM-dd}");
             sheet.AddRow("Earliest retained Copilot audit record (UTC)",
                 summary.DataSources?.AuditHistoryStartUtc?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "Not established");
-            sheet.AddRow("Latest workload report (UTC)",
+            sheet.AddRow("Assessed workload-report cutoff (UTC)",
                 summary.DataSources?.M365UsageReportDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "Unavailable");
             sheet.AddRow("Analysis refreshed (UTC)", summary.GeneratedUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture));
             sheet.AddRow(XlsxCell.Wrapped("Record boundaries do not prove continuous import coverage; import gaps cannot be ruled out. "

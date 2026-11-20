@@ -571,9 +571,13 @@ namespace Common.Entities.CopilotAdoption
         [JsonProperty("copilotUsageReportAvailable")]
         public bool CopilotUsageReportAvailable { get; set; }
 
-        /// <summary>The Microsoft 365 workload usage reports (Teams/Outlook/SharePoint/OneDrive) have data.</summary>
+        /// <summary>All four workload reports have durable complete outcomes for the assessed daily window.</summary>
         [JsonProperty("m365UsageReportsAvailable")]
         public bool M365UsageReportsAvailable { get; set; }
+
+        [JsonProperty("workloadCoverage")]
+        public List<Common.Entities.State.UsageReportCoverage> WorkloadCoverage { get; set; }
+            = new List<Common.Entities.State.UsageReportCoverage>();
 
         /// <summary>User metadata (departments, managers, licences) has been imported.</summary>
         [JsonProperty("userMetadataAvailable")]
@@ -592,8 +596,8 @@ namespace Common.Entities.CopilotAdoption
         public int CopilotUsageReportPeriodDays { get; set; }
 
         /// <summary>
-        /// The last daily Microsoft 365 usage report available. It bounds the period the workload
-        /// figures are averaged over; it is not the only day they are read from.
+        /// The settled cutoff assessed for daily workload reports. This bounds workload queries;
+        /// it is not a MAX fact date or a claim that data exists. See WorkloadCoverage for evidence.
         /// </summary>
         [JsonProperty("m365UsageReportDate")]
         public DateTime? M365UsageReportDate { get; set; }
@@ -1050,11 +1054,11 @@ namespace Common.Entities.CopilotAdoption
         /// using Cowork. This is the population a rollout should target first.
         /// </summary>
         [JsonProperty("coworkPrimeCandidates")]
-        public int CoworkPrimeCandidates { get; set; }
+        public int? CoworkPrimeCandidates { get; set; }
 
         /// <summary>Users with the workload for Cowork but not yet the Copilot habit to delegate to it.</summary>
         [JsonProperty("coworkBuildFluencyFirst")]
-        public int CoworkBuildFluencyFirst { get; set; }
+        public int? CoworkBuildFluencyFirst { get; set; }
 
         /// <summary>
         /// Everyone who should be in the Cowork spending policy: the prime candidates plus everyone already
@@ -1066,7 +1070,7 @@ namespace Common.Entities.CopilotAdoption
 
         /// <summary>Mean coordination load across scored seat holders.</summary>
         [JsonProperty("coworkAverageCoordinationLoad")]
-        public double CoworkAverageCoordinationLoad { get; set; }
+        public double? CoworkAverageCoordinationLoad { get; set; }
 
         /// <summary>Mean Copilot fluency across scored seat holders.</summary>
         [JsonProperty("coworkAverageFluency")]
@@ -1894,6 +1898,7 @@ namespace Common.Entities.CopilotAdoption
         public const string LicenceCandidatesAuditOnly = "licenceCandidatesAuditOnly";
         public const string CoworkReadinessNoSources = "coworkReadinessNoSources";
         public const string CoworkM365UsageMissing = "coworkM365UsageMissing";
+        public const string WorkloadCoverageUnverified = "workloadCoverageUnverified";
         public const string CoworkAuditMissing = "coworkAuditMissing";
         public const string UsageReportSourcedUsers = "usageReportSourcedUsers";
         public const string UsageReportWindowMismatch = "usageReportWindowMismatch";
@@ -1934,7 +1939,8 @@ namespace Common.Entities.CopilotAdoption
             { CopilotAdoptionWarningKeys.LicenceOpportunitiesNoSources, "Licence opportunities need either the Copilot audit import or the Microsoft 365 usage reports. Neither has data, so no candidates can be identified." },
             { CopilotAdoptionWarningKeys.LicenceCandidatesAuditOnly, "The Microsoft 365 usage reports are not available, so licence candidates are ranked only on unlicensed Copilot Chat use. Heavy Microsoft 365 users who have never tried Copilot will not appear." },
             { CopilotAdoptionWarningKeys.CoworkReadinessNoSources, "Cowork readiness needs the Copilot audit import or the Microsoft 365 usage reports. Neither has data for this period, so no readiness assessment is possible." },
-            { CopilotAdoptionWarningKeys.CoworkM365UsageMissing, "The Microsoft 365 usage reports are not available, so coordination load cannot be measured. Everyone will score zero on that axis and no one will be identified as a Cowork candidate. Enable the Microsoft 365 usage report import to use this tab." },
+            { CopilotAdoptionWarningKeys.CoworkM365UsageMissing, "The Microsoft 365 workload reports are unverified. Coordination load and workload-fit classifications are unavailable, not zero. Check daily usage-report imports and durable runtime state." },
+            { CopilotAdoptionWarningKeys.WorkloadCoverageUnverified, "Daily import outcomes do not verify every workload for the assessed period. Positive retained observations are partial; missing values are unknown, not zero. Workload-fit classifications and prospective hours are withheld. Legacy completion stamps cannot establish this coverage." },
             { CopilotAdoptionWarningKeys.CoworkAuditMissing, "The Copilot audit import has no data for this period. Cowork interactions come only from the Copilot audit log, so nobody can be shown as already using Cowork, and everyone is assessed on coordination load and Copilot fluency alone." },
             { CopilotAdoptionWarningKeys.UsageReportSourcedUsers, "{count} licensed user{userPlural} ({percentage}%) were scored from Microsoft's Copilot usage report because the audit import had no per-user signal for them. Their Microsoft prompt counts are not added to audit interaction totals, concentration, intensity or licensed/unlicensed interaction comparisons." },
             { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, "Microsoft's pinned Copilot usage-report period is D{reportDays}, but this analysis window is D{analysisDays}. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\"." },

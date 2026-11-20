@@ -5,6 +5,8 @@
  * makes a missing one a build failure.
  */
 export const copilotAdoptionCowork = {
+  'copilotAdoptionCowork.tier.workloadUnavailable.label': 'Workload assessment unavailable',
+  'copilotAdoptionCowork.tier.workloadUnavailable.description': 'Workload coverage is unverified. Missing values are unknown, not zero; workload-fit classification and prospective hours are withheld.',
   // Shared basis and metrics
   'copilotAdoptionCowork.basis.observedTooltip': 'Observed: this person has actually used Cowork.',
   'copilotAdoptionCowork.basis.observed': 'Observed',
@@ -331,7 +333,7 @@ export const copilotAdoptionCowork = {
   'copilotAdoptionCowork.coverage.periodLabel': 'Reporting window',
   'copilotAdoptionCowork.coverage.dateRange': '{from} to {to}',
   'copilotAdoptionCowork.coverage.assessedLabel': 'Seat holders assessed for readiness',
-  'copilotAdoptionCowork.coverage.reportLabel': 'Latest workload report',
+  'copilotAdoptionCowork.coverage.reportLabel': 'Assessed workload-report cutoff',
   'copilotAdoptionCowork.coverage.analysisLabel': 'Analysis refreshed',
   'copilotAdoptionCowork.coverage.details': 'Sources and limitations',
   'copilotAdoptionCowork.coverage.historyStart': 'Earliest retained Copilot audit record: {date}. This is a record boundary, not proof of continuous import coverage.',
