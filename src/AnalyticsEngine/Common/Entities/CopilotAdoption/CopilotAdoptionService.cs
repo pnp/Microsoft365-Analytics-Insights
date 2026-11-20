@@ -3263,7 +3263,7 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkAverageFluency = Math.Round(
                 rows.Average(r => r.FluencyScore), 1, MidpointRounding.AwayFromZero);
 
-            summary.CoworkTiers = BuildCoworkTiers(rows);
+            summary.CoworkTiers = BuildCoworkTiers(rows, summary.DataSources.M365UsageReportsAvailable);
             summary.CoworkByDepartment = BuildCoworkSegments(rows);
             summary.CoworkQuadrant = BuildCoworkQuadrant(summary.CoworkByDepartment);
 
@@ -3285,9 +3285,10 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// The Cowork figures for a slice with nobody to assess: available, every count zero, every tier
-        /// listed at zero, and empty estimates - the same shapes a populated slice publishes, so the tab
-        /// renders "nobody here" rather than a missing section.
+        /// The Cowork figures for a slice with nobody to assess: available, every count zero, every tier the
+        /// period's evidence can support listed at zero (<see cref="BuildCoworkTiers"/>), and empty estimates -
+        /// the same shapes a populated slice publishes, so the tab renders "nobody here" rather than a missing
+        /// section.
         /// </summary>
         private void PublishEmptyCowork(CopilotAdoptionSummary summary)
         {
@@ -3302,7 +3303,7 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkRecommendedForPolicy = 0;
             summary.CoworkAverageCoordinationLoad = summary.DataSources.M365UsageReportsAvailable ? (double?)0 : null;
             summary.CoworkAverageFluency = 0;
-            summary.CoworkTiers = BuildCoworkTiers(none);
+            summary.CoworkTiers = BuildCoworkTiers(none, summary.DataSources.M365UsageReportsAvailable);
             summary.CoworkByDepartment = new List<CoworkSegmentRow>();
             summary.CoworkQuadrant = new List<CoworkQuadrantPoint>();
             summary.CoworkValueEstimate = new CoworkValueEstimate();
@@ -3313,9 +3314,19 @@ namespace Common.Entities.CopilotAdoption
         /// Every tier with its population, stated once with a count rather than repeated per row - the
         /// same reasoning as <see cref="BuildActionPlan"/>.
         /// </summary>
-        private List<CoworkTierSummary> BuildCoworkTiers(IReadOnlyCollection<CoworkReadinessRow> rows)
+        /// <param name="workloadVerified">
+        /// Whether the Microsoft 365 workload reports are verified for the period. When they are not, nobody can
+        /// be placed in a tier inferred from workload - everyone without observed Cowork use is
+        /// <see cref="CopilotAdoptionScoring.CoworkTiers.WorkloadUnavailable"/> - so those tiers are left out
+        /// rather than listed at zero. A zero there would read as "nobody is a prime candidate", the finding
+        /// the null <see cref="CopilotAdoptionSummary.CoworkPrimeCandidates"/> headline already withholds, on
+        /// the tier cards, the population list and the workbook's chart.
+        /// </param>
+        internal List<CoworkTierSummary> BuildCoworkTiers(IReadOnlyCollection<CoworkReadinessRow> rows, bool workloadVerified)
         {
             return CopilotAdoptionScoring.AllCoworkTiers
+                .Where(tier => workloadVerified
+                    || CopilotAdoptionScoring.CoworkTierBasis(tier) != CopilotAdoptionScoring.CoworkBasis.Inference)
                 .Select(tier =>
                 {
                     var count = rows.Count(r => r.Tier == tier);

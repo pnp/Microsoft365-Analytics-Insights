@@ -888,6 +888,115 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// An in-memory store whose latest-job pointer write can meet what the runtime state table's can: the write lands
+        /// but its reply is lost, and the SDK's If-Match retry then fails on the ETag its own first attempt changed, so the
+        /// caller is told "not written"; or another start lands first. Optionally the next read of the pointer fails.
+        /// </summary>
+        private sealed class LatestJobReplyStore : IConditionalKeyValueStore
+        {
+            public InMemoryKeyValueStore Inner { get; } = new InMemoryKeyValueStore();
+            public bool LoseTheReply { get; set; }
+            public string AnotherStartLandsFirst { get; set; }
+            public bool PointerUnreadableAfterWrite { get; set; }
+            public List<string> JobRowsWritten { get; } = new List<string>();
+            private bool _failNextPointerRead;
+            public string Description => Inner.Description;
+
+            private void Record(string key)
+            {
+                if (key.StartsWith("Job:", StringComparison.Ordinal) && !key.EndsWith(":Cancel", StringComparison.Ordinal)
+                    && !JobRowsWritten.Contains(key)) JobRowsWritten.Add(key);
+            }
+
+            public Task<VersionedValue> GetVersionedAsync(string key, System.Threading.CancellationToken cancellationToken = default)
+            {
+                if (key == "LatestJob" && _failNextPointerRead)
+                {
+                    _failNextPointerRead = false;
+                    throw new Azure.RequestFailedException(503, "Simulated: the state table could not be reached.");
+                }
+                return Inner.GetVersionedAsync(key, cancellationToken);
+            }
+
+            public async Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, System.Threading.CancellationToken cancellationToken = default)
+            {
+                Record(key);
+                if (key != "LatestJob") return await Inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
+                if (AnotherStartLandsFirst != null) await Inner.SetStringAsync(key, AnotherStartLandsFirst, null, cancellationToken);
+                var landed = await Inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
+                _failNextPointerRead = PointerUnreadableAfterWrite;
+                return landed && !LoseTheReply;
+            }
+
+            public Task<string> GetStringAsync(string key, System.Threading.CancellationToken cancellationToken = default) => Inner.GetStringAsync(key, cancellationToken);
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, System.Threading.CancellationToken cancellationToken = default)
+            {
+                Record(key);
+                return Inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+            }
+            public Task<bool> DeleteAsync(string key, System.Threading.CancellationToken cancellationToken = default) => Inner.DeleteAsync(key, cancellationToken);
+            public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, System.Threading.CancellationToken cancellationToken = default)
+                => Inner.TryDeleteAsync(key, expectedVersionToken, cancellationToken);
+            public Task<bool> ExistsAsync(string key, System.Threading.CancellationToken cancellationToken = default) => Inner.ExistsAsync(key, cancellationToken);
+        }
+
+        [TestMethod]
+        public async Task Start_WhoseLatestPointerReplyIsLost_IsStillTheStartedJob()
+        {
+            // Release critique of #909 (#918): "not written" from the pointer's If-Match write was taken as a lost race,
+            // and the job row was deleted - though the pointer could already name it.
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var store = new LatestJobReplyStore { LoseTheReply = true };
+            var state = new CopilotAuditBackfillStateStore(store, true, () => now);
+
+            var job = await state.TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin@contoso.com", copilotImportEnabled: true);
+
+            Assert.IsNotNull(job, "The start happened; the administrator must not be told it was refused.");
+            var latest = await state.GetLatestAsync();
+            Assert.IsNotNull(latest, "The row the pointer names must still exist.");
+            Assert.AreEqual(job.Id, latest.Id);
+        }
+
+        [TestMethod]
+        public async Task Start_ThatLosesTheRace_IsRefusedAndRemovesItsRow()
+        {
+            // The other direction: a start that genuinely lost is still refused and cleans up, and the winner is untouched.
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var store = new LatestJobReplyStore();
+            var state = new CopilotAuditBackfillStateStore(store, true, () => now);
+            var winner = await state.TryCreateWhenIdleAsync(now.AddDays(-2), now, "first@contoso.com", copilotImportEnabled: true);
+            winner.State = CopilotAuditBackfillStates.Completed;
+            await state.SaveAsync(winner);
+            var winnerId = (winner.Id + 100).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            store.AnotherStartLandsFirst = winnerId;
+
+            var lost = await state.TryCreateWhenIdleAsync(now.AddDays(-2), now.AddSeconds(1), "second@contoso.com", copilotImportEnabled: true);
+
+            Assert.IsNull(lost, "A start that lost the race is refused.");
+            Assert.AreEqual(winnerId, await store.Inner.GetStringAsync("LatestJob"), "The winner's pointer is left alone.");
+            Assert.AreEqual(2, store.JobRowsWritten.Count, "The fixture must have written the finished job's row and the losing start's.");
+            var surviving = new List<string>();
+            foreach (var key in store.JobRowsWritten)
+                if (await store.Inner.GetStringAsync(key) != null) surviving.Add(key);
+            CollectionAssert.AreEqual(new[] { "Job:" + winner.Id }, surviving,
+                "The losing start's row is deleted; the finished job's is kept.");
+        }
+
+        [TestMethod]
+        public async Task Start_WhosePointerCannotBeReReadAfterALostReply_IsUnknown_AndLeavesTheRowInPlace()
+        {
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var store = new LatestJobReplyStore { LoseTheReply = true, PointerUnreadableAfterWrite = true };
+            var state = new CopilotAuditBackfillStateStore(store, true, () => now);
+
+            await Assert.ThrowsExceptionAsync<CopilotAuditBackfillStateUnavailableException>(
+                () => state.TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin@contoso.com", copilotImportEnabled: true),
+                "Unknown is reported as 'state unavailable' - neither as started nor as 'a job is active'.");
+            var latest = await state.GetLatestAsync();
+            Assert.IsNotNull(latest, "Unknown must not delete a row the pointer may name; it expires if nothing does.");
+        }
+
+        /// <summary>
         /// An in-memory store that holds every read of the latest-job pointer until all the starts have made it, so
         /// they all race from the same version of it.
         /// </summary>
@@ -902,9 +1011,13 @@ namespace Tests.UnitTests
 
             private void Gate(string key)
             {
-                if (Holding && key == "LatestJob" && !_barrier.SignalAndWait(TimeSpan.FromSeconds(10)))
+                if (Holding && key == "LatestJob")
                 {
-                    throw new TimeoutException("Not every start read the latest job.");
+                    if (!_barrier.SignalAndWait(TimeSpan.FromSeconds(10)))
+                        throw new TimeoutException("Not every start read the latest job.");
+                    // Every start has now made its first read. Later reads (a start re-checking the pointer after
+                    // its write was refused) must not wait for a second round of starts that will never come.
+                    Holding = false;
                 }
             }
 

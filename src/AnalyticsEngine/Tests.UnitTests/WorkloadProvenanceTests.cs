@@ -146,6 +146,91 @@ namespace Tests.UnitTests
             Assert.IsNull(scoped.CoworkReadiness.Single().EmailsSent);
         }
 
+        private static CopilotAdoptionAnalysis CoworkTierFixture(bool workloadVerified, bool nobody = false)
+        {
+            var options = CopilotAdoptionOptions.Default;
+            options.MinSeatsPerSegment = 1;
+            var analysis = new CopilotAdoptionAnalysis
+            {
+                CoworkSignals = new List<CoworkReadinessSignalRow>
+                {
+                    new CoworkReadinessSignalRow
+                    {
+                        UserId = 1, UserPrincipalName = "person@contoso.com", EmailDomain = "contoso.com",
+                        Department = "Contoso", TeamsMessages = 20, AdoptionScore = 80,
+                    },
+                    new CoworkReadinessSignalRow
+                    {
+                        UserId = 2, UserPrincipalName = "cowork@contoso.com", EmailDomain = "contoso.com",
+                        Department = "Contoso", TeamsMessages = 5, AdoptionScore = 60,
+                        CoworkInteractions = 3, CoworkActiveDays = 1,
+                    },
+                },
+                LicensedUsers = new List<LicensedUserAdoptionRow>
+                {
+                    new LicensedUserAdoptionRow { UserId = 1, EmailDomain = "contoso.com", AdoptionScore = 80 },
+                    new LicensedUserAdoptionRow { UserId = 2, EmailDomain = "contoso.com", AdoptionScore = 60 },
+                },
+            };
+            analysis.Summary.DataSources.WorkloadCoverage = workloadVerified
+                ? Coverage(UsageReportCoverageStore.Sources.ToArray())
+                : Coverage("teams");
+            analysis.Summary.DataSources.M365UsageReportsAvailable = workloadVerified;
+            if (nobody)
+            {
+                // A slice of an assessment that ran, with nobody in it: published as zeros (PublishEmptyCowork).
+                analysis.CoworkSignals.Clear();
+                analysis.LicensedUsers.Clear();
+                analysis.CoworkAssessedForWholePopulation = true;
+            }
+            analysis.Summary.Options = options;
+            new CopilotAdoptionService(options).FinaliseSummary(analysis);
+            return analysis;
+        }
+
+        [TestMethod]
+        public void UnverifiedWorkload_LeavesTheInferredCoworkTiersOut_RatherThanListingThemAtZero()
+        {
+            // Release critique of #909: with the workload unverified nobody can be placed in a tier inferred
+            // from workload, and the prime-candidate headline is null - but every inferred tier was still
+            // listed, at zero, on the tier cards, the population list and the workbook's chart.
+            foreach (var nobody in new[] { false, true })
+            {
+                var unverified = CoworkTierFixture(workloadVerified: false, nobody: nobody);
+                Assert.IsTrue(unverified.Summary.CoworkReadinessAvailable, "The fixture must exercise the Cowork path.");
+                Assert.IsNull(unverified.Summary.CoworkPrimeCandidates);
+                CollectionAssert.AreEqual(
+                    new[]
+                    {
+                        CopilotAdoptionScoring.CoworkTiers.Established,
+                        CopilotAdoptionScoring.CoworkTiers.Trialling,
+                        CopilotAdoptionScoring.CoworkTiers.WorkloadUnavailable,
+                    },
+                    unverified.Summary.CoworkTiers.Select(t => t.Code).ToArray(),
+                    nobody ? "An empty slice follows the same rule." : "Only tiers the evidence supports are listed.");
+                Assert.IsFalse(unverified.Summary.CoworkTiers.Any(t => t.Basis == CopilotAdoptionScoring.CoworkBasis.Inference));
+                if (!nobody)
+                {
+                    Assert.AreEqual(1, unverified.Summary.CoworkTiers.Single(t => t.Code == CopilotAdoptionScoring.CoworkTiers.Trialling).Users,
+                        "Observed Cowork use is still counted.");
+                    Assert.AreEqual(1, unverified.Summary.CoworkTiers.Single(t => t.Code == CopilotAdoptionScoring.CoworkTiers.WorkloadUnavailable).Users);
+                    var workbook = CopilotAdoptionWorkbookText.Of(CopilotAdoptionWorkbook.Build(unverified));
+                    StringAssert.Contains(workbook, "UNVERIFIED, not assessed.");
+                    Assert.IsFalse(workbook.Contains("PREDICTED, not observed."),
+                        "No predicted tier is listed when nothing could be predicted.");
+                }
+            }
+
+            // ...and silent when the workload IS verified: every tier is listed, inferred ones included.
+            foreach (var nobody in new[] { false, true })
+            {
+                var verified = CoworkTierFixture(workloadVerified: true, nobody: nobody);
+                Assert.IsNotNull(verified.Summary.CoworkPrimeCandidates);
+                CollectionAssert.AreEqual(CopilotAdoptionScoring.AllCoworkTiers.ToArray(),
+                    verified.Summary.CoworkTiers.Select(t => t.Code).ToArray());
+            }
+        }
+
         [TestMethod]
         public async Task SuccessfulEmpty_AllFourSourcesSupportRealZero_WithoutFactRows()
         {

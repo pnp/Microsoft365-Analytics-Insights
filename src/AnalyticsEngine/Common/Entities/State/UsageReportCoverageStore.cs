@@ -81,6 +81,8 @@ namespace Common.Entities.State
         /// day T - 1 has already certified the newest day the analysis on day T reads, at any time of day T.
         /// A successfully EMPTY day needs the full lag: Graph answers a day it has not published yet with
         /// 200 and no rows, so zero rows inside the lag cannot be told from "not available yet".
+        /// <paramref name="importedUtc"/> must be when Graph was ASKED for the day, not when the save ended: a
+        /// save that crosses midnight UTC would otherwise age the answer by a day it never had.
         /// </summary>
         public Task CompleteDayAsync(string source, DateTime day, bool wholeTenant, bool allRowsSaved,
             bool empty, DateTime importedUtc, int settlementDays)

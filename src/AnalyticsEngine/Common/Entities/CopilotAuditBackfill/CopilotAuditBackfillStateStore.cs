@@ -41,7 +41,9 @@ namespace Common.Entities.CopilotAuditBackfill
         /// gets null. The new job's row is inserted only if absent, so a start that picked the same id in the same
         /// second never overwrites it, and the latest-job pointer moves only from the version this call read the
         /// previous job under, so a start that lost the race never replaces the winner. A store without conditional
-        /// writes cannot make that promise and falls back to check-then-write.
+        /// writes cannot make that promise and falls back to check-then-write. Throws
+        /// <see cref="CopilotAuditBackfillStateUnavailableException"/> when the store fails, including when it cannot
+        /// confirm whether a refused pointer write in fact landed.
         /// </summary>
         public async Task<CopilotAuditBackfillJob> TryCreateWhenIdleAsync(DateTime startUtc, DateTime endUtc, string requestedBy,
             bool copilotImportEnabled)
@@ -75,6 +77,18 @@ namespace Common.Entities.CopilotAuditBackfill
             await SaveAsync(job).ConfigureAwait(false);
             var id = job.Id.ToString(CultureInfo.InvariantCulture);
             if (await StoreAsync(LatestKey, "save", () => conditional.TrySetStringAsync(LatestKey, id, latest.VersionToken)).ConfigureAwait(false))
+            {
+                return job;
+            }
+
+            // "Not written" is not proof the pointer did not move. The table SDK retries a write whose reply it did
+            // not get, and an If-Match retry then fails on the ETag its own first attempt changed - so a start that
+            // DID become the latest job can be told it lost. Deleting its row then would leave the pointer naming a
+            // job that no longer exists, and tell the administrator a start that happened was refused. If the
+            // pointer cannot be re-read, the outcome is unknown: the row is left (it expires with the job
+            // time-to-live if nothing names it) and the caller gets "state unavailable", not "a job is active".
+            var pointer = await StoreAsync(LatestKey, "read", () => conditional.GetVersionedAsync(LatestKey)).ConfigureAwait(false);
+            if (string.Equals(pointer.Value, id, StringComparison.Ordinal))
             {
                 return job;
             }

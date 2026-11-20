@@ -506,6 +506,88 @@ namespace Tests.UnitTests
             Assert.AreEqual("empty", settled.Status, "Once fully settled, a day Graph still reports empty is successfully empty.");
         }
 
+        /// <summary>
+        /// Downloads <paramref name="day"/> alone with the clock at <paramref name="requestedUtc"/>, then moves the
+        /// clock on by <paramref name="saveTakes"/> before the save - as pre-resolution and the upsert of a large
+        /// tenant's day can - and returns the day's coverage status.
+        /// </summary>
+        private static async Task<string> CoverageStatusAfterSlowSaveAsync(
+            DateTime day, DateTime requestedUtc, TimeSpan saveTakes, bool withRows)
+        {
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var loader = CoverageLoader(requestedUtc, coverage, new InMemoryUsageReportStore<FakeUserUsageActivityLog>());
+            if (withRows) loader.PagesByDate[day] = new List<FakeUserActivityDetail> { Page(UserA, 4) };
+            var clock = (FixedClock)loader.Clock;
+            loader.AfterGraphRequest = requested => { if (requested == day) clock.Advance(saveTakes); };
+            var daysBack = (int)(requestedUtc.Date - day).TotalDays;
+            // MinDaysBack can widen the window past the day under test; skip every other date in it.
+            var skip = new HashSet<DateTime>(Enumerable.Range(1, UsageReportRefreshPolicy.MaxDaysBack)
+                .Select(back => requestedUtc.Date.AddDays(-back)).Where(date => date != day));
+
+            await loader.LoadAndSaveEachDateAsync(daysBack, skip, null, SeededIdCache(), new UserCache(null));
+
+            CollectionAssert.AreEqual(new[] { day }, loader.GraphRequests.ToArray(), "Only the day under test is downloaded.");
+            return (await coverage.ReadAsync(day, day)).Single(c => c.Source == "teams").Status;
+        }
+
+        [TestMethod]
+        public async Task DailyCoverage_SettlementIsJudgedWhenGraphWasAsked_NotWhenTheSaveFinished()
+        {
+            // Release critique of #909: CompleteDayAsync was given the clock at the END of the save. A day
+            // requested just before midnight UTC and saved just after was judged one day older than it was
+            // when Graph answered - so an empty answer for a day Graph had not yet published was certified
+            // "empty" for good, and rows from a day still being revised were certified "complete".
+            var day = new DateTime(2026, 6, 17, 0, 0, 0, DateTimeKind.Utc);
+            var twoMinutes = TimeSpan.FromMinutes(2);
+
+            Assert.AreEqual("partial",
+                await CoverageStatusAfterSlowSaveAsync(day, day.AddDays(3).AddMinutes(-1), twoMinutes, withRows: false),
+                "An empty answer requested at age 2 is not settled, however late the save finishes.");
+            Assert.AreEqual("partial",
+                await CoverageStatusAfterSlowSaveAsync(day, day.AddDays(2).AddMinutes(-1), twoMinutes, withRows: true),
+                "Rows requested at age 1 are not settled, however late the save finishes.");
+
+            // The guard must stay silent on days that WERE settled when requested.
+            Assert.AreEqual("empty",
+                await CoverageStatusAfterSlowSaveAsync(day, day.AddDays(3).AddMinutes(1), twoMinutes, withRows: false),
+                "An empty answer requested at age 3 is settled.");
+            Assert.AreEqual("complete",
+                await CoverageStatusAfterSlowSaveAsync(day, day.AddDays(2).AddMinutes(1), twoMinutes, withRows: true),
+                "Rows requested at age 2 are settled.");
+            Assert.AreEqual("complete",
+                await CoverageStatusAfterSlowSaveAsync(day, day.AddDays(2).AddMinutes(1), TimeSpan.FromHours(30), withRows: true),
+                "A save that runs on for longer still certifies a day that was settled when requested.");
+        }
+
+        [TestMethod]
+        public async Task DailyCoverage_TheWholeWindowSave_AlsoJudgesSettlementAtTheRequest()
+        {
+            // The same rule on SaveLoadedReportsToSql, which saves every downloaded date after the whole
+            // window has been read: the dates were requested well before the save reaches them.
+            var day = new DateTime(2026, 6, 17, 0, 0, 0, DateTimeKind.Utc);
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var loader = CoverageLoader(day.AddDays(3).AddMinutes(-1), coverage, new InMemoryUsageReportStore<FakeUserUsageActivityLog>());
+            var clock = (FixedClock)loader.Clock;
+            // Every date is requested at 23:59; the window's last request takes the clock past midnight.
+            loader.AfterGraphRequest = requested => { if (requested == day.AddDays(-1)) clock.Advance(TimeSpan.FromMinutes(5)); };
+
+            await loader.PopulateLoadedReportPagesFromGraph(3);
+            CollectionAssert.AreEqual(new[] { day.AddDays(1), day, day.AddDays(-1) }, loader.GraphRequests.ToArray());
+            Assert.IsTrue(clock.UtcNow >= day.AddDays(3), "The test must save after midnight to mean anything.");
+            await loader.SaveLoadedReportsToSql(SeededIdCache(), new UserCache(null));
+
+            Assert.AreEqual("partial", (await coverage.ReadAsync(day, day)).Single(c => c.Source == "teams").Status,
+                "Requested at age 2 and empty: not settled, though saved at age 3.");
+            Assert.AreEqual("empty", (await coverage.ReadAsync(day.AddDays(-1), day.AddDays(-1))).Single(c => c.Source == "teams").Status,
+                "Requested at age 3 and empty: settled.");
+
+            // A page seeded without a request has no request time and is judged at the save, as before.
+            var seeded = CoverageLoader(day.AddDays(3).AddMinutes(1), coverage, new InMemoryUsageReportStore<FakeUserUsageActivityLog>());
+            seeded.LoadedReportPages[day] = new List<FakeUserActivityDetail>();
+            await seeded.SaveLoadedReportsToSql(SeededIdCache(), new UserCache(null));
+            Assert.AreEqual("empty", (await coverage.ReadAsync(day, day)).Single(c => c.Source == "teams").Status);
+        }
+
         [TestMethod]
         public async Task DailyCoverage_AFirstDownloadThatFailsMidway_IsNotCertified()
         {

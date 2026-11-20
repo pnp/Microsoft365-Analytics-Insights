@@ -63,6 +63,12 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// <summary>Optional scope filter, standing in for the Entra group-membership check.</summary>
         public Func<string, bool> InScopeRule { get; set; }
 
+        /// <summary>
+        /// Runs after each "Graph" request has answered - so a test can move the clock on, as a long download or
+        /// save does, between the moment a date is requested and the moment it is saved.
+        /// </summary>
+        public Action<DateTime> AfterGraphRequest { get; set; }
+
         public override string ReportGraphURL => "https://graph.microsoft.com/beta/reports/thisReportDoesNotExist";
 
         public override DbSet<FakeUserUsageActivityLog> GetTable(AnalyticsEntitiesContext context) => null;
@@ -71,6 +77,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         {
             GraphRequests.Add(date.Date);
             PagesByDate.TryGetValue(date.Date, out var page);
+            AfterGraphRequest?.Invoke(date.Date);
             return Task.FromResult(page ?? new List<FakeUserActivityDetail>());
         }
 

@@ -1985,7 +1985,9 @@ namespace Common.Entities.CopilotAdoption
                 AddMeta(sheet, tier.Label, tier.Users,
                     (tier.Basis == CopilotAdoptionScoring.CoworkBasis.Evidence
                         ? "OBSERVED. "
-                        : "PREDICTED, not observed. ")
+                        : tier.Basis == CopilotAdoptionScoring.CoworkBasis.Unavailable
+                            ? "UNVERIFIED, not assessed. "
+                            : "PREDICTED, not observed. ")
                     + tier.Description);
             }
 
