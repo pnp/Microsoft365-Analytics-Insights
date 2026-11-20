@@ -36,10 +36,10 @@ namespace Common.Entities.State
             _readTimeout = readTimeout ?? TimeSpan.FromSeconds(30);
         }
 
-        public static UsageReportCoverageStore Open(AppConfig config, ILogger logger = null)
+        public static UsageReportCoverageStore Open(AppConfig config, ILogger logger = null, TimeSpan? readTimeout = null)
         {
             var store = StateStore.TryOpen(config, StatePartitions.UsageReportCoverage, logger);
-            return new UsageReportCoverageStore(store ?? ProcessFallback, store != null);
+            return new UsageReportCoverageStore(store ?? ProcessFallback, store != null, readTimeout);
         }
 
         /// <summary>False for the process-local fallback, whose outcomes never certify a workload.</summary>
@@ -187,6 +187,56 @@ namespace Common.Entities.State
                     {
                         result.Status = "unverified";
                         result.Reason = "durableStateUnavailable";
+                    }
+                })).ConfigureAwait(false);
+            }
+            return results;
+        }
+
+        /// <summary>
+        /// Reads the exact daily outcomes for report consumers that need to distinguish a verified empty
+        /// day from an older day with no ledger record. Missing or unavailable outcomes are returned as
+        /// absent entries so callers can retain their historical row-presence fallback.
+        /// </summary>
+        public async Task<Dictionary<string, Dictionary<DateTime, string>>> ReadDailyOutcomesAsync(
+            DateTime from, DateTime through, CancellationToken cancellationToken = default)
+        {
+            var results = Sources.ToDictionary(
+                source => source,
+                _ => new Dictionary<DateTime, string>(),
+                StringComparer.Ordinal);
+            var count = (through.Date - from.Date).Days + 1;
+            if (!_durable || count <= 0 || count > MaximumDays) return results;
+
+            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            using (var gate = new SemaphoreSlim(ReadConcurrency))
+            {
+                deadline.CancelAfter(_readTimeout);
+                await Task.WhenAll(Sources.Select(async source =>
+                {
+                    try
+                    {
+                        for (var offset = 0; offset < count; offset += ReadConcurrency)
+                        {
+                            var days = Enumerable.Range(offset, Math.Min(ReadConcurrency, count - offset));
+                            var outcomes = await Task.WhenAll(days.Select(async day =>
+                            {
+                                await gate.WaitAsync(deadline.Token).ConfigureAwait(false);
+                                try
+                                {
+                                    return await _store.GetStringAsync(
+                                        Key(source, from.Date.AddDays(day)), deadline.Token).ConfigureAwait(false);
+                                }
+                                finally { gate.Release(); }
+                            })).ConfigureAwait(false);
+                            foreach (var day in days)
+                                results[source][from.Date.AddDays(day)] = outcomes[day - offset];
+                        }
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                    catch (Exception)
+                    {
+                        results[source].Clear();
                     }
                 })).ConfigureAwait(false);
             }
