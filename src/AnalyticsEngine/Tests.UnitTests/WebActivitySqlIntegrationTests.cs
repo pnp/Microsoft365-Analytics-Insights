@@ -522,6 +522,25 @@ namespace Tests.UnitTests
             Assert.AreEqual(100, fromHome, 0.01);
         }
 
+        [TestMethod]
+        public void Journeys_TransitionsUsesHashJoinsForEndpointTitles()
+        {
+            StringAssert.Contains(WebActivitySql.Transitions,
+                "LEFT HASH JOIN Titles AS ft ON ft.url_id = s.FromUrlId");
+            StringAssert.Contains(WebActivitySql.Transitions,
+                "LEFT HASH JOIN Titles AS tt ON tt.url_id = s.ToUrlId");
+        }
+
+        [TestMethod]
+        public void Journeys_FlowsPreaggregateVisitCountsAndShareTotal()
+        {
+            StringAssert.Contains(WebActivitySql.StartEndFlows, "VisitCounts AS (");
+            StringAssert.Contains(WebActivitySql.StartEndFlows, "GROUP BY h.session_id");
+            StringAssert.Contains(WebActivitySql.StartEndFlows, "SUM(COUNT_BIG(*)) OVER ()");
+            StringAssert.Contains(WebActivitySql.StartEndFlows, "NULLIF(fl.TotalVisits, 0)");
+            Assert.IsFalse(WebActivitySql.StartEndFlows.Contains("(SELECT SUM(f2.Visits) FROM Flows AS f2)"));
+        }
+
         /// <summary>
         /// The average visit length is over the visits that reported a dwell time (#851, R7-6). A visit none of whose pages
         /// reported one is unmeasured, and counting it in the denominator shortened the average as if it took no time.
@@ -700,6 +719,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, flows[HomeUrl + " > " + NewsUrl].People, "Ada's second visit and Grace's.");
             Assert.AreEqual(1, flows[HomeUrl + " > " + PolicyUrl].People);
             Assert.AreEqual(1, flows[HomeUrl + " > " + HomeUrl].People);
+            Assert.AreEqual(100.0, journeys.Flows.Sum(f => f.SharePct), 0.01,
+                "Flow shares use all paired visits as their denominator.");
 
             // Three clicks, one of them on a page view with no visit: two people.
             var click = journeys.ClickedElements.Single(c => c.Name == "Contoso desk booking");
