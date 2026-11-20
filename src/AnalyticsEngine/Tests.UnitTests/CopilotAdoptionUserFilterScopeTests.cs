@@ -292,6 +292,12 @@ namespace Tests.UnitTests
         public void Filtering_ThatMatchesNobody_ReportsAnEmptyPopulationRatherThanTheTenant()
         {
             var analysis = Analysis();
+            // Verified workload, as every tenant was assumed to have before #921: the inferred Cowork tiers are only
+            // listed when the workload is verified (WorkloadProvenanceTests covers the unverified slice).
+            analysis.Summary.DataSources.WorkloadCoverage = Common.Entities.State.UsageReportCoverageStore.Sources
+                .Select(source => new Common.Entities.State.UsageReportCoverage { Source = source, Status = "complete", ExpectedDays = 1, VerifiedDays = 1 })
+                .ToList();
+            analysis.Summary.DataSources.M365UsageReportsAvailable = true;
             var service = Service();
             service.FinaliseSummary(analysis);
 

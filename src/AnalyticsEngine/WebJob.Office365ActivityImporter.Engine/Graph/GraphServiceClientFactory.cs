@@ -26,9 +26,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// Create the SDK-backed Graph client used by the Graph importer.
         /// Microsoft.Graph 6.5.0 installs Kiota's RetryHandler in the default pipeline; we
-        /// keep it for service-directed transient HTTP retries and add a bounded wrapper for
-        /// local request-deadline timeouts. The deadline applies to every method; only idempotent
-        /// reads get local timeout retries.
+        /// keep it for service-directed transient HTTP retries (429/503/504 and Retry-After) and
+        /// add a bounded handler inside it for local per-attempt request-deadline timeouts. The
+        /// deadline applies to every method; only idempotent reads get local timeout retries.
         /// </summary>
         public static GraphServiceClient CreateForGraphImport(TokenCredential credential, ILogger logger = null)
             => CreateForGraphImport(credential, GraphRequestBudgetOptions.GraphImportDefault, logger);
@@ -49,32 +49,44 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (authProvider == null) throw new ArgumentNullException(nameof(authProvider));
             if (budget == null) throw new ArgumentNullException(nameof(budget));
 
-            var graphOptions = new GraphClientOptions();
-            var handlers = GraphClientFactory.CreateDefaultHandlers(graphOptions).ToList();
-
-            for (var i = 0; i < handlers.Count; i++)
-            {
-                if (handlers[i] is RetryHandler)
-                {
-                    handlers[i] = new RetryHandler(new RetryHandlerOption
-                    {
-                        MaxRetry = budget.SdkRetryCount,
-                        Delay = budget.SdkRetryDelaySeconds,
-                        RetriesTimeLimit = budget.SdkRetryTimeLimit
-                    });
-                }
-            }
-
-            handlers.Insert(0, new BoundedGraphRequestHandler(budget, logger));
-            handlers.Insert(1, new GraphTransientErrorHandler());
+            var handlers = BuildGraphImportHandlers(budget, logger);
             if (HttpMessageTracing.Current.IsEnabled)
             {
-                handlers.Insert(1, new MessageTraceHandler("graph"));
+                handlers.Insert(0, new MessageTraceHandler("graph"));
             }
             var httpClient = GraphClientFactory.Create(authProvider, handlers, finalHandler: finalHandler);
             httpClient.Timeout = Timeout.InfiniteTimeSpan;
             budget.Log(logger);
             return httpClient;
+        }
+
+        /// <summary>
+        /// The SDK pipeline for Graph import, outermost first. The bounded deadline handler sits
+        /// directly INSIDE Kiota's <see cref="RetryHandler"/>, so its deadline covers one HTTP
+        /// attempt and never a Retry-After wait (#846 R8-10). Placed outside, a Retry-After longer
+        /// than the per-request deadline was cancelled part-way, counted as a timeout and re-sent
+        /// without honouring Retry-After.
+        /// </summary>
+        internal static System.Collections.Generic.List<DelegatingHandler> BuildGraphImportHandlers(GraphRequestBudgetOptions budget, ILogger logger)
+        {
+            if (budget == null) throw new ArgumentNullException(nameof(budget));
+
+            var handlers = GraphClientFactory.CreateDefaultHandlers(new GraphClientOptions()).ToList();
+            var retryIndex = handlers.FindIndex(h => h is RetryHandler);
+            if (retryIndex < 0)
+            {
+                throw new InvalidOperationException("The Graph SDK default pipeline no longer contains Kiota's RetryHandler; the per-attempt request deadline cannot be placed inside it.");
+            }
+
+            handlers[retryIndex] = new RetryHandler(new RetryHandlerOption
+            {
+                MaxRetry = budget.SdkRetryCount,
+                Delay = budget.SdkRetryDelaySeconds,
+                RetriesTimeLimit = budget.SdkRetryTimeLimit
+            });
+            handlers.Insert(retryIndex + 1, new BoundedGraphRequestHandler(budget, logger));
+            handlers.Insert(0, new GraphTransientErrorHandler());
+            return handlers;
         }
 
         /// <summary>

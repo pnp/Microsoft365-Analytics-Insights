@@ -157,15 +157,22 @@ namespace Tests.UnitTests
                     + "email-domain row - seat holders, unlicensed Chat users, licence candidates - is floored on its own; and "
                     + "rows published beside a total (the domains' columns, the departments' candidate counts in the league "
                     + "table and chart, the departments' manager figures) are withheld, smallest first, until the total less "
-                    + "the rows shown can no longer give back 1-4 people.")
+                    + "the rows shown can no longer give back 1-4 people. Cowork audit and readiness figures, including "
+                    + "tiers, department subgroups and legacy activity-volume estimates, are withheld together when a "
+                    + "cohort or complement would be smaller than five.")
                 .By(typeof(CopilotAdoptionService), nameof(CopilotAdoptionService.FinaliseSummary))
                 .By(typeof(CopilotAdoptionSummary), nameof(CopilotAdoptionSummary.WithoutIndividualData))
                 .By(typeof(LicenceTypeClassification), nameof(LicenceTypeClassification.WithoutSmallSeatIdleCounts))
                 .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.WithholdSmallestListedGroups))
+                .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.WithholdCoworkOpportunity))
                 .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.EmailDomainsWithoutSmallPopulations))
                 .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.CandidateCountsWithoutComplements))
                 .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.ManagerDepartmentsWithoutComplements))
                 .ProvenBy(
+                    Test<CopilotAdoptionCoworkTests>(nameof(CopilotAdoptionCoworkTests.NewAdoption_WithoutSeePii_WithholdsSmallCohortsAndComplements_OnACopy)),
+                    Test<CopilotAdoptionCoworkTests>(nameof(CopilotAdoptionCoworkTests.CoworkAuditFigures_WithholdSmallCohortsAndComplementsTogether)),
+                    Test<CopilotAdoptionCoworkTests>(nameof(CopilotAdoptionCoworkTests.CoworkReadiness_WithholdsDepartmentSubgroupsEvenWhenEveryTenantTierIsSafe)),
+                    Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSummary_WithoutSeePii_WithholdsSmallCoworkFigures_OnTheEndpointAndKeepsThemForSeePii)),
                     Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.DepartmentBreakdowns_LeaveOutDepartmentsWithFewerPeopleThanTheMinimum)),
                     Test<CopilotAdoptionTests>(nameof(CopilotAdoptionTests.AccountabilityRollup_SuppressesSmallLeaderGroupsLikeSegments)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionSummary_WithoutSeePii_LosesTheManagerRollup_AndTheCachedAnalysisKeepsIt)),
@@ -228,6 +235,7 @@ namespace Tests.UnitTests
                 .By(typeof(CopilotAdoptionWorkbook), nameof(CopilotAdoptionWorkbook.Build))
                 .By(typeof(LicenceTypeClassification), nameof(LicenceTypeClassification.WithoutSmallSeatIdleCounts))
                 .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.WithholdSmallestListedGroups))
+                .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.WithholdCoworkOpportunity))
                 .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.EmailDomainsWithoutSmallPopulations))
                 .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.CandidateCountsWithoutComplements))
                 .By(typeof(CopilotAdoptionSmallGroups), nameof(CopilotAdoptionSmallGroups.ManagerDepartmentsWithoutComplements))
@@ -239,6 +247,7 @@ namespace Tests.UnitTests
                     Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.EmailDomainSheet_WithoutSeePii_LeavesAFewPeoplesFiguresBlank_AsTheScreenDoes_AndWithItWritesThem)),
                     Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.DepartmentSheet_WithoutSeePii_LeavesOutTheDepartmentTheScreenDoes_AndSaysWhy_AndWithItWritesEveryOne)),
                     Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.CoworkSheet_WithoutSeePii_ListsOnlyTheDepartmentsTheScreenDoes_AndSaysWhy_AndWithItListsEveryOne)),
+                    Test<CopilotAdoptionWorkbookTests>(nameof(CopilotAdoptionWorkbookTests.Workbook_NewAdoptionPrivacyFloor_LeavesWithheldHoursBlank_NotZero)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionRowsBesideTotals_AreFlooredWithoutSeePii_OnTheSummaryAndTheWorkbook_AndUnchangedWithIt)),
                     Test<PortalPermissionTests>(nameof(PortalPermissionTests.CopilotAdoptionDepartmentsLeftOut_AreComplementedWithoutSeePii_OnTheSummaryAndTheWorkbook_AndUnchangedWithIt)))
                 .Refusing("emailDomain, userFilter, seatLicenceTypeIds",

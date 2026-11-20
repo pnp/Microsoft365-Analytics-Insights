@@ -126,9 +126,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
             {
                 SchemaUpgradeDeferred = true;
                 _logger.LogError("Database initialisation did not run because Windows could not launch the downloaded installer. " +
-                    "Continuing the remaining installation tasks, but WebJobs will remain paused (WEBJOBS_STOPPED=1). " +
+                    "Continuing the remaining installation tasks; WebJobs pause cleanup will still run. " +
                     "Apply the matching release's manual SQL upgrade scripts in migration-id order, or re-run the installer from an approved machine. " +
-                    "Verify the schema and matching binaries before restoring WebJobs.");
+                    "The importers may fail until the schema matches the deployed binaries.");
                 return;
             }
             if (!result.Success)

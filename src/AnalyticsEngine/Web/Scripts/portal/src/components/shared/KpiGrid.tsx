@@ -170,8 +170,8 @@ export function KpiGrid({ items }: { items: KpiDefinition[] }) {
  * two hundred and thirty-four to an English reader and one point two three four to a Spanish one,
  * and these figures end up in licence negotiations.
  */
-export function formatCount(value: number): string {
-  return formatNumber(Math.round(value));
+export function formatCount(value: number | null): string {
+  return value == null ? '\u2014' : formatNumber(Math.round(value));
 }
 
 /**

@@ -1,5 +1,6 @@
 using Common.Entities;
 using Common.Entities.ActivityReports;
+using Common.Entities.State;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -35,6 +36,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         public abstract DbSet<TReportDbType> GetTable(AnalyticsEntitiesContext context);
 
         public Dictionary<DateTime, List<TUserActivityUserDetail>> LoadedReportPages { get; set; } = new Dictionary<DateTime, List<TUserActivityUserDetail>>();
+
+        /// <summary>
+        /// When <see cref="PopulateLoadedReportPagesFromGraph"/> asked Graph for each date in
+        /// <see cref="LoadedReportPages"/>, so <see cref="SaveLoadedReportsToSql"/> judges coverage settlement at
+        /// the request, as the import does. A page seeded without a request is judged at the save.
+        /// </summary>
+        private readonly Dictionary<DateTime, DateTime> _loadedReportPageRequestedUtc = new Dictionary<DateTime, DateTime>();
 
         /// <summary>
         /// How many usage-log rows to persist per EF SaveChanges (and per existence query). Kept small enough
@@ -101,6 +109,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// </summary>
         public IClock Clock { get; set; } = SystemClock.Instance;
 
+        public UsageReportCoverageStore CoverageStore { get; set; }
+        public string CoverageSource { get; set; }
+        public bool CoverageWholeTenant { get; set; }
+
         /// <summary>
         /// Opt-in, privacy-safe stage diagnostics for the daily usage-report save path. The default is a
         /// no-op unless <c>AI_USAGE_REPORT_SAVE_DIAGNOSTICS</c> is enabled and the logger can emit App
@@ -147,14 +159,54 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                     }
                 }
 
-                return storedFinalizedDates;
+                return await KeepCoverageVerifiedAsync(storedFinalizedDates);
             }
 
             // Some account/group report tables have no date-leading index. Repeated existence
             // probes would each scan the table, so use one range scan until an index is available.
             var scannedDates = await store.GetStoredDatesInRangeAsync(window.WindowStartUtc, window.SafeCutoffUtc);
 
-            return new HashSet<DateTime>(scannedDates.Select(date => date.Date));
+            return await KeepCoverageVerifiedAsync(new HashSet<DateTime>(scannedDates.Select(date => date.Date)));
+        }
+
+        /// <summary>
+        /// Stored rows are not a coverage outcome (#899): a finalized day with no durable outcome (imported before
+        /// the ledger existed) or still marked in progress (a download that never finished) is downloaded once
+        /// more so it can get a final outcome. Days with a final outcome - including the never-certifiable
+        /// incomplete and scopeUnverified - stay skipped, so a filtered tenant keeps #375's skip window.
+        /// Bounded by the skip window (at most 25 point reads). Without durable state the skip set is unchanged.
+        /// </summary>
+        private async Task<HashSet<DateTime>> KeepCoverageVerifiedAsync(HashSet<DateTime> storedDates)
+        {
+            if (CoverageStore == null || !CoverageStore.IsDurable || storedDates.Count == 0)
+            {
+                return storedDates;
+            }
+
+            var skip = new HashSet<DateTime>();
+            try
+            {
+                foreach (var date in storedDates)
+                {
+                    if (!await CoverageStore.NeedsReimportAsync(CoverageSource, date.Date, CoverageWholeTenant))
+                    {
+                        skip.Add(date);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Telemetry.LogWarning($"{GetType().Name}: could not read usage-report coverage outcomes ({ex.GetType().Name}); " +
+                    "stored dates are skipped as before and stay unverified for Copilot Adoption.");
+                return storedDates;
+            }
+
+            var reimport = storedDates.Count - skip.Count;
+            if (reimport > 0)
+            {
+                Telemetry.LogInformation($"{GetType().Name}: re-downloading {reimport:N0} stored date(s) with no final coverage outcome.");
+            }
+            return skip;
         }
 
         internal Task<bool> HasLeadingDateIndexAsync(AnalyticsEntitiesContext db)
@@ -181,6 +233,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             daysBackMax = ClampDaysBack(daysBackMax);
 
             LoadedReportPages.Clear();
+            _loadedReportPageRequestedUtc.Clear();
+            _unfinishedDownloads.Clear();
             var sawIdentifiableRow = false;
             var nowUtc = Clock.UtcNow;
 
@@ -193,6 +247,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 }
                 var dt = date.Value;
 
+                var requestedUtc = Clock.UtcNow;
                 var dayReports = await LoadReportPageForDateFromGraph(dt);
 
                 if (LoadedReportPages.ContainsKey(dt))
@@ -203,6 +258,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 {
                     Telemetry.LogInformation($"Finished loading {this.GetType().Name} for date {dt.ToString("dd-MM-yyyy")}");
                     LoadedReportPages.Add(dt, dayReports);
+                    _loadedReportPageRequestedUtc[dt] = requestedUtc;
                 }
 
                 // A tenant that conceals identities conceals every row of every date. Once a whole date has come back
@@ -288,11 +344,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// retried next cycle with the real HTTP status recorded in Application Insights.
         ///
         /// A genuinely empty day (Graph returns 200 with no rows) is unaffected and still loads as empty.
+        ///
+        /// A 404 is still lenient, as it always was: the pager returns the rows gathered so far. Those rows are saved,
+        /// but the day is recorded as an unfinished download (<see cref="RecordUnfinishedDownload"/>), so the coverage
+        /// ledger never certifies a day Graph stopped answering part-way through - neither "complete" with the
+        /// later pages missing nor "empty" from a first-page 404.
         /// </remarks>
         protected virtual Task<List<TUserActivityUserDetail>> LoadReportPageForDateFromGraph(DateTime date)
         {
             var requestUrl = $"{ReportGraphURL}(date={date.ToString("yyyy-MM-dd")})?$format=application/json";
-            return _client.LoadAllPagesWithThrottleRetries<TUserActivityUserDetail>(requestUrl, Telemetry, throwOnHttpError: true);
+            return _client.LoadAllPagesPlusDeltaWithThrottleRetries<TUserActivityUserDetail>(requestUrl, Telemetry, deltaTokenFunc: null,
+                throwOnHttpError: true, onPageFailed: (ex, page) => RecordUnfinishedDownload(date, page, ex));
+        }
+
+        /// <summary>
+        /// Dates whose download ended before Graph's last page in the current download. Strict paging throws for every
+        /// failure except a 404, which ends the download with the rows gathered so far; <see cref="SaveDateAsync"/> then
+        /// saves those rows but leaves the day uncertified (see <see cref="UsageReportCoverageStore.RecordUnfinishedDownloadAsync"/>).
+        /// </summary>
+        private readonly HashSet<DateTime> _unfinishedDownloads = new HashSet<DateTime>();
+
+        private void RecordUnfinishedDownload(DateTime date, int page, Exception reason)
+        {
+            _unfinishedDownloads.Add(date.Date);
+            Telemetry.LogWarning($"{GetType().Name}: Graph ended the download of {date.ToString("yyyy-MM-dd")} on page {page} " +
+                $"({reason?.GetType().Name ?? "unknown"}). The rows received are saved, but the day is not certified for Copilot " +
+                "Adoption and is downloaded again next cycle.");
         }
 
         /// <summary>
@@ -336,7 +413,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 {
                     foreach (var dateTime in LoadedReportPages.Keys)
                     {
-                        await SaveDateAsync(run, dateTime, LoadedReportPages[dateTime], userEmailToDbIdCache, lookupCache);
+                        var requestedUtc = _loadedReportPageRequestedUtc.TryGetValue(dateTime, out var requested)
+                            ? requested
+                            : Clock.UtcNow;
+                        await SaveDateAsync(run, dateTime, LoadedReportPages[dateTime], userEmailToDbIdCache, lookupCache, requestedUtc);
                     }
                 }
 
@@ -382,6 +462,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         {
             daysBackMax = ClampDaysBack(daysBackMax);
             LoadedReportPages.Clear();
+            _unfinishedDownloads.Clear();
             LastLoadedRowCount = 0;
             LastLoadedDateCount = 0;
 
@@ -401,6 +482,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                         continue;
                     }
 
+                    // Taken before the request, so the coverage ledger never credits Graph with a day it could only
+                    // have published after this moment (see SaveDateAsync).
+                    var requestedUtc = Clock.UtcNow;
                     var dayReports = await LoadReportPageForDateFromGraph(dt.Value) ?? new List<TUserActivityUserDetail>();
                     if (!datesLoaded.Add(dt.Value.Date))
                     {
@@ -445,7 +529,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                     }
 
                     await PreResolveAsync(run, new[] { dayReports }, userEmailToDbIdCache, lookupCache);
-                    await SaveDateAsync(run, dt.Value, dayReports, userEmailToDbIdCache, lookupCache);
+                    await SaveDateAsync(run, dt.Value, dayReports, userEmailToDbIdCache, lookupCache, requestedUtc);
                 }
 
                 bulkWrite?.Dispose();
@@ -579,9 +663,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         private static readonly System.Globalization.CultureInfo EnUs = new System.Globalization.CultureInfo("en-US");
 
         /// <summary>Upserts one date's rows, flushing every <see cref="SaveBatchSize"/> writes, then releases them.</summary>
+        /// <param name="requestedUtc">
+        /// When Graph was asked for <paramref name="dateTime"/>. The coverage ledger judges settlement at this
+        /// instant, never at the end of the save: what Graph had published is fixed when it answered.
+        /// </param>
         private async Task SaveDateAsync(SaveRun run, DateTime dateTime, List<TUserActivityUserDetail> rows,
-            ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache)
+            ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache, DateTime requestedUtc)
         {
+            if (CoverageStore != null)
+            {
+                await CoverageStore.BeginDayAsync(CoverageSource, dateTime.Date);
+            }
             var store = run.Store;
             var instrumentation = run.Instrumentation;
             var instrumentationEnabled = run.InstrumentationEnabled;
@@ -609,6 +701,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             var duplicateRows = 0;
             var outOfScopeRows = 0;
             var missingLookupRows = 0;
+            var concealedRows = 0;
 
             if (instrumentationEnabled)
             {
@@ -646,6 +739,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // Counted and reported once for the whole report.
                 if (IsConcealed(reportPage))
                 {
+                    concealedRows++;
                     dateMetrics?.RecordConcealedIdentity();
                     totals?.RecordConcealedIdentity();
                     continue;
@@ -837,6 +931,29 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 });
             }
             run.DateIndex++;
+            if (CoverageStore != null && _unfinishedDownloads.Contains(dateTime.Date))
+            {
+                // Graph stopped answering part-way through (a 404 on a later page, or on the first): the rows saved may
+                // be only some of the day's, or none of a day that has rows. Neither is an outcome.
+                await CoverageStore.RecordUnfinishedDownloadAsync(CoverageSource, dateTime.Date);
+            }
+            else if (CoverageStore != null)
+            {
+                // The upsert never deletes, so rows from an earlier download that Graph no longer returns stay
+                // stored. They are positive observations of the same day and leave no user unknown, so they do
+                // not block "complete"; they do mean the day cannot be certified successfully empty.
+                var allRowsSaved = missingLookupRows == 0 && concealedRows == 0 && outOfScopeRows == 0
+                    && (rows.Count > 0 || existingRows.Count == 0);
+                // RefreshableRecentDays (3) is also the analysis' default UsageReportLagDays; the store certifies
+                // a day with rows one day before the analysis first reads it, and an empty day only once settled.
+                //
+                // Settlement is judged at requestedUtc - when Graph was ASKED for the day - not at the end of the
+                // save. Pre-resolution and the upsert of a 200k-user day can take long enough to cross midnight
+                // UTC; judged after the save, a day Graph had not yet published (an empty answer at age 2) would
+                // be certified "empty" at age 3, a permanent and false "nobody used this workload".
+                await CoverageStore.CompleteDayAsync(CoverageSource, dateTime.Date, CoverageWholeTenant,
+                    allRowsSaved, rows.Count == 0, requestedUtc, RefreshableRecentDays);
+            }
         }
 
         private void CompleteSave(SaveRun run)

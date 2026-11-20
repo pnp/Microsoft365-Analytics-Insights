@@ -115,6 +115,8 @@ namespace Common.Entities.CopilotAdoption
                 if (includeIndividualData) WriteLicensedUsersSheet(workbook, summary, analysis.LicensedUsers);
                 WriteCoworkSheet(workbook, summary, analysis.CoworkReadiness, includeIndividualData);
                 WriteCoworkEstimateSheet(workbook, summary, configured, modelOptions);
+                WriteCoworkObservedSheet(workbook, summary);
+                WriteCoworkLicensingScenarioSheet(workbook, summary, modelOptions);
                 WriteSeatHolderTimeSavedSheet(workbook, summary, configured, modelOptions);
                 if (includeIndividualData) WriteOpportunitiesSheet(workbook, summary, analysis.Opportunities);
                 WriteLicenceEstimateSheet(workbook, summary, configured, modelOptions);
@@ -288,6 +290,16 @@ namespace Common.Entities.CopilotAdoption
                     ? $"Daily reports read across the whole period, up to {summary.DataSources.M365UsageReportDate.Value:yyyy-MM-dd}. "
                       + "Per-user figures are an average across the days that user was active."
                     : "Not imported.");
+            foreach (var coverage in summary.DataSources.WorkloadCoverage)
+            {
+                AddMeta(sheet, coverage.Source + " daily import coverage", coverage.Status,
+                    $"{coverage.FromUtc:yyyy-MM-dd} to {coverage.ThroughUtc:yyyy-MM-dd}: "
+                    + $"{coverage.VerifiedDays} of {coverage.ExpectedDays} days verified; "
+                    + $"{coverage.EmptyDays} successfully empty days. "
+                    + (coverage.IsComplete ? "Tenant-wide settled imports verified."
+                        : "Missing values are unknown, not zero. Positive observations are partial; workload-fit scores and prospective hours are withheld. "
+                          + $"Reason: {coverage.Reason}. Legacy cadence stamps cannot establish this coverage."));
+            }
             AddMeta(sheet, "User metadata", YesNo(summary.DataSources.UserMetadataAvailable),
                 "Supplies the licensed population and every department breakdown.");
             AddMeta(sheet, "Subscribed SKU inventory", YesNo(summary.SubscribedSkusAvailable),
@@ -515,7 +527,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Reclaim - certain", summary.ReclaimCertainSeats,
                 "Disabled accounts still holding seats. Act immediately unless there is a known exception.");
             AddMeta(sheet, "Reclaim - probable", summary.ReclaimProbableSeats,
-                $"No observed use, account enabled, and the account-age tenure proxy is beyond the {summary.Options.ReclaimGraceDays}-day grace period.");
+                $"No observed use, account enabled, and a recorded current-seat holding proves at least the {summary.Options.ReclaimGraceDays}-day grace period. History observations are lower bounds, not assignment dates; account age is not used.");
             AddMeta(sheet, "Reclaim - review", summary.ReclaimReviewSeats,
                 "Dormant, too new, or missing enough account state/tenure context to judge automatically.");
             AddMeta(sheet, "Reclaim exclusions", summary.ReclaimExcludedUsers,
@@ -533,7 +545,7 @@ namespace Common.Entities.CopilotAdoption
             AddMeta(sheet, "Reclaimable but still active", summary.ReclaimSeatsFromActiveBands,
                 "Reclaimable seats that are not never-used or dormant - disabled accounts that were still active when they were disabled. Never used + Dormant + this = Reclaimable + all held-back figures.");
             AddMeta(sheet, "Too new to judge", summary.TooNewToJudgeUsers,
-                $"Seats held for less than the {summary.Options.ReclaimGraceDays}-day grace period. Counted separately because an unused brand-new seat has not failed - it has not started, and reclaiming it would take a licence back from someone who was only just given one.");
+                $"Current seats observed for less than the {summary.Options.ReclaimGraceDays}-day grace period. An initial observation may represent an older assignment, but does not yet prove mature tenure. These seats stay Review; missing history also stays Review.");
             if (!string.IsNullOrWhiteSpace(summary.ReclaimCaveat))
             {
                 AddMeta(sheet, "Reclaim caveat", string.Empty, summary.ReclaimCaveat);
@@ -588,14 +600,26 @@ namespace Common.Entities.CopilotAdoption
 
             if (summary.CoworkReadinessAvailable)
             {
-                AddMeta(sheet, "Cowork established users", summary.CoworkEstablishedUsers,
-                    $"Using Cowork on at least {summary.Options.CoworkRegularMinActiveDays} separate days - a habit, not a trial.");
-                AddMeta(sheet, "Cowork prime candidates", summary.CoworkPrimeCandidates,
-                    "PREDICTED, not measured. Copilot-fluent seat holders with a heavy coordination load who are not "
-                    + "yet using Cowork. The population a rollout should target first.");
-                AddMeta(sheet, "To add to the Cowork policy", summary.CoworkRecommendedForPolicy,
-                    "Prime candidates plus everyone already using Cowork. Cowork access is granted by a spending "
-                    + "policy scoped to users, and existing users must stay in scope or they lose access.");
+                if (summary.CoworkReadinessWithheld)
+                {
+                    AddMeta(sheet, "Cowork readiness", "Withheld",
+                        "Figures are withheld because a cohort or its complement could identify fewer than five people. This is not zero potential or zero use.");
+                }
+                else
+                {
+                    AddMeta(sheet, "Cowork established users", summary.CoworkEstablishedUsers,
+                        $"Using Cowork on at least {summary.Options.CoworkRegularMinActiveDays} separate days - a habit, not a trial.");
+                    AddMeta(sheet, "Cowork prime candidates", summary.CoworkPrimeCandidates,
+                        "PREDICTED, not measured. Copilot-fluent seat holders with a heavy coordination load who are not "
+                        + "yet using Cowork. The population a rollout should target first.");
+                    AddMeta(sheet, "To add to the Cowork policy", summary.CoworkRecommendedForPolicy,
+                        summary.CoworkPrimeCandidates.HasValue
+                            ? "Prime candidates plus everyone already using Cowork. Cowork access is granted by a spending "
+                              + "policy scoped to users, and existing users must stay in scope or they lose access."
+                            : "UNVERIFIED, a floor: only the people already using Cowork. Prime candidates could not be "
+                              + "assessed, because the Microsoft 365 usage reports are not verified for this period. "
+                              + "Existing users must stay in the spending policy's scope or they lose access.");
+                }
             }
 
             var chart = new XlsxChart
@@ -1019,13 +1043,14 @@ namespace Common.Entities.CopilotAdoption
                 "Guests are attributed to their HOME organisation, not to this tenant, so an invited "
                 + "partner appears under its own domain and is flagged External. Interactions per licence "
                 + "divides by every licence including idle ones, and is normalised to a month."));
-            if (domains.Any(d => d.SeatHoldersWithheld != null || d.UnlicensedUsersWithheld != null || d.LicenceCandidatesWithheld != null))
+            if (domains.Any(d => d.SeatHoldersWithheld != null || d.UnlicensedUsersWithheld != null
+                || d.LicenceCandidatesWithheld != null || d.CoworkPrimeCandidatesWithheld != null))
             {
                 sheet.AddRow(XlsxCell.Wrapped(
-                    "This file was exported without the See PII permission. Each row holds three groups of people - its "
-                    + "seat holders, its unlicensed Copilot Chat users and its licence candidates - and a group of fewer "
-                    + $"than {MinimumPeople(domains)} people has its figures left blank: for the seat holders, every column "
-                    + "from Seats to Interactions per licence, and the Cowork prime candidates. So does the smallest other "
+                    "This file was exported without the See PII permission. Each row holds four groups of people - its "
+                    + "seat holders, its unlicensed Copilot Chat users, its licence candidates and its prime Cowork candidates - "
+                    + $"and a group of fewer than {MinimumPeople(domains)} people has its figures left blank: for the seat holders, "
+                    + "every column from Seats to Interactions per licence. So does the smallest other "
                     + "group of the same kind when the tenant's total, less the figures shown, would otherwise give a blank "
                     + "one back. Blank means not shown, never 0."));
             }
@@ -1057,7 +1082,8 @@ namespace Common.Entities.CopilotAdoption
             chart.AddSeries("Adoption rate %", sheet.RangeReference(first, 6, last, 6));
             sheet.AddChart(chart);
 
-            if (summary.CoworkReadinessAvailable && domains.Any(d => d.CoworkPrimeCandidates > 0))
+            if (summary.CoworkReadinessAvailable
+                && domains.Any(d => d.CoworkPrimeCandidates > 0 || d.CoworkPrimeCandidatesWithheld != null))
             {
                 sheet.AddBlankRow();
                 sheet.AddRow(XlsxCell.Wrapped(
@@ -1939,7 +1965,9 @@ namespace Common.Entities.CopilotAdoption
         private static void WriteCoworkSheet(
             XlsxWriter workbook, CopilotAdoptionSummary summary, List<CoworkReadinessRow> people, bool includeIndividualData)
         {
-            if (!summary.CoworkReadinessAvailable || summary.CoworkScoredUsers == 0) return;
+            if (!summary.CoworkReadinessAvailable
+                || (!summary.CoworkReadinessWithheld && summary.CoworkScoredUsers == 0))
+                return;
 
             var rows = people ?? new List<CoworkReadinessRow>();
 
@@ -1963,6 +1991,13 @@ namespace Common.Entities.CopilotAdoption
                 + "prerequisite and is then billed by usage against Copilot Credits, with access granted by a "
                 + "spending policy scoped to users or groups. So this is not a list of licences to buy - it is "
                 + "a list of people to put in that policy."));
+            if (summary.CoworkReadinessWithheld)
+            {
+                sheet.AddRow(XlsxCell.Wrapped(
+                    "Readiness figures are withheld because a cohort or its complement could identify fewer than five people. "
+                    + "This is not zero potential or zero use."));
+                return;
+            }
             sheet.AddBlankRow();
 
             sheet.AddHeaderRow("Measure", "Value", "What it means");
@@ -1973,7 +2008,9 @@ namespace Common.Entities.CopilotAdoption
                 AddMeta(sheet, tier.Label, tier.Users,
                     (tier.Basis == CopilotAdoptionScoring.CoworkBasis.Evidence
                         ? "OBSERVED. "
-                        : "PREDICTED, not observed. ")
+                        : tier.Basis == CopilotAdoptionScoring.CoworkBasis.Unavailable
+                            ? "UNVERIFIED, not assessed. "
+                            : "PREDICTED, not observed. ")
                     + tier.Description);
             }
 
@@ -2225,11 +2262,10 @@ namespace Common.Entities.CopilotAdoption
             CopilotAdoptionOptions configured,
             CopilotAdoptionOptions model)
         {
-            if (!summary.CoworkReadinessAvailable) return;
-
-            var ready = RestateCowork(summary.CoworkValueEstimate, model);
-            var full = RestateCowork(summary.CoworkFullRolloutEstimate, model);
-            if (ready.CohortUsers == 0 && full.CohortUsers == 0) return;
+            var readyKnown = summary.CoworkNewAdoptionEstimate != null;
+            var fullKnown = summary.CoworkNonUserCeilingEstimate != null;
+            var ready = RestateCowork(summary.CoworkNewAdoptionEstimate, model, CoworkEstimateCohort.NewAdoption);
+            var full = RestateCowork(summary.CoworkNonUserCeilingEstimate, model, CoworkEstimateCohort.NonUserCeiling);
 
             var workingDays = CopilotAdoptionScoring.WorkingDaysPerMonth(configured);
 
@@ -2241,14 +2277,20 @@ namespace Common.Entities.CopilotAdoption
 
             var sheet = workbook.AddSheet("Cowork estimate (modelled)");
             sheet.SetColumnWidths(52, 16, 22, 62);
+            void EstimateRow(string measure, double first, double second, string notes)
+            {
+                AddEstimateRow(sheet, measure, readyKnown ? (double?)first : null, fullKnown ? (double?)second : null, notes);
+            }
 
-            sheet.AddTitle("Potential time back from Cowork - MODELLED, NOT MEASURED");
+            sheet.AddTitle("Potential from new Cowork adoption - MODELLED, NOT MEASURED");
             sheet.AddRow(XlsxCell.Wrapped(
                 "This product does not and cannot measure time saved. The work people already do by hand - "
                 + "meetings organised and attended, emails sent, Teams messages, files worked on - is observed "
                 + "from Microsoft's usage reports; the share of that work handed to Cowork and the minutes saved "
-                + "on each piece are assumptions, listed with them. Everyone is modelled this way, including "
-                + "people already using Cowork. Treat this as a way to size a Cowork rollout, not as a result, "
+                + "on each piece are assumptions, listed with them. Only people with no Cowork use observed "
+                + "in this reporting window are covered; established and trialling users are excluded. "
+                + "Known-disabled prospective accounts are excluded; unknown account status is not treated as disabled. "
+                + "Treat this as a way to size new adoption, not as a result, "
                 + "and never quote the hours without the assumptions underneath them."));
             sheet.AddRow(XlsxCell.Wrapped(
                 "Cowork only, on top of Microsoft 365 Copilot - the part paid for in Copilot Credits. These people "
@@ -2257,6 +2299,20 @@ namespace Common.Entities.CopilotAdoption
                 + "or for people who already use Copilot, so quote these hours as an assumption, not as evidence. "
                 + "The time Copilot could give back to the people recommended for a licence is on the "
                 + "'Licence estimate (modelled)' sheet."));
+            WriteCoworkCoverage(sheet, summary);
+            if (summary.CoworkAdoptionUnavailableReason != null || (!readyKnown && !fullKnown))
+            {
+                sheet.AddRow("New-adoption estimate", "Unavailable", XlsxCell.Wrapped(
+                    summary.CoworkNewAdoptionWithheld != null || summary.CoworkNonUserCeilingWithheld != null
+                        ? "WITHHELD: a cohort or its complement could identify fewer than five people. Not zero."
+                        : CoworkUnavailableReason(summary.CoworkAdoptionUnavailableReason)));
+                return;
+            }
+            if (!readyKnown || !fullKnown)
+            {
+                sheet.AddRow(XlsxCell.Wrapped("WITHHELD: a cohort or its complement could identify fewer than five people. "
+                    + "Its figures are blank, never zero."));
+            }
             sheet.AddRow(XlsxCell.Wrapped(customised
                 ? "ASSUMPTIONS ENTERED IN THE PORTAL: figures on this sheet were entered by the person who "
                   + "downloaded this file. The product defaults are recorded against their keys on the Settings "
@@ -2265,13 +2321,13 @@ namespace Common.Entities.CopilotAdoption
                   + "enter their own figures before exporting."));
             sheet.AddBlankRow();
 
-            sheet.AddHeaderRow("Measure", "Ready now", "Every Copilot seat holder", "What it means");
+            sheet.AddHeaderRow("Measure", "Ready candidates - no observed use", "All eligible non-users", "What it means");
 
-            AddEstimateRow(sheet, "People covered", ready.CohortUsers, full.CohortUsers,
-                "Ready now: the people recommended for the Cowork spending policy - prime candidates plus "
-                + "everyone already using Cowork - and where a rollout starts. Every Copilot seat holder: the "
-                + "ceiling if every scored seat holder used Cowork, including people who are not ready yet and "
-                + "would likely hand it less.");
+            EstimateRow("People covered", ready.CohortUsers, full.CohortUsers,
+                "Ready candidates: recommended prime candidates with no Cowork use observed in the period. "
+                + "All eligible non-users: assessed, not-known-disabled seat holders with no observed use, "
+                + "including people not yet ready who may delegate less than assumed. Neither is the full "
+                + "recommended policy audience; keep existing users in that separate policy audience.");
 
             var readyHours = CopilotAdoptionScoring.CoworkHoursByActivity(ready, model);
             var fullHours = CopilotAdoptionScoring.CoworkHoursByActivity(full, model);
@@ -2281,14 +2337,14 @@ namespace Common.Entities.CopilotAdoption
             // ---- The work Cowork could take on ----
             sheet.AddBlankRow();
             AddSectionRow(sheet, "WORK COWORK COULD TAKE ON");
-            AddEstimateRow(sheet, "People modelled from their own work", ready.CohortUsers, full.CohortUsers,
-                "Everyone covered, including people already using Cowork. Their work comes from Microsoft's "
+            EstimateRow("People modelled from their own work", ready.CohortUsers, full.CohortUsers,
+                "Only the prospective cohort, never established or trialling users. Work comes from Microsoft's "
                 + $"usage reports: per-active-day averages, restated over {Num(workingDays)} working days a month.");
 
             for (var i = 0; i < CoworkActivities.All.Count; i++)
             {
                 var activity = CoworkActivities.All[i];
-                AddEstimateRow(sheet, $"{activity.Label} - done by hand a month (observed)",
+                EstimateRow($"{activity.Label} - done by hand a month (observed)",
                     CopilotAdoptionScoring.CoworkVolume(ready, activity.Key),
                     CopilotAdoptionScoring.CoworkVolume(full, activity.Key),
                     $"OBSERVED. {activity.VolumeLabel}, from Microsoft's usage reports.");
@@ -2302,21 +2358,21 @@ namespace Common.Entities.CopilotAdoption
                     "ASSUMPTION - NO PUBLISHED STUDY. Cowork's increment over Copilot alone on each piece it takes on. "
                     + "The product ships with the same six minutes for every kind of work: the smallest credit "
                     + "Microsoft's Agent Assisted Hours method gives a resolved agent session.");
-                AddEstimateRow(sheet, $"{activity.Label} - handed to Cowork a month", readyPieces[i], fullPieces[i],
+                EstimateRow($"{activity.Label} - handed to Cowork a month", readyPieces[i], fullPieces[i],
                     "MODELLED. The volume x the share.");
-                AddEstimateRow(sheet, $"{activity.Label} - hours a month (high)", readyHours[i], fullHours[i],
+                EstimateRow($"{activity.Label} - hours a month (high)", readyHours[i], fullHours[i],
                     "MODELLED. Handed to Cowork x minutes saved on each.");
             }
 
-            AddEstimateRow(sheet, "Pieces of work handed to Cowork a month", ready.ProjectedCoworkTasks, full.ProjectedCoworkTasks,
+            EstimateRow("Pieces of work handed to Cowork a month", ready.ProjectedCoworkTasks, full.ProjectedCoworkTasks,
                 "MODELLED. Every kind of work above, handed over at its share.");
 
             // ---- Checking the shares after a pilot ----
             sheet.AddBlankRow();
             AddSectionRow(sheet, "CHECKING THE SHARES AFTER A PILOT");
             AddEstimateTenthsRow(sheet, "Pieces of work handed to Cowork a month per person",
-                PerPerson(ready.ProjectedCoworkTasks, ready.CohortUsers),
-                PerPerson(full.ProjectedCoworkTasks, full.CohortUsers),
+                readyKnown ? (double?)PerPerson(ready.ProjectedCoworkTasks, ready.CohortUsers) : null,
+                fullKnown ? (double?)PerPerson(full.ProjectedCoworkTasks, full.CohortUsers) : null,
                 "MODELLED. After a pilot, compare this with the Cowork tasks a month per person that Microsoft's "
                 + "Cowork usage report in the Microsoft 365 admin centre (Copilot > Cowork > Usage) shows for your "
                 + "pilot group, and move the shares until the two agree. This product does not import that report. "
@@ -2326,13 +2382,13 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddBlankRow();
             AddSectionRow(sheet, "TIME SAVED - on top of Microsoft 365 Copilot, paid for in Copilot Credits");
             sheet.AddRow(
-                "Lower bound (share of the assumptions)",
+                "Conservative scenario (share of the assumptions)",
                 XlsxCell.Percent(CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model)),
                 XlsxCell.Percent(CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model)),
-                XlsxCell.Wrapped("ASSUMPTION. The conservative end applies this share of the minutes saved."));
-            AddEstimateRow(sheet, "Cowork hours a month (low)", ready.HoursPerMonthLow, full.HoursPerMonthLow,
-                "MODELLED. The conservative end.");
-            AddEstimateRow(sheet, "Cowork hours a month (high)", ready.HoursPerMonthHigh, full.HoursPerMonthHigh,
+                XlsxCell.Wrapped("ASSUMPTION. These scenarios are not confidence intervals or guaranteed bounds."));
+            EstimateRow("Cowork hours a month (low)", ready.HoursPerMonthLow, full.HoursPerMonthLow,
+                "MODELLED additional potential over Copilot alone. The conservative scenario.");
+            EstimateRow("Cowork hours a month (high)", ready.HoursPerMonthHigh, full.HoursPerMonthHigh,
                 "MODELLED. Every row of hours above, added up. Quote the range, never a single figure.");
 
             sheet.AddBlankRow();
@@ -2341,6 +2397,99 @@ namespace Common.Entities.CopilotAdoption
             {
                 sheet.AddRow(XlsxCell.Wrapped(assumption));
             }
+        }
+
+        private static void WriteCoworkCoverage(XlsxSheet sheet, CopilotAdoptionSummary summary)
+        {
+            sheet.AddRow("Reporting window (UTC)", $"{summary.FromUtc:yyyy-MM-dd} to {summary.ToUtc:yyyy-MM-dd}");
+            sheet.AddRow("Earliest retained Copilot audit record (UTC)",
+                summary.DataSources?.AuditHistoryStartUtc?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "Not established");
+            sheet.AddRow("Assessed workload-report cutoff (UTC)",
+                summary.DataSources?.M365UsageReportDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "Unavailable");
+            sheet.AddRow("Analysis refreshed (UTC)", summary.GeneratedUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture));
+            sheet.AddRow(XlsxCell.Wrapped("Record boundaries do not prove continuous import coverage; import gaps cannot be ruled out. "
+                + "No Cowork use observed in these dates does not mean never used, not enabled or no access. "
+                + "Effective spending-policy membership is not imported. Never add the prospective increment-over-Copilot "
+                + "scenario to existing-user benefit, licence-opportunity or existing-seat-holder hours."));
+        }
+
+        private static string CoworkUnavailableReason(string reason)
+        {
+            switch (reason)
+            {
+                case "auditMissing": return "No usable audit evidence in the period; missing interactions are not evidence of non-use.";
+                case "historyUnknown": return "The start of retained audit history is not established.";
+                case "historyLimited": return "The reporting window starts before the earliest retained Copilot audit record.";
+                case "incomplete": return "Analysis or import backfill is incomplete; the observed-use split is unavailable.";
+                case "workloadMissing": return "The Microsoft 365 workload reports needed by the forecast are unavailable.";
+                default: return "The observed-use adoption split was not assessed. No legacy forecast is substituted.";
+            }
+        }
+
+        private static void WriteCoworkObservedSheet(XlsxWriter workbook, CopilotAdoptionSummary summary)
+        {
+            var sheet = workbook.AddSheet("Cowork observed use");
+            sheet.SetColumnWidths(48, 24, 72);
+            sheet.AddTitle("Observed Cowork use and estimated benefit");
+            WriteCoworkCoverage(sheet, summary);
+            var observed = summary.CoworkObservedUsage;
+            if (observed?.Available == true)
+            {
+                sheet.AddHeaderRow("Observed fact", "Value", "Population / meaning");
+                sheet.AddRow("Assessed Copilot seat holders", observed.AssessedUsers, "This scope; accounts disabled today are included.");
+                sheet.AddRow("People with observed Cowork use", observed.Users, "At least one imported Cowork interaction in the window.");
+                sheet.AddRow("Cowork audit interactions", observed.Interactions, "Interactions, not completed tasks.");
+                sheet.AddRow("Active user-days", observed.ActiveUserDays, "Sum of each person's days with any interaction; not distinct cohort days or Microsoft's prompt-based active days.");
+                sheet.AddRow("Most recent observed Cowork interaction (UTC)", observed.LastInteractionUtc,
+                    "Unavailable when none was observed; not a lifetime last-use claim.");
+                if (observed.Partial) sheet.AddRow(XlsxCell.Wrapped("PARTIAL: retained observations only; history, analysis or assessment limits may leave people or activity out."));
+            }
+            else
+            {
+                sheet.AddRow("Observed Cowork facts", "Unavailable", observed?.WithheldReason != null
+                    ? "WITHHELD: the population or its complement could identify fewer than five people. Not zero."
+                    : "No usable observation for this population and period. Not zero.");
+            }
+            sheet.AddRow("Existing-user assisted hours", "Not estimated", XlsxCell.Wrapped(
+                "Insufficient evidence for a validated benefit model (#897 Stage B). Conversation/task coverage, "
+                + "credit units and model provenance must be validated before assigning hours. Overall workload, "
+                + "audit interactions or active days do not establish completed work or time saved. "
+                + "No arbitrary time credits are applied. Cowork costs remain unknown."));
+        }
+
+        private static void WriteCoworkLicensingScenarioSheet(
+            XlsxWriter workbook, CopilotAdoptionSummary summary, CopilotAdoptionOptions model)
+        {
+            var source = summary.CoworkWithoutLicenceEstimate;
+            if ((source == null || source.CohortUsers <= 0) && summary.CoworkWithoutLicenceWithheld == null) return;
+            var sheet = workbook.AddSheet("Cowork licensing scenario");
+            sheet.SetColumnWidths(48, 24, 72);
+            sheet.AddTitle("Separate Cowork licensing scenario - MODELLED, NOT MEASURED");
+            if (summary.CoworkWithoutLicenceWithheld != null)
+            {
+                sheet.AddRow("Estimate", "Unavailable",
+                    "WITHHELD: fewer than five people. No hours are published, not zero hours.");
+                return;
+            }
+            var estimate = RestateCowork(source, model, CoworkEstimateCohort.WithoutLicence);
+            sheet.AddRow(XlsxCell.Wrapped("Every licence candidate, not the observed-use adoption split. "
+                + "Cowork use and access have not been established for this population. Assumes licensing and future "
+                + "delegation, with Cowork's increment over Copilot alone; never added to the licence forecast or "
+                + "existing-user benefit. Unknown Cowork spend is not zero."));
+            WriteCoworkCoverage(sheet, summary);
+            sheet.AddRow("People covered", estimate.CohortUsers);
+            var hours = CopilotAdoptionScoring.CoworkHoursByActivity(estimate, model);
+            for (var i = 0; i < CoworkActivities.All.Count; i++)
+            {
+                var activity = CoworkActivities.All[i];
+                sheet.AddRow(activity.Label + " - workload a month", CopilotAdoptionScoring.CoworkVolume(estimate, activity.Key));
+                sheet.AddRow(activity.Label + " - share handed to Cowork", XlsxCell.Percent(activity.Share(model)));
+                sheet.AddRow(activity.Label + " - minutes on each", activity.Minutes(model));
+                sheet.AddRow(activity.Label + " - hours a month (high)", hours[i]);
+            }
+            sheet.AddRow("Cowork hours a month (low)", estimate.HoursPerMonthLow);
+            sheet.AddRow("Cowork hours a month (high)", estimate.HoursPerMonthHigh);
+            foreach (var assumption in estimate.Assumptions) sheet.AddRow(XlsxCell.Wrapped(assumption));
         }
 
         /// <summary>A per-person figure to one decimal place; zero when there is nobody to divide by.</summary>
@@ -2353,7 +2502,7 @@ namespace Common.Entities.CopilotAdoption
         /// A row of figures that can be fractional, written unformatted: the whole-number style of
         /// <see cref="AddEstimateRow"/> would print 2.5 tasks a person as 3.
         /// </summary>
-        private static void AddEstimateTenthsRow(XlsxSheet sheet, string measure, double first, double second, string notes)
+        private static void AddEstimateTenthsRow(XlsxSheet sheet, string measure, double? first, double? second, string notes)
         {
             sheet.AddRow(measure, first, second, XlsxCell.Wrapped(notes));
         }
@@ -2369,7 +2518,8 @@ namespace Common.Entities.CopilotAdoption
         /// the portal recomputes it. Under the configured defaults this reproduces the published figures to
         /// the hour, because the server derives them from the same rounded inputs.
         /// </summary>
-        private static CoworkValueEstimate RestateCowork(CoworkValueEstimate estimate, CopilotAdoptionOptions model)
+        private static CoworkValueEstimate RestateCowork(
+            CoworkValueEstimate estimate, CopilotAdoptionOptions model, CoworkEstimateCohort cohort)
         {
             if (estimate == null || estimate.CohortUsers <= 0) return new CoworkValueEstimate();
 
@@ -2380,7 +2530,7 @@ namespace Common.Entities.CopilotAdoption
                 inputs.ActivityVolumes[activity.Key] = CopilotAdoptionScoring.CoworkVolume(estimate, activity.Key);
             }
 
-            return CopilotAdoptionScoring.ModelCoworkValue(estimate.CohortUsers, model, inputs);
+            return CopilotAdoptionScoring.ModelCoworkValue(estimate.CohortUsers, model, inputs, cohort);
         }
 
         /// <summary>
@@ -2411,6 +2561,12 @@ namespace Common.Entities.CopilotAdoption
         private static void AddEstimateRow(XlsxSheet sheet, string measure, double first, double second, string notes)
         {
             sheet.AddRow(measure, XlsxCell.Number(first), XlsxCell.Number(second), XlsxCell.Wrapped(notes));
+        }
+
+        private static void AddEstimateRow(XlsxSheet sheet, string measure, double? first, double? second, string notes)
+        {
+            sheet.AddRow(measure, first.HasValue ? (object)XlsxCell.Number(first.Value) : null,
+                second.HasValue ? (object)XlsxCell.Number(second.Value) : null, XlsxCell.Wrapped(notes));
         }
 
         /// <summary>A row of three cohorts' figures - the licence estimate's.</summary>
@@ -2575,8 +2731,8 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddTitle("Time already saved by Copilot seat holders - MODELLED, NOT MEASURED");
             sheet.AddRow(XlsxCell.Wrapped(
                 "This sheet answers how much time the seats already paid for may be giving back. It uses "
-                + "observed Copilot audit actions by seat holders, multiplied by visible Microsoft-published "
-                + "per-action credits. It is aggregate only, never per person, never money, and never added to "
+                + "observed Copilot audit interactions and distinct person-meeting contexts for seat holders, "
+                + "multiplied by visible, editable minutes assumptions. It is aggregate only, never per person, never money, and never added to "
                 + "the licence or Cowork estimates."));
             sheet.AddRow(XlsxCell.Wrapped(customised
                 ? "ASSUMPTIONS ENTERED IN THE PORTAL: figures on this sheet were entered by the person who downloaded this file."
@@ -2588,11 +2744,11 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddRow("Excluded usage-report-sourced users", XlsxCell.Number(estimate.ExcludedUsageReportSourcedUsers), XlsxCell.Wrapped("Seat holders whose engagement came only from Microsoft's usage report. They have prompt counts, not per-action detail."));
             sheet.AddRow("Outlook actions a month", XlsxCell.Number(estimate.ObservedOutlookActions), XlsxCell.Wrapped("OBSERVED. Outlook app-host Copilot actions, normalised to the report month."));
             sheet.AddRow("Word/PowerPoint/Excel actions a month", XlsxCell.Number(estimate.ObservedOfficeActions), XlsxCell.Wrapped("OBSERVED. Office document-work Copilot actions, normalised to the report month."));
-            sheet.AddRow("Teams meeting actions a month", XlsxCell.Number(estimate.ObservedTeamsMeetingActions), XlsxCell.Wrapped("OBSERVED. Actions linked to a Teams meeting context, normalised to the report month."));
+            sheet.AddRow("Teams meeting contexts a month", XlsxCell.Number(estimate.ObservedTeamsMeetingActions), XlsxCell.Wrapped("OBSERVED. Meetings with Copilot context, counted once per person and normalised to the report month. Not a count of recap or summarisation actions."));
             sheet.AddRow("Uncredited actions a month", XlsxCell.Number(estimate.ObservedUncreditedActions), XlsxCell.Wrapped("OBSERVED. Copilot Chat and other surfaces. Defaults to zero credit because no per-prompt credit is published."));
             sheet.AddRow("Outlook minutes per action", estimate.Credits.OutlookMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Microsoft-published email action credit."));
             sheet.AddRow("Office minutes per action", estimate.Credits.OfficeMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Microsoft-published document drafting/summarising credit."));
-            sheet.AddRow("Teams meeting minutes per action", estimate.Credits.TeamsMeetingMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Fixed fallback because meeting duration is not reliably imported here."));
+            sheet.AddRow("Minutes per person-meeting context", estimate.Credits.TeamsMeetingMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Editable fixed credit; neither a recap action nor meeting duration is established by this import."));
             sheet.AddRow("Uncredited minutes per action", estimate.Credits.UncreditedMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Defaults to zero."));
             sheet.AddRow("Lower bound", XlsxCell.Percent(estimate.Credits.LowerBoundRatio), XlsxCell.Wrapped("ASSUMPTION. Conservative share applied to every credit."));
             sheet.AddRow("Modelled hours a month (low)", XlsxCell.Number(estimate.HoursPerMonthLow), XlsxCell.Wrapped("MODELLED. Conservative end."));
@@ -3149,7 +3305,8 @@ namespace Common.Entities.CopilotAdoption
                         : "Per-user movement cannot be read from this file: it was exported without the See PII "
                           + "permission, so it has no 'Licensed users' sheet. Its 'Snapshot facts' match a full "
                           + "export's except accountabilityRollup.count, which is 0 when the roll-up is grouped by "
-                          + "manager, because those rows name managers."
+                          + "manager, because those rows name managers, and privacy-withheld Cowork cohorts or observations. "
+                          + "Those figures are blank, with their withholding reason, never zero."
                           + WithheldFactsNote(summary)));
 
             AddMethod(sheet, "Licence classification",

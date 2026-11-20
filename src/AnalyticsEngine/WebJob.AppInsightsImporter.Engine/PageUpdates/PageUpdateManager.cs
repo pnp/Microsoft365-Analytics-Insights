@@ -471,18 +471,23 @@ namespace WebJob.AppInsightsImporter.Engine
             }
 
             // Standard props
+            var taxonomyFieldNames = new HashSet<string>(taxonomyProps.Select(t => t.PropName));
             foreach (var prop in simpleProps)
             {
                 var field = fields[prop.Key];
                 storedValuesByFieldId.TryGetValue(field.ID, out var stored);
 
-                // Don't overwrite MM props processed above ^^ 
-                if (stored?.TagGuid != null)
+                // Don't overwrite MM props processed above ^^, nor a stored term with its raw "id;#Label|termGuid" text
+                // from a tracker that sent no terms. A field cleared on the page arrives empty and with no term, though,
+                // and must not keep its last term (#849).
+                var clearsStoredTerm = stored?.TagGuid != null && string.IsNullOrWhiteSpace(prop.Value) && !taxonomyFieldNames.Contains(prop.Key);
+                if (stored?.TagGuid != null && !clearsStoredTerm)
                 {
                     continue;
                 }
 
                 var urlPropVal = ValueToWrite(field, stored);
+                urlPropVal.TagGuid = null;
                 urlPropVal.FieldValue = prop.Value;
                 urlPropVal.Updated = now;
                 updatesMade = true;

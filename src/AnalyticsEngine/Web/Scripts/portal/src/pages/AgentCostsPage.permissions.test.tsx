@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import { renderWithProvider } from '../test/renderWithProvider';
+import { loadCatalog } from '../i18n';
 import AgentCostsPage from './AgentCostsPage';
 import {
   fetchAllDetailRows,
@@ -14,7 +15,7 @@ import {
   fetchTopUsers,
   fetchTrend,
 } from '../api/agentCostsApi';
-import type { AgentCostAvailability, AgentCostSummary, AgentCostUserRow } from '../types/agentCosts';
+import type { AgentCostAvailability, AgentCostBreakdownRow, AgentCostSummary, AgentCostUserRow } from '../types/agentCosts';
 
 vi.mock('../api/agentCostsApi', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../api/agentCostsApi')>()),
@@ -185,5 +186,45 @@ describe('AgentCostsPage - See PII', () => {
     expect(screen.getByText('Who is spending the credits')).toBeInTheDocument();
     expect(screen.queryByText('Individual details are hidden')).not.toBeInTheDocument();
     await waitFor(() => expect(fetchTopUsers).toHaveBeenCalled());
+  });
+});
+
+// #851 (R2-10): the figure counts every day with reported credit use, billed or not, so it is not called "Days active".
+describe('AgentCostsPage - days with usage', () => {
+  const agent: AgentCostBreakdownRow = {
+    key: '00000000-0000-0000-0000-000000000002',
+    label: 'Contoso helpdesk agent',
+    billedCredits: 0,
+    nonBilledCredits: 40,
+    activeDays: 2,
+    peakDistinctUsers: 6,
+    folded: 0,
+    withheld: false,
+  };
+
+  it('names the days column of both tables for what it counts, and explains that unbilled days count', async () => {
+    vi.mocked(fetchBreakdown).mockResolvedValue([agent]);
+    renderWithProvider(<AgentCostsPage />, { access: { administration: false, seePii: true } });
+
+    expect(await screen.findByText('maker@contoso.com')).toBeInTheDocument();
+    await screen.findByText('Contoso helpdesk agent', { selector: 'td' });
+    expect(screen.getAllByText('Days with usage', { selector: 'th' })).toHaveLength(2);
+    expect(screen.queryByText('Days active')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'How "Days with usage" is calculated' })[0]);
+    expect(await screen.findByText(
+      'The number of days on which Microsoft reported any Copilot Studio credit use, including days on which none of it was billed.',
+    )).toBeInTheDocument();
+  });
+
+  it('says the same in Spanish', async () => {
+    await loadCatalog('es');
+    vi.mocked(fetchBreakdown).mockResolvedValue([agent]);
+    renderWithProvider(<AgentCostsPage />, { access: { administration: false, seePii: true }, language: 'es' });
+
+    expect(await screen.findByText('maker@contoso.com')).toBeInTheDocument();
+    await screen.findByText('Contoso helpdesk agent', { selector: 'td' });
+    expect(screen.getAllByText('Días con uso', { selector: 'th' })).toHaveLength(2);
+    expect(screen.queryByText('Días activos')).not.toBeInTheDocument();
   });
 });

@@ -104,6 +104,36 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// #849: a managed-metadata field cleared on the page arrives as an empty value with no term. The standard pass
+        /// never overwrote a stored term, so the page kept its last term in SQL for good.
+        /// </summary>
+        [TestMethod]
+        public async Task TaxonomyField_ClearedOnThePage_ClearsTheStoredTerm_ButARawValueStillDoesNot()
+        {
+            var url = await NewUrl("taxonomy-cleared");
+            var manager = Manager();
+            var financeRaw = "2;#Contoso Finance|" + Finance;
+
+            await manager.SaveAll(new[] { Update(url, Props("ContosoDepartment", financeRaw), Term("ContosoDepartment", Finance, "Contoso Finance")) });
+            Assert.AreEqual(("Contoso Finance", (Guid?)Finance), (await StoredValues(url))["ContosoDepartment"]);
+
+            // A tracker that sends no terms: the raw text still does not replace the stored term
+            RefreshWindowPasses(url);
+            await manager.SaveAll(new[] { Update(url, Props("ContosoDepartment", financeRaw)) });
+            Assert.AreEqual(("Contoso Finance", (Guid?)Finance), (await StoredValues(url))["ContosoDepartment"]);
+
+            // The field cleared on the page
+            RefreshWindowPasses(url);
+            await manager.SaveAll(new[] { Update(url, Props("ContosoDepartment", string.Empty)) });
+            Assert.AreEqual((string.Empty, (Guid?)null), (await StoredValues(url))["ContosoDepartment"], "A cleared field keeps no term.");
+
+            // And tagged again
+            RefreshWindowPasses(url);
+            await manager.SaveAll(new[] { Update(url, Props("ContosoDepartment", financeRaw), Term("ContosoDepartment", Finance, "Contoso Finance")) });
+            Assert.AreEqual(("Contoso Finance", (Guid?)Finance), (await StoredValues(url))["ContosoDepartment"]);
+        }
+
+        /// <summary>
         /// Automatic change detection is off while a chunk is saved, and changes are detected once before each page's
         /// save. A value changed in place is saved only because of that, so this reads one back.
         /// </summary>

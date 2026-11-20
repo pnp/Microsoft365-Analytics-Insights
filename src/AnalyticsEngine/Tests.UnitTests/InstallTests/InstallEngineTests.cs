@@ -301,10 +301,12 @@ namespace Tests.UnitTests
         }
 
         [DataTestMethod]
+        [DataRow("pause")]
         [DataRow("schema")]
         [DataRow("content")]
         [DataRow("stop")]
-        public async Task UpgradeDeployment_FailureNeverResumesOldOrPartiallyDeployedWebJobs(string failingStage)
+        [DataRow("start")]
+        public async Task UpgradeDeployment_FailureAlwaysAttemptsWebJobsCleanup_AndPreservesOriginalError(string failingStage)
         {
             var stages = new List<string>();
             var failure = new InvalidOperationException("Synthetic " + failingStage + " failure");
@@ -321,13 +323,14 @@ namespace Tests.UnitTests
 
             Assert.AreSame(failure, error, "The original failure and stack must survive cleanup.");
             Assert.AreEqual("pause", stages[0]);
-            Assert.IsTrue(stages.Contains("start"), "A stop that throws may have completed server-side; restore SCM access.");
-            Assert.IsFalse(stages.Contains("resume"), "A partially upgraded deployment must stay paused for operator recovery.");
+            Assert.AreEqual(failingStage != "pause", stages.Contains("start"),
+                "A stop that throws may have completed server-side; restore SCM access.");
+            Assert.AreEqual("resume", stages.Last(), "An error must not strand the WebJobs pause setting.");
             if (failingStage != "content") Assert.IsFalse(stages.Contains("content"));
         }
 
         [TestMethod]
-        public async Task UpgradeDeployment_SchemaOnlyLeavesWebJobsPausedForTheManualBinaryUpgrade()
+        public async Task UpgradeDeployment_SchemaOnlyStillRemovesTheWebJobsPause()
         {
             var stages = new List<string>();
             Func<string, Task> stage = name => { stages.Add(name); return Task.CompletedTask; };
@@ -336,7 +339,7 @@ namespace Tests.UnitTests
                 () => stage("pause"), () => stage("resume"), () => stage("stop"), () => stage("start"),
                 () => stage("schema"), () => stage("content"), _logger);
 
-            CollectionAssert.AreEqual(new[] { "pause", "stop", "schema", "start" }, stages);
+            CollectionAssert.AreEqual(new[] { "pause", "stop", "schema", "start", "resume" }, stages);
         }
 
         [TestMethod]
@@ -368,7 +371,7 @@ namespace Tests.UnitTests
         [DataRow("")]
         [DataRow("0")]
         [DataRow("1")]
-        public void UpgradeDeployment_RetryRestoresTheOriginalOperatorWebJobsSetting(string original)
+        public void UpgradeDeployment_RetryRemovesTheWebJobsPauseRegardlessOfItsPreviousValue(string original)
         {
             var settings = new Dictionary<string, string> { ["ContosoUnmanagedSetting"] = "keep" };
             if (original != null) settings["WEBJOBS_STOPPED"] = original;
@@ -378,8 +381,7 @@ namespace Tests.UnitTests
             ConfigureAzureComponentsTasks.PauseUpgradeWebJobs(settings); // Recovery run after a schema/deployment failure.
             ConfigureAzureComponentsTasks.ResumeUpgradeWebJobs(settings);
 
-            Assert.AreEqual(original != null, settings.ContainsKey("WEBJOBS_STOPPED"));
-            if (original != null) Assert.AreEqual(original, settings["WEBJOBS_STOPPED"]);
+            Assert.IsFalse(settings.ContainsKey("WEBJOBS_STOPPED"));
             Assert.IsFalse(settings.ContainsKey(ConfigureAzureComponentsTasks.UpgradeWebJobsStateSetting));
             Assert.AreEqual("keep", settings["ContosoUnmanagedSetting"]);
         }

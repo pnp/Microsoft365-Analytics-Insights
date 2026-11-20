@@ -68,6 +68,7 @@ const health: Record<keyof typeof en, string> = {
   'health.reason.agentCostConnectionConnected': 'Hay una conexión de administrador de facturación de Power Platform guardada para el consumo de créditos de agentes.',
   'health.reason.agentCostConnectionDisconnected': 'El seguimiento de créditos de agentes está habilitado, pero no hay ningún administrador de facturación de Power Platform conectado. Conéctelo en Administración > Costes de agentes.',
   'health.reason.agentCostConnectionReconnectNeeded': 'La conexión del administrador de facturación de Power Platform necesita renovarse. Vuelva a conectarlo en Administración > Costes de agentes.',
+  'health.reason.agentCostConnectionRouteRefused': 'El administrador de facturación de Power Platform sigue con la sesión iniciada, pero Microsoft rechazó la solicitud de uso de Copilot Studio (HTTP 403). Puede que la cuenta haya perdido el rol de administrador de Power Platform o que Microsoft haya restringido las rutas de consumo por usuario que ha marcado como obsoletas. Volver a conectar no basta para solucionarlo. La capacidad de Copilot Credits y los costes de Azure no se ven afectados.',
   'health.reason.agentCostConnectionCheckFailed': 'No se pudo comprobar la conexión del administrador de facturación de Power Platform. Compruebe el acceso a Azure Table Storage y Administración > Costes de agentes.',
   'health.duration.day': '{count} día',
   'health.duration.days': '{count} días',

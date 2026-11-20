@@ -18,6 +18,12 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         public const string TokenUnavailableDiagnostic = "agentCosts.import.tokenUnavailable";
 
         /// <summary>
+        /// The delegated token was accepted but Microsoft refused the licensing route (HTTP 403). Reconnecting alone
+        /// does not fix it, so it is reported separately from <see cref="ReconnectDiagnostic"/> (#914).
+        /// </summary>
+        public const string RouteRefusedDiagnostic = "agentCosts.import.routeRefused";
+
+        /// <summary>
         /// Stored in the import log instead of an error when there is no delegated connection. Kept equal to
         /// <c>AgentCostImportNames.ConnectionRequired</c>, which the report store reads.
         /// </summary>
@@ -76,6 +82,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         private readonly ICopilotStudioCreditSource _capacity;
         private readonly AgentCostConnectionStore _store;
         private readonly string _version;
+        private readonly SemaphoreSlim _routeStateGate = new SemaphoreSlim(1, 1);
+        private bool _routeAnswered;
+        private bool _routeRefused;
 
         public DelegatedAgentCostSource(ICopilotStudioCreditSource consumption, ICopilotStudioCreditSource capacity,
             AgentCostConnectionStore store, string version)
@@ -91,8 +100,9 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
         public Task<CopilotStudioCapacitySnapshot> GetCapacityAsync() => _capacity.GetCapacityAsync();
         public Task<IReadOnlyDictionary<string, string>> GetEnvironmentNamesAsync() => _consumption.GetEnvironmentNamesAsync();
 
-        // Every consumption route is delegated, and a refusal on any of them means the connection no longer
-        // grants what the import needs, so each goes through the reconnect handling.
+        // Every consumption route is delegated. A token Microsoft no longer accepts (HTTP 401, or a refresh that
+        // fails) means the connection must be renewed. A refused route (HTTP 403) does not: the sign-in is valid,
+        // so it is recorded as its own state rather than sending the administrator round a reconnect loop (#914).
         public Task<CopilotStudioUserCreditPage> GetUserConsumptionPageAsync(DateTime fromDate, DateTime toDate, string continuationToken) =>
             WithReconnectAsync(() => _consumption.GetUserConsumptionPageAsync(fromDate, toDate, continuationToken));
 
@@ -101,12 +111,50 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
 
         private async Task<T> WithReconnectAsync<T>(Func<Task<T>> read)
         {
-            try { return await read(); }
+            T result;
+            try { result = await read(); }
+            catch (AgentCostRouteRefusedException ex)
+            {
+                await RecordRouteStateAsync(refused: true);
+                throw new AgentCostRouteRefusedException(AgentCostDelegatedHttpClient.RouteRefusedDiagnostic, ex);
+            }
             catch (AgentCostAuthorisationException)
             {
                 await _store.RequireReconnectAsync(_version);
                 throw new AgentCostAuthorisationException(AgentCostDelegatedHttpClient.ReconnectDiagnostic);
             }
+            await RecordRouteStateAsync(refused: false);
+            return result;
+        }
+
+        /// <summary>
+        /// A refusal is recorded every time; a successful read clears an earlier run's refusal once, and only while this
+        /// run has not been refused itself. Per-user reads run concurrently, so both go through one gate: a success that
+        /// finishes after a concurrent refusal must not erase it.
+        /// </summary>
+        private async Task RecordRouteStateAsync(bool refused)
+        {
+            if (!refused && (_routeAnswered || _routeRefused)) return;
+            await _routeStateGate.WaitAsync();
+            try
+            {
+                if (refused)
+                {
+                    _routeRefused = true;
+                    await _store.RefuseRouteAsync(_version);
+                }
+                else if (!_routeAnswered && !_routeRefused)
+                {
+                    _routeAnswered = true;
+                    await _store.ClearRouteRefusedAsync(_version);
+                }
+            }
+            catch (Exception)
+            {
+                // Fail open: the state only guides the administrator, so a Storage outage must neither fail a read
+                // that worked nor hide the refusal behind a Storage error. The next run records it again.
+            }
+            finally { _routeStateGate.Release(); }
         }
     }
 }

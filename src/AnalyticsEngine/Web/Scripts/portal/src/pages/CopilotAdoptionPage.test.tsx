@@ -192,6 +192,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     coworkInteractions: 0,
     coworkDetected: false,
     coworkReadinessAvailable: false,
+    coworkReadinessWithheld: false,
     coworkScoredUsers: 0,
     coworkEstablishedUsers: 0,
     coworkTriallingUsers: 0,
@@ -322,6 +323,53 @@ describe('CopilotAdoptionPage loading and recovery', () => {
   }
 
   it.each([
+    { language: 'en' as const, ready: 'Report ready', hide: 'Hide report status', heading: 'Where we stand' },
+    { language: 'es' as const, ready: 'Informe listo', hide: 'Ocultar el estado del informe', heading: 'Dónde estamos' },
+  ])('dismisses a successful report status locally in $language without hiding the report', async ({ language, ready, hide, heading }) => {
+    const user = userEvent.setup();
+    await renderPage({ language });
+    const dismiss = await screen.findByRole('button', { name: hide }, { timeout: 5000 });
+    expect(screen.getByText(ready)).toBeVisible();
+
+    await user.click(dismiss);
+
+    expect(screen.queryByText(ready)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: hide })).not.toBeInTheDocument();
+    expect(screen.getAllByText(heading)[0]).toBeVisible();
+    expect(fetchAdoptionSummary).toHaveBeenCalledTimes(1);
+    expect(fetchAdoptionFilters).toHaveBeenCalledTimes(1);
+    expect(fetchAdoptionSql).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows ready status again for a new period even when the generation is cached', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      diagnostics: { generationId, totalMs: 100, steps: [], progress: resultProgress() },
+    }));
+    await renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Hide report status' }));
+    expect(screen.queryByText('Report ready')).not.toBeInTheDocument();
+
+    choosePeriod('90');
+
+    expect(await screen.findByRole('button', { name: 'Hide report status' }, { timeout: 5000 })).toBeVisible();
+    expect(screen.getByText('Report ready')).toBeVisible();
+    expect(fetchAdoptionSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for supporting requests before allowing dismissal', async () => {
+    let resolve!: (queries: Record<string, string>) => void;
+    const pending = new Promise<Record<string, string>>(done => { resolve = done; });
+    vi.mocked(fetchAdoptionSql).mockImplementationOnce(() => pending);
+    await renderPage();
+    expect(await screen.findByText('Preparing the report')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Hide report status' })).not.toBeInTheDocument();
+
+    await act(async () => { resolve({}); await pending; });
+
+    expect(await screen.findByRole('button', { name: 'Hide report status' })).toBeVisible();
+  });
+
+  it.each([
     { language: 'en' as const, percent: '25% of stages processed', progressLabel: 'Analysis stages processed' },
     { language: 'es' as const, percent: '25% de etapas procesadas', progressLabel: 'Etapas del análisis procesadas' },
   ])('shows live stage progress in $language without pretending the report is ready', async ({ language, percent, progressLabel }) => {
@@ -344,6 +392,9 @@ describe('CopilotAdoptionPage loading and recovery', () => {
     expect(screen.queryByText('Where we stand')).not.toBeInTheDocument();
     expect(fetchAdoptionFilters).not.toHaveBeenCalled();
     expect(rebuildAdoption).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', {
+      name: language === 'es' ? 'Ocultar el estado del informe' : 'Hide report status',
+    })).not.toBeInTheDocument();
   });
 
   it('keeps a partial report visible during a rebuild and reconciles supporting data after publication', async () => {
@@ -385,17 +436,20 @@ describe('CopilotAdoptionPage loading and recovery', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
     expect(await screen.findByText(/This is a failed section, not evidence/)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Retry failed analysis' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Hide report status' })).not.toBeInTheDocument();
   });
 
   it('retries a failed filter request without rebuilding SQL or retrying successful requests', async () => {
     vi.mocked(fetchAdoptionFilters).mockRejectedValueOnce(new Error('Synthetic filter request failure'));
     await renderPage();
     expect(await screen.findByText('Synthetic filter request failure')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Hide report status' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry request' }));
     await waitFor(() => expect(fetchAdoptionFilters).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText('Synthetic filter request failure')).not.toBeInTheDocument());
     expect(fetchAdoptionSql).toHaveBeenCalledTimes(1);
     expect(rebuildAdoption).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'Hide report status' })).toBeVisible();
   });
 
   it('checks a failed summary request again without issuing a rebuild', async () => {
@@ -881,6 +935,47 @@ describe('CopilotAdoptionPage view split', () => {
     expect(screen.queryByText('Readiness for Cowork')).not.toBeInTheDocument();
   });
 
+  it('shows no readiness gauge when the Microsoft 365 usage reports are not verified for the period', async () => {
+    // Release critique of #909: unverified, nobody can be assessed as a prime candidate, so only the
+    // people already using Cowork are "recommended" and the gauge read as a near-zero readiness -
+    // permanently, on a tenant whose import is scoped by group. The test above it is the other direction.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      dataSources: { ...summary().dataSources, m365UsageReportsAvailable: false },
+      coworkDetected: true,
+      coworkAdoptionPct: null,
+      coworkReadinessAvailable: true,
+      coworkScoredUsers: 80,
+      coworkRecommendedForPolicy: 5,
+    }));
+
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+
+    expect(await screen.findByRole('tab', { name: 'Analyst view', selected: true })).toBeVisible();
+    expect(screen.queryByRole('img', { name: /Readiness for Cowork/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/scored seat holders are ready to be scoped for Cowork/)).not.toBeInTheDocument();
+  });
+
+  it('shows no readiness gauge when Cowork readiness figures are withheld for small groups', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      coworkDetected: true,
+      coworkAdoptionPct: null,
+      coworkReadinessAvailable: true,
+      coworkReadinessWithheld: true,
+      coworkScoredUsers: null,
+      coworkRecommendedForPolicy: null,
+    }));
+
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+
+    expect(await screen.findByRole('tab', { name: 'Analyst view', selected: true })).toBeVisible();
+    expect(screen.queryByRole('img', { name: /Readiness for Cowork/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/scored seat holders are ready to be scoped for Cowork/)).not.toBeInTheDocument();
+  });
+
   it('uses the designed executive empty state instead of an empty grid of diagnostics', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
       licensedUsers: 0,
@@ -1182,6 +1277,34 @@ describe('CopilotAdoptionPage printing', () => {
     // By text, not by role, so this stays true either side of that swap.
     expect(screen.getByText('Excel report').closest('[data-print="hide"]')).not.toBeNull();
     expect(screen.getByRole('tab', { name: 'Executive view' }).closest('[data-print="hide"]')).not.toBeNull();
+  });
+
+  it('prints the per-workload source coverage facts with the report', async () => {
+    const report = summary();
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue({
+      ...report,
+      dataSources: {
+        ...report.dataSources,
+        workloadCoverage: [{
+          source: 'teams',
+          status: 'empty',
+          reason: null,
+          fromUtc: '2025-12-05',
+          throughUtc: '2025-12-31',
+          expectedDays: 27,
+          verifiedDays: 27,
+          emptyDays: 27,
+          partialDays: 0,
+          scopeUnverifiedDays: 0,
+        }],
+      },
+    });
+
+    await renderPage();
+
+    const coverage = await screen.findByText('Teams: Successfully empty — 27 of 27 days verified');
+    expect(coverage.closest('[data-print="hide"]')).toBeNull();
+    expect(coverage.closest('[data-print="flow"]')).not.toBeNull();
   });
 
   it('keeps the report itself out of the print-hidden chrome', async () => {
@@ -1500,6 +1623,10 @@ describe('CopilotAdoptionPage modelled time saved', () => {
       coworkRecommendedForPolicy: 20,
       coworkValueEstimate: coworkReady,
       coworkFullRolloutEstimate: coworkCeiling,
+      coworkNewAdoptionEstimate: coworkReady,
+      coworkNonUserCeilingEstimate: coworkCeiling,
+      coworkAdoptionUnavailableReason: null,
+      dataSources: { ...summary().dataSources, auditHistoryStartUtc: '2025-01-01T00:00:00Z' },
       licenceOpportunityEstimate: licenceEstimate,
       seatHolderTimeSavedEstimate: seatHolderEstimate,
       licenceChatUsersEstimate: {
@@ -1551,7 +1678,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(within(licence).getByText('1,800\u20133,600 h')).toBeVisible();
     expect(within(licence).getByText('a month if all 40 licence candidates were licensed')).toBeVisible();
     // The Cowork tile keeps its own choice: the people ready now.
-    expect(within(await tile('Time back from Cowork')).getByText('15\u201330 h')).toBeVisible();
+    expect(within(await tile('New Cowork adoption potential')).getByText('15\u201330 h')).toBeVisible();
   });
 
   it('quotes every Copilot seat holder on the Cowork tile when the reader chose to model them all', async () => {
@@ -1560,9 +1687,9 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     await renderPage();
 
-    const cowork = await tile('Time back from Cowork');
+    const cowork = await tile('New Cowork adoption potential');
     expect(within(cowork).getByText('75\u2013150 h')).toBeVisible();
-    expect(within(cowork).getByText('a month if all 100 Copilot seat holders used Cowork')).toBeVisible();
+    expect(within(cowork).getByText(/a month across 100 eligible non-users - broader scenario/)).toBeVisible();
     expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
   });
 
@@ -1631,7 +1758,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     const model = screen.getByRole('tabpanel', { name: 'Time saved' });
     expect(within(model).getByText('Time already saved by seat holders')).toBeVisible();
     expect(within(model).getByText(/Copilot Chat and other non-agent surfaces default to zero minutes/)).toBeVisible();
-    expect(within(model).getByText(/Agent and Cowork activity is left out of this figure/)).toBeVisible();
+    expect(within(model).getByText(/Agent and Cowork activity is left out; existing-user Cowork benefit is not estimated/)).toBeVisible();
 
     const other = within(model).getByText('Copilot Chat and other apps').closest('tr') as HTMLElement;
     expect(within(other).getByText('20')).toBeVisible();
@@ -1761,10 +1888,10 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(within(licence).getByText('1,200\u20132,400 h')).toBeVisible();
     expect(within(licence).getByText('a month if the 9 recommended people were licensed')).toBeVisible();
 
-    const cowork = await tile('Time back from Cowork');
+    const cowork = await tile('New Cowork adoption potential');
     expect(within(cowork).getByText('Modelled')).toBeVisible();
     expect(within(cowork).getByText('15\u201330 h')).toBeVisible();
-    expect(within(cowork).getByText('a month if the 20 people ready used Cowork')).toBeVisible();
+    expect(within(cowork).getByText(/a month from 20 ready candidates with no observed Cowork use/)).toBeVisible();
   });
 
   /**
@@ -1789,7 +1916,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(
       withEstimate({
         coworkRecommendedForPolicy: 0,
-        coworkValueEstimate: {
+        coworkNewAdoptionEstimate: {
           ...coworkReady,
           cohortUsers: 0,
           projectedCoworkTasks: 0,
@@ -1801,9 +1928,9 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     await renderPage();
 
-    const cowork = await tile('Time back from Cowork');
+    const cowork = await tile('New Cowork adoption potential');
     expect(within(cowork).getByText('75\u2013150 h')).toBeVisible();
-    expect(within(cowork).getByText('a month if all 100 Copilot seat holders used Cowork')).toBeVisible();
+    expect(within(cowork).getByText(/a month across 100 eligible non-users - broader scenario/)).toBeVisible();
   });
 
   it('links each tile to the tab that explains it', async () => {
@@ -1815,7 +1942,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(await screen.findByRole('tab', { name: 'Licence opportunities', selected: true })).toBeVisible();
 
     fireEvent.click(screen.getByRole('tab', { name: 'Executive view' }));
-    fireEvent.click(within(await tile('Time back from Cowork')).getByRole('button', { name: 'See the Cowork tab' }));
+    fireEvent.click(within(await tile('New Cowork adoption potential')).getByRole('button', { name: 'See the Cowork tab' }));
     expect(await screen.findByRole('tab', { name: 'Cowork', selected: true })).toBeVisible();
   });
 
@@ -1866,7 +1993,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     await screen.findAllByText('Where we stand');
 
     expect(screen.queryByText('Time back from licensing')).not.toBeInTheDocument();
-    expect(screen.queryByText('Time back from Cowork')).not.toBeInTheDocument();
+    expect(screen.queryByText('New Cowork adoption potential')).not.toBeInTheDocument();
   });
 
   it('shows the licensing figure on its own when Cowork readiness could not be assessed', async () => {
@@ -1875,7 +2002,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     await renderPage();
 
     expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
-    expect(screen.queryByText('Time back from Cowork')).not.toBeInTheDocument();
+    expect(screen.queryByText('New Cowork adoption potential')).not.toBeInTheDocument();
   });
 
   it('keeps a large range short, with its unit on the same line', async () => {
@@ -1900,7 +2027,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
 
     // 2,000 x 16 + 100,000 + 24,000 = 156,000 minutes = 2,600 hours, 1,300 conservative.
     expect(within(await tile('Time back from licensing')).getByText('1,300\u20132,600 h')).toBeVisible();
-    expect(within(await tile('Time back from Cowork')).getByText('15\u201330 h')).toBeVisible();
+    expect(within(await tile('New Cowork adoption potential')).getByText('15\u201330 h')).toBeVisible();
     // The link has no href until the filters and SQL have loaded too (reportBusy), which can be after the tiles.
     const url = await waitFor(() => new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href), { timeout: 5000 });
     expect(url.searchParams.get('copilotMinutesSavedPerMeeting')).toBe('16');
@@ -1916,7 +2043,7 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     await renderPage();
 
     // 6,000 emails x 10% = 600 handed over x 6 = 3,600 minutes = 60 hours, 30 conservative.
-    expect(within(await tile('Time back from Cowork')).getByText('30\u201360 h')).toBeVisible();
+    expect(within(await tile('New Cowork adoption potential')).getByText('30\u201360 h')).toBeVisible();
     expect(within(await tile('Time back from licensing')).getByText('1,200\u20132,400 h')).toBeVisible();
     // The link has no href until the filters and SQL have loaded too (reportBusy), which can be after the tiles.
     const url = await waitFor(() => new URL((screen.getByText('Excel report').closest('a') as HTMLAnchorElement).href), { timeout: 5000 });
@@ -1961,9 +2088,9 @@ describe('CopilotAdoptionPage modelled time saved', () => {
     expect(within(licence).getByText('Modelado')).toBeVisible();
     expect(within(licence).getByText('al mes si las 5000 personas recomendadas tuvieran licencia')).toBeVisible();
 
-    const cowork = await tile('Tiempo recuperado con Cowork');
+    const cowork = await tile('Potencial de nueva adopción de Cowork');
     expect(within(cowork).getByText('15\u201330 h')).toBeVisible();
-    expect(within(cowork).getByText('al mes si las 20 personas preparadas usaran Cowork')).toBeVisible();
+    expect(within(cowork).getByText(/al mes de 20 candidatos preparados sin uso observado de Cowork/)).toBeVisible();
   });
 });
 
@@ -2189,7 +2316,7 @@ describe('CopilotAdoptionPage language switch', () => {
       /^Informe de uso de Microsoft Copilot: instant\u00e1nea del 1 ene\.? 2026\. Solo cubre a los usuarios con licencia, /,
     );
     expect(await line('Informes de uso de Microsoft 365:')).toBe(
-      'Informes de uso de Microsoft 365: no importados. Se usan para encontrar usuarios intensivos de Microsoft 365 que no tienen licencia de Copilot.',
+      'Informes de uso de Microsoft 365: la cobertura diaria está incompleta o sin verificar. Las observaciones positivas siguen siendo parciales; se omiten las evaluaciones de idoneidad según la carga de trabajo.',
     );
     expect(await line('Cifras de indicaciones del inquilino seg\u00fan Microsoft:')).toMatch(
       /^Cifras de indicaciones del inquilino seg\u00fan Microsoft: no importadas\. Las indicaciones enviadas/,

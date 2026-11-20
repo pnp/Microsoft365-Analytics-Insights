@@ -415,8 +415,9 @@ export function BandBadge({ band, name }: { band: AdoptionBand; name: string }) 
  * bars makes the shape of the problem visible in one glance - which is the whole reason this list
  * exists rather than a raw data dump.
  */
-export function ScoreBar({ score, colour }: { score: number; colour?: string }) {
+export function ScoreBar({ score, colour }: { score: number | null; colour?: string }) {
   const styles = useStyles();
+  if (score == null) return <span>{'\u2014'}</span>;
   const clamped = Math.max(0, Math.min(100, score));
 
   return (

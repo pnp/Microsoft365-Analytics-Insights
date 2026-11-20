@@ -110,6 +110,14 @@ namespace Common.Entities.CopilotAuditBackfill
         public string LastErrorCode { get; set; }
         public string LastErrorDetail { get; set; }
         public bool CancelRequested { get; set; }
+
+        /// <summary>
+        /// Unique to the start request that created this job, so that request can tell its own job row from another
+        /// start's under the same id: one by the same administrator, for the same range, in the same tick of the
+        /// system clock (which advances in steps of about 15 ms) is otherwise byte-for-byte the same row. Persisted
+        /// only; never sent to the portal.
+        /// </summary>
+        public string StartAttempt { get; set; }
         public bool IsActive => CopilotAuditBackfillStates.IsActive(State);
 
         /// <summary>Completed original day windows, including days processed through smaller slices.</summary>

@@ -9,6 +9,7 @@ using Newtonsoft.Json;
 using System.Linq;
 using System.Globalization;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 
 namespace Tests.UnitTests
 {
@@ -27,6 +28,156 @@ namespace Tests.UnitTests
     [TestClass]
     public class CopilotAdoptionSqlIntegrationTests
     {
+        public TestContext TestContext { get; set; }
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task CurrentSeatTenure_RollingServiceUsesHistoryOrConservativeUnknown(bool historyAvailable)
+        {
+            using (var db = ScratchDatabase.Create("CopilotRollingTenure"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                db.Execute(@"INSERT dbo.license_types (id,name,sku_id)
+                      VALUES (1,N'Contoso Copilot',N'Microsoft_365_Copilot');
+                    INSERT dbo.users (id,user_name,account_enabled,created_utc)
+                      VALUES (1,'recent@contoso.com',1,DATEADD(day,-1000,GETUTCDATE())),
+                             (2,'mature@contoso.com',1,DATEADD(day,-1000,GETUTCDATE()));
+                    INSERT dbo.user_license_type_lookups (id,user_id,license_type_id) VALUES (1,1,1),(2,2,1);");
+                if (historyAvailable)
+                {
+                    db.Execute(Common.Entities.Migrations.LicenceHistory.Up_Sql);
+                    db.Execute(@"INSERT dbo.user_license_history (user_id,license_type_id,valid_from_utc,from_source)
+                        VALUES (1,1,DATEADD(day,-5,GETUTCDATE()),1),(2,1,DATEADD(day,-120,GETUTCDATE()),0);");
+                }
+                var analysis = await new CopilotAdoptionService(CopilotAdoptionOptions.Default,
+                    new AgentInventoryContextFactory(db.ConnectionString)).AnalyseAsync();
+                Assert.AreEqual(2, analysis.Summary.LicensedUsers);
+                Assert.AreEqual(2, analysis.LicensedUsers.Count, string.Join(" | ", analysis.Summary.Warnings));
+                Assert.AreEqual("review", analysis.LicensedUsers.Single(r => r.UserId == 1).ReclaimEligibility);
+                Assert.AreEqual(historyAvailable ? "probable" : "review",
+                    analysis.LicensedUsers.Single(r => r.UserId == 2).ReclaimEligibility);
+                Assert.AreEqual(historyAvailable ? 1 : 0, analysis.Summary.ReclaimableSeats);
+                if (!historyAvailable)
+                {
+                    Assert.IsTrue(analysis.LicensedUsers.All(r => r.TenureBasis == "unknown"));
+                    Assert.IsTrue(analysis.Summary.Warnings.Any(w => w.Contains("current Copilot seat tenure")));
+                }
+            }
+        }
+
+        [TestMethod]
+        public void CurrentSeatTenure_UsesOnlyOpenCurrentConfiguredHoldingsWithoutDuplicatingPeople()
+        {
+            using (var db = ScratchDatabase.Create("CopilotSeatTenure"))
+            {
+                CreateUserTables(db);
+                db.Execute(Common.Entities.Migrations.LicenceHistory.Up_Sql);
+                db.Execute(@"INSERT dbo.user_license_type_lookups (id,user_id,license_type_id)
+                    VALUES (1,1,1),(2,1,2),(3,2,1),(4,3,1),(5,4,1),(6,5,1),(7,6,1);
+                    INSERT dbo.user_license_history (user_id,license_type_id,valid_from_utc,valid_to_utc,from_source)
+                    VALUES (1,1,'2026-10-31',NULL,1),(1,2,'2026-08-01',NULL,0),
+                           (2,1,'2026-01-01','2026-10-01',1),(2,1,'2026-10-31',NULL,1),
+                           (3,1,'2026-10-31',NULL,0),
+                           (4,2,'2026-01-01',NULL,1),
+                           (5,1,'2026-12-01',NULL,1),
+                           (6,1,'2026-01-01',NULL,99);");
+                var now = new DateTime(2026, 11, 1, 12, 0, 0, DateTimeKind.Utc);
+                var rows = Query<LicensedUserUsageRow>(db, CopilotAdoptionSql.CurrentSeatTenureSql(new[] { 1, 2 }),
+                    new SqlParameter("@asOf", now));
+                CollectionAssert.AreEquivalent(new[] { 1, 2, 3 }, rows.Select(r => r.UserId).ToArray());
+                Assert.AreEqual(new DateTime(2026, 8, 1), rows.Single(r => r.UserId == 1).SeatObservedFromUtc);
+                Assert.AreEqual((byte)0, rows.Single(r => r.UserId == 1).SeatObservationSource);
+                Assert.AreEqual(new DateTime(2026, 10, 31), rows.Single(r => r.UserId == 2).SeatObservedFromUtc,
+                    "A closed holding cannot mature a reassigned seat.");
+                Assert.AreEqual(new DateTime(2026, 10, 31), rows.Single(r => r.UserId == 3).SeatObservedFromUtc,
+                    "Never backdate an initial observation to account creation or the report start.");
+                foreach (var row in rows)
+                {
+                    row.AccountEnabled = true;
+                    row.AccountCreatedUtc = now.AddDays(-1000);
+                    var scored = CopilotAdoptionScoring.Score(row, now.AddDays(-27), now, true);
+                    Assert.AreEqual(row.UserId == 1 ? "probable" : "review", scored.ReclaimEligibility);
+                }
+                var oneSku = Query<LicensedUserUsageRow>(db, CopilotAdoptionSql.CurrentSeatTenureSql(new[] { 1 }),
+                    new SqlParameter("@asOf", now));
+                Assert.AreEqual(new DateTime(2026, 10, 31), oneSku.Single(r => r.UserId == 1).SeatObservedFromUtc,
+                    "Removing a SKU from the configured entitlement set cannot leave its old tenure behind.");
+            }
+        }
+
+        [TestMethod]
+        [TestCategory("Performance")]
+        public void CurrentSeatTenure_200kUsers_UsesBatchedIndexedReads()
+        {
+            using (var db = ScratchDatabase.Create("CopilotSeatTenureScale"))
+            {
+                CreateUserTables(db);
+                db.Execute(Common.Entities.Migrations.LicenceHistory.Up_Sql);
+                db.Execute(@"WITH n AS (
+                    SELECT TOP (200000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS id
+                    FROM sys.all_objects a CROSS JOIN sys.all_objects b)
+                    SELECT CAST(id AS int) AS id INTO #people FROM n;
+                    INSERT dbo.user_license_type_lookups (id,user_id,license_type_id)
+                      SELECT id,id,1 FROM #people UNION ALL SELECT id+200000,id,2 FROM #people WHERE id<=1000;
+                    INSERT dbo.user_license_history (user_id,license_type_id,valid_from_utc,valid_to_utc,from_source)
+                      SELECT id,1,DATEADD(day,-400-samples.n,'2026-11-01'),DATEADD(day,-399-samples.n,'2026-11-01'),1
+                      FROM #people CROSS JOIN (VALUES(0),(10),(20),(30),(40)) samples(n);
+                    INSERT dbo.user_license_history (user_id,license_type_id,valid_from_utc,from_source)
+                      SELECT id,1,'2026-08-01',0 FROM #people
+                      UNION ALL SELECT id,2,'2026-10-31',1 FROM #people WHERE id<=1000;
+                    DROP TABLE #people;
+                    UPDATE STATISTICS dbo.user_license_history WITH FULLSCAN;
+                    UPDATE STATISTICS dbo.user_license_type_lookups WITH FULLSCAN;");
+
+                foreach (var ids in new[] { new[] { 2 }, new[] { 1, 2 } })
+                {
+                    var readings = new System.Collections.Generic.List<long>();
+                    var elapsed = new System.Collections.Generic.List<double>();
+                    var operators = new System.Collections.Generic.HashSet<string>();
+                    for (var run = 0; run < 4; run++)
+                    {
+                        var messages = new System.Text.StringBuilder();
+                        using (var connection = new SqlConnection(db.ConnectionString))
+                        {
+                            connection.InfoMessage += (sender, e) => messages.AppendLine(e.Message);
+                            connection.Open();
+                            using (var command = new SqlCommand("SET STATISTICS IO ON; SET STATISTICS XML ON;\r\n"
+                                + CopilotAdoptionSql.CurrentSeatTenureSql(ids).TrimEnd(';') + " OPTION (RECOMPILE);", connection))
+                            {
+                                command.CommandTimeout = 90;
+                                command.Parameters.AddWithValue("@asOf", new DateTime(2026, 11, 1, 12, 0, 0));
+                                var watch = System.Diagnostics.Stopwatch.StartNew();
+                                using (var reader = command.ExecuteReader())
+                                {
+                                    var count = 0;
+                                    while (reader.Read()) count++;
+                                    Assert.AreEqual(ids.Length == 1 ? 1000 : 200000, count);
+                                    if (reader.NextResult() && reader.Read())
+                                    {
+                                        var plan = System.Xml.Linq.XDocument.Parse(reader.GetString(0));
+                                        foreach (var op in plan.Descendants().Attributes("PhysicalOp"))
+                                            operators.Add(op.Value);
+                                    }
+                                }
+                                watch.Stop();
+                                if (run > 0) elapsed.Add(watch.Elapsed.TotalMilliseconds);
+                            }
+                        }
+                        if (run > 0)
+                            readings.Add(System.Text.RegularExpressions.Regex.Matches(messages.ToString(), @"logical reads (\d+)")
+                                .Cast<System.Text.RegularExpressions.Match>().Sum(m => long.Parse(m.Groups[1].Value)));
+                    }
+                    Assert.IsTrue(readings.All(r => r > 0), "Capture actual SQL IO, not an in-memory timing.");
+                    Assert.IsTrue(operators.Any(op => op.Contains("Index")), "Use the shipped indexes, not a per-person query.");
+                    TestContext.WriteLine("CurrentSeatTenure, {0} users: median {1} logical reads, {2:F1} ms including materialisation; {3}",
+                        ids.Length == 1 ? 1000 : 200000, readings.OrderBy(x => x).ElementAt(1),
+                        elapsed.OrderBy(x => x).ElementAt(1), string.Join(", ", operators.OrderBy(x => x)));
+                }
+            }
+        }
+
         /// <summary>
         /// A bare EF context used purely to execute raw SQL, so the tests exercise the exact
         /// materialisation path the service uses (<c>Database.SqlQuery&lt;T&gt;</c>) rather than a
@@ -1561,6 +1712,58 @@ namespace Tests.UnitTests
                 Assert.AreEqual(1, rows[0].CoworkInteractions,
                     "Cowork use is still observable from the audit log without the usage reports.");
                 Assert.AreEqual(0, rows[0].TeamsMeetings, "Coordination load collapses to zero, not to an error.");
+            }
+        }
+
+        /// <summary>
+        /// Issue #699 (R3-13). A Cowork agent turn in Microsoft 365 Copilot is two audit records that both carry the
+        /// Cowork agent id; the runtime's one is listed in copilot_chat_duplicates. Cowork interactions and active days
+        /// count the turn once, like every other interaction count, while distinct Cowork turns still all count.
+        /// </summary>
+        [TestMethod]
+        public void CoworkReadinessQuery_CountsAPairedCoworkTurnOnce()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptCoworkPairs"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, account_enabled)
+                          VALUES (1, N'paired@contoso.com', 1), (2, N'unpaired@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1), (2, 2, 1);
+                      INSERT INTO dbo.copilot_agents (id, name, agent_id)
+                          VALUES (1, N'Copilot Cowork', N'Copilot.M365Copilot.CoworkChat');");
+
+                // User 1: one paired agent turn on its own day (counts once), plus a Cowork-app turn on another day.
+                var pairedDay = DateTime.UtcNow.Date.AddDays(-3).AddHours(9);
+                var runtime = SeedCopilotInteractionAtReturningId(db, 1, pairedDay, "m365copilot", agentId: 1);
+                var client = SeedCopilotInteractionAtReturningId(db, 1, pairedDay.AddSeconds(5), "Office", agentId: 1);
+                MarkDuplicate(db, runtime, client, 1);
+                SeedCopilotInteractionAt(db, 1, DateTime.UtcNow.Date.AddDays(-5).AddHours(9), "cowork");
+
+                // User 2: the same two agent records with no pairing are two separate turns, and both still count.
+                SeedCopilotInteractionAt(db, 2, pairedDay, "m365copilot", agentId: 1);
+                SeedCopilotInteractionAt(db, 2, pairedDay.AddSeconds(5), "Office", agentId: 1);
+
+                var sql = CopilotAdoptionSql.CoworkReadinessSql(
+                    new[] { 1 }, new[] { 1 }, CopilotAdoptionOptions.Default,
+                    includeCopilotAudit: true, includeM365Usage: false);
+
+                var rows = Query<CoworkReadinessSignalRow>(db, sql,
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@maxRows", 1000));
+
+                var paired = rows.Single(r => r.UserPrincipalName == "paired@contoso.com");
+                Assert.AreEqual(2, paired.CoworkInteractions,
+                    "The paired agent turn counts once (not twice), plus the separate Cowork-app turn.");
+                Assert.AreEqual(2, paired.CoworkActiveDays);
+
+                var unpaired = rows.Single(r => r.UserPrincipalName == "unpaired@contoso.com");
+                Assert.AreEqual(2, unpaired.CoworkInteractions, "Records that are not paired are distinct turns.");
+                Assert.AreEqual(1, unpaired.CoworkActiveDays);
             }
         }
 
