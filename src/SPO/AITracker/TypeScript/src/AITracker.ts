@@ -90,6 +90,11 @@ function checkStillOnTrackedSite(): boolean {
 
 // Handle page click events
 function interceptClickEvent(e: MouseEvent) {
+    // Only the buttons that follow a link: the main button, and the middle one, which opens it in a new tab. Not the right
+    // button, which only opens the context menu, nor back/forward buttons.
+    if (e.button !== 0 && e.button !== 1) {
+        return;
+    }
     if (!checkStillOnTrackedSite()) {
         return;
     }
