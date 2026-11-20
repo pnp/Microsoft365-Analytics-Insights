@@ -6,11 +6,11 @@ namespace Common.Entities.CopilotAdoption
     /// <summary>
     /// Modelled time Microsoft 365 Copilot has already given back to people who hold a Copilot seat.
     ///
-    /// <b>Hours only, never money.</b> Counts are observed Copilot audit actions for seat holders; credits
-    /// are Microsoft-published Copilot assisted-hours credits from the Viva Insights Copilot Dashboard
-    /// metric definitions: email and document actions carry a fixed credit, and Teams meeting summaries
-    /// use meeting duration when available. This product's audit import does not carry meeting duration,
-    /// so the meeting credit is a documented fixed fallback. Copilot Chat, agents and Cowork default to
+    /// <b>Hours only, never money.</b> Counts are observed Copilot audit interactions and distinct
+    /// person-meeting contexts for seat holders. Default email/document credits are based on Microsoft's
+    /// Copilot assisted-hours metric definitions. That method uses duration for meeting summarisation;
+    /// this import identifies neither that intent nor a reliable duration. Its meeting credit is instead
+    /// an editable assumption per person-meeting context. Copilot Chat, agents and Cowork default to
     /// zero here because Microsoft does not publish a per-prompt credit for this model. Cowork is excluded
     /// altogether; existing-user Cowork benefit is not estimated.
     ///

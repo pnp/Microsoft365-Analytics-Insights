@@ -1620,6 +1620,22 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Workbook_SeatHolderAssumptionsDescribeMeetingContextsNotRecapActions()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.SeatHolderTimeSavedEstimate =
+                CopilotAdoptionScoring.ModelSeatHolderTimeSaved(12, 0, 0, 0, 4, 0, analysis.Summary.Options);
+            var text = string.Join(" ", SheetCells(CopilotAdoptionWorkbook.Build(analysis), "Seat holders time saved"));
+
+            StringAssert.Contains(text, "meetings with Copilot context, counted once per person");
+            StringAssert.Contains(text, "does not identify a recap or summarisation action");
+            StringAssert.Contains(text, "Teams meeting contexts a month");
+            StringAssert.Contains(text, "Minutes per person-meeting context");
+            Assert.IsFalse(text.Contains("Teams meeting recap or summarise actions"));
+            Assert.IsFalse(text.Contains("Teams meeting actions a month"));
+        }
+
+        [TestMethod]
         public void Workbook_SeatHolderEstimateIsAggregateOnly()
         {
             var analysis = SyntheticAnalysis();

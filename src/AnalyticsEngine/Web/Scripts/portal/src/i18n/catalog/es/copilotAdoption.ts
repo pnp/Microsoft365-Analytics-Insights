@@ -949,7 +949,7 @@ const copilotAdoption: Record<keyof typeof en, string> = {
   'copilotAdoption.server.guidance.copilotAcademy': 'Copilot Academy',
   'copilotAdoption.server.guidance.scenarioLibrary': 'Biblioteca de escenarios de Microsoft',
   'copilotAdoption.server.guidance.successKit': 'Kit de éxito de Copilot',
-  'copilotAdoption.server.guidance.essentialGuide': 'La guía esencial para la adopción de Microsoft 365 Copilot',
+  'copilotAdoption.server.guidance.copilotChampions': 'Microsoft Copilot para promotores',
   'copilotAdoption.server.guidance.aiCouncil': 'Crear un consejo de IA',
   'copilotAdoption.server.guidance.workTrendIndex2026': 'Work Trend Index 2026',
   'copilotAdoption.server.guidance.frontierFirmResources': 'Recursos sobre la Frontier Firm',

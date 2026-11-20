@@ -315,7 +315,7 @@ export const GUIDANCE_LINK_TITLE_KEYS = {
   copilotAcademy: 'copilotAdoption.server.guidance.copilotAcademy',
   scenarioLibrary: 'copilotAdoption.server.guidance.scenarioLibrary',
   successKit: 'copilotAdoption.server.guidance.successKit',
-  essentialGuide: 'copilotAdoption.server.guidance.essentialGuide',
+  copilotChampions: 'copilotAdoption.server.guidance.copilotChampions',
   aiCouncil: 'copilotAdoption.server.guidance.aiCouncil',
   workTrendIndex2026: 'copilotAdoption.server.guidance.workTrendIndex2026',
   frontierFirmResources: 'copilotAdoption.server.guidance.frontierFirmResources',

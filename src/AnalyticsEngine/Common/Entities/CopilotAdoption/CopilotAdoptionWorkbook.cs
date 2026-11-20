@@ -2696,8 +2696,8 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddTitle("Time already saved by Copilot seat holders - MODELLED, NOT MEASURED");
             sheet.AddRow(XlsxCell.Wrapped(
                 "This sheet answers how much time the seats already paid for may be giving back. It uses "
-                + "observed Copilot audit actions by seat holders, multiplied by visible Microsoft-published "
-                + "per-action credits. It is aggregate only, never per person, never money, and never added to "
+                + "observed Copilot audit interactions and distinct person-meeting contexts for seat holders, "
+                + "multiplied by visible, editable minutes assumptions. It is aggregate only, never per person, never money, and never added to "
                 + "the licence or Cowork estimates."));
             sheet.AddRow(XlsxCell.Wrapped(customised
                 ? "ASSUMPTIONS ENTERED IN THE PORTAL: figures on this sheet were entered by the person who downloaded this file."
@@ -2709,11 +2709,11 @@ namespace Common.Entities.CopilotAdoption
             sheet.AddRow("Excluded usage-report-sourced users", XlsxCell.Number(estimate.ExcludedUsageReportSourcedUsers), XlsxCell.Wrapped("Seat holders whose engagement came only from Microsoft's usage report. They have prompt counts, not per-action detail."));
             sheet.AddRow("Outlook actions a month", XlsxCell.Number(estimate.ObservedOutlookActions), XlsxCell.Wrapped("OBSERVED. Outlook app-host Copilot actions, normalised to the report month."));
             sheet.AddRow("Word/PowerPoint/Excel actions a month", XlsxCell.Number(estimate.ObservedOfficeActions), XlsxCell.Wrapped("OBSERVED. Office document-work Copilot actions, normalised to the report month."));
-            sheet.AddRow("Teams meeting actions a month", XlsxCell.Number(estimate.ObservedTeamsMeetingActions), XlsxCell.Wrapped("OBSERVED. Actions linked to a Teams meeting context, normalised to the report month."));
+            sheet.AddRow("Teams meeting contexts a month", XlsxCell.Number(estimate.ObservedTeamsMeetingActions), XlsxCell.Wrapped("OBSERVED. Meetings with Copilot context, counted once per person and normalised to the report month. Not a count of recap or summarisation actions."));
             sheet.AddRow("Uncredited actions a month", XlsxCell.Number(estimate.ObservedUncreditedActions), XlsxCell.Wrapped("OBSERVED. Copilot Chat and other surfaces. Defaults to zero credit because no per-prompt credit is published."));
             sheet.AddRow("Outlook minutes per action", estimate.Credits.OutlookMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Microsoft-published email action credit."));
             sheet.AddRow("Office minutes per action", estimate.Credits.OfficeMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Microsoft-published document drafting/summarising credit."));
-            sheet.AddRow("Teams meeting minutes per action", estimate.Credits.TeamsMeetingMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Fixed fallback because meeting duration is not reliably imported here."));
+            sheet.AddRow("Minutes per person-meeting context", estimate.Credits.TeamsMeetingMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Editable fixed credit; neither a recap action nor meeting duration is established by this import."));
             sheet.AddRow("Uncredited minutes per action", estimate.Credits.UncreditedMinutesPerAction, XlsxCell.Wrapped("ASSUMPTION. Defaults to zero."));
             sheet.AddRow("Lower bound", XlsxCell.Percent(estimate.Credits.LowerBoundRatio), XlsxCell.Wrapped("ASSUMPTION. Conservative share applied to every credit."));
             sheet.AddRow("Modelled hours a month (low)", XlsxCell.Number(estimate.HoursPerMonthLow), XlsxCell.Wrapped("MODELLED. Conservative end."));

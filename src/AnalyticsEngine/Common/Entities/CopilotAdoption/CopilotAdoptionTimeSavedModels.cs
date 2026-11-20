@@ -184,7 +184,7 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Minutes credited to one observed Word, PowerPoint or Excel Copilot action for already-licensed users.</summary>
         public double? SeatOfficeMinutesPerAction { get; set; }
 
-        /// <summary>Minutes credited to one observed Teams meeting recap/summarise action for already-licensed users.</summary>
+        /// <summary>Assumed minutes per Teams meeting with Copilot context, counted once per already-licensed person.</summary>
         public double? SeatMeetingMinutesPerAction { get; set; }
 
         /// <summary>Minutes credited to Copilot Chat and other uncredited actions for already-licensed users.</summary>
