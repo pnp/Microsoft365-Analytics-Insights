@@ -127,6 +127,31 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
+        public void AccountUpdate_KeepsExistingManagedIdentityAndTags()
+        {
+            var identity = new Azure.ResourceManager.Models.ManagedServiceIdentity(
+                Azure.ResourceManager.Models.ManagedServiceIdentityType.SystemAssigned);
+            var existing = new Azure.ResourceManager.CognitiveServices.CognitiveServicesAccountData(AzureLocation.WestEurope)
+            {
+                Kind = "OpenAI",
+                Sku = new Azure.ResourceManager.CognitiveServices.Models.CognitiveServicesSku("S0"),
+                Identity = identity,
+                Properties = new Azure.ResourceManager.CognitiveServices.Models.CognitiveServicesAccountProperties()
+            };
+            existing.Tags["owner"] = "contoso";
+
+            var update = AzureOpenAIInstallTask.BuildAccountUpdateData(existing, "contoso-prompt-ai",
+                Azure.ResourceManager.CognitiveServices.Models.ServiceAccountPublicNetworkAccess.Disabled);
+
+            Assert.AreSame(identity, update.Identity, "A PUT without identity would remove the account's managed identity.");
+            Assert.AreEqual("contoso", update.Tags["owner"]);
+            Assert.AreEqual("OpenAI", update.Kind);
+            Assert.AreEqual("S0", update.Sku.Name);
+            Assert.AreEqual("contoso-prompt-ai", update.Properties.CustomSubDomainName);
+            Assert.AreEqual("Disabled", update.Properties.PublicNetworkAccess.ToString());
+        }
+
+        [TestMethod]
         public void FoundryRuntimeRole_IsInferenceOnlyBuiltInRole()
         {
             Assert.AreEqual("Cognitive Services OpenAI User", ResourceSecurityInstallJob.FOUNDRY_OPENAI_USER_ROLE_NAME);
