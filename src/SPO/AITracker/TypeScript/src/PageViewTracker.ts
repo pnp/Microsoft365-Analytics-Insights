@@ -1,6 +1,6 @@
 import { AppInsightsWrapper } from "./AppInsightsWrapper";
 import { ClearLastPageStatsVal, GetLastPageStatsVal, SetLastPageStatsVal } from "./Cookies";
-import { getSPRequestDuration } from "./DataFunctions";
+import { getSPRequestDurationFromScripts } from "./DataFunctions";
 import { debug, error, log, warn } from "./Logger";
 import TimeMe from 'timeme.js'
 import { PagePropertyManager } from "./PageProps/PagePropertyManager";
@@ -138,7 +138,7 @@ export class PageViewTracker {
 
         // SPRequestDuration is in the HTML SharePoint served for the document, so it only describes a page the browser loaded:
         // after a page navigation it's the duration of the first page's request. Not an officially supported API either.
-        const spRequestDuration = pageLoadDuration === 0 ? null : getSPRequestDuration(document.body.innerHTML);
+        const spRequestDuration = pageLoadDuration === 0 ? null : getSPRequestDurationFromScripts(document.body);
         if (!this._ai.trackCurrentPageView(pageLoadDuration, spRequestDuration, webUrl, siteUrl, webTitle)) {
             return;     // Same page as last time
         }

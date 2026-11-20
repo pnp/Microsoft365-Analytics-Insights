@@ -9,9 +9,12 @@
     "noEmitOnError": true,
     "target": "es5",
     "outDir": "dist",
-    "moduleResolution":"node",
+    "rootDir": ".",
+    "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
     "strictNullChecks": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "types": ["node", "jest"]
   },
   "include": [
     "src/**/*"
