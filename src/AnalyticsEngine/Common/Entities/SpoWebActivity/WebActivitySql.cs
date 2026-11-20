@@ -1029,6 +1029,8 @@ OPTION (RECOMPILE);";
         /// <c>People</c> (#844) is the people who took the step, counted from the visits it was taken in, joined after
         /// the steps are found (<see cref="PeopleOfHits"/>).
         /// </para>
+        /// Both endpoint-title joins use hash joins so SQL Server resolves the date-bounded title set once
+        /// instead of repeating URL lookups for the many transition pairs in a large reporting window.
         /// </remarks>
         public const string Transitions = @"
 WITH" + HitWindowCte + @",
@@ -1063,8 +1065,8 @@ SELECT TOP (@top)
 FROM Steps AS s
 INNER JOIN dbo.urls AS fu ON fu.id = s.FromUrlId
 INNER JOIN dbo.urls AS tu ON tu.id = s.ToUrlId
-LEFT JOIN Titles AS ft ON ft.url_id = s.FromUrlId
-LEFT JOIN Titles AS tt ON tt.url_id = s.ToUrlId
+LEFT HASH JOIN Titles AS ft ON ft.url_id = s.FromUrlId
+LEFT HASH JOIN Titles AS tt ON tt.url_id = s.ToUrlId
 LEFT JOIN dbo.page_titles AS fpt ON fpt.id = ft.TitleId
 LEFT JOIN dbo.page_titles AS tpt ON tpt.id = tt.TitleId
 ORDER BY s.Count DESC, s.FromUrlId ASC, s.ToUrlId ASC
@@ -1092,31 +1094,39 @@ OPTION (RECOMPILE);";
         /// functions on one row, because first and last need different ORDER BY directions.
         /// </para>
         /// <para>
-        /// <c>People</c> (#844) is the people whose visits made the flow: one row per visit, joined to the visit after the
-        /// pairing (<see cref="PeopleOfHits"/>). A LEFT JOIN on the visit's key, so the share's denominator - the same
-        /// CTE, read again - needs no join at all.
+        /// Visit length is grouped once per session rather than computed with a window spool over every hit. The share
+        /// denominator is a window sum over the grouped flows, so it does not re-run the flow aggregation.
+        /// <c>People</c> (#844) is the people whose visits made the flow: one row per visit, joined after pairing
+        /// (<see cref="PeopleOfHits"/>).
         /// </para>
         /// </remarks>
         public const string StartEndFlows = @"
 WITH" + HitWindowCte + @",
+VisitCounts AS (
+    SELECT h.session_id, COUNT(*) AS VisitPages
+    FROM H AS h
+    WHERE h.session_id IS NOT NULL
+    GROUP BY h.session_id
+),
 Ranked AS (
     SELECT h.session_id, h.url_id,
            ROW_NUMBER() OVER (PARTITION BY h.session_id ORDER BY h.hit_timestamp ASC,  h.id ASC)  AS FirstSeq,
-           ROW_NUMBER() OVER (PARTITION BY h.session_id ORDER BY h.hit_timestamp DESC, h.id DESC) AS LastSeq,
-           COUNT(*) OVER (PARTITION BY h.session_id)                                              AS VisitPages
+           ROW_NUMBER() OVER (PARTITION BY h.session_id ORDER BY h.hit_timestamp DESC, h.id DESC) AS LastSeq
     FROM H AS h
     WHERE h.session_id IS NOT NULL
 ),
 Pairs AS (
-    SELECT f.session_id, f.url_id AS StartUrlId, l.url_id AS EndUrlId, f.VisitPages
+    SELECT f.session_id, f.url_id AS StartUrlId, l.url_id AS EndUrlId, vc.VisitPages
     FROM Ranked AS f
     INNER JOIN Ranked AS l ON l.session_id = f.session_id AND l.LastSeq = 1
+    INNER JOIN VisitCounts AS vc ON vc.session_id = f.session_id
     WHERE f.FirstSeq = 1
 ),
 Flows AS (
     SELECT p.StartUrlId,
            p.EndUrlId,
            COUNT_BIG(*)                                                        AS Visits,
+           SUM(COUNT_BIG(*)) OVER ()                                           AS TotalVisits,
            CAST(SUM(CASE WHEN p.VisitPages = 1 THEN 1 ELSE 0 END) AS bigint)   AS SinglePageVisits,
            AVG(CAST(p.VisitPages AS float))                                    AS AveragePages,
            " + PeopleOfHits + @"
@@ -1141,7 +1151,7 @@ SELECT TOP (@top)
        -- Share of ALL paired visits, not of the truncated top N, so the diagram can honestly say
        -- how much of the traffic it is showing.
        CAST(fl.Visits AS float) * 100.0
-           / NULLIF((SELECT SUM(f2.Visits) FROM Flows AS f2), 0)               AS SharePct,
+           / NULLIF(fl.TotalVisits, 0)                                          AS SharePct,
        fl.People
 FROM Flows AS fl
 INNER JOIN dbo.urls AS su ON su.id = fl.StartUrlId
