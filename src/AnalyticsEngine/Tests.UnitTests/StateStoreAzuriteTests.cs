@@ -2,6 +2,7 @@ using Azure;
 using Azure.Data.Tables;
 using Common.Entities.State;
 using Common.Entities.Copilot;
+using Common.Entities.CopilotAuditBackfill;
 using Common.Entities.UserScope.Purge;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -387,6 +388,31 @@ namespace Tests.UnitTests
             Assert.AreEqual(75, change.OldValue);
             Assert.AreEqual(stored.Settings.ChampionScore, change.NewValue);
             Assert.AreEqual("admin" + (stored.Settings.ChampionScore - 80) + "@contoso.com", stored.History.Single().ChangedBy, "The history names the winner.");
+        }
+
+        /// <summary>
+        /// Several portal instances starting a Copilot audit backfill at once: exactly one job is created and becomes
+        /// the latest. The rest lose on the job row's insert (409, the same id in the same second) or on the
+        /// latest-job pointer's ETag (412, a different id), and are refused.
+        /// </summary>
+        [TestMethod]
+        public async Task CopilotAuditBackfill_ConcurrentStarts_CreateExactlyOneJob()
+        {
+            var partition = "Test" + Guid.NewGuid().ToString("N");
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var stores = Enumerable.Range(0, 6).Select(i => new CopilotAuditBackfillStateStore(
+                new AzureTableKeyValueStore(_table ?? Skip(), partition), isDurable: true, utcNow: () => now.AddSeconds(i % 2))).ToList();
+
+            var jobs = await Task.WhenAll(stores.Select((store, i) => Task.Run(() =>
+                store.TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin" + i + "@contoso.com", copilotImportEnabled: true))));
+
+            var created = jobs.Where(j => j != null).ToList();
+            Assert.AreEqual(1, created.Count, "Exactly one start creates a job.");
+            var latest = await stores[0].GetLatestAsync();
+            Assert.AreEqual(created[0].Id, latest.Id);
+            Assert.AreEqual(created[0].RequestedBy, latest.RequestedBy, "The latest job is the one its requester was told was started.");
+            Assert.IsNull(await stores[0].TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin@contoso.com", copilotImportEnabled: true),
+                "A start while that job is queued is refused.");
         }
 
         private static AzureTableKeyValueStore NewStore()

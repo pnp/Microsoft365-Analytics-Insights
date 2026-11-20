@@ -129,6 +129,7 @@ export const admin = {
   // Shared administration labels.
   'admin.common.enabled': 'Enabled',
   'admin.common.no': 'No',
+  'admin.common.none': 'None',
   'admin.common.unknown': 'Unknown',
   'admin.common.unknownWithPeriod': 'Unknown.',
   'admin.common.yes': 'Yes',
