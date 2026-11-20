@@ -585,7 +585,7 @@ describe('CoworkPanel', () => {
     expect(within(hero).queryAllByText(/Cowork tasks already running/)).toHaveLength(0);
     expect(
       within(hero).getByRole('img', {
-        name: 'Modelled time by kind of work: Organise meetings 11%, Prepare for meetings 17%, Send email 43%, Post in Teams 21%, Create documents 8%',
+        name: 'Modelled time by kind of work: Organise meetings 11%, Prepare for meetings 17%, Send email 43%, Post in Teams 21% and Create documents 8%',
       }),
     ).toBeTruthy();
   });
