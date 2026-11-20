@@ -58,7 +58,8 @@ export const agentCosts = {
   'agentCosts.notice.exportedRows': 'Exported {rows} billed line(s).',
   'agentCosts.warning.copilotStudioImportFailing': 'Copilot Studio credit import is failing.',
   'agentCosts.warning.azureCostImportFailing': 'Azure cost import is failing.',
-  'agentCosts.import.reconnectNeeded': 'The billing administrator needs to reconnect. In Administration > Copilot Studio billing connection, check the account still has its role and isn’t blocked by Conditional Access, then reconnect. Azure costs and capacity figures are unaffected.',
+  'agentCosts.import.reconnectNeeded': 'The billing administrator needs to reconnect: Microsoft no longer accepts the account’s sign-in. In Administration > Copilot Studio billing connection, check the account isn’t disabled or blocked, including by Conditional Access, then reconnect. Azure costs and capacity figures are unaffected.',
+  'agentCosts.import.routeRefused': 'The billing administrator is still signed in, but Microsoft refused the Copilot Studio usage request (HTTP 403). Either the account has lost the Power Platform Administrator role, or Microsoft has restricted the per-user consumption routes it has marked as deprecated. Reconnecting alone won’t fix this. Copilot Credits capacity and Azure costs are unaffected.',
   'agentCosts.import.tokenUnavailable': 'Microsoft sign-in was temporarily unavailable, so Copilot Studio usage couldn’t be read. It will be tried again at the next scheduled run; the connection is kept.',
   'agentCosts.import.connectionRequired': 'Copilot Studio usage isn’t being imported because no billing administrator is connected. Connect one in Administration > Copilot Studio billing connection. Capacity figures are unaffected.',
 
