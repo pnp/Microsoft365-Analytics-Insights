@@ -1,0 +1,28 @@
+name: Usage report coverage benchmark
+
+on:
+  push:
+    branches:
+      - benchmark/899-table-coverage
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: usage-report-coverage-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  table-benchmark:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Run isolated Azurite benchmark
+        shell: pwsh
+        run: .\src\AnalyticsEngine\Tests.UnitTests\Run-UsageReportCoverageBenchmark.ps1

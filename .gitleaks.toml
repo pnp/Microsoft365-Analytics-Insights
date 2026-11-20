@@ -8,6 +8,18 @@ title = "Microsoft365-Analytics-Insights gitleaks config"
 [extend]
 useDefault = true
 
+# --- Standard Azurite emulator key in isolated Table benchmark ---
+[[allowlists]]
+description = """
+The standard, publicly documented Azurite devstoreaccount1 key is a fixed emulator-only test fixture,
+not an Azure credential. This exception is limited to that exact key in the loopback-only coverage
+benchmark; other keys and paths remain subject to the default secret detectors.
+"""
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==$''']
+paths = ['''^src/AnalyticsEngine/Tests\.UnitTests/UsageReportCoverageAzuriteBenchmarkTests\.cs$''']
+
 # --- Confirmed test fixtures / sample data (committed, but not usable secrets) ---
 # Scoped to the high-entropy rules that produce these false positives, so a different class of real
 # secret (private key, cloud key, etc.) accidentally added to these files would still be detected.
