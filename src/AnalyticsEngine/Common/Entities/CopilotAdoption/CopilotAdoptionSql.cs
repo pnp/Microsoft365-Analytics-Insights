@@ -958,6 +958,10 @@ namespace Common.Entities.CopilotAdoption
                     "--\r\n" +
                     "-- ActiveDays is the column the 'regular use' verdict rests on: an interaction count\r\n" +
                     "-- cannot tell habitual use apart from one long afternoon of experimenting.\r\n" +
+                    "--\r\n" +
+                    "-- Counted turns only (#699): a Cowork agent turn in Microsoft 365 Copilot is audited\r\n" +
+                    "-- twice, and both records carry the Cowork agent id, so the runtime twin listed in\r\n" +
+                    "-- copilot_chat_duplicates must not be counted as a second interaction.\r\n" +
                     "CoworkUsage AS (\r\n" +
                     "    SELECT c.user_id AS user_id,\r\n" +
                     "           COUNT_BIG(*) AS Interactions,\r\n" +
@@ -967,6 +971,7 @@ namespace Common.Entities.CopilotAdoption
                     "    WHERE c.time_stamp >= @from\r\n      AND c.time_stamp < @toExclusive\r\n" +
                     "      AND c.user_id IS NOT NULL\r\n" +
                     $"      AND ({cowork})\r\n" +
+                    $"      AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
                     "    GROUP BY c.user_id\r\n" +
                     ")");
             }
