@@ -190,8 +190,11 @@ namespace Tests.UnitTests
                 UserId = 1,
                 UserPrincipalName = "adele.vance@contoso.onmicrosoft.com",
                 AccountEnabled = true,
-                // Well past the 30-day reclaim grace period, so tenure cannot be what saves this row.
                 AccountCreatedUtc = Now.AddDays(-400),
+                // Grace is judged on the recorded seat holding (#901), not account age. A holding
+                // well past the 30-day grace period means tenure cannot be what saves this row.
+                SeatObservedFromUtc = Now.AddDays(-400),
+                SeatObservationSource = 0,
             };
         }
 
