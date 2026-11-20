@@ -1715,6 +1715,58 @@ namespace Tests.UnitTests
             }
         }
 
+        /// <summary>
+        /// Issue #699 (R3-13). A Cowork agent turn in Microsoft 365 Copilot is two audit records that both carry the
+        /// Cowork agent id; the runtime's one is listed in copilot_chat_duplicates. Cowork interactions and active days
+        /// count the turn once, like every other interaction count, while distinct Cowork turns still all count.
+        /// </summary>
+        [TestMethod]
+        public void CoworkReadinessQuery_CountsAPairedCoworkTurnOnce()
+        {
+            using (var db = ScratchDatabase.Create("CopilotAdoptCoworkPairs"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+
+                db.Execute(
+                    @"INSERT INTO dbo.license_types (id, name, sku_id)
+                          VALUES (1, N'Microsoft Copilot for Microsoft 365', N'Microsoft_365_Copilot');
+                      INSERT INTO dbo.users (id, user_name, account_enabled)
+                          VALUES (1, N'paired@contoso.com', 1), (2, N'unpaired@contoso.com', 1);
+                      INSERT INTO dbo.user_license_type_lookups (id, user_id, license_type_id) VALUES (1, 1, 1), (2, 2, 1);
+                      INSERT INTO dbo.copilot_agents (id, name, agent_id)
+                          VALUES (1, N'Copilot Cowork', N'Copilot.M365Copilot.CoworkChat');");
+
+                // User 1: one paired agent turn on its own day (counts once), plus a Cowork-app turn on another day.
+                var pairedDay = DateTime.UtcNow.Date.AddDays(-3).AddHours(9);
+                var runtime = SeedCopilotInteractionAtReturningId(db, 1, pairedDay, "m365copilot", agentId: 1);
+                var client = SeedCopilotInteractionAtReturningId(db, 1, pairedDay.AddSeconds(5), "Office", agentId: 1);
+                MarkDuplicate(db, runtime, client, 1);
+                SeedCopilotInteractionAt(db, 1, DateTime.UtcNow.Date.AddDays(-5).AddHours(9), "cowork");
+
+                // User 2: the same two agent records with no pairing are two separate turns, and both still count.
+                SeedCopilotInteractionAt(db, 2, pairedDay, "m365copilot", agentId: 1);
+                SeedCopilotInteractionAt(db, 2, pairedDay.AddSeconds(5), "Office", agentId: 1);
+
+                var sql = CopilotAdoptionSql.CoworkReadinessSql(
+                    new[] { 1 }, new[] { 1 }, CopilotAdoptionOptions.Default,
+                    includeCopilotAudit: true, includeM365Usage: false);
+
+                var rows = Query<CoworkReadinessSignalRow>(db, sql,
+                    new SqlParameter("@from", DateTime.UtcNow.Date.AddDays(-28)),
+                    new SqlParameter("@maxRows", 1000));
+
+                var paired = rows.Single(r => r.UserPrincipalName == "paired@contoso.com");
+                Assert.AreEqual(2, paired.CoworkInteractions,
+                    "The paired agent turn counts once (not twice), plus the separate Cowork-app turn.");
+                Assert.AreEqual(2, paired.CoworkActiveDays);
+
+                var unpaired = rows.Single(r => r.UserPrincipalName == "unpaired@contoso.com");
+                Assert.AreEqual(2, unpaired.CoworkInteractions, "Records that are not paired are distinct turns.");
+                Assert.AreEqual(1, unpaired.CoworkActiveDays);
+            }
+        }
+
         [TestMethod]
         public void CoworkReadinessQuery_RunsWithoutTheCopilotAuditImport()
         {
