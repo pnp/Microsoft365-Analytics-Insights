@@ -902,6 +902,16 @@ namespace Tests.UnitTests
             public bool LoseTheJobInsertReply { get; set; }
             /// <summary>Another start inserts its own row under the same job id first.</summary>
             public string AnotherStartInsertsTheSameIdFirst { get; set; }
+            /// <summary>
+            /// Another start by the same administrator, for the same range, in the same clock tick inserts first: its row
+            /// is this call's, byte for byte, but for the start attempt each start draws for itself.
+            /// </summary>
+            public bool AnIdenticalStartInsertsFirst { get; set; }
+            /// <summary>
+            /// Runs once, after the pointer write lands and before its (lost) reply: what the importer and a later start
+            /// can do while the reply is on its way.
+            /// </summary>
+            public Func<Task> WhileThePointerReplyIsOnItsWay { get; set; }
             public List<string> JobRowsWritten { get; } = new List<string>();
             private bool _failNextPointerRead;
             public string Description => Inner.Description;
@@ -929,6 +939,8 @@ namespace Tests.UnitTests
                 {
                     if (AnotherStartInsertsTheSameIdFirst != null)
                         await Inner.SetStringAsync(key, AnotherStartInsertsTheSameIdFirst, null, cancellationToken);
+                    if (AnIdenticalStartInsertsFirst)
+                        await Inner.SetStringAsync(key, IdenticalStartsRow(value), null, cancellationToken);
                     var inserted = await Inner.TrySetStringAsync(key, value, null, cancellationToken);
                     return inserted && !LoseTheJobInsertReply;
                 }
@@ -936,8 +948,19 @@ namespace Tests.UnitTests
                 if (AnotherStartLandsFirst != null) await Inner.SetStringAsync(key, AnotherStartLandsFirst, null, cancellationToken);
                 var landed = await Inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
                 _failNextPointerRead = PointerUnreadableAfterWrite;
+                var inFlight = WhileThePointerReplyIsOnItsWay;
+                WhileThePointerReplyIsOnItsWay = null;
+                if (inFlight != null) await inFlight();
                 return landed && !LoseTheReply;
             }
+
+            /// <summary>
+            /// The row an identical start writes: this call's, with whatever start attempt that start drew for itself. A
+            /// start that draws none (as before the attempt existed) writes exactly this call's row.
+            /// </summary>
+            public static string IdenticalStartsRow(string value)
+                => System.Text.RegularExpressions.Regex.Replace(value, "\"StartAttempt\":\"[0-9a-f]{32}\"",
+                    "\"StartAttempt\":\"" + new string('f', 32) + "\"");
 
             public Task<string> GetStringAsync(string key, System.Threading.CancellationToken cancellationToken = default) => Inner.GetStringAsync(key, cancellationToken);
             public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, System.Threading.CancellationToken cancellationToken = default)
@@ -1043,6 +1066,56 @@ namespace Tests.UnitTests
             Assert.AreEqual(otherStartsRow, await store.Inner.GetStringAsync(store.JobRowsWritten[0]),
                 "The other start's row is neither overwritten nor deleted.");
             Assert.IsNull(await store.Inner.GetStringAsync("LatestJob"), "A refused start never moves the pointer.");
+        }
+
+        [TestMethod]
+        public async Task Start_ThatAnIdenticalStartBeatToTheId_IsRefused_AndLeavesItsRowAlone()
+        {
+            // Release critique of #909 (#918), round 3: the round-2 fix recognised its own row by its content. Two starts
+            // by the same administrator, for the same range, in the same tick of the clock (about 15 ms) write the same
+            // content - so the second adopted the first's row and published it, and the first's later unconditional
+            // rewrite could then put a job the importer had already advanced back to queued.
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var store = new LatestJobReplyStore { AnIdenticalStartInsertsFirst = true };
+            var state = new CopilotAuditBackfillStateStore(store, true, () => now);
+
+            var job = await state.TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin@contoso.com", copilotImportEnabled: true);
+
+            Assert.IsNull(job, "The other start owns that id, though it asked for exactly the same thing.");
+            Assert.AreEqual(1, store.JobRowsWritten.Count, "The fixture must have attempted exactly one job row.");
+            StringAssert.Contains(await store.Inner.GetStringAsync(store.JobRowsWritten[0]), "\"StartAttempt\":\"" + new string('f', 32) + "\"",
+                "The other start's row is neither overwritten nor deleted.");
+            Assert.IsNull(await store.Inner.GetStringAsync("LatestJob"), "A refused start never moves the pointer.");
+        }
+
+        [TestMethod]
+        public async Task Start_WhoseJobRanWhileItsPointerReplyWasOnItsWay_IsThatJob_AndItsRowIsKept()
+        {
+            // Release critique of #909 (#918), round 3: the pointer write lands and its reply is lost; meanwhile the
+            // importer picks the job up and finishes it, and a later start moves the pointer on. The re-read pointer then
+            // names that later job, and the round-1 fix took it as a lost race and deleted the row - a finished job's.
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var store = new LatestJobReplyStore { LoseTheReply = true };
+            var state = new CopilotAuditBackfillStateStore(store, true, () => now);
+            string laterStart = null;
+            store.WhileThePointerReplyIsOnItsWay = async () =>
+            {
+                var published = await state.GetLatestAsync();
+                published.State = CopilotAuditBackfillStates.Completed;
+                await state.SaveAsync(published);
+                laterStart = (published.Id + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                await store.Inner.SetStringAsync("LatestJob", laterStart, null);
+            };
+
+            var job = await state.TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin@contoso.com", copilotImportEnabled: true);
+
+            Assert.IsNotNull(laterStart, "The fixture must have run the job and moved the pointer on.");
+            Assert.IsNotNull(job, "The start happened and its job ran; the administrator must not be told it was refused.");
+            Assert.AreEqual(CopilotAuditBackfillStates.Completed, job.State, "The job is reported as it now stands.");
+            var kept = await state.GetAsync(job.Id);
+            Assert.IsNotNull(kept, "A job that was published and ran is never deleted.");
+            Assert.AreEqual(CopilotAuditBackfillStates.Completed, kept.State);
+            Assert.AreEqual(laterStart, await store.Inner.GetStringAsync("LatestJob"), "The later start's pointer is left alone.");
         }
 
         /// <summary>

@@ -218,6 +218,10 @@ namespace Tests.UnitTests
                     StringAssert.Contains(workbook, "UNVERIFIED, not assessed.");
                     Assert.IsFalse(workbook.Contains("PREDICTED, not observed."),
                         "No predicted tier is listed when nothing could be predicted.");
+                    // Round 3: the policy count is then only the people already using Cowork - a floor, not the
+                    // target the note described.
+                    StringAssert.Contains(workbook, "UNVERIFIED, a floor: only the people already using Cowork.");
+                    Assert.IsFalse(workbook.Contains("Prime candidates plus everyone already using Cowork."));
                 }
             }
 
@@ -228,6 +232,12 @@ namespace Tests.UnitTests
                 Assert.IsNotNull(verified.Summary.CoworkPrimeCandidates);
                 CollectionAssert.AreEqual(CopilotAdoptionScoring.AllCoworkTiers.ToArray(),
                     verified.Summary.CoworkTiers.Select(t => t.Code).ToArray());
+                if (!nobody)
+                {
+                    var workbook = CopilotAdoptionWorkbookText.Of(CopilotAdoptionWorkbook.Build(verified));
+                    StringAssert.Contains(workbook, "Prime candidates plus everyone already using Cowork.");
+                    Assert.IsFalse(workbook.Contains("UNVERIFIED, a floor"));
+                }
             }
         }
 

@@ -169,7 +169,7 @@ export default function CopilotAuditBackfillPage() {
     <Text role="note" block size={200} className={styles.previewNote}>{t('admin.copilotAuditBackfill.previewNote')}</Text>
     <div className={styles.cards}>
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
-      {!status?.copilotImportEnabled && <MessageBar intent="warning"><MessageBarBody>{t('admin.copilotAuditBackfill.copilotOff')}</MessageBarBody></MessageBar>}
+      {status && !status.copilotImportEnabled && <MessageBar intent="warning"><MessageBarBody>{t('admin.copilotAuditBackfill.copilotOff')}</MessageBarBody></MessageBar>}
       {status && !status.stateDurable && <MessageBar intent="warning"><MessageBarBody>{t('admin.copilotAuditBackfill.stateNotDurable')}</MessageBarBody></MessageBar>}
       <Card>
         <CardHeader header={<Text weight="semibold">{t('admin.copilotAuditBackfill.start.title')}</Text>} />

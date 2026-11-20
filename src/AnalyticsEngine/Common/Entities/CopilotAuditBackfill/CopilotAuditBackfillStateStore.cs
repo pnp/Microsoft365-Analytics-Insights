@@ -39,9 +39,11 @@ namespace Common.Entities.CopilotAuditBackfill
         /// Creates a job only while no job is queued or running, and atomically: of two concurrent starts (a double
         /// click, two tabs, two administrators) exactly one gets a job; the other, like a start while a job is active,
         /// gets null. The new job's row is inserted only if absent, so a start that picked the same id in the same
-        /// second never overwrites it (a start whose own insert landed but lost its reply recognises the row as its
-        /// own), and the latest-job pointer moves only from the version this call read the
-        /// previous job under, so a start that lost the race never replaces the winner. A store without conditional
+        /// second never overwrites it (a start whose own insert landed but lost its reply recognises the row by its
+        /// start attempt), and the latest-job pointer moves only from the version this call read the
+        /// previous job under, so a start that lost the race never replaces the winner. A start told it lost that
+        /// in fact won is answered with its job as it now stands, and a row is deleted only on the version it was
+        /// reserved under, so a published job is never deleted. A store without conditional
         /// writes cannot make that promise and falls back to check-then-write. Throws
         /// <see cref="CopilotAuditBackfillStateUnavailableException"/> when the store fails, including when it cannot
         /// confirm whether a refused pointer write in fact landed.
@@ -67,25 +69,29 @@ namespace Common.Entities.CopilotAuditBackfill
 
             var job = NewJob(NextId(latestId, now), now, startUtc, endUtc, requestedBy, previous);
             job.CopilotImportEnabled = copilotImportEnabled;
+            job.StartAttempt = Guid.NewGuid().ToString("N");
             var key = JobKey(job.Id);
-            var json = JsonConvert.SerializeObject(job);
-            if (!await StoreAsync(key, "save", () => conditional.TrySetStringAsync(key, json, null)).ConfigureAwait(false))
+            if (!await StoreAsync(key, "save", () => conditional.TrySetStringAsync(key, JsonConvert.SerializeObject(job), null)).ConfigureAwait(false))
             {
                 // "Not inserted" is not proof either: an insert whose reply was lost is retried by the SDK, and the
                 // retry then fails with 409 on the row its own first attempt created. That start would be refused as
-                // "a job is active" while no job runs, and leave a row with no time-to-live behind. A row holding
-                // exactly what this call wrote (its creation instant to the tick) is this call's; anything else is
-                // another start's, and is left alone.
+                // "a job is active" while no job runs, and leave a row with no time-to-live behind. Only a row carrying
+                // this call's start attempt is this call's. Matching on what was requested is not enough: two starts by
+                // the same administrator for the same range in the same clock tick ask for the same thing, and the one
+                // that adopted the other's row would publish it while its owner is still to rewrite it.
                 var existing = await StoreAsync(key, "read", () => conditional.GetVersionedAsync(key)).ConfigureAwait(false);
-                if (!string.Equals(existing.Value, json, StringComparison.Ordinal))
+                if (!string.Equals(StartAttemptOf(existing.Value), job.StartAttempt, StringComparison.Ordinal))
                 {
                     return null;
                 }
             }
 
-            // Rewritten with its time-to-live before it becomes the latest job, so nobody else ever writes it and a
-            // row left behind by a lost race below still expires.
+            // Rewritten with its time-to-live before it becomes the latest job, so a row left behind by a lost race
+            // below still expires. Until the pointer names it, nothing but this call writes the row; once it does, the
+            // importer, a cancel and the job's own progress do. So the version it holds now - before it is published -
+            // is the proof, below, of whether it ever was.
             await SaveAsync(job).ConfigureAwait(false);
+            var reserved = await StoreAsync(key, "read", () => conditional.GetVersionedAsync(key)).ConfigureAwait(false);
             var id = job.Id.ToString(CultureInfo.InvariantCulture);
             if (await StoreAsync(LatestKey, "save", () => conditional.TrySetStringAsync(LatestKey, id, latest.VersionToken)).ConfigureAwait(false))
             {
@@ -104,16 +110,34 @@ namespace Common.Entities.CopilotAuditBackfill
                 return job;
             }
 
-            await TryDeleteUnclaimedAsync(conditional, key).ConfigureAwait(false);
+            // The pointer names another job. Either this start lost, or it won and - while its reply was still on the
+            // way - its job was picked up and finished, and a later start moved the pointer on: a start replaces only a
+            // job that is no longer active, and only a write to a published row makes it so. A row still at the
+            // version it was reserved under was therefore never published: delete it, on that version, and refuse.
+            // A row written since was published and has run: it is this call's job, as it now stands.
+            var row = await StoreAsync(key, "read", () => conditional.GetVersionedAsync(key)).ConfigureAwait(false);
+            if (row.Value != null && !string.Equals(row.VersionToken, reserved.VersionToken, StringComparison.Ordinal))
+            {
+                return await GetAsync(job.Id).ConfigureAwait(false);
+            }
+
+            await TryDeleteUnclaimedAsync(conditional, key, reserved.VersionToken).ConfigureAwait(false);
             return null;
         }
 
-        private static async Task TryDeleteUnclaimedAsync(IConditionalKeyValueStore conditional, string key)
+        private static string StartAttemptOf(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            try { return JsonConvert.DeserializeObject<CopilotAuditBackfillJob>(json)?.StartAttempt; }
+            catch (JsonException) { return null; }
+        }
+
+        private static async Task TryDeleteUnclaimedAsync(IConditionalKeyValueStore conditional, string key, string reservedVersion)
         {
             try
             {
-                var row = await conditional.GetVersionedAsync(key).ConfigureAwait(false);
-                await conditional.TryDeleteAsync(key, row.VersionToken).ConfigureAwait(false);
+                // Only on the version it was reserved under: a row written since is not unclaimed.
+                await conditional.TryDeleteAsync(key, reservedVersion).ConfigureAwait(false);
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {

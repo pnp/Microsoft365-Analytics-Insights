@@ -934,6 +934,28 @@ describe('CopilotAdoptionPage view split', () => {
     expect(screen.queryByText('Readiness for Cowork')).not.toBeInTheDocument();
   });
 
+  it('shows no readiness gauge when the Microsoft 365 usage reports are not verified for the period', async () => {
+    // Release critique of #909: unverified, nobody can be assessed as a prime candidate, so only the
+    // people already using Cowork are "recommended" and the gauge read as a near-zero readiness -
+    // permanently, on a tenant whose import is scoped by group. The test above it is the other direction.
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      dataSources: { ...summary().dataSources, m365UsageReportsAvailable: false },
+      coworkDetected: true,
+      coworkAdoptionPct: null,
+      coworkReadinessAvailable: true,
+      coworkScoredUsers: 80,
+      coworkRecommendedForPolicy: 5,
+    }));
+
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+
+    expect(await screen.findByRole('tab', { name: 'Analyst view', selected: true })).toBeVisible();
+    expect(screen.queryByRole('img', { name: /Readiness for Cowork/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/scored seat holders are ready to be scoped for Cowork/)).not.toBeInTheDocument();
+  });
+
   it('uses the designed executive empty state instead of an empty grid of diagnostics', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
       licensedUsers: 0,
