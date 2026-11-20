@@ -1238,6 +1238,34 @@ describe('CopilotAdoptionPage printing', () => {
     expect(screen.getByRole('tab', { name: 'Executive view' }).closest('[data-print="hide"]')).not.toBeNull();
   });
 
+  it('prints the per-workload source coverage facts with the report', async () => {
+    const report = summary();
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue({
+      ...report,
+      dataSources: {
+        ...report.dataSources,
+        workloadCoverage: [{
+          source: 'teams',
+          status: 'empty',
+          reason: null,
+          fromUtc: '2025-12-05',
+          throughUtc: '2025-12-31',
+          expectedDays: 27,
+          verifiedDays: 27,
+          emptyDays: 27,
+          partialDays: 0,
+          scopeUnverifiedDays: 0,
+        }],
+      },
+    });
+
+    await renderPage();
+
+    const coverage = await screen.findByText('Teams: Successfully empty — 27 of 27 days verified');
+    expect(coverage.closest('[data-print="hide"]')).toBeNull();
+    expect(coverage.closest('[data-print="flow"]')).not.toBeNull();
+  });
+
   it('keeps the report itself out of the print-hidden chrome', async () => {
     // The obvious way to get this wrong is to hide a container that also holds the report. The
     // title and the figures have to survive - they are the printout.

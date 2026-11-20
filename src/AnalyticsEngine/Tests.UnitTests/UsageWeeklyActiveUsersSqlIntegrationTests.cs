@@ -2,6 +2,7 @@ extern alias AnalyticsWeb;
 
 using Common.Entities;
 using Common.Entities.Entities.Teams;
+using Common.Entities.State;
 using Common.Entities.UserFilters;
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -129,6 +130,7 @@ namespace Tests.UnitTests
             Assert.AreEqual(3d, weeks[CompleteWeek].Value,
                 "Monday-only, Friday-only and Sunday users are three weekly active users, not one.");
             Assert.AreEqual(7, weeks[CompleteWeek].ImportedDays);
+            Assert.IsFalse(weeks[CompleteWeek].Incomplete);
         }
 
         [TestMethod]
@@ -148,7 +150,23 @@ namespace Tests.UnitTests
             var week = weeks[WeekMissingADay];
             Assert.AreEqual(6, week.ImportedDays, "Wednesday has no report, so the week is incomplete.");
             Assert.AreEqual(7, week.ExpectedDays);
+            Assert.IsTrue(week.Incomplete);
             Assert.AreEqual(1d, week.Value, "The week is still counted from the days that were imported.");
+        }
+
+        [TestMethod]
+        public void ANoRowsDayWithConfirmedEmptyProvenanceIsNotReportedAsMissing()
+        {
+            var outcomes = Enumerable.Range(0, 7).ToDictionary(
+                day => WeekMissingADay.AddDays(day),
+                day => day == 2 ? UsageReportCoverageStore.Empty : UsageReportCoverageStore.Complete);
+
+            var week = Run("dbo.teams_user_activity_log", outcomes: outcomes)[WeekMissingADay];
+
+            Assert.AreEqual(6, week.ImportedDays);
+            Assert.IsFalse(week.Incomplete,
+                "The empty Wednesday report is confirmed coverage, not a missed import.");
+            Assert.AreEqual(1d, week.Value, "Rows from the other days remain charted.");
         }
 
         [TestMethod]
@@ -158,6 +176,20 @@ namespace Tests.UnitTests
 
             Assert.IsFalse(weeks.ContainsKey(WeekNeverImported),
                 "A week with no report on any day is unknown, so it must come back as no row (a gap), never as zero.");
+        }
+
+        [TestMethod]
+        public void AWeekWithSevenConfirmedEmptyReportsIsARealZero()
+        {
+            var outcomes = Enumerable.Range(0, 7).ToDictionary(
+                day => WeekNeverImported.AddDays(day),
+                _ => UsageReportCoverageStore.Empty);
+
+            var week = Run("dbo.teams_user_activity_log", outcomes: outcomes)[WeekNeverImported];
+
+            Assert.AreEqual(0d, week.Value);
+            Assert.AreEqual(0, week.ImportedDays);
+            Assert.IsFalse(week.Incomplete);
         }
 
         [TestMethod]
@@ -189,11 +221,12 @@ namespace Tests.UnitTests
             }
         }
 
-        private static Dictionary<DateTime, Week> Run(string table, ReportUserScope scope = null)
+        private static Dictionary<DateTime, Week> Run(
+            string table, ReportUserScope scope = null, IDictionary<DateTime, string> outcomes = null)
         {
             scope = scope ?? ReportUserScope.Everyone;
             var sql = ReportScopeSql.Apply(ReportsAPIController.UsageWeeklyActiveUsersQuery(table), scope);
-            var weeks = new Dictionary<DateTime, Week>();
+            var dailyRows = new List<ReportsAPIController.UsageWeekRow>();
 
             using (var connection = new SqlConnection(_connectionString))
             using (var command = connection.CreateCommand())
@@ -211,16 +244,31 @@ namespace Tests.UnitTests
                 {
                     while (reader.Read())
                     {
-                        weeks.Add(Convert.ToDateTime(reader["WeekStart"]).Date, new Week
+                        dailyRows.Add(new ReportsAPIController.UsageWeekRow
                         {
+                            WeekStart = Convert.ToDateTime(reader["WeekStart"]).Date,
                             Value = Convert.ToDouble(reader["Value"]),
-                            ImportedDays = Convert.ToInt32(reader["ImportedDays"]),
-                            ExpectedDays = Convert.ToInt32(reader["ExpectedDays"]),
+                            CoverageDate = Convert.ToDateTime(reader["CoverageDate"]).Date,
+                            HasRows = Convert.ToBoolean(reader["HasRows"]),
                         });
                     }
                 }
             }
 
+            var aggregation = ReportsAPIController.AggregateUsageWeekRows(dailyRows, outcomes);
+            var weeks = aggregation.WeeklyRows.ToDictionary(
+                row => row.WeekStart.Date,
+                row =>
+                {
+                    var days = dailyRows.Where(day => day.WeekStart.Date == row.WeekStart.Date).ToList();
+                    return new Week
+                    {
+                        Value = row.Value,
+                        ImportedDays = days.Count(day => day.HasRows),
+                        ExpectedDays = days.Count,
+                        Incomplete = aggregation.IncompleteWeeks.Contains(row.WeekStart.Date),
+                    };
+                });
             return weeks;
         }
 
@@ -241,6 +289,7 @@ namespace Tests.UnitTests
             public double Value { get; set; }
             public int ImportedDays { get; set; }
             public int ExpectedDays { get; set; }
+            public bool Incomplete { get; set; }
         }
     }
 }

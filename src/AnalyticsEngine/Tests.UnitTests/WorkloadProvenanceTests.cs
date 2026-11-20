@@ -162,6 +162,23 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ReadDailyOutcomes_PreservesEmptyAndPartialStatesAndLegacyMisses()
+        {
+            var store = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            await store.CompleteDayAsync("teams", Day, true, true, false, Day.AddDays(3), 3);
+            await store.CompleteDayAsync("outlook", Day, true, true, true, Day.AddDays(3), 3);
+            await store.CompleteDayAsync("sharepoint", Day, true, true, false, Day.AddDays(1), 3);
+
+            var outcomes = await store.ReadDailyOutcomesAsync(Day, Day.AddDays(1));
+
+            Assert.AreEqual(UsageReportCoverageStore.Complete, outcomes["teams"][Day]);
+            Assert.AreEqual(UsageReportCoverageStore.Empty, outcomes["outlook"][Day]);
+            Assert.AreEqual(UsageReportCoverageStore.Partial, outcomes["sharepoint"][Day]);
+            Assert.IsNull(outcomes["onedrive"][Day], "No ledger entry remains distinguishable from a known outcome.");
+            Assert.IsNull(outcomes["teams"][Day.AddDays(1)]);
+        }
+
+        [TestMethod]
         public async Task MixedDailyOutcomes_DoNotCertifyGaps_Scope_RecentDays_OrLegacyStamps()
         {
             var state = new InMemoryKeyValueStore();
