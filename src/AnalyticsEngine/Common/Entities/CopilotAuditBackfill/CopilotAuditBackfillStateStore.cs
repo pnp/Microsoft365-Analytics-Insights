@@ -27,10 +27,84 @@ namespace Common.Entities.CopilotAuditBackfill
         public async Task<CopilotAuditBackfillJob> CreateAsync(DateTime startUtc, DateTime endUtc, string requestedBy)
         {
             var now = _utcNow();
-            var seed = (int)Math.Min(int.MaxValue - 1, Math.Max(1, (now - IdEpoch).TotalSeconds));
             var latestId = await GetLatestIdAsync().ConfigureAwait(false);
             var previous = latestId > 0 ? await GetAsync(latestId).ConfigureAwait(false) : null;
-            var id = Math.Max(latestId + 1, seed);
+            var job = NewJob(NextId(latestId, now), now, startUtc, endUtc, requestedBy, previous);
+            await SaveAsync(job).ConfigureAwait(false);
+            await WriteAsync(LatestKey, job.Id.ToString(CultureInfo.InvariantCulture), null).ConfigureAwait(false);
+            return job;
+        }
+
+        /// <summary>
+        /// Creates a job only while no job is queued or running, and atomically: of two concurrent starts (a double
+        /// click, two tabs, two administrators) exactly one gets a job; the other, like a start while a job is active,
+        /// gets null. The new job's row is inserted only if absent, so a start that picked the same id in the same
+        /// second never overwrites it, and the latest-job pointer moves only from the version this call read the
+        /// previous job under, so a start that lost the race never replaces the winner. A store without conditional
+        /// writes cannot make that promise and falls back to check-then-write.
+        /// </summary>
+        public async Task<CopilotAuditBackfillJob> TryCreateWhenIdleAsync(DateTime startUtc, DateTime endUtc, string requestedBy,
+            bool copilotImportEnabled)
+        {
+            if (!(_values is IConditionalKeyValueStore conditional))
+            {
+                var current = await GetLatestAsync().ConfigureAwait(false);
+                if (current != null && current.IsActive) return null;
+                var created = await CreateAsync(startUtc, endUtc, requestedBy).ConfigureAwait(false);
+                created.CopilotImportEnabled = copilotImportEnabled;
+                await SaveAsync(created).ConfigureAwait(false);
+                return created;
+            }
+
+            var now = _utcNow();
+            var latest = await StoreAsync(LatestKey, "read", () => conditional.GetVersionedAsync(LatestKey)).ConfigureAwait(false);
+            var latestId = ParseId(latest.Value);
+            var previous = latestId > 0 ? await GetAsync(latestId).ConfigureAwait(false) : null;
+            if (previous != null && previous.IsActive) return null;
+
+            var job = NewJob(NextId(latestId, now), now, startUtc, endUtc, requestedBy, previous);
+            job.CopilotImportEnabled = copilotImportEnabled;
+            var key = JobKey(job.Id);
+            if (!await StoreAsync(key, "save", () => conditional.TrySetStringAsync(key, JsonConvert.SerializeObject(job), null)).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            // Rewritten with its time-to-live before it becomes the latest job, so nobody else ever writes it and a
+            // row left behind by a lost race below still expires.
+            await SaveAsync(job).ConfigureAwait(false);
+            var id = job.Id.ToString(CultureInfo.InvariantCulture);
+            if (await StoreAsync(LatestKey, "save", () => conditional.TrySetStringAsync(LatestKey, id, latest.VersionToken)).ConfigureAwait(false))
+            {
+                return job;
+            }
+
+            await TryDeleteUnclaimedAsync(conditional, key).ConfigureAwait(false);
+            return null;
+        }
+
+        private static async Task TryDeleteUnclaimedAsync(IConditionalKeyValueStore conditional, string key)
+        {
+            try
+            {
+                var row = await conditional.GetVersionedAsync(key).ConfigureAwait(false);
+                await conditional.TryDeleteAsync(key, row.VersionToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                // Nothing points at the row, and it expires with the job time-to-live.
+            }
+        }
+
+        private static int NextId(int latestId, DateTime now)
+        {
+            var seed = (int)Math.Min(int.MaxValue - 1, Math.Max(1, (now - IdEpoch).TotalSeconds));
+            return Math.Max(latestId + 1, seed);
+        }
+
+        private static CopilotAuditBackfillJob NewJob(int id, DateTime now, DateTime startUtc, DateTime endUtc, string requestedBy,
+            CopilotAuditBackfillJob previous)
+        {
             var job = new CopilotAuditBackfillJob
             {
                 Id = id,
@@ -46,8 +120,6 @@ namespace Common.Entities.CopilotAuditBackfill
                 SubmitFailureBackoffMinutes = previous?.SubmitFailureBackoffMinutes ?? 0,
             };
             job.PendingSlices = CopilotAuditBackfillSlicer.BuildDaySlices(job.StartUtc, job.EndUtc);
-            await SaveAsync(job).ConfigureAwait(false);
-            await WriteAsync(LatestKey, id.ToString(CultureInfo.InvariantCulture), null).ConfigureAwait(false);
             return job;
         }
 
@@ -114,11 +186,10 @@ namespace Common.Entities.CopilotAuditBackfill
             return WriteAsync(SubmissionLedgerKey, JsonConvert.SerializeObject(ledger), TimeSpan.FromDays(2));
         }
 
-        private async Task<int> GetLatestIdAsync()
-        {
-            var value = await ReadAsync(LatestKey).ConfigureAwait(false);
-            return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0;
-        }
+        private async Task<int> GetLatestIdAsync() => ParseId(await ReadAsync(LatestKey).ConfigureAwait(false));
+
+        private static int ParseId(string value)
+            => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0;
 
         private static string JobKey(int id) => "Job:" + id.ToString(CultureInfo.InvariantCulture);
         private static string CancelKey(int id) => JobKey(id) + ":Cancel";
@@ -133,6 +204,12 @@ namespace Common.Entities.CopilotAuditBackfill
         {
             try { await _values.SetStringAsync(key, value, ttl).ConfigureAwait(false); }
             catch (Exception ex) when (!(ex is OperationCanceledException)) { throw new CopilotAuditBackfillStateUnavailableException($"Couldn't save '{key}' to {_values.Description}: {ex.Message}", ex); }
+        }
+
+        private async Task<T> StoreAsync<T>(string key, string verb, Func<Task<T>> action)
+        {
+            try { return await action().ConfigureAwait(false); }
+            catch (Exception ex) when (!(ex is OperationCanceledException)) { throw new CopilotAuditBackfillStateUnavailableException($"Couldn't {verb} '{key}' in {_values.Description}: {ex.Message}", ex); }
         }
     }
 

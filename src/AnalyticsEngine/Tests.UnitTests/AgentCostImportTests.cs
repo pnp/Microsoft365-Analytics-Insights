@@ -2191,6 +2191,129 @@ namespace Tests.UnitTests
         }
 
         /// <summary>
+        /// #914: through the real licensing source, a 401 still requires a reconnect, but a 403 - the token accepted and
+        /// the route refused - is its own state. Marking it "reconnect needed" sent administrators round a loop: the
+        /// connect probe then refused the same route, so reconnecting could never clear it.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(HttpStatusCode.Unauthorized, "users")]
+        [DataRow(HttpStatusCode.Unauthorized, "userResources")]
+        [DataRow(HttpStatusCode.Forbidden, "users")]
+        [DataRow(HttpStatusCode.Forbidden, "userResources")]
+        public async Task DelegatedSource_A401RequiresReconnectButA403IsARefusedRoute(HttpStatusCode status, string route)
+        {
+            var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
+            await store.ConnectAsync("synthetic-encrypted-cache");
+            var head = await store.GetHeadAsync();
+            var handler = new RecordingPostHandler(new HttpResponseMessage(status) { Content = new StringContent(string.Empty) });
+            using (var client = new DataUtils.Http.AutoThrottleHttpClient(handler, Logger))
+            {
+                var source = new DelegatedAgentCostSource(new PowerPlatformLicensingCreditSource(client, Logger, delegated: true),
+                    new ScriptedCreditSource(), store, head.Version);
+                var day = new DateTime(2026, 1, 1);
+                Func<Task> read = route == "users"
+                    ? (Func<Task>)(() => source.GetUserConsumptionPageAsync(day, day, null))
+                    : () => source.GetUserResourceConsumptionPageAsync("00000000-0000-0000-0000-000000000001", day, null);
+                var error = await CatchAsync<AgentCostAuthorisationException>(read);
+
+                if (status == HttpStatusCode.Forbidden)
+                {
+                    Assert.IsInstanceOfType(error, typeof(AgentCostRouteRefusedException));
+                    Assert.AreEqual(AgentCostDelegatedHttpClient.RouteRefusedDiagnostic, error.Message);
+                    Assert.AreEqual("routeRefused", await store.GetStatusAsync());
+                    Assert.IsFalse(await store.NeedsReconnectAsync(head.Version),
+                        "A refused route keeps a valid sign-in, so token refresh must not be blocked.");
+                }
+                else
+                {
+                    Assert.IsNotInstanceOfType(error, typeof(AgentCostRouteRefusedException));
+                    Assert.AreEqual(AgentCostDelegatedHttpClient.ReconnectDiagnostic, error.Message);
+                    Assert.AreEqual("reconnectNeeded", await store.GetStatusAsync());
+                    Assert.IsFalse(await store.IsRouteRefusedAsync(head.Version));
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task DelegatedSource_ARefusedRouteClearsOnTheNextSuccessfulReadAndOnDisconnect()
+        {
+            var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
+            await store.ConnectAsync("synthetic-encrypted-cache");
+            var head = await store.GetHeadAsync();
+            var refused = new DelegatedAgentCostSource(new FailingCreditSource(new AgentCostRouteRefusedException("Synthetic 403")),
+                new ScriptedCreditSource(), store, head.Version);
+            await CatchAsync<AgentCostRouteRefusedException>(() => refused.GetUserConsumptionPageAsync(DateTime.UtcNow, DateTime.UtcNow, null));
+            Assert.AreEqual("routeRefused", await store.GetStatusAsync());
+
+            // A refusal in the same run is never erased by one of its successful reads...
+            var day = new DateTime(2026, 1, 1);
+            var mixed = new ScriptedCreditSource();
+            mixed.FailResources("00000000-0000-0000-0000-000000000001", day, new AgentCostRouteRefusedException("Synthetic 403"));
+            var sameRun = new DelegatedAgentCostSource(mixed, new ScriptedCreditSource(), store, head.Version);
+            await CatchAsync<AgentCostRouteRefusedException>(() =>
+                sameRun.GetUserResourceConsumptionPageAsync("00000000-0000-0000-0000-000000000001", day, null));
+            await sameRun.GetUserConsumptionPageAsync(day, day, null);
+            Assert.AreEqual("routeRefused", await store.GetStatusAsync());
+
+            // ...but the next run that Microsoft lets read usage clears it, with no reconnect.
+            var nextRun = new DelegatedAgentCostSource(new ScriptedCreditSource(), new ScriptedCreditSource(), store, head.Version);
+            await nextRun.GetUserConsumptionPageAsync(day, day, null);
+            Assert.AreEqual("connected", await store.GetStatusAsync());
+
+            await store.RefuseRouteAsync(head.Version);
+            await store.DisconnectAsync();
+            Assert.IsFalse(await store.IsRouteRefusedAsync(head.Version), "Disconnect removes every key of the old connection.");
+            Assert.AreEqual("disconnected", await store.GetStatusAsync());
+        }
+
+        [TestMethod]
+        public async Task DelegatedSource_AStorageOutageNeitherFailsAReadNorHidesARefusal()
+        {
+            var backing = new OutageKeyValueStore();
+            var store = new AgentCostConnectionStore(backing);
+            await store.ConnectAsync("synthetic-encrypted-cache");
+            var head = await store.GetHeadAsync();
+            backing.Down = true;
+
+            var day = new DateTime(2026, 1, 1);
+            var working = new DelegatedAgentCostSource(new ScriptedCreditSource(), new ScriptedCreditSource(), store, head.Version);
+            Assert.IsNotNull(await working.GetUserConsumptionPageAsync(day, day, null),
+                "Clearing an old refusal only guides the administrator; it must not fail a read Microsoft answered.");
+
+            var refused = new DelegatedAgentCostSource(new FailingCreditSource(new AgentCostRouteRefusedException("Synthetic 403")),
+                new ScriptedCreditSource(), store, head.Version);
+            var error = await CatchAsync<AgentCostRouteRefusedException>(() => refused.GetUserConsumptionPageAsync(day, day, null));
+            Assert.AreEqual(AgentCostDelegatedHttpClient.RouteRefusedDiagnostic, error.Message);
+        }
+
+        [TestMethod]
+        public async Task DelegatedSource_ATokenRefreshFailureStillRequiresReconnect()
+        {
+            // The token handler turns a refresh Microsoft refuses into this exact exception before any request is sent.
+            var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
+            await store.ConnectAsync("synthetic-encrypted-cache");
+            var head = await store.GetHeadAsync();
+            var source = new DelegatedAgentCostSource(
+                new FailingCreditSource(new AgentCostAuthorisationException(AgentCostDelegatedHttpClient.ReconnectDiagnostic)),
+                new ScriptedCreditSource(), store, head.Version);
+            var error = await CatchAsync<AgentCostAuthorisationException>(() =>
+                source.GetUserConsumptionPageAsync(DateTime.UtcNow, DateTime.UtcNow, null));
+            Assert.IsNotInstanceOfType(error, typeof(AgentCostRouteRefusedException));
+            Assert.AreEqual(AgentCostDelegatedHttpClient.ReconnectDiagnostic, error.Message);
+            Assert.AreEqual("reconnectNeeded", await store.GetStatusAsync());
+            Assert.IsFalse(await store.IsRouteRefusedAsync(head.Version));
+        }
+
+        /// <summary>Like <c>Assert.ThrowsExceptionAsync</c>, but also accepts a derived exception type.</summary>
+        private static async Task<T> CatchAsync<T>(Func<Task> action) where T : Exception
+        {
+            try { await action(); }
+            catch (T ex) { return ex; }
+            Assert.Fail($"Expected {typeof(T).Name}, but nothing was thrown.");
+            return null;
+        }
+
+        /// <summary>
         /// A fully scriptable source. Pages are keyed by (day, continuation token) - the first page's token being
         /// empty - so a test can return a day in several pages. An unlisted page is empty and final.
         /// </summary>
@@ -2319,18 +2442,33 @@ namespace Tests.UnitTests
                     case "userResources": read = () => source.GetUserResourceConsumptionPageAsync("bbbbbbbb-0000-0000-0000-000000000001", day, null); break;
                     default: throw new ArgumentOutOfRangeException(nameof(route));
                 }
-                var error = await Assert.ThrowsExceptionAsync<AgentCostAuthorisationException>(
-                    read);
+                var error = await CatchAsync<AgentCostAuthorisationException>(read);
 
                 StringAssert.Contains(error.Message, $"HTTP {(int)status}");
                 Assert.IsFalse(error.Message.Contains("tenant-wide per-agent"));
                 Assert.IsTrue(error.Message.Length <= 1000, "Guidance must fit the import log's SQL column.");
                 if (route != "capacity")
                 {
-                    StringAssert.Contains(error.Message, "reconnect in Administration");
+                    // #914: a 401 is a token Microsoft no longer accepts, so reconnecting is the fix. A 403 is the token
+                    // accepted and the route refused - reconnecting signs the same account in again and gets the same 403.
+                    if (status == HttpStatusCode.Forbidden)
+                    {
+                        Assert.IsInstanceOfType(error, typeof(AgentCostRouteRefusedException));
+                        StringAssert.Contains(error.Message, "deprecated");
+                        StringAssert.Contains(error.Message, "Reconnecting alone will not fix this");
+                        StringAssert.Contains(error.Message, "Copilot Credits capacity are unaffected");
+                        Assert.IsFalse(error.Message.Contains("reconnect in Administration"));
+                    }
+                    else
+                    {
+                        Assert.IsNotInstanceOfType(error, typeof(AgentCostRouteRefusedException));
+                        StringAssert.Contains(error.Message, "reconnect in Administration");
+                    }
                     return;
                 }
 
+                Assert.IsNotInstanceOfType(error, typeof(AgentCostRouteRefusedException),
+                    "The app-only capacity route keeps its own guidance; only delegated consumption reads are a refused route.");
                 StringAssert.Contains(error.Message, "HTTP " + (int)status + " (" + status + ")");
                 StringAssert.Contains(error.Message, "already verified");
                 StringAssert.Contains(error.Message, "same runtime app identity");

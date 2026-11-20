@@ -146,8 +146,12 @@ namespace Web.AnalyticsWeb
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                 using (var response = await VerificationClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead))
                 {
-                    if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+                    // 401: the token itself was not accepted. 403: the token was accepted but Microsoft refused the
+                    // route, which Microsoft Learn now marks as deprecated - a role or consent fix may not help (#914).
+                    if (response.StatusCode == HttpStatusCode.Unauthorized)
                         throw new AgentCostConnectionException("accessDenied");
+                    if (response.StatusCode == HttpStatusCode.Forbidden)
+                        throw new AgentCostConnectionException("routeRefused");
                     if (!response.IsSuccessStatusCode) throw new AgentCostConnectionException("failed");
                 }
             }
@@ -155,6 +159,6 @@ namespace Web.AnalyticsWeb
 
         private static string SafeOutcome(string code) =>
             code == "storageNotConfigured" || code == "consentOrPolicy" || code == "identityMismatch"
-                || code == "accessDenied" ? code : "failed";
+                || code == "accessDenied" || code == "routeRefused" ? code : "failed";
     }
 }

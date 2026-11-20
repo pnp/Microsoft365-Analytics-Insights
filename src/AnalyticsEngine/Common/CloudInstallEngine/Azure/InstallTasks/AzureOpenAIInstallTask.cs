@@ -118,25 +118,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
                 if (needsUpdate)
                 {
-                    var updateProperties = currentProperties ?? new CognitiveServicesAccountProperties();
-                    if (string.IsNullOrWhiteSpace(updateProperties.CustomSubDomainName))
-                    {
-                        updateProperties.CustomSubDomainName = name;
-                    }
-                    updateProperties.PublicNetworkAccess = desiredAccess;
-                    var update = new CognitiveServicesAccountData(account.Data.Location)
-                    {
-                        Sku = account.Data.Sku,
-                        Kind = account.Data.Kind,
-                        Properties = updateProperties
-                    };
-                    if (account.Data.Tags != null)
-                    {
-                        foreach (var tag in account.Data.Tags)
-                        {
-                            update.Tags[tag.Key] = tag.Value;
-                        }
-                    }
+                    var update = BuildAccountUpdateData(account.Data, name, desiredAccess);
                     account = (await Container.GetCognitiveServicesAccounts()
                         .CreateOrUpdateAsync(WaitUntil.Completed, name, update, cancellationToken: CancellationToken)).Value;
                 }
@@ -178,6 +160,39 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     }
                 }
             };
+        }
+
+        /// <summary>
+        /// Builds the PUT payload that updates an existing account. A PUT replaces the resource, so
+        /// everything the installer doesn't manage (tags, managed identity) is copied from <paramref name="existing"/>;
+        /// leaving <c>Identity</c> out would remove a managed identity an admin had assigned.
+        /// </summary>
+        internal static CognitiveServicesAccountData BuildAccountUpdateData(CognitiveServicesAccountData existing, string name,
+            ServiceAccountPublicNetworkAccess desiredAccess)
+        {
+            if (existing == null) throw new ArgumentNullException(nameof(existing));
+
+            var updateProperties = existing.Properties ?? new CognitiveServicesAccountProperties();
+            if (string.IsNullOrWhiteSpace(updateProperties.CustomSubDomainName))
+            {
+                updateProperties.CustomSubDomainName = name;
+            }
+            updateProperties.PublicNetworkAccess = desiredAccess;
+            var update = new CognitiveServicesAccountData(existing.Location)
+            {
+                Sku = existing.Sku,
+                Kind = existing.Kind,
+                Identity = existing.Identity,
+                Properties = updateProperties
+            };
+            if (existing.Tags != null)
+            {
+                foreach (var tag in existing.Tags)
+                {
+                    update.Tags[tag.Key] = tag.Value;
+                }
+            }
+            return update;
         }
 
         internal static CognitiveServicesAccountData BuildAccountData(AzureLocation location, string name, bool allowPublicAccess)

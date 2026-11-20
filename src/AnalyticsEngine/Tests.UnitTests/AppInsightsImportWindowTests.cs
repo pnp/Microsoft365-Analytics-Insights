@@ -257,13 +257,17 @@ namespace Tests.UnitTests
             var other = new KeyValueIngestionCursorStore(state, "00000000-0000-0000-0000-000000000002");
 
             Assert.IsNull(await store.ReadAsync());
-            await store.WriteAsync(Now);
+            Assert.IsNull(await store.ReadNewestStoredHitAtCursorAsync());
+            await store.WriteAsync(Now, Now.AddMinutes(-5));
 
             var read = await store.ReadAsync();
             Assert.AreEqual(Now, read);
             Assert.AreEqual(DateTimeKind.Utc, read.Value.Kind);
+            Assert.AreEqual(Now.AddMinutes(-5), await store.ReadNewestStoredHitAtCursorAsync());
             Assert.IsNull(await other.ReadAsync(), "Another Application Insights resource has its own cursor.");
-            Assert.AreEqual(Now.ToString("o"), await state.GetStringAsync("IngestionCursor:00000000-0000-0000-0000-000000000001"));
+            Assert.IsNull(await other.ReadNewestStoredHitAtCursorAsync());
+            Assert.AreEqual(Now.ToString("o"), await state.GetStringAsync("IngestionCursor:00000000-0000-0000-0000-000000000001"),
+                "The cursor value keeps its format, so an older build can still read it.");
         }
 
         #endregion

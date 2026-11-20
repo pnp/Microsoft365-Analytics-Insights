@@ -56,6 +56,7 @@ export const AGENT_COST_CONNECTION_REASON_KEYS: Record<string, keyof typeof enHe
   'agentCostConnection.connected': 'health.reason.agentCostConnectionConnected',
   'agentCostConnection.disconnected': 'health.reason.agentCostConnectionDisconnected',
   'agentCostConnection.reconnectNeeded': 'health.reason.agentCostConnectionReconnectNeeded',
+  'agentCostConnection.routeRefused': 'health.reason.agentCostConnectionRouteRefused',
   'agentCostConnection.checkFailed': 'health.reason.agentCostConnectionCheckFailed',
 };
 

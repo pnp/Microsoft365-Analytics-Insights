@@ -72,6 +72,25 @@ describe('billing administrator connection', () => {
     expect(screen.queryByText('Connected — no action needed')).not.toBeInTheDocument();
   });
 
+  it('shows a refused route as its own state, not as reconnect-needed', async () => {
+    vi.mocked(fetchAgentCostConnection).mockResolvedValue({ state: 'routeRefused' });
+    renderPage();
+    expect(await screen.findByText(/Microsoft is refusing Copilot Studio usage reads/)).toBeVisible();
+    expect(screen.getByText(/marked as deprecated/)).toBeVisible();
+    expect(screen.queryByText(/Reconnect needed/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Connected — no action needed')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Connect or reconnect an administrator' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeEnabled();
+  });
+
+  it('explains a probe that Microsoft refused with HTTP 403, in Spanish', async () => {
+    vi.mocked(fetchAgentCostConnection).mockResolvedValue({ state: 'disconnected' });
+    renderPage('es', '?connection=routeRefused');
+    expect(await screen.findByText(/rechazó la solicitud de uso de Copilot Studio \(HTTP 403\)/)).toBeVisible();
+    expect(screen.queryByText(/HTTP 401/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Microsoft refused/)).not.toBeInTheDocument();
+  });
+
   it('does not offer a non-durable connection without Storage', async () => {
     vi.mocked(fetchAgentCostConnection).mockResolvedValue({ state: 'storageNotConfigured' });
     renderPage();

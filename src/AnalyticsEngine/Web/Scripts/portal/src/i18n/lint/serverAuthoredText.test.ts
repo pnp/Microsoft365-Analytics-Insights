@@ -114,7 +114,7 @@ describe('Delegated billing import diagnostics', () => {
     await loadCatalog('es');
     const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'Health', 'HealthService.cs'), 'utf8');
     const states = [...source.matchAll(/row\.ReasonKey = "(agentCostConnection\.[^"]+)";\s*row\.Detail = "([^"]+)";/g)];
-    expect(states).toHaveLength(4);
+    expect(states).toHaveLength(5);
     expect(states.map((state) => state[1]).sort()).toEqual(Object.keys(AGENT_COST_CONNECTION_REASON_KEYS).sort());
     const es: TFunction = (key, values) => translateStatic('es', key, values);
     for (const [, reasonKey, detail] of states) {
@@ -133,7 +133,7 @@ describe('Delegated billing import diagnostics', () => {
       'WebJob.Office365ActivityImporter.Engine', 'AgentCosts', 'DelegatedAgentCostSource.cs'), 'utf8');
     const page = readFileSync(join(process.cwd(), 'src', 'pages', 'AgentCostsPage.tsx'), 'utf8');
     const keys = translationKeysIn(server, 'agentCosts.import.');
-    expect(keys.length).toBe(3);
+    expect(keys.length).toBe(4);
     expect(translationKeysIn(functionBody(page, 'importFailureDetail'), 'agentCosts.import.')).toEqual(keys);
     expect(catalogKeys('agentCosts.import.')).toEqual(keys);
   });

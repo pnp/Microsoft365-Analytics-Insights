@@ -14,6 +14,7 @@ const outcomes = new Map<string, TranslationKey>([
   ['consentOrPolicy', 'admin.agentCostConnection.consentOrPolicy'],
   ['identityMismatch', 'admin.agentCostConnection.identityMismatch'],
   ['accessDenied', 'admin.agentCostConnection.accessDenied'],
+  ['routeRefused', 'admin.agentCostConnection.routeRefusedOutcome'],
   ['failed', 'admin.agentCostConnection.failed'],
 ]);
 
@@ -21,8 +22,13 @@ const states: Record<AgentCostConnectionStatus['state'], TranslationKey> = {
   connected: 'admin.agentCostConnection.connected',
   disconnected: 'admin.agentCostConnection.disconnected',
   reconnectNeeded: 'admin.agentCostConnection.reconnectNeeded',
+  routeRefused: 'admin.agentCostConnection.routeRefused',
   storageNotConfigured: 'admin.agentCostConnection.storageNotConfigured',
 };
+
+// A refused route (HTTP 403) keeps a valid sign-in, so reconnecting is not the obvious next step there.
+const reconnectIsSecondary = new Set<AgentCostConnectionStatus['state']>(['connected', 'routeRefused']);
+const canDisconnect = new Set<AgentCostConnectionStatus['state']>(['connected', 'reconnectNeeded', 'routeRefused']);
 
 export default function AgentCostConnectionPage() {
   const t = useT();
@@ -110,10 +116,10 @@ export default function AgentCostConnectionPage() {
         {status?.state !== 'connected' && <Text>{t('admin.agentCostConnection.prerequisites')}</Text>}
         <Text>{t('admin.agentCostConnection.persistence')}</Text>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <Button appearance={status?.state === 'connected' ? 'secondary' : 'primary'} disabled={busy || !status || status.state === 'storageNotConfigured'} onClick={() => void connect()}>
+          <Button appearance={status && reconnectIsSecondary.has(status.state) ? 'secondary' : 'primary'} disabled={busy || !status || status.state === 'storageNotConfigured'} onClick={() => void connect()}>
             {t('admin.agentCostConnection.connect')}
           </Button>
-          <Button disabled={busy || !status || !['connected', 'reconnectNeeded'].includes(status.state)} onClick={() => void disconnect()}>
+          <Button disabled={busy || !status || !canDisconnect.has(status.state)} onClick={() => void disconnect()}>
             {t('admin.agentCostConnection.disconnect')}
           </Button>
           <Button disabled={busy} onClick={() => void load()}>{t('admin.agentCostConnection.refresh')}</Button>
