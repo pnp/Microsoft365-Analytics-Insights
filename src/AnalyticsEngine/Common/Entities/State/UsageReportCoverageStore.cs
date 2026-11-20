@@ -97,6 +97,21 @@ namespace Common.Entities.State
         }
 
         /// <summary>
+        /// Records a download Graph ended before its last page - the pager returns the rows gathered so far on a 404 -
+        /// so the rows saved for the day are not known to be all of them. Not an outcome: the day is left partial and
+        /// downloaded again. A day already certified complete keeps its outcome, as in <see cref="BeginDayAsync"/>: the
+        /// upsert never deletes, so every user it was certified with is still stored. A day certified empty does not,
+        /// because rows may now be stored for it, and its outcome would still say nobody used the workload.
+        /// </summary>
+        public async Task RecordUnfinishedDownloadAsync(string source, DateTime day)
+        {
+            var key = Key(source, day);
+            var outcome = await _store.GetStringAsync(key).ConfigureAwait(false);
+            if (outcome == Complete) return;
+            await _store.SetStringAsync(key, Partial, TimeSpan.FromDays(400)).ConfigureAwait(false);
+        }
+
+        /// <summary>
         /// True only for a day with a durable complete or successfully empty outcome.
         /// </summary>
         public async Task<bool> IsDayVerifiedAsync(string source, DateTime day, CancellationToken cancellationToken = default)

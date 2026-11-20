@@ -530,6 +530,135 @@ namespace Tests.UnitTests
             return (await coverage.ReadAsync(day, day)).Single(c => c.Source == "teams").Status;
         }
 
+        /// <summary>Answers each Graph request with the next scripted status and body.</summary>
+        private sealed class ScriptedGraphHandler : System.Net.Http.HttpMessageHandler
+        {
+            private readonly Queue<Tuple<System.Net.HttpStatusCode, string>> _responses;
+            public int CallCount { get; private set; }
+
+            public ScriptedGraphHandler(params Tuple<System.Net.HttpStatusCode, string>[] responses)
+            {
+                _responses = new Queue<Tuple<System.Net.HttpStatusCode, string>>(responses);
+            }
+
+            protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                CallCount++;
+                Assert.IsTrue(_responses.Count > 0, "Graph was asked for more pages than the test scripted.");
+                var next = _responses.Dequeue();
+                return Task.FromResult(new System.Net.Http.HttpResponseMessage(next.Item1)
+                {
+                    Content = new System.Net.Http.StringContent(next.Item2),
+                    RequestMessage = request,
+                });
+            }
+        }
+
+        private const string GraphPage2 = "https://graph.microsoft.com/beta/reports/thisReportDoesNotExist?$skiptoken=page2";
+
+        private static readonly Tuple<System.Net.HttpStatusCode, string> GraphNotFound = Tuple.Create(
+            System.Net.HttpStatusCode.NotFound, "{\"error\":{\"code\":\"ResourceNotFound\",\"message\":\"Synthetic not found.\"}}");
+
+        /// <summary>A 200 report page holding one row per UPN, with an @odata.nextLink when <paramref name="nextLink"/> is set.</summary>
+        private static Tuple<System.Net.HttpStatusCode, string> GraphPage(string nextLink, params string[] upns)
+        {
+            var rows = string.Join(",", upns.Select(upn => "{\"userPrincipalName\":\"" + upn + "\",\"thingCount\":4}"));
+            var next = nextLink == null ? string.Empty : "\"@odata.nextLink\":\"" + nextLink + "\",";
+            return Tuple.Create(System.Net.HttpStatusCode.OK, "{" + next + "\"value\":[" + rows + "]}");
+        }
+
+        /// <summary>
+        /// Downloads <paramref name="day"/> alone through the production Graph paging over <paramref name="graph"/>, as the
+        /// import does (LoadAndSaveEachDateAsync), and saves it to <paramref name="sql"/>.
+        /// </summary>
+        private static async Task<InMemoryUsageReportStore<FakeUserUsageActivityLog>> ImportOneDayThroughGraphAsync(
+            ScriptedGraphHandler graph, UsageReportCoverageStore coverage, DateTime day, DateTime nowUtc,
+            InMemoryUsageReportStore<FakeUserUsageActivityLog> sql = null)
+        {
+            sql = sql ?? new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            using (var client = new WebJob.Office365ActivityImporter.Engine.Graph.ManualGraphCallClient(graph, NullLogger.Instance))
+            {
+                var loader = new InMemoryDailyActivityLoader(NullLogger.Instance, client)
+                {
+                    Clock = new FixedClock(nowUtc),
+                    StorageInspector = new FakeUsageReportStorageInspector(hasLeadingDateIndex: true),
+                    CoverageStore = coverage, CoverageSource = "teams", CoverageWholeTenant = true,
+                };
+                loader.ReportStore = sql;
+                var skip = new HashSet<DateTime>(Enumerable.Range(1, UsageReportRefreshPolicy.MaxDaysBack)
+                    .Select(back => nowUtc.Date.AddDays(-back)).Where(date => date != day));
+
+                await loader.LoadAndSaveEachDateAsync((int)(nowUtc.Date - day).TotalDays, skip, null, SeededIdCache(), new UserCache(null));
+
+                CollectionAssert.AreEqual(new[] { day }, loader.GraphRequests.ToArray(), "Only the day under test is downloaded.");
+            }
+            return sql;
+        }
+
+        private static async Task<string> TeamsStatusAsync(UsageReportCoverageStore coverage, DateTime day)
+            => (await coverage.ReadAsync(day, day)).Single(c => c.Source == "teams").Status;
+
+        [TestMethod]
+        public async Task DailyCoverage_AGraph404PartWayThroughADay_SavesTheRowsButNeverCertifiesTheDay()
+        {
+            // Release critique of #909 (R5-1): the daily usage reports page leniently on a 404 - the pager returns the
+            // rows gathered so far, as it always has. The coverage ledger then certified that truncated day "complete"
+            // (a first-page 404, "empty"), and NeedsReimportAsync skipped it from then on: a false "verified".
+            var now = new DateTime(2026, 6, 20, 10, 0, 0, DateTimeKind.Utc);
+            var day = now.Date.AddDays(-5);
+
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var graph = new ScriptedGraphHandler(GraphPage(GraphPage2, UserA), GraphNotFound);
+            var sql = await ImportOneDayThroughGraphAsync(graph, coverage, day, now);
+            Assert.AreEqual(2, graph.CallCount, "Page 1 answered with a next link; page 2 answered 404.");
+            Assert.AreEqual(1, sql.Stored.Count, "The rows received are still saved, as before.");
+            Assert.AreEqual("partial", await TeamsStatusAsync(coverage, day),
+                "A day Graph stopped answering part-way through is not complete.");
+            Assert.IsTrue(await coverage.NeedsReimportAsync("teams", day, true), "It is downloaded again next cycle.");
+
+            coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            sql = await ImportOneDayThroughGraphAsync(new ScriptedGraphHandler(GraphNotFound), coverage, day, now);
+            Assert.AreEqual(0, sql.Stored.Count);
+            Assert.AreEqual("partial", await TeamsStatusAsync(coverage, day), "A first-page 404 is not a successfully empty day.");
+
+            // The guard stays silent on whole downloads.
+            coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            sql = await ImportOneDayThroughGraphAsync(
+                new ScriptedGraphHandler(GraphPage(GraphPage2, UserA), GraphPage(null, UserB)), coverage, day, now);
+            Assert.AreEqual(2, sql.Stored.Count);
+            Assert.AreEqual("complete", await TeamsStatusAsync(coverage, day), "Every page answered: the day is certified.");
+            Assert.IsFalse(await coverage.NeedsReimportAsync("teams", day, true));
+
+            coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            await ImportOneDayThroughGraphAsync(new ScriptedGraphHandler(GraphPage(null)), coverage, day, now);
+            Assert.AreEqual("empty", await TeamsStatusAsync(coverage, day), "A settled 200 with no rows is still successfully empty.");
+        }
+
+        [TestMethod]
+        public async Task DailyCoverage_AnUnfinishedRedownload_KeepsACompleteDayComplete_ButNotAnEmptyDayEmpty()
+        {
+            var now = new DateTime(2026, 6, 20, 10, 0, 0, DateTimeKind.Utc);
+            var day = now.Date.AddDays(-5);
+
+            // Certified complete: the upsert never deletes, so every user it was certified with is still stored.
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var sql = await ImportOneDayThroughGraphAsync(
+                new ScriptedGraphHandler(GraphPage(GraphPage2, UserA), GraphPage(null, UserB)), coverage, day, now);
+            await ImportOneDayThroughGraphAsync(
+                new ScriptedGraphHandler(GraphPage(GraphPage2, UserA), GraphNotFound), coverage, day, now, sql);
+            Assert.AreEqual(2, sql.Stored.Count);
+            Assert.AreEqual("complete", await TeamsStatusAsync(coverage, day));
+
+            // Certified empty: the unfinished re-download stored a row, so "nobody used this workload" is no longer true.
+            coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            sql = await ImportOneDayThroughGraphAsync(new ScriptedGraphHandler(GraphPage(null)), coverage, day, now);
+            Assert.AreEqual("empty", await TeamsStatusAsync(coverage, day));
+            await ImportOneDayThroughGraphAsync(
+                new ScriptedGraphHandler(GraphPage(GraphPage2, UserA), GraphNotFound), coverage, day, now, sql);
+            Assert.AreEqual(1, sql.Stored.Count);
+            Assert.AreEqual("partial", await TeamsStatusAsync(coverage, day));
+        }
+
         [TestMethod]
         public async Task DailyCoverage_SettlementIsJudgedWhenGraphWasAsked_NotWhenTheSaveFinished()
         {

@@ -9,6 +9,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 using System.Data.Entity;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
+using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 
 namespace Tests.UnitTests.FakeLoaderClasses
@@ -48,9 +49,21 @@ namespace Tests.UnitTests.FakeLoaderClasses
     public class InMemoryDailyActivityLoader
         : AbstractUserDailyActivityLoader<FakeUserUsageActivityLog, FakeUserActivityDetail>
     {
+        private readonly bool _downloadsFromGraphClient;
+
         public InMemoryDailyActivityLoader(ILogger logger)
             : base(null, Common.Entities.UserScope.UserImportScope.Unfiltered, logger)
         {
+        }
+
+        /// <summary>
+        /// Downloads through the production Graph paging over <paramref name="graph"/> (typically a scripted HTTP
+        /// handler) instead of <see cref="PagesByDate"/>, so a test can see exactly what a real page failure does.
+        /// </summary>
+        public InMemoryDailyActivityLoader(ILogger logger, ManualGraphCallClient graph)
+            : base(graph, Common.Entities.UserScope.UserImportScope.Unfiltered, logger)
+        {
+            _downloadsFromGraphClient = graph != null;
         }
 
         /// <summary>Canned Graph pages, keyed by the DATE (time component ignored) they answer for.</summary>
@@ -73,12 +86,20 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
         public override DbSet<FakeUserUsageActivityLog> GetTable(AnalyticsEntitiesContext context) => null;
 
-        protected override Task<List<FakeUserActivityDetail>> LoadReportPageForDateFromGraph(DateTime date)
+        protected override async Task<List<FakeUserActivityDetail>> LoadReportPageForDateFromGraph(DateTime date)
         {
             GraphRequests.Add(date.Date);
-            PagesByDate.TryGetValue(date.Date, out var page);
+            List<FakeUserActivityDetail> page;
+            if (_downloadsFromGraphClient)
+            {
+                page = await base.LoadReportPageForDateFromGraph(date);
+            }
+            else
+            {
+                PagesByDate.TryGetValue(date.Date, out page);
+            }
             AfterGraphRequest?.Invoke(date.Date);
-            return Task.FromResult(page ?? new List<FakeUserActivityDetail>());
+            return page ?? new List<FakeUserActivityDetail>();
         }
 
         protected override Task<bool> IdInScope(string lookupId)

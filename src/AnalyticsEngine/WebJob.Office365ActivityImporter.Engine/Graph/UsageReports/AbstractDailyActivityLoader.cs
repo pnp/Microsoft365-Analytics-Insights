@@ -234,6 +234,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
             LoadedReportPages.Clear();
             _loadedReportPageRequestedUtc.Clear();
+            _unfinishedDownloads.Clear();
             var sawIdentifiableRow = false;
             var nowUtc = Clock.UtcNow;
 
@@ -343,11 +344,32 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// retried next cycle with the real HTTP status recorded in Application Insights.
         ///
         /// A genuinely empty day (Graph returns 200 with no rows) is unaffected and still loads as empty.
+        ///
+        /// A 404 is still lenient, as it always was: the pager returns the rows gathered so far. Those rows are saved,
+        /// but the day is recorded as an unfinished download (<see cref="RecordUnfinishedDownload"/>), so the coverage
+        /// ledger never certifies a day Graph stopped answering part-way through - neither "complete" with the
+        /// later pages missing nor "empty" from a first-page 404.
         /// </remarks>
         protected virtual Task<List<TUserActivityUserDetail>> LoadReportPageForDateFromGraph(DateTime date)
         {
             var requestUrl = $"{ReportGraphURL}(date={date.ToString("yyyy-MM-dd")})?$format=application/json";
-            return _client.LoadAllPagesWithThrottleRetries<TUserActivityUserDetail>(requestUrl, Telemetry, throwOnHttpError: true);
+            return _client.LoadAllPagesPlusDeltaWithThrottleRetries<TUserActivityUserDetail>(requestUrl, Telemetry, deltaTokenFunc: null,
+                throwOnHttpError: true, onPageFailed: (ex, page) => RecordUnfinishedDownload(date, page, ex));
+        }
+
+        /// <summary>
+        /// Dates whose download ended before Graph's last page in the current download. Strict paging throws for every
+        /// failure except a 404, which ends the download with the rows gathered so far; <see cref="SaveDateAsync"/> then
+        /// saves those rows but leaves the day uncertified (see <see cref="UsageReportCoverageStore.RecordUnfinishedDownloadAsync"/>).
+        /// </summary>
+        private readonly HashSet<DateTime> _unfinishedDownloads = new HashSet<DateTime>();
+
+        private void RecordUnfinishedDownload(DateTime date, int page, Exception reason)
+        {
+            _unfinishedDownloads.Add(date.Date);
+            Telemetry.LogWarning($"{GetType().Name}: Graph ended the download of {date.ToString("yyyy-MM-dd")} on page {page} " +
+                $"({reason?.GetType().Name ?? "unknown"}). The rows received are saved, but the day is not certified for Copilot " +
+                "Adoption and is downloaded again next cycle.");
         }
 
         /// <summary>
@@ -440,6 +462,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         {
             daysBackMax = ClampDaysBack(daysBackMax);
             LoadedReportPages.Clear();
+            _unfinishedDownloads.Clear();
             LastLoadedRowCount = 0;
             LastLoadedDateCount = 0;
 
@@ -908,7 +931,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 });
             }
             run.DateIndex++;
-            if (CoverageStore != null)
+            if (CoverageStore != null && _unfinishedDownloads.Contains(dateTime.Date))
+            {
+                // Graph stopped answering part-way through (a 404 on a later page, or on the first): the rows saved may
+                // be only some of the day's, or none of a day that has rows. Neither is an outcome.
+                await CoverageStore.RecordUnfinishedDownloadAsync(CoverageSource, dateTime.Date);
+            }
+            else if (CoverageStore != null)
             {
                 // The upsert never deletes, so rows from an earlier download that Graph no longer returns stay
                 // stored. They are positive observations of the same day and leave no user unknown, so they do
