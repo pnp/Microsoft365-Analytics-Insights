@@ -898,6 +898,10 @@ namespace Tests.UnitTests
             public bool LoseTheReply { get; set; }
             public string AnotherStartLandsFirst { get; set; }
             public bool PointerUnreadableAfterWrite { get; set; }
+            /// <summary>The job row's insert lands but its reply is lost, so the SDK's retry is refused with 409.</summary>
+            public bool LoseTheJobInsertReply { get; set; }
+            /// <summary>Another start inserts its own row under the same job id first.</summary>
+            public string AnotherStartInsertsTheSameIdFirst { get; set; }
             public List<string> JobRowsWritten { get; } = new List<string>();
             private bool _failNextPointerRead;
             public string Description => Inner.Description;
@@ -921,6 +925,13 @@ namespace Tests.UnitTests
             public async Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, System.Threading.CancellationToken cancellationToken = default)
             {
                 Record(key);
+                if (key != "LatestJob" && expectedVersionToken == null && !key.EndsWith(":Cancel", StringComparison.Ordinal))
+                {
+                    if (AnotherStartInsertsTheSameIdFirst != null)
+                        await Inner.SetStringAsync(key, AnotherStartInsertsTheSameIdFirst, null, cancellationToken);
+                    var inserted = await Inner.TrySetStringAsync(key, value, null, cancellationToken);
+                    return inserted && !LoseTheJobInsertReply;
+                }
                 if (key != "LatestJob") return await Inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
                 if (AnotherStartLandsFirst != null) await Inner.SetStringAsync(key, AnotherStartLandsFirst, null, cancellationToken);
                 var landed = await Inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
@@ -994,6 +1005,44 @@ namespace Tests.UnitTests
                 "Unknown is reported as 'state unavailable' - neither as started nor as 'a job is active'.");
             var latest = await state.GetLatestAsync();
             Assert.IsNotNull(latest, "Unknown must not delete a row the pointer may name; it expires if nothing does.");
+        }
+
+        [TestMethod]
+        public async Task Start_WhoseJobRowInsertReplyIsLost_IsStillTheStartedJob()
+        {
+            // Release critique of #909 (#918), round 2: the job row's insert-if-absent has the same hazard as the pointer
+            // write. The insert lands, its reply is lost, the SDK's retry is refused with 409 - and the start was told
+            // "a job is active" while none was, leaving a row with no time-to-live behind.
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var store = new LatestJobReplyStore { LoseTheJobInsertReply = true };
+            var state = new CopilotAuditBackfillStateStore(store, true, () => now);
+
+            var job = await state.TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin@contoso.com", copilotImportEnabled: true);
+
+            Assert.IsNotNull(job, "The insert happened; the administrator must not be told a job is already active.");
+            var latest = await state.GetLatestAsync();
+            Assert.IsNotNull(latest, "The started job becomes the latest job.");
+            Assert.AreEqual(job.Id, latest.Id);
+            Assert.AreEqual("admin@contoso.com", latest.RequestedBy);
+        }
+
+        [TestMethod]
+        public async Task Start_WhoseJobIdIsTakenByAnotherStart_IsRefused_AndLeavesTheOtherRowAlone()
+        {
+            // The other direction: a row under the same id that this call did NOT write is another start's. Refused, and
+            // neither that row nor the pointer is touched.
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            const string otherStartsRow = "{\"Id\":0,\"RequestedBy\":\"other@contoso.com\"}";
+            var store = new LatestJobReplyStore { AnotherStartInsertsTheSameIdFirst = otherStartsRow };
+            var state = new CopilotAuditBackfillStateStore(store, true, () => now);
+
+            var job = await state.TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin@contoso.com", copilotImportEnabled: true);
+
+            Assert.IsNull(job, "Another start owns that id.");
+            Assert.AreEqual(1, store.JobRowsWritten.Count, "The fixture must have attempted exactly one job row.");
+            Assert.AreEqual(otherStartsRow, await store.Inner.GetStringAsync(store.JobRowsWritten[0]),
+                "The other start's row is neither overwritten nor deleted.");
+            Assert.IsNull(await store.Inner.GetStringAsync("LatestJob"), "A refused start never moves the pointer.");
         }
 
         /// <summary>

@@ -39,7 +39,8 @@ namespace Common.Entities.CopilotAuditBackfill
         /// Creates a job only while no job is queued or running, and atomically: of two concurrent starts (a double
         /// click, two tabs, two administrators) exactly one gets a job; the other, like a start while a job is active,
         /// gets null. The new job's row is inserted only if absent, so a start that picked the same id in the same
-        /// second never overwrites it, and the latest-job pointer moves only from the version this call read the
+        /// second never overwrites it (a start whose own insert landed but lost its reply recognises the row as its
+        /// own), and the latest-job pointer moves only from the version this call read the
         /// previous job under, so a start that lost the race never replaces the winner. A store without conditional
         /// writes cannot make that promise and falls back to check-then-write. Throws
         /// <see cref="CopilotAuditBackfillStateUnavailableException"/> when the store fails, including when it cannot
@@ -67,9 +68,19 @@ namespace Common.Entities.CopilotAuditBackfill
             var job = NewJob(NextId(latestId, now), now, startUtc, endUtc, requestedBy, previous);
             job.CopilotImportEnabled = copilotImportEnabled;
             var key = JobKey(job.Id);
-            if (!await StoreAsync(key, "save", () => conditional.TrySetStringAsync(key, JsonConvert.SerializeObject(job), null)).ConfigureAwait(false))
+            var json = JsonConvert.SerializeObject(job);
+            if (!await StoreAsync(key, "save", () => conditional.TrySetStringAsync(key, json, null)).ConfigureAwait(false))
             {
-                return null;
+                // "Not inserted" is not proof either: an insert whose reply was lost is retried by the SDK, and the
+                // retry then fails with 409 on the row its own first attempt created. That start would be refused as
+                // "a job is active" while no job runs, and leave a row with no time-to-live behind. A row holding
+                // exactly what this call wrote (its creation instant to the tick) is this call's; anything else is
+                // another start's, and is left alone.
+                var existing = await StoreAsync(key, "read", () => conditional.GetVersionedAsync(key)).ConfigureAwait(false);
+                if (!string.Equals(existing.Value, json, StringComparison.Ordinal))
+                {
+                    return null;
+                }
             }
 
             // Rewritten with its time-to-live before it becomes the latest job, so nobody else ever writes it and a
