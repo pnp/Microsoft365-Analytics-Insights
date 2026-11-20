@@ -613,8 +613,12 @@ namespace Common.Entities.CopilotAdoption
                         "PREDICTED, not measured. Copilot-fluent seat holders with a heavy coordination load who are not "
                         + "yet using Cowork. The population a rollout should target first.");
                     AddMeta(sheet, "To add to the Cowork policy", summary.CoworkRecommendedForPolicy,
-                        "Prime candidates plus everyone already using Cowork. Cowork access is granted by a spending "
-                        + "policy scoped to users, and existing users must stay in scope or they lose access.");
+                        summary.CoworkPrimeCandidates.HasValue
+                            ? "Prime candidates plus everyone already using Cowork. Cowork access is granted by a spending "
+                              + "policy scoped to users, and existing users must stay in scope or they lose access."
+                            : "UNVERIFIED, a floor: only the people already using Cowork. Prime candidates could not be "
+                              + "assessed, because the Microsoft 365 usage reports are not verified for this period. "
+                              + "Existing users must stay in the spending policy's scope or they lose access.");
                 }
             }
 
@@ -2004,7 +2008,9 @@ namespace Common.Entities.CopilotAdoption
                 AddMeta(sheet, tier.Label, tier.Users,
                     (tier.Basis == CopilotAdoptionScoring.CoworkBasis.Evidence
                         ? "OBSERVED. "
-                        : "PREDICTED, not observed. ")
+                        : tier.Basis == CopilotAdoptionScoring.CoworkBasis.Unavailable
+                            ? "UNVERIFIED, not assessed. "
+                            : "PREDICTED, not observed. ")
                     + tier.Description);
             }
 

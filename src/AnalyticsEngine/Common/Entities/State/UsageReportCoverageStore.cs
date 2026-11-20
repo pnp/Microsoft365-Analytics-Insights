@@ -81,6 +81,8 @@ namespace Common.Entities.State
         /// day T - 1 has already certified the newest day the analysis on day T reads, at any time of day T.
         /// A successfully EMPTY day needs the full lag: Graph answers a day it has not published yet with
         /// 200 and no rows, so zero rows inside the lag cannot be told from "not available yet".
+        /// <paramref name="importedUtc"/> must be when Graph was ASKED for the day, not when the save ended: a
+        /// save that crosses midnight UTC would otherwise age the answer by a day it never had.
         /// </summary>
         public Task CompleteDayAsync(string source, DateTime day, bool wholeTenant, bool allRowsSaved,
             bool empty, DateTime importedUtc, int settlementDays)
@@ -92,6 +94,21 @@ namespace Common.Entities.State
                 : !allRowsSaved ? Incomplete
                 : empty ? Empty : Complete;
             return _store.SetStringAsync(Key(source, day), status, TimeSpan.FromDays(400));
+        }
+
+        /// <summary>
+        /// Records a download Graph ended before its last page - the pager returns the rows gathered so far on a 404 -
+        /// so the rows saved for the day are not known to be all of them. Not an outcome: the day is left partial and
+        /// downloaded again. A day already certified complete keeps its outcome, as in <see cref="BeginDayAsync"/>: the
+        /// upsert never deletes, so every user it was certified with is still stored. A day certified empty does not,
+        /// because rows may now be stored for it, and its outcome would still say nobody used the workload.
+        /// </summary>
+        public async Task RecordUnfinishedDownloadAsync(string source, DateTime day)
+        {
+            var key = Key(source, day);
+            var outcome = await _store.GetStringAsync(key).ConfigureAwait(false);
+            if (outcome == Complete) return;
+            await _store.SetStringAsync(key, Partial, TimeSpan.FromDays(400)).ConfigureAwait(false);
         }
 
         /// <summary>

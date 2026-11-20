@@ -1639,9 +1639,13 @@ function AnalystTab({
   // spending-policy scope is unknown - which is the normal case, because nothing in the import can
   // see that scope - so gating the whole Cowork slot on it removed Cowork from this card entirely on
   // most tenants. Readiness has no such denominator: it is a share of the seat holders this tool
-  // actually scored, so it is always answerable when the readiness step ran.
+  // actually scored, so it is always answerable when the readiness step ran - provided the Microsoft
+  // 365 usage reports are verified for the period. When they are not, nobody can be assessed as a
+  // prime candidate, so "recommended" is only the people already using Cowork and the share would
+  // read as near zero - a finding about the import, not about readiness (release critique of #909).
   const coworkReadinessPct =
-    summary.coworkReadinessAvailable && !summary.coworkReadinessWithheld
+    summary.coworkReadinessAvailable && summary.dataSources.m365UsageReportsAvailable
+      && !summary.coworkReadinessWithheld
       && summary.coworkScoredUsers !== null && summary.coworkScoredUsers > 0
       && summary.coworkRecommendedForPolicy !== null
       ? (summary.coworkRecommendedForPolicy / summary.coworkScoredUsers) * 100

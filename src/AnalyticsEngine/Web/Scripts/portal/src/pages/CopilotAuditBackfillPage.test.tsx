@@ -101,6 +101,17 @@ describe('CopilotAuditBackfillPage', () => {
     expect(screen.getByRole('button', { name: 'Start backfill' })).toBeDisabled();
   });
 
+  it('does not claim the Copilot toggle is off when the status could not be read', async () => {
+    // Release critique of #909: with no status at all (the state table unreachable on first load), the
+    // page also said the Copilot import toggle was off - a claim about a setting it never read. The test
+    // above is the other direction.
+    mockFetch.mockRejectedValue(new Error('stateUnavailable'));
+    renderWithProvider(<CopilotAuditBackfillPage />);
+
+    expect(await screen.findByText(/Backfill state could not be read or saved/)).toBeVisible();
+    expect(screen.queryByText(/The Copilot audit import toggle is off/)).not.toBeInTheDocument();
+  });
+
   it('shows completed with gaps and affected days', async () => {
     mockFetch.mockResolvedValue(status({ latestJob: job({ state: 'completedWithGaps', failedDays: ['2026-09-30'], incompleteDays: ['2026-09-29'], lastErrorCode: 'queryTruncated' }) }));
     renderWithProvider(<CopilotAuditBackfillPage />);
