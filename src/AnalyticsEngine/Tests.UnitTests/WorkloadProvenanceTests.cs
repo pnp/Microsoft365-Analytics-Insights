@@ -138,8 +138,8 @@ namespace Tests.UnitTests
                 CopilotAdoptionScope.ForEmailDomain("contoso.com"), service.FinaliseSummary);
             Assert.AreEqual("unverified", scoped.Summary.DataSources.WorkloadCoverage.Single(c => c.Source == "outlook").Status);
             Assert.IsNull(scoped.Summary.CoworkPrimeCandidates);
-            Assert.IsNull(scoped.Summary.CoworkSegments.Single().PrimeCandidates);
-            Assert.IsNull(scoped.Summary.CoworkSegments.Single().AverageCoordinationLoad);
+            Assert.IsNull(scoped.Summary.CoworkByDepartment.Single().PrimeCandidates);
+            Assert.IsNull(scoped.Summary.CoworkByDepartment.Single().AverageCoordinationLoad);
             Assert.AreEqual(0, scoped.Summary.CoworkQuadrant.Count);
             Assert.IsNull(scoped.Summary.CoworkNewAdoptionEstimate);
             Assert.AreEqual(20L, scoped.CoworkReadiness.Single().TeamsMessages);
@@ -208,16 +208,16 @@ namespace Tests.UnitTests
                 await Assert.ThrowsExceptionAsync<TaskCanceledException>(
                     () => durable.ReadAsync(Day, Day, cancellation.Token));
             }
+        }
 
-            [TestMethod]
-            public async Task SlowDurableState_HasAnOverallDeadline_AndCannotCertifyCoverage()
-            {
-                var state = new ProbeStore { DelayReads = true };
-                var store = new UsageReportCoverageStore(state, true, TimeSpan.FromMilliseconds(1));
-                var coverage = await store.ReadAsync(Day, Day.AddDays(365));
-                Assert.IsTrue(coverage.All(c => c.Status == "unverified" && c.Reason == "durableStateUnavailable"));
-                Assert.IsTrue(state.Reads < 4 * 366, "A timeout stops bounded workers rather than starting the remaining reads.");
-            }
+        [TestMethod]
+        public async Task SlowDurableState_HasAnOverallDeadline_AndCannotCertifyCoverage()
+        {
+            var state = new ProbeStore { DelayReads = true };
+            var store = new UsageReportCoverageStore(state, true, TimeSpan.FromMilliseconds(1));
+            var coverage = await store.ReadAsync(Day, Day.AddDays(365));
+            Assert.IsTrue(coverage.All(c => c.Status == "unverified" && c.Reason == "durableStateUnavailable"));
+            Assert.IsTrue(state.Reads < 4 * 366, "A timeout stops bounded workers rather than starting the remaining reads.");
         }
 
         [TestMethod]

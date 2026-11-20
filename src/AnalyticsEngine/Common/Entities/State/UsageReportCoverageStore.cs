@@ -41,6 +41,9 @@ namespace Common.Entities.State
             return new UsageReportCoverageStore(store ?? ProcessFallback, store != null);
         }
 
+        /// <summary>False for the process-local fallback, whose outcomes never certify a workload.</summary>
+        public bool IsDurable => _durable;
+
         private static string Key(string source, DateTime day)
         {
             if (!Sources.Contains(source)) throw new ArgumentException("Unknown usage-report source.", nameof(source));
@@ -62,6 +65,17 @@ namespace Common.Entities.State
                 : !allRowsSaved || !settled ? "partial"
                 : empty ? "empty" : "complete";
             return _store.SetStringAsync(Key(source, day), status, TimeSpan.FromDays(400));
+        }
+
+        /// <summary>
+        /// True only for a day with a durable complete or successfully empty outcome. The importer uses this so
+        /// a stored day is never skipped while unverified: days imported before this ledger existed, or while
+        /// still inside the refreshable window, are downloaded once more and then certified.
+        /// </summary>
+        public async Task<bool> IsDayVerifiedAsync(string source, DateTime day, CancellationToken cancellationToken = default)
+        {
+            var outcome = await _store.GetStringAsync(Key(source, day), cancellationToken).ConfigureAwait(false);
+            return outcome == "complete" || outcome == "empty";
         }
 
         /// <summary>

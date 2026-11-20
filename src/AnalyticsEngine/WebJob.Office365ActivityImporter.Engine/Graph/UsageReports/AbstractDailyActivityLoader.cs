@@ -152,14 +152,52 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                     }
                 }
 
-                return storedFinalizedDates;
+                return await KeepCoverageVerifiedAsync(storedFinalizedDates);
             }
 
             // Some account/group report tables have no date-leading index. Repeated existence
             // probes would each scan the table, so use one range scan until an index is available.
             var scannedDates = await store.GetStoredDatesInRangeAsync(window.WindowStartUtc, window.SafeCutoffUtc);
 
-            return new HashSet<DateTime>(scannedDates.Select(date => date.Date));
+            return await KeepCoverageVerifiedAsync(new HashSet<DateTime>(scannedDates.Select(date => date.Date)));
+        }
+
+        /// <summary>
+        /// Stored rows are not a coverage outcome (#899): a finalized day with no durable complete/empty outcome
+        /// is downloaded once more so it can be certified. Bounded by the skip window (at most 25 point reads).
+        /// Without durable state nothing can be certified, so the existing skip set is kept unchanged.
+        /// </summary>
+        private async Task<HashSet<DateTime>> KeepCoverageVerifiedAsync(HashSet<DateTime> storedDates)
+        {
+            if (CoverageStore == null || !CoverageStore.IsDurable || storedDates.Count == 0)
+            {
+                return storedDates;
+            }
+
+            var verified = new HashSet<DateTime>();
+            try
+            {
+                foreach (var date in storedDates)
+                {
+                    if (await CoverageStore.IsDayVerifiedAsync(CoverageSource, date.Date))
+                    {
+                        verified.Add(date);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Telemetry.LogWarning($"{GetType().Name}: could not read usage-report coverage outcomes ({ex.GetType().Name}); " +
+                    "stored dates are skipped as before and stay unverified for Copilot Adoption.");
+                return storedDates;
+            }
+
+            var reimport = storedDates.Count - verified.Count;
+            if (reimport > 0)
+            {
+                Telemetry.LogInformation($"{GetType().Name}: re-downloading {reimport:N0} stored date(s) with no verified coverage outcome.");
+            }
+            return verified;
         }
 
         internal Task<bool> HasLeadingDateIndexAsync(AnalyticsEntitiesContext db)

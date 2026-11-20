@@ -409,6 +409,37 @@ namespace Tests.UnitTests
                 "A stored date inside the 3-day mutability window can still change in Graph and must be re-imported.");
         }
 
+        [TestMethod]
+        public async Task DailyCoverage_StoredButUncertifiedDatesAreReimportedOnce()
+        {
+            // #899: a day stamped "partial" while it was still refreshable (or imported before the ledger
+            // existed) must be downloaded once more after it settles, or it can never be certified.
+            var now = new DateTime(2026, 6, 20, 11, 15, 0, DateTimeKind.Utc);
+            var today = now.Date;
+            var certified = today.AddDays(-6);
+            var uncertified = today.AddDays(-5);
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            await coverage.CompleteDayAsync("teams", certified, true, true, false, now, 3);
+            await coverage.CompleteDayAsync("teams", uncertified, true, true, false, uncertified, 3);
+            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+            {
+                Clock = new FixedClock(now),
+                StorageInspector = new FakeUsageReportStorageInspector(hasLeadingDateIndex: true),
+                CoverageStore = coverage, CoverageSource = "teams", CoverageWholeTenant = true,
+            };
+            loader.ReportStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>()
+                .Seed(StoredRow(certified, UserAId, 1), StoredRow(uncertified, UserAId, 1));
+
+            var skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: now);
+
+            CollectionAssert.AreEqual(new[] { certified }, skip.ToArray());
+
+            loader.CoverageStore = new UsageReportCoverageStore(new InMemoryKeyValueStore(), false);
+            skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: now);
+            CollectionAssert.AreEquivalent(new[] { certified, uncertified }, skip.ToArray(),
+                "Without durable state nothing can be certified, so the existing skip behaviour is kept.");
+        }
+
 
 
         [TestMethod]

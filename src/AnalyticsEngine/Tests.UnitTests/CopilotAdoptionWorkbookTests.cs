@@ -1227,7 +1227,7 @@ namespace Tests.UnitTests
                     .ToList();
             }
 
-            string Count(int value) => value.ToString(CultureInfo.InvariantCulture);
+            string Count(int? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
 
             // Without See PII: the scored seat holders, the rollout order (department, seats, prime candidates) and the quadrant
             // (department, seats, ..., prime candidates in E) are the screen's, and Finance is in neither table.
