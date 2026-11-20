@@ -2171,15 +2171,15 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkUsers = summary.CoworkAuditUsers;
             summary.CoworkEligibilityKnown = summary.CoworkEligibleUsers.HasValue;
             summary.CoworkAdoptionPct = summary.CoworkEligibilityKnown
-                ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkUsers, summary.CoworkEligibleUsers.Value)
+                ? (double?)CopilotAdoptionScoring.Percentage(summary.CoworkUsers.Value, summary.CoworkEligibleUsers.Value)
                 : null;
-            if (!summary.CoworkEligibilityKnown && summary.CoworkUsers > 0)
+            if (!summary.CoworkEligibilityKnown && summary.CoworkUsers.GetValueOrDefault() > 0)
             {
                 CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.CoworkEligibilityUnknown);
             }
             // Only claim a Cowork signal when Cowork was actually seen. On a tenant that has not been enabled
             // for it, "0% Cowork adoption" reads as a failure rather than as "not available".
-            summary.CoworkDetected = summary.CoworkInteractions > 0;
+            summary.CoworkDetected = summary.CoworkInteractions.GetValueOrDefault() > 0;
 
             summary.Funnel = BuildFunnel(summary, users);
             summary.BandBreakdown = BuildBandBreakdown(users);

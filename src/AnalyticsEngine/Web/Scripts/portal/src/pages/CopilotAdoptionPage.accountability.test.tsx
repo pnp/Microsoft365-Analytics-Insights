@@ -145,6 +145,7 @@ function incompleteSummary(): CopilotAdoptionSummary {
     coworkInteractions: 0,
     coworkDetected: false,
     coworkReadinessAvailable: false,
+    coworkReadinessWithheld: false,
     coworkScoredUsers: 0,
     coworkEstablishedUsers: 0,
     coworkTriallingUsers: 0,

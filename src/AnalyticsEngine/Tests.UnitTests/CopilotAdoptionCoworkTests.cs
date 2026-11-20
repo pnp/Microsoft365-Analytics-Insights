@@ -980,6 +980,7 @@ namespace Tests.UnitTests
                 {
                     UserId = s.UserId, UserPrincipalName = s.UserPrincipalName, EmailDomain = s.EmailDomain,
                     AdoptionScore = s.AdoptionScore,
+                    CoworkInteractions = s.CoworkInteractions,
                 }).ToList(),
             };
             analysis.Summary.FromUtc = new DateTime(2025, 3, 4, 0, 0, 0, DateTimeKind.Utc);
@@ -1134,16 +1135,43 @@ namespace Tests.UnitTests
             Assert.IsFalse(reader.CoworkObservedUsage.Available);
             Assert.IsNull(reader.CoworkObservedUsage.Users);
             Assert.IsNotNull(reader.CoworkObservedUsage.WithheldReason);
+            Assert.IsTrue(reader.CoworkReadinessWithheld);
+            Assert.IsNull(reader.CoworkScoredUsers);
+            Assert.IsNull(reader.CoworkEstablishedUsers);
+            Assert.IsNull(reader.CoworkTriallingUsers);
+            Assert.IsNull(reader.CoworkPrimeCandidates);
+            Assert.IsNull(reader.CoworkRecommendedForPolicy);
+            Assert.AreEqual(0, reader.CoworkTiers.Count);
+            Assert.AreEqual(0, reader.CoworkByDepartment.Count);
+            Assert.IsNull(reader.CoworkValueEstimate);
+            Assert.IsNull(reader.CoworkFullRolloutEstimate);
+            Assert.IsNull(reader.CoworkUsers);
+            Assert.IsNull(reader.CoworkAuditUsers);
+            Assert.IsNull(reader.CoworkInteractions);
+            Assert.IsNull(reader.CoworkAdoptionPct);
+            Assert.IsFalse(reader.CoworkDetected);
+            var payload = JObject.FromObject(reader);
+            Assert.IsTrue(payload["coworkReadinessWithheld"].Value<bool>());
+            Assert.AreEqual(JTokenType.Null, payload["coworkScoredUsers"].Type);
+            Assert.AreEqual(JTokenType.Null, payload["coworkUsers"].Type);
+            Assert.AreEqual(JTokenType.Null, payload["coworkInteractions"].Type);
             Assert.IsNull(reader.CoworkNewAdoptionEstimate,
                 "The legacy policy audience less the ready cohort would reveal the three observed users' workload.");
             Assert.IsNull(reader.CoworkNonUserCeilingEstimate,
                 "The full assessed workload less the ceiling would reveal three observed users' workload.");
+            Assert.IsFalse(summary.CoworkReadinessWithheld);
+            Assert.AreEqual(3, summary.CoworkUsers);
+            Assert.IsNotNull(summary.CoworkValueEstimate);
             Assert.IsTrue(JToken.DeepEquals(before, JObject.FromObject(summary)), "No cached field may be edited.");
 
             var safe = OpportunityAnalysis(Enumerable.Range(1, 20)
                 .Select(id => OpportunitySignal(id, activeDays: id <= 5 ? 2 : 0, fluency: id <= 10 ? 80 : 5)).ToArray());
             new CopilotAdoptionService().FinaliseSummary(safe);
             reader = safe.Summary.WithoutIndividualData();
+            Assert.IsFalse(reader.CoworkReadinessWithheld, "Safe cohorts and complements remain available.");
+            Assert.AreEqual(20, reader.CoworkScoredUsers);
+            Assert.AreEqual(5, reader.CoworkUsers);
+            Assert.IsNotNull(reader.CoworkValueEstimate);
             Assert.IsNotNull(reader.CoworkNewAdoptionEstimate, "A cohort of five with safe complements stays.");
             Assert.IsNotNull(reader.CoworkNonUserCeilingEstimate);
             Assert.IsTrue(reader.CoworkObservedUsage.Available);
@@ -1155,6 +1183,99 @@ namespace Tests.UnitTests
             Assert.IsFalse(reader.CoworkObservedUsage.Available,
                 "Ten observed users beside twelve assessed users would give back two non-users.");
             Assert.IsNull(reader.CoworkNonUserCeilingEstimate);
+        }
+
+        [TestMethod]
+        public void CoworkAuditFigures_WithholdSmallCohortsAndComplementsTogether()
+        {
+            var analysis = OpportunityAnalysis(Enumerable.Range(1, 20)
+                .Select(id => OpportunitySignal(id, activeDays: id <= 16 ? 2 : 0)).ToArray());
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            Assert.AreEqual(16, analysis.Summary.CoworkUsers);
+            Assert.AreEqual(20, analysis.Summary.LicensedUsers);
+
+            var reader = analysis.Summary.WithoutIndividualData();
+
+            Assert.IsNull(reader.CoworkUsers, "The remaining four licensed users are a small complement.");
+            Assert.IsNull(reader.CoworkAuditUsers);
+            Assert.IsNull(reader.CoworkInteractions);
+            Assert.IsNull(reader.CoworkAdoptionPct);
+            Assert.IsNull(reader.CoworkEligibleUsers);
+            Assert.IsFalse(reader.CoworkEligibilityKnown);
+            Assert.IsFalse(reader.CoworkDetected);
+            Assert.IsFalse(reader.CoworkObservedUsage.Available);
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, reader.CoworkObservedUsage.WithheldReason);
+
+            var smallEligible = OpportunityAnalysis(OpportunitySignal(1));
+            new CopilotAdoptionService().FinaliseSummary(smallEligible);
+            smallEligible.Summary.LicensedUsers = 20;
+            smallEligible.Summary.CoworkUsers = 0;
+            smallEligible.Summary.CoworkAuditUsers = 0;
+            smallEligible.Summary.CoworkInteractions = 0;
+            smallEligible.Summary.CoworkEligibilityKnown = true;
+            smallEligible.Summary.CoworkEligibleUsers = 4;
+            reader = smallEligible.Summary.WithoutIndividualData();
+            Assert.IsNull(reader.CoworkUsers);
+            Assert.IsNull(reader.CoworkEligibleUsers, "A small eligibility population is withheld even when no one used Cowork.");
+            Assert.IsFalse(reader.CoworkEligibilityKnown);
+        }
+
+        [TestMethod]
+        public void CoworkReadiness_WithholdsDepartmentSubgroupsEvenWhenEveryTenantTierIsSafe()
+        {
+            var signals = Enumerable.Range(1, 20)
+                .Select(id =>
+                {
+                    var regular = id >= 6 && id <= 10;
+                    var fluent = id <= 10;
+                    var signal = OpportunitySignal(id, activeDays: regular ? 10 : 0, fluency: fluent ? 80 : 5);
+                    signal.Department = id <= 2 || (id >= 6 && id <= 13) ? "Northwind" : "Fabrikam";
+                    return signal;
+                })
+                .ToArray();
+            var analysis = OpportunityAnalysis(signals);
+            new CopilotAdoptionService().FinaliseSummary(analysis);
+            Assert.IsTrue(analysis.Summary.CoworkTiers.All(tier => tier.Users == 0 || tier.Users >= 5));
+            Assert.IsTrue(analysis.Summary.CoworkByDepartment.Any(row => row.Segment == "Northwind"
+                && row.LicensedUsers == 10 && row.PrimeCandidates == 2));
+
+            var before = JObject.FromObject(analysis.Summary);
+            var reader = analysis.Summary.WithoutIndividualData();
+
+            Assert.IsTrue(reader.CoworkReadinessWithheld);
+            Assert.IsNull(reader.CoworkScoredUsers);
+            Assert.AreEqual(0, reader.CoworkByDepartment.Count);
+            Assert.AreEqual(0, reader.CoworkQuadrant.Count);
+            Assert.IsTrue(JToken.DeepEquals(before, JObject.FromObject(analysis.Summary)));
+        }
+
+        [TestMethod]
+        public void CoworkReadiness_WithholdsSmallRecommendationComplement_WhenForecastsAreUnavailable()
+        {
+            var summary = new CopilotAdoptionSummary
+            {
+                LicensedUsers = 20,
+                CoworkReadinessAvailable = true,
+                CoworkScoredUsers = 20,
+                CoworkEstablishedUsers = 10,
+                CoworkTriallingUsers = 5,
+                CoworkPrimeCandidates = 8,
+                CoworkBuildFluencyFirst = 0,
+                CoworkRecommendedForPolicy = 18,
+                CoworkTiers = new List<CoworkTierSummary> { new CoworkTierSummary { Users = 20 } },
+                CoworkByDepartment = new List<CoworkSegmentRow>(),
+                CoworkQuadrant = new List<CoworkQuadrantPoint>(),
+                CoworkNewAdoptionEstimate = null,
+                CoworkNonUserCeilingEstimate = null,
+            };
+
+            var reader = summary.WithoutIndividualData();
+
+            Assert.IsTrue(reader.CoworkReadinessWithheld);
+            Assert.IsNull(reader.CoworkScoredUsers);
+            Assert.IsNull(reader.CoworkRecommendedForPolicy);
+            Assert.AreEqual(0, reader.CoworkTiers.Count);
+            Assert.AreEqual(18, summary.CoworkRecommendedForPolicy, "The cached full-permission summary is unchanged.");
         }
 
         internal static CopilotAdoptionAnalysis JointCoworkCohortAnalysis(
@@ -1909,7 +2030,7 @@ namespace Tests.UnitTests
 
             foreach (var expected in new[]
             {
-                "coworkReadinessAvailable", "coworkScoredUsers", "coworkEstablishedUsers",
+                "coworkReadinessAvailable", "coworkReadinessWithheld", "coworkScoredUsers", "coworkEstablishedUsers",
                 "coworkTriallingUsers", "coworkPrimeCandidates", "coworkBuildFluencyFirst",
                 "coworkRecommendedForPolicy", "coworkAverageCoordinationLoad", "coworkAverageFluency",
                 "coworkTiers", "coworkQuadrant", "coworkByDepartment", "coworkCreditPosition",

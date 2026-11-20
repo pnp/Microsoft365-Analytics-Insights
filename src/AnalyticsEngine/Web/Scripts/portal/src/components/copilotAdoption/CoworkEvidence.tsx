@@ -109,7 +109,7 @@ export function CoworkEvidenceNote({
             from: formatDate(summary.fromUtc), to: formatDate(summary.toUtc),
           })}</Text></dd>
         </div>
-        {model && summary.coworkReadinessAvailable && <div>
+        {model && summary.coworkReadinessAvailable && !summary.coworkReadinessWithheld && <div>
           <dt><Text size={200} className={styles.note}>{t('copilotAdoptionCowork.coverage.assessedLabel')}</Text></dt>
           <dd className={styles.factValue}><Text weight="semibold">{formatCount(summary.coworkScoredUsers ?? 0)}</Text></dd>
         </div>}
@@ -132,7 +132,7 @@ export function CoworkEvidenceNote({
           <li className={styles.limit}><Text size={200}>{t('copilotAdoptionCowork.coverage.observationLimits')}</Text></li>
           <li className={styles.limit}><Text size={200}>{t('copilotAdoptionCowork.coverage.noUseLimits')}</Text></li>
           <li className={styles.limit}><Text size={200}>{t('copilotAdoptionCowork.coverage.policyLimits')}</Text></li>
-          {model && summary.coworkReadinessAvailable && <li className={styles.limit}><Text size={200}>{t('copilotAdoptionCowork.coverage.assessed', {
+          {model && summary.coworkReadinessAvailable && !summary.coworkReadinessWithheld && <li className={styles.limit}><Text size={200}>{t('copilotAdoptionCowork.coverage.assessed', {
             users: formatCount(summary.coworkScoredUsers ?? 0),
           })}</Text></li>}
           {model && <li className={styles.limit}><Text size={200}>{t('copilotAdoptionCowork.coverage.baseline')}</Text></li>}

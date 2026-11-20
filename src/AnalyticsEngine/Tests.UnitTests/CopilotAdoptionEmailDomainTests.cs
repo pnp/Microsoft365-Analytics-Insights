@@ -340,6 +340,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(12, contoso.ActiveUsers);
             Assert.AreEqual(60d, contoso.AdoptionRatePct);
             Assert.IsNull(contoso.SeatHoldersWithheld);
+            Assert.IsNull(contoso.CoworkPrimeCandidatesWithheld,
+                "A missing Cowork source is not a small population and must not be described as withheld.");
 
             // The mirror image: three seat holders beside twenty Chat users. Every seat-holder figure goes, the count too.
             var fabrikam = floored["fabrikam.com"];
@@ -366,6 +368,43 @@ namespace Tests.UnitTests
             Assert.AreEqual(3, analysis.Summary.EmailDomains.Single(d => d.Segment == "contoso.com").UnlicensedActiveUsers,
                 "The cached summary is shared between readers and must never be edited for one.");
             Assert.IsNull(analysis.Summary.EmailDomains.Single(d => d.Segment == "contoso.com").UnlicensedUsersWithheld);
+        }
+
+        [TestMethod]
+        public void WithoutSeePii_AHiddenCoworkDomainAndItsComplement_AreBothWithheld_WithoutEditingTheCachedRows()
+        {
+            var analysis = new CopilotAdoptionAnalysis();
+            analysis.Summary.Options = new CopilotAdoptionOptions { WindowDays = 28 };
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 20).Select(i =>
+                Scored($"seat{i}@contoso.com", 60, AdoptionBand.Established)));
+            analysis.LicensedUsers.AddRange(Enumerable.Range(0, 20).Select(i =>
+                Scored($"seat{i}@fabrikam.com", 60, AdoptionBand.Established)));
+            Service().FinaliseSummary(analysis);
+
+            var summary = analysis.Summary;
+            summary.CoworkReadinessAvailable = true;
+            summary.CoworkScoredUsers = 40;
+            summary.CoworkEstablishedUsers = 10;
+            summary.CoworkTriallingUsers = 10;
+            summary.CoworkPrimeCandidates = 8;
+            summary.CoworkRecommendedForPolicy = 20;
+            summary.CoworkTiers = new List<CoworkTierSummary> { new CoworkTierSummary { Users = 40 } };
+            summary.CoworkByDepartment = new List<CoworkSegmentRow>();
+            summary.CoworkNewAdoptionEstimate = null;
+            summary.CoworkNonUserCeilingEstimate = null;
+            summary.EmailDomains.Single(d => d.Segment == "contoso.com").CoworkPrimeCandidates = 3;
+            summary.EmailDomains.Single(d => d.Segment == "fabrikam.com").CoworkPrimeCandidates = 5;
+
+            var before = Newtonsoft.Json.JsonConvert.SerializeObject(summary.EmailDomains);
+            var rows = summary.WithoutIndividualData().EmailDomains.ToDictionary(d => d.Segment);
+
+            Assert.IsNull(rows["contoso.com"].CoworkPrimeCandidates);
+            Assert.AreEqual(SmallGroupWithheldReasons.FewPeople, rows["contoso.com"].CoworkPrimeCandidatesWithheld);
+            Assert.IsNull(rows["fabrikam.com"].CoworkPrimeCandidates,
+                "The domain total less the rows shown would otherwise reveal Contoso's three.");
+            Assert.AreEqual(SmallGroupWithheldReasons.RevealsSmallerGroup, rows["fabrikam.com"].CoworkPrimeCandidatesWithheld);
+            Assert.AreEqual(before, Newtonsoft.Json.JsonConvert.SerializeObject(summary.EmailDomains),
+                "The reader's floor must not change the cached rows given to a reader with See PII.");
         }
 
         [TestMethod]
