@@ -67,6 +67,7 @@ import {
 } from '../components/agentCosts/agentCostShared';
 import { usePortalAccess } from '../access';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
+import InfoTip from '../components/shared/InfoTip';
 import GlobalFilterBar from '../components/globalFilter/GlobalFilterBar';
 import { SortableTh } from '../components/copilotAdoption/adoptionShared';
 
@@ -947,7 +948,10 @@ export default function AgentCostsPage() {
                           <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.creditsBilled')}</th>
                           <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.share')}</th>
                           <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.notCharged')}</th>
-                          <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.daysActive')}</th>
+                          <th className={`${styles.th} ${styles.thNumeric}`}>
+                            {t('agentCosts.table.daysWithUsage')}
+                            <InfoTip title={t('agentCosts.table.daysWithUsage')} content={{ what: t('agentCosts.table.daysWithUsageWhat') }} />
+                          </th>
                           <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.busiestSlicePeople')}</th>
                         </tr>
                       </thead>
@@ -1135,7 +1139,10 @@ export default function AgentCostsPage() {
                       <th className={styles.th}>{t('agentCosts.table.person')}</th>
                       <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.creditsBilled')}</th>
                       <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.share')}</th>
-                      <th className={`${styles.th} ${styles.thNumeric}`}>{t('agentCosts.table.daysActive')}</th>
+                      <th className={`${styles.th} ${styles.thNumeric}`}>
+                        {t('agentCosts.table.daysWithUsage')}
+                        <InfoTip title={t('agentCosts.table.daysWithUsage')} content={{ what: t('agentCosts.table.daysWithUsageWhat') }} />
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
