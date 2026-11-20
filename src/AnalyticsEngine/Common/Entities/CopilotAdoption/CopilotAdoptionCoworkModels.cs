@@ -208,7 +208,10 @@ namespace Common.Entities.CopilotAdoption
         /// The x-axis of the quadrant.
         /// </summary>
         [JsonProperty("coordinationLoadScore")]
-        public double CoordinationLoadScore { get; set; }
+        public double? CoordinationLoadScore { get; set; }
+
+        [JsonProperty("workloadUnavailableReason")]
+        public string WorkloadUnavailableReason { get; set; }
 
         /// <summary>
         /// Copilot fluency, 0-100: the engagement score plus a bounded agent-familiarity uplift. The
@@ -229,31 +232,31 @@ namespace Common.Entities.CopilotAdoption
         #region Coordination-load components
 
         [JsonProperty("collaborationScore")]
-        public double CollaborationScore { get; set; }
+        public double? CollaborationScore { get; set; }
 
         [JsonProperty("meetingScore")]
-        public double MeetingScore { get; set; }
+        public double? MeetingScore { get; set; }
 
         [JsonProperty("emailScore")]
-        public double EmailScore { get; set; }
+        public double? EmailScore { get; set; }
 
         [JsonProperty("documentScore")]
-        public double DocumentScore { get; set; }
+        public double? DocumentScore { get; set; }
 
         [JsonProperty("teamsMessages")]
-        public long TeamsMessages { get; set; }
+        public long? TeamsMessages { get; set; }
 
         [JsonProperty("teamsMeetings")]
-        public long TeamsMeetings { get; set; }
+        public long? TeamsMeetings { get; set; }
 
         [JsonProperty("emailsSent")]
-        public long EmailsSent { get; set; }
+        public long? EmailsSent { get; set; }
 
         [JsonProperty("emailsRead")]
-        public long EmailsRead { get; set; }
+        public long? EmailsRead { get; set; }
 
         [JsonProperty("filesViewedOrEdited")]
-        public long FilesViewedOrEdited { get; set; }
+        public long? FilesViewedOrEdited { get; set; }
 
         [JsonProperty("lastM365ActivityUtc")]
         public DateTime? LastM365ActivityUtc { get; set; }
@@ -367,11 +370,11 @@ namespace Common.Entities.CopilotAdoption
         public int LicensedUsers { get; set; }
 
         [JsonProperty("primeCandidates")]
-        public int PrimeCandidates { get; set; }
+        public int? PrimeCandidates { get; set; }
 
         /// <summary>Prime candidates as a share of the segment's seats.</summary>
         [JsonProperty("primeCandidateRatePct")]
-        public double PrimeCandidateRatePct { get; set; }
+        public double? PrimeCandidateRatePct { get; set; }
 
         [JsonProperty("regularCoworkUsers")]
         public int RegularCoworkUsers { get; set; }
@@ -380,7 +383,7 @@ namespace Common.Entities.CopilotAdoption
         public double CoworkAdoptionPct { get; set; }
 
         [JsonProperty("averageCoordinationLoad")]
-        public double AverageCoordinationLoad { get; set; }
+        public double? AverageCoordinationLoad { get; set; }
 
         [JsonProperty("averageFluency")]
         public double AverageFluency { get; set; }

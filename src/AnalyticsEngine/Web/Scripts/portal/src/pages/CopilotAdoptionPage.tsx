@@ -73,6 +73,7 @@ import PrintButton from '../components/shared/PrintButton';
 import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
 import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
+import WorkloadCoverageNotice from '../components/copilotAdoption/WorkloadCoverageNotice';
 import AdoptionPeriodControl, { periodLabel, type FixedPeriod } from '../components/copilotAdoption/AdoptionPeriodControl';
 import SeatHolderTimeSavedModel from '../components/copilotAdoption/SeatHolderTimeSavedModel';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
@@ -923,6 +924,7 @@ function CopilotAdoptionView({
 
           {summary && (
             <div className={styles.stack} data-print="flow" inert={summaryLoading || undefined}>
+              <WorkloadCoverageNotice coverage={summary.dataSources.workloadCoverage} />
               {summary.figuresIncomplete && (
                 <MessageBar intent="error">
                   <MessageBarBody>

@@ -124,6 +124,10 @@ const SORT_OPTIONS: Array<{ value: string; labelKey: TranslationKey }> = [
 ];
 
 const COWORK_TIER_KEYS: Record<CoworkTier, { label: TranslationKey; description: TranslationKey }> = {
+  workloadUnavailable: {
+    label: 'copilotAdoptionCowork.tier.workloadUnavailable.label',
+    description: 'copilotAdoptionCowork.tier.workloadUnavailable.description',
+  },
   established: {
     label: 'copilotAdoptionCowork.tier.established.label',
     description: 'copilotAdoptionCowork.tier.established.description',
@@ -330,6 +334,8 @@ const DEFAULT_FILTERS: CoworkPeopleFilters = {
 function BasisBadge({ basis }: { basis: CoworkBasis }) {
   const styles = useStyles();
   const t = useT();
+
+  if (basis === 'unavailable') return <Badge appearance="outline">{t('copilotAdoption.workload.unverified')}</Badge>;
 
   // Spelled out rather than shortened to "Observed"/"Predicted" alone, because this badge is the one
   // thing stopping a reader treating a forecast as a fact.
@@ -779,14 +785,15 @@ export default function CoworkPanel({
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {formatCount(row.primeCandidates)}
                       <Text size={100} block className={table.tdSub}>
-                        {t('copilotAdoptionCowork.table.percentOfSeats', { percent: Math.round(row.primeCandidateRatePct) })}
+                        {row.primeCandidateRatePct == null ? t('copilotAdoption.workload.unverified')
+                          : t('copilotAdoptionCowork.table.percentOfSeats', { percent: Math.round(row.primeCandidateRatePct) })}
                       </Text>
                     </td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {formatCount(row.regularCoworkUsers)}
                     </td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
-                      {Math.round(row.averageCoordinationLoad)}
+                      {formatCount(row.averageCoordinationLoad)}
                     </td>
                     <td className={`${table.td} ${table.tdNumeric}`}>{Math.round(row.averageFluency)}</td>
                   </tr>
@@ -1115,10 +1122,10 @@ export default function CoworkPanel({
                           <Tooltip
                             relationship="description"
                             content={t('copilotAdoptionCowork.scoreTooltip.loadBreakdown', {
-                              meetings: Math.round(row.meetingScore),
-                              email: Math.round(row.emailScore),
-                              messages: Math.round(row.collaborationScore),
-                              documents: Math.round(row.documentScore),
+                              meetings: formatCount(row.meetingScore),
+                              email: formatCount(row.emailScore),
+                              messages: formatCount(row.collaborationScore),
+                              documents: formatCount(row.documentScore),
                             })}
                           >
                             <div>
@@ -1157,33 +1164,33 @@ export default function CoworkPanel({
                         </td>
                         <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.teamsMeetings)}</td>
                         <td className={`${table.td} ${table.tdNumeric}`}>
-                          {formatCount(row.emailsSent + row.emailsRead)}
+                          {formatCount(row.emailsSent == null || row.emailsRead == null ? null : row.emailsSent + row.emailsRead)}
                         </td>
                       </tr>
                       {open && (
                         <DetailRow colSpan={detailColSpan}>
                           <DetailSections>
-                            <DetailSection title={t('copilotAdoptionCowork.detail.coordinationLoadTitle', { score: Math.round(row.coordinationLoadScore) })}>
+                            <DetailSection title={t('copilotAdoptionCowork.detail.coordinationLoadTitle', { score: formatCount(row.coordinationLoadScore) })}>
                               <DetailStats>
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.meetings')}
                                   value={formatCount(row.teamsMeetings)}
-                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.meetingScore), target: formatNumber(options.coworkMeetingTarget) })}
+                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: formatCount(row.meetingScore), target: formatNumber(options.coworkMeetingTarget) })}
                                 />
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.email')}
-                                  value={formatCount(row.emailsSent + row.emailsRead)}
-                                  sub={t('copilotAdoptionCowork.detail.emailScoreSentRead', { score: Math.round(row.emailScore), sent: formatCount(row.emailsSent), read: formatCount(row.emailsRead) })}
+                                  value={formatCount(row.emailsSent == null || row.emailsRead == null ? null : row.emailsSent + row.emailsRead)}
+                                  sub={t('copilotAdoptionCowork.detail.emailScoreSentRead', { score: formatCount(row.emailScore), sent: formatCount(row.emailsSent), read: formatCount(row.emailsRead) })}
                                 />
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.teamsMessages')}
                                   value={formatCount(row.teamsMessages)}
-                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.collaborationScore), target: formatNumber(options.coworkCollaborationTarget) })}
+                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: formatCount(row.collaborationScore), target: formatNumber(options.coworkCollaborationTarget) })}
                                 />
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.files')}
                                   value={formatCount(row.filesViewedOrEdited)}
-                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.documentScore), target: formatNumber(options.coworkDocumentTarget) })}
+                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: formatCount(row.documentScore), target: formatNumber(options.coworkDocumentTarget) })}
                                 />
                               </DetailStats>
                             </DetailSection>
@@ -1217,7 +1224,8 @@ export default function CoworkPanel({
                                   label={t('copilotAdoptionCowork.detail.loadBar')}
                                   value={options.coworkLoadMinScore}
                                   sub={
-                                    row.coordinationLoadScore >= options.coworkLoadMinScore
+                                    row.coordinationLoadScore == null ? t('copilotAdoption.workload.unverified')
+                                    : row.coordinationLoadScore >= options.coworkLoadMinScore
                                       ? t('copilotAdoptionCowork.detail.cleared')
                                       : t('copilotAdoptionCowork.detail.notCleared')
                                   }

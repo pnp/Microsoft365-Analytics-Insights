@@ -2246,7 +2246,7 @@ describe('CopilotAdoptionPage language switch', () => {
       /^Informe de uso de Microsoft Copilot: instant\u00e1nea del 1 ene\.? 2026\. Solo cubre a los usuarios con licencia, /,
     );
     expect(await line('Informes de uso de Microsoft 365:')).toBe(
-      'Informes de uso de Microsoft 365: no importados. Se usan para encontrar usuarios intensivos de Microsoft 365 que no tienen licencia de Copilot.',
+      'Informes de uso de Microsoft 365: la cobertura diaria está incompleta o sin verificar. Las observaciones positivas siguen siendo parciales; se omiten las evaluaciones de idoneidad según la carga de trabajo.',
     );
     expect(await line('Cifras de indicaciones del inquilino seg\u00fan Microsoft:')).toMatch(
       /^Cifras de indicaciones del inquilino seg\u00fan Microsoft: no importadas\. Las indicaciones enviadas/,

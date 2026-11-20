@@ -670,9 +670,9 @@ export default function OpportunitiesPanel({
                           relationship="description"
                           content={t('copilotAdoptionUsers.opportunities.scoreTooltip', {
                             copilot: Math.round(row.copilotDemandScore),
-                            collaboration: Math.round(row.collaborationScore),
-                            email: Math.round(row.emailScore),
-                            documents: Math.round(row.documentScore),
+                            collaboration: formatCount(row.collaborationScore),
+                            email: formatCount(row.emailScore),
+                            documents: formatCount(row.documentScore),
                           })}
                         >
                           <div>
@@ -709,7 +709,7 @@ export default function OpportunitiesPanel({
                     {open && (
                       <DetailRow colSpan={8}>
                         <DetailSections>
-                          <DetailSection title={t('copilotAdoptionUsers.opportunities.businessCaseDetailTitle', { score: Math.round(row.opportunityScore) })}>
+                          <DetailSection title={t('copilotAdoptionUsers.opportunities.businessCaseDetailTitle', { score: formatCount(row.opportunityScore) })}>
                             <DetailStats>
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.copilotDemand')}
@@ -718,17 +718,17 @@ export default function OpportunitiesPanel({
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.collaboration')}
-                                value={Math.round(row.collaborationScore)}
+                                value={formatCount(row.collaborationScore)}
                                 sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: formatNumber(options.opportunityCollaborationWeight) })}
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.email')}
-                                value={Math.round(row.emailScore)}
+                                value={formatCount(row.emailScore)}
                                 sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: formatNumber(options.opportunityEmailWeight) })}
                               />
                               <DetailStat
                                 label={t('copilotAdoptionUsers.opportunities.documents')}
-                                value={Math.round(row.documentScore)}
+                                value={formatCount(row.documentScore)}
                                 sub={t('copilotAdoptionUsers.opportunities.weightSub', { weight: formatNumber(options.opportunityDocumentWeight) })}
                               />
                             </DetailStats>

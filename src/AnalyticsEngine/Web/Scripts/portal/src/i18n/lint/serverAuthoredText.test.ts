@@ -1103,7 +1103,10 @@ const COWORK_TIER_LABEL_ARM = /case\s+CoworkTiers\.(\w+):\s+return\s+"[^"]+";/g;
 function coworkTierKeys(): string[] {
   const source = readFileSync(COPILOT_ADOPTION_SCORING, 'utf8');
   const constants = new Map([...source.matchAll(COWORK_TIER_CONST)].map((m) => [m[1], m[2]]));
-  return [...source.matchAll(COWORK_TIER_LABEL_ARM)].map((m) => constants.get(m[1]) ?? m[1]);
+  // A description can also be one literal return; only the label switch defines this inventory.
+  const labels = source.match(/public static string CoworkTierLabel\([^)]*\)[\s\S]*?(?=public static string CoworkTierBasis)/)?.[0];
+  expect(labels, 'CoworkTierLabel must be found before reading its tier keys').toBeTruthy();
+  return [...labels!.matchAll(COWORK_TIER_LABEL_ARM)].map((m) => constants.get(m[1]) ?? m[1]);
 }
 
 describe('Copilot Adoption Cowork tier labels and descriptions', () => {

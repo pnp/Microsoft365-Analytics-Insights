@@ -1,5 +1,6 @@
 using Common.Entities;
 using Common.Entities.ActivityReports;
+using Common.Entities.State;
 using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
@@ -101,6 +102,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// </summary>
         public IClock Clock { get; set; } = SystemClock.Instance;
 
+        public UsageReportCoverageStore CoverageStore { get; set; }
+        public string CoverageSource { get; set; }
+        public bool CoverageWholeTenant { get; set; }
+
         /// <summary>
         /// Opt-in, privacy-safe stage diagnostics for the daily usage-report save path. The default is a
         /// no-op unless <c>AI_USAGE_REPORT_SAVE_DIAGNOSTICS</c> is enabled and the logger can emit App
@@ -147,14 +152,54 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                     }
                 }
 
-                return storedFinalizedDates;
+                return await KeepCoverageVerifiedAsync(storedFinalizedDates);
             }
 
             // Some account/group report tables have no date-leading index. Repeated existence
             // probes would each scan the table, so use one range scan until an index is available.
             var scannedDates = await store.GetStoredDatesInRangeAsync(window.WindowStartUtc, window.SafeCutoffUtc);
 
-            return new HashSet<DateTime>(scannedDates.Select(date => date.Date));
+            return await KeepCoverageVerifiedAsync(new HashSet<DateTime>(scannedDates.Select(date => date.Date)));
+        }
+
+        /// <summary>
+        /// Stored rows are not a coverage outcome (#899): a finalized day with no durable outcome (imported before
+        /// the ledger existed) or still marked in progress (a download that never finished) is downloaded once
+        /// more so it can get a final outcome. Days with a final outcome - including the never-certifiable
+        /// incomplete and scopeUnverified - stay skipped, so a filtered tenant keeps #375's skip window.
+        /// Bounded by the skip window (at most 25 point reads). Without durable state the skip set is unchanged.
+        /// </summary>
+        private async Task<HashSet<DateTime>> KeepCoverageVerifiedAsync(HashSet<DateTime> storedDates)
+        {
+            if (CoverageStore == null || !CoverageStore.IsDurable || storedDates.Count == 0)
+            {
+                return storedDates;
+            }
+
+            var skip = new HashSet<DateTime>();
+            try
+            {
+                foreach (var date in storedDates)
+                {
+                    if (!await CoverageStore.NeedsReimportAsync(CoverageSource, date.Date, CoverageWholeTenant))
+                    {
+                        skip.Add(date);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Telemetry.LogWarning($"{GetType().Name}: could not read usage-report coverage outcomes ({ex.GetType().Name}); " +
+                    "stored dates are skipped as before and stay unverified for Copilot Adoption.");
+                return storedDates;
+            }
+
+            var reimport = storedDates.Count - skip.Count;
+            if (reimport > 0)
+            {
+                Telemetry.LogInformation($"{GetType().Name}: re-downloading {reimport:N0} stored date(s) with no final coverage outcome.");
+            }
+            return skip;
         }
 
         internal Task<bool> HasLeadingDateIndexAsync(AnalyticsEntitiesContext db)
@@ -582,6 +627,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         private async Task SaveDateAsync(SaveRun run, DateTime dateTime, List<TUserActivityUserDetail> rows,
             ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache)
         {
+            if (CoverageStore != null)
+            {
+                await CoverageStore.BeginDayAsync(CoverageSource, dateTime.Date);
+            }
             var store = run.Store;
             var instrumentation = run.Instrumentation;
             var instrumentationEnabled = run.InstrumentationEnabled;
@@ -609,6 +658,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             var duplicateRows = 0;
             var outOfScopeRows = 0;
             var missingLookupRows = 0;
+            var concealedRows = 0;
 
             if (instrumentationEnabled)
             {
@@ -646,6 +696,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // Counted and reported once for the whole report.
                 if (IsConcealed(reportPage))
                 {
+                    concealedRows++;
                     dateMetrics?.RecordConcealedIdentity();
                     totals?.RecordConcealedIdentity();
                     continue;
@@ -837,6 +888,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 });
             }
             run.DateIndex++;
+            if (CoverageStore != null)
+            {
+                // The upsert never deletes, so rows from an earlier download that Graph no longer returns stay
+                // stored. They are positive observations of the same day and leave no user unknown, so they do
+                // not block "complete"; they do mean the day cannot be certified successfully empty.
+                var allRowsSaved = missingLookupRows == 0 && concealedRows == 0 && outOfScopeRows == 0
+                    && (rows.Count > 0 || existingRows.Count == 0);
+                // RefreshableRecentDays (3) is also the analysis' default UsageReportLagDays; the store certifies
+                // a day with rows one day before the analysis first reads it, and an empty day only once settled.
+                await CoverageStore.CompleteDayAsync(CoverageSource, dateTime.Date, CoverageWholeTenant,
+                    allRowsSaved, rows.Count == 0, Clock.UtcNow, RefreshableRecentDays);
+            }
         }
 
         private void CompleteSave(SaveRun run)

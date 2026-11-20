@@ -59,10 +59,10 @@ namespace Common.Entities.CopilotAdoption
         private static bool CoworkJointPopulationsAreSafe(
             CopilotAdoptionSummary summary, CoworkValueEstimate ready, CoworkValueEstimate ceiling, int minPeople)
         {
-            if (ready == null || ceiling == null || summary.CoworkTiers == null
+            if (ready == null || ceiling == null || summary.CoworkTiers == null || !summary.CoworkPrimeCandidates.HasValue
                 || (summary.CoworkScoredUsers > 0 && summary.CoworkTiers.Count == 0)) return false;
             var observed = summary.CoworkEstablishedUsers + summary.CoworkTriallingUsers;
-            var disabledPrime = summary.CoworkPrimeCandidates - ready.CohortUsers;
+            var disabledPrime = summary.CoworkPrimeCandidates.Value - ready.CohortUsers;
             var parts = new[]
             {
                 ready.CohortUsers,

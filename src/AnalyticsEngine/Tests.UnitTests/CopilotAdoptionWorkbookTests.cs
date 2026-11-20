@@ -1,5 +1,6 @@
 ﻿using Common.Entities.Copilot;
 using Common.Entities.CopilotAdoption;
+using Common.Entities.State;
 using Common.Entities.Xlsx;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
@@ -45,6 +46,36 @@ namespace Tests.UnitTests
         private const string AmpersandDepartment = "Fish & Chips <Ltd>";
 
         #region Package validity
+
+        [TestMethod]
+        public void Workbook_CarriesPerSourceCoverageAndBlankUnknownScores()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Summary.DataSources.WorkloadCoverage = UsageReportCoverageStore.Sources.Select(source => new UsageReportCoverage
+            {
+                Source = source, Status = source == "teams" ? "complete" : "unverified",
+                FromUtc = Now.AddDays(-28), ThroughUtc = Now.AddDays(-3), ExpectedDays = 26,
+                VerifiedDays = source == "teams" ? 26 : 0, Reason = source == "teams" ? null : "outcomesMissing",
+            }).ToList();
+            analysis.Summary.DataSources.M365UsageReportsAvailable = false;
+            analysis.Opportunities.Clear();
+            analysis.Opportunities.Add(CopilotAdoptionWorkloadEvidence.Apply(
+                CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+                {
+                    UserPrincipalName = "coverage@contoso.com", TeamsMessages = 20,
+                }), analysis.Summary.DataSources.WorkloadCoverage));
+            var bytes = CopilotAdoptionWorkbook.Build(analysis);
+            var report = SheetCells(bytes, "Report");
+            CollectionAssert.Contains(report, "teams daily import coverage");
+            CollectionAssert.Contains(report, "outlook daily import coverage");
+            Assert.IsTrue(report.Any(c => c.Contains("Missing values are unknown, not zero")));
+            var cells = SheetCellElements(bytes, "Licence opportunities");
+            var scoreColumn = Regex.Replace((string)cells.Single(c => c.Value == "Opportunity score (0-100)").Attribute("r"), "[0-9]", "");
+            var dataRow = Regex.Replace((string)cells.Single(c => c.Value == "coverage@contoso.com").Attribute("r"), "[A-Z]", "");
+            var scoreCell = cells.SingleOrDefault(c => (string)c.Attribute("r") == scoreColumn + dataRow);
+            Assert.IsTrue(scoreCell == null || string.IsNullOrEmpty(scoreCell.Value), "Unknown is a blank spreadsheet cell, never numeric zero.");
+            Assert.IsTrue(cells.Any(c => c.Value == "workloadCoverageUnverified"));
+        }
 
         [TestMethod]
         public void Workbook_IsAValidPackageWithWellFormedParts()
@@ -1196,7 +1227,7 @@ namespace Tests.UnitTests
                     .ToList();
             }
 
-            string Count(int value) => value.ToString(CultureInfo.InvariantCulture);
+            string Count(int? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
 
             // Without See PII: the scored seat holders, the rollout order (department, seats, prime candidates) and the quadrant
             // (department, seats, ..., prime candidates in E) are the screen's, and Finance is in neither table.
@@ -2665,6 +2696,8 @@ namespace Tests.UnitTests
             // The licence estimate multiplies the Microsoft 365 usage-report volumes, and is only modelled
             // when they exist.
             summary.DataSources.M365UsageReportsAvailable = true;
+            summary.DataSources.WorkloadCoverage = UsageReportCoverageStore.Sources
+                .Select(source => new UsageReportCoverage { Source = source, Status = "complete" }).ToList();
             summary.DataSources.M365UsageReportDate = Now.AddDays(-2).Date;
             summary.Warnings.Add("Synthetic warning containing an ampersand & an <element>.");
 

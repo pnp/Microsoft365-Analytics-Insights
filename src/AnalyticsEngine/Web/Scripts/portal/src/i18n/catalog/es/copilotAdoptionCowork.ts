@@ -7,6 +7,8 @@ import type { copilotAdoptionCowork as en } from '../en/copilotAdoptionCowork';
  * build rather than reaching a customer as English text inside a Spanish page.
  */
 const copilotAdoptionCowork: Record<keyof typeof en, string> = {
+  'copilotAdoptionCowork.tier.workloadUnavailable.label': 'Evaluación de carga de trabajo no disponible',
+  'copilotAdoptionCowork.tier.workloadUnavailable.description': 'La cobertura de carga de trabajo no está verificada. Los valores ausentes son desconocidos, no cero; se omiten la clasificación de idoneidad y las horas previstas.',
   // Shared basis and metrics
   'copilotAdoptionCowork.basis.observedTooltip': 'Observado: esta persona ha usado Cowork realmente.',
   'copilotAdoptionCowork.basis.observed': 'Observado',
@@ -333,7 +335,7 @@ const copilotAdoptionCowork: Record<keyof typeof en, string> = {
   'copilotAdoptionCowork.coverage.periodLabel': 'Periodo del informe',
   'copilotAdoptionCowork.coverage.dateRange': 'Del {from} al {to}',
   'copilotAdoptionCowork.coverage.assessedLabel': 'Titulares de licencia evaluados para la preparación',
-  'copilotAdoptionCowork.coverage.reportLabel': 'Último informe de carga de trabajo',
+  'copilotAdoptionCowork.coverage.reportLabel': 'Fecha límite de los informes de carga evaluados',
   'copilotAdoptionCowork.coverage.analysisLabel': 'Análisis actualizado',
   'copilotAdoptionCowork.coverage.details': 'Fuentes y limitaciones',
   'copilotAdoptionCowork.coverage.historyStart': 'Primer registro de auditoría de Copilot conservado: {date}. Es el límite de los registros, no prueba de una importación continua.',

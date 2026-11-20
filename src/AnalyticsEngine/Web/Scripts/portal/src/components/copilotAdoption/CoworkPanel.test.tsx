@@ -492,6 +492,25 @@ describe('CoworkPanel', () => {
     expect(rationale.getAttribute('title')).toBeNull();
   });
 
+  it('does not present an unverified workload as low fit or a zero score', async () => {
+    const user = userEvent.setup();
+    fetchCowork.mockResolvedValue(page([row({
+      tier: 'workloadUnavailable', tierLabel: 'Workload assessment unavailable', basis: 'unavailable',
+      coordinationLoadScore: null, meetingScore: null, emailScore: null, documentScore: null,
+      collaborationScore: null, teamsMessages: 20, teamsMeetings: null, emailsSent: null,
+      emailsRead: null, filesViewedOrEdited: null, recommendForPolicy: false,
+      workloadUnavailableReason: 'workloadCoverageUnverified',
+    })]));
+    render(summary({ coworkPrimeCandidates: null, coworkBuildFluencyFirst: null, coworkAverageCoordinationLoad: null }));
+    const people = await openSection(user, /^People$/);
+    await waitFor(() => expect(within(people).getByText('aisha.rahman@contoso.com')).toBeTruthy());
+    expect(within(people).getByText('Workload assessment unavailable')).toBeTruthy();
+    expect(within(people).getByText('Unverified')).toBeTruthy();
+    await user.click(within(people).getByRole('button', { name: /Show the full assessment/ }));
+    expect(await within(people).findByText(/Missing values are unknown, not zero/)).toBeTruthy();
+    expect(within(people).getAllByText('—').length).toBeGreaterThan(3);
+  });
+
   /**
    * Cowork use is audit-only (#692). A person's detail shows their Cowork interactions from the Copilot
    * audit log, under a heading that says so, and nothing that reads as Microsoft's Cowork tasks: no
@@ -868,7 +887,7 @@ describe('CoworkPanel', () => {
     const user = userEvent.setup();
     await renderSettled(withEstimates());
     const hero = screen.getByRole('region', { name: '85\u2013169 hours a month' });
-    for (const label of ['Reporting window', 'Seat holders assessed for readiness', 'Latest workload report', 'Analysis refreshed']) {
+    for (const label of ['Reporting window', 'Seat holders assessed for readiness', 'Assessed workload-report cutoff', 'Analysis refreshed']) {
       expect(within(hero).getByText(label)).toBeVisible();
     }
     expect(within(hero).getByText('440')).toBeVisible();
