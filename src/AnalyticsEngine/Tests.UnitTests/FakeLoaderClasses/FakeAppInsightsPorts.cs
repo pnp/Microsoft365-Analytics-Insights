@@ -144,11 +144,17 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
         public Task<DateTime?> ReadAsync() => ReadFailsWith != null ? Task.FromException<DateTime?>(ReadFailsWith) : Task.FromResult(CursorUtc);
 
-        public Task WriteAsync(DateTime cursorUtc)
+        /// <summary>The newest stored hit recorded beside the cursor; null for a cursor written by an older build.</summary>
+        public DateTime? NewestStoredHitAtCursorUtc { get; set; }
+
+        public Task<DateTime?> ReadNewestStoredHitAtCursorAsync() => Task.FromResult(NewestStoredHitAtCursorUtc);
+
+        public Task WriteAsync(DateTime cursorUtc, DateTime? newestStoredHitUtc)
         {
             if (WriteFailsWith != null) return Task.FromException(WriteFailsWith);
             Writes++;
             CursorUtc = cursorUtc;
+            NewestStoredHitAtCursorUtc = newestStoredHitUtc;
             return Task.CompletedTask;
         }
     }

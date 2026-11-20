@@ -160,6 +160,7 @@ namespace WebJob.AppInsightsImporter.Engine
 
             AppInsightsReadWindow range;
             DateTime? cursorUtc = null;
+            DateTime? newestStoredHitAtCursorUtc = null;
             var cursorReadFailed = false;
             if (scanFromDateOverride.HasValue)
             {
@@ -174,12 +175,17 @@ namespace WebJob.AppInsightsImporter.Engine
                     try
                     {
                         cursorUtc = await _cursorStore.ReadAsync();
+                        if (cursorUtc.HasValue)
+                        {
+                            newestStoredHitAtCursorUtc = await _cursorStore.ReadNewestStoredHitAtCursorAsync();
+                        }
                     }
                     catch (Exception ex) when (!(ex is OutOfMemoryException))
                     {
                         // The cursor is not written at the end of this cycle, so the next one resumes from the stored cursor
                         // and nothing ingested since is skipped.
                         cursorReadFailed = true;
+                        cursorUtc = null;
                         result.Degrade("CursorReadFailed");
                         _logger.LogWarning($"AppInsightsCursor: Outcome=ReadFailed; Store={_cursorStore.Description}; {ExceptionDescriber.Chain(ex)}. " +
                             "Reading whole days from the newest stored hit this cycle, and leaving the stored cursor as it is.", ex);
@@ -190,6 +196,19 @@ namespace WebJob.AppInsightsImporter.Engine
                     _logger.LogWarning($"AppInsightsCursor: the ingestion cursor ({cursorUtc.Value:O}) says data was imported, but the hits table is empty " +
                         "(a new or restored database?). Ignoring the cursor and starting again from scratch.");
                     cursorUtc = null;
+                }
+                else if (cursorUtc.HasValue)
+                {
+                    var newestStoredHitUtc = AppInsightsImportWindow.NormalizeStoredHitTimestampUtc(newestHitTimestamp).Value;
+                    var rewound = AppInsightsIngestionCursorPolicy.CursorAfterDatabaseRestore(cursorUtc.Value, newestStoredHitUtc, newestStoredHitAtCursorUtc);
+                    if (rewound.HasValue)
+                    {
+                        _logger.LogWarning($"AppInsightsCursor: Outcome=RewoundAfterRestore; Cursor={cursorUtc.Value:O}; RewoundTo={rewound.Value:O}; " +
+                            $"NewestStoredHit={newestStoredHitUtc:O}; NewestStoredHitAtCursor={(newestStoredHitAtCursorUtc.HasValue ? newestStoredHitAtCursorUtc.Value.ToString("O", CultureInfo.InvariantCulture) : "none")}. " +
+                            "The database holds fewer hits than when the cursor was written (a point-in-time restore or an older copy?), so " +
+                            "ingestion since the newest stored hit is read again; rows already stored are skipped.");
+                        cursorUtc = rewound;
+                    }
                 }
 
                 if (cursorUtc.HasValue)
@@ -242,7 +261,8 @@ namespace WebJob.AppInsightsImporter.Engine
                 var newCursor = range.IngestedBeforeUtc.Value;
                 try
                 {
-                    await _cursorStore.WriteAsync(newCursor);
+                    var newestStoredHitUtc = await ReadNewestStoredHitAfterImportAsync(hitWatermarkStore, newestHitTimestamp);
+                    await _cursorStore.WriteAsync(newCursor, newestStoredHitUtc);
                     result.CursorAdvancedToUtc = newCursor;
                     _logger.LogInformation($"AppInsightsCursor: Outcome=Advanced; Cursor={newCursor:O}; Previous={(cursorUtc.HasValue ? cursorUtc.Value.ToString("O", CultureInfo.InvariantCulture) : "none")}.");
                 }
@@ -256,6 +276,26 @@ namespace WebJob.AppInsightsImporter.Engine
 
             jobTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
             return result;
+        }
+
+        /// <summary>
+        /// The newest stored hit once this cycle has saved, recorded beside the cursor so the next cycle can tell that
+        /// the database lost hits (#849). Falls back to the value read at the start of the cycle, which is older but
+        /// still one this database has reached, if it cannot be read.
+        /// </summary>
+        private async Task<DateTime?> ReadNewestStoredHitAfterImportAsync(IHitWatermarkStore hitWatermarkStore, DateTime? newestAtStart)
+        {
+            try
+            {
+                var newest = await hitWatermarkStore.GetNewestHitTimestampUtcAsync();
+                return AppInsightsImportWindow.NormalizeStoredHitTimestampUtc(newest ?? newestAtStart);
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                _logger.LogWarning($"AppInsightsCursor: could not re-read the newest stored hit after saving ({ExceptionDescriber.Chain(ex)}); " +
+                    "recording the one read at the start of the cycle beside the cursor.", ex);
+                return AppInsightsImportWindow.NormalizeStoredHitTimestampUtc(newestAtStart);
+            }
         }
 
         /// <summary>

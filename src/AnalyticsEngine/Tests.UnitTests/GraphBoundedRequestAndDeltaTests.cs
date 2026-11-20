@@ -5,6 +5,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -94,6 +95,103 @@ namespace Tests.UnitTests
                 new StringContent("{}")));
 
             Assert.AreEqual(1, terminal.Attempts, "Non-GET SDK calls must keep a request deadline but must not be retried by the local timeout policy.");
+        }
+
+        [TestMethod]
+        public async Task GraphImportPipeline_RetryAfterLongerThanAttemptDeadline_IsHonouredByRetryHandler()
+        {
+            // Retry-After (1 s) is longer than one attempt's deadline (250 ms) and the timeout-retry budget (500 ms).
+            var terminal = new SequenceHttpHandler(
+                ct => Task.FromResult(JsonResponse((HttpStatusCode)429, retryAfterSeconds: 1)),
+                ct => Task.FromResult(JsonResponse(HttpStatusCode.OK)));
+            var client = BuildGraphImportPipelineClient(terminal, perRequestMs: 250, timeoutRetryCount: 1, totalBudgetMs: 500);
+            var sw = Stopwatch.StartNew();
+
+            var response = await client.GetAsync("https://graph.microsoft.com/v1.0/users");
+
+            Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+            Assert.AreEqual(2, terminal.Attempts);
+            Assert.IsTrue(sw.Elapsed >= TimeSpan.FromMilliseconds(950), $"Retry-After must be waited in full, not cut short by the per-attempt deadline; elapsed {sw.ElapsedMilliseconds} ms.");
+            CollectionAssert.AreEqual(new[] { null, "1" }, terminal.RetryAttemptHeaders,
+                "The second send must be Kiota's Retry-After retry, not a local timeout re-send.");
+        }
+
+        [TestMethod]
+        public async Task GraphImportPipeline_RetryAfterHonouredThenStillThrottled_IsNotRetriedLocally()
+        {
+            var terminal = new SequenceHttpHandler(
+                ct => Task.FromResult(JsonResponse((HttpStatusCode)503, retryAfterSeconds: 1)),
+                ct => Task.FromResult(JsonResponse((HttpStatusCode)503, retryAfterSeconds: 1)));
+            var client = BuildGraphImportPipelineClient(terminal, perRequestMs: 250, timeoutRetryCount: 2, totalBudgetMs: 750, sdkRetryCount: 1);
+
+            await Assert.ThrowsExceptionAsync<AggregateException>(() => client.GetAsync("https://graph.microsoft.com/v1.0/users"));
+
+            Assert.AreEqual(2, terminal.Attempts, "Once the RetryHandler has honoured Retry-After and given up, nothing re-sends the request locally.");
+        }
+
+        [TestMethod]
+        public async Task GraphImportPipeline_StalledAttempt_StillFailsWithinTheBound()
+        {
+            var terminal = new SequenceHttpHandler(
+                async ct => { await Task.Delay(TimeSpan.FromSeconds(30), ct); return JsonResponse(HttpStatusCode.OK); },
+                async ct => { await Task.Delay(TimeSpan.FromSeconds(30), ct); return JsonResponse(HttpStatusCode.OK); });
+            var client = BuildGraphImportPipelineClient(terminal, perRequestMs: 100, timeoutRetryCount: 1, totalBudgetMs: 300);
+            var sw = Stopwatch.StartNew();
+
+            var ex = await Assert.ThrowsExceptionAsync<TimeoutException>(() => client.GetAsync("https://graph.microsoft.com/v1.0/users"));
+
+            StringAssert.Contains(ex.Message, "Graph import SDK request deadline exhausted");
+            Assert.AreEqual(2, terminal.Attempts);
+            Assert.IsTrue(sw.Elapsed < TimeSpan.FromSeconds(5), $"A stalled attempt must fail within the timeout budget; elapsed {sw.ElapsedMilliseconds} ms.");
+        }
+
+        [TestMethod]
+        public void GraphImportPipeline_BoundedHandler_SitsDirectlyInsideRetryHandler()
+        {
+            var handlers = GraphServiceClientFactory.BuildGraphImportHandlers(GraphRequestBudgetOptions.GraphImportDefault, null);
+            var retryIndex = handlers.FindIndex(h => h is Microsoft.Kiota.Http.HttpClientLibrary.Middleware.RetryHandler);
+
+            Assert.IsTrue(retryIndex >= 0);
+            Assert.IsInstanceOfType(handlers[retryIndex + 1], typeof(BoundedGraphRequestHandler));
+            Assert.AreEqual(1, handlers.Count(h => h is BoundedGraphRequestHandler));
+        }
+
+        private static HttpResponseMessage JsonResponse(HttpStatusCode status, int? retryAfterSeconds = null)
+        {
+            var response = new HttpResponseMessage(status)
+            {
+                Content = new StringContent(status == HttpStatusCode.OK ? "{}" : "{\"error\":{\"code\":\"TooManyRequests\",\"message\":\"synthetic\"}}",
+                    System.Text.Encoding.UTF8, "application/json")
+            };
+            if (retryAfterSeconds.HasValue)
+            {
+                response.Headers.Add("Retry-After", retryAfterSeconds.Value.ToString());
+            }
+            return response;
+        }
+
+        private static HttpClient BuildGraphImportPipelineClient(SequenceHttpHandler terminal, int perRequestMs, int timeoutRetryCount, int totalBudgetMs, int sdkRetryCount = 3)
+        {
+            var budget = new GraphRequestBudgetOptions(
+                TimeSpan.FromMilliseconds(perRequestMs),
+                timeoutRetryCount,
+                TimeSpan.FromMilliseconds(1),
+                TimeSpan.FromMilliseconds(totalBudgetMs),
+                sdkRetryCount,
+                1,
+                TimeSpan.FromSeconds(10));
+            var authProvider = new Microsoft.Kiota.Authentication.Azure.AzureIdentityAuthenticationProvider(
+                new SyntheticTokenCredential(), scopes: new[] { "https://graph.microsoft.com/.default" });
+            return GraphServiceClientFactory.CreateHttpClient(authProvider, budget, AnalyticsLogger.ConsoleOnlyTracer(), terminal);
+        }
+
+        private sealed class SyntheticTokenCredential : Azure.Core.TokenCredential
+        {
+            public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+                => new Azure.Core.AccessToken("synthetic-token", DateTimeOffset.UtcNow.AddHours(1));
+
+            public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
+                => new ValueTask<Azure.Core.AccessToken>(GetToken(requestContext, cancellationToken));
         }
 
         [TestMethod]
@@ -229,18 +327,23 @@ namespace Tests.UnitTests
         {
             private readonly Queue<Func<CancellationToken, Task<HttpResponseMessage>>> _responses;
             public int Attempts { get; private set; }
+            public List<string> RetryAttemptHeaders { get; } = new List<string>();
 
             public SequenceHttpHandler(params Func<CancellationToken, Task<HttpResponseMessage>>[] responses)
             {
                 _responses = new Queue<Func<CancellationToken, Task<HttpResponseMessage>>>(responses);
             }
 
-            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
                 Attempts++;
-                return _responses.Count == 0
-                    ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))
-                    : _responses.Dequeue()(cancellationToken);
+                RetryAttemptHeaders.Add(request.Headers.TryGetValues("Retry-Attempt", out var values) ? string.Join(",", values) : null);
+                var response = _responses.Count == 0
+                    ? new HttpResponseMessage(HttpStatusCode.OK)
+                    : await _responses.Dequeue()(cancellationToken).ConfigureAwait(false);
+                // HttpClientHandler sets this; Kiota's RetryHandler clones it to replay a throttled request.
+                response.RequestMessage = response.RequestMessage ?? request;
+                return response;
             }
         }
 
