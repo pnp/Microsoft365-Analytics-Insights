@@ -131,6 +131,7 @@ const admin: Record<keyof typeof en, string> = {
   // Shared administration labels.
   'admin.common.enabled': 'Habilitado',
   'admin.common.no': 'No',
+  'admin.common.none': 'Ninguno',
   'admin.common.unknown': 'Desconocido',
   'admin.common.unknownWithPeriod': 'Desconocido.',
   'admin.common.yes': 'Sí',

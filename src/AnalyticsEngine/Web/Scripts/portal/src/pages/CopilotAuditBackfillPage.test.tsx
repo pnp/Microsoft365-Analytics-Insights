@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
 import CopilotAuditBackfillPage from './CopilotAuditBackfillPage';
 import type { CopilotAuditBackfillJob, CopilotAuditBackfillStatus } from '../types/copilotAuditBackfill';
@@ -152,5 +152,73 @@ describe('CopilotAuditBackfillPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Start backfill' }));
 
     expect(await screen.findByText('Your session has expired. Reload the page to sign in again.')).toBeVisible();
+  });
+
+  it('shows None, not Unknown, for empty day lists', async () => {
+    mockFetch.mockResolvedValue(status({ latestJob: job({ state: 'completed', completedDays: [], failedDays: [], incompleteDays: [] }) }));
+    renderWithProvider(<CopilotAuditBackfillPage />);
+
+    expect(await screen.findByText('Completed')).toBeVisible();
+    expect(screen.getAllByText('None')).toHaveLength(3);
+    expect(screen.queryByText('Unknown')).not.toBeInTheDocument();
+  });
+
+  it('waits for a slow poll instead of overlapping it, and backs off after failures', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockFetch.mockResolvedValueOnce(status({ latestJob: job() }));
+      renderWithProvider(<CopilotAuditBackfillPage />);
+      expect(await screen.findByText('Running')).toBeVisible();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      let answer: (value: CopilotAuditBackfillStatus) => void = () => undefined;
+      mockFetch.mockImplementationOnce(() => new Promise<CopilotAuditBackfillStatus>((resolve) => { answer = resolve; }));
+      await act(() => vi.advanceTimersByTimeAsync(5_000));
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      mockFetch.mockRejectedValue(new Error('stateUnavailable'));
+      await act(async () => { answer(status({ latestJob: job() })); });
+      await act(() => vi.advanceTimersByTimeAsync(5_500));
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(await screen.findByText(/Backfill state could not be read or saved/)).toBeVisible();
+
+      await act(() => vi.advanceTimersByTimeAsync(8_500));
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      await act(() => vi.advanceTimersByTimeAsync(2_000));
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+      await act(() => vi.advanceTimersByTimeAsync(18_000));
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+      await act(() => vi.advanceTimersByTimeAsync(2_500));
+      expect(mockFetch).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never lets an older status replace a newer one', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mockFetch.mockResolvedValueOnce(status({ latestJob: job() }));
+      renderWithProvider(<CopilotAuditBackfillPage />);
+      expect(await screen.findByText('Running')).toBeVisible();
+
+      let answer: (value: CopilotAuditBackfillStatus) => void = () => undefined;
+      mockFetch.mockImplementationOnce(() => new Promise<CopilotAuditBackfillStatus>((resolve) => { answer = resolve; }));
+      await act(() => vi.advanceTimersByTimeAsync(5_000));
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      mockFetch.mockResolvedValueOnce(status({ latestJob: job({ state: 'completed' }) }));
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      expect(await screen.findByText('Completed')).toBeVisible();
+
+      await act(async () => { answer(status({ latestJob: job() })); });
+
+      expect(screen.getByText('Completed')).toBeVisible();
+      expect(screen.queryByText('Running')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

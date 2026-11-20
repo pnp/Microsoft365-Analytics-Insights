@@ -15,6 +15,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Security.Claims;
 using System.Text;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
@@ -22,6 +23,9 @@ using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.Entities;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill;
+using AnalyticsWeb::Web.AnalyticsWeb.Security;
+using BackfillAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.CopilotAuditBackfillAPIController;
+using BackfillRequestException = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAuditBackfill.CopilotAuditBackfillRequestException;
 using BackfillStatusService = AnalyticsWeb::Web.AnalyticsWeb.Models.CopilotAuditBackfill.CopilotAuditBackfillService;
 
 namespace Tests.UnitTests
@@ -791,6 +795,152 @@ namespace Tests.UnitTests
                 () => now, existingEvents: new FakeExistingEventFilter()).AdvanceLatestAsync();
             Assert.AreEqual(1, source.SubmitCount);
             Assert.AreEqual(100, (await state.GetSubmissionLedgerAsync()).SubmissionTimestampsUtc.Count);
+        }
+
+        /// <summary>
+        /// A double click, two tabs or two administrators: every start reads the latest job before any of them writes,
+        /// so every one passes the "no active job" check. Exactly one may create a job; the rest are refused as
+        /// <c>jobActive</c>, and no job row is left behind for them. In the same second they pick the same id.
+        /// </summary>
+        [DataTestMethod]
+        [DataRow(true, DisplayName = "Same second, same id")]
+        [DataRow(false, DisplayName = "Different seconds, different ids")]
+        public async Task Start_ConcurrentStartsCreateExactlyOneJob(bool sameSecond)
+        {
+            const int starts = 4;
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var tick = 0;
+            var store = new LatestJobBarrierStore(starts) { Holding = true };
+            var state = new CopilotAuditBackfillStateStore(store, true,
+                () => sameSecond ? now : now.AddSeconds(System.Threading.Interlocked.Increment(ref tick)));
+            var service = new BackfillStatusService(state,
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, () => now);
+
+            var outcomes = await Task.WhenAll(Enumerable.Range(0, starts).Select(i => Task.Run(async () =>
+            {
+                try { return (await service.StartAsync(null, "admin" + i + "@contoso.com")).RequestedBy; }
+                catch (BackfillRequestException ex) { return ex.Status + ":" + ex.Code; }
+            })));
+            store.Holding = false;
+
+            var winner = outcomes.Single(o => o.EndsWith("@contoso.com", StringComparison.Ordinal));
+            Assert.AreEqual(starts - 1, outcomes.Count(o => o == HttpStatusCode.Conflict + ":jobActive"), string.Join(", ", outcomes));
+            var latest = await state.GetLatestAsync();
+            Assert.AreEqual(winner, latest.RequestedBy, "The latest job is the one the winner was told it started.");
+            Assert.IsTrue(latest.CopilotImportEnabled);
+            var rows = new List<string>();
+            foreach (var key in store.JobRowsWritten.Distinct())
+            {
+                if (await store.Inner.GetStringAsync(key) != null) rows.Add(key);
+            }
+            CollectionAssert.AreEqual(new[] { "Job:" + latest.Id }, rows, "A start that lost the race leaves no job row behind.");
+        }
+
+        [TestMethod]
+        public async Task Start_AfterTheLatestJobFinishesStartsANewOne()
+        {
+            var now = new DateTime(2026, 10, 2, 12, 0, 0, DateTimeKind.Utc);
+            var clock = now;
+            var state = new CopilotAuditBackfillStateStore(new InMemoryKeyValueStore(), true, () => clock);
+            var service = new BackfillStatusService(state,
+                new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } }, () => clock);
+            var first = await service.StartAsync(null, "admin@contoso.com");
+
+            var refused = await Assert.ThrowsExceptionAsync<BackfillRequestException>(() => service.StartAsync(null, "admin@contoso.com"));
+            Assert.AreEqual("jobActive", refused.Code);
+
+            var finished = await state.GetAsync(first.Id);
+            finished.State = CopilotAuditBackfillStates.Completed;
+            await state.SaveAsync(finished);
+            clock = now.AddHours(1);
+            var second = await service.StartAsync(null, "admin@contoso.com");
+
+            Assert.IsTrue(second.Id > first.Id);
+            Assert.AreEqual(second.Id, (await state.GetLatestAsync()).Id);
+            Assert.AreEqual(CopilotAuditBackfillStates.Completed, (await state.GetAsync(first.Id)).State, "The finished job is kept, not overwritten.");
+        }
+
+        [TestMethod]
+        public async Task Start_RecordsTheRequestersSignInNameNotTheirDisplayName()
+        {
+            var state = new CopilotAuditBackfillStateStore(new InMemoryKeyValueStore(), true);
+            var service = new BackfillStatusService(state, new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } });
+            var identity = new ClaimsIdentity("synthetic-test");
+            identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, "synthetic-portal-user"));
+            identity.AddClaim(new Claim(ClaimTypes.Name, "Contoso Administrator"));
+            identity.AddClaim(new Claim("upn", "admin@contoso.com"));
+            identity.AddClaim(new Claim("roles", PortalRoles.Administration));
+            using (var host = new PortalTestHost(new[] { typeof(BackfillAPIController) }, new ClaimsPrincipal(identity),
+                PortalAccessPolicy.Enforcing, _ => new BackfillAPIController(() => service)))
+            using (var request = new HttpRequestMessage(HttpMethod.Post, "api/CopilotAuditBackfill/start")
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json")
+            })
+            {
+                request.Headers.Add("X-Requested-With", "XMLHttpRequest");
+                using (var response = await host.Client.SendAsync(request))
+                {
+                    Assert.AreEqual(HttpStatusCode.Accepted, response.StatusCode, await response.Content.ReadAsStringAsync());
+                }
+            }
+
+            Assert.AreEqual("admin@contoso.com", (await state.GetLatestAsync()).RequestedBy);
+        }
+
+        /// <summary>
+        /// An in-memory store that holds every read of the latest-job pointer until all the starts have made it, so
+        /// they all race from the same version of it.
+        /// </summary>
+        private sealed class LatestJobBarrierStore : IConditionalKeyValueStore
+        {
+            private readonly System.Threading.Barrier _barrier;
+            public LatestJobBarrierStore(int participants) { _barrier = new System.Threading.Barrier(participants); }
+            public InMemoryKeyValueStore Inner { get; } = new InMemoryKeyValueStore();
+            public bool Holding { get; set; }
+            public System.Collections.Concurrent.ConcurrentQueue<string> JobRowsWritten { get; } = new System.Collections.Concurrent.ConcurrentQueue<string>();
+            public string Description => Inner.Description;
+
+            private void Gate(string key)
+            {
+                if (Holding && key == "LatestJob" && !_barrier.SignalAndWait(TimeSpan.FromSeconds(10)))
+                {
+                    throw new TimeoutException("Not every start read the latest job.");
+                }
+            }
+
+            private void Record(string key)
+            {
+                if (key.StartsWith("Job:", StringComparison.Ordinal) && !key.EndsWith(":Cancel", StringComparison.Ordinal)) JobRowsWritten.Enqueue(key);
+            }
+
+            public Task<string> GetStringAsync(string key, System.Threading.CancellationToken cancellationToken = default)
+            {
+                Gate(key);
+                return Inner.GetStringAsync(key, cancellationToken);
+            }
+
+            public Task<VersionedValue> GetVersionedAsync(string key, System.Threading.CancellationToken cancellationToken = default)
+            {
+                Gate(key);
+                return Inner.GetVersionedAsync(key, cancellationToken);
+            }
+
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, System.Threading.CancellationToken cancellationToken = default)
+            {
+                Record(key);
+                return Inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+            }
+
+            public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, System.Threading.CancellationToken cancellationToken = default)
+            {
+                Record(key);
+                return Inner.TrySetStringAsync(key, value, expectedVersionToken, cancellationToken);
+            }
+
+            public Task<bool> DeleteAsync(string key, System.Threading.CancellationToken cancellationToken = default) => Inner.DeleteAsync(key, cancellationToken);
+            public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, System.Threading.CancellationToken cancellationToken = default)
+                => Inner.TryDeleteAsync(key, expectedVersionToken, cancellationToken);
+            public Task<bool> ExistsAsync(string key, System.Threading.CancellationToken cancellationToken = default) => Inner.ExistsAsync(key, cancellationToken);
         }
 
         private static CopilotAuditBackfillImporter RegressionImporter(CopilotAuditBackfillStateStore state,
