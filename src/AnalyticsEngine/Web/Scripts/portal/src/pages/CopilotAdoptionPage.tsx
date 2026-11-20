@@ -1644,7 +1644,10 @@ function AnalystTab({
   // prime candidate, so "recommended" is only the people already using Cowork and the share would
   // read as near zero - a finding about the import, not about readiness (release critique of #909).
   const coworkReadinessPct =
-    summary.coworkReadinessAvailable && summary.dataSources.m365UsageReportsAvailable && summary.coworkScoredUsers > 0
+    summary.coworkReadinessAvailable && summary.dataSources.m365UsageReportsAvailable
+      && !summary.coworkReadinessWithheld
+      && summary.coworkScoredUsers !== null && summary.coworkScoredUsers > 0
+      && summary.coworkRecommendedForPolicy !== null
       ? (summary.coworkRecommendedForPolicy / summary.coworkScoredUsers) * 100
       : null;
 
@@ -1687,7 +1690,7 @@ function AnalystTab({
             label={t('copilotAdoption.page.habitRate3')}
             sublabel={t('copilotAdoption.page.gauge.madePartWorkingWeek', { count: formatCount(summary.habitualUsers) })}
           />
-          {summary.coworkDetected && summary.coworkAdoptionPct !== null && (
+          {summary.coworkDetected && summary.coworkUsers !== null && summary.coworkAdoptionPct !== null && (
             <GaugeRing
               value={summary.coworkAdoptionPct}
               label={t('copilotAdoption.page.coworkAdoption')}
@@ -1698,7 +1701,10 @@ function AnalystTab({
             <GaugeRing
               value={coworkReadinessPct}
               label={t('copilotAdoption.page.readinessCowork')}
-              sublabel={t('copilotAdoption.page.gauge.readyForCoworkScope', { ready: formatCount(summary.coworkRecommendedForPolicy), total: formatCount(summary.coworkScoredUsers) })}
+              sublabel={t('copilotAdoption.page.gauge.readyForCoworkScope', {
+                ready: formatCount(summary.coworkRecommendedForPolicy ?? 0),
+                total: formatCount(summary.coworkScoredUsers ?? 0),
+              })}
             />
           )}
         </div>
@@ -2984,7 +2990,7 @@ function buildTimeSavedKpis(
     });
   }
 
-  if (summary.coworkReadinessAvailable) {
+  if (summary.coworkReadinessAvailable && !summary.coworkReadinessWithheld) {
     const { ready, full } = projectCoworkAdoption(summary, assumptions, o);
     const coworkCohort = resolveTimeSavedCohort(
       cohorts.cowork,
@@ -3218,7 +3224,7 @@ function buildKpis(
 
   // Cowork is only claimed as a metric when Cowork was actually seen: on a tenant that has not been
   // enabled for it, "0% Cowork adoption" reads as a failure rather than as "not available here".
-  if (summary.coworkDetected) {
+  if (summary.coworkDetected && summary.coworkUsers !== null && summary.coworkInteractions !== null) {
     items.push({
       key: 'cowork',
       label: summary.coworkAdoptionPct === null

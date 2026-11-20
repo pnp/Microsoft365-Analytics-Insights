@@ -1531,6 +1531,56 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task CopilotAdoptionSummary_WithoutSeePii_WithholdsSmallCoworkFigures_OnTheEndpointAndKeepsThemForSeePii()
+        {
+            var analysis = SmallAnalysis();
+            var summary = analysis.Summary;
+            summary.CoworkDetected = true;
+            summary.CoworkUsers = 3;
+            summary.CoworkAuditUsers = 3;
+            summary.CoworkInteractions = 12;
+            summary.CoworkReadinessAvailable = true;
+            summary.CoworkScoredUsers = 3;
+            summary.CoworkEstablishedUsers = 3;
+            summary.CoworkTriallingUsers = 0;
+            summary.CoworkPrimeCandidates = 0;
+            summary.CoworkBuildFluencyFirst = 0;
+            summary.CoworkRecommendedForPolicy = 3;
+            summary.CoworkTiers = new List<CoworkTierSummary>
+            {
+                new CoworkTierSummary { Code = "established", Label = "Established", Users = 3, SharePct = 100 },
+            };
+            summary.CoworkValueEstimate = new CoworkValueEstimate { CohortUsers = 3 };
+            summary.CoworkFullRolloutEstimate = new CoworkValueEstimate { CohortUsers = 3 };
+
+            using (var host = CopilotAdoptionHost(analysis, PortalTestHost.SignedIn(PortalRoles.SeePii)))
+            {
+                var initialFull = JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"));
+                Assert.AreEqual(3, (int)initialFull["coworkUsers"]);
+                var cached = JObject.FromObject(summary);
+
+                host.Principal = PortalTestHost.SignedIn();
+                var reader = JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"));
+                Assert.IsTrue((bool)reader["coworkReadinessWithheld"]);
+                Assert.AreEqual(JTokenType.Null, reader["coworkUsers"].Type);
+                Assert.AreEqual(JTokenType.Null, reader["coworkAuditUsers"].Type);
+                Assert.AreEqual(JTokenType.Null, reader["coworkInteractions"].Type);
+                Assert.AreEqual(JTokenType.Null, reader["coworkScoredUsers"].Type);
+                Assert.AreEqual(0, ((JArray)reader["coworkTiers"]).Count);
+                Assert.AreEqual(JTokenType.Null, reader["coworkValueEstimate"].Type);
+                Assert.IsTrue(JToken.DeepEquals(cached, JObject.FromObject(summary)),
+                    "The cached full-permission summary is never edited for a reader without See PII.");
+
+                host.Principal = PortalTestHost.SignedIn(PortalRoles.SeePii);
+                var full = JObject.Parse(await host.Client.GetStringAsync("api/CopilotAdoption/summary"));
+                Assert.AreEqual(3, (int)full["coworkUsers"]);
+                Assert.AreEqual(12, (long)full["coworkInteractions"]);
+                Assert.AreEqual(3, (int)full["coworkTiers"][0]["users"]);
+                Assert.AreEqual(3, (int)full["coworkValueEstimate"]["cohortUsers"]);
+            }
+        }
+
+        [TestMethod]
         public async Task CopilotAdoption_NarrowedAggregates_RequireSeePii()
         {
             using (var host = CopilotAdoptionHost(SmallAnalysis(), PortalTestHost.SignedIn()))

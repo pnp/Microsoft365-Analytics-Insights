@@ -567,7 +567,7 @@ export default function CoworkPanel({
 
   const selectTier = (tier: CoworkTier) => showPeople(tier);
 
-  if (!available) {
+  if (!available || summary.coworkReadinessWithheld) {
     // Read from the SUMMARY, not from `data`: the effect above deliberately does not fetch when the
     // analysis is unavailable, so `data` is always null on this branch. The summary is a prop and is
     // always present, which is what makes the diagnosis below reachable at all.
@@ -583,7 +583,11 @@ export default function CoworkPanel({
           <Text weight="semibold" block>
             {t('copilotAdoptionCowork.unavailable.title')}
           </Text>
-          {coworkWarnings.length > 0 ? (
+          {summary.coworkReadinessWithheld ? (
+            <Text size={200} block className={styles.muted}>
+              {t('copilotAdoptionCowork.coverage.withheld')}
+            </Text>
+          ) : coworkWarnings.length > 0 ? (
             <div className={styles.warnings}>
               {coworkWarnings.map(({ warning, detail }) => (
                 <MessageBar key={`${detail?.key ?? warning}:${warning}`} intent="warning">
@@ -751,7 +755,9 @@ export default function CoworkPanel({
             {t('copilotAdoptionCowork.rollout.title')}
           </Text>
           <Text size={200} className={styles.sectionNote}>
-            {t('copilotAdoptionCowork.rollout.empty')}
+            {summary.coworkReadinessWithheld
+              ? t('copilotAdoptionCowork.coverage.withheld')
+              : t('copilotAdoptionCowork.rollout.empty')}
           </Text>
         </Card>
       )}

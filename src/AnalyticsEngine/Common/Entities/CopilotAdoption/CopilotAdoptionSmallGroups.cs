@@ -24,9 +24,19 @@ namespace Common.Entities.CopilotAdoption
         {
             var ready = summary.CoworkNewAdoptionEstimate;
             var ceiling = summary.CoworkNonUserCeilingEstimate;
+            var jointPopulationsUnsafe = (ready != null || ceiling != null)
+                && !CoworkJointPopulationsAreSafe(summary, ready, ceiling, minPeople);
+            var observed = summary.CoworkObservedUsage;
+            var observedPopulationUnsafe = observed?.Available == true
+                && !CoworkObservedPopulationIsSafe(observed, minPeople);
+            var auditPopulationUnsafe = !CoworkAuditPopulationIsSafe(summary, minPeople)
+                || observedPopulationUnsafe;
+            var readinessUnsafe = summary.CoworkReadinessAvailable
+                && (jointPopulationsUnsafe || !CoworkReadinessPopulationsAreSafe(summary, minPeople));
+
             // These are a joint release: the legacy forecasts and audit/tier totals can recover a
             // withheld part from the other new cohort. Do not leave one half of that reconstruction.
-            if ((ready != null || ceiling != null) && !CoworkJointPopulationsAreSafe(summary, ready, ceiling, minPeople))
+            if (jointPopulationsUnsafe)
             {
                 var copy = writable();
                 copy.CoworkNewAdoptionEstimate = null;
@@ -42,35 +52,157 @@ namespace Common.Entities.CopilotAdoption
                 copy.CoworkWithoutLicenceWithheld = SmallGroupWithheldReasons.FewPeople;
             }
 
-            var observed = summary.CoworkObservedUsage;
-            if (observed?.Available == true && observed.Users.HasValue
-                && (SmallPopulations.IsSmall(observed.Users.Value, minPeople)
-                    || SmallPopulations.IsSmall((observed.AssessedUsers ?? 0) - observed.Users.Value, minPeople)
-                    || observed.AuditPopulationParts == null
-                    || observed.AuditPopulationParts.Any(people => people < 0 || SmallPopulations.IsSmall(people, minPeople))))
+            if (auditPopulationUnsafe || observedPopulationUnsafe)
             {
                 writable().CoworkObservedUsage = new CoworkObservedUsage
                 {
                     WithheldReason = SmallGroupWithheldReasons.RevealsSmallerGroup,
                 };
             }
+
+            if (auditPopulationUnsafe)
+            {
+                var copy = writable();
+                copy.CoworkUsers = null;
+                copy.CoworkAuditUsers = null;
+                copy.CoworkInteractions = null;
+                copy.CoworkAdoptionPct = null;
+                copy.CoworkEligibilityKnown = false;
+                copy.CoworkEligibleUsers = null;
+                copy.CoworkDetected = false;
+            }
+
+            if (readinessUnsafe)
+            {
+                var copy = writable();
+                copy.CoworkReadinessWithheld = true;
+                copy.CoworkScoredUsers = null;
+                copy.CoworkEstablishedUsers = null;
+                copy.CoworkTriallingUsers = null;
+                copy.CoworkPrimeCandidates = null;
+                copy.CoworkBuildFluencyFirst = null;
+                copy.CoworkRecommendedForPolicy = null;
+                copy.CoworkAverageCoordinationLoad = null;
+                copy.CoworkAverageFluency = null;
+                copy.CoworkTiers = new List<CoworkTierSummary>();
+                copy.CoworkByDepartment = new List<CoworkSegmentRow>();
+                copy.CoworkQuadrant = new List<CoworkQuadrantPoint>();
+                copy.CoworkValueEstimate = null;
+                copy.CoworkFullRolloutEstimate = null;
+                copy.CoworkNewAdoptionEstimate = null;
+                copy.CoworkNewAdoptionWithheld = SmallGroupWithheldReasons.RevealsSmallerGroup;
+                copy.CoworkNonUserCeilingEstimate = null;
+                copy.CoworkNonUserCeilingWithheld = SmallGroupWithheldReasons.RevealsSmallerGroup;
+            }
+        }
+
+        private static bool CoworkObservedPopulationIsSafe(CoworkObservedUsage observed, int minPeople) =>
+            observed.Users.HasValue
+            && !SmallPopulations.IsSmall(observed.Users.Value, minPeople)
+            && (observed.AssessedUsers ?? 0) - observed.Users.Value >= 0
+            && !SmallPopulations.IsSmall((observed.AssessedUsers ?? 0) - observed.Users.Value, minPeople)
+            && observed.AuditPopulationParts != null
+            && observed.AuditPopulationParts.All(people => people >= 0 && !SmallPopulations.IsSmall(people, minPeople));
+
+        private static bool CoworkAuditPopulationIsSafe(CopilotAdoptionSummary summary, int minPeople)
+        {
+            if (!summary.CoworkUsers.HasValue)
+            {
+                return summary.DataSources?.AuditAvailable != true
+                    && !summary.CoworkAuditUsers.HasValue
+                    && !summary.CoworkInteractions.HasValue
+                    && !summary.CoworkAdoptionPct.HasValue
+                    && !summary.CoworkEligibleUsers.HasValue;
+            }
+            var users = summary.CoworkUsers.Value;
+            if (summary.CoworkEligibilityKnown && !summary.CoworkEligibleUsers.HasValue) return false;
+            var populations = new[] { (int?)summary.LicensedUsers };
+            if (summary.CoworkEligibleUsers.HasValue)
+                populations = populations.Append(summary.CoworkEligibleUsers).ToArray();
+
+            return !SmallPopulations.IsSmall(users, minPeople)
+                && populations.Where(population => population.HasValue).All(population =>
+            {
+                var complement = population.Value - users;
+                return complement >= 0
+                    && !SmallPopulations.IsSmall(population.Value, minPeople)
+                    && !SmallPopulations.IsSmall(complement, minPeople);
+            });
+        }
+
+        private static bool CoworkReadinessPopulationsAreSafe(CopilotAdoptionSummary summary, int minPeople)
+        {
+            if (!summary.CoworkScoredUsers.HasValue
+                || !summary.CoworkEstablishedUsers.HasValue
+                || !summary.CoworkTriallingUsers.HasValue
+                || !summary.CoworkRecommendedForPolicy.HasValue
+                || summary.CoworkTiers == null)
+                return false;
+
+            var scored = summary.CoworkScoredUsers.Value;
+            if (SmallPopulations.IsSmall(scored, minPeople)
+                || summary.LicensedUsers < scored
+                || SmallPopulations.IsSmall(summary.LicensedUsers - scored, minPeople)
+                || (scored > 0 && summary.CoworkTiers.Count == 0)
+                || summary.CoworkTiers.Sum(tier => tier.Users) != scored
+                || summary.CoworkTiers.Any(tier => SmallPopulations.IsSmall(tier.Users, minPeople)))
+                return false;
+
+            var observed = summary.CoworkEstablishedUsers.Value + summary.CoworkTriallingUsers.Value;
+            if (observed > scored
+                || summary.CoworkRecommendedForPolicy.Value > scored
+                || SmallPopulations.IsSmall(summary.CoworkEstablishedUsers.Value, minPeople)
+                || SmallPopulations.IsSmall(summary.CoworkTriallingUsers.Value, minPeople)
+                || SmallPopulations.IsSmall(observed, minPeople)
+                || SmallPopulations.IsSmall(summary.CoworkRecommendedForPolicy.Value, minPeople)
+                || SmallPopulations.IsSmall(scored - summary.CoworkRecommendedForPolicy.Value, minPeople)
+                || (summary.CoworkPrimeCandidates.HasValue
+                    && (summary.CoworkPrimeCandidates.Value > scored
+                        || SmallPopulations.IsSmall(summary.CoworkPrimeCandidates.Value, minPeople)))
+                || (summary.CoworkBuildFluencyFirst.HasValue
+                    && (summary.CoworkBuildFluencyFirst.Value > scored
+                        || SmallPopulations.IsSmall(summary.CoworkBuildFluencyFirst.Value, minPeople))))
+                return false;
+
+            foreach (var department in summary.CoworkByDepartment ?? new List<CoworkSegmentRow>())
+            {
+                if (SmallPopulations.IsSmall(department.LicensedUsers, minPeople)
+                    || SmallPopulations.IsSmall(department.RegularCoworkUsers, minPeople)
+                    || SmallPopulations.IsSmall(department.LicensedUsers - department.RegularCoworkUsers, minPeople))
+                    return false;
+
+                if (department.PrimeCandidates.HasValue)
+                {
+                    var prime = department.PrimeCandidates.Value;
+                    var other = department.LicensedUsers - department.RegularCoworkUsers - prime;
+                    if (prime < 0 || other < 0
+                        || SmallPopulations.IsSmall(prime, minPeople)
+                        || SmallPopulations.IsSmall(department.LicensedUsers - prime, minPeople)
+                        || SmallPopulations.IsSmall(other, minPeople))
+                        return false;
+                }
+            }
+
+            return true;
         }
 
         private static bool CoworkJointPopulationsAreSafe(
             CopilotAdoptionSummary summary, CoworkValueEstimate ready, CoworkValueEstimate ceiling, int minPeople)
         {
             if (ready == null || ceiling == null || summary.CoworkTiers == null || !summary.CoworkPrimeCandidates.HasValue
-                || (summary.CoworkScoredUsers > 0 && summary.CoworkTiers.Count == 0)) return false;
-            var observed = summary.CoworkEstablishedUsers + summary.CoworkTriallingUsers;
+                || !summary.CoworkScoredUsers.HasValue || !summary.CoworkEstablishedUsers.HasValue
+                || !summary.CoworkTriallingUsers.HasValue || !summary.CoworkRecommendedForPolicy.HasValue
+                || (summary.CoworkScoredUsers.Value > 0 && summary.CoworkTiers.Count == 0)) return false;
+            var observed = summary.CoworkEstablishedUsers.Value + summary.CoworkTriallingUsers.Value;
             var disabledPrime = summary.CoworkPrimeCandidates.Value - ready.CohortUsers;
             var parts = new[]
             {
                 ready.CohortUsers,
                 ceiling.CohortUsers - ready.CohortUsers,
-                summary.CoworkRecommendedForPolicy - ready.CohortUsers,
+                summary.CoworkRecommendedForPolicy.Value - ready.CohortUsers,
                 disabledPrime,
-                observed - summary.CoworkRecommendedForPolicy + ready.CohortUsers,
-                summary.CoworkScoredUsers - observed - ceiling.CohortUsers - disabledPrime,
+                observed - summary.CoworkRecommendedForPolicy.Value + ready.CohortUsers,
+                summary.CoworkScoredUsers.Value - observed - ceiling.CohortUsers - disabledPrime,
             };
             return parts.All(people => people >= 0 && !SmallPopulations.IsSmall(people, minPeople))
                 && summary.CoworkTiers.All(tier => !SmallPopulations.IsSmall(tier.Users, minPeople));
@@ -143,7 +275,7 @@ namespace Common.Entities.CopilotAdoption
                 (summary.ScoredUsers - summary.UsageReportSourcedUsers,
                     Groups(summary.IntensityByDepartment, r => r.Segment, r => r.LicensedUsers)
                         .Concat(Groups(timeSaved?.ByDepartment, r => r.Segment, r => r.CohortUsers))),
-                (summary.CoworkScoredUsers, Groups(summary.CoworkByDepartment, r => r.Segment, r => r.LicensedUsers)
+                (summary.CoworkScoredUsers.GetValueOrDefault(), Groups(summary.CoworkByDepartment, r => r.Segment, r => r.LicensedUsers)
                     .Concat(Groups(summary.CoworkQuadrant, r => r.Segment, r => r.LicensedUsers))));
 
             var countries = SmallestListedGroups(minPeople, (summary.ScoredUsers,
@@ -390,14 +522,15 @@ namespace Common.Entities.CopilotAdoption
         #region Email domains
 
         /// <summary>
-        /// The email-domain table for a reader without See PII: each of a row's three populations - its seat holders, its
-        /// unlicensed Copilot Chat users and its licence candidates - floored on its own, rather than the row on all of them
-        /// together, and each column's total kept from giving a withheld cell back.
+        /// The email-domain table for a reader without See PII: each of a row's four populations - its seat holders, its
+        /// unlicensed Copilot Chat users, its licence candidates and its Cowork prime candidates - floored on its own,
+        /// rather than the row on all of them together, and each column's total kept from giving a withheld cell back.
         /// </summary>
         /// <remarks>
         /// <para>A domain of 20 seat holders and 3 Chat users is listed, because it has enough people, but its Chat count
         /// is about 3 people: withheld (<see cref="SmallGroupWithheldReasons.FewPeople"/>). Each column then answers to its
-        /// own total - the scored seat holders, the unlicensed users counted, the recommended candidates - with
+        /// own total - the scored seat holders, the unlicensed users counted, the recommended licence candidates, and the
+        /// Cowork prime candidates - with
         /// <see cref="WithholdWhatATotalWouldGiveBack"/>. The people of a domain are in exactly one row, so the total less the
         /// rows shown counts the withheld rows and the domains left out of the table, and nobody twice.</para>
         /// <para>Every row stays, in the order of what is shown: withheld seat holders have no adoption rate to rank on, so
@@ -412,26 +545,35 @@ namespace Common.Entities.CopilotAdoption
             var seats = rows.Select(r => r?.LicensedUsers ?? 0).ToList();
             var chat = rows.Select(r => r?.UnlicensedActiveUsers ?? 0).ToList();
             var candidates = rows.Select(r => r?.RecommendedForLicence ?? 0).ToList();
+            var cowork = rows.Select(r => r?.CoworkPrimeCandidates ?? 0).ToList();
 
             var seatsSmall = seats.Select(n => SmallPopulations.IsSmall(n, minPeople)).ToArray();
             var chatSmall = chat.Select(n => SmallPopulations.IsSmall(n, minPeople)).ToArray();
             var candidatesSmall = candidates.Select(n => SmallPopulations.IsSmall(n, minPeople)).ToArray();
+            var coworkSmall = rows.Select(r =>
+                summary.CoworkReadinessAvailable && r != null && r.CoworkPrimeCandidates.HasValue
+                && SmallPopulations.IsSmall(r.CoworkPrimeCandidates.Value, minPeople)).ToArray();
 
             var seatsWithheld = (bool[])seatsSmall.Clone();
             var chatWithheld = (bool[])chatSmall.Clone();
             var candidatesWithheld = (bool[])candidatesSmall.Clone();
+            var coworkWithheld = (bool[])coworkSmall.Clone();
 
             WithholdWhatATotalWouldGiveBack(seats, seatsWithheld, summary.ScoredUsers, minPeople);
             WithholdWhatATotalWouldGiveBack(chat, chatWithheld, UnlicensedUsersCounted(summary), minPeople);
             WithholdWhatATotalWouldGiveBack(candidates, candidatesWithheld, summary.RecommendedForLicence, minPeople);
+            if (summary.CoworkReadinessAvailable && summary.CoworkPrimeCandidates.HasValue)
+                WithholdWhatATotalWouldGiveBack(cowork, coworkWithheld, summary.CoworkPrimeCandidates.Value, minPeople);
 
-            if (!seatsWithheld.Any(w => w) && !chatWithheld.Any(w => w) && !candidatesWithheld.Any(w => w)) return rows;
+            if (!seatsWithheld.Any(w => w) && !chatWithheld.Any(w => w) && !candidatesWithheld.Any(w => w)
+                && !coworkWithheld.Any(w => w))
+                return rows;
 
             var floored = new List<AdoptionDomainRow>(rows.Count);
             for (var i = 0; i < rows.Count; i++)
             {
                 var row = rows[i];
-                if (row == null || (!seatsWithheld[i] && !chatWithheld[i] && !candidatesWithheld[i]))
+                if (row == null || (!seatsWithheld[i] && !chatWithheld[i] && !candidatesWithheld[i] && !coworkWithheld[i]))
                 {
                     floored.Add(row);
                     continue;
@@ -463,6 +605,12 @@ namespace Common.Entities.CopilotAdoption
                 {
                     copy.LicenceCandidatesWithheld = Reason(candidatesSmall[i]);
                     copy.RecommendedForLicence = null;
+                }
+
+                if (coworkWithheld[i])
+                {
+                    copy.CoworkPrimeCandidatesWithheld = Reason(coworkSmall[i]);
+                    copy.CoworkPrimeCandidates = null;
                 }
 
                 floored.Add(copy);

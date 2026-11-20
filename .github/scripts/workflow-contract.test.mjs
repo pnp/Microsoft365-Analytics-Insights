@@ -43,6 +43,15 @@ test('the parser reads what the contract relies on from the real files', () => {
   assert.equal(jobs(workflows['secret-scan.yml']).gitleaks.check, 'gitleaks');
 });
 
+test('the secret scan covers commits introduced by the push or pull request', () => {
+  const workflow = real().workflows['secret-scan.yml'];
+  assert.match(workflow, /PR_BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+  assert.match(workflow, /PR_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+  assert.match(workflow, /base_sha="\$BEFORE_SHA"/);
+  assert.match(workflow, /git merge-base "origin\/\$DEFAULT_BRANCH" "\$GITHUB_SHA"/);
+  assert.match(workflow, /--log-opts "\$base_sha\.\.\$head_sha"/);
+});
+
 test('a path that ci-paths.json selects tests for but a build does not start on is reported for each build', () => {
   const input = real();
   input.ciPaths.dotnet.push('deploy/**');

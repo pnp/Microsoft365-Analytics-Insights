@@ -311,9 +311,13 @@ export const copilotAdoptionUsers = {
     'Hidden: this domain has fewer than {count} licence candidates',
   'copilotAdoptionUsers.emailDomain.withheld.candidates.revealsSmallerGroup':
     'Hidden: with the tenant total, this count would reveal a domain with fewer than {count} licence candidates',
+  'copilotAdoptionUsers.emailDomain.withheld.cowork.fewPeople':
+    'Hidden: fewer than {count} people on this domain are prime Cowork candidates',
+  'copilotAdoptionUsers.emailDomain.withheld.cowork.revealsSmallerGroup':
+    'Hidden: with the tenant total, this count would reveal a domain with fewer than {count} prime Cowork candidates',
   'copilotAdoptionUsers.emailDomain.withheld.other': 'Hidden: it could single out fewer than {count} people',
   'copilotAdoptionUsers.emailDomain.withheldNote':
-    'Each row holds three groups of people - its seat holders, its unlicensed Copilot Chat users and its licence candidates - and a group of fewer than {count} people is hidden, so that nobody can be singled out.',
+    'Each row holds four groups of people - its seat holders, its unlicensed Copilot Chat users, its licence candidates and its prime Cowork candidates - and a group of fewer than {count} people is hidden, so that nobody can be singled out.',
   'copilotAdoptionUsers.emailDomain.withheldNoteComplement':
     'One more domain is hidden in a column when subtracting the figures shown from the tenant\u2019s total would otherwise reveal a hidden one.',
 

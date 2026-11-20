@@ -107,6 +107,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
       m365UsageReportsAvailable: true, m365UsageReportDate: '2025-03-29T00:00:00Z',
     } as CopilotAdoptionSummary['dataSources'],
     coworkReadinessAvailable: true,
+    coworkReadinessWithheld: false,
     coworkScoredUsers: 2,
     coworkEstablishedUsers: 1,
     coworkTriallingUsers: 0,
@@ -944,6 +945,27 @@ describe('CoworkPanel', () => {
     expect(screen.getAllByText('Reporting window')).toHaveLength(1);
     expect(screen.getByText(/Only retained, imported evidence is observed/)).not.toBeVisible();
     expect(screen.queryByText('Seat holders assessed for readiness')).toBeNull();
+  });
+
+  it('explains withheld readiness without rendering the small-group figures', () => {
+    render(withEstimates({
+      coworkReadinessWithheld: true,
+      coworkScoredUsers: null,
+      coworkTiers: [],
+      coworkByDepartment: [],
+      coworkQuadrant: [],
+      coworkValueEstimate: null,
+      coworkFullRolloutEstimate: null,
+      coworkNewAdoptionEstimate: null,
+      coworkNonUserCeilingEstimate: null,
+      coworkObservedUsage: {
+        available: false, assessedUsers: null, users: null, interactions: null, activeUserDays: null,
+        lastInteractionUtc: null, partial: false, assistedHours: null, withheldReason: 'revealsSmallerGroup',
+      },
+    }));
+    expect(screen.getAllByText(/Figures are withheld because a cohort or its complement/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Seat holders scored')).toBeNull();
+    expect(screen.queryByText('Prime candidate')).toBeNull();
   });
 
   it('opens all observed accounts, including disabled-account diagnostics, without changing the forecast', async () => {

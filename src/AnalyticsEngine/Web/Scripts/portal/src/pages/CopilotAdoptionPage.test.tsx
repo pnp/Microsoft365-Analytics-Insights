@@ -192,6 +192,7 @@ function summary(overrides: Partial<CopilotAdoptionSummary> = {}): CopilotAdopti
     coworkInteractions: 0,
     coworkDetected: false,
     coworkReadinessAvailable: false,
+    coworkReadinessWithheld: false,
     coworkScoredUsers: 0,
     coworkEstablishedUsers: 0,
     coworkTriallingUsers: 0,
@@ -956,6 +957,25 @@ describe('CopilotAdoptionPage view split', () => {
     expect(screen.queryByText(/scored seat holders are ready to be scoped for Cowork/)).not.toBeInTheDocument();
   });
 
+  it('shows no readiness gauge when Cowork readiness figures are withheld for small groups', async () => {
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
+      coworkDetected: true,
+      coworkAdoptionPct: null,
+      coworkReadinessAvailable: true,
+      coworkReadinessWithheld: true,
+      coworkScoredUsers: null,
+      coworkRecommendedForPolicy: null,
+    }));
+
+    await renderPage();
+    await screen.findAllByText('Where we stand');
+    fireEvent.click(screen.getByRole('tab', { name: 'Analyst view' }));
+
+    expect(await screen.findByRole('tab', { name: 'Analyst view', selected: true })).toBeVisible();
+    expect(screen.queryByRole('img', { name: /Readiness for Cowork/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/scored seat holders are ready to be scoped for Cowork/)).not.toBeInTheDocument();
+  });
+
   it('uses the designed executive empty state instead of an empty grid of diagnostics', async () => {
     vi.mocked(fetchAdoptionSummary).mockResolvedValue(summary({
       licensedUsers: 0,
@@ -1257,6 +1277,34 @@ describe('CopilotAdoptionPage printing', () => {
     // By text, not by role, so this stays true either side of that swap.
     expect(screen.getByText('Excel report').closest('[data-print="hide"]')).not.toBeNull();
     expect(screen.getByRole('tab', { name: 'Executive view' }).closest('[data-print="hide"]')).not.toBeNull();
+  });
+
+  it('prints the per-workload source coverage facts with the report', async () => {
+    const report = summary();
+    vi.mocked(fetchAdoptionSummary).mockResolvedValue({
+      ...report,
+      dataSources: {
+        ...report.dataSources,
+        workloadCoverage: [{
+          source: 'teams',
+          status: 'empty',
+          reason: null,
+          fromUtc: '2025-12-05',
+          throughUtc: '2025-12-31',
+          expectedDays: 27,
+          verifiedDays: 27,
+          emptyDays: 27,
+          partialDays: 0,
+          scopeUnverifiedDays: 0,
+        }],
+      },
+    });
+
+    await renderPage();
+
+    const coverage = await screen.findByText('Teams: Successfully empty — 27 of 27 days verified');
+    expect(coverage.closest('[data-print="hide"]')).toBeNull();
+    expect(coverage.closest('[data-print="flow"]')).not.toBeNull();
   });
 
   it('keeps the report itself out of the print-hidden chrome', async () => {
