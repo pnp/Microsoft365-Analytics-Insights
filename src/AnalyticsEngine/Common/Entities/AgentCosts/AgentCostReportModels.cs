@@ -398,7 +398,10 @@ namespace Common.Entities.AgentCosts
         [JsonProperty("nonBilledCredits")]
         public decimal? NonBilledCredits { get; set; }
 
-        /// <summary>How many distinct usage days this group was active on. Null only on the <see cref="Withheld"/> row.</summary>
+        /// <summary>
+        /// How many distinct usage days this group has any reported credit use on, billed or not - a day covered entirely by
+        /// non-billed credits counts. Shown as "Days with usage". Null only on the <see cref="Withheld"/> row.
+        /// </summary>
         [JsonProperty("activeDays")]
         public int? ActiveDays { get; set; }
 
@@ -542,7 +545,10 @@ namespace Common.Entities.AgentCosts
         [JsonProperty("billedCredits")]
         public decimal BilledCredits { get; set; }
 
-        /// <summary>How many distinct usage days this user consumed credits on.</summary>
+        /// <summary>
+        /// How many distinct usage days Microsoft reported credit use for this user on, including days billed at zero
+        /// credits. Shown as "Days with usage".
+        /// </summary>
         [JsonProperty("activeDays")]
         public int ActiveDays { get; set; }
     }

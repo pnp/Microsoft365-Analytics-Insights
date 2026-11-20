@@ -274,6 +274,36 @@ namespace Tests.UnitTests
             Assert.AreEqual(2, rows[0].ActiveDays, "agent-1 was active on both days.");
         }
 
+        /// <summary>
+        /// Issue #851 (R2-10). The column is "Days with usage": a day with credit use that Microsoft did not bill - billed
+        /// credits of zero - is still a day with usage, in the per-agent breakdown and in the per-person list.
+        /// </summary>
+        [TestMethod]
+        public async Task ReportStore_DaysWithUsage_CountDaysWithNothingBilled()
+        {
+            var allowanceDay = CreditRow(Day2, "agent-1", "Generative answer", credits: 0m);
+            allowanceDay.NonBilledCredits = 4m;
+            await _store.UpsertCopilotStudioCreditsAsync(new[]
+            {
+                CreditRow(Day1, "agent-1", "Generative answer", credits: 10m),
+                allowanceDay,
+            });
+            await _store.UpsertCopilotStudioUserCreditsAsync(new[] { UserCreditRow(Day1, credits: 3m), UserCreditRow(Day2, credits: 0m) });
+
+            var reportStore = new SqlAgentCostReportStore(DefaultAnalyticsDbContextFactory.Instance);
+            var query = new AgentCostQuery { FromUtc = Day1, ToUtc = Day2, EnvironmentId = TestMarker };
+
+            var agent = (await reportStore.GetBreakdownAsync(query, AgentCostDimensions.Agent, 10)).Single();
+            Assert.AreEqual(10m, agent.BilledCredits);
+            Assert.AreEqual(4m, agent.NonBilledCredits);
+            Assert.AreEqual(2, agent.ActiveDays, "Day 2's use was not billed, but it is a day with usage.");
+
+            var person = (await reportStore.GetTopUsersAsync(query, 10))
+                .Single(u => u.EntraObjectId == "00000000-0000-0000-0000-0000000000a1");
+            Assert.AreEqual(3m, person.BilledCredits);
+            Assert.AreEqual(2, person.ActiveDays, "A day billed at zero credits is still a day with usage.");
+        }
+
         [TestMethod]
         public async Task ReportStore_DetailPagingIsStableAcrossPages()
         {
