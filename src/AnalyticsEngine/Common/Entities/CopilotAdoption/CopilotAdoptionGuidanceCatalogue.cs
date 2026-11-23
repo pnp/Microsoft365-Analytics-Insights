@@ -17,7 +17,7 @@ namespace Common.Entities.CopilotAdoption
     /// </remarks>
     public static class CopilotAdoptionGuidanceCatalogue
     {
-        public const string Version = "2026.10.07";
+        public const string Version = "2026.11.18";
 
         public const string UnlicensedActionCode = "unlicensed";
 
@@ -43,7 +43,7 @@ namespace Common.Entities.CopilotAdoption
             Link(CopilotAdoptionScoring.AdoptionActionCodes.Grow, "successKit", "Copilot Success Kit", "https://aka.ms/Copilot/SuccessKit", "Copilot Success Kit – Microsoft Adoption", "departmentLead"),
             Link(CopilotAdoptionScoring.AdoptionActionCodes.Grow, "scenarioLibrary", "Microsoft Scenario Library", "https://aka.ms/ScenarioLibrary", "Microsoft Scenario Library – Microsoft Adoption", "departmentLead"),
 
-            Link(CopilotAdoptionScoring.AdoptionActionCodes.Advocate, "essentialGuide", "The essential guide to Microsoft 365 Copilot adoption", "https://adoption.microsoft.com/en-us/copilot/essential-guide/", "The essential guide to Microsoft 365 Copilot adoption – Microsoft Adoption", "enablementOwner"),
+            Link(CopilotAdoptionScoring.AdoptionActionCodes.Advocate, "copilotChampions", "Microsoft Copilot for Champions", "https://adoption.microsoft.com/en-us/copilot/champions/", "Microsoft Copilot for Champions – Microsoft Adoption", "enablementOwner"),
             Link(CopilotAdoptionScoring.AdoptionActionCodes.Advocate, "aiCouncil", "Creating an AI Council", "https://adoption.microsoft.com/en-us/copilot/ai-council/", "Creating an AI Council – Microsoft Adoption", "enablementOwner"),
             Link(CopilotAdoptionScoring.AdoptionActionCodes.Advocate, "workTrendIndex2026", "2026 Work Trend Index", "https://www.microsoft.com/en-us/worklab/work-trend-index/agents-human-agency-and-the-opportunity-for-every-organization", "2026 Work Trend Index report: Agents, human agency, and opportunity", "enablementOwner"),
             Link(CopilotAdoptionScoring.AdoptionActionCodes.Advocate, "frontierFirmResources", "Frontier Firm resources", "https://www.microsoft.com/en-us/worklab/frontier-firm-resources", "Journey to the Frontier Firm", "enablementOwner"),

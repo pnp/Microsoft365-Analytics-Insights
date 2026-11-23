@@ -1,14 +1,15 @@
-import { makeStyles, tokens, Text, Button, Badge, MessageBar, MessageBarBody } from '@fluentui/react-components';
+import { makeStyles, tokens, Text, Button, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import { ArrowRight16Regular, Options16Regular } from '@fluentui/react-icons';
 import type { CopilotAdoptionOptions, CopilotAdoptionSummary } from '../../types/copilotAdoption';
 import { formatCount } from '../shared/KpiGrid';
-import { formatNumber, plural, useT } from '../../i18n';
+import { formatList, formatNumber, plural, useT } from '../../i18n';
 import {
   COWORK_ASSUMPTION_KEYS,
   customisesAny,
   formatModelled,
   modelledRange,
   projectCoworkTimeSaved,
+  projectCoworkAdoption,
   type CoworkProjection,
   type TimeSavedAssumptionState,
 } from './coworkTimeSaved';
@@ -18,7 +19,6 @@ import {
   COWORK_ACTIVITY_COLOUR,
   COWORK_ACTIVITY_LABEL,
   CohortPicker,
-  EVIDENCE_GREEN,
   ModelledBadge,
   TIME_SAVED_COWORK_COLOUR,
   TimeSavedHeroFrame,
@@ -27,20 +27,9 @@ import {
   wholeShares,
   type HeroStat,
 } from './timeSavedShared';
+import { CoworkAdoptionUnavailable, CoworkEvidenceNote } from './CoworkEvidence';
 
 const useStyles = makeStyles({
-  observed: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    marginTop: '10px',
-    color: tokens.colorNeutralForeground2,
-  },
-  observedBadge: {
-    color: tokens.colorNeutralForegroundOnBrand,
-    backgroundColor: EVIDENCE_GREEN,
-    whiteSpace: 'nowrap',
-  },
   breakdown: {
     marginTop: '18px',
   },
@@ -98,16 +87,14 @@ const useStyles = makeStyles({
  * The Cowork tab's headline: the time Cowork could give back on top of what Microsoft 365 Copilot
  * already saves - the value of enabling Cowork, paid for in Copilot Credits.
  *
- * Leads with the people ready for Cowork now, because that is the decision this tab exists for: who
- * to put in the spending policy. Every Copilot seat holder is beside it as the ceiling, and says it
- * is one - it has people who are not ready yet hand Cowork the same share of their work, so it
- * overstates. The reader can make every seat holder the headline instead, with the people ready now
- * beside it; and when nobody is ready, every seat holder leads on its own and says why, rather than
- * the headline vanishing.
+ * Leads with recommended prime candidates with no Cowork use observed in the period. The broader
+ * scenario covers eligible assessed non-users, including people not yet ready. The full policy
+ * audience serves a separate decision and does not determine either forecast.
  *
  * Beneath the figure, where it would come from: the share of the hours each kind of work Cowork can
  * take on accounts for - the meetings people organise and attend, the email they send, their Teams
- * messages and documents - beside the Cowork tasks already running. That is the question the figure
+ * messages and documents. Observed use and unestimated existing benefit have their own section.
+ * That is the question the figure
  * is asked for: not only how much time, but where.
  *
  * There is deliberately no Microsoft 365 Copilot figure here. These people already hold a licence,
@@ -143,11 +130,36 @@ export default function CoworkTimeSavedHero({
   const t = useT();
   const { assumptions, customised } = timeSaved;
 
-  const ready = projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, options);
-  const full = projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, options);
+  const { ready, full } = projectCoworkAdoption(summary, assumptions, options);
   const withoutLicence = projectCoworkTimeSaved(summary.coworkWithoutLicenceEstimate, assumptions, options);
   const resolved = resolveTimeSavedCohort(cohort, ready, full, withoutLicence);
-  if (!resolved) return null;
+  const picker = full || withoutLicence ? (
+    <CohortPicker
+      value={resolved?.cohort ?? cohort}
+      onChange={onCohortChange}
+      options={[
+        {
+          value: 'recommended',
+          label: summary.coworkNewAdoptionWithheld
+            ? t('copilotAdoptionCowork.timeSaved.cohort.readyWithheld')
+            : summary.coworkNewAdoptionEstimate == null
+              ? t('copilotAdoptionCowork.timeSaved.cohort.readyUnavailable')
+              : t('copilotAdoptionCowork.timeSaved.cohort.ready', { users: formatCount(ready?.cohortUsers ?? 0) }),
+          disabled: !ready,
+        },
+        ...(full
+          ? [{ value: 'all' as const, label: t('copilotAdoptionCowork.timeSaved.cohort.all', { users: formatCount(full.cohortUsers) }) }]
+          : []),
+        ...(withoutLicence
+          ? [{
+              value: 'withoutLicence' as const,
+              label: t('copilotAdoptionCowork.timeSaved.cohort.withoutLicence', { users: formatCount(withoutLicence.cohortUsers) }),
+            }]
+          : []),
+      ]}
+    />
+  ) : undefined;
+  if (!resolved) return <CoworkAdoptionUnavailable summary={summary}>{picker}</CoworkAdoptionUnavailable>;
   const { projection: headline, cohort: shown, fallback } = resolved;
   const everyone = shown === 'all';
   // People without a Copilot seat: a what-if on top of a licence, said as one wherever it is quoted.
@@ -156,7 +168,7 @@ export default function CoworkTimeSavedHero({
   const figures = {
     percent: formatNumber(assumptions.conservativeRatio * 100, { maximumFractionDigits: 1 }),
   };
-  const readyUsers = summary.coworkRecommendedForPolicy;
+  const readyUsers = ready?.cohortUsers ?? 0;
   const hours = (projection: CoworkProjection) =>
     modelledRange(t, formatCount(projection.hoursLow), formatCount(projection.hoursHigh));
 
@@ -237,9 +249,9 @@ export default function CoworkTimeSavedHero({
           className={styles.bar}
           role="img"
           aria-label={t('copilotAdoptionCowork.timeSaved.hero.breakdownAria', {
-            parts: segments
-              .map((s, i) => t('copilotAdoptionCowork.timeSaved.hero.breakdownPart', { activity: s.label, share: formatWholeShare(shares[i]) }))
-              .join(', '),
+            parts: formatList(
+              segments.map((s, i) => t('copilotAdoptionCowork.timeSaved.hero.breakdownPart', { activity: s.label, share: formatWholeShare(shares[i]) })),
+            ),
           })}
         >
           {segments.map((s, i) =>
@@ -280,7 +292,9 @@ export default function CoworkTimeSavedHero({
     <TimeSavedHeroFrame
       id="cowork-time-saved-headline"
       accent={TIME_SAVED_COWORK_COLOUR}
-      eyebrow={t('copilotAdoptionCowork.timeSaved.hero.eyebrow')}
+      eyebrow={t(unlicensed
+        ? 'copilotAdoptionCowork.timeSaved.hero.licensingEyebrow'
+        : 'copilotAdoptionCowork.timeSaved.hero.eyebrow')}
       badges={
         <>
           <ModelledBadge />
@@ -304,32 +318,7 @@ export default function CoworkTimeSavedHero({
         }),
         source: t('copilotAdoptionCowork.timeSaved.hero.info.source'),
       }}
-      picker={
-        full || withoutLicence ? (
-          <CohortPicker
-            value={shown}
-            onChange={onCohortChange}
-            options={[
-              {
-                value: 'recommended',
-                label: t('copilotAdoptionCowork.timeSaved.cohort.ready', { users: formatCount(ready?.cohortUsers ?? 0) }),
-                disabled: !ready,
-              },
-              ...(full
-                ? [{ value: 'all' as const, label: t('copilotAdoptionCowork.timeSaved.cohort.all', { users: formatCount(full.cohortUsers) }) }]
-                : []),
-              ...(withoutLicence
-                ? [
-                    {
-                      value: 'withoutLicence' as const,
-                      label: t('copilotAdoptionCowork.timeSaved.cohort.withoutLicence', { users: formatCount(withoutLicence.cohortUsers) }),
-                    },
-                  ]
-                : []),
-            ]}
-          />
-        ) : undefined
-      }
+      picker={picker}
       headline={t('copilotAdoptionTimeSaved.hero.hoursRange', { range: hours(headline) })}
       subline={
         unlicensed
@@ -381,7 +370,9 @@ export default function CoworkTimeSavedHero({
         ) : everyone ? (
           <MessageBar intent="info">
             <MessageBarBody>
-              {t(fallback ? 'copilotAdoptionCowork.timeSaved.hero.noneReady' : 'copilotAdoptionCowork.timeSaved.hero.allNotice')}
+              {t(summary.coworkNewAdoptionWithheld
+                ? 'copilotAdoptionCowork.coverage.withheld'
+                : fallback ? 'copilotAdoptionCowork.timeSaved.hero.noneReady' : 'copilotAdoptionCowork.timeSaved.hero.allNotice')}
             </MessageBarBody>
           </MessageBar>
         ) : undefined
@@ -428,25 +419,7 @@ export default function CoworkTimeSavedHero({
           )}
         </>
       }
-      footer={
-        summary.coworkDetected && summary.coworkUsers > 0 ? (
-          <div className={styles.observed}>
-            <Badge className={styles.observedBadge} size="small">
-              {t('copilotAdoptionCowork.basis.observed')}
-            </Badge>
-            <Text size={200}>
-              {t(
-                plural(
-                  summary.coworkUsers,
-                  'copilotAdoptionCowork.timeSaved.hero.observed.users.one',
-                  'copilotAdoptionCowork.timeSaved.hero.observed.users.other',
-                ),
-                { users: formatCount(summary.coworkUsers) },
-              )}
-            </Text>
-          </div>
-        ) : undefined
-      }
+      footer={<CoworkEvidenceNote summary={summary} model={!unlicensed} />}
     />
   );
 }

@@ -440,6 +440,8 @@ namespace Tests.UnitTests
             var row = UsageRow(interactions: 0, activeDays: 0, appsUsed: 0, lastUse: null);
             row.AccountEnabled = true;
             row.AccountCreatedUtc = Now.AddDays(-5);
+            row.SeatObservedFromUtc = Now.AddDays(-5);
+            row.SeatObservationSource = 1;
 
             var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: true);
 
@@ -449,8 +451,8 @@ namespace Tests.UnitTests
                 "Too-new users need a later review, not an automatic reclaim recommendation.");
             Assert.AreEqual(CopilotAdoptionScoring.AdoptionActionCodes.Review, scored.RecommendedActionCode);
             StringAssert.Contains(scored.RecommendedAction, "Too new to judge");
-            Assert.AreEqual(CopilotAdoptionScoring.TenureBasisAccountAge, scored.TenureBasis,
-                "Until seat-tenure history exists, the row must say it used account age.");
+            Assert.AreEqual(CopilotAdoptionScoring.TenureBasisSeatObservedLowerBound, scored.TenureBasis,
+                "The row must identify recorded seat evidence, not account age.");
         }
 
         [TestMethod]
@@ -466,7 +468,7 @@ namespace Tests.UnitTests
             var scored = CopilotAdoptionScoring.Score(row, WindowStart, Now, auditAvailable: true);
 
             Assert.IsTrue(scored.ExpectedActiveDays < CopilotAdoptionScoring.TargetActiveDays(CopilotAdoptionOptions.Default),
-                "Frequency must be prorated while the account-age tenure proxy is inside the grace period.");
+                "Frequency must be prorated for an account created inside the grace period.");
             Assert.AreEqual(100, scored.FrequencyScore);
             Assert.AreEqual(AdoptionBand.Champion, scored.Band);
             Assert.IsFalse(scored.TooNewToJudge && scored.ReclaimEligibility == CopilotAdoptionScoring.ReclaimEligibilityTiers.Probable,
@@ -1110,7 +1112,7 @@ namespace Tests.UnitTests
             // different between runs.
             StringAssert.Contains(sql, "TOP (@maxRows)");
             StringAssert.Contains(sql, "u.created_utc AS AccountCreatedUtc",
-                "The user detail rows must carry the account-age tenure proxy used by the grace-period rule.");
+                "The user detail rows must carry account creation for the frequency observation window.");
             StringAssert.Contains(sql, "dbo.copilot_adoption_reclaim_exclusions",
                 "Reclaim exclusions must be read with the same user-id key the detail list drills through on.");
             StringAssert.Contains(sql, "ORDER BY u.id");
@@ -3364,7 +3366,8 @@ namespace Tests.UnitTests
                 { CopilotAdoptionWarningKeys.LicenceOpportunitiesNoSources, Case("Licence opportunities need either the Copilot audit import or the Microsoft 365 usage reports. Neither has data, so no candidates can be identified.") },
                 { CopilotAdoptionWarningKeys.LicenceCandidatesAuditOnly, Case("The Microsoft 365 usage reports are not available, so licence candidates are ranked only on unlicensed Copilot Chat use. Heavy Microsoft 365 users who have never tried Copilot will not appear.") },
                 { CopilotAdoptionWarningKeys.CoworkReadinessNoSources, Case("Cowork readiness needs the Copilot audit import or the Microsoft 365 usage reports. Neither has data for this period, so no readiness assessment is possible.") },
-                { CopilotAdoptionWarningKeys.CoworkM365UsageMissing, Case("The Microsoft 365 usage reports are not available, so coordination load cannot be measured. Everyone will score zero on that axis and no one will be identified as a Cowork candidate. Enable the Microsoft 365 usage report import to use this tab.") },
+                { CopilotAdoptionWarningKeys.CoworkM365UsageMissing, Case("The Microsoft 365 workload reports are unverified. Coordination load and workload-fit classifications are unavailable, not zero. Check daily usage-report imports and durable runtime state.") },
+                { CopilotAdoptionWarningKeys.WorkloadCoverageUnverified, Case("Daily import outcomes do not verify every workload for the assessed period. Positive retained observations are partial; missing values are unknown, not zero. Workload-fit classifications and prospective hours are withheld. Legacy completion stamps cannot establish this coverage.") },
                 // #692 changed these two on purpose: neither may name Microsoft's Cowork usage report, which this
                 // product cannot read, and the coworkUsageReportMissing warning about that report is gone.
                 { CopilotAdoptionWarningKeys.CoworkAuditMissing, Case("The Copilot audit import has no data for this period. Cowork interactions come only from the Copilot audit log, so nobody can be shown as already using Cowork, and everyone is assessed on coordination load and Copilot fluency alone.") },
@@ -3375,7 +3378,7 @@ namespace Tests.UnitTests
                 { CopilotAdoptionWarningKeys.CurrentOrgDataForPastRange, Case("Department, manager, country, office, company, account status and reclaim exclusions are today's values, not historical values for the selected period.") },
                 { CopilotAdoptionWarningKeys.AgentInventoryAsOfNow, Case("The agent inventory - the agents listed, their health verdicts and agent use by department - remains an as-of-now view even when the reporting period is historical. Active agents, agent users and interactions per agent user describe the selected period.") },
                 { CopilotAdoptionWarningKeys.AgentPeriodFiguresUnavailable, Case("The Copilot audit log holds nothing for this period, so its active agents, agent interactions and interactions per agent user are left blank rather than taken from the agent inventory, which describes the latest weeks and not this period.") },
-                { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, Case("Microsoft's pinned Copilot usage-report period is D90, but this analysis window is D28. Report-sourced rows are kept in the adoption population so active people are not marked as never used, but a report-sourced row that would otherwise be a PROBABLE reclaim is excluded from reclaimable-seat totals rather than normalising prompt counts across unlike windows. Certain (disabled-account) seats are never held back this way, because a disabled account is not an inference from an absence of use. The band breakdown therefore counts more idle seats than the reclaim figure does; the difference is reported as \"held back for window mismatch\".", "reportDays", 90, "analysisDays", 28) },
+                { CopilotAdoptionWarningKeys.UsageReportWindowMismatch, Case("Microsoft's pinned Copilot usage-report period is D90, but this analysis window is D28. A report whose last activity predates this window supplies historical evidence only, not current activity or habit. Other report-sourced rows retain report-native counters: an in-window or missing last-activity date does not establish how many prompts or active days belong to this window. These rows remain in the population rather than becoming never used. A report-sourced PROBABLE reclaim is held back for window mismatch, outside reclaimable-seat totals; certain (disabled-account) seats are not, because disabling is not an inference from absent use.", "reportDays", 90, "analysisDays", 28) },
                 { CopilotAdoptionWarningKeys.CoworkEligibilityUnknown, Case("Cowork use is shown as a number of people, not as a percentage. Working out a percentage needs the number of people allowed to use Cowork. That is decided by your spending policies that include Cowork, not by the number of Copilot licences, and this tool can't read those policies. The Cowork entry in the Microsoft 365 admin centre (Agents > All Agents) no longer controls access, so it isn't used as a substitute. This is expected and needs no action.") },
                 { CopilotAdoptionWarningKeys.PurchasedSeatsUnknown, Case("Purchased and unassigned Copilot seats are unknown because Graph subscribedSkus/prepaidUnits has not been imported. Grant Organization.Read.All and rerun the user metadata import; the report deliberately does not show zero for unassigned seats when the purchase inventory is missing.") },
                 { CopilotAdoptionWarningKeys.SkuSeatMismatch, Case("Purchased and assigned Copilot seats disagree for Contoso Copilot SKU: Graph reports 1,234 purchased but 1,200 assigned, so unassigned seats are shown as Unknown rather than zero.", "skuName", "Contoso Copilot SKU", "purchased", 1234, "assigned", 1200) },
@@ -3690,6 +3693,7 @@ namespace Tests.UnitTests
                 "https://adoption.microsoft.com/en-us/" + "scenarios/",
                 "https://adoption.microsoft.com/en-us/copilot/" + "plan/",
                 "https://adoption.microsoft.com/en-us/copilot/" + "adopt/",
+                "https://adoption.microsoft.com/en-us/copilot/" + "essential-guide/",
                 "https://aka.ms/" + "CopilotAdoptionPlaybook",
                 // Renders the WorkLab home page with HTTP 200 for any path, so it reads as working to a
                 // link checker while never showing the report (#643).
@@ -4643,6 +4647,8 @@ namespace Tests.UnitTests
                 UserPrincipalName = "user@contoso.com",
                 AccountEnabled = true,
                 AccountCreatedUtc = Now.AddDays(-120),
+                SeatObservedFromUtc = Now.AddDays(-120),
+                SeatObservationSource = 0,
                 Interactions = interactions,
                 ActiveDays = activeDays,
                 AppsUsed = appsUsed,
@@ -4660,7 +4666,8 @@ namespace Tests.UnitTests
                 AccountEnabled = true,
                 AccountCreatedUtc = Now.AddDays(-120),
                 TenureStartUtc = Now.AddDays(-120),
-                TenureBasis = CopilotAdoptionScoring.TenureBasisAccountAge,
+                TenureBasis = CopilotAdoptionScoring.TenureBasisSeatObservedLowerBound,
+                SeatObservationSource = 0,
                 DaysSinceTenureStart = 120,
                 AdoptionScore = score,
                 Band = band,

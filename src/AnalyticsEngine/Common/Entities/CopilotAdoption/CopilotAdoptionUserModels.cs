@@ -47,10 +47,19 @@ namespace Common.Entities.CopilotAdoption
         public bool? HoldsSeatToday { get; set; }
 
         /// <summary>
-        /// Entra user.createdDateTime persisted by the user import. Used as the current account-age proxy
-        /// for Copilot seat tenure until real assignment history exists.
+        /// Entra user.createdDateTime persisted by the user import. Bounds the possible observation
+        /// window for frequency, but is not evidence of Copilot seat tenure.
         /// </summary>
         public DateTime? AccountCreatedUtc { get; set; }
+
+        /// <summary>
+        /// Earliest recorded start among currently held Copilot SKUs. A lower bound on holding age,
+        /// never an assignment timestamp; closed holdings and non-seat SKUs cannot establish it.
+        /// </summary>
+        public DateTime? SeatObservedFromUtc { get; set; }
+
+        /// <summary>The selected holding's original <c>user_license_history.from_source</c>.</summary>
+        public byte? SeatObservationSource { get; set; }
 
         /// <summary>Reason on the current reclaim exclusion, if this user has one.</summary>
         public string ReclaimExclusionReason { get; set; }
@@ -188,6 +197,9 @@ namespace Common.Entities.CopilotAdoption
 
         [JsonProperty("tenureBasis")]
         public string TenureBasis { get; set; }
+
+        [JsonProperty("seatObservationSource")]
+        public byte? SeatObservationSource { get; set; }
 
         [JsonProperty("daysSinceTenureStart")]
         public int? DaysSinceTenureStart { get; set; }
@@ -459,38 +471,41 @@ namespace Common.Entities.CopilotAdoption
         public DateTime? LastCopilotInteractionUtc { get; set; }
 
         [JsonProperty("teamsMessages")]
-        public long TeamsMessages { get; set; }
+        public long? TeamsMessages { get; set; }
 
         [JsonProperty("teamsMeetings")]
-        public long TeamsMeetings { get; set; }
+        public long? TeamsMeetings { get; set; }
 
         [JsonProperty("emailsSent")]
-        public long EmailsSent { get; set; }
+        public long? EmailsSent { get; set; }
 
         [JsonProperty("emailsRead")]
-        public long EmailsRead { get; set; }
+        public long? EmailsRead { get; set; }
 
         [JsonProperty("filesViewedOrEdited")]
-        public long FilesViewedOrEdited { get; set; }
+        public long? FilesViewedOrEdited { get; set; }
 
         [JsonProperty("lastM365ActivityUtc")]
         public DateTime? LastM365ActivityUtc { get; set; }
 
         /// <summary>0-100. Higher means a stronger business case for giving this person a seat.</summary>
         [JsonProperty("opportunityScore")]
-        public double OpportunityScore { get; set; }
+        public double? OpportunityScore { get; set; }
+
+        [JsonProperty("workloadUnavailableReason")]
+        public string WorkloadUnavailableReason { get; set; }
 
         [JsonProperty("copilotDemandScore")]
         public double CopilotDemandScore { get; set; }
 
         [JsonProperty("collaborationScore")]
-        public double CollaborationScore { get; set; }
+        public double? CollaborationScore { get; set; }
 
         [JsonProperty("emailScore")]
-        public double EmailScore { get; set; }
+        public double? EmailScore { get; set; }
 
         [JsonProperty("documentScore")]
-        public double DocumentScore { get; set; }
+        public double? DocumentScore { get; set; }
 
         /// <summary>True when the score clears <see cref="CopilotAdoptionOptions.OpportunityRecommendScore"/>.</summary>
         [JsonProperty("recommended")]

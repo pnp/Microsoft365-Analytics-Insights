@@ -81,6 +81,54 @@ namespace WebJob.AppInsightsImporter.Engine
             }
             return new AppInsightsReadWindow(ingestedFrom - LateArrivalBound, nowUtc + FutureBound, ingestedFrom, nowUtc);
         }
+
+        /// <summary>
+        /// How far a stored hit's timestamp can be ahead of when it was ingested: a day, by the documented rule above.
+        /// A cursor rewound to the newest stored hit is rewound this much further, so no row ingested after it is missed.
+        /// </summary>
+        public static readonly TimeSpan TimestampAheadOfIngestionBound = TimeSpan.FromDays(1);
+
+        /// <summary>
+        /// Margin for comparing the newest stored hit with the one recorded beside the cursor: the stored value
+        /// round-trips through SQL <c>datetime</c> (3 ms precision) and text.
+        /// </summary>
+        private static readonly TimeSpan NewestHitComparisonTolerance = TimeSpan.FromSeconds(1);
+
+        /// <summary>
+        /// Whether the database lost hits that the cursor says were imported - a point-in-time restore, or a copy of an
+        /// older database - and if so, the cursor to read from instead; null to keep <paramref name="cursorUtc"/> (#849).
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The cursor lives in the state table, outside the database, so restoring the database does not move it back.
+        /// Without this, every row ingested between the restore point and the cursor was never read again.
+        /// </para>
+        /// <para>
+        /// The newest stored hit only ever moves forward while the database is the one the cursor was written for, so the
+        /// newest stored hit recorded when the cursor was written (<paramref name="newestStoredHitAtCursorUtc"/>) is the
+        /// test: the database now holding an older newest hit than that means hits went missing. A cursor written before
+        /// that was recorded has no such record, so the fallback is a cursor more than <see cref="LateArrivalBound"/>
+        /// ahead of the newest stored hit. That fallback can also fire for a tenant that has had no tracked page views
+        /// for days, but only once: the cycle records the newest stored hit beside the cursor it writes.
+        /// </para>
+        /// <para>
+        /// Re-reading is safe because the merges skip page-request ids that are already stored, and
+        /// <see cref="IncrementalRange"/> still caps it at <see cref="MaxLookback"/>, Application Insights' retention.
+        /// </para>
+        /// </remarks>
+        public static DateTime? CursorAfterDatabaseRestore(DateTime cursorUtc, DateTime newestStoredHitUtc, DateTime? newestStoredHitAtCursorUtc)
+        {
+            bool hitsWentMissing = newestStoredHitAtCursorUtc.HasValue
+                ? newestStoredHitUtc < newestStoredHitAtCursorUtc.Value - NewestHitComparisonTolerance
+                : cursorUtc > newestStoredHitUtc + LateArrivalBound;
+            if (!hitsWentMissing)
+            {
+                return null;
+            }
+
+            var rewound = newestStoredHitUtc - TimestampAheadOfIngestionBound;
+            return rewound < cursorUtc ? rewound : (DateTime?)null;
+        }
     }
 
     /// <summary>Where the ingestion cursor is kept between cycles and restarts.</summary>
@@ -92,8 +140,17 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <summary>The cursor, or null when there is none yet. Throws when the store cannot be read.</summary>
         Task<DateTime?> ReadAsync();
 
-        /// <summary>Everything ingested before <paramref name="cursorUtc"/> has been saved.</summary>
-        Task WriteAsync(DateTime cursorUtc);
+        /// <summary>
+        /// The newest stored hit when the cursor was last written, or null when none was recorded (a cursor written by an
+        /// older build). Throws when the store cannot be read.
+        /// </summary>
+        Task<DateTime?> ReadNewestStoredHitAtCursorAsync();
+
+        /// <summary>
+        /// Everything ingested before <paramref name="cursorUtc"/> has been saved, and the newest stored hit is then
+        /// <paramref name="newestStoredHitUtc"/> (null: no hits).
+        /// </summary>
+        Task WriteAsync(DateTime cursorUtc, DateTime? newestStoredHitUtc);
     }
 
     /// <summary>
@@ -106,20 +163,44 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <summary>The key prefix. Part of the stored data's address: do not rename.</summary>
         public const string KeyPrefix = "IngestionCursor";
 
+        /// <summary>
+        /// The key prefix of the newest stored hit recorded beside the cursor (#849). A separate key, so a build that
+        /// predates it still reads the cursor. Part of the stored data's address: do not rename.
+        /// </summary>
+        public const string NewestHitKeyPrefix = "IngestionCursorNewestHit";
+
         private readonly IKeyValueStore _store;
         private readonly string _key;
+        private readonly string _newestHitKey;
 
         public KeyValueIngestionCursorStore(IKeyValueStore store, string appInsightsApplicationId)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
-            _key = string.IsNullOrWhiteSpace(appInsightsApplicationId) ? KeyPrefix : KeyPrefix + ":" + appInsightsApplicationId.Trim();
+            var suffix = string.IsNullOrWhiteSpace(appInsightsApplicationId) ? string.Empty : ":" + appInsightsApplicationId.Trim();
+            _key = KeyPrefix + suffix;
+            _newestHitKey = NewestHitKeyPrefix + suffix;
         }
 
         public string Description => _store.Description + ", key '" + _key + "'";
 
-        public async Task<DateTime?> ReadAsync()
+        public Task<DateTime?> ReadAsync() => ReadUtcAsync(_key);
+
+        public Task<DateTime?> ReadNewestStoredHitAtCursorAsync() => ReadUtcAsync(_newestHitKey);
+
+        public async Task WriteAsync(DateTime cursorUtc, DateTime? newestStoredHitUtc)
         {
-            var value = await _store.GetStringAsync(_key).ConfigureAwait(false);
+            // The newest hit first: if the cursor then fails to save, the next cycle compares against a newer newest hit
+            // than the cursor's, which is still one the database has reached.
+            if (newestStoredHitUtc.HasValue)
+            {
+                await _store.SetStringAsync(_newestHitKey, ToRoundTrip(newestStoredHitUtc.Value)).ConfigureAwait(false);
+            }
+            await _store.SetStringAsync(_key, ToRoundTrip(cursorUtc)).ConfigureAwait(false);
+        }
+
+        private async Task<DateTime?> ReadUtcAsync(string key)
+        {
+            var value = await _store.GetStringAsync(key).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(value))
             {
                 return null;
@@ -127,10 +208,10 @@ namespace WebJob.AppInsightsImporter.Engine
             return DateTime.ParseExact(value, "o", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind).ToUniversalTime();
         }
 
-        public Task WriteAsync(DateTime cursorUtc)
+        private static string ToRoundTrip(DateTime utc)
         {
-            var utc = cursorUtc.Kind == DateTimeKind.Utc ? cursorUtc : DateTime.SpecifyKind(cursorUtc, DateTimeKind.Utc);
-            return _store.SetStringAsync(_key, utc.ToString("o", CultureInfo.InvariantCulture));
+            var value = utc.Kind == DateTimeKind.Utc ? utc : DateTime.SpecifyKind(utc, DateTimeKind.Utc);
+            return value.ToString("o", CultureInfo.InvariantCulture);
         }
     }
 }

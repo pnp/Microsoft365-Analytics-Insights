@@ -73,6 +73,7 @@ import PrintButton from '../components/shared/PrintButton';
 import { PRINT_ROW_LIMIT } from '../components/shared/printPreparation';
 import { serverPlaceholderText } from '../components/shared/serverPlaceholder';
 import DismissibleWarnings from '../components/shared/DismissibleWarnings';
+import WorkloadCoverageNotice from '../components/copilotAdoption/WorkloadCoverageNotice';
 import AdoptionPeriodControl, { periodLabel, type FixedPeriod } from '../components/copilotAdoption/AdoptionPeriodControl';
 import SeatHolderTimeSavedModel from '../components/copilotAdoption/SeatHolderTimeSavedModel';
 import PiiHiddenNote from '../components/shared/PiiHiddenNote';
@@ -93,6 +94,7 @@ import {
 import {
   compactHoursRange,
   projectCoworkTimeSaved,
+  projectCoworkAdoption,
   projectLicenceTimeSaved,
   projectSeatHolderTimeSaved,
   timeSavedExportParams,
@@ -495,6 +497,7 @@ function CopilotAdoptionView({
   );
   const userFilterParam = serializeUserFilter(userFilter);
   const userFilterScope = userFilterParam ?? '';
+  const scopeKey = `${windowDays}::${dateRange?.from ?? 'rolling'}::${dateRange?.to ?? 'rolling'}::${userFilterScope}`;
   const selectedEmailDomain = singleValueFor(userFilter, EMAIL_DOMAIN_DIMENSION);
   const selectEmailDomain = (domain: string | null) => {
     const next = withDimensionValue(userFilter, EMAIL_DOMAIN_DIMENSION, domain);
@@ -533,6 +536,7 @@ function CopilotAdoptionView({
   const [sqlAttempt, setSqlAttempt] = useState(0);
   const [listLoading, setListLoading] = useState(false);
   const [generationMismatch, setGenerationMismatch] = useState(false);
+  const [dismissedStatusKey, setDismissedStatusKey] = useState<string | null>(null);
   const lastSummaryScope = useRef<string | null>(null);
   const lastRebuildAttempt = useRef(-1);
   const autoReconciled = useRef(false);
@@ -595,7 +599,6 @@ function CopilotAdoptionView({
     // scope loads kept the Excel button pointing at one population and enabled against another -
     // and if the new request then failed, the page went on rendering the previous organisation's
     // figures underneath a heading naming the newly selected one.
-    const scopeKey = `${windowDays}::${dateRange?.from ?? 'rolling'}::${dateRange?.to ?? 'rolling'}::${userFilterScope}`;
     const sameScope = lastSummaryScope.current === scopeKey;
     const startRebuild = loadRequest.rebuild && loadRequest.after && sameScope
       && lastRebuildAttempt.current !== loadRequest.attempt;
@@ -651,7 +654,7 @@ function CopilotAdoptionView({
       cancelled = true;
       controller.abort();
     };
-  }, [availability, windowDays, dateRange, userFilterScope, loadRequest]);
+  }, [availability, windowDays, dateRange, userFilterScope, scopeKey, loadRequest]);
 
   const generationId = summary?.diagnostics?.generationId;
 
@@ -704,6 +707,12 @@ function CopilotAdoptionView({
 
   const cooldownSeconds = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
   const hasFailedAnalysis = summary?.diagnostics?.steps.some(step => step.failed) ?? false;
+  const statusKey = JSON.stringify([scopeKey, loadRequest.attempt, progress?.generationId ?? generationId ?? null]);
+  const canDismissStatus = !!summary && lastSummaryScope.current === scopeKey
+    && !summaryLoading && !summaryError && !hasFailedAnalysis && !generationMismatch
+    && !progress?.steps.some(step => step.state === 'failed')
+    && filtersLoad.state === 'loaded' && !filtersLoad.error
+    && sqlLoad.state === 'loaded' && !sqlLoad.error;
   const reportBusy = summaryLoading || listLoading
     || filtersLoad.state === 'running' || filtersLoad.state === 'pending'
     || sqlLoad.state === 'running' || sqlLoad.state === 'pending';
@@ -889,29 +898,33 @@ function CopilotAdoptionView({
             </TabList>
           </div>
 
-          <AdoptionLoadingCard
-            progress={progress}
-            busy={summaryLoading}
-            keepingReport={!!summary}
-            error={summaryError}
-            filters={filtersLoad}
-            sql={sqlLoad}
-            onCheckAgain={(summaryError && summaryRetryable) || generationMismatch
-              ? () => {
-                autoReconciled.current = false;
-                setGenerationMismatch(false);
-                // Reads the report as it stands, never "the replacement for" an earlier one: after a failed retry, asking
-                // for that replacement again only ever repeated its failure.
-                setLoadRequest(request => ({ attempt: request.attempt + 1 }));
-              } : undefined}
-            onRebuild={hasFailedAnalysis && generationId ? retryAnalysis : undefined}
-            onRetryFilters={() => setFiltersAttempt(attempt => attempt + 1)}
-            onRetrySql={() => setSqlAttempt(attempt => attempt + 1)}
-            cooldownSeconds={cooldownSeconds}
-          />
+          {(!canDismissStatus || dismissedStatusKey !== statusKey) && (
+            <AdoptionLoadingCard
+              progress={progress}
+              busy={summaryLoading}
+              keepingReport={!!summary}
+              error={summaryError}
+              filters={filtersLoad}
+              sql={sqlLoad}
+              onCheckAgain={(summaryError && summaryRetryable) || generationMismatch
+                ? () => {
+                  autoReconciled.current = false;
+                  setGenerationMismatch(false);
+                  // Reads the report as it stands, never "the replacement for" an earlier one: after a failed retry, asking
+                  // for that replacement again only ever repeated its failure.
+                  setLoadRequest(request => ({ attempt: request.attempt + 1 }));
+                } : undefined}
+              onRebuild={hasFailedAnalysis && generationId ? retryAnalysis : undefined}
+              onRetryFilters={() => setFiltersAttempt(attempt => attempt + 1)}
+              onRetrySql={() => setSqlAttempt(attempt => attempt + 1)}
+              cooldownSeconds={cooldownSeconds}
+              onDismiss={canDismissStatus ? () => setDismissedStatusKey(statusKey) : undefined}
+            />
+          )}
 
           {summary && (
             <div className={styles.stack} data-print="flow" inert={summaryLoading || undefined}>
+              <WorkloadCoverageNotice coverage={summary.dataSources.workloadCoverage} />
               {summary.figuresIncomplete && (
                 <MessageBar intent="error">
                   <MessageBarBody>
@@ -1626,9 +1639,15 @@ function AnalystTab({
   // spending-policy scope is unknown - which is the normal case, because nothing in the import can
   // see that scope - so gating the whole Cowork slot on it removed Cowork from this card entirely on
   // most tenants. Readiness has no such denominator: it is a share of the seat holders this tool
-  // actually scored, so it is always answerable when the readiness step ran.
+  // actually scored, so it is always answerable when the readiness step ran - provided the Microsoft
+  // 365 usage reports are verified for the period. When they are not, nobody can be assessed as a
+  // prime candidate, so "recommended" is only the people already using Cowork and the share would
+  // read as near zero - a finding about the import, not about readiness (release critique of #909).
   const coworkReadinessPct =
-    summary.coworkReadinessAvailable && summary.coworkScoredUsers > 0
+    summary.coworkReadinessAvailable && summary.dataSources.m365UsageReportsAvailable
+      && !summary.coworkReadinessWithheld
+      && summary.coworkScoredUsers !== null && summary.coworkScoredUsers > 0
+      && summary.coworkRecommendedForPolicy !== null
       ? (summary.coworkRecommendedForPolicy / summary.coworkScoredUsers) * 100
       : null;
 
@@ -1671,7 +1690,7 @@ function AnalystTab({
             label={t('copilotAdoption.page.habitRate3')}
             sublabel={t('copilotAdoption.page.gauge.madePartWorkingWeek', { count: formatCount(summary.habitualUsers) })}
           />
-          {summary.coworkDetected && summary.coworkAdoptionPct !== null && (
+          {summary.coworkDetected && summary.coworkUsers !== null && summary.coworkAdoptionPct !== null && (
             <GaugeRing
               value={summary.coworkAdoptionPct}
               label={t('copilotAdoption.page.coworkAdoption')}
@@ -1682,7 +1701,10 @@ function AnalystTab({
             <GaugeRing
               value={coworkReadinessPct}
               label={t('copilotAdoption.page.readinessCowork')}
-              sublabel={t('copilotAdoption.page.gauge.readyForCoworkScope', { ready: formatCount(summary.coworkRecommendedForPolicy), total: formatCount(summary.coworkScoredUsers) })}
+              sublabel={t('copilotAdoption.page.gauge.readyForCoworkScope', {
+                ready: formatCount(summary.coworkRecommendedForPolicy ?? 0),
+                total: formatCount(summary.coworkScoredUsers ?? 0),
+              })}
             />
           )}
         </div>
@@ -2968,23 +2990,23 @@ function buildTimeSavedKpis(
     });
   }
 
-  if (summary.coworkReadinessAvailable) {
-    // The people ready now lead, as on the Cowork tab: that is the spending-policy decision. When the
-    // reader chose every seat holder, or nobody is ready, the ceiling stands in - and says it is every
-    // seat holder, not the ready few.
+  if (summary.coworkReadinessAvailable && !summary.coworkReadinessWithheld) {
+    const { ready, full } = projectCoworkAdoption(summary, assumptions, o);
     const coworkCohort = resolveTimeSavedCohort(
       cohorts.cowork,
-      projectCoworkTimeSaved(summary.coworkValueEstimate, assumptions, o),
-      projectCoworkTimeSaved(summary.coworkFullRolloutEstimate, assumptions, o),
+      ready,
+      full,
       projectCoworkTimeSaved(summary.coworkWithoutLicenceEstimate, assumptions, o),
     );
     if (coworkCohort) {
       const cowork = coworkCohort.projection;
       items.push({
         key: 'coworkTimeSaved',
-        label: t('copilotAdoption.page.kpi.coworkTimeSaved.label'),
+        label: t(coworkCohort.cohort === 'withoutLicence'
+          ? 'copilotAdoptionCowork.timeSaved.hero.licensingEyebrow'
+          : 'copilotAdoption.page.kpi.coworkTimeSaved.label'),
         value: t('copilotAdoption.page.kpi.hoursValue', { range: compactHoursRange(t, cowork.hoursLow, cowork.hoursHigh) }),
-        hint:
+        hint: (
           coworkCohort.cohort === 'recommended'
             ? t(
                 plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintReady.other'),
@@ -2998,14 +3020,18 @@ function buildTimeSavedKpis(
               : t(
                   plural(cowork.cohortUsers, 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.one', 'copilotAdoption.page.kpi.coworkTimeSaved.hintCeiling.other'),
                   { users: formatCount(cowork.cohortUsers) },
-                ),
+                )) + ' ' + t('copilotAdoptionCowork.coverage.period', {
+                  from: formatDate(summary.fromUtc), to: formatDate(summary.toUtc),
+                }),
         tone: 'opportunity',
         modelledBadge: t('copilotAdoption.page.kpi.modelledBadge'),
         action: onOpenTab
           ? { label: t('copilotAdoption.page.kpi.coworkTimeSaved.open'), onClick: () => onOpenTab('cowork') }
           : undefined,
         info: {
-          what: t('copilotAdoption.page.kpi.coworkTimeSaved.what'),
+          what: t(coworkCohort.cohort === 'withoutLicence'
+            ? 'copilotAdoptionCowork.timeSaved.hero.info.whatWithoutLicence'
+            : 'copilotAdoption.page.kpi.coworkTimeSaved.what'),
           how: t('copilotAdoption.page.kpi.coworkTimeSaved.how'),
           formula: t('copilotAdoption.page.kpi.coworkTimeSaved.formula', {
             percent,
@@ -3198,7 +3224,7 @@ function buildKpis(
 
   // Cowork is only claimed as a metric when Cowork was actually seen: on a tenant that has not been
   // enabled for it, "0% Cowork adoption" reads as a failure rather than as "not available here".
-  if (summary.coworkDetected) {
+  if (summary.coworkDetected && summary.coworkUsers !== null && summary.coworkInteractions !== null) {
     items.push({
       key: 'cowork',
       label: summary.coworkAdoptionPct === null

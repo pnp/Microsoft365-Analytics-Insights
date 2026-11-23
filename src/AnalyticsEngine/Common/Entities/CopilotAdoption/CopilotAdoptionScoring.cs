@@ -31,11 +31,17 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Score built from Microsoft's per-user Copilot usage report.</summary>
         public const string SignalSourceUsageReport = "usageReport";
 
-        /// <summary>The current tenure signal is Entra account age, not true Copilot seat tenure.</summary>
+        /// <summary>Legacy basis retained for older API consumers; no longer used for reclaim decisions.</summary>
         public const string TenureBasisAccountAge = "accountAge";
+
+        /// <summary>Recorded current holding age is a lower bound, not an exact assignment age.</summary>
+        public const string TenureBasisSeatObservedLowerBound = "seatObservedLowerBound";
 
         /// <summary>No tenure signal was available, so reclaim confidence is deliberately lowered.</summary>
         public const string TenureBasisUnknown = "unknown";
+
+        private static string TenureBasisDescription(string basis) =>
+            basis == TenureBasisSeatObservedLowerBound ? "recorded seat-tenure lower bound" : basis;
 
         public static class ReclaimEligibilityTiers
         {
@@ -98,10 +104,9 @@ namespace Common.Entities.CopilotAdoption
         }
 
         /// <summary>
-        /// Frequency target adjusted for a new user's actual observation window. Until issue #277 adds
-        /// real seat-tenure history, <c>users.created_utc</c> is the best cheap proxy we have. Only the
-        /// early-tenure case is prorated; established users still use the full-window target so the
-        /// metric remains comparable across the population.
+        /// Frequency target adjusted for a new account's possible observation window. The account
+        /// cannot predate creation, but a seat can predate its first observation. Do not prorate from
+        /// a holding's lower bound: an initial history seed is not a new assignment.
         /// </summary>
         /// <remarks>
         /// Prorated against the REPORTING WINDOW, not against <see cref="CopilotAdoptionOptions.ReclaimGraceDays"/>.
@@ -139,11 +144,19 @@ namespace Common.Entities.CopilotAdoption
             return Math.Max(0, (int)(nowUtc.Date - tenureStartUtc.Value.Date).TotalDays);
         }
 
-        /// <summary>Whether the only tenure signal says the user is still inside the grace period.</summary>
+        private static DateTime? RecordedSeatStart(LicensedUserUsageRow row, DateTime nowUtc)
+        {
+            if (row?.SeatObservedFromUtc == null || row.SeatObservedFromUtc > nowUtc
+                || !row.SeatObservationSource.HasValue || row.SeatObservationSource.Value > 2)
+                return null;
+            return row.SeatObservedFromUtc;
+        }
+
+        /// <summary>Whether the recorded lower bound is not yet enough to establish mature holding tenure.</summary>
         public static bool IsTooNewToJudge(LicensedUserUsageRow row, DateTime nowUtc, CopilotAdoptionOptions options)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
-            var days = DaysSinceTenureStart(row?.AccountCreatedUtc, nowUtc);
+            var days = DaysSinceTenureStart(RecordedSeatStart(row, nowUtc), nowUtc);
             return days.HasValue && days.Value < Math.Max(1, o.ReclaimGraceDays);
         }
 
@@ -183,10 +196,15 @@ namespace Common.Entities.CopilotAdoption
                 || row.ReportPrompts.HasValue
                 || row.ReportLastActivityUtc.HasValue;
             var useReport = (!auditAvailable || !auditHasSignal) && reportHasSignal;
+            // Report totals describe its native period, not a distribution we can clip to this window.
+            // A known latest date before the window rules out using those totals as current activity.
+            // With no latest date, retain the explicitly labelled report-native fallback (not "never used").
+            var staleReport = row.ReportLastActivityUtc.HasValue
+                && row.ReportLastActivityUtc.Value < windowStartUtc;
 
-            var activeDays = useReport ? (row.ReportActiveDays ?? 0) : row.ActiveDays;
-            var interactions = useReport ? (row.ReportPrompts ?? 0) : row.Interactions;
-            var appsUsed = useReport ? (row.ReportAppsUsed ?? 0) : row.AppsUsed;
+            var activeDays = useReport ? (staleReport ? 0 : row.ReportActiveDays ?? 0) : row.ActiveDays;
+            var interactions = useReport ? (staleReport ? 0 : row.ReportPrompts ?? 0) : row.Interactions;
+            var appsUsed = useReport ? (staleReport ? 0 : row.ReportAppsUsed ?? 0) : row.AppsUsed;
             var lastUse = useReport
                 ? row.ReportLastActivityUtc
                 : (row.LastInteractionUtc ?? row.ReportLastActivityUtc);
@@ -228,6 +246,7 @@ namespace Common.Entities.CopilotAdoption
                 || (row.FirstInteractionUtc.HasValue && row.FirstInteractionUtc.Value < windowStartUtc);
 
             var band = BandFor(score, usedInWindow, usedBeforeWindow, o);
+            var seatStart = RecordedSeatStart(row, nowUtc);
 
             var scored = new LicensedUserAdoptionRow
             {
@@ -246,9 +265,10 @@ namespace Common.Entities.CopilotAdoption
                 AccountEnabled = row.AccountEnabled,
                 HoldsSeatToday = row.HoldsSeatToday,
                 AccountCreatedUtc = row.AccountCreatedUtc,
-                TenureStartUtc = row.AccountCreatedUtc,
-                TenureBasis = row.AccountCreatedUtc.HasValue ? TenureBasisAccountAge : TenureBasisUnknown,
-                DaysSinceTenureStart = DaysSinceTenureStart(row.AccountCreatedUtc, nowUtc),
+                TenureStartUtc = seatStart,
+                TenureBasis = seatStart.HasValue ? TenureBasisSeatObservedLowerBound : TenureBasisUnknown,
+                SeatObservationSource = seatStart.HasValue ? row.SeatObservationSource : null,
+                DaysSinceTenureStart = DaysSinceTenureStart(seatStart, nowUtc),
                 TooNewToJudge = IsTooNewToJudge(row, nowUtc, o),
                 ReclaimExclusionReason = row.ReclaimExclusionReason,
                 ReclaimExclusionNote = row.ReclaimExclusionNote,
@@ -335,12 +355,12 @@ namespace Common.Entities.CopilotAdoption
                 if (row.TooNewToJudge)
                 {
                     row.ReclaimEligibility = ReclaimEligibilityTiers.Review;
-                    row.ReclaimEligibilityReason = $"Too new to judge: {row.TenureBasis} is below the {o.ReclaimGraceDays}-day grace period.";
+                    row.ReclaimEligibilityReason = $"Too new to judge: {TenureBasisDescription(row.TenureBasis)} is below the {o.ReclaimGraceDays}-day grace period.";
                 }
                 else if (row.AccountEnabled == true && row.DaysSinceTenureStart.HasValue)
                 {
                     row.ReclaimEligibility = ReclaimEligibilityTiers.Probable;
-                    row.ReclaimEligibilityReason = $"No observed Copilot use and {row.TenureBasis} is beyond the {o.ReclaimGraceDays}-day grace period.";
+                    row.ReclaimEligibilityReason = $"No observed Copilot use and {TenureBasisDescription(row.TenureBasis)} is beyond the {o.ReclaimGraceDays}-day grace period.";
                 }
                 else
                 {
@@ -591,7 +611,7 @@ namespace Common.Entities.CopilotAdoption
 
             if (row.TooNewToJudge && row.Band == AdoptionBand.NeverUsed)
             {
-                return $"Review before reclaim - Too new to judge: {row.TenureBasis} is below the {o.ReclaimGraceDays}-day grace period. Do not reclaim yet; check again after onboarding has had time to work.";
+                return $"Review before reclaim - Too new to judge: {TenureBasisDescription(row.TenureBasis)} is below the {o.ReclaimGraceDays}-day grace period. Do not reclaim yet; check again after onboarding has had time to work.";
             }
 
             if (row.ReclaimEligibility == ReclaimEligibilityTiers.Review && row.Band == AdoptionBand.NeverUsed)
@@ -762,8 +782,8 @@ namespace Common.Entities.CopilotAdoption
                          + "still holding a seat is the clearest reclaim there is whatever its usage looked "
                          + "like before it was disabled - no enablement effort is worthwhile on an account "
                          + $"nobody can sign into. The rest had no Copilot activity anywhere in the last {o.HistoryDays} "
-                         + "days - the whole history this analysis reads - and have enough account tenure to judge: "
-                         + "confirm the licence is still needed before renewal. New starters inside the grace period "
+                         + "days - the whole history this analysis reads - and have enough recorded current-seat tenure to judge: "
+                         + "confirm the licence is still needed before renewal. Recent seat observations inside the grace period "
                          + "and users with no tenure evidence are NOT here; they are under 'Review before reclaim'.";
 
                 case AdoptionActionCodes.Reengage:
@@ -1418,6 +1438,7 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public static class CoworkTiers
         {
+            public const string WorkloadUnavailable = "workloadUnavailable";
             /// <summary>Regular, habitual Cowork use. Evidence.</summary>
             public const string Established = "established";
 
@@ -1440,6 +1461,7 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>Whether a tier rests on observed Cowork use or on inference.</summary>
         public static class CoworkBasis
         {
+            public const string Unavailable = "unavailable";
             /// <summary>The user has actually used Cowork - this is observed, not inferred.</summary>
             public const string Evidence = "evidence";
 
@@ -1456,6 +1478,7 @@ namespace Common.Entities.CopilotAdoption
             CoworkTiers.BuildFluencyFirst,
             CoworkTiers.LowCoordinationLoad,
             CoworkTiers.NotIndicated,
+            CoworkTiers.WorkloadUnavailable,
         };
 
         /// <summary>
@@ -1483,6 +1506,8 @@ namespace Common.Entities.CopilotAdoption
                 return CoworkTiers.Trialling;
             }
 
+            if (!row.CoordinationLoadScore.HasValue) return CoworkTiers.WorkloadUnavailable;
+
             var fluent = row.FluencyScore >= o.CoworkFluencyMinScore;
             var loaded = row.CoordinationLoadScore >= o.CoworkLoadMinScore;
 
@@ -1503,6 +1528,7 @@ namespace Common.Entities.CopilotAdoption
                 case CoworkTiers.BuildFluencyFirst: return "Build fluency first";
                 case CoworkTiers.LowCoordinationLoad: return "Low coordination load";
                 case CoworkTiers.NotIndicated: return "Not indicated";
+                case CoworkTiers.WorkloadUnavailable: return "Workload assessment unavailable";
                 default: return string.Empty;
             }
         }
@@ -1512,6 +1538,8 @@ namespace Common.Entities.CopilotAdoption
         {
             switch (tier)
             {
+                case CoworkTiers.WorkloadUnavailable:
+                    return CoworkBasis.Unavailable;
                 case CoworkTiers.Established:
                 case CoworkTiers.Trialling:
                     return CoworkBasis.Evidence;
@@ -1528,6 +1556,8 @@ namespace Common.Entities.CopilotAdoption
 
             switch (tier)
             {
+                case CoworkTiers.WorkloadUnavailable:
+                    return "Workload coverage is unverified. Missing values are unknown, not zero; workload-fit classification and prospective hours are withheld.";
                 case CoworkTiers.Established:
                     return $"Using Cowork on at least {days} separate days in this period. These people have "
                          + "already made it part of how they work - keep them in scope, and use them as the "
@@ -1579,23 +1609,23 @@ namespace Common.Entities.CopilotAdoption
 
             if (row.TeamsMeetings > 0)
             {
-                workload.Add($"{row.TeamsMeetings:N0} meeting{Plural(row.TeamsMeetings)} a day");
+                workload.Add($"{row.TeamsMeetings:N0} meeting{Plural(row.TeamsMeetings.Value)} a day");
             }
 
             if (row.TeamsMessages > 0)
             {
-                workload.Add($"{row.TeamsMessages:N0} Teams message{Plural(row.TeamsMessages)} a day");
+                workload.Add($"{row.TeamsMessages:N0} Teams message{Plural(row.TeamsMessages.Value)} a day");
             }
 
             var mail = row.EmailsSent + row.EmailsRead;
             if (mail > 0)
             {
-                workload.Add($"{mail:N0} email{Plural(mail)} a day");
+                workload.Add($"{mail:N0} email{Plural(mail.Value)} a day");
             }
 
             if (row.FilesViewedOrEdited > 0)
             {
-                workload.Add($"{row.FilesViewedOrEdited:N0} file{Plural(row.FilesViewedOrEdited)} a day");
+                workload.Add($"{row.FilesViewedOrEdited:N0} file{Plural(row.FilesViewedOrEdited.Value)} a day");
             }
 
             var workloadPhrase = workload.Count > 0
@@ -1619,7 +1649,7 @@ namespace Common.Entities.CopilotAdoption
 
                 case CoworkTiers.PrimeCandidate:
                     return $"Predicted fit - not yet measured: Copilot fluency {Num(row.FluencyScore)}/100 "
-                         + $"and a coordination load of {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}). "
+                         + $"and a coordination load of {row.CoordinationLoadScore?.ToString("0.###############", CultureInfo.InvariantCulture)}/100 ({workloadPhrase}). "
                          + "Recommended for the Cowork spending policy.";
 
                 case CoworkTiers.BuildFluencyFirst:
@@ -1629,12 +1659,12 @@ namespace Common.Entities.CopilotAdoption
 
                 case CoworkTiers.LowCoordinationLoad:
                     return $"Fluent with Copilot ({Num(row.FluencyScore)}/100) but a coordination load of "
-                         + $"only {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}). Little for Cowork "
+                         + $"only {row.CoordinationLoadScore?.ToString("0.###############", CultureInfo.InvariantCulture)}/100 ({workloadPhrase}). Little for Cowork "
                          + "to take on.";
 
                 default:
                     return $"No case on current evidence: Copilot fluency {Num(row.FluencyScore)}/100, "
-                         + $"coordination load {Num(row.CoordinationLoadScore)}/100 ({workloadPhrase}).";
+                         + $"coordination load {row.CoordinationLoadScore?.ToString("0.###############", CultureInfo.InvariantCulture)}/100 ({workloadPhrase}).";
             }
         }
 
@@ -1714,7 +1744,7 @@ namespace Common.Entities.CopilotAdoption
         {
             var o = options ?? CopilotAdoptionOptions.Default;
 
-            if (cohort == null || cohort.Count == 0)
+            if (cohort == null || cohort.Count == 0 || cohort.Any(row => row.WorkloadUnavailableReason != null))
             {
                 return new CoworkValueEstimate();
             }
@@ -1754,7 +1784,7 @@ namespace Common.Entities.CopilotAdoption
             IReadOnlyCollection<LicenceOpportunityRow> candidates,
             CopilotAdoptionOptions options = null)
         {
-            if (candidates == null || candidates.Count == 0)
+            if (candidates == null || candidates.Count == 0 || candidates.Any(row => row.WorkloadUnavailableReason != null))
             {
                 return new CoworkValueEstimate();
             }
@@ -1878,9 +1908,30 @@ namespace Common.Entities.CopilotAdoption
                     + "days a month.");
             }
 
-            estimate.Assumptions.Add(
-                "Everyone here is modelled from the work they already do by hand, including people already "
-                + "using Cowork.");
+            var newAdoption = who == CoworkEstimateCohort.NewAdoption || who == CoworkEstimateCohort.NonUserCeiling;
+            if (newAdoption)
+            {
+                estimate.Assumptions.Add(
+                    "Covers only people with no Cowork use observed in the selected reporting period, excluding "
+                    + "known-disabled accounts. This does not establish lifetime non-use or lack of access.");
+                if (who == CoworkEstimateCohort.NewAdoption)
+                {
+                    estimate.Assumptions.Add(
+                        "Recommended prime candidates only: sufficient coordination load and Copilot fluency.");
+                }
+                else
+                {
+                    estimate.Assumptions.Add(
+                        "Broader non-user scenario, not a target: includes people not yet ready and assumes the "
+                        + "same delegation shares, which they may not achieve.");
+                }
+            }
+            else
+            {
+                estimate.Assumptions.Add(
+                    "Everyone here is modelled from the work they already do by hand, including people already "
+                    + "using Cowork.");
+            }
 
             estimate.Assumptions.Add(
                 "The minutes are Cowork's increment over Copilot alone. For work Copilot already speeds up - a "
@@ -1888,16 +1939,20 @@ namespace Common.Entities.CopilotAdoption
 
             estimate.Assumptions.Add(
                 "Only work Microsoft's usage reports count is modelled. Research, searches, replies to "
-                + "invitations and scheduled automations are left out, so the estimate understates what Cowork "
-                + "does rather than inventing it.");
+                + "invitations and scheduled automations are left out. This is a limited workload scenario, "
+                + "not a complete account of Cowork work.");
 
-            estimate.Assumptions.Add(
-                $"The lower bound applies {Num(lowerRatio * 100d)}% of the minutes saved; the upper bound applies "
-                + "them in full.");
+            estimate.Assumptions.Add(newAdoption
+                ? $"The conservative scenario applies {Num(lowerRatio * 100d)}% of the assumed minutes; the "
+                  + "other scenario applies them in full. These are not confidence intervals or guaranteed bounds."
+                : $"The lower bound applies {Num(lowerRatio * 100d)}% of the minutes saved; the upper bound applies "
+                  + "them in full.");
 
-            estimate.Assumptions.Add(
-                "This is the potential at full use, not the gain over today: people already using Cowork may be "
-                + "realising part of it now.");
+            estimate.Assumptions.Add(newAdoption
+                ? "Modelled additional potential over Copilot alone, not measured savings. Never add it to "
+                  + "existing-user assisted hours, licence-opportunity hours or existing-seat-holder hours."
+                : "This is the potential at full use, not the gain over today: people already using Cowork may be "
+                  + "realising part of it now.");
 
             estimate.Assumptions.Add(
                 "Time saved is NOT measured by this product and cannot be. These figures are a model for "
@@ -1990,8 +2045,8 @@ namespace Common.Entities.CopilotAdoption
         #region Already-licensed seat-holder time saved (MODELLED - not measured)
 
         /// <summary>
-        /// Applies Microsoft's published Copilot assisted-hours credits to observed Copilot actions from
-        /// people who already hold a seat. Hours only, never money, and never added to the licence or
+        /// Applies editable minutes assumptions to observed Copilot interactions and distinct person-meeting
+        /// contexts for people who already hold a seat. Hours only, never money, and never added to the licence or
         /// Cowork estimates: this answers "what are the seats we already pay for giving back?".
         /// </summary>
         public static SeatHolderTimeSavedEstimate ModelSeatHolderTimeSaved(
@@ -2037,10 +2092,10 @@ namespace Common.Entities.CopilotAdoption
 
             var assumptions = new List<string>
             {
-                $"Counts observed Copilot audit actions by Copilot seat holders in the selected period, restated as a {Math.Max(1, o.HabitBucketNormalisationDays)}-day month.",
-                $"Credits Outlook actions at {Num(estimate.Credits.OutlookMinutesPerAction)} minutes each, Word/PowerPoint/Excel actions at {Num(estimate.Credits.OfficeMinutesPerAction)} minutes each, and Teams meeting recap or summarise actions at {Num(estimate.Credits.TeamsMeetingMinutesPerAction)} minutes each.",
-                "Microsoft's Copilot assisted-hours method credits meeting summarisation from meeting duration; this import does not reliably carry duration, so the Teams meeting credit is a visible fixed fallback.",
-                $"Copilot Chat and other non-agent surfaces default to {Num(estimate.Credits.UncreditedMinutesPerAction)} minutes here unless the reader overrides it. Agent and Cowork activity is excluded from this figure; Cowork has its own estimate and is never added to this one.",
+                $"Counts observed Copilot audit interactions and distinct person-meeting contexts for Copilot seat holders in the selected period, restated as a {Math.Max(1, o.HabitBucketNormalisationDays)}-day month.",
+                $"Credits Outlook actions at {Num(estimate.Credits.OutlookMinutesPerAction)} minutes each, Word/PowerPoint/Excel actions at {Num(estimate.Credits.OfficeMinutesPerAction)} minutes each, and meetings with Copilot context, counted once per person, at {Num(estimate.Credits.TeamsMeetingMinutesPerAction)} assumed minutes each.",
+                "The audit import does not identify a recap or summarisation action or reliably carry meeting duration. Microsoft's Copilot assisted-hours method uses duration for meeting summarisation; this model instead uses an editable fixed credit per person-meeting context.",
+                $"Copilot Chat and other non-agent surfaces default to {Num(estimate.Credits.UncreditedMinutesPerAction)} minutes here unless the reader overrides it. Agent and Cowork activity is excluded from this figure; existing-user Cowork benefit is not estimated and is never added to this one.",
             };
             if (estimate.ExcludedUsageReportSourcedUsers > 0)
             {
@@ -2112,7 +2167,8 @@ namespace Common.Entities.CopilotAdoption
         {
             var o = options ?? CopilotAdoptionOptions.Default;
 
-            if (candidates == null || candidates.Count == 0)
+            if (candidates == null || candidates.Count == 0 || candidates.Any(row => row.WorkloadUnavailableReason != null
+                || !row.TeamsMeetings.HasValue || !row.EmailsSent.HasValue || !row.EmailsRead.HasValue || !row.FilesViewedOrEdited.HasValue))
             {
                 return new LicenceValueEstimate { CandidatesCapped = candidatesCapped };
             }
@@ -2125,9 +2181,9 @@ namespace Common.Entities.CopilotAdoption
             double meetings = 0, mail = 0, documents = 0;
             foreach (var row in candidates)
             {
-                meetings += row.TeamsMeetings * workingDaysPerMonth;
-                mail += (row.EmailsSent + row.EmailsRead) * workingDaysPerMonth;
-                documents += row.FilesViewedOrEdited * workingDaysPerMonth;
+                meetings += row.TeamsMeetings.Value * workingDaysPerMonth;
+                mail += (row.EmailsSent.Value + row.EmailsRead.Value) * workingDaysPerMonth;
+                documents += row.FilesViewedOrEdited.Value * workingDaysPerMonth;
             }
 
             return ModelLicenceValue(candidates.Count, meetings, mail, documents, o, candidatesCapped, cohort);

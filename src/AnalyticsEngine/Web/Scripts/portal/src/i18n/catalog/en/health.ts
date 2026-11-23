@@ -66,6 +66,7 @@ export const health = {
   'health.reason.agentCostConnectionConnected': 'A Power Platform billing administrator connection is saved for agent credit consumption.',
   'health.reason.agentCostConnectionDisconnected': 'Agent credit tracking is enabled but no Power Platform billing administrator is connected. Connect in Administration > Agent costs.',
   'health.reason.agentCostConnectionReconnectNeeded': 'The Power Platform billing administrator connection needs renewal. Reconnect in Administration > Agent costs.',
+  'health.reason.agentCostConnectionRouteRefused': 'The Power Platform billing administrator is still signed in, but Microsoft refused the Copilot Studio usage request (HTTP 403). The account may have lost the Power Platform Administrator role, or Microsoft may have restricted the per-user consumption routes it has marked as deprecated. Reconnecting alone will not fix this. Copilot Credits capacity and Azure costs are unaffected.',
   'health.reason.agentCostConnectionCheckFailed': 'The Power Platform billing administrator connection could not be checked. Check Azure Table storage access and Administration > Agent costs.',
   'health.duration.day': '{count} day',
   'health.duration.days': '{count} days',

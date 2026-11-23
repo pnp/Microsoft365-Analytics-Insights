@@ -3,6 +3,7 @@ using System.Net;
 using System.Threading.Tasks;
 using System.Web.Http;
 using Web.AnalyticsWeb.Models.CopilotAuditBackfill;
+using Web.AnalyticsWeb.Models.UserFilters;
 using Web.AnalyticsWeb.Security;
 
 namespace Web.AnalyticsWeb.Controllers
@@ -29,7 +30,8 @@ namespace Web.AnalyticsWeb.Controllers
         [Route("start")]
         [RequireSameOriginXhr]
         public Task<IHttpActionResult> Start([FromBody] CopilotAuditBackfillStartRequest request)
-            => Answer(async service => Content(HttpStatusCode.Accepted, await service.StartAsync(request, User?.Identity?.Name)));
+            => Answer(async service => Content(HttpStatusCode.Accepted,
+                await service.StartAsync(request, PortalViewer.UserPrincipalNameOf(User) ?? User?.Identity?.Name)));
 
         [HttpPost]
         [Route("{id:int}/cancel")]

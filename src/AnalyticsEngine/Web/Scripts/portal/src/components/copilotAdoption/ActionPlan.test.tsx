@@ -71,4 +71,19 @@ describe('ActionPlan guidance links', () => {
     expect(await screen.findByText('Guía de Microsoft para este tipo de usuario:', { exact: false })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Contoso adoption handbook' })).toBeInTheDocument();
   });
+
+  it('renders the replacement Champions resource in Spanish without changing its destination', async () => {
+    const actions = coach({
+      actionCode: 'advocate',
+      titleKey: 'copilotChampions',
+      title: 'Microsoft Copilot for Champions',
+      url: 'https://adoption.microsoft.com/en-us/copilot/champions/',
+    });
+    actions[0].code = 'advocate';
+    renderWithProvider(<ActionPlan actions={actions} />, { language: 'es' });
+
+    const link = await screen.findByRole('link', { name: 'Microsoft Copilot para promotores' });
+    expect(link).toHaveAttribute('href', 'https://adoption.microsoft.com/en-us/copilot/champions/');
+    expect(screen.queryByRole('link', { name: 'Microsoft Copilot for Champions' })).toBeNull();
+  });
 });

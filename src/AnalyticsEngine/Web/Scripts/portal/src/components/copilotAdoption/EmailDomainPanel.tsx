@@ -57,7 +57,7 @@ const NO_VALUE = '\u2014';
 const WITHHELD_FLOOR = 5;
 
 /** The three populations a row holds, each floored on its own for a reader without See PII (#844). */
-type DomainPopulation = 'seats' | 'unlicensed' | 'candidates';
+type DomainPopulation = 'seats' | 'unlicensed' | 'candidates' | 'cowork';
 
 const WITHHELD_KEYS: Record<DomainPopulation, Record<SmallGroupWithheldReason, TranslationKey>> = {
   seats: {
@@ -71,6 +71,10 @@ const WITHHELD_KEYS: Record<DomainPopulation, Record<SmallGroupWithheldReason, T
   candidates: {
     fewPeople: 'copilotAdoptionUsers.emailDomain.withheld.candidates.fewPeople',
     revealsSmallerGroup: 'copilotAdoptionUsers.emailDomain.withheld.candidates.revealsSmallerGroup',
+  },
+  cowork: {
+    fewPeople: 'copilotAdoptionUsers.emailDomain.withheld.cowork.fewPeople',
+    revealsSmallerGroup: 'copilotAdoptionUsers.emailDomain.withheld.cowork.revealsSmallerGroup',
   },
 };
 
@@ -88,6 +92,8 @@ function withheldReason(row: AdoptionDomainRow, population: DomainPopulation): s
       return row.unlicensedUsersWithheld ?? (row.unlicensedActiveUsers == null ? 'unknown' : null);
     case 'candidates':
       return row.licenceCandidatesWithheld ?? (row.recommendedForLicence == null ? 'unknown' : null);
+    case 'cowork':
+      return row.coworkPrimeCandidatesWithheld ?? null;
   }
 }
 
@@ -128,13 +134,17 @@ export default function EmailDomainPanel({
     established: o.establishedScore,
     developing: o.developingScore,
   };
-  const showCowork = summary.coworkReadinessAvailable && rows.some((r) => (r.coworkPrimeCandidates ?? 0) > 0);
-  const anyWithheld = rows.some((r) =>
-    (['seats', 'unlicensed', 'candidates'] as DomainPopulation[]).some((p) => withheldReason(r, p) !== null));
+  const showCowork = summary.coworkReadinessAvailable && rows.some((r) =>
+    (r.coworkPrimeCandidates ?? 0) > 0 || r.coworkPrimeCandidatesWithheld != null);
+  const populations: DomainPopulation[] = showCowork
+    ? ['seats', 'unlicensed', 'candidates', 'cowork']
+    : ['seats', 'unlicensed', 'candidates'];
+  const anyWithheld = rows.some((r) => populations.some((p) => withheldReason(r, p) !== null));
   const complement = rows.some((r) =>
     r.seatHoldersWithheld === 'revealsSmallerGroup'
     || r.unlicensedUsersWithheld === 'revealsSmallerGroup'
-    || r.licenceCandidatesWithheld === 'revealsSmallerGroup');
+    || r.licenceCandidatesWithheld === 'revealsSmallerGroup'
+    || r.coworkPrimeCandidatesWithheld === 'revealsSmallerGroup');
   const floor = rows.find((r) => r.minimumPeople != null)?.minimumPeople ?? WITHHELD_FLOOR;
 
   if (rows.length === 0) {
@@ -222,6 +232,7 @@ export default function EmailDomainPanel({
             const hasSeats = seatsWithheld === null && (row.licensedUsers ?? 0) > 0;
             const unlicensedWithheld = withheldReason(row, 'unlicensed');
             const candidatesWithheld = withheldReason(row, 'candidates');
+            const coworkWithheld = withheldReason(row, 'cowork');
             const dash = (population: DomainPopulation, reason: string) => {
               const text = withheldText(t, row, population, reason);
               return (
@@ -306,7 +317,11 @@ export default function EmailDomainPanel({
                   <td className={`${table.td} ${table.tdNumeric}`}>
                     {seatsWithheld !== null
                       ? dash('seats', seatsWithheld)
-                      : hasSeats ? formatCount(row.coworkPrimeCandidates ?? 0) : NO_VALUE}
+                      : coworkWithheld !== null
+                        ? dash('cowork', coworkWithheld)
+                        : hasSeats && row.coworkPrimeCandidates != null
+                          ? formatCount(row.coworkPrimeCandidates)
+                          : NO_VALUE}
                   </td>
                 )}
                 {onSelectDomain && (

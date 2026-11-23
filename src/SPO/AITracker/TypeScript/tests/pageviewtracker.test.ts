@@ -292,6 +292,29 @@ describe('PageViewTracker', () => {
             expect(pageViews()[1].properties.spRequestDuration).toBeUndefined();
         });
 
+        test('finds spRequestDuration without serialising the page', () => {
+            document.body.innerHTML = '<div>' + '<p>Contoso news</p>'.repeat(50) + '</div>' +
+                '<script src="https://contoso.example.invalid/lib.js"></script>' +
+                '<script>var a = 1;</script>' +
+                '<script>var x = {"perf":{"spRequestDuration":\\r321,"IsSPO":true},"y":2};</script>';
+            const innerHtml = jest.spyOn(Element.prototype, 'innerHTML', 'get');
+
+            tracker.trackCurrentPageViewAndLastPageExit('https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx', 'Site Pages', 1);
+
+            expect(innerHtml).not.toHaveBeenCalled();
+            innerHtml.mockRestore();
+            expect(pageViews()[0].properties.spRequestDuration).toBe(321);
+        });
+
+        test('no spRequestDuration when the perf block is not in a script', () => {
+            // An attribute value: innerHTML wrote its quotes as &quot;, so it never matched before either
+            document.body.innerHTML = `<div data-x='{"perf":{"spRequestDuration":519},"y":2}'></div>`;
+
+            tracker.trackCurrentPageViewAndLastPageExit('https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx', 'Site Pages', 1);
+
+            expect(pageViews()[0].properties.spRequestDuration).toBeUndefined();
+        });
+
         test('tracks the search on a modern search results page the browser loaded', () => {
             const url = 'https://contoso.sharepoint.com/sites/test/_layouts/15/search.aspx/siteall?q=Καλημέρα%20κόσμε';
             Object.defineProperty(document, 'URL', { value: url, writable: true, configurable: true });

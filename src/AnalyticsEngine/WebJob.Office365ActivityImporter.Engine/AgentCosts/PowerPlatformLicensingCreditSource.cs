@@ -204,10 +204,19 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
                 {
                     if (_delegated)
                     {
+                        if (response.StatusCode == HttpStatusCode.Forbidden)
+                        {
+                            // The token was accepted; Microsoft refused this route. Reconnecting signs the same
+                            // account in again and gets the same answer, so it is not reported as a reconnect (#914).
+                            throw new AgentCostRouteRefusedException(
+                                "The connected billing administrator's sign-in is valid, but Microsoft refused the Copilot Studio usage request (HTTP 403). "
+                                + "Either the account no longer has the Power Platform Administrator role, or Microsoft has restricted the per-user "
+                                + "consumption routes it has marked as deprecated. Reconnecting alone will not fix this. "
+                                + "Azure costs and Copilot Credits capacity are unaffected.");
+                        }
                         throw new AgentCostAuthorisationException(
-                            $"Microsoft refused to let the connected billing administrator read Copilot Studio usage (HTTP {(int)response.StatusCode}). "
-                            + "Check that the account still has the Power Platform Administrator role and isn't blocked by Conditional Access, "
-                            + "then reconnect in Administration > Copilot Studio billing connection. "
+                            "Microsoft didn't accept the connected billing administrator's sign-in token when reading Copilot Studio usage (HTTP 401). "
+                            + "The sign-in may have expired or been revoked: reconnect in Administration > Copilot Studio billing connection. "
                             + "Azure costs and Copilot Credits capacity are unaffected.");
                     }
                     // Consumption reads only run delegated, so an app-only refusal here is the capacity route.
@@ -281,6 +290,19 @@ namespace WebJob.Office365ActivityImporter.Engine.AgentCosts
     public class AgentCostAuthorisationException : Exception
     {
         public AgentCostAuthorisationException(string message) : base(message) { }
+        public AgentCostAuthorisationException(string message, Exception innerException) : base(message, innerException) { }
+    }
+
+    /// <summary>
+    /// A delegated licensing route answered HTTP 403: the connected account's token was accepted, but Microsoft refused
+    /// the route itself. Unlike a 401 or a failed token refresh, signing in again does not help, so the connection is
+    /// not marked as needing a reconnect (#914). Still an authorisation failure everywhere else: never retried, never
+    /// read as an empty import.
+    /// </summary>
+    public class AgentCostRouteRefusedException : AgentCostAuthorisationException
+    {
+        public AgentCostRouteRefusedException(string message) : base(message) { }
+        public AgentCostRouteRefusedException(string message, Exception innerException) : base(message, innerException) { }
     }
 
     /// <summary>

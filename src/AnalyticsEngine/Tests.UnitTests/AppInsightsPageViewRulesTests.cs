@@ -231,6 +231,24 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void PageViews_OverLongGreekUrl_IsShortenedToFitTheStagingColumn()
+        {
+            // Each Greek letter percent-encodes to 6 characters, so this path is far over nvarchar(850).
+            var longGreekUrl = InScopeSite + "/SitePages/" + string.Concat(System.Linq.Enumerable.Repeat("καλημέρα-", 40)) + ".aspx";
+
+            var plan = PageViewStagingRules.Plan(
+                CollectionOf(PageView(Guid.NewGuid(), longGreekUrl)),
+                FilterFor("https://contoso.sharepoint.com"));
+
+            Assert.AreEqual(1, plan.RowsToStage.Count);
+            var staged = plan.RowsToStage[0].Url;
+            Assert.IsTrue(StringUtils.GetUrlBaseAddressIfValidUrl(longGreekUrl).Length > Common.Entities.Url.FullUrlMaxLength,
+                "Precondition: the encoded URL must be over the column limit.");
+            Assert.IsTrue(staged.Length <= Common.Entities.Url.FullUrlMaxLength, "The hit URL must fit url nvarchar(850).");
+            StringAssert.StartsWith(staged, InScopeSite + "/SitePages/");
+        }
+
+        [TestMethod]
         public void PageViews_DuplicateCheckHappensBeforeTheUrlFilter()
         {
             // Pins the ORDER of the two rules, which no other test does. The same id appears first on

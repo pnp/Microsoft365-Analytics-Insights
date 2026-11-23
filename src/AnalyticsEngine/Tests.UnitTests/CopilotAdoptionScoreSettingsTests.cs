@@ -181,6 +181,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(AgentHealth.Review, CopilotAdoptionScoring.AgentHealthFor(200, 1, 3, custom));
             var starter = Row(0, 0, 0);
             starter.AccountCreatedUtc = Now.AddDays(-35);
+            starter.SeatObservedFromUtc = Now.AddDays(-35);
+            starter.SeatObservationSource = 1;
             Assert.IsFalse(CopilotAdoptionScoring.IsTooNewToJudge(starter, Now, CopilotAdoptionOptions.Default));
             Assert.IsTrue(CopilotAdoptionScoring.IsTooNewToJudge(starter, Now, custom));
         }

@@ -567,6 +567,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var yammerDeviceActivityLoader = new YammerDeviceUsageLoader(client, userScope, _logger);
             var userPlatActivityLoader = new AppPlatformUserActivityLoader(client, userScope, _logger);
 
+            var coverage = Common.Entities.State.UsageReportCoverageStore.Open(_settings, _logger);
+            teamsUserUsageLoader.CoverageStore = coverage;
+            teamsUserUsageLoader.CoverageSource = "teams";
+            teamsUserUsageLoader.CoverageWholeTenant = userScope?.IsFiltered != true;
+            outlookLoader.CoverageStore = coverage;
+            outlookLoader.CoverageSource = "outlook";
+            outlookLoader.CoverageWholeTenant = userScope?.IsFiltered != true;
+            sharePointUserActivityLoader.CoverageStore = coverage;
+            sharePointUserActivityLoader.CoverageSource = "sharepoint";
+            sharePointUserActivityLoader.CoverageWholeTenant = userScope?.IsFiltered != true;
+            oneDriveUserActivityLoader.CoverageStore = coverage;
+            oneDriveUserActivityLoader.CoverageSource = "onedrive";
+            oneDriveUserActivityLoader.CoverageWholeTenant = userScope?.IsFiltered != true;
+
             return new List<ActivityReportRun>
             {
                 new ActivityReportRun("Teams user activity", () => LoadAndSaveDailyImportReport(teamsUserUsageLoader, daysBackMax, "Teams user activity", _logger, lookupIdCache, lastImportedDate)),

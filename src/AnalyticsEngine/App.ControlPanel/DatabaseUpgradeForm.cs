@@ -2,6 +2,7 @@
 using App.ControlPanel.Engine.Models;
 using System;
 using System.ComponentModel;
+using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -33,6 +34,138 @@ namespace App.ControlPanel
         public DatabaseUpgradeForm()
         {
             InitializeComponent();
+            if (LicenseManager.UsageMode != LicenseUsageMode.Designtime)
+                ConfigureLayout();
+        }
+
+        private void ConfigureLayout()
+        {
+            SuspendLayout();
+            var content = CreateLayout("upgradeContent");
+            foreach (var label in new[] { label1, label2, label3 })
+                AddLayoutRow(content, label);
+
+            var connection = CreateLayout("upgradeConnection");
+            connection.Padding = new Padding(8);
+            foreach (var control in new Control[] { label4, txtConnectionString, lnkAutodetect, lblAuthMode })
+                AddLayoutRow(connection, control);
+            ConfigureGroup(grpConnectionString, connection);
+            AddLayoutRow(content, grpConnectionString);
+
+            var credentials = CreateLayout("upgradeCredentials");
+            credentials.Padding = new Padding(8);
+            credentials.ColumnCount = 2;
+            credentials.ColumnStyles.Clear();
+            credentials.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            credentials.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            AddLayoutRow(credentials, lblEntraInfo);
+            credentials.SetColumnSpan(lblEntraInfo, 2);
+            var labels = new[] { lblEntraTenantId, lblEntraClientId, lblEntraSecret };
+            var fields = new[] { txtEntraTenantId, txtEntraClientId, txtEntraSecret };
+            for (var i = 0; i < fields.Length; i++)
+            {
+                AddLayoutRow(credentials, labels[i]);
+                fields[i].Dock = DockStyle.Fill;
+                fields[i].Margin = new Padding(8, 0, 0, 6);
+                credentials.Controls.Add(fields[i], 1, credentials.RowCount - 1);
+            }
+            ConfigureGroup(grpEntra, credentials);
+            AddLayoutRow(content, grpEntra);
+
+            grpLog.Dock = DockStyle.Fill;
+            grpLog.MinimumSize = new Size(0, 120);
+            grpLog.Margin = new Padding(0, 0, 0, 6);
+            grpLog.Padding = new Padding(8);
+            txtLog.Dock = DockStyle.Fill;
+            content.RowStyles.Add(new RowStyle(SizeType.Absolute, 126));
+            content.Controls.Add(grpLog, 0, content.RowCount++);
+
+            var viewport = new Panel
+            {
+                Name = "upgradeViewport",
+                Dock = DockStyle.Fill,
+                AutoScroll = true,
+                Padding = new Padding(12)
+            };
+            viewport.Controls.Add(content);
+            // A percent row in an autosized table can feed the log's current height back into its preferred size.
+            content.Layout += (sender, args) =>
+            {
+                var settingsHeight = content.GetRowHeights().Take(content.RowCount - 1).Sum();
+                content.RowStyles[content.RowCount - 1].Height = Math.Max(grpLog.MinimumSize.Height + grpLog.Margin.Vertical,
+                    viewport.ClientSize.Height - viewport.Padding.Vertical - settingsHeight);
+            };
+            viewport.ClientSizeChanged += (sender, args) => content.PerformLayout();
+
+            var footer = CreateLayout("upgradeFooter");
+            footer.Dock = DockStyle.Bottom;
+            footer.Padding = new Padding(12, 6, 12, 12);
+            AddLayoutRow(footer, chkConfirm);
+            var actions = CreateLayout("upgradeActions");
+            actions.Dock = DockStyle.Fill;
+            actions.ColumnCount = 3;
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            actions.RowCount = 1;
+            actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            progressBar.Anchor = AnchorStyles.Left;
+            progressBar.Margin = new Padding(0, 0, 8, 0);
+            actions.Controls.Add(progressBar, 0, 0);
+            var buttons = new[] { btnCancel, btnUpgrade };
+            for (var i = 0; i < buttons.Length; i++)
+            {
+                buttons[i].AutoSize = true;
+                buttons[i].MinimumSize = new Size(90, 32);
+                buttons[i].Size = buttons[i].MinimumSize;
+                buttons[i].Anchor = AnchorStyles.Right;
+                buttons[i].Margin = new Padding(8, 0, 0, 0);
+                actions.Controls.Add(buttons[i], i + 1, 0);
+            }
+            AddLayoutRow(footer, actions);
+            viewport.TabIndex = 0;
+            footer.TabIndex = 1;
+            chkConfirm.TabIndex = 0;
+            actions.TabIndex = 1;
+            btnCancel.TabIndex = 0;
+            btnUpgrade.TabIndex = 1;
+            Controls.Add(viewport);
+            Controls.Add(footer);
+            MinimumSize = new Size(480, 360);
+            ClientSize = new Size(640, 640);
+            StartPosition = FormStartPosition.CenterParent;
+            ResumeLayout(true);
+        }
+
+        private static TableLayoutPanel CreateLayout(string name)
+        {
+            var layout = new TableLayoutPanel
+            {
+                Name = name,
+                Dock = DockStyle.Top,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 1,
+                Margin = Padding.Empty
+            };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            return layout;
+        }
+
+        private static void AddLayoutRow(TableLayoutPanel layout, Control control)
+        {
+            control.AutoSize = true;
+            control.Dock = DockStyle.Fill;
+            control.Margin = new Padding(0, 0, 0, 6);
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.Controls.Add(control, 0, layout.RowCount++);
+        }
+
+        private static void ConfigureGroup(GroupBox group, TableLayoutPanel content)
+        {
+            group.Controls.Clear();
+            group.AutoSize = true;
+            group.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            group.Controls.Add(content);
         }
 
         /// <summary>
@@ -300,6 +433,9 @@ namespace App.ControlPanel
 
         private void DatabaseUpgradeForm_Load(object sender, EventArgs e)
         {
+            var workingArea = Screen.FromControl(Owner ?? this).WorkingArea;
+            Size = new Size(Math.Min(Width, workingArea.Width), Math.Min(Height, workingArea.Height));
+
             // The designer holds a sample connection string so the form reads sensibly at design time. It
             // must not survive to runtime: it names a fictional server, and - because it carries a SQL
             // login - it would wrongly grey out the Microsoft Entra ID box for an Entra-only deployment.

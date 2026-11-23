@@ -42,6 +42,72 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void UsageWeekCoverage_ConfirmedEmptyDaysCompleteTheWeekAndProduceZeroWhenAllEmpty()
+        {
+            var week = new DateTime(2026, 8, 10);
+            var outcomes = new Dictionary<DateTime, string>();
+            var dailyRows = new List<ReportsAPIController.UsageWeekRow>();
+            for (var day = 0; day < 7; day++)
+            {
+                var date = week.AddDays(day);
+                var isEmpty = day == 6;
+                outcomes[date] = isEmpty
+                    ? Common.Entities.State.UsageReportCoverageStore.Empty
+                    : Common.Entities.State.UsageReportCoverageStore.Complete;
+                dailyRows.Add(new ReportsAPIController.UsageWeekRow
+                {
+                    WeekStart = week,
+                    CoverageDate = date,
+                    HasRows = !isEmpty,
+                    Value = 4,
+                });
+            }
+
+            var partiallyActive = ReportsAPIController.AggregateUsageWeekRows(dailyRows, outcomes);
+            Assert.AreEqual(1, partiallyActive.WeeklyRows.Count);
+            Assert.AreEqual(4d, partiallyActive.WeeklyRows[0].Value);
+            Assert.AreEqual(0, partiallyActive.IncompleteWeeks.Count,
+                "A day confirmed empty by the importer is covered, not a missing import.");
+
+            foreach (var row in dailyRows)
+            {
+                row.HasRows = false;
+                row.Value = 0;
+            }
+            foreach (var date in outcomes.Keys.ToList()) outcomes[date] = Common.Entities.State.UsageReportCoverageStore.Empty;
+            var allEmpty = ReportsAPIController.AggregateUsageWeekRows(dailyRows, outcomes);
+            Assert.AreEqual(1, allEmpty.WeeklyRows.Count);
+            Assert.AreEqual(0d, allEmpty.WeeklyRows[0].Value);
+            Assert.AreEqual(0, allEmpty.IncompleteWeeks.Count);
+        }
+
+        [TestMethod]
+        public void UsageWeekCoverage_PartialOutcomeIsNotCompleteButMissingOutcomeKeepsHistoricalRowFallback()
+        {
+            var week = new DateTime(2026, 8, 10);
+            var dailyRows = Enumerable.Range(0, 7).Select(day => new ReportsAPIController.UsageWeekRow
+            {
+                WeekStart = week,
+                CoverageDate = week.AddDays(day),
+                HasRows = true,
+                Value = 4,
+            }).ToList();
+            var outcomes = Enumerable.Range(0, 7).ToDictionary(
+                day => week.AddDays(day),
+                _ => Common.Entities.State.UsageReportCoverageStore.Complete);
+            outcomes[week.AddDays(3)] = Common.Entities.State.UsageReportCoverageStore.Incomplete;
+
+            var partial = ReportsAPIController.AggregateUsageWeekRows(dailyRows, outcomes);
+            Assert.AreEqual(1, partial.WeeklyRows.Count, "Existing rows remain charted as a lower-bound value.");
+            CollectionAssert.AreEqual(new[] { week }, partial.IncompleteWeeks);
+
+            outcomes.Remove(week.AddDays(3));
+            var historic = ReportsAPIController.AggregateUsageWeekRows(dailyRows, outcomes);
+            Assert.AreEqual(0, historic.IncompleteWeeks.Count,
+                "A day predating the ledger retains the old row-presence completeness rule.");
+        }
+
+        [TestMethod]
         public void TimeoutStopsRemainingWorkloads_OnceSomethingCanBeDrawn()
         {
             var week = new DateTime(2026, 8, 10);

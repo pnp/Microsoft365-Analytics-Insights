@@ -55,7 +55,7 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(true, plan.AccountEnabled);
             Assert.AreEqual(new DateTime(2026, 8, 1, 9, 30, 0, DateTimeKind.Utc), plan.AccountCreatedUtc,
-                "Copilot Adoption uses Graph user.createdDateTime as its account-age tenure proxy.");
+                "Copilot Adoption uses Graph user.createdDateTime to bound the possible frequency observation window.");
             Assert.AreEqual("SW1A 1AA", plan.PostalCode);
             Assert.AreEqual("00000000-0000-0000-0000-000000000001", plan.AzureAdId);
             Assert.AreEqual("jane.doe@contoso.com", plan.Mail);

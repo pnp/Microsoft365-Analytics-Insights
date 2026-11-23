@@ -104,12 +104,7 @@ namespace App.ControlPanel.Engine
                     PauseUpgradeWebJobs(settings.Properties);
                     await webApp.UpdateApplicationSettingsAsync(settings, CancellationToken);
                 },
-                async () =>
-                {
-                    var settings = (await webApp.GetApplicationSettingsAsync(CancellationToken)).Value;
-                    ResumeUpgradeWebJobs(settings.Properties);
-                    await webApp.UpdateApplicationSettingsAsync(settings, CancellationToken);
-                },
+                () => EnsureWebJobsRunningAsync(webApp, _logger),
                 async () => { await webApp.StopAsync(CancellationToken); },
                 // Recovery must finish even when the operation was cancelled after stopping the site.
                 async () => { await webApp.StartAsync(); },
@@ -155,13 +150,15 @@ namespace App.ControlPanel.Engine
                 }
                 catch (Exception ex) when (!(ex is OperationCanceledException))
                 {
-                    logger.LogError("UpgradeDeployment: stage=preflight outcome=Refused exceptionType={ExceptionType}; nothing was paused or stopped, so the WebJobs and the site are as they were.",
+                    logger.LogError("UpgradeDeployment: stage=preflight outcome=Refused exceptionType={ExceptionType}; nothing was paused or stopped by this upgrade.",
                         ex.GetType().Name);
                     throw;
                 }
             }
 
             var stage = "pause";
+            var pauseAttempted = false;
+            var resumeFailed = false;
             var stopAttempted = false;
             Exception upgradeFailure = null;
             try
@@ -170,6 +167,8 @@ namespace App.ControlPanel.Engine
                 if (installContent || upgradeSchema)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    // A failed ARM response does not prove the setting was not written.
+                    pauseAttempted = true;
                     await pauseWebJobs();
                 }
 
@@ -198,11 +197,11 @@ namespace App.ControlPanel.Engine
                     try
                     {
                         await startSite();
-                        logger.LogInformation("UpgradeDeployment: stage=scm outcome=Started; WEBJOBS_STOPPED=1 until new content is deployed.");
+                        logger.LogInformation("UpgradeDeployment: stage=scm outcome=Started; WEBJOBS_STOPPED=1 until deployment cleanup.");
                     }
                     catch (Exception startEx)
                     {
-                        logger.LogCritical("UpgradeDeployment: stage=scm outcome=Failed exceptionType={ExceptionType}; start the App Service manually with WEBJOBS_STOPPED=1, then re-run the installer.",
+                        logger.LogCritical("UpgradeDeployment: stage=scm outcome=Failed exceptionType={ExceptionType}; start the App Service manually, then re-run the installer. WebJobs pause cleanup will still run.",
                             startEx.GetType().Name);
                         if (upgradeFailure == null)
                         {
@@ -225,63 +224,109 @@ namespace App.ControlPanel.Engine
                 if (schemaUpgradeDeferred?.Invoke() == true)
                 {
                     logger.LogWarning("UpgradeDeployment: stage=complete outcome=Deferred elapsedMs={ElapsedMs} contentSelected={ContentSelected}; the schema upgrade did not run. " +
-                        "WEBJOBS_STOPPED=1 is retained. Complete the matching release's database upgrade manually or from an approved machine, " +
-                        "then re-run the installer with content deployment enabled to restore the previous WebJobs state. Continuing remaining installation tasks.",
+                        "WebJobs pause cleanup will still run. Complete the matching release's database upgrade manually or from an approved machine; " +
+                        "the importers may fail until the schema matches the deployed binaries. Continuing remaining installation tasks.",
                         elapsed.ElapsedMilliseconds, installContent);
                     return;
                 }
-                if (installContent)
+                if (!installContent && upgradeSchema)
                 {
-                    stage = "resume";
-                    await resumeWebJobs();
-                    cancellationToken.ThrowIfCancellationRequested();
-                }
-                else if (upgradeSchema)
-                {
-                    logger.LogWarning("UpgradeDeployment: stage=complete outcome=Paused elapsedMs={ElapsedMs}; schema-only upgrade left WEBJOBS_STOPPED=1. Deploy matching new binaries before restoring WebJobs; re-run the installer with content deployment enabled.",
+                    logger.LogWarning("UpgradeDeployment: stage=schema outcome=Succeeded elapsedMs={ElapsedMs}; schema-only upgrade completed. WebJobs pause cleanup will still run; verify the deployed binaries match the upgraded schema.",
                         elapsed.ElapsedMilliseconds);
-                    return;
                 }
-                logger.LogInformation("UpgradeDeployment: stage=complete outcome=Succeeded elapsedMs={ElapsedMs} schemaSelected={SchemaSelected} contentSelected={ContentSelected}.",
-                    elapsed.ElapsedMilliseconds, upgradeSchema, installContent);
             }
             // The token decides, not the exception type: a Cancel during the database step can arrive as a SqlException
             // ("Operation cancelled by user"), and logging that as a failed upgrade is what an operator would act on.
             catch (Exception) when (cancellationToken.IsCancellationRequested)
             {
-                logger.LogWarning("UpgradeDeployment: stage={Stage} outcome=Cancelled; no further deployment tasks will run. If WebJobs were paused, keep WEBJOBS_STOPPED=1 until the schema and matching binaries are verified; re-run the installer to complete the upgrade.",
+                logger.LogWarning("UpgradeDeployment: stage={Stage} outcome=Cancelled; no further deployment tasks will run. WebJobs pause cleanup will still run; verify the schema and matching binaries before retrying the upgrade.",
                     stage);
                 throw;
             }
             catch (Exception ex)
             {
-                logger.LogCritical("UpgradeDeployment: stage={Stage} outcome=Failed elapsedMs={ElapsedMs} exceptionType={ExceptionType} httpStatus={HttpStatus}; WebJobs resume is unconfirmed. Keep WEBJOBS_STOPPED=1 until the schema and matching binaries are deployed; re-run the installer.",
+                logger.LogCritical("UpgradeDeployment: stage={Stage} outcome=Failed elapsedMs={ElapsedMs} exceptionType={ExceptionType} httpStatus={HttpStatus}; WebJobs pause cleanup will still run. Verify the schema and matching binaries, then re-run the installer.",
                     stage, elapsed.ElapsedMilliseconds, ex.GetType().Name, (ex as RequestFailedException)?.Status);
                 throw;
             }
+            finally
+            {
+                if (pauseAttempted)
+                {
+                    try
+                    {
+                        await resumeWebJobs();
+                    }
+                    catch (Exception ex)
+                    {
+                        resumeFailed = true;
+                        logger.LogError("UpgradeDeployment: stage=resume outcome=Failed exceptionType={ExceptionType}; the final installation check will retry removing WEBJOBS_STOPPED. The original deployment error, if any, is unchanged.",
+                            ex.GetType().Name);
+                    }
+                }
+            }
+            logger.LogInformation("UpgradeDeployment: stage=complete outcome={Outcome} elapsedMs={ElapsedMs} schemaSelected={SchemaSelected} contentSelected={ContentSelected}.",
+                resumeFailed ? "CleanupFailed" : "Succeeded", elapsed.ElapsedMilliseconds, upgradeSchema, installContent);
         }
 
         internal const string UpgradeWebJobsStateSetting = "AnalyticsUpgradeWebJobsPreviousState";
 
         internal static void PauseUpgradeWebJobs(IDictionary<string, string> settings)
         {
-            // A failed upgrade leaves this marker in place, so a retry must not replace the operator's original state.
-            if (!settings.ContainsKey(UpgradeWebJobsStateSetting))
-                settings[UpgradeWebJobsStateSetting] = settings.TryGetValue("WEBJOBS_STOPPED", out var previous) ? "restore:" + previous : "remove";
             settings["WEBJOBS_STOPPED"] = "1";
         }
 
         internal static void ResumeUpgradeWebJobs(IDictionary<string, string> settings)
         {
-            if (!settings.TryGetValue(UpgradeWebJobsStateSetting, out var previous))
-                throw new InvalidOperationException("The upgrade's previous WebJobs state is missing; leave WEBJOBS_STOPPED=1 and restore it manually after verifying the deployed binaries.");
-            if (previous == "remove")
-                settings.Remove("WEBJOBS_STOPPED");
-            else if (previous != null && previous.StartsWith("restore:", StringComparison.Ordinal))
-                settings["WEBJOBS_STOPPED"] = previous.Substring("restore:".Length);
-            else
-                throw new InvalidOperationException("The upgrade's previous WebJobs state is invalid; leave WEBJOBS_STOPPED=1 and restore it manually after verifying the deployed binaries.");
-            settings.Remove(UpgradeWebJobsStateSetting);
+            foreach (var key in settings.Keys.Where(IsWebJobsPauseSetting).ToArray())
+                settings.Remove(key);
+        }
+
+        private static bool IsWebJobsPauseSetting(string key) =>
+            string.Equals(key, "WEBJOBS_STOPPED", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(key, UpgradeWebJobsStateSetting, StringComparison.OrdinalIgnoreCase);
+
+        internal static async Task EnsureWebJobsRunningAsync(WebSiteResource webApp, ILogger logger)
+        {
+            // Cleanup must survive the user's Cancel, but must not hold the installer open indefinitely.
+            using (var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2)))
+            {
+                await EnsureWebJobsRunningAsync(
+                    async ct => (await webApp.GetApplicationSettingsAsync(ct)).Value,
+                    async (settings, ct) => { await webApp.UpdateApplicationSettingsAsync(settings, ct); },
+                    logger, timeout.Token);
+            }
+        }
+
+        internal static async Task EnsureWebJobsRunningAsync(
+            Func<CancellationToken, Task<AppServiceConfigurationDictionary>> readSettings,
+            Func<AppServiceConfigurationDictionary, CancellationToken, Task> writeSettings,
+            ILogger logger, CancellationToken cancellationToken)
+        {
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    var settings = await readSettings(cancellationToken);
+                    if (settings.Properties.Keys.Any(IsWebJobsPauseSetting))
+                    {
+                        ResumeUpgradeWebJobs(settings.Properties);
+                        await writeSettings(settings, cancellationToken);
+                        settings = await readSettings(cancellationToken);
+                    }
+                    if (settings.Properties.Keys.Any(IsWebJobsPauseSetting))
+                        throw new InvalidOperationException("App Service still reports a WebJobs pause setting after cleanup.");
+
+                    logger.LogInformation("WebJobsCleanup: outcome=Verified; WEBJOBS_STOPPED and the legacy upgrade pause marker are absent.");
+                    return;
+                }
+                catch (Exception ex) when (attempt < 3 && !cancellationToken.IsCancellationRequested)
+                {
+                    logger.LogWarning("WebJobsCleanup: outcome=Retry attempt={Attempt} exceptionType={ExceptionType}; retrying the final app-settings check.",
+                        attempt, ex.GetType().Name);
+                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                }
+            }
         }
 
         /// <summary>

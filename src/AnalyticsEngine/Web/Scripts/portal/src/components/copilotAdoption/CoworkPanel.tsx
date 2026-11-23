@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, Fragment, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, Fragment, type ReactNode } from 'react';
 import {
   makeStyles,
   tokens,
@@ -6,7 +6,7 @@ import {
   Card,
   Input,
   Select,
-  Checkbox,
+  Label,
   Button,
   Badge,
   MessageBar,
@@ -79,6 +79,7 @@ import { useTimeSavedAssumptions } from './coworkTimeSaved';
 import { useTimeSavedCohorts } from './timeSavedCohort';
 import { copilotAdoptionWarningText, coworkRationaleText, coworkTierLabel, isCoworkWarning } from './serverText';
 import PiiHiddenNote from '../shared/PiiHiddenNote';
+import { CoworkObservedUsagePanel } from './CoworkEvidence';
 
 const PAGE_SIZE = 50;
 
@@ -89,7 +90,28 @@ const PAGE_SIZE = 50;
  * and a fifty-row list - and the list buried everything above it. Each section now answers one
  * question, under a headline that answers the one everybody asks first.
  */
-type CoworkSection = 'timeSaved' | 'readiness' | 'rollout' | 'people';
+type CoworkSection = 'timeSaved' | 'observedUse' | 'readiness' | 'rollout' | 'people';
+
+type CoworkPopulation = 'recommended' | 'newCandidates' | 'usingCowork' | 'observedUsers' | 'nonUsers' | 'all' | CoworkTier;
+type CoworkPeopleFilters = Omit<CoworkFilters, 'tiers' | 'recommendedOnly' | 'coworkUsersOnly' | 'prospectiveOnly'> & {
+  population: CoworkPopulation;
+};
+
+const POLICY_POPULATIONS: Array<{ value: CoworkPopulation; labelKey: TranslationKey; descriptionKey: TranslationKey }> = [
+  { value: 'recommended', labelKey: 'copilotAdoptionCowork.filters.recommended', descriptionKey: 'copilotAdoptionCowork.filters.recommendedDescription' },
+  { value: 'newCandidates', labelKey: 'copilotAdoptionCowork.filters.newCandidates', descriptionKey: 'copilotAdoptionCowork.filters.newCandidatesDescription' },
+  { value: 'usingCowork', labelKey: 'copilotAdoptionCowork.filters.usingCowork', descriptionKey: 'copilotAdoptionCowork.filters.usingCoworkDescription' },
+];
+
+function populationFilters(population: CoworkPopulation): Pick<CoworkFilters, 'tiers' | 'recommendedOnly' | 'coworkUsersOnly' | 'prospectiveOnly'> {
+  return {
+    tiers: population === 'newCandidates' ? ['primeCandidate']
+      : population in COWORK_TIER_KEYS ? [population as CoworkTier] : [],
+    recommendedOnly: population === 'recommended' || population === 'newCandidates' || population === 'usingCowork',
+    coworkUsersOnly: population === 'usingCowork' || population === 'observedUsers',
+    prospectiveOnly: population === 'nonUsers',
+  };
+}
 
 const SORT_OPTIONS: Array<{ value: string; labelKey: TranslationKey }> = [
   { value: 'load:desc', labelKey: 'copilotAdoptionCowork.sort.mostCoordinationLoad' },
@@ -102,6 +124,10 @@ const SORT_OPTIONS: Array<{ value: string; labelKey: TranslationKey }> = [
 ];
 
 const COWORK_TIER_KEYS: Record<CoworkTier, { label: TranslationKey; description: TranslationKey }> = {
+  workloadUnavailable: {
+    label: 'copilotAdoptionCowork.tier.workloadUnavailable.label',
+    description: 'copilotAdoptionCowork.tier.workloadUnavailable.description',
+  },
   established: {
     label: 'copilotAdoptionCowork.tier.established.label',
     description: 'copilotAdoptionCowork.tier.established.description',
@@ -158,6 +184,10 @@ const useStyles = makeStyles({
     gap: '4px',
     marginBottom: '2px',
   },
+  sectionTabs: {
+    flexWrap: 'wrap',
+    maxWidth: '100%',
+  },
   sectionNote: {
     color: tokens.colorNeutralForeground3,
     display: 'block',
@@ -174,6 +204,19 @@ const useStyles = makeStyles({
   grow: {
     flexGrow: 1,
     minWidth: '200px',
+  },
+  populationFilter: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    flexGrow: 1,
+    minWidth: 0,
+    maxWidth: '100%',
+  },
+  populationSelect: {
+    flexGrow: 1,
+    minWidth: 0,
+    maxWidth: '100%',
   },
   spacer: {
     flexGrow: 1,
@@ -281,11 +324,9 @@ const useStyles = makeStyles({
   },
 });
 
-const DEFAULT_FILTERS: CoworkFilters = {
+const DEFAULT_FILTERS: CoworkPeopleFilters = {
   search: '',
-  tiers: [],
-  recommendedOnly: false,
-  coworkUsersOnly: false,
+  population: 'recommended',
   sortBy: 'load',
   sortDesc: true,
 };
@@ -293,6 +334,8 @@ const DEFAULT_FILTERS: CoworkFilters = {
 function BasisBadge({ basis }: { basis: CoworkBasis }) {
   const styles = useStyles();
   const t = useT();
+
+  if (basis === 'unavailable') return <Badge appearance="outline">{t('copilotAdoption.workload.unverified')}</Badge>;
 
   // Spelled out rather than shortened to "Observed"/"Predicted" alone, because this badge is the one
   // thing stopping a reader treating a forecast as a fact.
@@ -371,10 +414,16 @@ export default function CoworkPanel({
   const t = useT();
   const tNode = useTNode();
 
-  const [filters, setFilters] = useState<CoworkFilters>({
+  const populationId = useId();
+  const populationHelpId = useId();
+  const [peopleFilters, setFilters] = useState<CoworkPeopleFilters>({
     ...DEFAULT_FILTERS,
     userFilter: userFilter ?? '',
   });
+  const filters = useMemo<CoworkFilters>(() => {
+    const { population, ...rest } = peopleFilters;
+    return { ...rest, ...populationFilters(population) };
+  }, [peopleFilters]);
 
   /**
    * Resets the panel's own filters while KEEPING the page-wide user filter.
@@ -385,9 +434,9 @@ export default function CoworkPanel({
    * spending-policy CSV built from the same state would follow it - which on this tab means handing
    * an admin a list of people to grant Cowork to who are not in the organisation they were looking at.
    */
-  const clearPanelFilters = () => {
+  const showAllPeople = () => {
     setSearchDraft('');
-    setFilters({ ...DEFAULT_FILTERS, userFilter: userFilter ?? '' });
+    setFilters({ ...DEFAULT_FILTERS, population: 'all', userFilter: userFilter ?? '' });
   };
   const [searchDraft, setSearchDraft] = useState('');
   const [page, setPage] = useState(0);
@@ -483,21 +532,29 @@ export default function CoworkPanel({
 
   const credits = summary.coworkCreditPosition;
   const coworkRegularMinActiveDays = formatNumber(Math.max(1, options.coworkRegularMinActiveDays));
+  const selectedPopulation = POLICY_POPULATIONS.find((p) => p.value === peopleFilters.population);
+  const populationLabel = peopleFilters.population === 'nonUsers' ? t('copilotAdoptionCowork.filters.nonUsers')
+    : peopleFilters.population === 'observedUsers' ? t('copilotAdoptionCowork.filters.observedUsers')
+    : selectedPopulation ? t(selectedPopulation.labelKey)
+    : selectedTier ? coworkTierText(t, selectedTier.code, 'label', selectedTier.label, coworkRegularMinActiveDays)
+    : t('copilotAdoptionCowork.filters.allPeople');
+  const populationDescription = peopleFilters.population === 'nonUsers' ? t('copilotAdoptionCowork.filters.nonUsersDescription')
+    : peopleFilters.population === 'observedUsers' ? t('copilotAdoptionCowork.filters.observedUsersDescription')
+    : selectedPopulation ? t(selectedPopulation.descriptionKey)
+    : t(selectedTier ? 'copilotAdoptionCowork.filters.verdictDescription' : 'copilotAdoptionCowork.filters.allPeopleDescription');
   // The detail row spans every column the header renders. The credit figures live inside the detail
   // panel rather than in a column, so this is now fixed.
   const detailColSpan = 8;
 
   /**
-   * Opens the people section, optionally re-filtered - how a tier card or the headline hands the
+   * Opens the people section, re-filtered - how a tier card or the headline hands the
    * reader the exact list it just counted, now that the list is no longer directly underneath. The
    * section strip is scrolled into view with it, because the list opens below the headline and would
    * otherwise start below the fold on a laptop screen.
    */
-  const showPeople = (next?: Partial<CoworkFilters>) => {
-    if (next) {
-      setSearchDraft('');
-      setFilters((f) => ({ ...f, ...next }));
-    }
+  const showPeople = (population: CoworkPopulation, exactCohort = false) => {
+    setSearchDraft('');
+    setFilters((f) => ({ ...(exactCohort ? DEFAULT_FILTERS : f), userFilter: userFilter ?? '', search: '', population }));
     setSection('people');
     setSectionRevealRequest((n) => n + 1);
   };
@@ -508,9 +565,9 @@ export default function CoworkPanel({
     setAssumptionFocusRequest((n) => n + 1);
   };
 
-  const selectTier = (tier: CoworkTier) => showPeople({ tiers: [tier], recommendedOnly: false });
+  const selectTier = (tier: CoworkTier) => showPeople(tier);
 
-  if (!available) {
+  if (!available || summary.coworkReadinessWithheld) {
     // Read from the SUMMARY, not from `data`: the effect above deliberately does not fetch when the
     // analysis is unavailable, so `data` is always null on this branch. The summary is a prop and is
     // always present, which is what makes the diagnosis below reachable at all.
@@ -519,12 +576,18 @@ export default function CoworkPanel({
       .filter(({ detail }) => isCoworkWarning(detail));
 
     return (
+      <div>
+      <CoworkObservedUsagePanel summary={summary} showEvidence />
       <Card>
         <div className={styles.emptyState}>
           <Text weight="semibold" block>
             {t('copilotAdoptionCowork.unavailable.title')}
           </Text>
-          {coworkWarnings.length > 0 ? (
+          {summary.coworkReadinessWithheld ? (
+            <Text size={200} block className={styles.muted}>
+              {t('copilotAdoptionCowork.coverage.withheld')}
+            </Text>
+          ) : coworkWarnings.length > 0 ? (
             <div className={styles.warnings}>
               {coworkWarnings.map(({ warning, detail }) => (
                 <MessageBar key={`${detail?.key ?? warning}:${warning}`} intent="warning">
@@ -544,6 +607,7 @@ export default function CoworkPanel({
           )}
         </div>
       </Card>
+      </div>
     );
   }
 
@@ -557,24 +621,28 @@ export default function CoworkPanel({
         cohort={cohorts.cowork}
         onCohortChange={(cohort) => setCohort('cowork', cohort)}
         onAdjust={adjustAssumptions}
-        onShowPeople={canSeePii ? () => showPeople({ recommendedOnly: true, tiers: [] }) : undefined}
+        onShowPeople={canSeePii ? () => showPeople('newCandidates', true) : undefined}
         // Every seat holder the headline models: each filter that would narrow the list lifted, and the
         // page-wide user filter kept - it is the population the headline was modelled for.
         onShowAll={
           canSeePii
-            ? () => showPeople({ search: '', recommendedOnly: false, coworkUsersOnly: false, tiers: [] })
+            ? () => showPeople('nonUsers', true)
             : undefined
         }
       />
 
       <div className={styles.sectionNav} data-print="hide" ref={sectionNavRef}>
         <TabList
+          className={styles.sectionTabs}
           selectedValue={section}
           onTabSelect={(_e, d) => setSection(d.value as CoworkSection)}
           aria-label={t('copilotAdoptionCowork.sections.ariaLabel')}
         >
           <Tab value="timeSaved" icon={<Clock20Regular />}>
             {t('copilotAdoptionCowork.sections.timeSaved')}
+          </Tab>
+          <Tab value="observedUse" icon={<Clock20Regular />}>
+            {t('copilotAdoptionCowork.sections.observedUse')}
           </Tab>
           <Tab value="readiness" icon={<DataScatter20Regular />}>
             {t('copilotAdoptionCowork.sections.readiness')}
@@ -583,13 +651,14 @@ export default function CoworkPanel({
             {t('copilotAdoptionCowork.sections.rollout')}
           </Tab>
           <Tab value="people" icon={<PeopleList20Regular />}>
-            {summary.coworkRecommendedForPolicy > 0
-              ? t('copilotAdoptionCowork.sections.peopleWithCount', {
-                  count: formatCount(summary.coworkRecommendedForPolicy),
-                })
-              : t('copilotAdoptionCowork.sections.people')}
+            {t('copilotAdoptionCowork.sections.people')}
           </Tab>
         </TabList>
+      </div>
+
+      <div role="tabpanel" aria-label={t('copilotAdoptionCowork.sections.observedUse')} hidden={section !== 'observedUse'}>
+        <CoworkObservedUsagePanel summary={summary}
+          onShowPeople={canSeePii ? () => showPeople('observedUsers', true) : undefined} />
       </div>
 
       {/* ---------- Time saved: the model behind the headline ---------- */}
@@ -618,7 +687,7 @@ export default function CoworkPanel({
 
         <div className={styles.tierGrid}>
           {summary.coworkTiers.map((tier) => {
-            const active = filters.tiers.length === 1 && filters.tiers[0] === tier.code;
+            const active = peopleFilters.population === tier.code;
             const label = coworkTierText(t, tier.code, 'label', tier.label, coworkRegularMinActiveDays);
             const description = coworkTierText(t, tier.code, 'description', tier.description, coworkRegularMinActiveDays);
             return (
@@ -686,7 +755,9 @@ export default function CoworkPanel({
             {t('copilotAdoptionCowork.rollout.title')}
           </Text>
           <Text size={200} className={styles.sectionNote}>
-            {t('copilotAdoptionCowork.rollout.empty')}
+            {summary.coworkReadinessWithheld
+              ? t('copilotAdoptionCowork.coverage.withheld')
+              : t('copilotAdoptionCowork.rollout.empty')}
           </Text>
         </Card>
       )}
@@ -720,14 +791,15 @@ export default function CoworkPanel({
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {formatCount(row.primeCandidates)}
                       <Text size={100} block className={table.tdSub}>
-                        {t('copilotAdoptionCowork.table.percentOfSeats', { percent: Math.round(row.primeCandidateRatePct) })}
+                        {row.primeCandidateRatePct == null ? t('copilotAdoption.workload.unverified')
+                          : t('copilotAdoptionCowork.table.percentOfSeats', { percent: Math.round(row.primeCandidateRatePct) })}
                       </Text>
                     </td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
                       {formatCount(row.regularCoworkUsers)}
                     </td>
                     <td className={`${table.td} ${table.tdNumeric}`}>
-                      {Math.round(row.averageCoordinationLoad)}
+                      {formatCount(row.averageCoordinationLoad)}
                     </td>
                     <td className={`${table.td} ${table.tdNumeric}`}>{Math.round(row.averageFluency)}</td>
                   </tr>
@@ -830,27 +902,32 @@ export default function CoworkPanel({
             {t('copilotAdoptionCowork.filters.searchButton')}
           </Button>
 
-          {/* The tier cards used to sit directly above this list and were its tier filter. They now
-              live in their own section, so the filter has to be here too - or a list narrowed from a
-              tier card could not be seen to be narrowed, let alone widened again. */}
-          <Select
-            value={filters.tiers[0] ?? ''}
-            aria-label={t('copilotAdoptionCowork.filters.tierAria')}
-            onChange={(_e: any, d: any) =>
-              setFilters((f) => ({
-                ...f,
-                tiers: d.value ? [d.value as CoworkTier] : [],
-                recommendedOnly: d.value ? false : f.recommendedOnly,
-              }))
-            }
-          >
-            <option value="">{t('copilotAdoptionCowork.filters.allVerdicts')}</option>
-            {summary.coworkTiers.map((tier) => (
-              <option key={tier.code} value={tier.code}>
-                {coworkTierText(t, tier.code, 'label', tier.label, coworkRegularMinActiveDays)}
-              </option>
-            ))}
-          </Select>
+          <div className={styles.populationFilter}>
+            <Label htmlFor={populationId}>{t('copilotAdoptionCowork.filters.show')}</Label>
+            <Select
+              id={populationId}
+              className={styles.populationSelect}
+              value={peopleFilters.population}
+              aria-describedby={populationHelpId}
+              onChange={(_e, d) => setFilters((f) => ({ ...f, population: d.value as CoworkPopulation }))}
+            >
+              <optgroup label={t('copilotAdoptionCowork.filters.policyLists')}>
+                {POLICY_POPULATIONS.map((p) => (
+                  <option key={p.value} value={p.value}>{t(p.labelKey)}</option>
+                ))}
+              </optgroup>
+              <optgroup label={t('copilotAdoptionCowork.filters.reviewLists')}>
+                <option value="all">{t('copilotAdoptionCowork.filters.allPeople')}</option>
+                <option value="nonUsers">{t('copilotAdoptionCowork.filters.nonUsers')}</option>
+                <option value="observedUsers">{t('copilotAdoptionCowork.filters.observedUsers')}</option>
+                {summary.coworkTiers.map((tier) => (
+                  <option key={tier.code} value={tier.code}>
+                    {coworkTierText(t, tier.code, 'label', tier.label, coworkRegularMinActiveDays)}
+                  </option>
+                ))}
+              </optgroup>
+            </Select>
+          </div>
 
           <Select
             value={sortValue}
@@ -866,29 +943,6 @@ export default function CoworkPanel({
               </option>
             ))}
           </Select>
-
-          <Tooltip
-            content={t('copilotAdoptionCowork.filters.policyListTooltip')}
-            relationship="description"
-          >
-            <Checkbox
-              label={t('copilotAdoptionCowork.filters.policyListOnly')}
-              checked={filters.recommendedOnly}
-              onChange={(_e: any, d: any) =>
-                setFilters((f) => ({ ...f, recommendedOnly: !!d.checked, tiers: [] }))
-              }
-            />
-          </Tooltip>
-          <Tooltip
-            content={t('copilotAdoptionCowork.filters.alreadyUsingTooltip')}
-            relationship="description"
-          >
-            <Checkbox
-              label={t('copilotAdoptionCowork.filters.alreadyUsingCowork')}
-              checked={filters.coworkUsersOnly}
-              onChange={(_e: any, d: any) => setFilters((f) => ({ ...f, coworkUsersOnly: !!d.checked }))}
-            />
-          </Tooltip>
 
           <div className={styles.spacer} />
 
@@ -916,18 +970,19 @@ export default function CoworkPanel({
           </Tooltip>
         </div>
 
+        <Text id={populationHelpId} size={200} className={styles.sectionNote}>
+          {populationDescription}
+          {' '}{t('copilotAdoptionCowork.filters.listOnly')}
+        </Text>
+
         <PrintedFilters
           filters={[
             printedSearch(t, filters.search),
             {
-              label: t('copilotAdoptionCowork.people.verdict'),
-              value: selectedTier
-                ? coworkTierText(t, selectedTier.code, 'label', selectedTier.label, coworkRegularMinActiveDays)
-                : t('copilotAdoptionCowork.filters.allVerdicts'),
+              label: t('copilotAdoptionCowork.filters.show'),
+              value: populationLabel,
             },
             sortOption && { label: t('copilotAdoption.shared.printedFilters.sortedBy'), value: t(sortOption.labelKey) },
-            filters.recommendedOnly && { value: t('copilotAdoptionCowork.filters.policyListOnly') },
-            filters.coworkUsersOnly && { value: t('copilotAdoptionCowork.filters.alreadyUsingCowork') },
           ]}
         />
 
@@ -967,10 +1022,10 @@ export default function CoworkPanel({
             </Text>
             <Button
               size="small"
-              onClick={clearPanelFilters}
+              onClick={showAllPeople}
               data-print="hide"
             >
-              {t('copilotAdoptionCowork.actions.clearFilters')}
+              {t('copilotAdoptionCowork.actions.showAllPeople')}
             </Button>
           </div>
         )}
@@ -1073,10 +1128,10 @@ export default function CoworkPanel({
                           <Tooltip
                             relationship="description"
                             content={t('copilotAdoptionCowork.scoreTooltip.loadBreakdown', {
-                              meetings: Math.round(row.meetingScore),
-                              email: Math.round(row.emailScore),
-                              messages: Math.round(row.collaborationScore),
-                              documents: Math.round(row.documentScore),
+                              meetings: formatCount(row.meetingScore),
+                              email: formatCount(row.emailScore),
+                              messages: formatCount(row.collaborationScore),
+                              documents: formatCount(row.documentScore),
                             })}
                           >
                             <div>
@@ -1115,33 +1170,33 @@ export default function CoworkPanel({
                         </td>
                         <td className={`${table.td} ${table.tdNumeric}`}>{formatCount(row.teamsMeetings)}</td>
                         <td className={`${table.td} ${table.tdNumeric}`}>
-                          {formatCount(row.emailsSent + row.emailsRead)}
+                          {formatCount(row.emailsSent == null || row.emailsRead == null ? null : row.emailsSent + row.emailsRead)}
                         </td>
                       </tr>
                       {open && (
                         <DetailRow colSpan={detailColSpan}>
                           <DetailSections>
-                            <DetailSection title={t('copilotAdoptionCowork.detail.coordinationLoadTitle', { score: Math.round(row.coordinationLoadScore) })}>
+                            <DetailSection title={t('copilotAdoptionCowork.detail.coordinationLoadTitle', { score: formatCount(row.coordinationLoadScore) })}>
                               <DetailStats>
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.meetings')}
                                   value={formatCount(row.teamsMeetings)}
-                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.meetingScore), target: formatNumber(options.coworkMeetingTarget) })}
+                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: formatCount(row.meetingScore), target: formatNumber(options.coworkMeetingTarget) })}
                                 />
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.email')}
-                                  value={formatCount(row.emailsSent + row.emailsRead)}
-                                  sub={t('copilotAdoptionCowork.detail.emailScoreSentRead', { score: Math.round(row.emailScore), sent: formatCount(row.emailsSent), read: formatCount(row.emailsRead) })}
+                                  value={formatCount(row.emailsSent == null || row.emailsRead == null ? null : row.emailsSent + row.emailsRead)}
+                                  sub={t('copilotAdoptionCowork.detail.emailScoreSentRead', { score: formatCount(row.emailScore), sent: formatCount(row.emailsSent), read: formatCount(row.emailsRead) })}
                                 />
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.teamsMessages')}
                                   value={formatCount(row.teamsMessages)}
-                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.collaborationScore), target: formatNumber(options.coworkCollaborationTarget) })}
+                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: formatCount(row.collaborationScore), target: formatNumber(options.coworkCollaborationTarget) })}
                                 />
                                 <DetailStat
                                   label={t('copilotAdoptionCowork.detail.files')}
                                   value={formatCount(row.filesViewedOrEdited)}
-                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: Math.round(row.documentScore), target: formatNumber(options.coworkDocumentTarget) })}
+                                  sub={t('copilotAdoptionCowork.detail.perDayVsTarget', { score: formatCount(row.documentScore), target: formatNumber(options.coworkDocumentTarget) })}
                                 />
                               </DetailStats>
                             </DetailSection>
@@ -1175,7 +1230,8 @@ export default function CoworkPanel({
                                   label={t('copilotAdoptionCowork.detail.loadBar')}
                                   value={options.coworkLoadMinScore}
                                   sub={
-                                    row.coordinationLoadScore >= options.coworkLoadMinScore
+                                    row.coordinationLoadScore == null ? t('copilotAdoption.workload.unverified')
+                                    : row.coordinationLoadScore >= options.coworkLoadMinScore
                                       ? t('copilotAdoptionCowork.detail.cleared')
                                       : t('copilotAdoptionCowork.detail.notCleared')
                                   }

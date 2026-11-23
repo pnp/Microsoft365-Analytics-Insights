@@ -51,6 +51,23 @@ export function getSPRequestDuration(source: string) : number | null {
     return null;
 }
 
+// SPRequestDuration from the inline scripts of a page, without serialising the whole page as body.innerHTML did on every page
+// view. The block can only be found in script text: innerHTML writes the quotes of an attribute value as &quot;, so the
+// "perf":{" marker never matched there. Like the search of innerHTML, it reads the first block found.
+export function getSPRequestDurationFromScripts(root: ParentNode | null): number | null {
+    if (!root) {
+        return null;
+    }
+    const scripts = root.querySelectorAll('script');
+    for (let i = 0; i < scripts.length; i++) {
+        const text = scripts[i].text;
+        if (text && text.indexOf(`"perf":{"`) > -1) {
+            return getSPRequestDuration(text);
+        }
+    }
+    return null;
+}
+
 export function isValidGuid(str : string | null) : boolean
 {
 

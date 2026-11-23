@@ -371,6 +371,7 @@ namespace Common.Entities.CopilotAdoption
         public const string M365ReportDate = "M365ReportDate";
         public const string CopilotReportAnonymisation = "CopilotReportAnonymisation";
         public const string SeatAssignments = "SeatAssignments";
+        public const string CurrentSeatTenure = "CurrentSeatTenure";
         public const string CoworkAgentLookup = "CoworkAgentLookup";
         public const string LicensedUserDetail = "LicensedUserDetail";
         public const string LicensedUsageByApp = "LicensedUsageByApp";
