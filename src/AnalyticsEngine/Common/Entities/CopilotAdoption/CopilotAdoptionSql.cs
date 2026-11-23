@@ -439,6 +439,30 @@ namespace Common.Entities.CopilotAdoption
         #region Licensed users
 
         /// <summary>
+        /// A lower bound on tenure from a still-open holding that matches a current configured seat SKU.
+        /// The earliest such holding suffices to prove maturity even if another SKU was added later.
+        /// Never backdate an initial seed, stitch across closed holdings, or substitute account creation.
+        /// One set-based read, using the existing licence/history indexes; one row per person.
+        /// </summary>
+        public static string CurrentSeatTenureSql(IEnumerable<int> seatLicenceTypeIds)
+        {
+            return
+                "WITH ObservedHoldings AS (\r\n" +
+                "    SELECT h.user_id AS UserId, h.valid_from_utc AS SeatObservedFromUtc,\r\n" +
+                "           h.from_source AS SeatObservationSource,\r\n" +
+                "           ROW_NUMBER() OVER (PARTITION BY h.user_id ORDER BY h.valid_from_utc, h.license_type_id) AS rn\r\n" +
+                "    FROM dbo.user_license_history AS h\r\n" +
+                "    JOIN dbo.user_license_type_lookups AS ul\r\n" +
+                "      ON ul.user_id = h.user_id AND ul.license_type_id = h.license_type_id\r\n" +
+                $"    WHERE h.license_type_id IN ({IdList(seatLicenceTypeIds)})\r\n" +
+                "      AND h.valid_to_utc IS NULL AND h.valid_from_utc <= @asOf\r\n" +
+                "      AND h.from_source IN (0, 1, 2)\r\n" +
+                ")\r\n" +
+                "SELECT UserId, SeatObservedFromUtc, SeatObservationSource\r\n" +
+                "FROM ObservedHoldings WHERE rn = 1;";
+        }
+
+        /// <summary>
         /// One row per (user, Copilot seat SKU). Used both to name the seats a user holds and to count
         /// the licensed population exactly - the detail query is capped, so it cannot be trusted for a
         /// headline figure, whereas this index-only read can.
@@ -934,6 +958,10 @@ namespace Common.Entities.CopilotAdoption
                     "--\r\n" +
                     "-- ActiveDays is the column the 'regular use' verdict rests on: an interaction count\r\n" +
                     "-- cannot tell habitual use apart from one long afternoon of experimenting.\r\n" +
+                    "--\r\n" +
+                    "-- Counted turns only (#699): a Cowork agent turn in Microsoft 365 Copilot is audited\r\n" +
+                    "-- twice, and both records carry the Cowork agent id, so the runtime twin listed in\r\n" +
+                    "-- copilot_chat_duplicates must not be counted as a second interaction.\r\n" +
                     "CoworkUsage AS (\r\n" +
                     "    SELECT c.user_id AS user_id,\r\n" +
                     "           COUNT_BIG(*) AS Interactions,\r\n" +
@@ -943,6 +971,7 @@ namespace Common.Entities.CopilotAdoption
                     "    WHERE c.time_stamp >= @from\r\n      AND c.time_stamp < @toExclusive\r\n" +
                     "      AND c.user_id IS NOT NULL\r\n" +
                     $"      AND ({cowork})\r\n" +
+                    $"      AND {Copilot.CopilotTurnSql.CountedTurn("c")}\r\n" +
                     "    GROUP BY c.user_id\r\n" +
                     ")");
             }

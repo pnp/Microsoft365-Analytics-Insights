@@ -9,10 +9,15 @@ using System.Threading.Tasks;
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     /// <summary>
-    /// Applies a deadline to every SDK HTTP request and retries idempotent reads only when
-    /// this process' request deadline expires.
-    /// Kiota's RetryHandler still owns Graph-directed HTTP retries such as 429/503/504 and
-    /// Retry-After. Caller cancellation is never treated as a transient timeout.
+    /// Applies a deadline to every SDK HTTP attempt and retries idempotent reads only when
+    /// this process' request deadline expires. Any response, including 429/503/504, is returned
+    /// as-is and never retried here. Caller cancellation is never treated as a transient timeout.
+    /// <para>
+    /// <see cref="GraphServiceClientFactory.BuildGraphImportHandlers"/> places this handler
+    /// INSIDE Kiota's RetryHandler, which owns Graph-directed retries and Retry-After waits.
+    /// So the deadline bounds each attempt the RetryHandler sends, never the Retry-After wait
+    /// between attempts (#846 R8-10).
+    /// </para>
     /// </summary>
     internal sealed class BoundedGraphRequestHandler : DelegatingHandler
     {

@@ -24,7 +24,7 @@ namespace Tests.UnitTests.InstallTests
         [DataRow(true, false, 1260)]
         [DataRow(false, true, 577)]
         [DataRow(false, false, 5)]
-        public async Task BlockedDownloadedInstaller_ContinuesDeploymentAndRetainsPauseOnlyForDeferredSchema(
+        public async Task BlockedDownloadedInstaller_ContinuesDeploymentAndRemovesWebJobsPause(
             bool upgradeSchema, bool installContent, int nativeError)
         {
             using (var arm = new SqlAuthenticationDetectionTests.SqlArmFixture())
@@ -51,8 +51,8 @@ namespace Tests.UnitTests.InstallTests
                 Assert.AreEqual(upgradeSchema ? 2 : 1, tasks.Launches, "Registration is independent of the schema checkbox.");
                 Assert.AreEqual(upgradeSchema, tasks.SchemaUpgradeDeferred);
                 Assert.AreEqual(installContent, stages.Contains("content"));
-                Assert.AreEqual(installContent && !upgradeSchema, stages.Contains("resume"));
-                Assert.AreEqual(upgradeSchema, settings.TryGetValue("WEBJOBS_STOPPED", out var stopped) && stopped == "1");
+                Assert.AreEqual(installContent || upgradeSchema, stages.Contains("resume"));
+                Assert.IsFalse(settings.ContainsKey("WEBJOBS_STOPPED"));
                 Assert.AreEqual("remaining-tasks", stages.Last());
                 Assert.IsTrue(logger.Lines.Any(l => l.Level == LogLevel.Warning && l.Message.Contains("not registered")));
                 Assert.AreEqual(upgradeSchema, logger.Lines.Any(l => l.Level == LogLevel.Error && l.Message.Contains("Database initialisation did not run")));
@@ -97,7 +97,7 @@ namespace Tests.UnitTests.InstallTests
                 Assert.IsFalse(tasks.SchemaUpgradeDeferred);
                 Assert.IsTrue(restarted);
                 Assert.IsFalse(deployed);
-                Assert.IsFalse(resumed);
+                Assert.IsTrue(resumed, "A failed migration must not strand WEBJOBS_STOPPED.");
                 Assert.AreEqual(1, tasks.Launches, "Registration must not follow a failed migration.");
             }
         }

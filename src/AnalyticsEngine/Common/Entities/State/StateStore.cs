@@ -152,6 +152,9 @@ namespace Common.Entities.State
         /// <summary>When each interval-gated import last ran (and when a failing usage report may next retry). Round-trip ("o") timestamps.</summary>
         public const string ImportSchedule = "ImportSchedule";
 
+        /// <summary>Exact daily user-detail outcomes (v1:source:yyyyMMdd), not import cadence stamps.</summary>
+        public const string UsageReportCoverage = "UsageReportCoverage";
+
         /// <summary>The Graph user import's <c>/users/delta</c> checkpoint. See <see cref="UserImportCheckpointKeys"/>.</summary>
         public const string UserImport = "UserImport";
 

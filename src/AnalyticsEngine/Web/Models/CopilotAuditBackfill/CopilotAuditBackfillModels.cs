@@ -153,9 +153,12 @@ namespace Web.AnalyticsWeb.Models.CopilotAuditBackfill
 
             var now = _utcNow();
             var start = CopilotAuditBackfillSlicer.ClampStart(request?.StartDateUtc, now);
-            var job = await _state.CreateAsync(start, now, requestedBy).ConfigureAwait(false);
-            job.CopilotImportEnabled = _config.ImportJobSettings.Copilot;
-            await _state.SaveAsync(job).ConfigureAwait(false);
+            var job = await _state.TryCreateWhenIdleAsync(start, now, requestedBy, _config.ImportJobSettings.Copilot).ConfigureAwait(false);
+            if (job == null)
+            {
+                // Another start claimed the job between the check above and this one.
+                throw new CopilotAuditBackfillRequestException(HttpStatusCode.Conflict, "jobActive");
+            }
             return ToModel(job);
         }
 

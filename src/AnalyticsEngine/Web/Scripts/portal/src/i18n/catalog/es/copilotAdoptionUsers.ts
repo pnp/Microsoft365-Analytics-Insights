@@ -313,9 +313,13 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
     'Oculto: este dominio tiene menos de {count} candidatos a licencia',
   'copilotAdoptionUsers.emailDomain.withheld.candidates.revealsSmallerGroup':
     'Oculto: con el total del inquilino, este recuento revelaría un dominio con menos de {count} candidatos a licencia',
+  'copilotAdoptionUsers.emailDomain.withheld.cowork.fewPeople':
+    'Oculto: menos de {count} personas de este dominio son candidatas prioritarias para Cowork',
+  'copilotAdoptionUsers.emailDomain.withheld.cowork.revealsSmallerGroup':
+    'Oculto: con el total del inquilino, este recuento revelaría un dominio con menos de {count} candidatas prioritarias para Cowork',
   'copilotAdoptionUsers.emailDomain.withheld.other': 'Oculto: podría identificar a menos de {count} personas',
   'copilotAdoptionUsers.emailDomain.withheldNote':
-    'Cada fila reúne tres grupos de personas (quienes tienen puesto, quienes usan Copilot Chat sin licencia y los candidatos a licencia), y un grupo de menos de {count} personas se oculta para que no se pueda señalar a nadie.',
+    'Cada fila reúne cuatro grupos de personas (quienes tienen puesto, quienes usan Copilot Chat sin licencia, los candidatos a licencia y las candidatas prioritarias para Cowork), y un grupo de menos de {count} personas se oculta para que no se pueda señalar a nadie.',
   'copilotAdoptionUsers.emailDomain.withheldNoteComplement':
     'En una columna se oculta además otro dominio cuando, al restar del total del inquilino las cifras mostradas, se revelaría una cifra oculta.',
 
@@ -327,6 +331,7 @@ const copilotAdoptionUsers: Record<keyof typeof en, string> = {
   'copilotAdoptionUsers.server.reclaimEligibility.review': 'revisión',
   'copilotAdoptionUsers.server.reclaimEligibility.excluded': 'excluido',
   'copilotAdoptionUsers.server.tenureBasis.accountAge': 'la antigüedad de la cuenta',
+  'copilotAdoptionUsers.server.tenureBasis.seatObservedLowerBound': 'el límite inferior registrado de antigüedad de la licencia',
   'copilotAdoptionUsers.server.tenureBasis.unknown': 'la antigüedad desconocida',
   'copilotAdoptionUsers.server.reclaimReason.excluded': 'Excluido por un administrador: {reason}.',
   'copilotAdoptionUsers.server.reclaimReason.disabled': 'La cuenta deshabilitada sigue ocupando un puesto de Copilot. Recupérelo inmediatamente.',

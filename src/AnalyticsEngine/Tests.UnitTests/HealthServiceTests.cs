@@ -60,6 +60,7 @@ namespace Tests.UnitTests
         [DataRow("connected", "Healthy", "agentCostConnection.connected")]
         [DataRow("disconnected", "Degraded", "agentCostConnection.disconnected")]
         [DataRow("reconnectNeeded", "Degraded", "agentCostConnection.reconnectNeeded")]
+        [DataRow("routeRefused", "Degraded", "agentCostConnection.routeRefused")]
         public async Task AgentCostConnection_Enabled_ReportsStatusAndRollsUp(
             string connectionStatus, string expectedStatus, string reasonKey)
         {

@@ -8,7 +8,7 @@ import { loadTrackerUnlessRunning } from './TrackerPresence';
 // AITracker.js function. That's where we drive the AppInsights telemetry.
 declare function modernPageNav(webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void;
 
-const AITRACKER_MODERN_VERSION: string = "1.0.1.64";     // Keep in step with the version in config/package-solution.json
+const AITRACKER_MODERN_VERSION: string = "1.0.1.65";     // Keep in step with the version in config/package-solution.json
 const NAV_EVENT_DELAY_MS: number = 2000;
 
 declare global {

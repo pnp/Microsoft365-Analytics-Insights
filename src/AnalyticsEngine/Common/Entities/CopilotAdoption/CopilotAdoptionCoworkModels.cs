@@ -208,7 +208,10 @@ namespace Common.Entities.CopilotAdoption
         /// The x-axis of the quadrant.
         /// </summary>
         [JsonProperty("coordinationLoadScore")]
-        public double CoordinationLoadScore { get; set; }
+        public double? CoordinationLoadScore { get; set; }
+
+        [JsonProperty("workloadUnavailableReason")]
+        public string WorkloadUnavailableReason { get; set; }
 
         /// <summary>
         /// Copilot fluency, 0-100: the engagement score plus a bounded agent-familiarity uplift. The
@@ -229,31 +232,31 @@ namespace Common.Entities.CopilotAdoption
         #region Coordination-load components
 
         [JsonProperty("collaborationScore")]
-        public double CollaborationScore { get; set; }
+        public double? CollaborationScore { get; set; }
 
         [JsonProperty("meetingScore")]
-        public double MeetingScore { get; set; }
+        public double? MeetingScore { get; set; }
 
         [JsonProperty("emailScore")]
-        public double EmailScore { get; set; }
+        public double? EmailScore { get; set; }
 
         [JsonProperty("documentScore")]
-        public double DocumentScore { get; set; }
+        public double? DocumentScore { get; set; }
 
         [JsonProperty("teamsMessages")]
-        public long TeamsMessages { get; set; }
+        public long? TeamsMessages { get; set; }
 
         [JsonProperty("teamsMeetings")]
-        public long TeamsMeetings { get; set; }
+        public long? TeamsMeetings { get; set; }
 
         [JsonProperty("emailsSent")]
-        public long EmailsSent { get; set; }
+        public long? EmailsSent { get; set; }
 
         [JsonProperty("emailsRead")]
-        public long EmailsRead { get; set; }
+        public long? EmailsRead { get; set; }
 
         [JsonProperty("filesViewedOrEdited")]
-        public long FilesViewedOrEdited { get; set; }
+        public long? FilesViewedOrEdited { get; set; }
 
         [JsonProperty("lastM365ActivityUtc")]
         public DateTime? LastM365ActivityUtc { get; set; }
@@ -367,11 +370,11 @@ namespace Common.Entities.CopilotAdoption
         public int LicensedUsers { get; set; }
 
         [JsonProperty("primeCandidates")]
-        public int PrimeCandidates { get; set; }
+        public int? PrimeCandidates { get; set; }
 
         /// <summary>Prime candidates as a share of the segment's seats.</summary>
         [JsonProperty("primeCandidateRatePct")]
-        public double PrimeCandidateRatePct { get; set; }
+        public double? PrimeCandidateRatePct { get; set; }
 
         [JsonProperty("regularCoworkUsers")]
         public int RegularCoworkUsers { get; set; }
@@ -380,7 +383,7 @@ namespace Common.Entities.CopilotAdoption
         public double CoworkAdoptionPct { get; set; }
 
         [JsonProperty("averageCoordinationLoad")]
-        public double AverageCoordinationLoad { get; set; }
+        public double? AverageCoordinationLoad { get; set; }
 
         [JsonProperty("averageFluency")]
         public double AverageFluency { get; set; }
@@ -449,10 +452,52 @@ namespace Common.Entities.CopilotAdoption
     }
 
     /// <summary>
+    /// Audit facts for the assessed seat-holder population, not completed tasks or measured benefit.
+    /// Active user-days sum each person's distinct active days; they are not distinct days for the cohort.
+    /// </summary>
+    public class CoworkObservedUsage
+    {
+        [JsonProperty("available")]
+        public bool Available { get; set; }
+
+        [JsonProperty("assessedUsers")]
+        public int? AssessedUsers { get; set; }
+
+        [JsonProperty("users")]
+        public int? Users { get; set; }
+
+        [JsonProperty("interactions")]
+        public long? Interactions { get; set; }
+
+        [JsonProperty("activeUserDays")]
+        public long? ActiveUserDays { get; set; }
+
+        [JsonProperty("lastInteractionUtc")]
+        public DateTime? LastInteractionUtc { get; set; }
+
+        [JsonProperty("partial")]
+        public bool Partial { get; set; }
+
+        /// <summary>
+        /// Not estimated until conversation/task coverage, credit units and model provenance are validated
+        /// (#897 Stage B). Neither workload volumes nor arbitrary interaction credits establish this benefit.
+        /// </summary>
+        [JsonProperty("assistedHours")]
+        public double? AssistedHours => null;
+
+        [JsonProperty("withheldReason", NullValueHandling = NullValueHandling.Ignore)]
+        public string WithheldReason { get; set; }
+
+        /// <summary>Shared, assessed-only and licensed-audit-only people; private privacy-floor provenance.</summary>
+        [JsonIgnore]
+        internal int[] AuditPopulationParts { get; set; }
+
+    }
+
+    /// <summary>
     /// The modelled Cowork estimate for one cohort: the time Cowork could give back ON TOP of what
-    /// Microsoft 365 Copilot already saves, for the people ready for Cowork now
-    /// (<see cref="CopilotAdoptionSummary.CoworkValueEstimate"/>) or every Copilot seat holder
-    /// (<see cref="CopilotAdoptionSummary.CoworkFullRolloutEstimate"/>).
+    /// Microsoft 365 Copilot already saves. The new-adoption estimates select eligible people with no
+    /// observed Cowork use; the legacy API forecasts still accept the complete policy audience.
     ///
     /// <b>Every hour here is derived from an assumption and none of it is measured.</b> The observed
     /// input - the work the cohort already does by hand (<see cref="Activities"/>) - is real; the share of
@@ -468,11 +513,9 @@ namespace Common.Entities.CopilotAdoption
     /// (<see cref="CoworkActivities"/>). A flat tasks-a-person projection could not say where the time
     /// was, and modelled the busiest and the quietest person alike.</para>
     ///
-    /// <para><b>People already using Cowork are modelled like everyone else.</b> The Copilot audit log
-    /// records their Cowork interactions, and an interaction is not a unit of work the model can count,
-    /// so the estimate is the potential at full use, not the gain over today. Before #692 people with
-    /// Cowork tasks in a Graph Cowork usage report were counted at those tasks instead, but that report
-    /// does not exist in Graph and was never imported, so every tenant was already modelled this way.</para>
+    /// <para><b>Not an existing-user benefit model.</b> Legacy forecasts may model existing users'
+    /// workloads for compatibility. The new-adoption forecasts exclude those users, and observed-use
+    /// assisted hours remain unestimated until the evidence gates in #897 Stage B are met.</para>
     ///
     /// <para><b>Cowork only, on purpose.</b> This is the figure a tenant uses to justify Copilot
     /// Credits: the value of enabling Cowork for people who already hold a Copilot licence. It used to

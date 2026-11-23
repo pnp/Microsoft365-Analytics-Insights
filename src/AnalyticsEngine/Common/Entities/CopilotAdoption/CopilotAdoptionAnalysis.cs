@@ -157,6 +157,9 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         public List<CoworkReadinessSignalRow> CoworkSignals { get; set; } = new List<CoworkReadinessSignalRow>();
 
+        /// <summary>The audit-backed Cowork query completed, including a genuinely empty result.</summary>
+        internal bool CoworkAuditAssessed { get; set; }
+
         /// <summary>
         /// True when this analysis is a slice of one whose Cowork assessment ran, so an empty
         /// <see cref="CoworkSignals"/> means "nobody in this slice", not "the assessment did not run".
@@ -169,9 +172,10 @@ namespace Common.Entities.CopilotAdoption
         public bool CoworkAssessedForWholePopulation { get; set; }
 
         /// <summary>
-        /// True when this analysis is a slice of one whose Cowork assessment ran but stopped at
+        /// True when the raw Cowork assessment stopped at
         /// <see cref="CopilotAdoptionOptions.MaxCoworkUsersScored"/>, so an empty slice means "not
-        /// assessed" - neither a measured zero nor a missing import - and is explained as such.
+        /// assessed" - neither a measured zero nor a missing import. Kept even when missing fluency
+        /// prevents readiness scoring, and inherited by every narrower slice.
         /// </summary>
         public bool CoworkAssessmentCapped { get; set; }
 

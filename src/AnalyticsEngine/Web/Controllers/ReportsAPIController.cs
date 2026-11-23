@@ -1,5 +1,6 @@
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.State;
 using Common.Entities.UserFilters;
 using System;
 using System.Collections.Generic;
@@ -655,26 +656,25 @@ namespace Web.AnalyticsWeb.Controllers
         // counted only that day's people as the week's - someone active on Monday alone vanished from
         // a week charted from its Sunday - so every imported day of the week is read.
         //
-        // A day with no rows at all is a day whose report was not imported: it is a hole in the
-        // evidence for everyone, not a day nobody was active. Each week therefore carries how many of
-        // its seven days were imported. A week with none is omitted and drawn as a gap; a week with
-        // some is drawn from the days it has and flagged as incomplete, so a missed import never reads
-        // as a fall in activity.
+        // A day with no rows is a hole unless the importer's durable provenance ledger records a
+        // successfully empty report. Older days without a ledger outcome keep the historical
+        // row-presence rule; known partial, incomplete or scoped outcomes are not treated as complete.
         private static List<Task<ReportChart>> UsageCharts(DateTime from, List<DateTime> weekSpine)
         {
             var workloads = new[]
             {
-                new { Table = "dbo.teams_user_activity_log", Name = "Teams" },
-                new { Table = "dbo.outlook_user_activity_log", Name = "Outlook" },
-                new { Table = "dbo.onedrive_user_activity_log", Name = "OneDrive" },
-                new { Table = "dbo.sharepoint_user_activity_log", Name = "SharePoint" },
-                new { Table = "dbo.yammer_user_activity_log", Name = "Viva Engage" },
+                new { Table = "dbo.teams_user_activity_log", Name = "Teams", CoverageSource = (string)"teams" },
+                new { Table = "dbo.outlook_user_activity_log", Name = "Outlook", CoverageSource = (string)"outlook" },
+                new { Table = "dbo.onedrive_user_activity_log", Name = "OneDrive", CoverageSource = (string)"onedrive" },
+                new { Table = "dbo.sharepoint_user_activity_log", Name = "SharePoint", CoverageSource = (string)"sharepoint" },
+                new { Table = "dbo.yammer_user_activity_log", Name = "Viva Engage", CoverageSource = (string)null },
             };
 
             var series = workloads.Select(w => new SeriesQuery
             {
                 Name = w.Name,
                 Body = UsageWeeklyActiveUsersQuery(w.Table),
+                CoverageSource = w.CoverageSource,
             }).ToList();
 
             // Only weeks whose every day Graph has settled: a week still inside the report lag would be
@@ -693,7 +693,7 @@ namespace Web.AnalyticsWeb.Controllers
         /// <summary>
         /// One workload's weekly active users: the distinct people with a report row - and Microsoft's last
         /// activity date inside the week - on ANY day of each week from <c>@from</c> to the week starting
-        /// <c>@through</c>, with how many of the week's seven days have a report imported at all.
+        /// <c>@through</c>, plus whether each individual date has any report rows.
         /// </summary>
         /// <remarks>
         /// Shaped like Licence activity's weekly scoring (<c>LicenceActivitySql</c>): one pass over the window
@@ -702,9 +702,9 @@ namespace Web.AnalyticsWeb.Controllers
         /// week, and a <c>COUNT(DISTINCT ...)</c> over the raw rows is the form Licence activity measured at
         /// 141.6 s, against 7.9 s for one pinned day per week, at 300k users over 180 days. Every column read
         /// is in <c>IX_date</c> (<c>[date], [last_activity_date]</c> INCLUDE <c>[user_id]</c>), so the activity
-        /// read is one index-only range seek. Import coverage is one <c>TOP (1)</c> seek per
-        /// day, deliberately NOT narrowed to the reader's scope: whether a day was imported is a fact about the
-        /// import, and a scope with nobody active that day must not make the day look missing.
+        /// read is one index-only range seek. Row presence is one <c>TOP (1)</c> seek per day,
+        /// deliberately NOT narrowed to the reader's scope: whether a day has stored rows is a fact about
+        /// the import, and a scope with nobody active that day must not make the day look missing.
         /// </remarks>
         internal static string UsageWeeklyActiveUsersQuery(string table)
         {
@@ -718,11 +718,12 @@ namespace Web.AnalyticsWeb.Controllers
                 "    FROM WeekStarts\r\n" +
                 "    WHERE WeekStart < @through\r\n" +
                 "),\r\n" +
-                "-- How many of each week's days have a settled report imported at all, from anyone. Graph's\r\n" +
-                "-- per-date reports list only the people active that day, so a missing day is a hole in the\r\n" +
-                "-- evidence for everyone; a week with none is omitted (drawn as a gap).\r\n" +
-                "Coverage AS (\r\n" +
-                "    SELECT weeks.WeekStart, SUM(ISNULL(present.Imported, 0)) AS ImportedDays\r\n" +
+                "-- Whether each settled date has any report rows. Durable empty-day provenance is merged\r\n" +
+                "-- by the caller so an empty Graph report is distinct from a missing import.\r\n" +
+                "CoverageDays AS (\r\n" +
+                "    SELECT weeks.WeekStart,\r\n" +
+                "           DATEADD(DAY, week_days.n, weeks.WeekStart) AS CoverageDate,\r\n" +
+                "           CAST(CASE WHEN present.Imported IS NULL THEN 0 ELSE 1 END AS bit) AS HasRows\r\n" +
                 "    FROM WeekStarts AS weeks\r\n" +
                 "    CROSS JOIN (VALUES (0), (1), (2), (3), (4), (5), (6)) AS week_days (n)\r\n" +
                 "    OUTER APPLY (\r\n" +
@@ -732,7 +733,6 @@ namespace Web.AnalyticsWeb.Controllers
                 "          AND available.[date] < DATEADD(DAY, week_days.n + 1, weeks.WeekStart)\r\n" +
                 "          AND available.[date] <= @settled\r\n" +
                 "    ) AS present\r\n" +
-                "    GROUP BY weeks.WeekStart\r\n" +
                 "),\r\n" +
                 "-- Everyone active on any day of the week, once per week.\r\n" +
                 "PerUserWeek AS (\r\n" +
@@ -752,12 +752,11 @@ namespace Web.AnalyticsWeb.Controllers
                 ")\r\n" +
                 "SELECT coverage.WeekStart,\r\n" +
                 "       CAST(ISNULL(active.Users, 0) AS float) AS Value,\r\n" +
-                "       coverage.ImportedDays,\r\n" +
-                "       7 AS ExpectedDays\r\n" +
-                "FROM Coverage AS coverage\r\n" +
+                "       coverage.CoverageDate,\r\n" +
+                "       coverage.HasRows\r\n" +
+                "FROM CoverageDays AS coverage\r\n" +
                 "LEFT JOIN WeeklyActive AS active ON active.WeekStart = coverage.WeekStart\r\n" +
-                "WHERE coverage.ImportedDays > 0\r\n" +
-                "ORDER BY coverage.WeekStart\r\n" +
+                "ORDER BY coverage.WeekStart, coverage.CoverageDate\r\n" +
                 // The recursion is bounded by the @through predicate above, so no arbitrary
                 // depth cap is needed (a cap silently errors if the window is ever widened).
                 "OPTION (MAXRECURSION 0);";
@@ -933,6 +932,7 @@ namespace Web.AnalyticsWeb.Controllers
             var incompleteWeeksBySeries = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
             var warnings = new List<string>();
             var warningFacts = new List<ReportSeriesWarning>();
+            var outcomesBySource = await ReadDailyUsageOutcomesAsync(from, lastWeek.AddDays(6));
 
             // Sequentially per series keeps a bounded number of concurrent contexts (the area itself
             // already runs in parallel with other areas' charts); each is one index-only range seek
@@ -942,14 +942,16 @@ namespace Web.AnalyticsWeb.Controllers
                 var sq = series[i];
                 try
                 {
-                    var rows = await QueryUsageWeeksAsync(sq.Body, from, lastWeek, settled);
+                    var dailyRows = await QueryUsageWeeksAsync(sq.Body, from, lastWeek, settled);
+                    var outcomes = sq.CoverageSource != null
+                        && outcomesBySource.TryGetValue(sq.CoverageSource, out var sourceOutcomes)
+                            ? sourceOutcomes
+                            : null;
+                    var aggregated = AggregateUsageWeekRows(dailyRows, outcomes);
                     rowsBySeries.Add(new KeyValuePair<string, List<WeekValueRow>>(
                         sq.Name,
-                        rows.Select(r => new WeekValueRow { WeekStart = r.WeekStart, Value = r.Value }).ToList()));
-                    incompleteWeeksBySeries[sq.Name] = rows
-                        .Where(r => r.ImportedDays < r.ExpectedDays)
-                        .Select(r => r.WeekStart.Date)
-                        .ToList();
+                        aggregated.WeeklyRows));
+                    incompleteWeeksBySeries[sq.Name] = aggregated.IncompleteWeeks;
                 }
                 catch (Exception ex)
                 {
@@ -988,6 +990,56 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             return CompleteMultiTimeSeries(chart, rowsBySeries, warnings, weekSpine, warningFacts, incompleteWeeksBySeries);
+        }
+
+        private static async Task<Dictionary<string, Dictionary<DateTime, string>>> ReadDailyUsageOutcomesAsync(
+            DateTime from, DateTime through)
+        {
+            try
+            {
+                return await UsageReportCoverageStore.Open(
+                    new AppConfig(), readTimeout: TimeSpan.FromSeconds(3))
+                    .ReadDailyOutcomesAsync(from, through).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                return new Dictionary<string, Dictionary<DateTime, string>>(StringComparer.Ordinal);
+            }
+        }
+
+        internal static UsageWeekAggregation AggregateUsageWeekRows(
+            IEnumerable<UsageWeekRow> dailyRows,
+            IDictionary<DateTime, string> outcomes)
+        {
+            var result = new UsageWeekAggregation();
+            foreach (var week in dailyRows.GroupBy(row => row.WeekStart.Date))
+            {
+                var days = week.ToList();
+                var hasRows = days.Any(day => day.HasRows);
+                var fullyCovered = days.All(day => IsUsageDayCovered(day, outcomes));
+
+                // A week with no activity rows is a real zero only when all seven days are proven.
+                // If some rows exist, keep charting them but flag the lower-bound week as incomplete.
+                if (hasRows || fullyCovered)
+                {
+                    result.WeeklyRows.Add(new WeekValueRow
+                    {
+                        WeekStart = week.Key,
+                        Value = days[0].Value,
+                    });
+                }
+                if (hasRows && !fullyCovered) result.IncompleteWeeks.Add(week.Key);
+            }
+            return result;
+        }
+
+        private static bool IsUsageDayCovered(UsageWeekRow day, IDictionary<DateTime, string> outcomes)
+        {
+            if (outcomes != null && outcomes.TryGetValue(day.CoverageDate.Date, out var outcome) && outcome != null)
+            {
+                return outcome == UsageReportCoverageStore.Complete || outcome == UsageReportCoverageStore.Empty;
+            }
+            return day.HasRows;
         }
 
         /// <summary>
@@ -1566,6 +1618,7 @@ namespace Web.AnalyticsWeb.Controllers
         {
             public string Name { get; set; }
             public string Body { get; set; }
+            public string CoverageSource { get; set; }
         }
 
         /// <summary>Shape for a weekly (WeekStart, Value) raw SQL result.</summary>
@@ -1576,15 +1629,20 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>
-        /// One week of a usage workload: its active users, and how many of its <see cref="ExpectedDays"/> days
-        /// have a usage report imported at all.
+        /// One date of a usage workload: its week's activity count and whether the daily report had rows.
         /// </summary>
         internal sealed class UsageWeekRow
         {
             public DateTime WeekStart { get; set; }
             public double Value { get; set; }
-            public int ImportedDays { get; set; }
-            public int ExpectedDays { get; set; }
+            public DateTime CoverageDate { get; set; }
+            public bool HasRows { get; set; }
+        }
+
+        internal sealed class UsageWeekAggregation
+        {
+            public List<WeekValueRow> WeeklyRows { get; } = new List<WeekValueRow>();
+            public List<DateTime> IncompleteWeeks { get; } = new List<DateTime>();
         }
 
         /// <summary>

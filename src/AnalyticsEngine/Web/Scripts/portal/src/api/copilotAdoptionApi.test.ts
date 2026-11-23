@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { apiFetch, PortalPermissionError, ReportScopeError, SessionExpiredError, UnexpectedServerError } from './http';
 import {
   AdoptionGenerationChangedError, AdoptionRequestError, adoptionFailure, adoptionFailureText, canRetryAdoptionRequest,
-  fetchAdoptionFilters, fetchAdoptionSummary, rebuildAdoption, workbookExportUrl,
+  fetchAdoptionFilters, fetchAdoptionSummary, fetchCowork, coworkExportUrl, rebuildAdoption, workbookExportUrl,
 } from './copilotAdoptionApi';
 import { loadCatalog, setActiveLanguage, translateActive, translateStatic } from '../i18n';
 
@@ -59,6 +59,26 @@ describe('copilotAdoptionApi query building', () => {
     // parameter and the server stores no period to compare against.
     expect(query.get('comparisonMode')).toBeNull();
     expect([...query.keys()].some((k) => /cost|currency|price/i.test(k))).toBe(false);
+  });
+
+  it('keeps the non-user ceiling list and CSV on the same prospective population and page-wide scope', async () => {
+    mockedFetch.mockResolvedValue(jsonResponse({ total: 0, skip: 0, take: 50, rows: [], warnings: [] }));
+    const filters = {
+      search: '', tiers: [], userFilter: 'synthetic-filter', recommendedOnly: false,
+      coworkUsersOnly: false, prospectiveOnly: true, sortBy: 'load', sortDesc: true,
+    };
+    await fetchCowork(28, filters, 0, 50, [1]);
+    const list = new URL(lastUrl(), 'https://contoso.example').searchParams;
+    const csv = new URL(coworkExportUrl(28, filters, [1]), 'https://contoso.example').searchParams;
+    for (const query of [list, csv]) {
+      expect(query.get('prospectiveOnly')).toBe('true');
+      expect(query.get('userFilter')).toBe('synthetic-filter');
+      expect(query.get('seatLicenceTypeIds')).toBe('1');
+      expect(query.has('coworkUsersOnly')).toBe(false);
+      expect(query.has('recommendedOnly')).toBe(false);
+    }
+    expect(new URL(coworkExportUrl(28, { ...filters, prospectiveOnly: false }), 'https://contoso.example')
+      .searchParams.has('prospectiveOnly')).toBe(false);
   });
 });
 

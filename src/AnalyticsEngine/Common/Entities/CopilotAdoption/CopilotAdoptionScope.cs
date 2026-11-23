@@ -223,6 +223,7 @@ namespace Common.Entities.CopilotAdoption
             var tenant = analysis.Summary ?? new CopilotAdoptionSummary();
             var licensedUsers = Narrow(analysis.LicensedUsers, u => u.UserId, u => u.EmailDomain, scope);
             var coworkSignals = Narrow(analysis.CoworkSignals, s => s.UserId, s => s.EmailDomain, scope);
+            var coworkCapped = CoworkCapped(analysis, tenant);
 
             return new CopilotAdoptionAnalysis
             {
@@ -274,12 +275,14 @@ namespace Common.Entities.CopilotAdoption
                     ? Narrow(analysis.CoworkReadiness, c => c.UserId, c => c.EmailDomain, scope)
                     : new List<CoworkReadinessRow>(),
                 CoworkSignals = coworkSignals,
+                CoworkAuditAssessed = analysis.CoworkAuditAssessed,
                 // Only a complete assessment can vouch for an empty slice. When the Cowork query hit its
                 // row cap, the people a slice selects may simply have been cut off, and "0 candidates"
                 // would be a claim about people nobody assessed - so that case is flagged separately and
                 // explained rather than shown as zero or as a missing import.
-                CoworkAssessedForWholePopulation = tenant.CoworkReadinessAvailable && !CoworkCapped(analysis, tenant),
-                CoworkAssessmentCapped = tenant.CoworkReadinessAvailable && CoworkCapped(analysis, tenant),
+                CoworkAssessedForWholePopulation =
+                    (analysis.CoworkAssessedForWholePopulation || tenant.CoworkReadinessAvailable) && !coworkCapped,
+                CoworkAssessmentCapped = coworkCapped,
                 UnlicensedUsers = Narrow(analysis.UnlicensedUsers, u => u.UserId, u => u.EmailDomain, scope),
                 // Resolved against the whole tenant, not the slice: a report in this view may well have a
                 // manager outside it, and that manager's own Copilot use is no less known for it (#641).
@@ -610,7 +613,8 @@ namespace Common.Entities.CopilotAdoption
 
         private static bool CoworkCapped(CopilotAdoptionAnalysis analysis, CopilotAdoptionSummary tenant)
         {
-            return (analysis.CoworkSignals?.Count ?? 0) >= (tenant.Options?.MaxCoworkUsersScored ?? int.MaxValue);
+            return analysis.CoworkAssessmentCapped
+                || (analysis.CoworkSignals?.Count ?? 0) >= (tenant.Options?.MaxCoworkUsersScored ?? int.MaxValue);
         }
 
         /// <summary>

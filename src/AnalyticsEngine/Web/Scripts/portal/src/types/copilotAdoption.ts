@@ -100,14 +100,33 @@ export interface AdoptionResourceTypeRow {
 
 /** Which imports supplied the data, so no headline number is quoted without its caveats. */
 export interface AdoptionDataSources {
+  workloadCoverage?: WorkloadCoverage[];
   auditAvailable: boolean;
+  /** Earliest retained record, not proof of continuous import coverage. */
+  auditHistoryStartUtc?: string | null;
   copilotUsageReportAvailable: boolean;
   m365UsageReportsAvailable: boolean;
   userMetadataAvailable: boolean;
   copilotUsageReportDate: string | null;
   copilotUsageReportPeriodDays: number;
+  /** Assessed settled cutoff, not the latest retained fact or proof of coverage. */
   m365UsageReportDate: string | null;
   copilotUsageReportObfuscated: boolean;
+}
+
+export interface WorkloadCoverage {
+  source: 'teams' | 'outlook' | 'sharepoint' | 'onedrive';
+  status: 'complete' | 'empty' | 'partial' | 'unverified';
+  reason: string | null;
+  fromUtc: string;
+  throughUtc: string;
+  expectedDays: number;
+  verifiedDays: number;
+  emptyDays: number;
+  partialDays: number;
+  /** Settled days not every row of which could be saved (concealed or missing identities). Final. */
+  incompleteDays?: number;
+  scopeUnverifiedDays: number;
 }
 
 /** Adoption for one slice of the organisation (a department, a country). */
@@ -141,10 +160,10 @@ export interface AdoptionSegmentRow {
  * business case. Neither is visible when the same people are split across departments that span
  * every company in the tenant.
  *
- * Three populations share a row - the seat holders (every figure from `licensedUsers` to
- * `coworkPrimeCandidates`), the unlicensed Copilot Chat users and the licence candidates - and for a reader
- * without See PII each is floored on its own (#844): a withheld population's figures are null, with the reason
- * beside them. Never render a withheld figure as 0, and never read withheld seat holders as "no seats".
+ * Four populations share a row - seat holders, unlicensed Copilot Chat users, licence candidates and
+ * Cowork prime candidates - and for a reader without See PII each is floored on its own (#844): a
+ * withheld population's figures are null, with the reason beside them. Never render a withheld figure
+ * as 0, and never read withheld seat holders as "no seats".
  */
 export interface AdoptionDomainRow {
   segment: string;
@@ -175,6 +194,8 @@ export interface AdoptionDomainRow {
   unlicensedUsersWithheld?: SmallGroupWithheldReason | null;
   /** Why `recommendedForLicence` is withheld. Absent when it is shown. */
   licenceCandidatesWithheld?: SmallGroupWithheldReason | null;
+  /** Why `coworkPrimeCandidates` is withheld. Absent when it is shown. */
+  coworkPrimeCandidatesWithheld?: SmallGroupWithheldReason | null;
   /** The fewest people a figure on this row may describe, when any of them is withheld. */
   minimumPeople?: number | null;
 }
@@ -679,12 +700,12 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
   microsoftReportAveragePromptsPerActiveUser?: number | null;
 
   // Cowork use, from the Copilot audit log only: interactions, never tasks (#692).
-  coworkUsers: number;
+  coworkUsers: number | null;
   coworkAdoptionPct: number | null;
   coworkEligibilityKnown: boolean;
   coworkEligibleUsers: number | null;
-  coworkAuditUsers: number;
-  coworkInteractions: number;
+  coworkAuditUsers: number | null;
+  coworkInteractions: number | null;
   coworkDetected: boolean;
 
   /**
@@ -692,34 +713,43 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
    * than render an empty quadrant, which reads as "nobody is a candidate" - a finding, not a fault.
    */
   coworkReadinessAvailable: boolean;
-  coworkScoredUsers: number;
-  coworkEstablishedUsers: number;
-  coworkTriallingUsers: number;
-  coworkPrimeCandidates: number;
-  coworkBuildFluencyFirst: number;
-  coworkRecommendedForPolicy: number;
-  coworkAverageCoordinationLoad: number;
-  coworkAverageFluency: number;
+  coworkReadinessWithheld: boolean;
+  coworkScoredUsers: number | null;
+  coworkEstablishedUsers: number | null;
+  coworkTriallingUsers: number | null;
+  coworkPrimeCandidates: number | null;
+  coworkBuildFluencyFirst: number | null;
+  coworkRecommendedForPolicy: number | null;
+  coworkAverageCoordinationLoad: number | null;
+  coworkAverageFluency: number | null;
   coworkTiers: CoworkTierSummary[];
   coworkQuadrant: CoworkQuadrantPoint[];
   coworkByDepartment: CoworkSegmentRow[];
   coworkCreditPosition: CoworkCreditPosition;
+  /** New-adoption potential, never the legacy policy-audience forecast. Missing/null means unavailable. */
+  coworkNewAdoptionEstimate?: CoworkValueEstimate | null;
+  coworkNonUserCeilingEstimate?: CoworkValueEstimate | null;
+  coworkAdoptionUnavailableReason?: string | null;
+  coworkNewAdoptionWithheld?: string | null;
+  coworkNonUserCeilingWithheld?: string | null;
+  coworkWithoutLicenceWithheld?: string | null;
+  coworkObservedUsage?: CoworkObservedUsage;
   /**
-   * The modelled Cowork estimate for the people ready for Cowork now (the recommended policy cohort):
-   * the time Cowork could give back on top of what their Copilot licences already save.
+   * Legacy workload forecast for the full recommended policy audience, including observed users.
+   * Retained for compatibility, not used as new-adoption potential or existing-user benefit.
    */
-  coworkValueEstimate: CoworkValueEstimate;
+  coworkValueEstimate: CoworkValueEstimate | null;
   /**
-   * The same model over every scored Copilot seat holder - the ceiling if everyone used Cowork.
+   * Legacy workload forecast over every scored seat holder, not the non-user adoption ceiling.
    * Optional only so a fixture written before it existed still type-checks; the server always sends it.
    */
-  coworkFullRolloutEstimate?: CoworkValueEstimate;
+  coworkFullRolloutEstimate?: CoworkValueEstimate | null;
   /**
    * The same model over the people WITHOUT a Copilot seat - every licence candidate: what Cowork could
    * add for them once licensed and enabled. Cowork needs a Copilot licence, and the time that licence
    * would give back is the licence estimate - never added to this. Absent from an older server.
    */
-  coworkWithoutLicenceEstimate?: CoworkValueEstimate;
+  coworkWithoutLicenceEstimate?: CoworkValueEstimate | null;
 
   unlicensedActiveUsers: number;
   recommendedForLicence: number;
@@ -876,6 +906,7 @@ export interface LicensedUserAdoptionRow {
   accountEnabled: boolean | null;
   accountCreatedUtc: string | null;
   tenureStartUtc: string | null;
+  seatObservationSource?: number | null;
   tenureBasis: string | null;
   daysSinceTenureStart: number | null;
   tooNewToJudge: boolean;
@@ -928,6 +959,7 @@ export interface LicensedUserAdoptionRow {
 
 /** An unlicensed user ranked as a candidate for a Copilot seat. */
 export interface LicenceOpportunityRow {
+  workloadUnavailableReason?: string | null;
   userId: number;
   userPrincipalName: string;
   mail: string | null;
@@ -942,18 +974,18 @@ export interface LicenceOpportunityRow {
   unlicensedCopilotActiveDays: number;
   lastCopilotInteractionUtc: string | null;
 
-  teamsMessages: number;
-  teamsMeetings: number;
-  emailsSent: number;
-  emailsRead: number;
-  filesViewedOrEdited: number;
+  teamsMessages: number | null;
+  teamsMeetings: number | null;
+  emailsSent: number | null;
+  emailsRead: number | null;
+  filesViewedOrEdited: number | null;
   lastM365ActivityUtc: string | null;
 
-  opportunityScore: number;
+  opportunityScore: number | null;
   copilotDemandScore: number;
-  collaborationScore: number;
-  emailScore: number;
-  documentScore: number;
+  collaborationScore: number | null;
+  emailScore: number | null;
+  documentScore: number | null;
   recommended: boolean;
 
   /**
@@ -1056,7 +1088,7 @@ export interface OpportunityFilters {
  * Carried as data rather than inferred from the tier name in the UI, so there is exactly one place
  * that decides it. Presenting a prediction as an observation is the worst thing this tab could do.
  */
-export type CoworkBasis = 'evidence' | 'inference';
+export type CoworkBasis = 'evidence' | 'inference' | 'unavailable';
 
 /** The Cowork populations, strongest evidence first. */
 export type CoworkTier =
@@ -1065,7 +1097,8 @@ export type CoworkTier =
   | 'primeCandidate'
   | 'buildFluencyFirst'
   | 'lowCoordinationLoad'
-  | 'notIndicated';
+  | 'notIndicated'
+  | 'workloadUnavailable';
 
 export interface CoworkTierSummary {
   code: CoworkTier;
@@ -1090,11 +1123,11 @@ export interface CoworkQuadrantPoint {
 export interface CoworkSegmentRow {
   segment: string;
   licensedUsers: number;
-  primeCandidates: number;
-  primeCandidateRatePct: number;
+  primeCandidates: number | null;
+  primeCandidateRatePct: number | null;
   regularCoworkUsers: number;
   coworkAdoptionPct: number;
-  averageCoordinationLoad: number;
+  averageCoordinationLoad: number | null;
   averageFluency: number;
 }
 
@@ -1193,6 +1226,20 @@ export interface CoworkValueEstimate {
   assumptions: string[];
 }
 
+export interface CoworkObservedUsage {
+  available: boolean;
+  assessedUsers: number | null;
+  users: number | null;
+  interactions: number | null;
+  /** Sum of each person's distinct active days, not distinct days for the whole cohort. */
+  activeUserDays: number | null;
+  lastInteractionUtc: string | null;
+  partial: boolean;
+  /** Stage B's evidence gates have not been met; no automatic numeric benefit is published. */
+  assistedHours: null;
+  withheldReason?: string | null;
+}
+
 /**
  * The modelled licence estimate: the time Microsoft 365 Copilot could give back to people recommended
  * for a licence - observed meetings, emails and documents times the minutes Copilot is assumed to save
@@ -1218,6 +1265,7 @@ export interface LicenceValueEstimate {
 
 /** One Copilot seat holder assessed for Cowork readiness. */
 export interface CoworkReadinessRow {
+  workloadUnavailableReason?: string | null;
   userId: number;
   userPrincipalName: string;
   mail: string | null;
@@ -1236,20 +1284,20 @@ export interface CoworkReadinessRow {
   usedCowork: boolean;
   regularCoworkUser: boolean;
 
-  coordinationLoadScore: number;
+  coordinationLoadScore: number | null;
   fluencyScore: number;
   adoptionScore: number;
   agentsUsed: number;
 
-  collaborationScore: number;
-  meetingScore: number;
-  emailScore: number;
-  documentScore: number;
-  teamsMessages: number;
-  teamsMeetings: number;
-  emailsSent: number;
-  emailsRead: number;
-  filesViewedOrEdited: number;
+  collaborationScore: number | null;
+  meetingScore: number | null;
+  emailScore: number | null;
+  documentScore: number | null;
+  teamsMessages: number | null;
+  teamsMeetings: number | null;
+  emailsSent: number | null;
+  emailsRead: number | null;
+  filesViewedOrEdited: number | null;
   lastM365ActivityUtc: string | null;
 
   tier: CoworkTier;
@@ -1282,6 +1330,7 @@ export interface CoworkFilters {
   userFilter?: string;
   recommendedOnly: boolean;
   coworkUsersOnly: boolean;
+  prospectiveOnly?: boolean;
   sortBy: string;
   sortDesc: boolean;
 }

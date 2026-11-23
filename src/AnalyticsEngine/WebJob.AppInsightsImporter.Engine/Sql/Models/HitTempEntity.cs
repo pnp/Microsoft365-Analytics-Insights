@@ -35,7 +35,9 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Models
             this.SPRequestDuration = p.CustomProperties?.SPRequestDuration ?? 0;
             this.Timestamp = p.Timestamp;
             this.Title = StringUtils.EnsureMaxLength(p.CustomProperties?.PageTitle, 250);           // 250 nvarchar for this destination column
-            this.Url = StringUtils.GetUrlBaseAddressIfValidUrl(p.Url);
+            // Shortened like click URLs (ClickTempEntity): a long percent-encoded path, typically a
+            // non-Latin one, would otherwise overflow nvarchar(850) and InsertBatch would skip the hit.
+            this.Url = StringUtils.EnsureUrlWithinLength(StringUtils.GetUrlBaseAddressIfValidUrl(p.Url), Common.Entities.Url.FullUrlMaxLength);
             this.Username = p.Username;
             this.WebTitle = StringUtils.EnsureMaxLength(p.CustomProperties?.WebTitle, 1000);        // Varchar max on this destination column, so not really important
             this.WebUrl = p.CustomProperties?.WebUrl;

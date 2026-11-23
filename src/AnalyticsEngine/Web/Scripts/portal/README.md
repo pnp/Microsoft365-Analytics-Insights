@@ -277,13 +277,19 @@ Security and operational contract:
 - ImportSchedule retains the legacy **CopilotStudioCreditsLastImported** key when no connection has ever
   existed. A changed connection uses **CopilotStudioCreditsLastImported_&lt;generation&gt;**.
   **AzureCostLastImported** is unchanged. To force an existing connection's retry, clear its matching stamp.
-- Revocation, refresh expiry, consent/Conditional Access challenges or an aggregate consumption 401/403 set
+- Revocation, refresh expiry, consent/Conditional Access challenges or a consumption 401 set
   **Reconnect needed**. A transient token or Storage outage does not erase the connection. Reconnect with
   an account whose access and policies permit unattended refresh; this flow does not bypass Conditional Access.
   Credential replacement can make the saved cache unreadable and require reconnection.
-- Import diagnostics `agentCosts.import.reconnectNeeded` and `agentCosts.import.tokenUnavailable` are stable
-  keys, translated on the cost page. The first requires administrator reconnection; the second retries
-  on the next due cycle without deleting the connection.
+- A consumption 403 sets **Route refused** instead (#914): the token was accepted, but Microsoft refused the
+  per-user licensing route, which Microsoft Learn now marks as deprecated. Reconnecting signs the same account in
+  again and gets the same answer, so this state does not block token refresh and clears itself after the next
+  successful consumption read. The connect probe reports the same case as the `routeRefused` outcome; a 401
+  there stays `accessDenied`.
+- Import diagnostics `agentCosts.import.reconnectNeeded`, `agentCosts.import.routeRefused` and
+  `agentCosts.import.tokenUnavailable` are stable keys, translated on the cost page. The first requires
+  administrator reconnection; the second means Microsoft refused the route (HTTP 403) and reconnecting alone
+  won't fix it; the third retries on the next due cycle without deleting the connection.
   `agentCosts.import.userAccessDenied` reports a refused best-effort per-user route without disabling
   an independently working aggregate connection.
 - Disconnect stops new imports using the connection, not an import already in progress; it does not revoke Entra

@@ -3,7 +3,7 @@ import { translateActive } from '../i18n/runtime';
 import type { TranslationKey } from '../i18n';
 
 export type AgentCostConnectionStatus = {
-  state: 'connected' | 'disconnected' | 'reconnectNeeded' | 'storageNotConfigured';
+  state: 'connected' | 'disconnected' | 'reconnectNeeded' | 'routeRefused' | 'storageNotConfigured';
   details?: { account: string | null; verifiedUtc: string | null } | null;
 };
 

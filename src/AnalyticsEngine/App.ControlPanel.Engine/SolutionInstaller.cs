@@ -1,6 +1,7 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
 using App.ControlPanel.Engine.Models;
+using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Resources;
 using CloudInstallEngine.Models;
 using Common.Entities.Installer;
@@ -50,6 +51,8 @@ namespace App.ControlPanel.Engine
             // summary itself so its lines aren't re-captured recursively.
             var summary = new InstallSummary();
             var log = (ILogger)new SummaryCapturingLogger(_logger, summary);
+            AzurePaaSInstallJob azureBackeEndCreationJob = null;
+            var cancelled = false;
 
             log.LogInformation($"Starting install. Authenticating & selecting subscription '{this.Config.Subscription.DisplayName}'...");
 
@@ -60,7 +63,7 @@ namespace App.ControlPanel.Engine
                 var azureSub = ConnectToSubscription(ct);
                 log.LogInformation("=== Phase: Azure backend resources ===");
                 // Get/create AppService + SQL and supporting Azure resources. Binaries installed post-create.
-                var azureBackeEndCreationJob = new AzurePaaSInstallJob(log, Config, azureSub,
+                azureBackeEndCreationJob = new AzurePaaSInstallJob(log, Config, azureSub,
                     () => Config.CheckpointPrivateNetworking(_configPassword, log));
                 azureBackeEndCreationJob.CancellationToken = ct;
                 await azureBackeEndCreationJob.Install();
@@ -159,13 +162,12 @@ namespace App.ControlPanel.Engine
                     // Keep what the interrupted call said, in case a real failure landed at the same moment.
                     log.LogInformation("The operation that was interrupted reported: " + CloudInstallEngine.ExceptionMessages.Format(ex));
                 }
-                PrintFinalStatus(summary, cancelled: true);
+                cancelled = true;
                 return;
             }
             catch (InstallException ex)       // General API error
             {
                 log.LogError(ex.Message);
-                PrintFinalStatus(summary);
                 return;
             }
             catch (Exception ex)            // Anything else
@@ -177,11 +179,30 @@ namespace App.ControlPanel.Engine
                 Console.WriteLine(ex);
                 InstallerLogs.AddToWindowsEventLog($"FATAL: Unexpected error of type '{ex.GetType().Name}': " + CloudInstallEngine.ExceptionMessages.Format(ex), true);
                 InstallerLogs.AddToWindowsEventLog(ex.ToString(), true);
-                PrintFinalStatus(summary);
                 return;
             }
+            finally
+            {
+                try
+                {
+                    await CheckWebJobsAfterInstallAsync(
+                        azureBackeEndCreationJob?.TaskResults.Values.OfType<WebSiteResource>().FirstOrDefault(), log);
+                }
+                catch (Exception ex)
+                {
+                    log.LogError("WebJobsCleanup: outcome=Failed exceptionType={ExceptionType}; could not confirm WEBJOBS_STOPPED was removed. " +
+                        "Remove WEBJOBS_STOPPED and AnalyticsUpgradeWebJobsPreviousState from App Service application settings manually, then check both continuous WebJobs.",
+                        ex.GetType().Name);
+                }
+                PrintFinalStatus(summary, cancelled);
+            }
+        }
 
-            PrintFinalStatus(summary);
+        internal virtual async Task CheckWebJobsAfterInstallAsync(WebSiteResource webApp, ILogger logger)
+        {
+            if (webApp == null) return;
+            logger.LogInformation("=== Phase: Final WebJobs check ===");
+            await ConfigureAzureComponentsTasks.EnsureWebJobsRunningAsync(webApp, logger);
         }
 
         internal static void OpenAdminSite(ILogger log, string adminSiteUrl, Action<string> open = null)

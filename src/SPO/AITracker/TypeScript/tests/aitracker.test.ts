@@ -74,12 +74,12 @@ async function settle(): Promise<void> {
     await new Promise(r => setTimeout(r, 0));
 }
 
-function mousedownOnLink(text: string, href: string = 'https://contoso.sharepoint.com/sites/test/SitePages/Other.aspx'): void {
+function mousedownOnLink(text: string, href: string = 'https://contoso.sharepoint.com/sites/test/SitePages/Other.aspx', button: number = 0): void {
     const a = document.createElement('a');
     a.href = href;
     a.textContent = text;
     document.body.appendChild(a);
-    a.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    a.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: button }));
 }
 
 function sitesTrackedInPage(...siteUrls: string[]): void {
@@ -278,6 +278,20 @@ describe('AITracker page bootstrap', () => {
         await settle();
 
         expect(mockAiInstances.length).toBe(0);
+    });
+
+    test('a right-click on a link only opens the context menu, so it is not a click; a middle-click opens the link, so it is', async () => {
+        loadTrackerCopy();
+        await settle();
+        const ai = mockAiInstances[0];
+
+        mousedownOnLink('Right-clicked', 'https://contoso.sharepoint.com/sites/test/SitePages/Right.aspx', 2);
+        mousedownOnLink('Back button', 'https://contoso.sharepoint.com/sites/test/SitePages/Back.aspx', 3);
+        expect(eventsNamed(ai, 'LinkClick').length).toBe(0);
+
+        mousedownOnLink('Middle-clicked', 'https://contoso.sharepoint.com/sites/test/SitePages/Middle.aspx', 1);
+        mousedownOnLink('Left-clicked', 'https://contoso.sharepoint.com/sites/test/SitePages/Left.aspx', 0);
+        expect(eventsNamed(ai, 'LinkClick').map((e: any) => e.properties.linkText)).toEqual(['Middle-clicked', 'Left-clicked']);
     });
 
     test('a click on an icon link without text is sent with its accessible label, so the importer keeps it', async () => {

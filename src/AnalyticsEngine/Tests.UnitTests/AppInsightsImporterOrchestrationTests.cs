@@ -528,6 +528,69 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task AppInsightsImporter_ACursorAheadOfARestoredDatabase_IsRewoundToTheNewestStoredHit()
+        {
+            // #849 R12-11: after a point-in-time restore the hits table lost its newest days but the cursor (in table
+            // storage) did not, so only an empty table made it distrust the cursor and the lost days were never read again.
+            var h = new Harness();
+            var newestAfterRestore = FixedNowUtc.AddDays(-2);
+            h.Watermark.NewestHitTimestampUtc = newestAfterRestore;
+            h.Cursor = new InMemoryIngestionCursorStore(FixedNowUtc.AddMinutes(-10)) { NewestStoredHitAtCursorUtc = FixedNowUtc.AddMinutes(-12) };
+            h.Source.ExtraPageViews.Add((FixedNowUtc.AddDays(-1), FixedNowUtc.AddDays(-1).AddMinutes(1)));   // lost by the restore
+
+            var log = await CaptureConsole(() => h.RunAsync());
+
+            Assert.AreEqual(AppInsightsReadMode.Incremental, h.LastResult.Mode);
+            var expectedFrom = newestAfterRestore - AppInsightsIngestionCursorPolicy.TimestampAheadOfIngestionBound - AppInsightsIngestionCursorPolicy.Overlap;
+            Assert.AreEqual(expectedFrom, h.Source.CountRangesRequested.Single().IngestedFromUtc);
+            Assert.AreEqual(FixedNowUtc.AddDays(-1), h.Persistence.SavedPageViews.Single().Rows.Single().Timestamp, "The lost hit is imported again.");
+            StringAssert.Contains(log, "AppInsightsCursor: Outcome=RewoundAfterRestore");
+            Assert.AreEqual(FixedNowUtc, h.Cursor.CursorUtc);
+            Assert.AreEqual(newestAfterRestore, h.Cursor.NewestStoredHitAtCursorUtc, "The mark is the newest hit this database now holds.");
+        }
+
+        [TestMethod]
+        public async Task AppInsightsImporter_ACursorFromAnOlderBuild_FarAheadOfTheNewestStoredHit_IsRewound()
+        {
+            var h = new Harness();
+            var newest = FixedNowUtc.AddDays(-5);
+            h.Watermark.NewestHitTimestampUtc = newest;
+            h.Cursor = new InMemoryIngestionCursorStore(FixedNowUtc.AddMinutes(-10));     // no mark recorded
+
+            await h.RunAsync();
+
+            Assert.AreEqual(newest - AppInsightsIngestionCursorPolicy.TimestampAheadOfIngestionBound - AppInsightsIngestionCursorPolicy.Overlap,
+                h.Source.CountRangesRequested.Single().IngestedFromUtc);
+        }
+
+        [TestMethod]
+        public async Task AppInsightsImporter_AQuietTenant_WhoseNewestHitIsOld_IsNotRewound()
+        {
+            // No new hits for days is not a restore: the database still holds the newest hit it held when the cursor was written.
+            var h = new Harness();
+            var newest = FixedNowUtc.AddDays(-10);
+            h.Watermark.NewestHitTimestampUtc = newest;
+            h.Cursor = new InMemoryIngestionCursorStore(FixedNowUtc.AddMinutes(-10)) { NewestStoredHitAtCursorUtc = newest };
+
+            var log = await CaptureConsole(() => h.RunAsync());
+
+            Assert.AreEqual(FixedNowUtc.AddMinutes(-10) - AppInsightsIngestionCursorPolicy.Overlap, h.Source.CountRangesRequested.Single().IngestedFromUtc);
+            Assert.IsFalse(log.Contains("RewoundAfterRestore"));
+        }
+
+        [TestMethod]
+        public void IngestionCursor_CursorAfterDatabaseRestore_Policy()
+        {
+            var cursor = FixedNowUtc;
+            var newest = FixedNowUtc.AddHours(-1);
+            Assert.IsNull(AppInsightsIngestionCursorPolicy.CursorAfterDatabaseRestore(cursor, newest, newest), "Same newest hit as when written.");
+            Assert.IsNull(AppInsightsIngestionCursorPolicy.CursorAfterDatabaseRestore(cursor, newest, newest.AddMilliseconds(500)), "Within the timestamp-precision tolerance.");
+            Assert.IsNull(AppInsightsIngestionCursorPolicy.CursorAfterDatabaseRestore(cursor, newest, null), "No mark and within the late-arrival bound.");
+            Assert.AreEqual(newest.AddDays(-1), AppInsightsIngestionCursorPolicy.CursorAfterDatabaseRestore(cursor, newest, newest.AddMinutes(1)));
+            Assert.AreEqual(FixedNowUtc.AddDays(-5), AppInsightsIngestionCursorPolicy.CursorAfterDatabaseRestore(cursor, FixedNowUtc.AddDays(-4), null));
+        }
+
+        [TestMethod]
         public async Task AppInsightsImporter_ABackfill_ReadsWholeDays_AndLeavesTheCursorAlone()
         {
             var h = ThreeDaysOfPageViews();

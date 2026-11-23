@@ -114,7 +114,7 @@ describe('Delegated billing import diagnostics', () => {
     await loadCatalog('es');
     const source = readFileSync(join(process.cwd(), '..', '..', 'Models', 'Health', 'HealthService.cs'), 'utf8');
     const states = [...source.matchAll(/row\.ReasonKey = "(agentCostConnection\.[^"]+)";\s*row\.Detail = "([^"]+)";/g)];
-    expect(states).toHaveLength(4);
+    expect(states).toHaveLength(5);
     expect(states.map((state) => state[1]).sort()).toEqual(Object.keys(AGENT_COST_CONNECTION_REASON_KEYS).sort());
     const es: TFunction = (key, values) => translateStatic('es', key, values);
     for (const [, reasonKey, detail] of states) {
@@ -133,7 +133,7 @@ describe('Delegated billing import diagnostics', () => {
       'WebJob.Office365ActivityImporter.Engine', 'AgentCosts', 'DelegatedAgentCostSource.cs'), 'utf8');
     const page = readFileSync(join(process.cwd(), 'src', 'pages', 'AgentCostsPage.tsx'), 'utf8');
     const keys = translationKeysIn(server, 'agentCosts.import.');
-    expect(keys.length).toBe(3);
+    expect(keys.length).toBe(4);
     expect(translationKeysIn(functionBody(page, 'importFailureDetail'), 'agentCosts.import.')).toEqual(keys);
     expect(catalogKeys('agentCosts.import.')).toEqual(keys);
   });
@@ -1103,7 +1103,10 @@ const COWORK_TIER_LABEL_ARM = /case\s+CoworkTiers\.(\w+):\s+return\s+"[^"]+";/g;
 function coworkTierKeys(): string[] {
   const source = readFileSync(COPILOT_ADOPTION_SCORING, 'utf8');
   const constants = new Map([...source.matchAll(COWORK_TIER_CONST)].map((m) => [m[1], m[2]]));
-  return [...source.matchAll(COWORK_TIER_LABEL_ARM)].map((m) => constants.get(m[1]) ?? m[1]);
+  // A description can also be one literal return; only the label switch defines this inventory.
+  const labels = source.match(/public static string CoworkTierLabel\([^)]*\)[\s\S]*?(?=public static string CoworkTierBasis)/)?.[0];
+  expect(labels, 'CoworkTierLabel must be found before reading its tier keys').toBeTruthy();
+  return [...labels!.matchAll(COWORK_TIER_LABEL_ARM)].map((m) => constants.get(m[1]) ?? m[1]);
 }
 
 describe('Copilot Adoption Cowork tier labels and descriptions', () => {

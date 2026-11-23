@@ -122,6 +122,27 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task RouteRefused_IsItsOwnStateThatAReconnectOutranksAndAnOldConnectionCannotSet()
+        {
+            var store = new AgentCostConnectionStore(new InMemoryKeyValueStore());
+            await store.ConnectAsync("encrypted-synthetic-cache");
+            var first = await store.GetHeadAsync();
+            await store.RefuseRouteAsync(first.Version);
+            Assert.AreEqual("routeRefused", await store.GetStatusAsync());
+            Assert.IsFalse(await store.NeedsReconnectAsync(first.Version), "A refused route must not block token refresh.");
+            await store.RequireReconnectAsync(first.Version);
+            Assert.AreEqual("reconnectNeeded", await store.GetStatusAsync(), "A sign-in that no longer works is the more urgent fix.");
+
+            await store.ConnectAsync("new-cache");
+            var second = await store.GetHeadAsync();
+            await store.RefuseRouteAsync(first.Version);
+            Assert.AreEqual("connected", await store.GetStatusAsync(), "A run on the replaced connection cannot mark the new one.");
+            await store.RefuseRouteAsync(second.Version);
+            await store.ClearRouteRefusedAsync(second.Version);
+            Assert.AreEqual("connected", await store.GetStatusAsync());
+        }
+
+        [TestMethod]
         public async Task Msal_RedeemsRefreshesAndPersistsRotatedCredentials()
         {
             var handler = new MsalServer();
@@ -366,7 +387,7 @@ namespace Tests.UnitTests
         [DataTestMethod]
         [DataRow(HttpStatusCode.OK, null)]
         [DataRow(HttpStatusCode.Unauthorized, "accessDenied")]
-        [DataRow(HttpStatusCode.Forbidden, "accessDenied")]
+        [DataRow(HttpStatusCode.Forbidden, "routeRefused")]
         [DataRow(HttpStatusCode.InternalServerError, "failed")]
         public async Task ConsentVerification_ProbesThePerUserRouteNotTheTenantWideOne(HttpStatusCode status, string expectedCode)
         {

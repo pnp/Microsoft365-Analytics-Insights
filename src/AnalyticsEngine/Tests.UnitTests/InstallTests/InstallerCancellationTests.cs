@@ -76,10 +76,10 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [DataTestMethod]
-        [DataRow("pause", "pause")]
-        [DataRow("stop", "pause,stop,start")]
-        [DataRow("schema", "pause,stop,schema,start")]
-        [DataRow("content", "pause,stop,schema,start,content")]
+        [DataRow("pause", "pause,resume")]
+        [DataRow("stop", "pause,stop,start,resume")]
+        [DataRow("schema", "pause,stop,schema,start,resume")]
+        [DataRow("content", "pause,stop,schema,start,content,resume")]
         public async Task UpgradeCancellation_RestartsStoppedSiteButSkipsSubsequentWork(string cancelAt, string expected)
         {
             using (var cancellation = new CancellationTokenSource())
