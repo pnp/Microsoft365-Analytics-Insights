@@ -112,13 +112,18 @@ export function contextForVisit(visit: INavigationVisit, context: PageContext, f
   try {
     const visible = new URL(visit.url);
     const item = context.listItem?.id;
+    const form = /\/(?:lists\/[^/]+|forms)\/(?:dispform|editform)\.aspx$|\/_layouts\/(?:15\/)?listform\.aspx$/.test(page.path);
+    const welcomePage = page.path === web.path;
+    let webPartItem = false;
     let itemMatches = true, namesItem = false, namesList = false, onlyItemKeys = true;
     visible.searchParams.forEach((value, key) => {
       const name = key.toLowerCase();
       if (name === 'id' && /^\d+$/.test(value)) {
+        // On a content page ID may select a web part's item, not the backing page.
+        if (!form) { webPartItem = true; onlyItemKeys = false; return; }
         namesItem = true;
         if (Number(value) !== item) itemMatches = false;
-      } else if ((name === 'listid' || name === 'list') && /^\{?[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}\}?$/i.test(value)) {
+      } else if (form && (name === 'listid' || name === 'list') && /^\{?[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}\}?$/i.test(value)) {
         namesList = true;
         if (value.replace(/[{}]/g, '').toLowerCase() !== context.list?.id?.toString().toLowerCase()) itemMatches = false;
       } else onlyItemKeys = false;
@@ -127,7 +132,7 @@ export function contextForVisit(visit: INavigationVisit, context: PageContext, f
     const listPath = context.list?.serverRelativeUrl;
     if (listPath) {
       const list = address(new URL(listPath, visible.origin).href);
-      if (!list || !containsPage(web, list) || (!namesList && !containsPage(list, page))) return undefined;
+      if (!list || !containsPage(web, list) || (!welcomePage && !namesList && !containsPage(list, page))) return undefined;
     }
     const requestPath = context.site.serverRequestPath;
     // A new top-level navigation can establish a page view without identifying a list item.
@@ -136,7 +141,12 @@ export function contextForVisit(visit: INavigationVisit, context: PageContext, f
     const request = new URL(requestPath, visible.origin);
     if (request.origin !== visible.origin || decodeURI(request.pathname).toLowerCase() !== decodeURI(visible.pathname).toLowerCase() ||
         (request.search !== visible.search && (!!request.search || (!freshEvent && !(namesItem && onlyItemKeys))))) return undefined;
-    return { url: visit.url, siteUrl: visit.site, binding: 'request', webUrl, webTitle: context.web.title,
-      listTitle: context.list?.title, listItemId: item };
+    const snapshot: IModernPageContext = { url: visit.url, siteUrl: visit.site, binding: 'request', webUrl, webTitle: context.web.title };
+    // A welcome URL names the web, not its underlying file in the pages library.
+    if (!welcomePage && !webPartItem) {
+      snapshot.listTitle = context.list?.title;
+      snapshot.listItemId = item;
+    }
+    return snapshot;
   } catch { return undefined; }
 }

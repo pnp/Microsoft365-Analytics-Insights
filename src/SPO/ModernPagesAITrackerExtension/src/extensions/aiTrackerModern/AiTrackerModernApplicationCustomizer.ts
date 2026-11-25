@@ -4,12 +4,12 @@ import { SPComponentLoader } from '@microsoft/sp-loader';
 import { IAiTrackerModernApplicationCustomizerProperties, SitesTrackedByExtension, SpPageContextInfo } from './definitions';
 import { Logger } from './Logger';
 import { contextForVisit, INavigationVisit, NavigationVisits, sameSite } from './NavigationVisits';
-import { loadTrackerUnlessRunning } from './TrackerPresence';
+import { loadTrackerUnlessRunning, trackerAlreadyRunning } from './TrackerPresence';
 
 // AITracker.js function. That's where we drive the AppInsights telemetry.
 declare function modernPageNav(webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): boolean | void;
 
-const AITRACKER_MODERN_VERSION: string = "1.0.1.68";     // Keep in step with the version in config/package-solution.json
+const AITRACKER_MODERN_VERSION: string = "1.0.1.69";     // Keep in step with the version in config/package-solution.json
 const NAV_EVENT_DELAY_MS: number = 2000;
 
 declare global {
@@ -168,6 +168,15 @@ export default class AiTrackerModernApplicationCustomizer
         // An older standalone returns void; only an explicit rejection leaves the visit available.
         visit.reported = modernPageNav(snapshot.webUrl ?? visit.site, snapshot.webTitle ?? '', visit.site,
           snapshot.listTitle, snapshot.listItemId) !== false;
+        if (!visit.reported && snapshot.binding === 'event' && trackerAlreadyRunning(window) === '1.6.12' &&
+            this.visits.isCurrent(visit, this.context.pageContext.site.absoluteUrl) && visit.pageContext === snapshot) {
+          // 1.6.12 rejects its first collection-only snapshot while a snapshot reader exists.
+          // Its positional-only first-view path records the registered collection and no web/list.
+          const registry = window._o365AnalyticsInfo;
+          window._o365AnalyticsInfo = { ...registry, visits: undefined };
+          try { visit.reported = modernPageNav(visit.site, '', visit.site) !== false; }
+          finally { window._o365AnalyticsInfo = registry; }
+        }
       } catch (e) {
         Logger.error(`[${this.runtimeId}]: Error calling modernPageNav: ${(e as Error).message}`);
       }

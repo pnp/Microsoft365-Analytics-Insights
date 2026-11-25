@@ -14,6 +14,7 @@ describe('delayed SharePoint navigation reports', () => {
   const a = window.location.origin + '/sites/one';
   const b = window.location.origin + '/sites/one-more';
   const home = '/SitePages/Home.aspx';
+  const form = '/Lists/Tasks/DispForm.aspx';
   const listeners = new Map<TestCustomizer, () => void>();
   const navigatedEvent = {
     add: (owner: TestCustomizer, callback: () => void): void => { listeners.set(owner, callback.bind(owner)); },
@@ -202,7 +203,7 @@ describe('delayed SharePoint navigation reports', () => {
     const event = new EventType(name);
     manager.raiseStickyEvent(name, {});
     try {
-      show(a + home + (evidence === 'unverified search query' ? '?q=current' : '?ID=2'));
+      show(a + (evidence === 'unverified search query' ? home + '?q=current' : form + '?ID=2'));
       const context = pageContext(a, 'Earlier', 1);
       context.site.serverRequestPath = location.pathname + (evidence === 'matching query but different item' ? location.search : '');
       const owner = await install(context, event);
@@ -220,7 +221,7 @@ describe('delayed SharePoint navigation reports', () => {
   });
 
   it.each(['exact request', 'matching item query'])('delivers an independently matched initial request even when subscription only replays: %s', async evidence => {
-    if (evidence === 'matching item query') show(a + home + '?ID=2');
+    if (evidence === 'matching item query') show(a + form + '?ID=2');
     const context = pageContext(a, 'Initial', 2);
     context.site.serverRequestPath = location.pathname;
     const replay = { ...navigatedEvent, add: (o: TestCustomizer, h: () => void): void => {
@@ -247,22 +248,71 @@ describe('delayed SharePoint navigation reports', () => {
     const requested = '00000000-0000-0000-0000-000000000001';
     const context = pageContext(a, 'Candidate', 2);
     const owner = await install(context);
-    show(a + home + '?ID=2');
+    show(a + form + '?ID=2');
     context.site.serverRequestPath = undefined;
     Object.assign(context.list, { serverRelativeUrl: '/sites/one/Lists/Other' });
     fire(owner);
     jest.advanceTimersByTime(2000);
     expect(nav).not.toHaveBeenCalled();
-    show(a + home + '?ID=2&ListId=' + requested);
+    show(a + form + '?ID=2&ListId=' + requested);
     Object.assign(context.list, { id: '00000000-0000-0000-0000-000000000002' });
     context.site.serverRequestPath = location.pathname;
     fire(owner);
     jest.advanceTimersByTime(2000);
     expect(nav).not.toHaveBeenCalled();
-    Object.assign(context.list, { id: requested, serverRelativeUrl: '/sites/one/SitePages' });
+    Object.assign(context.list, { id: requested, serverRelativeUrl: '/sites/one/Lists/Tasks' });
     fire(owner);
     jest.advanceTimersByTime(2000);
     expect(nav.mock.calls).toEqual([[a, 'Candidate', a, 'Pages', 2]]);
+  });
+
+  it('reports the verified welcome URL without guessing its backing Site Pages item', async () => {
+    show(a + '/');
+    const context = pageContext(a, 'Home web', 10);
+    Object.assign(context.list, { serverRelativeUrl: '/sites/one/SitePages' });
+    const owner = await install(context);
+    fire(owner);
+    jest.advanceTimersByTime(2000);
+    expect(nav.mock.calls).toEqual([[a, 'Home web', a, undefined, undefined]]);
+    expect(window._o365AnalyticsInfo.visits?.currentPageContext()?.listItemId).toBeUndefined();
+  });
+
+  it('does not use a webpart ID as replay evidence or let it veto a fresh Details page', async () => {
+    show(a + '/SitePages/Details.aspx?ID=20');
+    const context = pageContext(a, 'Earlier', 20);
+    context.site.serverRequestPath = location.pathname;
+    Object.assign(context.list, { serverRelativeUrl: '/sites/one/SitePages' });
+    const owner = await install(context);
+    expect(window._o365AnalyticsInfo.visits?.currentPageContext()).toBeUndefined();
+    context.listItem.id = 30;
+    context.web.title = 'Destination';
+    fire(owner);
+    jest.advanceTimersByTime(2000);
+    expect(nav.mock.calls).toEqual([[a, 'Destination', a, undefined, undefined]]);
+  });
+
+  it('retries a verified collection-only first visit in the positional-only mode supported by 1.6.12', async () => {
+    Object.assign(window, { spoInsightsAITrackerVersion: '1.6.12' });
+    try {
+      const context = pageContext(a, 'Unbound', 10);
+      context.site.serverRequestPath = undefined;
+      const owner = await install(context);
+      const registry = window._o365AnalyticsInfo, visits = registry.visits;
+      nav.mockImplementation(() => {
+        expect(window._o365AnalyticsInfo.siteUrls).toBe(registry.siteUrls);
+        return !window._o365AnalyticsInfo.visits?.currentPageContext;
+      });
+      fire(owner);
+      jest.advanceTimersByTime(2000);
+      fire(owner);
+      jest.advanceTimersByTime(2000);
+      expect(visits?.forEvent(a, a)?.reported).toBe(true);
+      expect(window._o365AnalyticsInfo.visits).toBe(visits);
+      expect(nav.mock.calls.every(call => call[0] === a && call[1] === '' && call[2] === a && !call[3] && !call[4])).toBe(true);
+    } finally {
+      nav.mockReset();
+      delete (window as { spoInsightsAITrackerVersion?: string }).spoInsightsAITrackerVersion;
+    }
   });
 
   it('does not forward a pending snapshot contradicted by a later event for that visit', async () => {
