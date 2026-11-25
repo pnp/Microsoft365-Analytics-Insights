@@ -313,6 +313,25 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task MissingSqlRows_OnlyADurableEmptyOutcomeCanSkipARefetch()
+        {
+            var values = new InMemoryKeyValueStore();
+            var store = new UsageReportCoverageStore(values, true);
+            foreach (var outcome in new[] { null, UsageReportCoverageStore.Partial, UsageReportCoverageStore.Incomplete,
+                UsageReportCoverageStore.ScopeUnverified, UsageReportCoverageStore.Empty, UsageReportCoverageStore.Complete })
+            {
+                await values.SetStringAsync("v1:teams:20260510", outcome);
+                Assert.AreEqual(outcome != UsageReportCoverageStore.Empty,
+                    await store.NeedsReimportAsync("teams", Day, true, hasStoredRows: false));
+                Assert.AreEqual(outcome != UsageReportCoverageStore.Complete && outcome != UsageReportCoverageStore.Incomplete,
+                    await store.NeedsReimportAsync("teams", Day, true, hasStoredRows: true));
+            }
+            await values.SetStringAsync("v1:teams:20260510", UsageReportCoverageStore.Empty);
+            Assert.IsTrue(await new UsageReportCoverageStore(values, false)
+                .NeedsReimportAsync("teams", Day, true, hasStoredRows: false));
+        }
+
+        [TestMethod]
         public async Task MissingOrUnreachableDurableState_NeverUsesProcessSuccess_AndCancellationPropagates()
         {
             var state = new ProbeStore();

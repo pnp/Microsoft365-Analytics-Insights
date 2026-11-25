@@ -108,10 +108,16 @@ namespace Common.Entities.State
         /// those rows (older builds could leave it after a failed refresh). A scopeUnverified day is retried
         /// once the importer runs tenant-wide again.
         /// </summary>
-        public async Task<bool> NeedsReimportAsync(string source, DateTime day, bool wholeTenant,
+        public Task<bool> NeedsReimportAsync(string source, DateTime day, bool wholeTenant,
+            CancellationToken cancellationToken = default) =>
+            NeedsReimportAsync(source, day, wholeTenant, hasStoredRows: true, cancellationToken: cancellationToken);
+
+        /// <summary>Without any retained rows only an explicitly empty report can settle the day.</summary>
+        public async Task<bool> NeedsReimportAsync(string source, DateTime day, bool wholeTenant, bool hasStoredRows,
             CancellationToken cancellationToken = default)
         {
             var outcome = await _store.GetStringAsync(Key(source, day), cancellationToken).ConfigureAwait(false);
+            if (!hasStoredRows) return !_durable || outcome != Empty;
             switch (outcome)
             {
                 case Complete:
