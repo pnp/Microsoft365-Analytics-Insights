@@ -750,7 +750,7 @@ namespace App.ControlPanel.Engine
             // the VNet so that private DNS zones resolve Azure PaaS hostnames to private endpoint IPs.
             //
             // Both keys are written in BOTH branches, so they are always installer-managed. That matters
-            // because PreserveUnmanagedAppSettingsAsync only fills in keys the installer does not write:
+            // because PreserveUnmanagedAppSettings only fills in keys the installer does not write:
             // if these were written solely in the enabled branch, disabling VNet on a later run would
             // leave the previous values in place instead of clearing them - the merge would preserve
             // exactly the setting the operator had just turned off. Writing empty values keeps
@@ -773,10 +773,18 @@ namespace App.ControlPanel.Engine
                 _logger.LogInformation("Service Bus is disabled; the App Service will not have a 'ServiceBus' connection string.");
             }
 
-            // A settings PUT can restart the app. Prepare both replacements before even patching the site;
-            // once writes start, the PATCH and the two PUTs are separate ARM operations.
-            await PreserveUnmanagedAppSettingsAsync(webApp, appSettings);
-            var connectionStrings = await PrepareConnectionStringsAsync(webApp, sqlConnectionString, storageConnectionString, serviceBusConnectionString);
+            // An upgrade captured both collections before the backend changed the existing site. A new site
+            // can only be read after creation. Consume the snapshot once; the writes are separate ARM requests.
+            await PreflightExistingSiteAsync(webApp);
+            var snapshot = _siteConfiguration;
+            _siteConfiguration = null;
+            PreserveUnmanagedAppSettings(snapshot.AppSettings, appSettings);
+            var connectionStrings = snapshot.UnmanagedConnectionStrings;
+            connectionStrings.Properties.Add(SqlConnectionName, new ConnStringValueTypePair(sqlConnectionString, ConnectionStringType.SqlAzure));
+            foreach (var name in StorageConnectionNames)
+                connectionStrings.Properties.Add(name, new ConnStringValueTypePair(storageConnectionString, ConnectionStringType.Custom));
+            if (!string.IsNullOrWhiteSpace(serviceBusConnectionString))
+                connectionStrings.Properties.Add(ServiceBusConnectionName, new ConnStringValueTypePair(serviceBusConnectionString, ConnectionStringType.Custom));
 
             await RunConfigurationStepAsync("site configuration", token => UpdatePostCreateSiteConfigAsync(webApp, appServicePlan, token));
             await RunConfigurationStepAsync("application settings", token => webApp.UpdateApplicationSettingsAsync(appSettings, token));
@@ -800,28 +808,51 @@ namespace App.ControlPanel.Engine
             }
         }
 
-        private async Task<ConnectionStringDictionary> PrepareConnectionStringsAsync(WebSiteResource webApp, string sql, string storage, string serviceBus)
-        {
-            var replacement = new ConnectionStringDictionary();
-            replacement.Properties.Add("SPOInsightsEntities", new ConnStringValueTypePair(sql, ConnectionStringType.SqlAzure));
-            replacement.Properties.Add("AzureWebJobsDashboard", new ConnStringValueTypePair(storage, ConnectionStringType.Custom));
-            replacement.Properties.Add("AzureWebJobsStorage", new ConnStringValueTypePair(storage, ConnectionStringType.Custom));
-            replacement.Properties.Add("Storage", new ConnStringValueTypePair(storage, ConnectionStringType.Custom));
-            if (!string.IsNullOrWhiteSpace(serviceBus))
-                replacement.Properties.Add("ServiceBus", new ConnStringValueTypePair(serviceBus, ConnectionStringType.Custom));
+        private const string SqlConnectionName = "SPOInsightsEntities";
+        private const string ServiceBusConnectionName = "ServiceBus";
+        private static readonly string[] StorageConnectionNames = { "AzureWebJobsDashboard", "AzureWebJobsStorage", "Storage" };
+        // Redis was retired; ServiceBus is still ours even when disabled.
+        private static readonly HashSet<string> OwnedConnectionNames = new HashSet<string>(StorageConnectionNames, StringComparer.OrdinalIgnoreCase)
+            { SqlConnectionName, ServiceBusConnectionName, "Redis" };
 
-            // The PUT replaces every string. Redis was retired; ServiceBus is still ours even when disabled.
-            var owned = new HashSet<string>(replacement.Properties.Keys, StringComparer.OrdinalIgnoreCase) { "Redis", "ServiceBus" };
+        private sealed class SiteConfigurationSnapshot
+        {
+            public string SiteId { get; }
+            public Dictionary<string, string> AppSettings { get; } = new Dictionary<string, string>();
+            public ConnectionStringDictionary UnmanagedConnectionStrings { get; } = new ConnectionStringDictionary();
+            public SiteConfigurationSnapshot(WebSiteResource site) { SiteId = site.Id.ToString(); }
+        }
+
+        private SiteConfigurationSnapshot _siteConfiguration;
+
+        internal async Task PreflightExistingSiteAsync(WebSiteResource webApp)
+        {
+            CancellationToken.ThrowIfCancellationRequested();
+            if (_siteConfiguration != null)
+            {
+                if (!string.Equals(_siteConfiguration.SiteId, webApp.Id.ToString(), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The configuration preflight was for a different App Service.");
+                return;
+            }
+
+            var snapshot = new SiteConfigurationSnapshot(webApp);
+            _logger.LogInformation("Reading App Service configuration. Avoid editing application settings or connection strings during deployment; their replacements use the values read here.");
+            await ReadConfigurationPropertiesAsync("application settings", webApp.GetApplicationSettingsAsync, (entry, listed) =>
+            {
+                if (entry.Value.ValueKind != JsonValueKind.String) throw new InvalidDataException();
+                snapshot.AppSettings.Add(entry.Name, listed.Properties[entry.Name]);
+            });
             await ReadConfigurationPropertiesAsync("connection strings", webApp.GetConnectionStringsAsync, (entry, listed) =>
             {
-                if (owned.Contains(entry.Name)) return;
+                if (OwnedConnectionNames.Contains(entry.Name)) return;
                 // The SDK defaults a missing type to the first enum value. Do not guess an operator's type or value.
                 if (entry.Value.GetProperty("type").ValueKind != JsonValueKind.String ||
                     entry.Value.GetProperty("value").ValueKind != JsonValueKind.String)
                     throw new InvalidDataException();
-                replacement.Properties.Add(entry.Name, listed.Properties[entry.Name]);
+                snapshot.UnmanagedConnectionStrings.Properties.Add(entry.Name, listed.Properties[entry.Name]);
             });
-            return replacement;
+            CancellationToken.ThrowIfCancellationRequested();
+            _siteConfiguration = snapshot;
         }
 
         private Task ReadConfigurationPropertiesAsync<T>(string collection, Func<CancellationToken, Task<Response<T>>> list, Action<JsonProperty, T> preserve)
@@ -869,7 +900,7 @@ namespace App.ControlPanel.Engine
         /// </summary>
         /// <remarks>
         /// Every key is written on every run, enabled or not, so turning a toggle off in the installer clears it
-        /// on the next deployment instead of <c>PreserveUnmanagedAppSettingsAsync</c> keeping the old value.
+        /// on the next deployment instead of <c>PreserveUnmanagedAppSettings</c> keeping the old value.
         /// The web app and the importer web-job run in the same App Service, so one set of settings serves both.
         /// </remarks>
         internal static void AddImportSelectionAppSettings(IDictionary<string, string> properties, Common.Entities.ImportTaskSettings settings)
@@ -939,17 +970,15 @@ namespace App.ControlPanel.Engine
         /// not an error, so a first-time deployment is unaffected.
         /// </para>
         /// </remarks>
-        private async Task PreserveUnmanagedAppSettingsAsync(WebSiteResource webApp, AppServiceConfigurationDictionary appSettings)
+        private void PreserveUnmanagedAppSettings(IReadOnlyDictionary<string, string> existing, AppServiceConfigurationDictionary appSettings)
         {
             var preserved = new List<string>();
-            await ReadConfigurationPropertiesAsync("application settings", webApp.GetApplicationSettingsAsync, (entry, listed) =>
+            foreach (var entry in existing)
             {
-                if (entry.Value.ValueKind != JsonValueKind.String) throw new InvalidDataException();
-                if (appSettings.Properties.ContainsKey(entry.Name)) return;
-
-                appSettings.Properties.Add(entry.Name, listed.Properties[entry.Name]);
-                preserved.Add(entry.Name);
-            });
+                if (appSettings.Properties.ContainsKey(entry.Key)) continue;
+                appSettings.Properties.Add(entry.Key, entry.Value);
+                preserved.Add(entry.Key);
+            }
 
             if (preserved.Count > 0)
             {

@@ -1,6 +1,7 @@
 using App.ControlPanel.Engine;
 using App.ControlPanel.Engine.Entities;
 using App.ControlPanel.Engine.InstallerTasks;
+using App.ControlPanel.Engine.Prerequisites;
 using Azure.Core;
 using Azure.Core.Pipeline;
 using Azure.ResourceManager;
@@ -45,6 +46,7 @@ namespace Tests.UnitTests.InstallTests
         private const string Site = Rg + "/providers/Microsoft.Web/sites/contoso-web";
         private const string AppSettings = Site + "/config/appsettings";
         private const string ConnectionStrings = Site + "/config/connectionstrings";
+        private const string FtpPolicy = Site + "/basicPublishingCredentialsPolicies/ftp";
         private const string SqlServer = Rg + "/providers/Microsoft.Sql/servers/contoso-sql";
         private const string Storage = Rg + "/providers/Microsoft.Storage/storageAccounts/contosoanalytics";
 
@@ -129,8 +131,8 @@ namespace Tests.UnitTests.InstallTests
             using (var arm = new FakeArm())
             {
                 arm.AddSite(minTls: "1.0");
-                var task = new AppServiceWebsiteTask(TaskConfig.GetConfigForName("contoso-web"), NullLogger.Instance,
-                    new AzureLocation("westeurope"), new Dictionary<string, string>()) { Container = arm.Group };
+                var task = new AzurePaaSInstallJob(NullLogger.Instance, BackendConfig("contoso-web", "contoso-web"), arm.Subscription).WebsiteTask;
+                task.Container = arm.Group;
 
                 await task.ExecuteTaskReturnResult(await arm.Plan("contoso-web"));
 
@@ -194,6 +196,127 @@ namespace Tests.UnitTests.InstallTests
                     properties["ContosoReporting"] = operatorPair.DeepClone();
                 }
             }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task FullUpgrade_DeniedConnectionStringsLeaveTheExistingSiteUnchanged(bool privateToPublic)
+        {
+            using (var arm = new FakeArm())
+            {
+                var config = BackendConfig("contoso-web", "contoso-web");
+                var logger = new CapturingLogger();
+                var subnet = Rg + "/providers/Microsoft.Network/virtualNetworks/contoso-vnet/subnets/integration";
+                arm.AddResourceGroup();
+                arm.AddSite("1.0", privateToPublic ? subnet : null);
+                arm.Resource(Site)["properties"]["publicNetworkAccess"] = "Disabled";
+                arm.Resource(Site).Property("identity").Remove();
+                arm.Resource(Site + "/config/web")["properties"]["alwaysOn"] = false;
+                arm.Resource(FtpPolicy)["properties"]["allow"] = true;
+                arm.Resource(AppSettings)["properties"]["WEBJOBS_STOPPED"] = "1";
+                if (privateToPublic)
+                    config.PrivateNetworking.Artifacts.Add(new PrivateNetworkArtifact
+                    {
+                        Id = Site, TargetId = Site, SubnetId = subnet, Kind = PrivateNetworkProvenance.Integration,
+                        CreatedByInstaller = true, CreationConfirmed = true
+                    });
+                arm.KnownLists.UnionWith(new[] { Rg + "/resources", Rg + "/providers/Microsoft.Network/privateEndpoints",
+                    Rg + "/providers/Microsoft.Network/privateDnsZones" });
+                foreach (var provider in AzureResourceProviderPreflight.RequiredProviders(config))
+                    arm.Add("/subscriptions/" + Sub + "/providers/" + provider, new JObject { ["namespace"] = provider, ["registrationState"] = "Registered" });
+                arm.PostStatuses[ConnectionStrings + "/list"] = HttpStatusCode.Forbidden;
+                arm.PostResponses[ConnectionStrings + "/list"] = new JObject { ["error"] = new JObject { ["message"] = "Contoso do not log" } };
+                var before = arm.Resource(Site).DeepClone();
+
+                await new FixtureSolutionInstaller(config, logger, arm.Subscription).InstallOrUpdate();
+
+                CollectionAssert.AreEqual(new[] { "POST " + AppSettings + "/list", "POST " + ConnectionStrings + "/list" }, ConfigurationRequests(arm));
+                Assert.IsTrue(JToken.DeepEquals(before, arm.Resource(Site)));
+                Assert.AreEqual(false, (bool)arm.Resource(Site + "/config/web")["properties"]["alwaysOn"]);
+                Assert.AreEqual(true, (bool)arm.Resource(FtpPolicy)["properties"]["allow"]);
+                Assert.AreEqual("1", (string)arm.Resource(AppSettings)["properties"]["WEBJOBS_STOPPED"]);
+                Assert.IsTrue(logger.Lines.Any(l => l.Message.Contains("HTTP 403") && l.Message.Contains("No replacement was sent")));
+                Assert.IsFalse(logger.Lines.Any(l => l.Message.Contains("Contoso do not log")));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false, false)]
+        [DataRow(false, true)]
+        [DataRow(true, false)]
+        public async Task FullInstall_UsesTheRegisteredWebsiteTaskAndOneSnapshotForTheFinalReplacements(bool newSite, bool planConflict)
+        {
+            using (var arm = new FakeArm())
+            {
+                const string siteCollection = Rg + "/providers/Microsoft.Web/sites";
+                arm.AddPlan("contoso-web");
+                if (newSite)
+                {
+                    arm.KnownLists.Add(siteCollection);
+                    arm.OverrideResponse = (method, path) =>
+                    {
+                        if (method != "PUT" || path != Site) return null;
+                        arm.AddSite("1.2"); // ARM supplies the host name and config resources on creation.
+                        return FakeArm.Json(HttpStatusCode.OK, arm.Resource(Site));
+                    };
+                }
+                else
+                {
+                    arm.AddSite("1.0");
+                    arm.Resource(Site).Property("identity").Remove();
+                    arm.Resource(Site + "/config/web")["properties"]["alwaysOn"] = false;
+                    arm.Resource(AppSettings)["properties"]["UserGroupsFilter"] = "Contoso pilot";
+                    arm.Resource(ConnectionStrings)["properties"]["ContosoReporting"] = new JObject { ["type"] = "Custom", ["value"] = "keep" };
+                    if (planConflict)
+                    {
+                        var patches = 0;
+                        arm.OverrideResponse = (method, path) => method == "PATCH" && path == Site && ++patches == 1
+                            ? FakeArm.Json(HttpStatusCode.Conflict, new JObject()) : null;
+                    }
+                }
+                // Azure site names are case-insensitive. A fresh-site PUT must not bypass the existing-site preflight.
+                var config = BackendConfig(newSite ? "contoso-web" : "CONTOSO-WEB", "contoso-web");
+                var installer = new FixtureSolutionInstaller(config, NullLogger.Instance, arm.Subscription);
+                var steps = installer.CreateAzureInstallSteps(NullLogger.Instance, arm.Subscription, CancellationToken.None);
+                steps.Backend.PlanTask.Container = steps.Backend.WebsiteTask.Container = arm.Group;
+                var plan = await steps.Backend.PlanTask.ExecuteTaskReturnResult(null);
+                var site = await steps.Backend.WebsiteTask.ExecuteTaskReturnResult(plan);
+                await steps.PostCreate.ConfigureWebApp(site, plan, "Contoso SQL", "Contoso storage",
+                    null, null, null, null, new Uri("https://contoso-vault.vault.azure.net/"));
+
+                var acquireSite = (newSite ? "PUT " : "PATCH ") + Site;
+                var expected = new List<string> { "POST " + AppSettings + "/list", "POST " + ConnectionStrings + "/list" };
+                expected.Insert(newSite ? 0 : 2, acquireSite);
+                if (planConflict) expected.Add("PATCH " + Site);
+                expected.AddRange(new[] { "PATCH " + Site, "PUT " + AppSettings, "PUT " + ConnectionStrings });
+                CollectionAssert.AreEqual(expected, ConfigurationRequests(arm));
+                var provision = arm.Requests.First(r => r.Path == Site && (r.Method == "PATCH" || r.Method == "PUT")).Body;
+                Assert.AreEqual("SystemAssigned", (string)provision.SelectToken("identity.type"));
+                Assert.AreEqual(true, (bool)provision.SelectToken("properties.siteConfig.alwaysOn"));
+                Assert.AreEqual("1.2", (string)provision.SelectToken("properties.siteConfig.minTlsVersion"));
+                if (planConflict)
+                {
+                    var retry = arm.Requests.Where(r => r.Method == "PATCH" && r.Path == Site).Skip(1).First().Body;
+                    Assert.IsNull(retry.SelectToken("properties.siteConfig.alwaysOn"));
+                    Assert.AreEqual("1.2", (string)retry.SelectToken("properties.siteConfig.minTlsVersion"));
+                    Assert.AreEqual("SystemAssigned", (string)retry.SelectToken("identity.type"));
+                }
+                if (!newSite)
+                {
+                    Assert.AreEqual("Contoso pilot", (string)arm.Resource(AppSettings)["properties"]["UserGroupsFilter"]);
+                    Assert.AreEqual("keep", (string)arm.Resource(ConnectionStrings)["properties"]["ContosoReporting"]["value"]);
+                }
+                Assert.AreEqual("Contoso SQL", (string)arm.Resource(ConnectionStrings)["properties"]["SPOInsightsEntities"]["value"]);
+            }
+        }
+
+        private sealed class FixtureSolutionInstaller : SolutionInstaller
+        {
+            private readonly SubscriptionResource _subscription;
+            public FixtureSolutionInstaller(SolutionInstallConfig config, ILogger logger, SubscriptionResource subscription)
+                : base(config, logger, null, null, "Contoso", null) { _subscription = subscription; }
+            internal override SubscriptionResource ConnectToSubscription(CancellationToken ct) => _subscription;
         }
 
         [DataTestMethod]
@@ -622,23 +745,26 @@ namespace Tests.UnitTests.InstallTests
         private static AppServicePlanTask PlanTaskFromTheInstallJob(FakeArm arm, string webAppName, string planName, ILogger logger = null,
             IEnumerable<AzTag> tags = null)
         {
-            var config = new SolutionInstallConfig
+            var job = new AzurePaaSInstallJob(logger ?? NullLogger.Instance, BackendConfig(webAppName, planName, tags), arm.Subscription);
+            var task = job.PlanTask;
+            task.Container = arm.Group;
+            return task;
+        }
+
+        private static SolutionInstallConfig BackendConfig(string webAppName, string planName, IEnumerable<AzTag> tags = null) =>
+            new SolutionInstallConfig
             {
                 ServiceBusEnabled = false, CognitiveServicesEnabled = false, FoundryPromptEnabled = false,
                 HealthMonitoring = new HealthMonitoringConfig { Enabled = false },
                 Subscription = new AzureSubscription(Sub, "Contoso"),
                 InstallerAccount = new AppRegistrationCredentials(Sub, "synthetic-secret", Sub),
+                ActivityAccount = new AppRegistrationCredentials(Sub, "synthetic-secret", Sub),
                 ResourceGroupName = "contoso", AzureLocationName = "westeurope",
                 AppServiceWebAppName = webAppName, AppServicePlanName = planName,
                 SQLServerName = "contoso-sql", SQLServerDatabaseName = "contoso-analytics", KeyVaultName = "contoso-vault",
                 StorageAccountName = "contosoanalytics", AppInsightsName = "contoso-insights", AppInsightsWorkspaceName = "contoso-workspace",
                 Tags = tags?.ToList() ?? new List<AzTag>()
             };
-            var job = new AzurePaaSInstallJob(logger ?? NullLogger.Instance, config, arm.Subscription);
-            var task = job.PlanTask;
-            task.Container = arm.Group;
-            return task;
-        }
 
         // ---------------------------------------------------------------- Runtime RBAC (R11-8)
 

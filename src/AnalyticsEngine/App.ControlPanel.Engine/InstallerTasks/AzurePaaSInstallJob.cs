@@ -464,7 +464,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     var cleanup = new PrivateNetworkCleanupClient(group, _networking.Manifest,
                         targets.Select(t => t.Item1), targets.Select(t => t.Item2),
                         string.IsNullOrWhiteSpace(_config.NetworkConfig?.VNetName) ? null :
-                            _networking.Manifest.ResourceGroupId + "/providers/Microsoft.Network/virtualNetworks/" + _config.NetworkConfig.VNetName);
+                            _networking.Manifest.ResourceGroupId + "/providers/Microsoft.Network/virtualNetworks/" + _config.NetworkConfig.VNetName)
+                    {
+                        BeforeExistingSiteUpdateAsync = _appServiceWebsiteTask.BeforeExistingSiteUpdateAsync
+                    };
                     await new PrivateNetworkTeardown(_networking, cleanup, Logger).Run(false, CancellationToken);
                 }
                 else
@@ -720,6 +723,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         public SqlDatabaseResource CreatedSqlDatabase => GetTaskResult<SqlDatabaseResource>(_sqlDatabaseTask);
         public AppServicePlanResource CreatedAppServicePlan => GetTaskResult<AppServicePlanResource>(_appServicePlanTask);
         internal AppServicePlanTask PlanTask => _appServicePlanTask;
+        internal AppServiceWebsiteTask WebsiteTask => _appServiceWebsiteTask;
         public WebSiteResource CreatedWebSiteResource => GetTaskResult<WebSiteResource>(_appServiceWebsiteTask);
 
         /// <summary>
