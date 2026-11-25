@@ -671,6 +671,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache, DateTime requestedUtc)
         {
             var downloadFinished = !_unfinishedDownloads.Contains(dateTime.Date);
+            if (CoverageStore != null)
+            {
+                if (downloadFinished)
+                    await CoverageStore.BeginDayAsync(CoverageSource, dateTime.Date, confirmedEmptyDownload: rows.Count == 0);
+                else
+                    await CoverageStore.RecordUnfinishedDownloadAsync(CoverageSource, dateTime.Date);
+            }
             var store = run.Store;
             var instrumentation = run.Instrumentation;
             var instrumentationEnabled = run.InstrumentationEnabled;
@@ -682,15 +689,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             var existingLoadWatch = instrumentationEnabled ? Stopwatch.StartNew() : null;
             var existingRows = await store.GetRowsForDateAsync(dateTime.Date);
             existingLoadWatch?.Stop();
-
-            if (CoverageStore != null)
-            {
-                if (downloadFinished)
-                    await CoverageStore.BeginDayAsync(CoverageSource, dateTime.Date,
-                        confirmedEmptyDownload: rows.Count == 0 && existingRows.Count == 0);
-                else
-                    await CoverageStore.RecordUnfinishedDownloadAsync(CoverageSource, dateTime.Date);
-            }
 
             var existingByLookupId = new Dictionary<int, TReportDbType>();
             // Graph returns one row per lookup per date; last wins if the DB somehow has duplicates.

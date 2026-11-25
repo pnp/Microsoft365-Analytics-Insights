@@ -65,7 +65,7 @@ namespace Common.Entities.State
 
         /// <summary>
         /// Marks a day in progress before writing it. An upsert never deletes rows, so a complete day stays
-        /// verified. An empty day stays verified only if neither the finished download nor SQL has rows.
+        /// verified. An empty day keeps its previous outcome during the save only if the download finished without rows.
         /// </summary>
         public async Task BeginDayAsync(string source, DateTime day, bool confirmedEmptyDownload)
         {
