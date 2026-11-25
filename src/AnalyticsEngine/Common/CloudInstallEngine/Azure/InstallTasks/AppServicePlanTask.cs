@@ -4,8 +4,11 @@ using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.AppService.Models;
 using Azure.ResourceManager.Resources;
 using CloudInstallEngine.Azure;
+using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -36,16 +39,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // Installers before this one ignored the configured plan name and named the plan after the web app, so most
             // existing web apps are hosted on a plan with the web app's name. Keep them exactly where they are.
             var webAppName = _config.GetOptionalConfigValue(CONFIG_KEY_WEB_APP_NAME);
-            AppServicePlanResource hostingPlan = null;
-            try
-            {
-                hostingPlan = await FindHostingPlanAsync(Container, webAppName, CancellationToken);
-            }
-            catch (RequestFailedException ex) when (!CancellationToken.IsCancellationRequested)
-            {
-                _logger.LogWarning($"Could not read the plan App Service '{webAppName}' runs on ({ex.Status} {ex.ErrorCode}); " +
-                    $"looking for the configured plan '{_config.ResourceName}' instead. The web app is not moved either way.");
-            }
+            var hostingPlan = await FindHostingPlanAsync(Container, webAppName, CancellationToken);
             if (hostingPlan != null)
             {
                 if (!string.Equals(hostingPlan.Data.Name, _config.ResourceName, System.StringComparison.OrdinalIgnoreCase))
@@ -136,26 +130,43 @@ namespace CloudInstallEngine.Azure.InstallTasks
         // A casing difference is not a new ARM resource: a create-or-update would resize the existing plan.
         public static AppServicePlanResource FindConfiguredPlan(ResourceGroupResource resourceGroup, string planName,
             CancellationToken cancellationToken = default(CancellationToken)) =>
-            resourceGroup.GetAppServicePlans().GetAll(cancellationToken: cancellationToken)
-                .SingleOrDefault(p => string.Equals(p.Data.Name, planName, System.StringComparison.OrdinalIgnoreCase));
+            AppServiceResourceLookup.FindPlan(resourceGroup, planName, cancellationToken);
 
         /// <summary>
         /// The plan <paramref name="webAppName"/> is hosted on, or null when the web app does not exist yet (or no name
-        /// is given). Also used by Test Configuration, so it checks the plan the installer will really use.
+        /// is given). An unreadable site or plan is not a confirmed absence. Test Configuration uses the same lookup.
         /// </summary>
         public static async Task<AppServicePlanResource> FindHostingPlanAsync(ResourceGroupResource resourceGroup, string webAppName,
             CancellationToken cancellationToken = default(CancellationToken))
         {
-            if (resourceGroup == null || string.IsNullOrWhiteSpace(webAppName)) return null;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(webAppName)) return null;
+            if (resourceGroup == null) throw new ArgumentNullException(nameof(resourceGroup));
+            var site = AppServiceResourceLookup.FindSite(resourceGroup, webAppName, cancellationToken);
+            if (site == null) return null;
 
-            var site = resourceGroup.GetWebSites().GetAll(cancellationToken: cancellationToken)
-                .Where(s => string.Equals(s.Data.Name, webAppName, System.StringComparison.OrdinalIgnoreCase)).SingleOrDefault();
-            var planId = site?.Data.AppServicePlanId;
-            if (planId == null) return null;
+            var id = site.Data.AppServicePlanId;
+            if (id == null || !ResourceIdentifier.TryParse(id.ToString(), out var planId)
+                || planId.ResourceType != AppServicePlanResource.ResourceType || planId.Parent?.ResourceType != ResourceGroupResource.ResourceType)
+                throw new InstallException("Azure did not return a valid hosting plan ID (serverFarmId) for the existing App Service. " +
+                    "Verify the site's App Service plan association and retry.");
 
-            // The plan can live in another resource group, so read it by its full ID.
-            var arm = resourceGroup.GetCachedClient(client => client);
-            return (await arm.GetAppServicePlanResource(planId).GetAsync(cancellationToken)).Value;
+            try
+            {
+                // A shared plan must be read by its full ID, not by name in the site's resource group.
+                var arm = resourceGroup.GetCachedClient(client => client);
+                var plan = (await arm.GetAppServicePlanResource(planId).GetAsync(cancellationToken))?.Value;
+                cancellationToken.ThrowIfCancellationRequested();
+                if (plan?.HasData != true || !planId.Equals(plan.Id) || string.IsNullOrWhiteSpace(plan.Data.Name))
+                    throw new InvalidDataException();
+                return plan;
+            }
+            catch (Exception ex)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw AppServiceResourceLookup.ReadFailure("read the existing App Service's hosting plan", ex,
+                    "Verify that the plan still exists and the installer can read it in the plan's resource group, then retry.");
+            }
         }
     }
 }

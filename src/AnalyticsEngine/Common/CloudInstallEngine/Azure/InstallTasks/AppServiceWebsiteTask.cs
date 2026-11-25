@@ -7,7 +7,6 @@ using CloudInstallEngine.Azure;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 // Azure.ResourceManager.AppService 1.5.0 added its own ManagedServiceIdentityType, which collides with
 // the ARM-wide one. ManagedServiceIdentity's constructor takes the ARM-wide type, so pin the alias to it.
@@ -40,8 +39,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var supportsAlwaysOn = AppServicePlanCapabilities.SupportsAlwaysOn(appServicePlanSku);
 
             // Get/create app-service with plan
-            var webApp = Container.GetWebSites().GetAll(cancellationToken: CancellationToken)
-                .SingleOrDefault(s => string.Equals(s.Data.Name, _config.ResourceName, StringComparison.OrdinalIgnoreCase));
+            var webApp = AppServiceResourceLookup.FindSite(Container, _config.ResourceName, CancellationToken);
             if (webApp == null)
             {
                 var newWebAppInfo = BuildNewWebSiteData(base.AzureLocation, appServicePlan.Id, appServicePlanSku, _allowPublicAccess);

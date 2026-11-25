@@ -14,6 +14,7 @@ using Azure.ResourceManager.Sql;
 using CloudInstallEngine;
 using CloudInstallEngine.Azure;
 using CloudInstallEngine.Azure.InstallTasks;
+using CloudInstallEngine.Models;
 using Common.Entities.Installer;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -43,6 +44,9 @@ namespace Tests.UnitTests.InstallTests
     {
         private const string Sub = "00000000-0000-0000-0000-000000000000";
         private const string Rg = "/subscriptions/" + Sub + "/resourceGroups/contoso";
+        private const string Sites = Rg + "/providers/Microsoft.Web/sites";
+        private const string Plans = Rg + "/providers/Microsoft.Web/serverfarms";
+        private const string SharedPlan = "/subscriptions/" + Sub + "/resourceGroups/contoso-hosting/providers/Microsoft.Web/serverfarms/contoso-shared";
         private const string Site = Rg + "/providers/Microsoft.Web/sites/contoso-web";
         private const string AppSettings = Site + "/config/appsettings";
         private const string ConnectionStrings = Site + "/config/connectionstrings";
@@ -887,31 +891,167 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
-        [TestMethod]
-        public async Task Plan_AnExistingWebAppOnASharedPlanInAnotherResourceGroup_UsesItAsItIs_WithoutWritingToIt()
+        [DataTestMethod]
+        [DataRow("contoso-web")]
+        [DataRow("CoNtOsO-WeB")]
+        public async Task Plan_AnExistingWebAppOnASharedPlanInAnotherResourceGroup_UsesItAsItIs_WithoutWritingToIt(string webAppName)
         {
             // A plan outside the deployment's resource group is one the operator chose to share. Writing the solution's
             // tags to it needs access the installer's identity need not have there, and a refused write aborted the
             // install. Installers before #828 never touched it.
-            const string sharedPlan = "/subscriptions/" + Sub + "/resourceGroups/contoso-hosting/providers/Microsoft.Web/serverfarms/contoso-shared";
             using (var arm = new FakeArm())
             {
                 arm.AddSite(minTls: "1.2");
-                arm.Resource(Site)["properties"]["serverFarmId"] = sharedPlan;
-                arm.Add(sharedPlan, new JObject
+                arm.Resource(Site)["properties"]["serverFarmId"] = SharedPlan;
+                arm.Add(SharedPlan, new JObject
                 {
                     ["name"] = "contoso-shared", ["type"] = "Microsoft.Web/serverfarms", ["location"] = "westeurope", ["kind"] = "app",
                     ["sku"] = new JObject { ["name"] = "P1v3", ["tier"] = "PremiumV3", ["family"] = "Pv3" }, ["properties"] = new JObject()
                 });
                 var logger = new CapturingLogger();
-                var task = PlanTaskFromTheInstallJob(arm, webAppName: "contoso-web", planName: "contoso-plan", logger: logger,
+                var task = PlanTaskFromTheInstallJob(arm, webAppName, planName: "contoso-plan", logger: logger,
                     tags: new[] { new AzTag("CostCentre", "Contoso-42") });
 
                 var plan = await task.ExecuteTaskReturnResult(null);
 
-                Assert.AreEqual(sharedPlan, plan.Id.ToString(), true, "The web app stays on the plan it runs on.");
+                Assert.AreEqual(SharedPlan, plan.Id.ToString(), true, "The web app stays on the plan it runs on.");
+                Assert.AreEqual("P1v3", plan.Data.Sku.Name);
                 Assert.AreEqual(0, arm.Mutations.Count, "Nothing is written to a plan outside the deployment's resource group: no tags, no second plan.");
                 Assert.IsTrue(logger.Lines.Any(l => l.Message.Contains("outside this deployment's")));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("site list denied", "App Services", "HTTP 403")]
+        [DataRow("incomplete site list", "App Services", "retry")]
+        [DataRow("unnamed site", "App Services", "retry")]
+        [DataRow("missing ID", "hosting plan ID", "retry")]
+        [DataRow("malformed ID", "hosting plan ID", "retry")]
+        [DataRow("wrong resource type", "hosting plan ID", "retry")]
+        [DataRow("plan denied", "hosting plan", "HTTP 403")]
+        [DataRow("plan missing", "hosting plan", "HTTP 404")]
+        [DataRow("empty plan", "hosting plan", "retry")]
+        public async Task Plan_UnresolvedSiteOrHostingPlan_StopsWithoutLookingForOrWritingAnotherPlan(string failure, string operation, string reason)
+        {
+            const string privateDetail = "Contoso-private-detail";
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.2");
+                var properties = (JObject)arm.Resource(Site)["properties"];
+                properties["serverFarmId"] = SharedPlan;
+                var denied = new JObject { ["error"] = new JObject { ["code"] = privateDetail, ["message"] = privateDetail } };
+                switch (failure)
+                {
+                    case "site list denied":
+                        arm.OverrideResponse = (m, p) => m == "GET" && p == Sites ? FakeArm.Json(HttpStatusCode.Forbidden, denied) : null;
+                        break;
+                    case "incomplete site list":
+                        arm.OverrideResponse = (m, p) => m == "GET" && p == Sites ? FakeArm.Json(HttpStatusCode.OK, new JObject()) : null;
+                        break;
+                    case "unnamed site": arm.Resource(Site).Property("name").Remove(); break;
+                    case "missing ID": properties.Property("serverFarmId").Remove(); break;
+                    case "malformed ID": properties["serverFarmId"] = privateDetail; break;
+                    case "wrong resource type": properties["serverFarmId"] = Site; break;
+                    case "plan denied":
+                        arm.OverrideResponse = (m, p) => m == "GET" && p == SharedPlan ? FakeArm.Json(HttpStatusCode.Forbidden, denied) : null;
+                        break;
+                    case "plan missing": break; // Not present in FakeArm.
+                    case "empty plan":
+                        arm.OverrideResponse = (m, p) => m == "GET" && p == SharedPlan ? FakeArm.Json(HttpStatusCode.OK, new JObject()) : null;
+                        break;
+                }
+
+                var logger = new CapturingLogger();
+                var task = PlanTaskFromTheInstallJob(arm, "CONTOSO-WEB", "contoso-unused", logger);
+                var failureSeen = await Assert.ThrowsAsync<InstallException>(() => task.ExecuteTaskReturnResult(null));
+
+                Assert.AreEqual(0, arm.Mutations.Count, "Unexpected writes: " + string.Join(", ", arm.Mutations.Select(m => m.Method + " " + m.Path)));
+                Assert.IsFalse(arm.Requests.Any(r => r.Path.Equals(Plans, StringComparison.OrdinalIgnoreCase)));
+                StringAssert.Contains(failureSeen.Message, operation);
+                StringAssert.Contains(failureSeen.Message, reason);
+                Assert.IsFalse(failureSeen.ToString().Contains(privateDetail) || logger.Lines.Any(l => l.Message.Contains(privateDetail)));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(403)]
+        [DataRow(200)]
+        public async Task Plan_UnreadableConfiguredPlanListForAMissingSite_IsNotPermissionToCreate(int status)
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.KnownLists.Add(Sites);
+                arm.AddPlan("Contoso-Premium");
+                arm.Resource(Plans + "/Contoso-Premium")["sku"]["name"] = "P1v3";
+                arm.OverrideResponse = (method, path) => method == "GET" && path.Equals(Plans, StringComparison.OrdinalIgnoreCase)
+                    ? FakeArm.Json((HttpStatusCode)status, new JObject { ["error"] = "Contoso-private-detail" }) : null;
+                var task = PlanTaskFromTheInstallJob(arm, "contoso-web", "contoso-premium");
+
+                var error = await Assert.ThrowsAsync<InstallException>(() => task.ExecuteTaskReturnResult(null));
+
+                StringAssert.Contains(error.Message, "App Service plans");
+                Assert.IsFalse(error.ToString().Contains("Contoso-private-detail"));
+                Assert.AreEqual(0, arm.Mutations.Count);
+                Assert.AreEqual("P1v3", (string)arm.Resource(Plans + "/Contoso-Premium")["sku"]["name"]);
+            }
+        }
+
+        [TestMethod]
+        public async Task Plan_VerifierWarnsInsteadOfCheckingAnUnrelatedConfiguredPlanForAnExistingSite()
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.2");
+                ((JObject)arm.Resource(Site)["properties"]).Property("serverFarmId").Remove();
+                arm.AddPlan("contoso-unused");
+                var logger = new CapturingLogger();
+                var verifier = new SolutionInstallVerifier(BackendConfig("contoso-web", "contoso-unused"), logger, null);
+                var check = typeof(SolutionInstallVerifier).GetMethod("VerifyAppServicePlanCapabilities", BindingFlags.NonPublic | BindingFlags.Instance);
+
+                await (Task)check.Invoke(verifier, new object[] { arm.Group });
+
+                Assert.AreEqual(0, arm.Mutations.Count);
+                Assert.IsFalse(arm.Requests.Any(r => r.Path.Equals(Plans, StringComparison.OrdinalIgnoreCase)));
+                Assert.IsTrue(logger.Lines.Any(l => l.Level == LogLevel.Warning && l.Message.Contains("hosting plan ID")));
+            }
+        }
+
+        [TestMethod]
+        public async Task Plan_CancellationDuringHostingPlanRead_IsNotDiscoveryFailure()
+        {
+            using (var arm = new FakeArm())
+            using (var cancellation = new CancellationTokenSource())
+            {
+                arm.AddSite("1.2");
+                arm.Resource(Site)["properties"]["serverFarmId"] = SharedPlan;
+                arm.OverrideResponse = (method, path) =>
+                {
+                    if (method == "GET" && path == SharedPlan) cancellation.Cancel();
+                    return null;
+                };
+                var task = PlanTaskFromTheInstallJob(arm, "contoso-web", "contoso-unused");
+                task.CancellationToken = cancellation.Token;
+
+                await Assert.ThrowsAsync<OperationCanceledException>(() => task.ExecuteTaskReturnResult(null));
+                Assert.AreEqual(0, arm.Mutations.Count);
+                Assert.IsFalse(arm.Requests.Any(r => r.Path.Equals(Plans, StringComparison.OrdinalIgnoreCase)));
+            }
+        }
+
+        [TestMethod]
+        public async Task Plan_NoSiteRequested_ReusesTheConfiguredPlanWithoutListingSites()
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddPlan("Contoso-Plan");
+                var task = new AppServicePlanTask(TaskConfig.GetConfigForName("contoso-plan"), NullLogger.Instance,
+                    AzureLocation.WestEurope, new Dictionary<string, string>()) { Container = arm.Group };
+
+                var plan = await task.ExecuteTaskReturnResult(null);
+
+                Assert.AreEqual("Contoso-Plan", plan.Data.Name);
+                Assert.AreEqual(0, arm.Mutations.Count);
+                Assert.IsFalse(arm.Requests.Any(r => r.Path.Equals(Sites, StringComparison.OrdinalIgnoreCase)));
             }
         }
 
@@ -1192,6 +1332,9 @@ namespace Tests.UnitTests.InstallTests
                 var body = string.IsNullOrWhiteSpace(text) ? null : JObject.Parse(text);
                 var entry = (request.Method.Method, path, body);
                 Requests.Add(entry);
+                if (request.Method != HttpMethod.Get) Mutations.Add(entry);
+                var response = OverrideResponse?.Invoke(request.Method.Method, path);
+                if (response != null) return response;
 
                 if (request.Method == HttpMethod.Get)
                 {
@@ -1210,9 +1353,6 @@ namespace Tests.UnitTests.InstallTests
                     return Json(HttpStatusCode.NotFound, new JObject { ["error"] = new JObject { ["code"] = "ResourceNotFound", ["message"] = "Synthetic: not found" } });
                 }
 
-                Mutations.Add(entry);
-                var response = OverrideResponse?.Invoke(request.Method.Method, path);
-                if (response != null) return response;
                 if (request.Method.Method == "POST")
                 {
                     if (PostText.TryGetValue(path, out var xml)) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(xml, Encoding.UTF8, "application/xml") };
