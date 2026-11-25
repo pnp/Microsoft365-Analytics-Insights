@@ -111,12 +111,7 @@ namespace App.ControlPanel.Engine
                 async (connectionString) => await VerifySqlWithFirewallSelfHeal(connectionString, repairFirewall));
             sqlInstallerTasks.CancellationToken = CancellationToken;
             await RunUpgradeDeploymentAsync(Config.TasksConfig.InstallLatestSolutionContent, Config.TasksConfig.UpgradeSchema,
-                async () =>
-                {
-                    var settings = (await webApp.GetApplicationSettingsAsync(CancellationToken)).Value;
-                    PauseUpgradeWebJobs(settings.Properties);
-                    await webApp.UpdateApplicationSettingsAsync(settings, CancellationToken);
-                },
+                () => PauseUpgradeWebJobsAsync(webApp, CancellationToken),
                 () => EnsureWebJobsRunningAsync(webApp, _logger),
                 async () => { await webApp.StopAsync(CancellationToken); },
                 // Recovery must finish even when the operation was cancelled after stopping the site.
@@ -283,10 +278,20 @@ namespace App.ControlPanel.Engine
         }
 
         internal const string UpgradeWebJobsStateSetting = "AnalyticsUpgradeWebJobsPreviousState";
+        private const string WebJobsStoppedSetting = "WEBJOBS_STOPPED";
+
+        internal static async Task PauseUpgradeWebJobsAsync(WebSiteResource webApp, CancellationToken cancellationToken)
+        {
+            var settings = await ReadUpgradeSettingsAsync(webApp, cancellationToken);
+            PauseUpgradeWebJobs(settings.Properties);
+            await WriteApplicationSettingsAsync(webApp, settings, cancellationToken);
+        }
 
         internal static void PauseUpgradeWebJobs(IDictionary<string, string> settings)
         {
-            settings["WEBJOBS_STOPPED"] = "1";
+            foreach (var key in settings.Keys.Where(k => string.Equals(k, WebJobsStoppedSetting, StringComparison.OrdinalIgnoreCase)).ToArray())
+                settings.Remove(key);
+            settings[WebJobsStoppedSetting] = "1";
         }
 
         internal static void ResumeUpgradeWebJobs(IDictionary<string, string> settings)
@@ -296,8 +301,15 @@ namespace App.ControlPanel.Engine
         }
 
         private static bool IsWebJobsPauseSetting(string key) =>
-            string.Equals(key, "WEBJOBS_STOPPED", StringComparison.OrdinalIgnoreCase)
+            string.Equals(key, WebJobsStoppedSetting, StringComparison.OrdinalIgnoreCase)
             || string.Equals(key, UpgradeWebJobsStateSetting, StringComparison.OrdinalIgnoreCase);
+
+        private static async Task<AppServiceConfigurationDictionary> ReadUpgradeSettingsAsync(WebSiteResource webApp, CancellationToken token)
+        {
+            var settings = new AppServiceConfigurationDictionary();
+            await CopyApplicationSettingsAsync(webApp, settings.Properties, token, ConfigurationStep.Read);
+            return settings;
+        }
 
         internal static async Task EnsureWebJobsRunningAsync(WebSiteResource webApp, ILogger logger)
         {
@@ -305,8 +317,8 @@ namespace App.ControlPanel.Engine
             using (var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2)))
             {
                 await EnsureWebJobsRunningAsync(
-                    async ct => (await webApp.GetApplicationSettingsAsync(ct)).Value,
-                    async (settings, ct) => { await webApp.UpdateApplicationSettingsAsync(settings, ct); },
+                    ct => ReadUpgradeSettingsAsync(webApp, ct),
+                    (settings, ct) => WriteApplicationSettingsAsync(webApp, settings, ct),
                     logger, timeout.Token);
             }
         }
@@ -786,9 +798,9 @@ namespace App.ControlPanel.Engine
             if (!string.IsNullOrWhiteSpace(serviceBusConnectionString))
                 connectionStrings.Properties.Add(ServiceBusConnectionName, new ConnStringValueTypePair(serviceBusConnectionString, ConnectionStringType.Custom));
 
-            await RunConfigurationStepAsync("site configuration", token => UpdatePostCreateSiteConfigAsync(webApp, appServicePlan, token));
-            await RunConfigurationStepAsync("application settings", token => webApp.UpdateApplicationSettingsAsync(appSettings, token));
-            await RunConfigurationStepAsync("connection strings", token => webApp.UpdateConnectionStringsAsync(connectionStrings, token));
+            await RunConfigurationStepAsync("site configuration", token => UpdatePostCreateSiteConfigAsync(webApp, appServicePlan, token), CancellationToken);
+            await WriteApplicationSettingsAsync(webApp, appSettings, CancellationToken);
+            await RunConfigurationStepAsync("connection strings", token => webApp.UpdateConnectionStringsAsync(connectionStrings, token), CancellationToken);
 
             _logger.LogInformation("App Service connection-strings & app-settings configured");
         }
@@ -837,11 +849,7 @@ namespace App.ControlPanel.Engine
 
             var snapshot = new SiteConfigurationSnapshot(webApp);
             _logger.LogInformation("Reading App Service configuration. Avoid editing application settings or connection strings during deployment; their replacements use the values read here.");
-            await ReadConfigurationPropertiesAsync("application settings", webApp.GetApplicationSettingsAsync, (entry, listed) =>
-            {
-                if (entry.Value.ValueKind != JsonValueKind.String) throw new InvalidDataException();
-                snapshot.AppSettings.Add(entry.Name, listed.Properties[entry.Name]);
-            });
+            await CopyApplicationSettingsAsync(webApp, snapshot.AppSettings, CancellationToken, ConfigurationStep.PreflightRead);
             await ReadConfigurationPropertiesAsync("connection strings", webApp.GetConnectionStringsAsync, (entry, listed) =>
             {
                 if (OwnedConnectionNames.Contains(entry.Name)) return;
@@ -850,12 +858,25 @@ namespace App.ControlPanel.Engine
                     entry.Value.GetProperty("value").ValueKind != JsonValueKind.String)
                     throw new InvalidDataException();
                 snapshot.UnmanagedConnectionStrings.Properties.Add(entry.Name, listed.Properties[entry.Name]);
-            });
+            }, CancellationToken, ConfigurationStep.PreflightRead);
             CancellationToken.ThrowIfCancellationRequested();
             _siteConfiguration = snapshot;
         }
 
-        private Task ReadConfigurationPropertiesAsync<T>(string collection, Func<CancellationToken, Task<Response<T>>> list, Action<JsonProperty, T> preserve)
+        private enum ConfigurationStep { Update, Read, PreflightRead }
+
+        private static Task CopyApplicationSettingsAsync(WebSiteResource webApp, IDictionary<string, string> destination, CancellationToken token, ConfigurationStep read)
+            => ReadConfigurationPropertiesAsync("application settings", webApp.GetApplicationSettingsAsync, (entry, listed) =>
+            {
+                if (entry.Value.ValueKind != JsonValueKind.String) throw new InvalidDataException();
+                destination.Add(entry.Name, listed.Properties[entry.Name]);
+            }, token, read);
+
+        private static Task WriteApplicationSettingsAsync(WebSiteResource webApp, AppServiceConfigurationDictionary settings, CancellationToken token)
+            => RunConfigurationStepAsync("application settings", ct => webApp.UpdateApplicationSettingsAsync(settings, ct), token);
+
+        private static Task ReadConfigurationPropertiesAsync<T>(string collection, Func<CancellationToken, Task<Response<T>>> list,
+            Action<JsonProperty, T> preserve, CancellationToken cancellationToken, ConfigurationStep read)
         {
             return RunConfigurationStepAsync(collection, async token =>
             {
@@ -866,12 +887,12 @@ namespace App.ControlPanel.Engine
                     foreach (var entry in body.RootElement.GetProperty("properties").EnumerateObject())
                         preserve(entry, listed.Value);
                 }
-            }, reading: true);
+            }, cancellationToken, read);
         }
 
-        private async Task RunConfigurationStepAsync(string section, Func<CancellationToken, Task> step, bool reading = false)
+        private static async Task RunConfigurationStepAsync(string section, Func<CancellationToken, Task> step, CancellationToken token,
+            ConfigurationStep kind = ConfigurationStep.Update)
         {
-            var token = CancellationToken;
             token.ThrowIfCancellationRequested();
             try
             {
@@ -892,9 +913,10 @@ namespace App.ControlPanel.Engine
                     else if (azureError.Status == 401 || azureError.Status == 403)
                         readAdvice = "Check the installer's access and retry.";
                 }
-                throw new InvalidOperationException(reading
-                    ? $"Could not read the existing App Service {section} ({reason}). No replacement was sent. {readAdvice}"
-                    : $"Could not update the App Service {section} ({reason}).");
+                if (kind == ConfigurationStep.Update)
+                    throw new InvalidOperationException($"Could not update the App Service {section} ({reason}).");
+                var beforeWrites = kind == ConfigurationStep.PreflightRead ? " No replacement was sent." : "";
+                throw new InvalidOperationException($"Could not read the existing App Service {section} ({reason}).{beforeWrites} {readAdvice}");
             }
         }
 

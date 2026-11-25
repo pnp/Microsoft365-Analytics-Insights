@@ -392,8 +392,10 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
-        [TestMethod]
-        public async Task AppService_CancellationDuringTheLastReadMakesNoConfigurationWrites()
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task AppService_CancellationDuringTheLastReadMakesNoConfigurationWrites(bool pausing)
         {
             using (var arm = new FakeArm())
             using (var cancellation = new CancellationTokenSource())
@@ -401,12 +403,16 @@ namespace Tests.UnitTests.InstallTests
                 arm.AddSite("1.2");
                 arm.OverrideResponse = (method, path) =>
                 {
-                    if (method == "POST" && path == ConnectionStrings + "/list") cancellation.Cancel();
+                    if (method == "POST" && path == (pausing ? AppSettings : ConnectionStrings) + "/list") cancellation.Cancel();
                     return null;
                 };
 
-                await Assert.ThrowsAsync<OperationCanceledException>(() => ConfigureWebAppAsync(arm, token: cancellation.Token));
-                CollectionAssert.AreEqual(new[] { "POST " + AppSettings + "/list", "POST " + ConnectionStrings + "/list" }, ConfigurationRequests(arm));
+                var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
+                await Assert.ThrowsAsync<OperationCanceledException>(() => pausing
+                    ? ConfigureAzureComponentsTasks.PauseUpgradeWebJobsAsync(site, cancellation.Token)
+                    : ConfigureWebAppAsync(arm, token: cancellation.Token));
+                CollectionAssert.AreEqual(pausing ? new[] { "POST " + AppSettings + "/list" } :
+                    new[] { "POST " + AppSettings + "/list", "POST " + ConnectionStrings + "/list" }, ConfigurationRequests(arm));
             }
         }
 
@@ -420,6 +426,9 @@ namespace Tests.UnitTests.InstallTests
             {
                 arm.AddSite("1.2");
                 const string privateValue = "Contoso do not log";
+                arm.Resource(AppSettings)["properties"]["Storage"] = "Contoso operator setting";
+                var operatorPair = new JObject { ["type"] = "PostgreSQL", ["value"] = "Καλημέρα; retain  " };
+                arm.Resource(ConnectionStrings)["properties"]["ImportJobSettings"] = operatorPair;
                 arm.OverrideResponse = (method, path) => method == "PUT" && path == collection
                     ? FakeArm.Json((HttpStatusCode)status, new JObject { ["error"] = new JObject { ["code"] = code, ["message"] = privateValue } })
                     : null;
@@ -430,11 +439,126 @@ namespace Tests.UnitTests.InstallTests
                 StringAssert.Contains(error.Message, $"HTTP {status}");
                 if (code == "ScopeLocked") StringAssert.Contains(error.Message, code);
                 Assert.IsFalse(error.ToString().Contains(privateValue) || error.Message.Contains("No replacement was sent"));
+                Assert.AreEqual(collection == ConnectionStrings, arm.Resource(AppSettings)["properties"]["ClientID"] != null);
+                Assert.IsNull(arm.Resource(ConnectionStrings)["properties"]["SPOInsightsEntities"]);
+
+                arm.OverrideResponse = null;
+                await ConfigureWebAppAsync(arm);
+                Assert.AreEqual("Contoso operator setting", (string)arm.Resource(AppSettings)["properties"]["Storage"]);
+                Assert.IsTrue(JToken.DeepEquals(operatorPair, arm.Resource(ConnectionStrings)["properties"]["ImportJobSettings"]));
+                Assert.AreEqual("Contoso SQL", (string)arm.Resource(ConnectionStrings)["properties"]["SPOInsightsEntities"]["value"]);
             }
         }
 
         private static string[] ConfigurationRequests(FakeArm arm) =>
             arm.Requests.Where(r => r.Method != "GET").Select(r => r.Method + " " + r.Path).ToArray();
+
+        [TestMethod]
+        public async Task AppService_LockedSitePatchDoesNotRetryWithoutPlanSettings()
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.2");
+                var logger = new CapturingLogger();
+                arm.OverrideResponse = (method, path) => method == "PATCH" && path == Site
+                    ? FakeArm.Json(HttpStatusCode.Conflict, new JObject { ["error"] = new JObject
+                        { ["code"] = "ScopeLocked", ["message"] = "Contoso private detail" } }) : null;
+
+                var error = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => ConfigureWebAppAsync(arm, logger: logger));
+                CollectionAssert.AreEqual(new[] { "POST " + AppSettings + "/list", "POST " + ConnectionStrings + "/list",
+                    "PATCH " + Site }, ConfigurationRequests(arm), string.Join(", ", ConfigurationRequests(arm)));
+                StringAssert.Contains(error.Message, "ScopeLocked");
+                Assert.IsFalse(error.ToString().Contains("Contoso private detail"));
+                Assert.IsFalse(logger.Lines.Any(l => l.Message.Contains("Scale the plan")));
+            }
+        }
+
+        [TestMethod]
+        public async Task AppService_PausingReplacesOnlyTheWindowsPauseKeyAndCleanupPreservesOperatorValues()
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.2");
+                arm.Resource(AppSettings)["properties"] = new JObject { ["wEbJoBs_sToPpEd"] = "0", ["Storage"] = "Καλημέρα; app  " };
+                var operatorConnection = new JObject { ["type"] = "MySql", ["value"] = "Καλημέρα; db  " };
+                arm.Resource(ConnectionStrings)["properties"]["wEbJoBs_sToPpEd"] = operatorConnection;
+                var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
+
+                await ConfigureAzureComponentsTasks.PauseUpgradeWebJobsAsync(site, CancellationToken.None);
+                var sent = (JObject)arm.Resource(AppSettings)["properties"];
+                Assert.AreEqual("1", (string)sent["WEBJOBS_STOPPED"]);
+                Assert.IsNull(sent["wEbJoBs_sToPpEd"], "Do not send conflicting pause values to Windows.");
+                Assert.AreEqual("Καλημέρα; app  ", (string)sent["Storage"]);
+                await ConfigureAzureComponentsTasks.EnsureWebJobsRunningAsync(site, NullLogger.Instance);
+                Assert.IsTrue(JToken.DeepEquals(new JObject { ["Storage"] = "Καλημέρα; app  " }, arm.Resource(AppSettings)["properties"]));
+                Assert.IsTrue(JToken.DeepEquals(operatorConnection, arm.Resource(ConnectionStrings)["properties"]["wEbJoBs_sToPpEd"]));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task AppService_PauseRejectsIncompleteReadsAndRedactsRejectedWrites(bool refuseWrite)
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.2");
+                const string value = "Contoso private detail";
+                arm.Resource(AppSettings)["properties"]["ContosoOperator"] = value;
+                var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
+                arm.OverrideResponse = (method, path) =>
+                {
+                    if (!refuseWrite && method == "POST" && path == AppSettings + "/list")
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject());
+                    if (refuseWrite && method == "PUT" && path == AppSettings)
+                        return FakeArm.Json(HttpStatusCode.Forbidden, new JObject { ["error"] = new JObject { ["code"] = value, ["message"] = value } });
+                    return null;
+                };
+
+                Exception error = null;
+                try { await ConfigureAzureComponentsTasks.PauseUpgradeWebJobsAsync(site, CancellationToken.None); }
+                catch (Exception ex) { error = ex; }
+                Assert.AreEqual(value, (string)arm.Resource(AppSettings)["properties"]["ContosoOperator"],
+                    "A missing list must not turn the pause into a replacement of every operator setting.");
+                Assert.IsNotNull(error);
+                Assert.IsFalse(error.ToString().Contains(value), "The pause failure must not include the ARM body or an arbitrary error code.");
+                Assert.IsInstanceOfType(error, typeof(InvalidOperationException));
+                CollectionAssert.AreEqual(refuseWrite ? new[] { "POST " + AppSettings + "/list", "PUT " + AppSettings } :
+                    new[] { "POST " + AppSettings + "/list" }, ConfigurationRequests(arm));
+                StringAssert.Contains(error.Message, refuseWrite ? "HTTP 403" : "complete collection");
+                Assert.IsFalse(error.Message.Contains("No replacement was sent"), "Earlier configuration writes may already have succeeded.");
+            }
+        }
+
+        [TestMethod]
+        public async Task AppService_CleanupDoesNotCertifyAMissingListAsAnEmptyCollection()
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.2");
+                var settings = arm.Resource(AppSettings);
+                settings["properties"]["WEBJOBS_STOPPED"] = "1";
+                var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
+                var reads = 0;
+                arm.OverrideResponse = (method, path) =>
+                {
+                    if (method == "POST" && path == AppSettings + "/list" && ++reads == 2)
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject());
+                    // The first PUT was acknowledged but the pause is still present.
+                    if (method == "PUT" && path == AppSettings && reads == 1)
+                        return FakeArm.Json(HttpStatusCode.OK, settings);
+                    return null;
+                };
+                var logger = new CapturingLogger();
+
+                await ConfigureAzureComponentsTasks.EnsureWebJobsRunningAsync(site, logger);
+
+                Assert.IsTrue(JToken.DeepEquals(new JObject(), arm.Resource(AppSettings)["properties"]),
+                    "An incomplete verification must retry, not report running while the WebJobs are still paused.");
+                Assert.AreEqual(4, reads);
+                Assert.IsTrue(logger.Lines.Any(l => l.Message.Contains("outcome=Verified")));
+            }
+        }
 
         private static async Task ConfigureWebAppAsync(FakeArm arm, string bus = null, ILogger logger = null, CancellationToken token = default)
         {
