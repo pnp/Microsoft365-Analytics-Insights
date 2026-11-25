@@ -415,6 +415,32 @@ namespace Tests.UnitTests
                 "A start while that job is queued is refused.");
         }
 
+        [TestMethod]
+        public async Task CopilotAuditBackfill_PurgeCannotRemoveTheRequestBeforeItsRenewedJob()
+        {
+            var now = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
+            var partition = "Test" + Guid.NewGuid().ToString("N");
+            var values = new AzureTableKeyValueStore(_table ?? Skip(), partition, () => now);
+            var state = new CopilotAuditBackfillStateStore(values, true, () => now);
+            var job = await state.TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin@contoso.com", true);
+            Assert.IsTrue(await state.RequestCancelAsync(job.Id));
+            now = now.AddMinutes(1);
+            await state.SaveAsync(job);
+
+            now = now.AddDays(180).AddSeconds(-1);
+            await values.PurgeExpiredAsync();
+            Assert.IsTrue((await state.GetLatestAsync()).CancelRequested);
+            now = now.AddSeconds(1);
+            Assert.IsNull(await state.GetLatestAsync());
+            var next = await state.TryCreateWhenIdleAsync(now.AddDays(-1), now, "admin@contoso.com", true);
+            Assert.IsFalse((await state.GetAsync(next.Id)).CancelRequested);
+
+            now = now.AddDays(180);
+            await values.PurgeExpiredAsync();
+            var retired = await values.GetVersionedAsync("Job:" + job.Id + ":Cancel");
+            Assert.IsNull(retired.VersionToken, "The retired marker should no longer occupy a table row.");
+        }
+
         private static AzureTableKeyValueStore NewStore()
         {
             return new AzureTableKeyValueStore(_table ?? Skip(), "Test" + Guid.NewGuid().ToString("N"));
