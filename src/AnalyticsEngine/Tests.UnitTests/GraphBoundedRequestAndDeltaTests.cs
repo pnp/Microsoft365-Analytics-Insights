@@ -42,6 +42,151 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, terminal.Attempts);
         }
 
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task GraphFactories_RelativeRedirects_UseEachCurrentHopAndItsOrigin(bool singleTimeout)
+        {
+            var hops = new List<string>();
+            var authenticatedHosts = new List<string>();
+            using (var optionalBody = new GatedJsonContent())
+            {
+                var terminal = new SequenceHttpHandler(
+                    ct => Task.FromResult(RelativeRedirect("?part=2", optionalBody)),
+                    ct => Task.FromResult(RelativeRedirect("pages/next")),
+                    ct => Task.FromResult(RelativeRedirect("/root/page")),
+                    ct => Task.FromResult(RelativeRedirect("//download.contoso.invalid/reports/page")),
+                    ct => Task.FromResult(RelativeRedirect("?part=3")),
+                    ct => Task.FromResult(JsonResponse(HttpStatusCode.OK)))
+                {
+                    ObserveRequest = r =>
+                    {
+                        hops.Add(r.RequestUri.AbsoluteUri);
+                        if (r.Headers.Authorization != null) authenticatedHosts.Add(r.RequestUri.Host);
+                    }
+                };
+                var credential = new SyntheticTokenCredential();
+                using (var graph = singleTimeout
+                    ? GraphServiceClientFactory.CreateWithTimeout(GraphServiceClientFactory.CreateAuthenticationProvider(credential), TimeSpan.FromSeconds(1), terminal)
+                    : GraphServiceClientFactory.CreateForGraphImport(credential, TestBudget(1000, 1, 3000), null, terminal))
+                {
+                    Assert.IsNotNull(await WithinWatchdog(graph.Users.GetAsync()));
+                    CollectionAssert.AreEqual(new[]
+                    {
+                        "https://graph.microsoft.com/v1.0/users", "https://graph.microsoft.com/v1.0/users?part=2",
+                        "https://graph.microsoft.com/v1.0/pages/next", "https://graph.microsoft.com/root/page",
+                        "https://download.contoso.invalid/reports/page", "https://download.contoso.invalid/reports/page?part=3"
+                    }, hops);
+                    CollectionAssert.AreEqual(Enumerable.Repeat("graph.microsoft.com", 4).ToList(), authenticatedHosts);
+                    Assert.IsFalse(optionalBody.Started.Task.IsCompleted);
+                    Assert.IsTrue(optionalBody.Disposed);
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(200)]
+        [DataRow(503)]
+        public async Task GraphAuditSingleAttempt_FinalBodyDeadlineDoesNotReplay(int status)
+        {
+            using (var finalBody = new GatedJsonContent())
+            {
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(RelativeRedirect("?part=2")),
+                    ct => Task.FromResult(new HttpResponseMessage((HttpStatusCode)status) { Content = finalBody }));
+                using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromMilliseconds(250), terminal))
+                {
+                    var loader = new GraphFileMetadataLoader(graph, AnalyticsLogger.ConsoleOnlyTracer());
+                    var elapsed = Stopwatch.StartNew();
+                    var lookup = loader.GetUserIdFromUpnSingleAttempt("reader@contoso.com");
+                    if (status == 200)
+                    {
+                        await Assert.ThrowsAsync<OperationCanceledException>(() => WithinWatchdog(lookup));
+                    }
+                    else
+                    {
+                        var error = await Assert.ThrowsExceptionAsync<CopilotEnrichmentTransientException>(() => WithinWatchdog(lookup));
+                        Assert.AreEqual(status, ((ApiException)error.InnerException).ResponseStatusCode);
+                    }
+                    Assert.IsTrue(finalBody.Started.Task.IsCompleted && finalBody.Disposed);
+                    Assert.AreEqual(2, terminal.Attempts, "Only the original request and the redirected request are allowed under the save lock.");
+                    Assert.IsTrue(elapsed.Elapsed < TimeSpan.FromSeconds(2), $"The 250 ms timeout took {elapsed.ElapsedMilliseconds} ms.");
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task GraphSingleTimeout_ServiceRetryAfterIsInsideTheOverallDeadline()
+        {
+            var terminal = new SequenceHttpHandler(ct => Task.FromResult(JsonResponse((HttpStatusCode)429, retryAfterSeconds: 2)),
+                ct => Task.FromResult(JsonResponse(HttpStatusCode.OK)));
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromMilliseconds(250), terminal))
+            {
+                await Assert.ThrowsAsync<OperationCanceledException>(() => WithinWatchdog(graph.Users.GetAsync()));
+                Assert.AreEqual(1, terminal.Attempts, "The overall timeout ends the SDK wait before it sends again.");
+            }
+        }
+
+        [TestMethod]
+        public async Task GraphSingleTimeout_CallerCancellationOnAnErrorBodyIsNotAStatusResult()
+        {
+            using (var body = new GatedJsonContent())
+            using (var caller = new CancellationTokenSource())
+            {
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = body }));
+                using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(30), terminal))
+                {
+                    var request = graph.Users.GetAsync(cancellationToken: caller.Token);
+                    await WithinWatchdog(body.Started.Task);
+                    caller.Cancel();
+                    await Assert.ThrowsAsync<OperationCanceledException>(() => WithinWatchdog(request));
+                    Assert.IsTrue(body.Disposed);
+                    Assert.AreEqual(1, terminal.Attempts);
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task GraphImportPipeline_CustomRedirectDecisionSeesOriginalLocationAndBody(bool follow)
+        {
+            var decisions = 0;
+            var terminal = new SequenceHttpHandler(ct => Task.FromResult(RelativeRedirect("?part=2", new StringContent("Contoso"))),
+                ct => Task.FromResult(JsonResponse(HttpStatusCode.OK)));
+            using (var http = BuildGraphImportPipelineClient(terminal, 1000, 0, 1000))
+            using (var request = new HttpRequestMessage(HttpMethod.Get, "https://graph.microsoft.com/v1.0/users"))
+            {
+                var option = new RedirectHandlerOption
+                {
+                    ShouldRedirect = response =>
+                    {
+                        decisions++;
+                        Assert.AreEqual("?part=2", response.Headers.Location.OriginalString);
+                        Assert.AreEqual("Contoso", response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+                        return follow;
+                    }
+                };
+                request.Properties[typeof(RedirectHandlerOption).FullName] = option;
+                using (var response = await WithinWatchdog(http.SendAsync(request)))
+                {
+                    Assert.AreEqual(1, decisions);
+                    Assert.AreSame(option, response.RequestMessage.Properties[typeof(RedirectHandlerOption).FullName]);
+                    if (follow)
+                    {
+                        CollectionAssert.AreEqual(new[] { "GET /v1.0/users", "GET /v1.0/users?part=2" }, terminal.Requests);
+                        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+                    }
+                    else
+                    {
+                        Assert.AreEqual(HttpStatusCode.Found, response.StatusCode);
+                        Assert.AreEqual("?part=2", response.Headers.Location.OriginalString);
+                        Assert.AreEqual("Contoso", await response.Content.ReadAsStringAsync());
+                        Assert.AreEqual(1, terminal.Attempts);
+                    }
+                }
+            }
+        }
+
         [TestMethod]
         public async Task BoundedGraphRequestHandler_RequestTimeoutThenHealthyResponse_RetriesSamePageOnly()
         {
@@ -530,6 +675,13 @@ namespace Tests.UnitTests
                 Headers = { Location = new Uri("https://graph.microsoft.com/v1.0/users?$select=id") },
                 Content = body
             };
+
+        private static HttpResponseMessage RelativeRedirect(string location, HttpContent body = null)
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.Found) { Content = body };
+            response.Headers.TryAddWithoutValidation("Location", location);
+            return response;
+        }
 
         private static HttpResponseMessage JsonResponse(HttpStatusCode status, int? retryAfterSeconds = null)
         {

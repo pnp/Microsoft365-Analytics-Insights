@@ -15,7 +15,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         // SDK importer calls return pages, not whole-tenant report downloads.
         private const int MaxPageBytes = 32 * 1024 * 1024;
         private static readonly SemaphoreSlim BodyReadSlots = new SemaphoreSlim(16, 16);
-        private static readonly Func<HttpResponseMessage, bool> DefaultShouldRedirect = new RedirectHandlerOption().ShouldRedirect;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -24,6 +23,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var content = response.Content;
             try
             {
+                // Custom redirect predicates receive the response, not the current request.
+                if (response.RequestMessage == null) response.RequestMessage = request;
+                var automaticRedirect = IsAutomaticRedirect(request, response);
+                if (automaticRedirect)
+                    GraphRedirectLocationHandler.ResolveLocation(response, request.RequestUri);
                 if (content != null && (request.Method == HttpMethod.Head || response.StatusCode == HttpStatusCode.NotModified))
                 {
                     // net48 HttpClient buffers these too. The advertised length describes the resource,
@@ -35,7 +39,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     response.Content = empty;
                     content.Dispose();
                 }
-                else if (content != null && HasOptionalRedirectBody(request, response))
+                else if (content != null && automaticRedirect)
                 {
                     // Kiota drains a redirect before sending its next request. It needs only the
                     // status and Location; close the transport without spending the attempt on it.
@@ -76,7 +80,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
-        private static bool HasOptionalRedirectBody(HttpRequestMessage request, HttpResponseMessage response)
+        private static bool IsAutomaticRedirect(HttpRequestMessage request, HttpResponseMessage response)
         {
             switch (response.StatusCode)
             {
@@ -89,7 +93,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // A custom predicate may inspect the body or return it to the caller. Don't
                     // invoke it speculatively; let Kiota evaluate it once with the bounded body.
                     var option = request.GetRequestOption<RedirectHandlerOption>();
-                    return option == null || (option.MaxRedirect > 0 && option.ShouldRedirect == DefaultShouldRedirect);
+                    return option == null || (option.MaxRedirect > 0 && GraphRedirectLocationHandler.UsesDefaultDecision(option));
                 default:
                     return false;
             }

@@ -65,7 +65,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // The SDK appends an AuthorizationHandler after the redirect handler. It must use the
             // same host-restricted provider as the request adapter, including on redirected hops.
             var httpClient = GraphClientFactory.Create(authProvider, handlers, nationalCloud: GraphClientFactory.Global_Cloud,
-                finalHandler: new GraphOriginHandler(finalHandler));
+                finalHandler: CreateWirePipeline(finalHandler));
             httpClient.Timeout = Timeout.InfiniteTimeSpan;
             budget.Log(logger);
             return httpClient;
@@ -73,6 +73,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         internal static AzureIdentityAuthenticationProvider CreateAuthenticationProvider(TokenCredential credential)
             => new AzureIdentityAuthenticationProvider(credential, allowedHosts: GraphHosts, scopes: DefaultScopes);
+
+        // Below all Kiota middleware, including the AuthorizationHandler the SDK appends.
+        private static HttpMessageHandler CreateWirePipeline(HttpMessageHandler transport)
+            => new BoundedGraphResponseBodyHandler { InnerHandler = new GraphOriginHandler(transport) };
+
+        private static System.Collections.Generic.List<DelegatingHandler> CreateSdkHandlers()
+        {
+            var handlers = GraphClientFactory.CreateDefaultHandlers(new GraphClientOptions()).ToList();
+            var redirectIndex = handlers.FindIndex(h => h is RedirectHandler);
+            if (redirectIndex < 0)
+                throw new InvalidOperationException("The Graph SDK redirect handler is required when native redirects are disabled.");
+            handlers.Insert(redirectIndex, new GraphRedirectLocationHandler());
+            return handlers;
+        }
 
         internal static HttpMessageHandler CreateTransport()
         {
@@ -124,7 +138,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             if (budget == null) throw new ArgumentNullException(nameof(budget));
 
-            var handlers = GraphClientFactory.CreateDefaultHandlers(new GraphClientOptions()).ToList();
+            var handlers = CreateSdkHandlers();
             var retryIndex = handlers.FindIndex(h => h is RetryHandler);
             if (retryIndex < 0)
             {
@@ -138,14 +152,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 RetriesTimeLimit = budget.SdkRetryTimeLimit
             });
             handlers.Insert(retryIndex + 1, new BoundedGraphRequestHandler(budget, logger));
-            handlers.Add(new BoundedGraphResponseBodyHandler());
             handlers.Insert(0, new GraphTransientErrorHandler());
             return handlers;
         }
 
         /// <summary>
-        /// Legacy helper kept for callers outside the user import path. Prefer
-        /// <see cref="CreateForGraphImport"/> for SDK-backed importer work.
+        /// A single timeout covers redirects, any SDK-directed retry waits, and the body transfer.
+        /// There are no local retries: audit metadata lookups inside the save lock can disable SDK
+        /// retries per request to make a single attempt. For paged imports, see <see cref="CreateForGraphImport"/>.
         /// </summary>
         public static GraphServiceClient CreateWithTimeout(TokenCredential credential, TimeSpan timeout)
         {
@@ -158,15 +172,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         internal static GraphServiceClient CreateWithTimeout(IAuthenticationProvider authProvider, TimeSpan timeout, HttpMessageHandler finalHandler)
         {
-            var handlers = GraphClientFactory.CreateDefaultHandlers(new GraphClientOptions()).ToList();
+            var handlers = CreateSdkHandlers();
             handlers.Insert(0, new GraphTransientErrorHandler());
             if (HttpMessageTracing.Current.IsEnabled)
             {
                 handlers.Insert(0, new MessageTraceHandler("graph"));
             }
+            handlers.Insert(0, new GraphOverallTimeoutHandler(timeout));
             var httpClient = GraphClientFactory.Create(handlers, nationalCloud: GraphClientFactory.Global_Cloud,
-                finalHandler: new GraphOriginHandler(finalHandler));
-            httpClient.Timeout = timeout;
+                finalHandler: CreateWirePipeline(finalHandler));
+            httpClient.Timeout = Timeout.InfiniteTimeSpan; // GraphOverallTimeoutHandler owns the one deadline.
             return new GraphServiceClient(httpClient, authProvider);
         }
     }
