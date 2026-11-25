@@ -9,6 +9,7 @@ export interface SpPageContextInfo {
 
 export interface SitesTrackedByExtension {
   siteUrls: string[];
+  siteRegistrationChanged?: (site: string) => void;
   visits?: NavigationVisits;
 }
 

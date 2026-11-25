@@ -3,13 +3,13 @@ import { Guid, SPEventArgs } from '@microsoft/sp-core-library';
 import { SPComponentLoader } from '@microsoft/sp-loader';
 import { IAiTrackerModernApplicationCustomizerProperties, SitesTrackedByExtension, SpPageContextInfo } from './definitions';
 import { Logger } from './Logger';
-import { INavigationVisit, NavigationVisits } from './NavigationVisits';
+import { contextMatchesVisit, INavigationVisit, NavigationVisits, sameSite } from './NavigationVisits';
 import { loadTrackerUnlessRunning } from './TrackerPresence';
 
 // AITracker.js function. That's where we drive the AppInsights telemetry.
-declare function modernPageNav(webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void;
+declare function modernPageNav(webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): boolean | void;
 
-const AITRACKER_MODERN_VERSION: string = "1.0.1.66";     // Keep in step with the version in config/package-solution.json
+const AITRACKER_MODERN_VERSION: string = "1.0.1.67";     // Keep in step with the version in config/package-solution.json
 const NAV_EVENT_DELAY_MS: number = 2000;
 
 declare global {
@@ -25,6 +25,7 @@ export default class AiTrackerModernApplicationCustomizer
   private lastSite: string | undefined = undefined;
   private readonly runtimeId: Guid = Guid.newGuid();
   private visits?: NavigationVisits;
+  private contextVisit?: INavigationVisit;
   private pending?: { visit: INavigationVisit; timer: number };
   private aiTrackerLoaded: boolean = false;
   private registeredSite: string | undefined = undefined;    // This instance's entry in _o365AnalyticsInfo.siteUrls
@@ -60,9 +61,10 @@ export default class AiTrackerModernApplicationCustomizer
 
     // Check for _spoInsightsLoaded global variable to avoid double-load...
     const existingSitesLoaded = this.getSitesConfigFromWindow();
-    if (existingSitesLoaded.siteUrls.indexOf(site) === -1) {
+    if (!existingSitesLoaded.siteUrls.some(registered => sameSite(registered, site))) {
       existingSitesLoaded.siteUrls.push(site);
       this.registeredSite = site;
+      existingSitesLoaded.siteRegistrationChanged?.(site);
       Logger.verbose(`[${this.runtimeId}]: Registered loaded for site ${site}`);
     }
     else {
@@ -74,10 +76,14 @@ export default class AiTrackerModernApplicationCustomizer
 
     Logger.info(`[${this.runtimeId}]: version ${AITRACKER_MODERN_VERSION} tracking page.`);
     this.visits = existingSitesLoaded.visits ??= new NavigationVisits(window, existingSitesLoaded.siteUrls);
-    this.visits.observeLocation();
+    const initialVisit = this.visits.forEvent(site, site);
+    if (initialVisit) this.capturePageContext(initialVisit, true);
 
     // AITracker.js reads the page's site and list from this. Always this site's: after a navigation from another site it can still describe that one
     this.updateLegacyPageContext();
+    // Capture a destination's navigatedEvent even if it precedes the script download or document load.
+    this.context.application.navigatedEvent.add(this, this.logNavigatedEvent);
+    this.lastSite = site;
 
     // Insert AITracker into the page, giving it the AppInsights key from the extension properties
     Logger.info(`[${this.runtimeId}]: Injecting AITracker with connection-string (hash present).`);
@@ -114,18 +120,14 @@ export default class AiTrackerModernApplicationCustomizer
     } catch (e) {
       Logger.error(`[${this.runtimeId}]: Failed to load AITracker.js from ${aiTrackerUrl}: ${(e as Error).message}`);
     }
+  }
 
-    // SharePoint can dispose of this instance while it waits for AITracker, if it moves on. Then the next instance follows
-    if (this.disposed) {
-      Logger.verbose(`[${this.runtimeId}]: Disposed while AITracker.js loaded, so not following navigations.`);
-      return;
-    }
-
-    // Wire-up page-changed SPFx event
-    this.context.application.navigatedEvent.add(this, this.logNavigatedEvent);
-
-    // Remember site for dispose event
-    this.lastSite = site;
+  private capturePageContext(visit: INavigationVisit, initial: boolean): void {
+    const page = this.context.pageContext;
+    if (!contextMatchesVisit(visit, page.web.absoluteUrl, page.site.serverRequestPath, initial)) return;
+    this.contextVisit = visit;
+    visit.pageContext = { url: visit.url, siteUrl: visit.site, webUrl: page.web.absoluteUrl, webTitle: page.web.title,
+      listTitle: page.list?.title, listItemId: page.listItem?.id };
   }
 
   private logNavigatedEvent(_args: SPEventArgs): void {
@@ -133,12 +135,13 @@ export default class AiTrackerModernApplicationCustomizer
     const page = this.context.pageContext;
     const visit = this.visits.forEvent(this.registeredSite, page.site.absoluteUrl);
     if (!visit) return;
-    if (visit.reported || this.pending?.visit === visit) {
+    if (visit.reported || (this.pending?.visit === visit && visit.pageContext)) {
       Logger.verbose(`[${this.runtimeId}]: Duplicate navigatedEvent detected. Ignoring.`);
       return;
     }
 
     this.cancelPendingReport();
+    this.capturePageContext(visit, false);
     const legacy: SpPageContextInfo = page.legacyPageContext;
     this.updateLegacyPageContext(legacy);
     const { absoluteUrl: webUrl, title: webTitle } = page.web;
@@ -154,7 +157,8 @@ export default class AiTrackerModernApplicationCustomizer
         Logger.warn(`[${this.runtimeId}]: AITracker.js didn't load, so this navigation isn't tracked.`);
         return;
       }
-      // AITracker.js publishes modernPageNav after tracking the initial page itself.
+      // A hard load belongs to the standalone script. If the initial page has changed, it can
+      // instead be waiting for the destination's report.
       if (typeof modernPageNav !== "function") {
         Logger.verbose(`[${this.runtimeId}]: AITracker.js is still waiting for the page to load, and will track it then.`);
         return;
@@ -162,8 +166,8 @@ export default class AiTrackerModernApplicationCustomizer
       try {
         // A different instance can start in the interim. The standalone script reads this global too.
         if (window._spPageContextInfo !== legacy) this.updateLegacyPageContext(legacy);
-        modernPageNav(webUrl, webTitle, visit.site, listTitle, listItemId);
-        visit.reported = true;
+        // An older standalone returns void; only an explicit rejection leaves the visit available.
+        visit.reported = modernPageNav(webUrl, webTitle, visit.site, listTitle, listItemId) !== false;
       } catch (e) {
         Logger.error(`[${this.runtimeId}]: Error calling modernPageNav: ${(e as Error).message}`);
       }
@@ -214,10 +218,12 @@ export default class AiTrackerModernApplicationCustomizer
 
     // Unregister the site this instance registered, or the next instance for it takes itself for a duplicate and doesn't track
     if (this.registeredSite) {
+      if (this.contextVisit) this.contextVisit.pageContext = undefined;
       const existingSitesLoaded: SitesTrackedByExtension = this.getSitesConfigFromWindow();
       const siteIndex = existingSitesLoaded.siteUrls.indexOf(this.registeredSite);
       if (siteIndex > -1) {
         existingSitesLoaded.siteUrls.splice(siteIndex, 1);
+        existingSitesLoaded.siteRegistrationChanged?.(this.registeredSite);
       }
     }
   }

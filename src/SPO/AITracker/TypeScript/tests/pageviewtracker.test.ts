@@ -21,7 +21,7 @@ function createContext(): spPageContextInfo {
     return {
         userLoginName: 'user@contoso.com',
         webAbsoluteUrl: 'https://contoso.sharepoint.com/sites/test',
-        siteAbsoluteUrl: 'https://contoso.sharepoint.com',
+        siteAbsoluteUrl: 'https://contoso.sharepoint.com/sites/test',
         webTitle: 'Test Site',
         pageItemId: 1,
         listTitle: 'Site Pages'
@@ -131,7 +131,7 @@ describe('PageViewTracker', () => {
             tracker.handleModernPageNav(
                 'https://contoso.sharepoint.com/sites/test',
                 'Test Site',
-                'https://contoso.sharepoint.com',
+                context.siteAbsoluteUrl,
                 'https://contoso.sharepoint.com/sites/test/SitePages/About.aspx',
                 'Site Pages', 2
             );
@@ -153,7 +153,7 @@ describe('PageViewTracker', () => {
             tracker.handleModernPageNav(
                 'https://contoso.sharepoint.com/sites/test',
                 'Test Site',
-                'https://contoso.sharepoint.com',
+                context.siteAbsoluteUrl,
                 'https://contoso.sharepoint.com/sites/test/SitePages/New.aspx'
             );
 
@@ -233,7 +233,7 @@ describe('PageViewTracker', () => {
             (mockAppInsights.trackEvent as jest.Mock).mockClear();
             (mockAppInsights.trackPageView as jest.Mock).mockClear();
 
-            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/test', 'Test Site', 'https://contoso.sharepoint.com', homeUrl, 'Site Pages', 1);
+            tracker.handleModernPageNav(context.webAbsoluteUrl, 'Test Site', context.siteAbsoluteUrl, homeUrl, 'Site Pages', 1);
 
             expect(mockAppInsights.trackEvent).not.toHaveBeenCalled();
             expect(mockAppInsights.trackPageView).not.toHaveBeenCalled();
@@ -248,7 +248,7 @@ describe('PageViewTracker', () => {
             (mockAppInsights.trackEvent as jest.Mock).mockClear();
 
             Object.defineProperty(document, 'URL', { value: aboutUrl, writable: true, configurable: true });
-            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/test', 'Test Site', 'https://contoso.sharepoint.com', aboutUrl, 'Site Pages', 2);
+            tracker.handleModernPageNav(context.webAbsoluteUrl, 'Test Site', context.siteAbsoluteUrl, aboutUrl, 'Site Pages', 2);
 
             const exits = events().filter(e => e.name === 'PAGE_EXIT');
             expect(exits.length).toBe(1);
@@ -327,7 +327,7 @@ describe('PageViewTracker', () => {
             Object.defineProperty(document, 'URL', { value: url, writable: true, configurable: true });
 
             tracker.trackCurrentPageViewAndLastPageExit(url, '', undefined);
-            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/test', 'Test Site', 'https://contoso.sharepoint.com', url);
+            tracker.handleModernPageNav(context.webAbsoluteUrl, 'Test Site', context.siteAbsoluteUrl, url);
 
             expect(searches().length).toBe(1);
         });

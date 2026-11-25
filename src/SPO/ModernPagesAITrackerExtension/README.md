@@ -8,6 +8,10 @@ This SharePoint Framework (SPFx 1.22.2) application customizer loads the SharePo
 
 The two-second wait lets the destination's document title settle. It belongs to that visit, not to whatever URL is visible when the timer fires. Only the configured instance for the visible site can forward it, once; disposal, a different URL (including a different query), or a superseding visit makes the old report ineligible. A `#fragment` stays on the same page. Where the browser supports `currententrychange`, a detour and return invalidates the old visit even between SharePoint events; elsewhere the extension can only distinguish changes it observes at its callbacks. The running `AITracker.js` still decides whether to record a view, including suppressing its already-tracked initial page.
 
+If the standalone tracker starts **after a soft navigation**, the loaded document cannot supply the destination title. SPFx 1.0.1.67 snapshots the web, list and item for the visit at SharePoint's [`navigatedEvent`](https://learn.microsoft.com/en-us/javascript/api/sp-application-base/applicationaccessor), including events that arrive during the script download. At `onInit` it can supply that snapshot only when [`SPSite.serverRequestPath`](https://learn.microsoft.com/en-us/javascript/api/sp-page-context/spsite) matches the visible request, including its query. A contradictory request path or a web outside the destination is not evidence. A rejected report can be retried; the `void` result from an older standalone still counts as a delivered callback.
+
+The optional `siteRegistrationChanged` callback is separate: it lets the standalone sample the clock when a collection becomes or ceases to be eligible, without reporting a page view.
+
 Read the [SharePoint instructions](../.github/copilot-instructions.md) before changing either part. They explain how the two parts work together, how the package is deployed, the rules the tracker must keep, and how to validate a change on a development tenant.
 
 ## How it's deployed

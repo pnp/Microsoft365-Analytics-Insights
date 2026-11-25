@@ -22,7 +22,8 @@ export class AppInsightsWrapper {
     }
 
     // Page views. Returns false if the URL was the page already tracked
-    trackCurrentPageView(pageLoadDuration: number | undefined, spRequestDuration: number | null, webUrl: string, siteUrl: string, webTitle: string): boolean {
+    trackCurrentPageView(pageLoadDuration: number | undefined, spRequestDuration: number | null, webUrl: string | undefined,
+        siteUrl: string | undefined, webTitle: string | undefined, pageTitle: string | null = document.title): boolean {
 
         const pageUrl = document.URL;
         this.discardPendingClicksUnlessOn(pageUrl);
@@ -43,14 +44,14 @@ export class AppInsightsWrapper {
         var appInsightsPageViewData: PageViewDataProperties =
         {
             pageRequestId: this._pageRequestId,
-            webUrl: webUrl,
-            siteUrl: siteUrl,
-            webTitle: webTitle,
             aiTrackerVersion: AI_TRACKER_VER,
             sessionId: this._sessionId,
-            pageTitle: document.title,
             timeStamp: new Date().toISOString()
         };
+        if (webUrl) appInsightsPageViewData.webUrl = webUrl;
+        if (siteUrl) appInsightsPageViewData.siteUrl = siteUrl;
+        if (webTitle) appInsightsPageViewData.webTitle = webTitle;
+        if (pageTitle) appInsightsPageViewData.pageTitle = pageTitle;
 
         // Do we have SPRequestDuration in the page source?
         if (spRequestDuration)
@@ -59,7 +60,8 @@ export class AppInsightsWrapper {
         const pv: IPageViewTelemetry =
         {
             uri: pageUrl,
-            name: document.title,
+            // The SDK fills a missing name from document.title. Only the address is known for some soft views.
+            name: pageTitle || new URL(pageUrl).pathname,
             properties: appInsightsPageViewData
         };
         if (pageLoadDuration !== undefined) {
@@ -69,7 +71,7 @@ export class AppInsightsWrapper {
             if (pageLoadDuration === 0) appInsightsPageViewData['duration'] = 0;
 
             this._ai.trackPageView(pv);
-            log('Uploaded page-view data with pageLoad override ' + pageLoadDuration + ' for pageRequestId: ' + this._pageRequestId + ', url: ' + document.URL + '. Page title: ' + document.title);
+            log('Uploaded page-view data with pageLoad override ' + pageLoadDuration + ' for pageRequestId: ' + this._pageRequestId + ', url: ' + pageUrl + '. Page name: ' + pv.name);
             debugObj('Page view telemetry:', pv);
         }
         else {

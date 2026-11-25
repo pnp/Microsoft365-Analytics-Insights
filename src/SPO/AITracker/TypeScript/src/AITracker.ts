@@ -3,7 +3,7 @@ import { createTrackerTelemetry, TrackerTelemetry } from './TrackerTelemetry';
 
 import { AppInsightsWrapper } from './AppInsightsWrapper';
 import { debug, error, log, warn } from './Logger';
-import { linkLabel, uuidv4 } from './DataFunctions';
+import { isSamePage, linkLabel, uuidv4 } from './DataFunctions';
 import { CleanCookies, GetSessionCookieVal, RemoveRetiredCookies, SetSessionCookieVal } from './Cookies';
 import { PageViewTracker } from './PageViewTracker';
 import { SpoPagePropertyManager } from './PageProps/SpoImplementation/SpoPagePropertyManager';
@@ -17,7 +17,7 @@ import { AITrackerConfig } from './Models';
 import { LocalStorageUtils } from './LocalStorageUtils';
 import { ConfigHandler } from './Config/ConfigHandler';
 import { ApiConfigLoader } from './Config/ApiConfigLoader';
-import type { SitesTrackedByExtension } from './TrackedSites';
+import { isUrlInSite, type SitesTrackedByExtension } from './TrackedSites';
 
 export { };
 
@@ -73,9 +73,12 @@ function initPageControls() {
     // the time spent there is no tracked page's time on page. Classic pages have no such navigations: every one loads a new page.
     if (modern) {
         window.setInterval(() => pageTracker?.observeCurrentPage(), TRACKED_SITE_CHECK_MS);
-        const navigated = () => pageTracker?.observeCurrentPage(true);
+        const navigated = () => pageTracker?.observeCurrentPage('navigation');
         if (window.navigation?.addEventListener) window.navigation.addEventListener('currententrychange', navigated);
         else window.addEventListener('popstate', navigated);
+        window._o365AnalyticsInfo!.siteRegistrationChanged = site => {
+            if (isUrlInSite(document.URL, site)) pageTracker?.observeCurrentPage('registration');
+        };
     }
 }
 
@@ -188,25 +191,23 @@ function trackLoadedPage(): void {
 
     // A document loaded for another URL means SharePoint navigated here without loading a page.
     const pageLoadDuration = documentWasLoadedForCurrentUrl() ? undefined : 0;
-    pageTracker.trackCurrentPageViewAndLastPageExit(document.URL, window._spPageContextInfo?.listTitle, window._spPageContextInfo?.pageItemId, pageLoadDuration);
+    const context = pageLoadDuration === 0 ? undefined : window._spPageContextInfo;
+    pageTracker.trackCurrentPageViewAndLastPageExit(document.URL, context?.listTitle, context?.pageItemId, pageLoadDuration);
 
-    // Only now: the SPFx extension's calls are page navigations, which need the current page to have been tracked first
+    // A hard load has been tracked. A first soft view without bound context still needs a destination report.
     window.modernPageNav = modernPageNav;
 }
 
 function documentWasLoadedForCurrentUrl(): boolean {
     const navEntries = window.performance && window.performance.getEntriesByType ?
         window.performance.getEntriesByType('navigation') : [];
-    if (navEntries.length === 0) return true;
-
-    const withoutHash = (url: string) => url.split('#')[0];
-    return withoutHash(navEntries[0].name) === withoutHash(document.URL);
+    if (!navEntries[0]?.name) return !window._o365AnalyticsInfo; // Classic pages only navigate by loading a document.
+    return isSamePage(navEntries[0].name, document.URL);
 }
 
 // Called by the SPFx extension when SharePoint navigates to another page without reloading
-const modernPageNav = function (webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void {
-
-    pageTracker?.handleModernPageNav(webUrl, webTitle, siteUrl, document.URL, listTitle, listItemId);
+const modernPageNav = function (webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): boolean {
+    return pageTracker?.handleModernPageNav(webUrl, webTitle, siteUrl, document.URL, listTitle, listItemId) ?? false;
 }
 
 // Used to see if this is a new browsing session, with our own cookie

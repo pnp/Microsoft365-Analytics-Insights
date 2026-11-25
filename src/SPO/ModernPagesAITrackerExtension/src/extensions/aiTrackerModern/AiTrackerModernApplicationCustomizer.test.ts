@@ -22,7 +22,7 @@ describe('delayed SharePoint navigation reports', () => {
   const nav = jest.fn();
 
   function pageContext(site: string, title: string, id = 1): {
-    site: { absoluteUrl: string }; web: { absoluteUrl: string; title: string }; list: { title: string };
+    site: { absoluteUrl: string; serverRequestPath?: string }; web: { absoluteUrl: string; title: string }; list: { title: string };
     listItem: { id: number }; legacyPageContext: { webTitle: string; siteAbsoluteUrl: string };
   } {
     return {
@@ -155,6 +155,80 @@ describe('delayed SharePoint navigation reports', () => {
     fire(await install(pageContext(a, 'Already reported')));
     jest.advanceTimersByTime(2000);
     expect(nav).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes only a page-bound context available to a late tracker and retries a rejected report', async () => {
+    const context = pageContext(a, 'Earlier web', 10);
+    context.site.serverRequestPath = '/sites/one/SitePages/Earlier.aspx';
+    const owner = await install(context);
+    const current = (): unknown => window._o365AnalyticsInfo.visits?.currentPageContext();
+    expect(current()).toBeUndefined();
+    nav.mockReturnValueOnce(false);
+    fire(owner);
+    jest.advanceTimersByTime(2000);
+    expect(current()).toBeUndefined();
+
+    Object.assign(context, pageContext(a, 'Current web', 20));
+    context.site.serverRequestPath = location.pathname;
+    fire(owner);
+    expect(current()).toEqual({ url: a + home, webUrl: a, webTitle: 'Current web', siteUrl: a, listTitle: 'Pages', listItemId: 20 });
+    jest.advanceTimersByTime(2000);
+    expect(nav).toHaveBeenCalledTimes(2);
+    fire(owner); // The previous call returned void, as an older standalone does.
+    jest.advanceTimersByTime(2000);
+    expect(nav).toHaveBeenCalledTimes(2);
+    owner.close();
+    expect(current()).toBeUndefined();
+  });
+
+  it('binds an init snapshot to an exact request, not a later query at the same path', async () => {
+    const context = pageContext(a, 'Bound at init');
+    context.site.serverRequestPath = location.pathname.toUpperCase();
+    await install(context);
+    expect(window._o365AnalyticsInfo.visits?.currentPageContext()?.webTitle).toBe('Bound at init');
+    show(a + home + '?q=new');
+    expect(window._o365AnalyticsInfo.visits?.currentPageContext()).toBeUndefined();
+  });
+
+  it('does not bind a different subweb or let an encoded managed path borrow the root registration', async () => {
+    const origin = location.origin;
+    show('/SitesArchive' + home);
+    const root = await install(pageContext(origin, 'Root'));
+    fire(root);
+    jest.advanceTimersByTime(2000);
+    nav.mockClear();
+    show('/%74EAMS/Caf%C3%A9' + home);
+    fire(root);
+    jest.advanceTimersByTime(2000);
+    expect(nav).not.toHaveBeenCalled();
+    const site = origin + '/teams/café';
+    const context = pageContext(site, 'Another subweb');
+    context.site.serverRequestPath = location.pathname;
+    context.web.absoluteUrl += '/another';
+    const owner = await install(context);
+    fire(owner);
+    expect(window._o365AnalyticsInfo.visits?.currentPageContext()).toBeUndefined();
+    Object.assign(context, pageContext(site, 'Destination', 20));
+    fire(owner);
+    jest.advanceTimersByTime(2000);
+    expect(nav.mock.calls).toEqual([[site, 'Destination', site, 'Pages', 20]]);
+    expect(window._o365AnalyticsInfo.visits?.currentPageContext()?.listItemId).toBe(20);
+  });
+
+  it('notifies the running tracker after actual registry mutations, never for a duplicate or a navigation report', async () => {
+    const observed: string[][] = [];
+    Object.assign(window, { _o365AnalyticsInfo: { siteUrls: [a], siteRegistrationChanged: (site: string): void => {
+      observed.push([site, ...window._o365AnalyticsInfo.siteUrls]);
+    } } });
+    show(b + home);
+    const owner = await install(pageContext(b, 'Two'));
+    const duplicate = await install(pageContext(b, 'Duplicate'));
+    duplicate.close();
+    expect(observed).toEqual([[b, a, b]]);
+    expect(nav).not.toHaveBeenCalled();
+    owner.close();
+    expect(observed).toEqual([[b, a, b], [b, a]]);
+    expect(nav).not.toHaveBeenCalled();
   });
 
   it('does not revive a timer after a browser-observed detour before SharePoint reports the return', async () => {
