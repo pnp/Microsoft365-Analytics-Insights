@@ -13,6 +13,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -28,6 +29,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly IUserMetadataLoader _userLoader;
         private readonly IAnalyticsDbContextFactory _contextFactory;
         private readonly IClock _clock;
+        private readonly CancellationToken _shutdownToken;
         private UserBatchProcessor _batchProcessor;
         private UserInsertProcessor _insertProcessor;
         private UserLicenseProcessor _licenseProcessor;
@@ -70,8 +72,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </param>
         public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient, IClock clock = null,
             IUserImportScopeProvider userScopeProvider = null, IImportLastRunStore lastRunStore = null)
+            : this(logger, settings, creds, manualGraphCallClient, clock, userScopeProvider, lastRunStore, CancellationToken.None)
+        {
+        }
+
+        internal UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient, IClock clock,
+            IUserImportScopeProvider userScopeProvider, IImportLastRunStore lastRunStore, CancellationToken shutdownToken)
             : base(logger, settings)
         {
+            _shutdownToken = shutdownToken;
             _clock = clock ?? SystemClock.Instance;
             _userScopeProvider = userScopeProvider;
             _lastRunStore = lastRunStore;
@@ -99,7 +108,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // the budget is therefore per request, not per full tenant traversal.
             var graphServiceClient = GraphServiceClientFactory.CreateForUserImport(creds, _logger);
 
-            _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _logger, graphServiceClient);
+            _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _logger, graphServiceClient, shutdownToken);
             _contextFactory = DefaultAnalyticsDbContextFactory.Instance;
             _orgTypeStore = CreateOrgTypeStore(settings, logger);
             _orgAssignmentStore = CreateOrgAssignmentStore(settings, logger);
@@ -568,6 +577,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Get SKUs from tenant
                 var skus = await _userLoader.LoadTenantSkus();
+                _shutdownToken.ThrowIfCancellationRequested();
 
                 // Load DB user data without tracking.
                 // Only include license lookups when we'll need per-user license processing
@@ -825,7 +835,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     phaseResults.UpdatePhaseSucceeded = true;
                     _logger.LogInformation($"User import - Completed metadata update for {existingUsersUpdated.ToString("N0")} existing users");
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!(ex is OperationCanceledException && _shutdownToken.IsCancellationRequested))
                 {
                     _logger.LogError($"User import - ERROR updating existing users: {ex.Message}");
                     throw;
@@ -958,6 +968,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // as not done keeps the cadence gate open, so that re-read happens on the next cycle.
                     // Not fenced: every write is done, so losing the lock now protects nothing, and failing here would
                     // only throw away a finished run.
+                    _shutdownToken.ThrowIfCancellationRequested();
                     cycleCompleted = await _userLoader.CommitDeltaTokenAsync();
                 }
                 else

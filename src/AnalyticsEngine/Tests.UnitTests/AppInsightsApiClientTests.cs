@@ -120,7 +120,7 @@ namespace Tests.UnitTests
         {
             public List<TimeSpan> Requested { get; } = new List<TimeSpan>();
 
-            public Task Wait(TimeSpan delay)
+            public Task Wait(TimeSpan delay, CancellationToken cancellationToken)
             {
                 Requested.Add(delay);
                 return Task.CompletedTask;

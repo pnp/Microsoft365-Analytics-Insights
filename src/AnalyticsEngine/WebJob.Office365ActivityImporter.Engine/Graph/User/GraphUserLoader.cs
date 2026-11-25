@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using GraphUserDeltaQuery = Common.Entities.State.GraphUserDeltaQuery;
 
@@ -24,6 +25,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly IDeltaValueProvider _deltaValueProvider;
         private readonly ILogger _logger;
         private readonly GraphServiceClient _graphServiceClient;
+        private readonly CancellationToken _shutdownToken;
 
         // Buffer the delta token returned by Graph during the most recent
         // LoadAllActiveUsers call. We do NOT persist it to the underlying
@@ -53,11 +55,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private bool _orgSelectionRejected;
 
         public GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger logger, GraphServiceClient graphServiceClient)
+            : this(httpClient, deltaValueProvider, logger, graphServiceClient, CancellationToken.None)
+        {
+        }
+
+        internal GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger logger, GraphServiceClient graphServiceClient, CancellationToken shutdownToken)
         {
             this._httpClient = httpClient;
             _deltaValueProvider = deltaValueProvider;
             this._logger = logger;
             this._graphServiceClient = graphServiceClient;
+            _shutdownToken = shutdownToken;
         }
 
         public IDeltaValueProvider DeltaValueProvider => _deltaValueProvider;
@@ -214,7 +222,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             try
             {
                 var current = await _graphServiceClient.Users[currentId.ToString()].GetAsync(rc =>
-                    rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" });
+                    rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" }, _shutdownToken);
                 if (current?.AccountEnabled != true
                     || !string.Equals(current.Id, currentOwner.Id, StringComparison.OrdinalIgnoreCase)
                     || !string.Equals(current.UserPrincipalName, currentOwner.UserPrincipalName, StringComparison.OrdinalIgnoreCase))
@@ -223,7 +231,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 try
                 {
                     await _graphServiceClient.Users[previousId.ToString()].GetAsync(rc =>
-                        rc.QueryParameters.Select = new[] { "id" });
+                        rc.QueryParameters.Select = new[] { "id" }, _shutdownToken);
                     return DeclineReusedUpn("previous object still exists (disabled is not deleted)");
                 }
                 catch (ApiException ex) when (ex.ResponseStatusCode == 404)
@@ -240,14 +248,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" };
                     rc.QueryParameters.Filter = $"id eq '{currentId}' or id eq '{previousId}' or userPrincipalName eq '{name}'";
-                });
+                }, _shutdownToken);
                 var only = page?.Value?.Count == 1 ? page.Value[0] : null;
                 var confirmed = string.IsNullOrEmpty(page?.OdataNextLink) && only?.AccountEnabled == true
                     && string.Equals(only.Id, currentOwner.Id, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(only.UserPrincipalName, currentOwner.UserPrincipalName, StringComparison.OrdinalIgnoreCase);
                 return confirmed || DeclineReusedUpn("directory response is partial, ambiguous or does not corroborate previous-object absence");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!(ex is OperationCanceledException && _shutdownToken.IsCancellationRequested))
             {
                 _logger.LogWarning("User import - reused UPN verification unavailable ({ExceptionType}); retaining identity quarantine.", ex.GetType().Name);
                 return false;
@@ -552,7 +560,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             try
             {
-                var page = await _graphServiceClient.SubscribedSkus.GetAsync();
+                var page = await _graphServiceClient.SubscribedSkus.GetAsync(cancellationToken: _shutdownToken);
 
                 if (page?.Value == null)
                 {
@@ -581,7 +589,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         return true;
                     });
 
-                await iterator.IterateAsync();
+                await iterator.IterateAsync(_shutdownToken);
+                // PageIterator can return normally when cancelled between pages. Never reconcile a partial inventory.
+                _shutdownToken.ThrowIfCancellationRequested();
 
                 if (iterator.State != PagingState.Complete)
                 {
@@ -640,7 +650,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // sequential requests, every cycle. Graph keeps the page size in each @odata.nextLink,
                 // which the iterator below follows unchanged. Issue #707.
                 rc.QueryParameters.Top = UsersBySkuPageSize;
-            });
+            }, _shutdownToken);
 
             // The licence refresh removes any assignment this list does not report, so an
             // incomplete answer must NEVER be passed off as a complete one - it would delete
@@ -668,7 +678,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     return true;
                 });
 
-            await iterator.IterateAsync();
+            await iterator.IterateAsync(_shutdownToken);
+            _shutdownToken.ThrowIfCancellationRequested();
 
             if (iterator.State == PagingState.Paused)
             {
@@ -688,7 +699,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var page = await _graphServiceClient.Users[userId].LicenseDetails.GetAsync(rc =>
                 {
                     rc.QueryParameters.Select = new[] { "skuPartNumber", "skuId" };
-                });
+                }, _shutdownToken);
 
                 if (page?.Value == null)
                 {

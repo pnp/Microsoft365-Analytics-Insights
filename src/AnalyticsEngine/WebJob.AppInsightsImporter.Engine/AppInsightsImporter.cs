@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
@@ -120,12 +121,16 @@ namespace WebJob.AppInsightsImporter.Engine
         /// could not be saved - is in the result's outcome rather than thrown, so the host can report a failed cycle as
         /// failed instead of as completed.
         /// </summary>
-        public async Task<AppInsightsImportCycleResult> ImportAndSave(bool saveRestResponses, int? daysBeforeOverride)
+        public Task<AppInsightsImportCycleResult> ImportAndSave(bool saveRestResponses, int? daysBeforeOverride) =>
+            ImportAndSave(saveRestResponses, daysBeforeOverride, CancellationToken.None);
+
+        public async Task<AppInsightsImportCycleResult> ImportAndSave(bool saveRestResponses, int? daysBeforeOverride, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (AllDatabasePortsSupplied)
             {
                 return await ImportAndSaveWith(saveRestResponses, daysBeforeOverride,
-                    _siteFilterLoader, _hitWatermarkStore, _persistence);
+                    _siteFilterLoader, _hitWatermarkStore, _persistence, cancellationToken);
             }
 
             // Production: one context for the whole run, exactly as before, with SQL adapters over it for
@@ -135,13 +140,13 @@ namespace WebJob.AppInsightsImporter.Engine
                 return await ImportAndSaveWith(saveRestResponses, daysBeforeOverride,
                     _siteFilterLoader ?? new SqlSiteFilterLoader(db),
                     _hitWatermarkStore ?? new SqlHitWatermarkStore(db),
-                    _persistence ?? new SqlAppInsightsDayPersistenceManager(db, _logger, _importConfig, _contextFactory));
+                    _persistence ?? new SqlAppInsightsDayPersistenceManager(db, _logger, _importConfig, _contextFactory), cancellationToken);
             }
         }
 
         private async Task<AppInsightsImportCycleResult> ImportAndSaveWith(bool saveRestResponses, int? daysBeforeOverride,
             ISiteFilterLoader siteFilterLoader,
-            IHitWatermarkStore hitWatermarkStore, IAppInsightsDayPersistenceManager persistence)
+            IHitWatermarkStore hitWatermarkStore, IAppInsightsDayPersistenceManager persistence, CancellationToken cancellationToken)
         {
             var result = new AppInsightsImportCycleResult();
 
@@ -235,7 +240,7 @@ namespace WebJob.AppInsightsImporter.Engine
             bool completed;
             if (_source != null)
             {
-                completed = await ImportRangeAsync(_source, range, saveRestResponses, filterUrls, persistence, result);
+                completed = await ImportRangeAsync(_source, range, saveRestResponses, filterUrls, persistence, result, cancellationToken);
             }
             else
             {
@@ -245,10 +250,11 @@ namespace WebJob.AppInsightsImporter.Engine
                     this._importConfig.ClientSecret);
                 using (var ai = new AppInsightsAPIClient(this._importConfig.AppInsightsConnectionString, credential, _logger))
                 {
-                    completed = await ImportRangeAsync(ai, range, saveRestResponses, filterUrls, persistence, result);
+                    completed = await ImportRangeAsync(ai, range, saveRestResponses, filterUrls, persistence, result, cancellationToken);
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             if (!completed)
             {
                 // Stopped early: the day it stopped at is retried next cycle, and the cursor stays where it was so nothing
@@ -262,11 +268,12 @@ namespace WebJob.AppInsightsImporter.Engine
                 try
                 {
                     var newestStoredHitUtc = await ReadNewestStoredHitAfterImportAsync(hitWatermarkStore, newestHitTimestamp);
+                    cancellationToken.ThrowIfCancellationRequested();
                     await _cursorStore.WriteAsync(newCursor, newestStoredHitUtc);
                     result.CursorAdvancedToUtc = newCursor;
                     _logger.LogInformation($"AppInsightsCursor: Outcome=Advanced; Cursor={newCursor:O}; Previous={(cursorUtc.HasValue ? cursorUtc.Value.ToString("O", CultureInfo.InvariantCulture) : "none")}.");
                 }
-                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                catch (Exception ex) when (!(ex is OutOfMemoryException) && !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
                 {
                     result.Degrade("CursorWriteFailed");
                     _logger.LogWarning($"AppInsightsCursor: Outcome=WriteFailed; Store={_cursorStore.Description}; {ExceptionDescriber.Chain(ex)}. " +
@@ -339,15 +346,19 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         /// <returns>False when the cycle stopped early: the counts could not be read, or a day failed and will be retried.</returns>
         private async Task<bool> ImportRangeAsync(IAppInsightsSourceLoader source, AppInsightsReadWindow range, bool saveRestResponses,
-            List<FilterUrlConfig> filterUrls, IAppInsightsDayPersistenceManager persistence, AppInsightsImportCycleResult result)
+            List<FilterUrlConfig> filterUrls, IAppInsightsDayPersistenceManager persistence, AppInsightsImportCycleResult result, CancellationToken cancellationToken)
         {
             var sw = Stopwatch.StartNew();
             IReadOnlyList<AppInsightsHourlyRowCount> counts;
             try
             {
-                counts = await source.GetHourlyRowCountsAsync(range);
+                cancellationToken.ThrowIfCancellationRequested();
+                counts = source is ICancellableAppInsightsSourceLoader cancellable
+                    ? await cancellable.GetHourlyRowCountsAsync(range, cancellationToken)
+                    : await source.GetHourlyRowCountsAsync(range);
+                cancellationToken.ThrowIfCancellationRequested();
             }
-            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            catch (Exception ex) when (!(ex is OutOfMemoryException) && !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
             {
                 result.Fail("RowCountQueryFailed");
                 _logger.LogError($"AppInsightsRowCounts: Outcome=Failed; Mode={result.Mode}; ElapsedMs={sw.ElapsedMilliseconds}; {ExceptionDescriber.Chain(ex)}. " +
@@ -372,7 +383,7 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 position++;
                 var dayResult = await ImportDayAsync(source, day.Key, day.ToList(), range, saveRestResponses, filterUrls, persistence,
-                    result.Mode, position, countsByDay.Count);
+                    result.Mode, position, countsByDay.Count, cancellationToken);
                 result.Days.Add(dayResult);
                 AppInsightsImportTelemetry.TrackDay(_logger, dayResult, result.Mode);
 
@@ -396,7 +407,7 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         private async Task<AppInsightsDayResult> ImportDayAsync(IAppInsightsSourceLoader source, DateTime dayUtc,
             IReadOnlyList<AppInsightsHourlyRowCount> dayCounts, AppInsightsReadWindow range, bool saveRestResponses,
-            List<FilterUrlConfig> filterUrls, IAppInsightsDayPersistenceManager persistence, AppInsightsReadMode mode, int position, int dayCount)
+            List<FilterUrlConfig> filterUrls, IAppInsightsDayPersistenceManager persistence, AppInsightsReadMode mode, int position, int dayCount, CancellationToken cancellationToken)
         {
             var day = new AppInsightsDayResult(dayUtc);
             var dayTimer = Stopwatch.StartNew();
@@ -408,13 +419,17 @@ namespace WebJob.AppInsightsImporter.Engine
             DateTime? newestRead = null;
             var removed = new AppInsightsScopeFilterResult();
             var stage = StageDownload;
+            var cancellable = source as ICancellableAppInsightsSourceLoader;
             try
             {
                 foreach (var window in pageViewWindows)
                 {
                     stage = StageDownload;
                     var fetch = Stopwatch.StartNew();
-                    var pageViews = await source.GetPageViewsAsync(window, saveRestResponses);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var pageViews = cancellable == null ? await source.GetPageViewsAsync(window, saveRestResponses)
+                        : await cancellable.GetPageViewsAsync(window, saveRestResponses, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     day.FetchSeconds += fetch.Elapsed.TotalSeconds;
                     day.Windows++;
                     var read = pageViews.Rows.Count;
@@ -440,7 +455,10 @@ namespace WebJob.AppInsightsImporter.Engine
                 {
                     stage = StageDownload;
                     var fetch = Stopwatch.StartNew();
-                    var events = await source.GetCustomEventsAsync(window, saveRestResponses);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var events = cancellable == null ? await source.GetCustomEventsAsync(window, saveRestResponses)
+                        : await cancellable.GetCustomEventsAsync(window, saveRestResponses, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     day.FetchSeconds += fetch.Elapsed.TotalSeconds;
                     day.Windows++;
                     var read = events.Rows.Count;
@@ -457,7 +475,7 @@ namespace WebJob.AppInsightsImporter.Engine
                     _logger.LogDebug($"AppInsightsWindow: Kind=Events; Window={window}; Read={read}; Saved={events.Rows.Count}; FetchMs={fetch.ElapsedMilliseconds}.");
                 }
             }
-            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            catch (Exception ex) when (!(ex is OutOfMemoryException) && !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
             {
                 // Every exception counts, not just SqlException or HttpRequestException: one that escaped used to stall
                 // the importer on the same day for months, and a download failure used to stop the cycle with no limit
@@ -506,6 +524,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 return day;
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             if (removed.Total > 0)
             {
                 _logger.LogInformation($"Left out data by people outside UserGroupsFilter for {dayUtc:yyyy-MM-dd}: {removed.PageViewsRemoved:n0} page-view(s), " +

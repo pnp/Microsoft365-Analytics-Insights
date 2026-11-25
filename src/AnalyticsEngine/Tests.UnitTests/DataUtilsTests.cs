@@ -5,6 +5,8 @@ using Common.Entities.Config;
 using Common.Entities.LookupCaches;
 using DataUtils;
 using DataUtils.Sql;
+using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Concurrent;
@@ -1428,33 +1430,104 @@ namespace Tests.UnitTests
             return new[] { stdout.ToString(), stderr.ToString() };
         }
 
-        [TestMethod]
-        public void SqlStartupProbe_PassesAgainstTheTestDatabase_AndNeverCountsTheWholeTable()
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        [TestCategory("SqlIntegration")]
+        public async Task SqlStartupProbe_ContinuousHostStopsWhileItsTableIsStillSchemaLocked(bool audit)
         {
-            var logger = AnalyticsLogger.ConsoleOnlyTracer();
-            var connectionStrings = new AppConfig().ConnectionStrings;
-
-            var captured = CaptureConsole(() =>
+            using (var db = ScratchDatabase.Create("StartupProbe"))
+            using (var locker = new SqlConnection(db.ConnectionString))
+            using (var stopping = new CancellationTokenSource())
             {
-                Assert.IsTrue(connectionStrings.TestSQLSettings(logger));
-                Assert.IsTrue(connectionStrings.TestAuditSQLSettings(logger));
-            });
-
-            StringAssert.Contains(captured[0], "SQL startup probe passed: table=hits; ElapsedMs=");
-            StringAssert.Contains(captured[0], "SQL startup probe passed: table=audit_events; ElapsedMs=");
-
-            // The query the probe runs: a COUNT over a TOP (1) subquery, not over the table.
-            var sql = new System.Text.StringBuilder();
-            using (var db = new AnalyticsEntitiesContext())
-            {
-                db.Database.Log = s => sql.Append(s);
-                db.hits.Take(1).Count();
-                db.AuditEventsCommon.Take(1).Count();
+                var table = audit ? "audit_events" : "hits";
+                var settings = new AppConnectionStrings(name => name == "SPOInsightsEntities" ? db.ConnectionString : null);
+                var logger = new CapturingLogger();
+                var attempts = 0;
+                Task<bool> Probe(CancellationToken token)
+                {
+                    Interlocked.Increment(ref attempts);
+                    return audit ? settings.TestAuditSqlOnceAsync(logger, token) : settings.TestWebTrafficSqlOnceAsync(logger, token);
+                }
+                db.Execute($"CREATE TABLE dbo.{table} (id int PRIMARY KEY)");
+                await locker.OpenAsync();
+                using (var transaction = locker.BeginTransaction())
+                using (var schemaLock = new SqlCommand($"ALTER TABLE dbo.{table} ADD hold int NULL;", locker, transaction))
+                using (var blocked = new SqlCommand(@"SELECT t.text FROM sys.dm_exec_requests r CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) t
+                    WHERE r.database_id = DB_ID() AND r.blocking_session_id = @@SPID;", locker, transaction))
+                {
+                    await schemaLock.ExecuteNonQueryAsync();
+                    var startup = Task.Run(() => StartupSqlCheck.WaitUntilReachable(Probe, logger, "Test", stopping.Token));
+                    try
+                    {
+                        string sql;
+                        var watch = System.Diagnostics.Stopwatch.StartNew();
+                        while ((sql = await blocked.ExecuteScalarAsync() as string) == null && !startup.IsCompleted && watch.Elapsed < TimeSpan.FromSeconds(15))
+                            await Task.Delay(25);
+                        StringAssert.Contains(sql ?? string.Empty, "TOP (1)",
+                            "Wait for the real bounded read itself, not just connection acquisition.");
+                        StringAssert.Contains(sql, "dbo." + table);
+                        stopping.Cancel();
+                        Assert.AreSame(startup, await Task.WhenAny(startup, Task.Delay(TimeSpan.FromSeconds(5))),
+                            "The host stop must end the probe without releasing the schema lock or waiting out its SQL deadline.");
+                        Assert.IsFalse(await startup);
+                        Assert.AreEqual(1, attempts);
+                        StringAssert.Contains(logger.Single(LogLevel.Warning), "STARTUP-SQL-CHECK Abandoned");
+                        Assert.IsFalse(logger.Lines.Any(l => l.Level >= LogLevel.Error));
+                    }
+                    finally
+                    {
+                        stopping.Cancel();
+                        transaction.Rollback();
+                        await startup;
+                    }
+                }
+                Assert.IsTrue(await Probe(CancellationToken.None), "A recovered, empty table is healthy, even after another caller stopped.");
+                StringAssert.Contains(logger.Single(LogLevel.Information), "SQL startup probe passed: table=" + table);
             }
-            var executed = sql.ToString();
-            StringAssert.Contains(executed, "TOP (1)");
-            Assert.IsFalse(System.Text.RegularExpressions.Regex.IsMatch(executed, @"COUNT\(1\) AS \[A1\]\s+FROM \[dbo\]\.\[(hits|audit_events)\]"),
-                "The probe must not count every row of the table.");
+        }
+
+        [TestMethod]
+        [TestCategory("SqlIntegration")]
+        public async Task SqlStartupProbe_ExpiredAttemptIsAnOutage_NotAHostStopOrOneShotDiagnosis()
+        {
+            using (var db = ScratchDatabase.Create("StartupTimeout"))
+            using (var locker = new SqlConnection(db.ConnectionString))
+            {
+                db.Execute("CREATE TABLE dbo.hits (id int PRIMARY KEY)");
+                await locker.OpenAsync();
+                using (var transaction = locker.BeginTransaction())
+                using (var schemaLock = new SqlCommand("ALTER TABLE dbo.hits ADD hold int NULL;", locker, transaction))
+                {
+                    await schemaLock.ExecuteNonQueryAsync();
+                    var settings = new AppConnectionStrings(name => name == "SPOInsightsEntities" ? db.ConnectionString : null);
+                    var logger = new CapturingLogger();
+                    var probe = settings.ProbeAsync(logger, audit: false, shutdownToken: CancellationToken.None, timeoutSeconds: 1);
+                    Assert.AreSame(probe, await Task.WhenAny(probe, Task.Delay(TimeSpan.FromSeconds(10))));
+                    Assert.IsFalse(await probe);
+                    var error = logger.Single(LogLevel.Error);
+                    StringAssert.Contains(error, "SQL startup probe failed: table=hits");
+                    Assert.IsFalse(error.Contains("one-shot"));
+                }
+            }
+        }
+
+        [TestMethod]
+        public void StartupSqlCheck_OnlyAnExplicitHostCancellationAbandonsAnInterruptedAttempt()
+        {
+            using (var stop = new CancellationTokenSource())
+            {
+                var logger = new CapturingLogger();
+                Assert.Throws<OperationCanceledException>(() => StartupSqlCheck.WaitUntilReachable(
+                    ct => Task.FromCanceled<bool>(new CancellationToken(true)), logger, "Test", stop.Token));
+                Assert.IsFalse(StartupSqlCheck.WaitUntilReachable(ct =>
+                {
+                    stop.Cancel();
+                    return Task.FromCanceled<bool>(ct);
+                }, logger, "Test", stop.Token));
+                StringAssert.Contains(logger.Single(LogLevel.Warning), "STARTUP-SQL-CHECK Abandoned");
+                Assert.IsFalse(logger.Lines.Any(l => l.Level >= LogLevel.Error));
+            }
         }
 
         [TestMethod]

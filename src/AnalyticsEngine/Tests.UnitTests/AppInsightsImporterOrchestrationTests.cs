@@ -67,7 +67,7 @@ namespace Tests.UnitTests
 
         private static int CountOf(string log, AnalyticsLogger.AnalyticsEvent e) => Regex.Matches(log, Regex.Escape(EventPattern(e))).Count;
 
-        private static async Task<string> CaptureConsole(Func<Task> action)
+        internal static async Task<string> CaptureConsole(Func<Task> action)
         {
             // Error and Critical lines go to stderr, so the capture is of both streams.
             var console = new StringWriter();

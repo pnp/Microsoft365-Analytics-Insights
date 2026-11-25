@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
@@ -42,6 +43,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly IGraphImportSectionFactory _sectionFactory;
 
         private readonly IClock _clock;
+        private readonly CancellationToken _shutdownToken;
 
         // What each daily report of the usage-report phase did, and what became of the weekly one: for the phase's one summary line.
         private readonly System.Collections.Concurrent.ConcurrentQueue<DailyReportOutcome> _dailyReportOutcomes = new System.Collections.Concurrent.ConcurrentQueue<DailyReportOutcome>();
@@ -76,8 +78,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         public GraphImporter(AnalyticsLogger logger, IUserImportScopeProvider userScopeProvider, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore, IImportLastRunStore lastRunStore, ISentEmailMailboxSkipList sentEmailMailboxSkipList, IClock clock, IReportCompletionStore reportCompletionStore)
+            : this(logger, userScopeProvider, graphAppIndentityOAuthContext, graphClient, settings, activityReportsLastImportedStore,
+                lastRunStore, sentEmailMailboxSkipList, clock, reportCompletionStore, CancellationToken.None)
+        {
+        }
+
+        public GraphImporter(AnalyticsLogger logger, IUserImportScopeProvider userScopeProvider, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext, GraphServiceClient graphClient, AppConfig settings, ISingleDateStore activityReportsLastImportedStore, IImportLastRunStore lastRunStore, ISentEmailMailboxSkipList sentEmailMailboxSkipList, IClock clock, IReportCompletionStore reportCompletionStore, CancellationToken shutdownToken)
             : base(logger, settings)
         {
+            _shutdownToken = shutdownToken;
             _clock = clock ?? SystemClock.Instance;
             _graphClient = graphClient;
             _activityReportsLastImportedStore = activityReportsLastImportedStore;
@@ -98,7 +107,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 DefaultAnalyticsDbContextFactory.Instance,
                 _clock,
                 _lastRunStore,
-                userScopeProvider);
+                userScopeProvider, shutdownToken);
         }
 
         /// <summary>
@@ -115,9 +124,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <c>InternalsVisibleTo("Tests.UnitTests")</c> makes it reachable from the test project, which
         /// is its only intended caller; production composes through the constructor above.
         /// </summary>
-        internal GraphImporter(AnalyticsLogger logger, AppConfig settings, IGraphImportSectionFactory sectionFactory, IImportLastRunStore lastRunStore, IClock clock)
+        internal GraphImporter(AnalyticsLogger logger, AppConfig settings, IGraphImportSectionFactory sectionFactory, IImportLastRunStore lastRunStore, IClock clock, CancellationToken shutdownToken = default)
             : base(logger, settings)
         {
+            _shutdownToken = shutdownToken;
             _clock = clock ?? SystemClock.Instance;
             _sectionFactory = sectionFactory ?? throw new ArgumentNullException(nameof(sectionFactory));
             _lastRunStore = lastRunStore ?? new InMemoryImportLastRunStore();
@@ -181,7 +191,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             bool succeeded;
             try
             {
+                _shutdownToken.ThrowIfCancellationRequested();
                 succeeded = await sectionWork();
+                _shutdownToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (_shutdownToken.IsCancellationRequested)
+            {
+                stage.Skipped("HostShutdown");
+                throw;
             }
             catch (Exception ex)
             {
@@ -245,7 +262,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             bool ran;
             try
             {
+                _shutdownToken.ThrowIfCancellationRequested();
                 ran = await section.RunAsync();
+                _shutdownToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (_shutdownToken.IsCancellationRequested)
+            {
+                stage.Skipped("HostShutdown");
+                throw;
             }
             catch (Exception ex)
             {
@@ -314,6 +338,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             foreach (var section in sections)
             {
+                _shutdownToken.ThrowIfCancellationRequested();
                 if (section.IsDeferred != deferredPass)
                 {
                     continue;

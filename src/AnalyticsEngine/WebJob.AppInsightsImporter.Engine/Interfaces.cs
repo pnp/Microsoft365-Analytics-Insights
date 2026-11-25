@@ -2,6 +2,7 @@ using Common.Entities.Config;
 using DataUtils;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
@@ -26,6 +27,14 @@ namespace WebJob.AppInsightsImporter.Engine
 
         /// <summary>Every imported custom event in <paramref name="window"/>, in timestamp order.</summary>
         Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses);
+    }
+
+    /// <summary>The WebJob source accepts a token for each request. Keep the original source port usable by existing callers.</summary>
+    public interface ICancellableAppInsightsSourceLoader : IAppInsightsSourceLoader
+    {
+        Task<IReadOnlyList<AppInsightsHourlyRowCount>> GetHourlyRowCountsAsync(AppInsightsReadWindow range, CancellationToken cancellationToken);
+        Task<PageViewCollection> GetPageViewsAsync(AppInsightsReadWindow window, bool saveRestResponses, CancellationToken cancellationToken);
+        Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses, CancellationToken cancellationToken);
     }
 
     /// <summary>

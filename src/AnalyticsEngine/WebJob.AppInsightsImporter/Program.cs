@@ -171,7 +171,8 @@ namespace WebJob.AppInsightsImporter
                             var stage = stages.Begin(logger, "AppInsightsImport");
                             try
                             {
-                                cycleResult = importer.ImportAndSave(saveRestResponses, readDaysBefore).GetAwaiter().GetResult();
+                                cycleResult = importer.ImportAndSave(saveRestResponses, readDaysBefore, HostRuntime.ShutdownToken).GetAwaiter().GetResult();
+                                HostRuntime.ThrowIfShutdownRequested();
                                 if (cycleResult.Outcome == Engine.AppInsightsCycleOutcome.Failed)
                                 {
                                     stage.Failed(reason: string.Join(",", cycleResult.Reasons));
@@ -180,6 +181,11 @@ namespace WebJob.AppInsightsImporter
                                 {
                                     stage.Succeeded();
                                 }
+                            }
+                            catch (OperationCanceledException) when (HostRuntime.ShutdownRequested)
+                            {
+                                stage.Skipped("HostShutdown");
+                                throw new ShutdownRequestedException();
                             }
                             catch (Exception ex)
                             {
@@ -269,7 +275,8 @@ namespace WebJob.AppInsightsImporter
             if (HostRuntime.ShutdownRequested) return false;
             var reachable = oneShot
                 ? settings.ConnectionStrings.TestWebTrafficSqlOnceAsync(logger, HostRuntime.ShutdownToken).GetAwaiter().GetResult()
-                : StartupSqlCheck.WaitUntilReachable(() => settings.ConnectionStrings.TestSQLSettings(logger), logger, ImporterHeartbeat.WebTrafficJob);
+                : StartupSqlCheck.WaitUntilReachable(ct => settings.ConnectionStrings.TestWebTrafficSqlOnceAsync(logger, ct), logger,
+                    ImporterHeartbeat.WebTrafficJob, HostRuntime.ShutdownToken);
             if (!reachable)
             {
                 return false;

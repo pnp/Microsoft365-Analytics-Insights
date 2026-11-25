@@ -19,7 +19,7 @@ namespace WebJob.AppInsightsImporter.Engine
     /// <summary>
     /// HTTP client for App Insights calls, authenticated via Entra ID (OAuth).
     /// </summary>
-    public class AppInsightsAPIClient : IAppInsightsSourceLoader, IDisposable
+    public class AppInsightsAPIClient : ICancellableAppInsightsSourceLoader, IDisposable
     {
         private readonly ILogger _logger;
         private readonly string _appInsightsId;
@@ -48,7 +48,7 @@ namespace WebJob.AppInsightsImporter.Engine
         /// time - which measures scheduling, GC and deserialisation as well, and is therefore both flaky
         /// under load and capable of passing after a no-back-off regression. See issue #374.
         /// </summary>
-        internal Func<TimeSpan, Task> RetryDelay { get; set; } = Task.Delay;
+        internal Func<TimeSpan, CancellationToken, Task> RetryDelay { get; set; } = Task.Delay;
 
         /// <summary>Where the <c>-logApiResponses</c> debug switch writes its dumps, one folder per query type.</summary>
         internal string DebugDumpDirectory { get; set; } = Path.Combine(Path.GetTempPath(), "AppInsightsImporter", "REST");
@@ -125,19 +125,19 @@ namespace WebJob.AppInsightsImporter.Engine
             return null;
         }
 
-        private async Task SetBearerToken()
+        private async Task SetBearerToken(CancellationToken cancellationToken)
         {
             // https://learn.microsoft.com/en-us/azure/azure-monitor/app/azure-ad-authentication?tabs=net
             // Only refresh the token when it is missing or within 5 minutes of expiry to
             // avoid redundant Entra ID calls on every HTTP request.
             // Guarded by semaphore because parallel API calls share this client instance.
-            await _tokenLock.WaitAsync();
+            await _tokenLock.WaitAsync(cancellationToken);
             try
             {
                 if (!_cachedToken.HasValue || _cachedToken.Value.ExpiresOn <= DateTimeOffset.UtcNow.AddMinutes(5))
                 {
                     var tokenRequestContext = new TokenRequestContext(AppInsightsScope);
-                    _cachedToken = await _credential.GetTokenAsync(tokenRequestContext, CancellationToken.None);
+                    _cachedToken = await _credential.GetTokenAsync(tokenRequestContext, cancellationToken);
                     client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _cachedToken.Value.Token);
                     _logger.LogInformation("Refreshed App Insights bearer token.");
                 }
@@ -151,38 +151,38 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <summary>
         /// Executes an HTTP GET with retry logic for transient failures (429, 5xx, network errors).
         /// </summary>
-        async Task<HttpResponseMessage> GetWithRetry(string url)
+        async Task<HttpResponseMessage> GetWithRetry(string url, CancellationToken cancellationToken)
         {
             for (int attempt = 0; ; attempt++)
             {
-                HttpResponseMessage response = null;
+                cancellationToken.ThrowIfCancellationRequested();
+                int backoff;
                 try
                 {
-                    response = await client.GetAsync(url);
-
-                    if (response.IsSuccessStatusCode)
+                    var response = await client.GetAsync(url, cancellationToken);
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        response.Dispose();
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+                    if (response.IsSuccessStatusCode || !IsTransientStatusCode(response.StatusCode) || attempt >= MaxRetries)
                     {
                         return response;
                     }
-
-                    if (!IsTransientStatusCode(response.StatusCode) || attempt >= MaxRetries)
+                    using (response)
                     {
-                        return response;
+                        backoff = GetRetryAfterSeconds(response) ?? BackoffSecondsFor(attempt);
+                        _logger.LogWarning($"Transient HTTP {(int)response.StatusCode} from App Insights API. Retrying in {backoff}s (attempt {attempt + 1}/{MaxRetries})...");
                     }
-
-                    var retryAfterSeconds = GetRetryAfterSeconds(response);
-                    var backoff = retryAfterSeconds ?? BackoffSecondsFor(attempt);
-                    _logger.LogWarning($"Transient HTTP {(int)response.StatusCode} from App Insights API. Retrying in {backoff}s (attempt {attempt + 1}/{MaxRetries})...");
-
-                    response.Dispose();
-                    await RetryDelay(TimeSpan.FromSeconds(backoff));
                 }
-                catch (Exception ex) when (IsTransientException(ex) && attempt < MaxRetries)
+                catch (Exception ex) when (IsTransientException(ex))
                 {
-                    var backoff = BackoffSecondsFor(attempt);
+                    cancellationToken.ThrowIfCancellationRequested(); // Not an HttpClient timeout.
+                    if (attempt >= MaxRetries) throw;
+                    backoff = BackoffSecondsFor(attempt);
                     _logger.LogWarning($"Transient error calling App Insights API: {ex.Message}. Retrying in {backoff}s (attempt {attempt + 1}/{MaxRetries})...");
-                    await RetryDelay(TimeSpan.FromSeconds(backoff));
                 }
+                await RetryDelay(TimeSpan.FromSeconds(backoff), cancellationToken);
             }
         }
 
@@ -220,10 +220,13 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <see cref="IAppInsightsSourceLoader"/>: page views and imported custom events per UTC hour of their timestamp.
         /// One aggregate query - a few hundred rows at most - so it is never close to the API's limits.
         /// </summary>
-        public async Task<IReadOnlyList<AppInsightsHourlyRowCount>> GetHourlyRowCountsAsync(AppInsightsReadWindow range)
+        public Task<IReadOnlyList<AppInsightsHourlyRowCount>> GetHourlyRowCountsAsync(AppInsightsReadWindow range) =>
+            GetHourlyRowCountsAsync(range, CancellationToken.None);
+
+        public async Task<IReadOnlyList<AppInsightsHourlyRowCount>> GetHourlyRowCountsAsync(AppInsightsReadWindow range, CancellationToken cancellationToken)
         {
             if (range == null) throw new ArgumentNullException(nameof(range));
-            var table = await QueryCompleteResultAsync(BuildHourlyCountsQuery(range), false, "hourlycounts");
+            var table = await QueryCompleteResultAsync(BuildHourlyCountsQuery(range), false, "hourlycounts", cancellationToken);
             if (table == null)
             {
                 throw new InvalidDataException("Application Insights returned a partial result for the hourly row counts. The import is halted to avoid losing data.");
@@ -259,16 +262,22 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         /// <summary><see cref="IAppInsightsSourceLoader"/>: every page view in <paramref name="window"/>.</summary>
-        public async Task<PageViewCollection> GetPageViewsAsync(AppInsightsReadWindow window, bool saveRestResponses)
+        public Task<PageViewCollection> GetPageViewsAsync(AppInsightsReadWindow window, bool saveRestResponses) =>
+            GetPageViewsAsync(window, saveRestResponses, CancellationToken.None);
+
+        public async Task<PageViewCollection> GetPageViewsAsync(AppInsightsReadWindow window, bool saveRestResponses, CancellationToken cancellationToken)
         {
-            var table = await QueryWindowAsync(BuildPageViewsQuery, window, saveRestResponses, PageViewKind);
+            var table = await QueryWindowAsync(BuildPageViewsQuery, window, saveRestResponses, PageViewKind, cancellationToken);
             return new PageViewCollection(table, window.FromUtc, this._logger);
         }
 
         /// <summary><see cref="IAppInsightsSourceLoader"/>: every imported custom event in <paramref name="window"/>.</summary>
-        public async Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses)
+        public Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses) =>
+            GetCustomEventsAsync(window, saveRestResponses, CancellationToken.None);
+
+        public async Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses, CancellationToken cancellationToken)
         {
-            var table = await QueryWindowAsync(BuildCustomEventsQuery, window, saveRestResponses, EventKind);
+            var table = await QueryWindowAsync(BuildCustomEventsQuery, window, saveRestResponses, EventKind, cancellationToken);
             return new CustomEventsResultCollection(table, window.FromUtc, _logger);
         }
 
@@ -355,11 +364,11 @@ namespace WebJob.AppInsightsImporter.Engine
         /// joined, so what is held at once is bounded by the planned window, not the day.
         /// </summary>
         private async Task<AppInsightsTable> QueryWindowAsync(Func<AppInsightsReadWindow, string> queryForWindow, AppInsightsReadWindow window,
-            bool saveRestResponses, string operationType)
+            bool saveRestResponses, string operationType, CancellationToken cancellationToken)
         {
             if (window == null) throw new ArgumentNullException(nameof(window));
             var completeWindows = new List<AppInsightsTable>();
-            await AddCompleteWindowsAsync(queryForWindow, window, saveRestResponses, operationType, completeWindows);
+            await AddCompleteWindowsAsync(queryForWindow, window, saveRestResponses, operationType, completeWindows, cancellationToken);
             if (completeWindows.Count > 1)
             {
                 _logger.LogInformation($"Read the {operationType}s for {window} in {completeWindows.Count} pieces, as the window is over the Application Insights query limits.");
@@ -375,9 +384,9 @@ namespace WebJob.AppInsightsImporter.Engine
         /// result even there fails the import of the day rather than saving part of it.
         /// </summary>
         private async Task AddCompleteWindowsAsync(Func<AppInsightsReadWindow, string> queryForWindow, AppInsightsReadWindow window,
-            bool saveRestResponses, string operationType, List<AppInsightsTable> completeWindows)
+            bool saveRestResponses, string operationType, List<AppInsightsTable> completeWindows, CancellationToken cancellationToken)
         {
-            var table = await QueryCompleteResultAsync(queryForWindow(window), saveRestResponses, operationType);
+            var table = await QueryCompleteResultAsync(queryForWindow(window), saveRestResponses, operationType, cancellationToken);
             if (table != null)
             {
                 completeWindows.Add(table);
@@ -392,8 +401,8 @@ namespace WebJob.AppInsightsImporter.Engine
 
             _logger.LogWarning($"Application Insights returned partial {operationType} results for {window} " +
                 "(the query reached its row or size limit). Querying each half of that window instead.");
-            await AddCompleteWindowsAsync(queryForWindow, window.WithTimestamps(window.FromUtc, midpointUtc), saveRestResponses, operationType, completeWindows);
-            await AddCompleteWindowsAsync(queryForWindow, window.WithTimestamps(midpointUtc, window.ToUtc), saveRestResponses, operationType, completeWindows);
+            await AddCompleteWindowsAsync(queryForWindow, window.WithTimestamps(window.FromUtc, midpointUtc), saveRestResponses, operationType, completeWindows, cancellationToken);
+            await AddCompleteWindowsAsync(queryForWindow, window.WithTimestamps(midpointUtc, window.ToUtc), saveRestResponses, operationType, completeWindows, cancellationToken);
         }
 
         /// <summary>
@@ -401,16 +410,17 @@ namespace WebJob.AppInsightsImporter.Engine
         /// nothing of a partial result means none of its truncated rows - up to the API's ~104 MB - stay referenced
         /// while the smaller windows are queried. Any other error throws: a smaller window does not help those.
         /// </summary>
-        private async Task<AppInsightsTable> QueryCompleteResultAsync(string adxQuery, bool saveRestResponses, string operationType)
+        private async Task<AppInsightsTable> QueryCompleteResultAsync(string adxQuery, bool saveRestResponses, string operationType, CancellationToken cancellationToken)
         {
             // Per request rather than per day: splitting a large day can take long enough for the token to need refreshing.
-            await SetBearerToken();
+            await SetBearerToken(cancellationToken);
 
             // API Doc: https://docs.microsoft.com/en-us/rest/api/application-insights/query/get
             var req = $"https://api.applicationinsights.io/v1/apps/{_appInsightsId}/query?query={Uri.EscapeDataString(adxQuery)}";
-            using (var response = await GetWithRetry(req))
+            using (var response = await GetWithRetry(req, cancellationToken))
             {
                 var result = await HandleResponse<AppInsightsQueryResult>(response, saveRestResponses, operationType);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (result == null)
                 {
                     throw new InvalidDataException("App Insights returned an empty query response.");

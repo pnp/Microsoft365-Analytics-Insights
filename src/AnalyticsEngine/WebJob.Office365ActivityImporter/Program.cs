@@ -255,7 +255,8 @@ namespace WebJob.Office365ActivityImporter
 
             // Test SQL: a failure is logged at Critical and retried with a back-off, not left to crash the process
             // (Kudu would restart it straight into the same failure).
-            if (!StartupSqlCheck.WaitUntilReachable(() => configuredSettings.ConnectionStrings.TestAuditSQLSettings(logger), logger, ImporterHeartbeat.ActivityJob))
+            if (!StartupSqlCheck.WaitUntilReachable(ct => configuredSettings.ConnectionStrings.TestAuditSqlOnceAsync(logger, ct), logger,
+                ImporterHeartbeat.ActivityJob, HostRuntime.ShutdownToken))
             {
                 await ShutdownMessageTracingAsync(messageTraceUploader);
                 ConsoleApp.BombOut(false);
@@ -433,7 +434,7 @@ namespace WebJob.Office365ActivityImporter
                     // started in the background at the end of the cycle (issue #706).
                     await tasks.GetGraphTeamsAndUserData();
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!(ex is ShutdownRequestedException))
                 {
                     logger.LogCritical($"Got exception on {nameof(ProgramTasks.GetGraphTeamsAndUserData)}: {CommonExceptionHandler.GetErrorText(ex)}", ex);
 #if DEBUG
@@ -443,6 +444,7 @@ namespace WebJob.Office365ActivityImporter
 
                 // And again after the Graph import, which can run for a long time on a large tenant (and holds the
                 // users-and-licences lock throughout its user import), so requests made meanwhile are not held a full cycle.
+                HostRuntime.ThrowIfShutdownRequested();
                 if (userRefreshWorker != null) await userRefreshWorker.DrainAsync();
 
                 // Activity import (Office 365 Management Activity API). Runs when any workload needs

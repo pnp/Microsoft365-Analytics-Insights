@@ -14,6 +14,7 @@ using Microsoft.Graph.Models.ODataErrors;
 using Microsoft.Kiota.Abstractions;
 using System;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
@@ -107,7 +108,7 @@ namespace WebJob.Office365ActivityImporter
             _logger.LogInformation("Starting Teams & Graph import.");
 
             var completed = await RunGraphStageAsync("GraphMainPass", StageSlot.Cycle, graphReader => graphReader.GetAndSaveNonDeferredGraphData(_settings),
-                "ERROR: Can't access Teams user data - are application permissions configured correctly?");
+                "ERROR: Can't access Teams user data - are application permissions configured correctly?", HostRuntime.ShutdownToken);
 
             if (completed)
             {
@@ -137,14 +138,22 @@ namespace WebJob.Office365ActivityImporter
         }
 
         /// <summary>A Graph pass as a stage: a 403 (not completed, already logged as a warning) is recorded as a failed stage.</summary>
-        private async Task<bool> RunGraphStageAsync(string stageName, StageSlot slot, Func<GraphImporter, Task> pass, string forbiddenWarning)
+        private async Task<bool> RunGraphStageAsync(string stageName, StageSlot slot, Func<GraphImporter, Task> pass, string forbiddenWarning,
+            CancellationToken shutdownToken = default)
         {
             var stage = StageTracker.Process.Begin(_logger, stageName, slot);
             try
             {
-                var completed = await RunGraphImportPass(pass, forbiddenWarning);
+                shutdownToken.ThrowIfCancellationRequested();
+                var completed = await RunGraphImportPass(pass, forbiddenWarning, shutdownToken);
+                shutdownToken.ThrowIfCancellationRequested();
                 if (completed) stage.Succeeded(); else stage.Failed(reason: "GraphForbidden");
                 return completed;
+            }
+            catch (OperationCanceledException) when (shutdownToken.IsCancellationRequested)
+            {
+                stage.Skipped("HostShutdown");
+                throw new ShutdownRequestedException();
             }
             catch (Exception ex)
             {
@@ -157,11 +166,12 @@ namespace WebJob.Office365ActivityImporter
         /// Runs one <see cref="GraphImporter"/> pass with a fresh importer, as each pass always has.
         /// </summary>
         /// <returns>False when Graph refused access (403), which is logged as a warning rather than thrown.</returns>
-        private async Task<bool> RunGraphImportPass(Func<GraphImporter, Task> pass, string forbiddenWarning)
+        private async Task<bool> RunGraphImportPass(Func<GraphImporter, Task> pass, string forbiddenWarning, CancellationToken shutdownToken)
         {
             await InitAuth();
 
-            var graphReader = new GraphImporter(_logger, _userScopeProvider, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList, clock: null, reportCompletionStore: _reportCompletionStore);
+            var graphReader = new GraphImporter(_logger, _userScopeProvider, _graphAppIndentityOAuthContext, _graphClient, _settings, _activityReportsLastImportedStore, _graphLastRunStore, _sentEmailMailboxSkipList, clock: null, reportCompletionStore: _reportCompletionStore,
+                shutdownToken: shutdownToken);
 
             try
             {
