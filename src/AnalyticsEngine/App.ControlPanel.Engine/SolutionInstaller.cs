@@ -187,9 +187,9 @@ namespace App.ControlPanel.Engine
                 }
                 catch (Exception ex)
                 {
-                    log.LogError("WebJobsCleanup: outcome=Failed exceptionType={ExceptionType}; could not confirm WEBJOBS_STOPPED was removed. " +
+                    log.LogError("WebJobsCleanup: outcome=Failed exceptionType={ExceptionType}; {Failure} " +
                         "Remove WEBJOBS_STOPPED and AnalyticsUpgradeWebJobsPreviousState from App Service application settings manually, then check both continuous WebJobs.",
-                        ex.GetType().Name);
+                        ex.GetType().Name, ConfigureAzureComponentsTasks.DescribeWebJobsCleanupFailure(ex));
                 }
                 PrintFinalStatus(summary, cancelled);
             }

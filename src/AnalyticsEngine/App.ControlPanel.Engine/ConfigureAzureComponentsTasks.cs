@@ -901,23 +901,41 @@ namespace App.ControlPanel.Engine
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
                 token.ThrowIfCancellationRequested();
-                // SDK exceptions can contain the response body. The installer logs inner exceptions too.
-                var reason = ex.GetType().Name;
-                var readAdvice = "Verify that Azure can return the complete collection and retry.";
-                if (ex is RequestFailedException azureError)
-                {
-                    reason = $"HTTP {azureError.Status}";
-                    // Distinguish a policy or lock from missing permissions. Never echo an arbitrary service field.
-                    if (azureError.ErrorCode == "RequestDisallowedByPolicy" || azureError.ErrorCode == "ScopeLocked")
-                        reason += $", {azureError.ErrorCode}";
-                    else if (azureError.Status == 401 || azureError.Status == 403)
-                        readAdvice = "Check the installer's access and retry.";
-                }
-                if (kind == ConfigurationStep.Update)
-                    throw new InvalidOperationException($"Could not update the App Service {section} ({reason}).");
-                var beforeWrites = kind == ConfigurationStep.PreflightRead ? " No replacement was sent." : "";
-                throw new InvalidOperationException($"Could not read the existing App Service {section} ({reason}).{beforeWrites} {readAdvice}");
+                if (ex is RequestFailedException response && response.Status >= 100 && response.Status <= 599)
+                    throw ConfigurationHttpException.ForStep(section, kind, response);
+                throw new InvalidOperationException(ConfigurationFailureMessage(section, kind, ex.GetType().Name));
             }
+        }
+
+        private static string ConfigurationFailureMessage(string section, ConfigurationStep kind, string reason, bool checkAccess = false)
+        {
+            if (kind == ConfigurationStep.Update)
+                return $"Could not update the App Service {section} ({reason}).";
+            var beforeWrites = kind == ConfigurationStep.PreflightRead ? " No replacement was sent." : "";
+            var advice = checkAccess ? "Check the installer's access and retry." : "Verify that Azure can return the complete collection and retry.";
+            return $"Could not read the existing App Service {section} ({reason}).{beforeWrites} {advice}";
+        }
+
+        // Only this exception has a message safe for the final cleanup log. Do not retain the SDK exception:
+        // its message and inner exceptions can contain response bodies and operator settings.
+        private sealed class ConfigurationHttpException : InvalidOperationException
+        {
+            private ConfigurationHttpException(string message) : base(message) { }
+
+            public static ConfigurationHttpException ForStep(string section, ConfigurationStep kind, RequestFailedException response)
+            {
+                var code = response.ErrorCode;
+                var lockOrPolicy = code == "ScopeLocked" || code == "RequestDisallowedByPolicy";
+                var reason = $"HTTP {response.Status}" + (lockOrPolicy ? $", {code}" : "");
+                var checkAccess = !lockOrPolicy && (response.Status == 401 || response.Status == 403);
+                return new ConfigurationHttpException(ConfigurationFailureMessage(section, kind, reason, checkAccess));
+            }
+        }
+
+        internal static string DescribeWebJobsCleanupFailure(Exception error)
+        {
+            const string unconfirmed = "could not confirm WEBJOBS_STOPPED was removed.";
+            return error is ConfigurationHttpException response ? $"{unconfirmed} {response.Message}" : unconfirmed;
         }
 
         internal const string CopilotCostConnectionSetupMessage =

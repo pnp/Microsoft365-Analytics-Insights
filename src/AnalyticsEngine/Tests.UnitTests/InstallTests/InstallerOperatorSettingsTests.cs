@@ -331,9 +331,16 @@ namespace Tests.UnitTests.InstallTests
         private sealed class FixtureSolutionInstaller : SolutionInstaller
         {
             private readonly SubscriptionResource _subscription;
-            public FixtureSolutionInstaller(SolutionInstallConfig config, ILogger logger, SubscriptionResource subscription)
-                : base(config, logger, null, null, "Contoso", null) { _subscription = subscription; }
+            private readonly WebSiteResource _cleanupSite;
+            public FixtureSolutionInstaller(SolutionInstallConfig config, ILogger logger, SubscriptionResource subscription, WebSiteResource cleanupSite = null)
+                : base(config, logger, null, null, "Contoso", null)
+            {
+                _subscription = subscription;
+                _cleanupSite = cleanupSite;
+            }
             internal override SubscriptionResource ConnectToSubscription(CancellationToken ct) => _subscription;
+            internal override Task CheckWebJobsAfterInstallAsync(WebSiteResource webApp, ILogger logger) =>
+                base.CheckWebJobsAfterInstallAsync(_cleanupSite ?? webApp, logger);
         }
 
         [DataTestMethod]
@@ -368,7 +375,7 @@ namespace Tests.UnitTests.InstallTests
                 }
 
                 var logger = new CapturingLogger();
-                var error = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => ConfigureWebAppAsync(arm, logger: logger));
+                var error = await Assert.ThrowsAsync<InvalidOperationException>(() => ConfigureWebAppAsync(arm, logger: logger));
                 CollectionAssert.AreEqual(collection == AppSettings ? new[] { "POST " + list } :
                     new[] { "POST " + AppSettings + "/list", "POST " + list }, ConfigurationRequests(arm));
                 StringAssert.Contains(error.Message, "No replacement was sent");
@@ -447,7 +454,7 @@ namespace Tests.UnitTests.InstallTests
                     ? FakeArm.Json((HttpStatusCode)status, new JObject { ["error"] = new JObject { ["code"] = code, ["message"] = privateValue } })
                     : null;
 
-                var error = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => ConfigureWebAppAsync(arm));
+                var error = await Assert.ThrowsAsync<InvalidOperationException>(() => ConfigureWebAppAsync(arm));
                 Assert.AreEqual("PUT " + collection, ConfigurationRequests(arm).Last());
                 StringAssert.Contains(error.Message, "Could not update");
                 StringAssert.Contains(error.Message, $"HTTP {status}");
@@ -478,7 +485,7 @@ namespace Tests.UnitTests.InstallTests
                     ? FakeArm.Json(HttpStatusCode.Conflict, new JObject { ["error"] = new JObject
                         { ["code"] = "ScopeLocked", ["message"] = "Contoso private detail" } }) : null;
 
-                var error = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => ConfigureWebAppAsync(arm, logger: logger));
+                var error = await Assert.ThrowsAsync<InvalidOperationException>(() => ConfigureWebAppAsync(arm, logger: logger));
                 CollectionAssert.AreEqual(new[] { "POST " + AppSettings + "/list", "POST " + ConnectionStrings + "/list",
                     "PATCH " + Site }, ConfigurationRequests(arm), string.Join(", ", ConfigurationRequests(arm)));
                 StringAssert.Contains(error.Message, "ScopeLocked");
@@ -571,6 +578,43 @@ namespace Tests.UnitTests.InstallTests
                     "An incomplete verification must retry, not report running while the WebJobs are still paused.");
                 Assert.AreEqual(4, reads);
                 Assert.IsTrue(logger.Lines.Any(l => l.Message.Contains("outcome=Verified")));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(true, 409, "ScopeLocked")]
+        [DataRow(false, 403, "RequestDisallowedByPolicy")]
+        [DataRow(true, 403, "Contoso-private-code")]
+        public async Task AppService_FinalCleanupReportsTheFailedArmOperationWithoutPrivateDetails(bool rejectWrite, int status, string code)
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.2");
+                var settings = arm.Resource(AppSettings)["properties"];
+                settings["WEBJOBS_STOPPED"] = "1";
+                settings["ContosoOperator"] = "Contoso-private-setting";
+                var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
+                var deniedMethod = rejectWrite ? "PUT" : "POST";
+                var deniedPath = rejectWrite ? AppSettings : AppSettings + "/list";
+                arm.OverrideResponse = (method, path) => method == deniedMethod && path == deniedPath
+                    ? FakeArm.Json((HttpStatusCode)status, new JObject { ["error"] = new JObject
+                        { ["code"] = code, ["message"] = "Contoso-private-body", ["target"] = "Contoso-private-target" } }) : null;
+                var logger = new CapturingLogger();
+                var config = BackendConfig("contoso-web", "contoso-web");
+
+                // Skip provisioning; the real final check must still run against the supplied site after Cancel.
+                await new FixtureSolutionInstaller(config, logger, arm.Subscription, site).InstallOrUpdate(new CancellationToken(true));
+
+                Assert.AreEqual(3, arm.Requests.Count(r => r.Method == "POST" && r.Path == AppSettings + "/list"));
+                Assert.AreEqual(rejectWrite ? 3 : 0, arm.Requests.Count(r => r.Method == "PUT" && r.Path == AppSettings));
+                var terminal = logger.Lines.Single(l => l.Level == LogLevel.Error && l.Message.StartsWith("WebJobsCleanup: outcome=Failed")).Message;
+                StringAssert.Contains(terminal, $"HTTP {status}");
+                StringAssert.Contains(terminal, rejectWrite ? "update" : "read");
+                if (code == "ScopeLocked" || code == "RequestDisallowedByPolicy") StringAssert.Contains(terminal, code);
+                StringAssert.Contains(terminal, "manually");
+                Assert.IsTrue(logger.Lines.Any(l => l.Level == LogLevel.Information && l.Message.Contains(terminal)), "The final summary must retain the diagnosis.");
+                Assert.IsFalse(logger.Lines.Any(l => l.Message.Contains("Contoso-private") || l.Message.Contains("outcome=Verified")
+                    || l.Message.Contains("No replacement was sent")));
             }
         }
 

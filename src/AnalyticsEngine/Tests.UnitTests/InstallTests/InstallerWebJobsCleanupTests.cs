@@ -139,7 +139,12 @@ namespace Tests.UnitTests.InstallTests
                 Assert.AreEqual(cleanupFails, lines.Any(line => line.Contains("WebJobsCleanup: outcome=Failed")));
                 Assert.IsTrue(lines.Any(line => line.Contains("Synthetic install failure.")), "Cleanup must preserve the original error.");
                 if (cleanupFails)
+                {
                     StringAssert.Contains(lines[summaryIndex], "2 error(s)");
+                    Assert.IsTrue(lines.Any(line => line.Contains("WebJobsCleanup: outcome=Failed") && line.Contains("exceptionType=InvalidOperationException")));
+                    Assert.IsFalse(lines.Any(line => line.Contains("Synthetic cleanup") || line.Contains("Synthetic inner detail")),
+                        "Neither the final log nor its summary may echo arbitrary exception messages.");
+                }
             }
         }
 
@@ -176,7 +181,7 @@ namespace Tests.UnitTests.InstallTests
             {
                 CleanupCalls++;
                 logger.LogInformation("Synthetic final cleanup.");
-                if (_cleanupFails) throw new InvalidOperationException("Synthetic cleanup failure.");
+                if (_cleanupFails) throw new InvalidOperationException("Synthetic cleanup failure.", new Exception("Synthetic inner detail."));
                 return Task.CompletedTask;
             }
         }
