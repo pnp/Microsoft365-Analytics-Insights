@@ -1,7 +1,6 @@
 ﻿using Azure;
 using Azure.Core;
 using Azure.Identity;
-using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Authorization;
 using Azure.ResourceManager.Authorization.Models;
 using Azure.ResourceManager.KeyVault;
@@ -413,7 +412,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var webAppName = _config.GetConfigValue(CONFIG_KEY_WEB_APP_NAME);
             var tenantId = TenantGuidFromConfig();
 
-            var webAppWithManagedIdentity = Container.GetWebSites().GetAll(cancellationToken: CancellationToken).Where(s => s.Data.Name == webAppName).SingleOrDefault();
+            var webAppWithManagedIdentity = AppServiceResourceLookup.FindSite(Container, webAppName, CancellationToken);
             if (webAppWithManagedIdentity == null)
                 throw new InstallException($"Can't find web-app with name '{webAppName}'");
 

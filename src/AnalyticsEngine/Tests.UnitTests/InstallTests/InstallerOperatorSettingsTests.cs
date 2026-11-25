@@ -6,6 +6,7 @@ using Azure.Core;
 using Azure.Core.Pipeline;
 using Azure.ResourceManager;
 using Azure.ResourceManager.AppService;
+using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.KeyVault.Models;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.ServiceBus;
@@ -51,6 +52,9 @@ namespace Tests.UnitTests.InstallTests
         private const string AppSettings = Site + "/config/appsettings";
         private const string ConnectionStrings = Site + "/config/connectionstrings";
         private const string FtpPolicy = Site + "/basicPublishingCredentialsPolicies/ftp";
+        private const string Vault = Rg + "/providers/Microsoft.KeyVault/vaults/contoso-vault";
+        private const string VaultTenant = "00000000-0000-0000-0000-000000000001";
+        private const string WebAppPrincipal = "00000000-0000-0000-0000-000000000002";
         private const string SqlServer = Rg + "/providers/Microsoft.Sql/servers/contoso-sql";
         private const string Storage = Rg + "/providers/Microsoft.Storage/storageAccounts/contosoanalytics";
 
@@ -814,6 +818,97 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual(KeyVaultNetworkRuleBypassOption.None, ruleSet.Bypass, "Trusted-services bypass must not be switched back on.");
             Assert.AreEqual(KeyVaultNetworkRuleBypassOption.AzureServices,
                 KeyVaultFirewallConfigTask.BuildFirewallRuleSet(null, null, null).Bypass, "A new vault still allows trusted services.");
+        }
+
+        [DataTestMethod]
+        [DataRow("contoso-web", true)]
+        [DataRow("CoNtOsO-WeB", true)]
+        [DataRow("contoso-other", false)]
+        public async Task KeyVault_RegisteredWebAppPolicyUsesOnlyTheConfiguredSiteIdentity(string webAppName, bool found)
+        {
+            using (var arm = new FakeArm())
+            {
+                var (task, vault) = await RegisteredVaultTask<KeyVaultAddWebAppPermissionsTask>(arm, webAppName, NullLogger.Instance);
+                if (!found)
+                {
+                    var error = await Assert.ThrowsAsync<InstallException>(() => task.ExecuteTask(vault));
+                    StringAssert.Contains(error.Message, "Can't find web-app");
+                    Assert.AreEqual(0, arm.Mutations.Count);
+                    return;
+                }
+
+                await task.ExecuteTask(vault);
+
+                var write = arm.Mutations.Single();
+                Assert.AreEqual("PUT", write.Method);
+                Assert.AreEqual(Vault + "/accessPolicies/add", write.Path, true);
+                var policy = write.Body.SelectToken("properties.accessPolicies").Single();
+                Assert.AreEqual(VaultTenant, (string)policy["tenantId"]);
+                Assert.AreEqual(WebAppPrincipal, (string)policy["objectId"]);
+                var grants = ((JObject)policy["permissions"]).Properties()
+                    .SelectMany(p => p.Value.Values<string>().Select(v => p.Name + ":" + v.ToLowerInvariant())).ToArray();
+                CollectionAssert.AreEquivalent(new[] { "secrets:get", "certificates:get" }, grants);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("contoso-web", true)]
+        [DataRow("CoNtOsO-WeB", true)]
+        [DataRow("contoso-other", false)]
+        public async Task KeyVault_RegisteredFirewallUsesOnlyTheConfiguredSiteOutboundIps(string webAppName, bool found)
+        {
+            using (var arm = new FakeArm())
+            {
+                var logger = new CapturingLogger();
+                var (task, vault) = await RegisteredVaultTask<KeyVaultFirewallConfigTask>(arm, webAppName, logger);
+                task.ResolveInstallerIpAsync = (name, log, token) => Task.FromResult("192.0.2.20");
+
+                await task.ExecuteTask(vault);
+
+                var write = arm.Mutations.Single();
+                Assert.AreEqual("PATCH", write.Method);
+                Assert.AreEqual(Vault, write.Path, true);
+                var rules = write.Body.SelectToken("properties.networkAcls");
+                Assert.AreEqual("Deny", (string)rules["defaultAction"]);
+                Assert.AreEqual("None", (string)rules["bypass"]);
+                var ips = rules["ipRules"].Select(ip => (string)ip["value"]).ToArray();
+                var expected = new List<string> { "192.0.2.10", "192.0.2.20" };
+                if (found) expected.AddRange(new[] { "203.0.113.10", "203.0.113.11" });
+                CollectionAssert.AreEquivalent(expected, ips);
+                Assert.AreEqual(!found, logger.Lines.Any(l => l.Level == LogLevel.Warning && l.Message.Contains("not found in the resource group")));
+            }
+        }
+
+        private static async Task<(T Task, KeyVaultResource Vault)> RegisteredVaultTask<T>(FakeArm arm, string webAppName, ILogger logger)
+            where T : InstallTaskInAzResourceGroup<KeyVaultResource>
+        {
+            arm.AddSite("1.2");
+            arm.Resource(Site)["identity"]["tenantId"] = VaultTenant;
+            arm.Resource(Site)["identity"]["principalId"] = WebAppPrincipal;
+            arm.Add(Vault, new JObject
+            {
+                ["name"] = "contoso-vault", ["type"] = "Microsoft.KeyVault/vaults", ["location"] = "westeurope",
+                ["properties"] = new JObject
+                {
+                    ["tenantId"] = VaultTenant, ["sku"] = new JObject { ["name"] = "standard", ["family"] = "A" },
+                    ["accessPolicies"] = new JArray(),
+                    ["networkAcls"] = new JObject { ["defaultAction"] = "Deny", ["bypass"] = "None",
+                        ["ipRules"] = new JArray(new JObject { ["value"] = "192.0.2.10" }) }
+                }
+            });
+            var config = BackendConfig(webAppName, "contoso-plan");
+            config.InstallerAccount.DirectoryId = VaultTenant;
+            var task = new InspectableBackend(config, logger, arm.Subscription).Registered<T>();
+            task.Container = arm.Group;
+            return (task, (await arm.Group.GetKeyVaultAsync("contoso-vault")).Value);
+        }
+
+        private sealed class InspectableBackend : AzurePaaSInstallJob
+        {
+            public InspectableBackend(SolutionInstallConfig config, ILogger logger, SubscriptionResource subscription)
+                : base(logger, config, subscription) { }
+
+            public T Registered<T>() => _installTaskListWithChildren.SelectMany(group => group).OfType<T>().Single();
         }
 
         // ---------------------------------------------------------------- Azure AI Language (R11-6)
