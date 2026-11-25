@@ -137,6 +137,22 @@ namespace Tests.UnitTests
             StringAssert.Contains(FactLine(Compare(Path.Combine(_folder, "before.xlsx"), Path.Combine(_folder, "after.xlsx"), "-IncludeUnchanged"), "licensedUsers"), "0");
         }
 
+        [TestMethod]
+        public void AForecastTheScorerWithheld_DoesNotCompareAsADecline()
+        {
+            var analysis = Earlier();
+            var before = Save("before.xlsx", analysis);
+            // Only the workload-only candidate lost a required volume. The Chat subset is still modelled.
+            analysis.Opportunities.Single(c => c.UnlicensedCopilotInteractions == 0).EmailsRead = null;
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            var result = Compare(before, Save("after.xlsx", analysis));
+            Assert.AreEqual(0, result.ExitCode, result.ToString());
+            StringAssert.Contains(FactLine(result, "licenceOpportunityEstimate.hoursPerMonthHigh"),
+                "blank in the later file - unknown now, so no change is calculated");
+            Assert.IsFalse(result.Lines.Any(l => l.StartsWith("licenceChatUsersEstimate.hoursPerMonthHigh ", StringComparison.Ordinal)),
+                "The unchanged Chat cohort is not listed as a change.");
+        }
+
         /// <summary>
         /// A key a later build added is reported, not treated as a failure: it has no value in the earlier
         /// export. A key the later build removed is reported the same way.

@@ -3543,7 +3543,9 @@ namespace Common.Entities.CopilotAdoption
             var withheld = summary?.WithheldSections ?? new List<string>();
             foreach (var fact in ScalarFacts(summary))
             {
-                sheet.AddRow(fact.Key, IsWithheldFact(fact.Key, withheld) ? string.Empty : fact.Value, XlsxCell.Wrapped(fact.Label));
+                // A null writes no value cell. An empty inline string looks blank, but is not blank to Excel.
+                var blank = IsWithheldFact(fact.Key, withheld) || Equals(fact.Value, string.Empty);
+                sheet.AddRow(fact.Key, blank ? null : fact.Value, XlsxCell.Wrapped(fact.Label));
             }
 
             sheet.FreezeTopRows(headerRow);
@@ -3920,7 +3922,10 @@ namespace Common.Entities.CopilotAdoption
         /// </summary>
         private static object ReadProperty(PropertyInfo property, object source)
         {
-            if (source == null) return null;
+            // Do not turn an unassessed forecast's API defaults into measured zeros in a comparison.
+            if (source == null || source is CoworkValueEstimate cowork && !cowork.WorkloadAssessed) return null;
+            if (source is LicenceValueEstimate licence && !licence.WorkloadAssessed
+                && property.Name != nameof(LicenceValueEstimate.CandidatesCapped)) return null;
 
             try
             {

@@ -2237,7 +2237,7 @@ namespace Common.Entities.CopilotAdoption
                     _options,
                     analysis.OpportunitiesCapped,
                     LicenceEstimateCohort.AllCandidates)
-                : new LicenceValueEstimate();
+                : new LicenceValueEstimate { CandidatesCapped = analysis.OpportunitiesCapped };
 
             // The same people, through the Cowork model instead: what Cowork could add for everyone without
             // a seat once licensed. Offered on the Cowork tab beside the seat holders; never summed with the
@@ -3277,8 +3277,8 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkTiers = BuildCoworkTiers(none, summary.DataSources.M365UsageReportsAvailable);
             summary.CoworkByDepartment = new List<CoworkSegmentRow>();
             summary.CoworkQuadrant = new List<CoworkQuadrantPoint>();
-            summary.CoworkValueEstimate = new CoworkValueEstimate();
-            summary.CoworkFullRolloutEstimate = new CoworkValueEstimate();
+            summary.CoworkValueEstimate = new CoworkValueEstimate { WorkloadAssessed = summary.DataSources.M365UsageReportsAvailable };
+            summary.CoworkFullRolloutEstimate = new CoworkValueEstimate { WorkloadAssessed = summary.DataSources.M365UsageReportsAvailable };
         }
 
         /// <summary>
