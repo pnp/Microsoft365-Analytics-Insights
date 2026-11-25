@@ -173,6 +173,88 @@ WHERE users.user_name LIKE @p0 AND history.valid_to_utc IS NULL", token + "%").S
             }
         }
 
+        [TestMethod]
+        public async Task ScheduledAppOnly_DeniedInventory_SavesMetadataWithoutLicenceReadsOrHistory_ThenRecoversOutsideDelta()
+        {
+            var prefix = "appsku" + Guid.NewGuid().ToString("N").Substring(0, 10);
+            var existingUpn = prefix + "-existing@contoso.example";
+            var newUpn = prefix + "-new@contoso.example";
+            var existingId = Guid.NewGuid().ToString();
+            var newId = Guid.NewGuid().ToString();
+            var part = prefix + "_SKU";
+            try
+            {
+                using (var db = new AnalyticsEntitiesContext())
+                {
+                    var existing = db.users.Add(new Common.Entities.User { UserPrincipalName = existingUpn, AzureAdId = existingId, AccountEnabled = true });
+                    var licence = db.LicenseTypes.Add(new LicenseType { Name = part, SKUID = part });
+                    await db.SaveChangesAsync();
+                    await db.Database.ExecuteSqlCommandAsync(@"
+INSERT INTO dbo.user_license_type_lookups (user_id, license_type_id) VALUES (@p0, @p1);
+INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, valid_to_utc, from_source)
+VALUES (@p0, @p1, '2020-01-01', NULL, 1);", existing.ID, licence.ID);
+                    var lookup = db.UserLicenseTypeLookups.Where(l => l.LicenseTypeId == licence.ID);
+                    var originalLookup = await lookup.Select(l => l.ID).SingleAsync();
+                    Task<int> RefreshCount() => db.Database.SqlQuery<int>("SELECT COUNT(*) FROM dbo.license_refresh_runs").SingleAsync();
+                    var before = await RefreshCount();
+
+                    var denied = true;
+                    var delta = new StubGraphHandler().Route("/users/delta", request =>
+                    {
+                        StringAssert.Contains(request.RequestUri.Query, denied ? "previous-checkpoint" : "after-denial");
+                        return StubGraphHandler.Response(HttpStatusCode.OK, new JObject
+                        {
+                            ["@odata.deltaLink"] = "https://graph.microsoft.com/v1.0/users/delta?$deltatoken=" + (denied ? "after-denial" : "after-recovery"),
+                            ["value"] = denied ? JArray.FromObject(new[]
+                            {
+                                new { id = existingId, userPrincipalName = existingUpn, accountEnabled = true, postalCode = "10000" },
+                                new { id = newId, userPrincipalName = newUpn, accountEnabled = true, postalCode = "20000" }
+                            }) : new JArray()
+                        }.ToString());
+                    });
+                    var sdk = new StubGraphHandler()
+                        .Route("/subscribedSkus", _ => denied ? new HttpResponseMessage(HttpStatusCode.Forbidden)
+                            : StubGraphHandler.Response(HttpStatusCode.OK, "{\"value\":[{\"skuId\":\"" + Guid.Empty + "\",\"skuPartNumber\":\"" + part + "\"}]}"))
+                        .Json("/users", "{\"value\":[{\"userPrincipalName\":\"" + newUpn + "\"}]}");
+                    var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                    var settings = new Common.Entities.Config.AppConfig { ConnectionStrings = new Common.Entities.Config.AppConnectionStrings(_ => "") };
+                    using (var manual = new ManualGraphCallClient(delta, logger))
+                    using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), sdk))
+                    {
+                        var updater = new UserMetadataUpdater(logger, settings, null, manual, null,
+                            TestUserScopes.Provider(TestUserScopes.Of(existingUpn, newUpn)), null, default, graph);
+                        await updater.UserLoader.DeltaValueProvider.SetDeltaToken("previous-checkpoint");
+                        var completed = await updater.InsertAndUpdateDatabaseFromExternalUsers();
+                        CollectionAssert.AreEqual(new[] { "/v1.0/subscribedSkus" }, sdk.Requests.Select(u => u.AbsolutePath).ToArray(),
+                            "An app-only importer must not call delegated-only licenseDetails, for new or existing users.");
+                        Assert.IsFalse(completed, "An unavailable licence refresh must not stamp the scheduled section as complete.");
+                        Assert.AreEqual("after-denial", await updater.UserLoader.DeltaValueProvider.GetDeltaToken());
+                        Assert.AreEqual("10000", await db.users.Where(u => u.ID == existing.ID).Select(u => u.PostalCode).SingleAsync());
+                        Assert.AreEqual("20000", await db.users.Where(u => u.UserPrincipalName == newUpn).Select(u => u.PostalCode).SingleAsync());
+                        Assert.AreEqual(originalLookup, await lookup.Select(l => l.ID).SingleAsync());
+                        Assert.AreEqual(1, await db.Database.SqlQuery<int>(
+                            "SELECT COUNT(*) FROM dbo.user_license_history WHERE user_id=@p0 AND license_type_id=@p1 AND valid_from_utc='2020-01-01' AND valid_to_utc IS NULL AND from_source=1",
+                            existing.ID, licence.ID).SingleAsync());
+                        Assert.AreEqual(before, await RefreshCount(), "No completed licence reading was observed.");
+
+                        denied = false;
+                        Assert.IsTrue(await updater.InsertAndUpdateDatabaseFromExternalUsers());
+                        CollectionAssert.AreEqual(new[] { "/v1.0/subscribedSkus", "/v1.0/subscribedSkus", "/v1.0/users" },
+                            sdk.Requests.Select(u => u.AbsolutePath).ToArray());
+                        Assert.AreEqual("after-recovery", await updater.UserLoader.DeltaValueProvider.GetDeltaToken());
+                        var addedUserId = await db.users.Where(u => u.UserPrincipalName == newUpn).Select(u => u.ID).SingleAsync();
+                        Assert.AreEqual(addedUserId, await lookup.Select(l => l.UserId).SingleAsync(),
+                            "The tenant SKU answer covers existing and new users even when their metadata delta is empty.");
+                        Assert.AreEqual(before + 1, await RefreshCount());
+                    }
+                }
+            }
+            finally
+            {
+                await CleanupAsync(prefix);
+            }
+        }
+
         [DataTestMethod]
         [DataRow(403, true)]
         [DataRow(403, false)]
@@ -369,6 +451,7 @@ WHERE h.user_id = @p0 AND r.id = @p1",
             {
                 await db.Database.ExecuteSqlCommandAsync(@"
 DELETE h FROM dbo.user_license_history h JOIN dbo.users u ON u.id = h.user_id WHERE u.user_name LIKE @p0;
+DELETE h FROM dbo.license_seat_count_history h JOIN dbo.license_types l ON l.id = h.license_type_id WHERE l.sku_id LIKE @p1;
 DELETE FROM dbo.user_license_type_lookups WHERE user_id IN (SELECT id FROM dbo.users WHERE user_name LIKE @p0);
 DELETE FROM dbo.users WHERE user_name LIKE @p0;
 DELETE FROM dbo.license_types WHERE sku_id LIKE @p1;",

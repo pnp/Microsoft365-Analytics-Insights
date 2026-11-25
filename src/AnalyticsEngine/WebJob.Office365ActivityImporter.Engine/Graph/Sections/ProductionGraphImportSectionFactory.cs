@@ -167,10 +167,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                         var userUpdater = new UserMetadataUpdater(_logger, _settings, _graphAppIndentityOAuthContext.Creds, httpClient,
                             clock: _clock, userScopeProvider: _userScopeProvider, lastRunStore: _lastRunStore, shutdownToken: _shutdownToken);
 
-                        // False when the /users/delta read did not complete (#664). The cadence gate is then not
-                        // stamped and no "finished section" event is sent, so the import is retried next cycle
-                        // rather than a failed read passing for a tenant in which nothing changed. Returning
-                        // instead of throwing also lets the sections after this one run.
+                        // An incomplete metadata read or unavailable app-only licence inventory leaves the
+                        // section unstamped and due next cycle, without stopping the following sections.
                         return await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
                     }),
 

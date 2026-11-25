@@ -567,12 +567,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // A 200 with no `value` collection is NOT the same answer as "this tenant has no
                     // SKUs". The licence refresh treats the SKU list as the authority on who holds
                     // what, so a spuriously empty list would have it remove every licence in the
-                    // tenant. Throw rather than returning null: null is the signal for the *403
-                    // permissions* case below, which routes into the per-user fallback - and that
-                    // fallback loads every user's licence lookups and makes one Graph call per user,
-                    // which at 200k users is both enormously slow and documented as OOM-prone. A
-                    // missing `value` on a 200 is transient, so failing the cycle and retrying is
-                    // both cheaper and safer. See issue #392.
+                    // tenant. Null is reserved for a 403. A malformed success fails the cycle rather
+                    // than being mistaken for a permission problem or an empty inventory (#392).
                     throw new InvalidOperationException(
                         "User import - the tenant SKU response contained no 'value' collection. Aborting rather than treating it as 'this tenant has no SKUs', which would delete every licence assignment in the database.");
                 }
@@ -605,24 +601,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 if (ex.ResponseStatusCode != (int)System.Net.HttpStatusCode.Forbidden)
                 {
-                    // Only a 403 justifies the per-user fallback: that is a persistent consent
-                    // problem ('Organization.Read.All' not granted) where per-user licence calls are
-                    // the only way to make progress. Anything else - 429 throttling, 500, 503 - is
-                    // transient, and falling back would turn one cheap failed request into one Graph
-                    // call per user (200k on a large tenant, while we are already being throttled),
-                    // down a path whose own comment warns it can run out of memory. Fail the cycle
-                    // and retry instead; the delta token is not committed, and no partial SKU
-                    // inventory is returned if a later page fails. See issue #392.
+                    // Only a forbidden inventory takes the metadata-only or supported per-user path.
+                    // All other failures still withhold the checkpoint; never reconcile a partial inventory.
                     _logger.LogError(ex, $"User import - couldn't load SKUs for org - {ex.Message}");
                     throw;
                 }
 
-                // An unreadable error body leaves a plain Kiota ApiException, not an ODataError.
-                // The known HTTP status still identifies the permission fallback.
-                _logger.LogError($"User import - couldn't load SKUs for org - {ex.Message}. Ensure 'Organization.Read.All' in granted.");
-
-                // If we can't get tenant SKUs to find all users by, we can get SKUs per user instead, but this can be very slow.
-                _logger.LogWarning($"User import - will load SKUs directly from each user instead. This will be slow.");
+                _logger.LogWarning("User import - tenant subscribedSkus request returned HTTP 403; tenant licence inventory is unavailable.");
                 return null;
             }
         }

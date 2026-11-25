@@ -98,7 +98,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>
         /// Loads all subscribed SKUs for the tenant.
         /// </summary>
-        /// <returns>Materialised list of subscribed SKUs, or <c>null</c> if unable to load.</returns>
+        /// <returns>A materialised inventory (possibly empty), or <c>null</c> when the inventory is unavailable.</returns>
         Task<List<SubscribedSku>> LoadTenantSkus();
 
         /// <summary>
@@ -109,7 +109,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         Task<List<Microsoft.Graph.Models.User>> LoadUsersBySku(System.Guid skuId);
 
         /// <summary>
-        /// Loads license details for a specific user.
+        /// Loads license details for a specific user from a supported source. Graph's <c>licenseDetails</c> API is delegated-only.
         /// </summary>
         /// <param name="userId">The user ID (Graph object ID)</param>
         /// <returns>Materialised list of license details for the user, or <c>null</c> if unable to load.</returns>
@@ -119,8 +119,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Persists any delta token captured during the most recent
         /// <see cref="LoadAllActiveUsers"/> call to the underlying delta value
         /// provider. <see cref="LoadAllActiveUsers"/> buffers the new delta in
-        /// memory; callers must invoke this only after the entire user import
-        /// has succeeded. If the import fails before commit, the previously
+        /// memory; callers must invoke this only after all work that depends on replaying
+        /// these users has succeeded. An unavailable app-only licence inventory is retried
+        /// across all in-scope users, not from this checkpoint. If the import fails before commit, the previously
         /// persisted delta is preserved and the failed users will be retried
         /// on the next cycle.
         /// </summary>
