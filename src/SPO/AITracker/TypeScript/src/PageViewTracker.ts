@@ -41,17 +41,19 @@ export class PageViewTracker {
         if (!this.observeCurrentPage()) {
             debug("Not tracking this page: it isn't on a tracked site");
         } else if (pageLoadDuration === 0 || (window._o365AnalyticsInfo && !this.visibleVisit?.atStartup)) {
-            this.trackFirstSoftView(url);
+            const destination = this.softViewContext(url);
+            if (destination) this.trackCurrentPageView(url, 0, destination, null);
         } else {
             const context = window._spPageContextInfo;
-            const bound = this.boundPageContext(url);
-            if (bound) {
-                this.trackCurrentPageView(url, pageLoadDuration, bound);
+            const sites = window._o365AnalyticsInfo;
+            if (sites?.visits?.currentPageContext) {
+                // A real document owns its title/timings, even when its page metadata cannot be verified.
+                this.trackCurrentPageView(url, pageLoadDuration, this.boundPageContext(url) ?? { siteUrl: registeredSiteFor(url, sites) });
             } else if (!context) {
                 error(`Didn't find legacy _spPageContextInfo on page.`);
             } else if (!window._o365AnalyticsInfo || this.contextIsOnPage(url, context.siteAbsoluteUrl, context.webAbsoluteUrl)) {
                 this.trackCurrentPageView(url, pageLoadDuration, { webUrl: context.webAbsoluteUrl, siteUrl: context.siteAbsoluteUrl,
-                    webTitle: context.webTitle, listTitle, listItemId });
+                    webTitle: context.webTitle, listTitle: listTitle ?? context.listTitle, listItemId: listItemId ?? context.pageItemId });
             } else {
                 // The browser loaded this registered page; its title and timings are still its own.
                 this.trackCurrentPageView(url, pageLoadDuration, { siteUrl: registeredSiteFor(url, window._o365AnalyticsInfo) });
@@ -84,38 +86,37 @@ export class PageViewTracker {
             isUrlInSite(webUrl, siteUrl) && isUrlInSite(url, webUrl);
     }
 
-    private boundPageContext(url: string): ModernPageContext | undefined {
-        const page = window._o365AnalyticsInfo?.visits?.currentPageContext?.();
-        return page && isSamePage(page.url, url) && this.contextIsOnPage(url, page.siteUrl, page.webUrl) ? page : undefined;
-    }
-
-    private trackFirstSoftView(url: string, reportedSite?: string): boolean {
-        // The DOM and the legacy global can still belong to the loaded document, even in the same web.
-        // SPFx 1.0.1.67 can supply its own visit-bound snapshot, never a document title.
+    private boundPageContext(url: string): Partial<ModernPageContext> | undefined {
         const sites = window._o365AnalyticsInfo;
-        const page = this.boundPageContext(url);
-        if (page) {
-            this.trackCurrentPageView(url, 0, page, null);
-        } else if (!sites || (reportedSite && !sites.visits?.currentPageContext)) {
-            // Older callbacks name a collection but not the page their web/list details came from.
-            this.trackCurrentPageView(url, 0, { siteUrl: sites && registeredSiteFor(url, sites) }, null);
-        } else {
-            return false; // Do not consume the destination's later, correctly bound report.
-        }
-        return true;
+        const page = sites?.visits?.currentPageContext?.();
+        if (!page || !page.siteUrl || !isSamePage(page.url, url) || !isOnTrackedSite(url, sites, page.siteUrl)) return;
+        if (page.webUrl && !this.contextIsOnPage(url, page.siteUrl, page.webUrl)) return;
+        // Only a request-bound .68+ snapshot proves where the web/list fields came from.
+        if (page.binding === 'request') return page.webUrl ? page : undefined;
+        return { siteUrl: page.siteUrl };
     }
 
-    handleModernPageNav(webUrl: string, webTitle: string, siteUrl: string, url: string, listTitle?: string, listItemId?: number): boolean {
+    private softViewContext(url: string, reportedSite?: string): Partial<ModernPageContext> | undefined {
+        const sites = window._o365AnalyticsInfo;
+        if (sites?.visits?.currentPageContext) return this.boundPageContext(url);
+        // A positional callback establishes the collection, not the originating visit of its other fields.
+        if (reportedSite || !sites) return { siteUrl: sites ? registeredSiteFor(url, sites) : reportedSite };
+    }
+
+    handleModernPageNav(webUrl: string, _webTitle: string, siteUrl: string, url: string, _listTitle?: string, _listItemId?: number): boolean {
         // SharePoint may already be on an unregistered site, or on another instance's site.
         if (!this.observeCurrentPage()) {
             debug("Not tracking a navigation outside an active tracked visit");
             return false;
         }
-        if (!this.contextIsOnPage(url, siteUrl, webUrl)) {
+        const sites = window._o365AnalyticsInfo;
+        if (!isSamePage(url, document.URL) || !siteUrl || !isOnTrackedSite(url, sites, siteUrl) ||
+            (!sites?.visits?.currentPageContext && !this.contextIsOnPage(url, siteUrl, webUrl))) {
             debug("Not tracking a navigation reported for another site: SharePoint has moved on since");
             return false;
         }
-        this.updatePageContext(window._spPageContextInfo);
+        const destination = this.softViewContext(url, siteUrl);
+        if (!destination) return false; // No exit or new request ID until a current report arrives.
 
         // The SPFx extension also reports the page that was tracked when it loaded. That isn't a navigation: don't end
         // the page's time-on-page after a couple of seconds and restart it, which would undercount it.
@@ -124,16 +125,13 @@ export class PageViewTracker {
             debug(`Ignoring navigation to the page already tracked: ${url}`);
             return true;
         }
-        if (!lastUrl && window._o365AnalyticsInfo) return this.trackFirstSoftView(url, siteUrl);
         log('Modern page navigation called from SPFx component. New URL: ' + url);
 
         if (lastUrl && this.acceptedVisit) {
             this._ai.trackTimingEvent(lastUrl, this.acceptedVisit.activeMs / 1000);
         }
 
-        // Track page with "load-time" of 0 as we didn't actually load a page. 
-        // If we don't supply 0, AppInsights will use the last page-load time instead, which would be invalid.
-        this.trackCurrentPageView(url, 0, { webUrl, siteUrl, webTitle, listTitle, listItemId });
+        this.trackCurrentPageView(url, 0, destination, null);
         return true;
     }
 

@@ -1,3 +1,5 @@
+import type { PageContext } from '@microsoft/sp-page-context';
+
 export interface INavigationVisit {
   readonly url: string;
   readonly site: string;
@@ -8,8 +10,9 @@ export interface INavigationVisit {
 export interface IModernPageContext {
   url: string;
   siteUrl: string;
-  webUrl: string;
-  webTitle: string;
+  binding: 'request' | 'event';
+  webUrl?: string;
+  webTitle?: string;
   listTitle?: string;
   listItemId?: number;
 }
@@ -17,17 +20,28 @@ export interface IModernPageContext {
 // Shared by this document's configured customizers, not by tabs or full page loads.
 export class NavigationVisits {
   private visit?: INavigationVisit;
+  private documentUrl?: string;
 
   public constructor(private readonly page: Window, private readonly sites: string[]) {
+    this.documentUrl = page.performance?.getEntriesByType?.('navigation')[0]?.name?.split('#')[0];
+    this.observeLocation();
     // A detour and return (including history.back()) can both precede the next SPFx event.
     // Only invalidate here. SharePoint's navigatedEvent supplies the context for a report.
-    (page as Window & { navigation?: EventTarget }).navigation?.addEventListener?.('currententrychange', () => this.observeLocation());
+    const navigation = (page as Window & { navigation?: EventTarget }).navigation;
+    if (navigation?.addEventListener) navigation.addEventListener('currententrychange', () => this.observeLocation());
+    else page.addEventListener('popstate', () => this.observeLocation());
   }
 
   public observeLocation(): string {
     const url = this.page.location.href.split('#')[0];
+    // Once the document visit ends, returning to its URL cannot restore its title or load time.
+    if (url !== this.documentUrl) this.documentUrl = undefined;
     if (this.visit && this.visit.url !== url) this.visit = undefined;
     return url;
+  }
+
+  public isOriginalDocumentVisit(): boolean {
+    return this.observeLocation() === this.documentUrl;
   }
 
   public forEvent(registeredSite: string, contextSite: string): INavigationVisit | undefined {
@@ -90,14 +104,39 @@ export function sameSite(first: string, second: string): boolean {
   return !!a && !!b && a.origin === b.origin && a.path === b.path;
 }
 
-export function contextMatchesVisit(visit: INavigationVisit, webUrl: string, requestPath: string, initial: boolean): boolean {
+export function contextForVisit(visit: INavigationVisit, context: PageContext, freshEvent: boolean): IModernPageContext | undefined {
+  const webUrl = context.web.absoluteUrl;
   const page = address(visit.url), site = address(visit.site), web = address(webUrl);
-  if (!site || !web || !page || !containsPage(site, web) || !containsPage(web, page)) return false;
-  // A navigatedEvent supplies the destination context; onInit by itself identifies only the collection.
-  if (!requestPath) return !initial;
+  if (!site || !web || !page || !sameSite(visit.site, context.site.absoluteUrl) ||
+      !containsPage(site, web) || !containsPage(web, page)) return undefined;
   try {
-    const visible = new URL(visit.url), request = new URL(requestPath, visible.origin);
-    return request.origin === visible.origin && decodeURI(request.pathname).toLowerCase() === decodeURI(visible.pathname).toLowerCase() &&
-      (request.search === visible.search || (!initial && !request.search));
-  } catch { return false; }
+    const visible = new URL(visit.url);
+    const item = context.listItem?.id;
+    let itemMatches = true, namesItem = false, namesList = false, onlyItemKeys = true;
+    visible.searchParams.forEach((value, key) => {
+      const name = key.toLowerCase();
+      if (name === 'id' && /^\d+$/.test(value)) {
+        namesItem = true;
+        if (Number(value) !== item) itemMatches = false;
+      } else if ((name === 'listid' || name === 'list') && /^\{?[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}\}?$/i.test(value)) {
+        namesList = true;
+        if (value.replace(/[{}]/g, '').toLowerCase() !== context.list?.id?.toString().toLowerCase()) itemMatches = false;
+      } else onlyItemKeys = false;
+    });
+    if (!itemMatches) return undefined;
+    const listPath = context.list?.serverRelativeUrl;
+    if (listPath) {
+      const list = address(new URL(listPath, visible.origin).href);
+      if (!list || !containsPage(web, list) || (!namesList && !containsPage(list, page))) return undefined;
+    }
+    const requestPath = context.site.serverRequestPath;
+    // A new top-level navigation can establish a page view without identifying a list item.
+    // Subscribing can synchronously replay an old event; that is no stronger than onInit.
+    if (!requestPath) return freshEvent ? { url: visit.url, siteUrl: visit.site, binding: 'event' } : undefined;
+    const request = new URL(requestPath, visible.origin);
+    if (request.origin !== visible.origin || decodeURI(request.pathname).toLowerCase() !== decodeURI(visible.pathname).toLowerCase() ||
+        (request.search !== visible.search && (!!request.search || (!freshEvent && !(namesItem && onlyItemKeys))))) return undefined;
+    return { url: visit.url, siteUrl: visit.site, binding: 'request', webUrl, webTitle: context.web.title,
+      listTitle: context.list?.title, listItemId: item };
+  } catch { return undefined; }
 }

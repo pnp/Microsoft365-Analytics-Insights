@@ -4,14 +4,18 @@
 export interface SitesTrackedByExtension {
     siteUrls: string[];
     siteRegistrationChanged?: (site: string) => void;
-    visits?: { currentPageContext?: () => ModernPageContext | undefined };
+    visits?: {
+        isOriginalDocumentVisit?: () => boolean;
+        currentPageContext?: () => ModernPageContext | undefined;
+    };
 }
 
 export interface ModernPageContext {
     url: string;
     siteUrl: string;
-    webUrl: string;
-    webTitle: string;
+    binding?: 'request' | 'event'; // Absent on the older, replay-unaware snapshot.
+    webUrl?: string;
+    webTitle?: string;
     listTitle?: string;
     listItemId?: number;
 }

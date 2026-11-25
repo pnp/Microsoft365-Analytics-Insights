@@ -223,6 +223,26 @@ describe('AITracker page bootstrap', () => {
         expect(view.properties).not.toHaveProperty('pageTitle');
     });
 
+    test('a departure observed before this script downloaded rules out the original document timing and title', async () => {
+        document.title = 'Intervening title';
+        document.body.innerHTML = '<script>var x = {"perf":{"spRequestDuration":500,"IsSPO":true},"y":2};</script>';
+        const visits: NonNullable<NonNullable<Window['_o365AnalyticsInfo']>['visits']> = {
+            isOriginalDocumentVisit: () => false, currentPageContext: () => undefined
+        };
+        window._o365AnalyticsInfo = { siteUrls: [SITE_URL], visits };
+        loadTrackerCopy();
+        await settle();
+        const ai = mockAiInstances[0];
+        expect(ai.trackPageView).not.toHaveBeenCalled();
+        expect(window.modernPageNav(SITE_URL, 'Earlier', SITE_URL)).toBe(false);
+        visits.currentPageContext = () => ({ url: PAGE_URL, siteUrl: SITE_URL, binding: 'request', webUrl: SITE_URL, webTitle: 'Returned web' });
+        expect(window.modernPageNav(SITE_URL, 'Earlier', SITE_URL)).toBe(true);
+        const view = ai.trackPageView.mock.calls[0][0];
+        expect(view).toMatchObject({ uri: PAGE_URL, name: new URL(PAGE_URL).pathname,
+            properties: { pageLoad: 0, duration: 0, webTitle: 'Returned web' } });
+        for (const key of ['pageTitle', 'spRequestDuration']) expect(view.properties).not.toHaveProperty(key);
+    });
+
     test('a copy whose App Insights can\'t start leaves the page to a correctly configured copy', async () => {
         const errorSpy = jest.spyOn(console, 'error').mockImplementation();
         (window as any).appInsightsConnectionStringHash = btoa('IngestionEndpoint=https://example.invalid/');
@@ -906,6 +926,8 @@ describe('AITracker page bootstrap', () => {
 
             setUrl(OTHER_PAGE_URL);
             sitesTrackedInPage(OTHER_SITE_URL);
+            window._o365AnalyticsInfo!.visits = { currentPageContext: () => ({ url: OTHER_PAGE_URL, siteUrl: OTHER_SITE_URL,
+                webUrl: OTHER_SITE_URL, webTitle: 'Other', binding: 'request' }) };
             (window as any).modernPageNav(SITE_URL, 'Test', SITE_URL);
             expect(ai.trackPageView).toHaveBeenCalledTimes(1);
 

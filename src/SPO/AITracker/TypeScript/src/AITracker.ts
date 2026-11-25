@@ -197,14 +197,15 @@ function trackLoadedPage(): void {
 
     // A document loaded for another URL means SharePoint navigated here without loading a page.
     const pageLoadDuration = documentWasLoadedForCurrentUrl() ? undefined : 0;
-    const context = pageLoadDuration === 0 ? undefined : window._spPageContextInfo;
-    pageTracker.trackCurrentPageViewAndLastPageExit(document.URL, context?.listTitle, context?.pageItemId, pageLoadDuration);
+    pageTracker.trackCurrentPageViewAndLastPageExit(document.URL, undefined, undefined, pageLoadDuration);
 
     // A hard load has been tracked. A first soft view without bound context still needs a destination report.
     window.modernPageNav = modernPageNav;
 }
 
 function documentWasLoadedForCurrentUrl(): boolean {
+    // The configured extension may have seen the document visit end before this script downloaded.
+    if (window._o365AnalyticsInfo?.visits?.isOriginalDocumentVisit?.() === false) return false;
     const navEntries = window.performance && window.performance.getEntriesByType ?
         window.performance.getEntriesByType('navigation') : [];
     if (!navEntries[0]?.name) return !window._o365AnalyticsInfo; // Classic pages only navigate by loading a document.

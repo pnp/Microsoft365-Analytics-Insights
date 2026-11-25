@@ -264,6 +264,7 @@ describe('PageViewTracker', () => {
 
         afterEach(() => {
             document.body.innerHTML = '';
+            window._o365AnalyticsInfo = undefined;
         });
 
         test('spRequestDuration is only sent for the page the browser loaded', () => {
@@ -332,14 +333,20 @@ describe('PageViewTracker', () => {
             expect(searches().length).toBe(1);
         });
 
-        test('reads page metadata from the web of the page navigated to', () => {
+        test.each(['positional', 'older snapshot'])('omits unverified metadata when a %s report reaches a later visit', mode => {
             const spy = jest.spyOn(pagePropManager, 'handleNewPage');
+            tracker.trackCurrentPageViewAndLastPageExit(document.URL);
+            spy.mockClear();
             const url = 'https://contoso.sharepoint.com/sites/other/SitePages/News.aspx';
             Object.defineProperty(document, 'URL', { value: url, writable: true, configurable: true });
-
-            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/other', 'Other', 'https://contoso.sharepoint.com/sites/other', url, 'Site Pages', 3);
-
-            expect(spy).toHaveBeenCalledWith('https://contoso.sharepoint.com/sites/other', 3, url, 'Site Pages');
+            const site = 'https://contoso.sharepoint.com/sites/other';
+            const unbound = { url, siteUrl: site, webUrl: site, webTitle: 'Earlier', listTitle: 'Earlier pages', listItemId: 10 };
+            window._o365AnalyticsInfo = { siteUrls: [site], visits: mode === 'positional' ? undefined : { currentPageContext: () => unbound } };
+            expect(tracker.handleModernPageNav(site, unbound.webTitle, site, url, unbound.listTitle, 10)).toBe(true);
+            const view = pageViews()[1];
+            expect(view).toMatchObject({ name: new URL(url).pathname, properties: { siteUrl: site, pageLoad: 0 } });
+            for (const key of ['pageTitle', 'webTitle', 'webUrl']) expect(view.properties).not.toHaveProperty(key);
+            expect(spy).not.toHaveBeenCalled();
         });
     });
 });

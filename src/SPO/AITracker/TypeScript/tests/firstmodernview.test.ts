@@ -13,7 +13,7 @@ import { createTrackerTelemetry } from '../src/TrackerTelemetry';
 
 jest.mock('timeme.js', () => ({ __esModule: true, default: { getTimeOnCurrentPageInMilliseconds: () => 1000 } }));
 
-test('the first soft view, clicks, search and list metadata use only the verified destination in the serialized SDK batch', async () => {
+test('first and later soft views, clicks, searches and list metadata use only the verified destination in the serialized SDK batch', async () => {
     jest.useFakeTimers({ doNotFake: ['performance'] });
     const previous = location.href, site = location.origin + '/sites/one';
     const web = site + '/sub', destination = web + '/Pages/Current.aspx?q=contoso';
@@ -51,8 +51,8 @@ test('the first soft view, clicks, search and list metadata use only the verifie
         expect(ai._pageRequestId).toBeNull();
         expect(fetch).not.toHaveBeenCalled();
 
-        snapshot = { url: destination, webUrl: web, siteUrl: site, webTitle: 'Current web', listTitle: 'Current pages', listItemId: 20 };
-        expect(tracker.handleModernPageNav(web, snapshot.webTitle, site, destination, snapshot.listTitle, snapshot.listItemId)).toBe(true);
+        snapshot = { binding: 'request', url: destination, webUrl: web, siteUrl: site, webTitle: 'Current web', listTitle: 'Current pages', listItemId: 20 };
+        expect(tracker.handleModernPageNav(web, stale.webTitle, site, destination, stale.listTitle, stale.pageItemId)).toBe(true);
         await jest.advanceTimersByTimeAsync(20000);
         expect(fetch).toHaveBeenCalledTimes(3);
         for (const [url] of fetch.mock.calls) expect(url).toContain(web + "/_api/web/lists/getbytitle('Current%20pages')/items(20)/");
@@ -73,6 +73,33 @@ test('the first soft view, clicks, search and list metadata use only the verifie
         expect(props('UserSearch')).toMatchObject({ userSearch: 'contoso', pageRequestId: ai._pageRequestId });
         expect(props('PageMetadataUpdate').url).toBe(destination);
         expect(JSON.parse(props('PageMetadataUpdate').props)).toMatchObject({ Marker: 'Current metadata' });
+        expect(JSON.stringify(batches)).not.toMatch(/Earlier|Referrer\.aspx/);
+
+        const firstId = ai._pageRequestId;
+        const next = web + '/Pages/Next.aspx?q=next';
+        history.pushState(null, '', next);
+        ai.trackClick({ linkText: 'Next link', altText: '', classNames: null, href: site });
+        // A timer cannot substitute its positional fields for a missing or stale visit snapshot.
+        expect(tracker.handleModernPageNav(web, stale.webTitle, site, next, stale.listTitle, 10)).toBe(false);
+        snapshot = undefined;
+        expect(tracker.handleModernPageNav(web, stale.webTitle, site, next, stale.listTitle, 10)).toBe(false);
+        expect(ai._pageRequestId).toBe(firstId);
+        expect(fetch).toHaveBeenCalledTimes(3);
+        snapshot = { binding: 'request', url: next, webUrl: web, siteUrl: site, webTitle: 'Next web', listTitle: 'Next pages', listItemId: 30 };
+        expect(tracker.handleModernPageNav(web, stale.webTitle, site, next, stale.listTitle, 10)).toBe(true);
+        await jest.advanceTimersByTimeAsync(20000);
+        expect(ai._pageRequestId).not.toBe(firstId);
+        expect(fetch).toHaveBeenCalledTimes(6);
+        for (const [url] of fetch.mock.calls.slice(3)) expect(url).toContain(web + "/_api/web/lists/getbytitle('Next%20pages')/items(30)/");
+        const nextViews = batches.filter(e => e.data.baseType === 'PageviewData' && e.data.baseData.url === next);
+        expect(nextViews).toHaveLength(1);
+        expect(nextViews[0].data.baseData).toMatchObject({ name: new URL(next).pathname, properties: { webTitle: 'Next web', pageLoad: '0' } });
+        expect(nextViews[0].data.baseData.properties).not.toHaveProperty('pageTitle');
+        const nextEvents = batches.filter(e => e.data.baseType === 'EventData').map(e => e.data.baseData);
+        expect(nextEvents.filter(e => e.name === 'PAGE_EXIT').map(e => e.properties.pageRequestId)).toEqual(['prior-view', firstId]);
+        expect(nextEvents.find(e => e.properties.linkText === 'Next link').properties.pageRequestId).toBe(ai._pageRequestId);
+        expect(nextEvents.find(e => e.properties.userSearch === 'next').properties.pageRequestId).toBe(ai._pageRequestId);
+        expect(nextEvents.filter(e => e.name === 'PageMetadataUpdate').map(e => e.properties.url)).toEqual([destination, next]);
         expect(JSON.stringify(batches)).not.toMatch(/Earlier|Referrer\.aspx/);
     } finally {
         window._o365AnalyticsInfo = undefined;
