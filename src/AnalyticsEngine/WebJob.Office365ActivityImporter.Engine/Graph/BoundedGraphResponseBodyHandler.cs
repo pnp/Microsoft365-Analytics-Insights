@@ -34,6 +34,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Custom redirect predicates receive the response, not the current request.
                 if (response.RequestMessage == null) response.RequestMessage = request;
                 var checkError = direct && GraphResponseEvidence.CheckErrorBody(status);
+                var checkCollection = response.IsSuccessStatusCode && GraphResponseEvidence.RequiresCollection(request);
+                if (checkCollection && (response.StatusCode != HttpStatusCode.OK || content == null))
+                    throw new GraphCollectionEnvelopeException();
                 var automaticRedirect = IsAutomaticRedirect(request, response);
                 if (automaticRedirect)
                     GraphRedirectLocationHandler.ResolveLocation(response, request.RequestUri);
@@ -57,7 +60,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 else if (content != null)
                 {
                     await BodyReadSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    var read = BufferAndReleaseSlotAsync(content, checkError, cancellationToken);
+                    var read = BufferAndReleaseSlotAsync(content, checkError, checkCollection ? request.RequestUri : null, cancellationToken);
                     if (!read.IsCompleted && await Task.WhenAny(read, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false) != read)
                     {
                         // net48 LoadIntoBufferAsync has no cancellation overload. Dispose the transport
@@ -130,11 +133,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
-        private static async Task<bool> BufferAndReleaseSlotAsync(HttpContent content, bool checkError, CancellationToken cancellationToken)
+        private static async Task<bool> BufferAndReleaseSlotAsync(HttpContent content, bool checkError, Uri collectionUri, CancellationToken cancellationToken)
         {
             try
             {
                 await content.LoadIntoBufferAsync(checkError ? GraphResponseEvidence.MaxErrorBytes : MaxPageBytes).ConfigureAwait(false);
+                if (collectionUri != null)
+                    await GraphResponseEvidence.CheckCollectionAsync(content, collectionUri, MaxPageBytes, cancellationToken).ConfigureAwait(false);
                 return !checkError || await GraphResponseEvidence.HasStructuredErrorAsync(content, cancellationToken).ConfigureAwait(false);
             }
             finally { BodyReadSlots.Release(); }

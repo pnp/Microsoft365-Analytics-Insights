@@ -40,7 +40,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (notificationUrl is null) throw new ArgumentNullException(nameof(notificationUrl));
 
             var matchingSubs = new List<CallRecordSubscription>();
-            var firstPage = await _client.Subscriptions.GetAsync(rc => rc.Options.Add(GraphResponseEvidence.RequireDirect), _stopping);
+            var firstPage = await _client.Subscriptions.GetAsync(rc => rc.Options.Add(GraphResponseEvidence.RequireCollection), _stopping);
             if (firstPage?.Value == null)
             {
                 // A 200 without the subscriptions list: whether the subscription exists is unknown, so this is a failed read.
@@ -61,7 +61,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     return true;
                 }, next =>
                 {
-                    next.AddRequestOptions(new[] { GraphResponseEvidence.RequireDirect });
+                    next.AddRequestOptions(new[] { GraphResponseEvidence.RequireCollection });
                     return next;
                 });
 

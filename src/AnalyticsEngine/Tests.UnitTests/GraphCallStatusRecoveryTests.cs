@@ -61,6 +61,57 @@ namespace Tests.UnitTests
         }
 
         [DataTestMethod]
+        [DataRow("subscribedSkus", false)]
+        [DataRow("subscribedSkus", true)]
+        [DataRow("subscriptions", false)]
+        [DataRow("subscriptions", true)]
+        [DataRow("users", true)]
+        [DataRow("users/person/licenseDetails", true)]
+        public async Task Inventory_NonArrayIsNeverReturnedAsACompleteInventory(string path, bool followingPage)
+        {
+            var calls = 0;
+            var transport = new TeamsCrawlTests.StubGraphHandler().Route("/" + path, request =>
+            {
+                Assert.AreEqual(HttpMethod.Get, request.Method, "Unknown inventory must not authorize any subscription write.");
+                return ++calls == 1 && followingPage
+                    ? Json(200, "{\"value\":[],\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/" + path + "?$skiptoken=synthetic\"}")
+                    : Json(200, "{\"value\":{}}");
+            });
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var loader = new GraphUserLoader(null, null, NullLogger.Instance, graph);
+                if (path == "subscriptions")
+                    await Assert.ThrowsAsync<GraphCollectionEnvelopeException>(() =>
+                        new CallWebhook(new GraphCallRecordSubscriptionManager(graph), NullLogger.Instance, Clock).CreateOrUpdateWebhook(WebhookUrl, ClientState));
+                else if (path == "subscribedSkus")
+                    await Assert.ThrowsAsync<GraphCollectionEnvelopeException>(() => loader.LoadTenantSkus());
+                else if (path == "users")
+                    await Assert.ThrowsAsync<GraphCollectionEnvelopeException>(() => loader.LoadUsersBySku(Guid.Empty));
+                else
+                    Assert.IsNull(await loader.LoadUserLicenseDetails("person"), "Preserve this user's existing assignments.");
+            }
+            Assert.AreEqual(followingPage ? 2 : 1, calls);
+        }
+
+        [TestMethod]
+        public async Task TenantInventory_EmptyPageWithContinuationStillReadsTheNextSku()
+        {
+            // https://learn.microsoft.com/graph/api/subscribedsku-list and /graph/paging:
+            // a 200 collection can have zero rows; only absence of nextLink ends the inventory.
+            var calls = 0;
+            var transport = new TeamsCrawlTests.StubGraphHandler().Route("/subscribedSkus", _ => ++calls == 1
+                ? Json(200, "{\"value\":[],\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/subscribedSkus?$skiptoken=synthetic\"}")
+                : Json(200, "{\"value\":[{\"skuId\":\"00000000-0000-0000-0000-000000000001\",\"skuPartNumber\":\"CONTOSO_PLAN\",\"prepaidUnits\":{\"enabled\":10}}]}"));
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var sku = (await new GraphUserLoader(null, null, NullLogger.Instance, graph).LoadTenantSkus()).Single();
+                Assert.AreEqual("CONTOSO_PLAN", sku.SkuPartNumber);
+                Assert.AreEqual(10, sku.PrepaidUnits.Enabled);
+            }
+            Assert.AreEqual(2, calls);
+        }
+
+        [DataTestMethod]
         [DataRow(403, true, false)]
         [DataRow(403, false, false)]
         [DataRow(403, true, true)]

@@ -15,9 +15,40 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// <summary>Opt in only on calls whose direct response guides subscription, identity or licence decisions.</summary>
     internal static class GraphResponseEvidence
     {
-        private sealed class DirectResponseOption : IRequestOption { }
+        private sealed class DirectResponseOption : IRequestOption
+        {
+            internal bool Collection { get; set; }
+        }
         internal static readonly IRequestOption RequireDirect = new DirectResponseOption();
+        internal static readonly IRequestOption RequireCollection = new DirectResponseOption { Collection = true };
         internal static bool IsRequired(HttpRequestMessage request) => request.GetRequestOption<DirectResponseOption>() != null;
+        internal static bool RequiresCollection(HttpRequestMessage request) => request.GetRequestOption<DirectResponseOption>()?.Collection == true;
+
+        // Kiota can turn a non-array value into an empty List and a non-string nextLink into null.
+        // Check the wire envelope before either conversion can authorize a reconciliation.
+        internal static async Task CheckCollectionAsync(HttpContent buffered, Uri requestUri, int maxBytes, CancellationToken cancellationToken)
+        {
+            var stream = await buffered.ReadAsStreamAsync().ConfigureAwait(false);
+            if (!stream.CanSeek || stream.Length > maxBytes)
+                throw new InvalidOperationException("Graph collection response could not be checked within the page limit.");
+            try
+            {
+                using (var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false))
+                {
+                    var root = document.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("value", out var value) || value.ValueKind != JsonValueKind.Array)
+                        throw new GraphCollectionEnvelopeException();
+                    if (root.TryGetProperty("@odata.nextLink", out var next)
+                        && (next.ValueKind != JsonValueKind.String || !Uri.TryCreate(next.GetString(), UriKind.Absolute, out var url)
+                            || url.Scheme != Uri.UriSchemeHttps || url.UserInfo.Length != 0 || url.Fragment.Length != 0
+                            || !string.Equals(url.Authority, requestUri.Authority, StringComparison.OrdinalIgnoreCase)
+                            || !string.Equals(url.AbsolutePath, requestUri.AbsolutePath, StringComparison.OrdinalIgnoreCase)
+                            || url.Query.Length <= 1))
+                        throw new GraphCollectionEnvelopeException();
+                }
+            }
+            finally { stream.Position = 0; } // Kiota still decodes the original body and all its fields.
+        }
 
         // Leave authentication challenges intact for the SDK/transport. The HTTP retry middleware
         // still receives every error response, with its original status and headers.
@@ -58,6 +89,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         internal static bool ConfirmsNotFound(ApiException ex) =>
             ex.ResponseStatusCode == (int)HttpStatusCode.NotFound && HasResourceNotFoundCode(ex);
+    }
+
+    internal sealed class GraphCollectionEnvelopeException : InvalidOperationException
+    {
+        internal GraphCollectionEnvelopeException() : base("Graph did not return a complete collection page with a value array and a usable continuation.") { }
     }
 
     internal sealed class GraphDecisionRedirectException : ApiException
