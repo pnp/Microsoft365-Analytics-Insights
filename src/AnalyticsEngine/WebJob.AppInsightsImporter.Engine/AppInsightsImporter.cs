@@ -206,6 +206,7 @@ namespace WebJob.AppInsightsImporter.Engine
                     catch (Exception ex) when (CanRecover(ex, token))
                     {
                         result.Fail("SearchRetryReadFailed");
+                        result.SearchWork = SearchRecoveryWork.CheckpointUnknown;
                         _logger.LogError($"AppInsightsSearchRetry: recovery checkpoint could not be read. Nothing reconciled. {FailureDimensions(ex)}");
                         return result;
                     }
@@ -220,7 +221,8 @@ namespace WebJob.AppInsightsImporter.Engine
                             return result;
                         }, token));
                     }
-                    await CheckpointSearchesAsync(retries, normalThroughUtc, result, token);
+                    if (!await CheckpointSearchesAsync(retries, normalThroughUtc, result, token))
+                        result.SearchWork = SearchRecoveryWork.CheckpointUnknown;
                     return result;
                 }
                 catch (Exception ex) when (deadline.IsCancellationRequested && !(ex is OutOfMemoryException))

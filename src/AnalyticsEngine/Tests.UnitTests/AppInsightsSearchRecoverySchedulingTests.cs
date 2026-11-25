@@ -214,6 +214,67 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, (await job.Cursor.ReadSearchRetriesAsync()).Count);
         }
 
+        [DataTestMethod]
+        [DataRow("cursor-read", "recover")]
+        [DataRow("marker-write", "recover")]
+        [DataRow("marker-read", "cleared")]
+        [DataRow("marker-read", "changed-cursor")]
+        public async Task SupplementalCheckpointOutage_BacksOffAndRechecksBeforeDoingAnyMoreWork(string fault, string disposition)
+        {
+            var job = new DailyImporter();
+            var store = new InMemoryIngestionCursorStore();
+            var importer = new AppInsightsImporter(null, AnalyticsLogger.ConsoleOnlyTracer(), job.Clock, job.Source,
+                new FakeSiteFilterLoader(), job.Sql, job.Sql, cursorStore: store);
+            var hours = Enumerable.Range(0, 9).Select(i => Start.AddDays(-5).AddHours(i)).ToArray();
+            foreach (var h in hours) job.Source.ExtraPageViews.Add((h, h));
+            await importer.ImportAndSave(false, null);
+            foreach (var h in hours) job.Source.ExtraCustomEvents.Add((h, h));
+            await store.WriteSearchRetriesAsync(hours.Select(h => new AppInsightsSearchRetry(h, Start)).ToArray());
+            var outage = new IOException("synthetic checkpoint unavailable");
+            int attempts = 0, normalPolls = 0, scopes = 0;
+            AppInsightsImportLoop.Run(false, () =>
+            {
+                normalPolls++;
+                return importer.ImportAndSave(false, null).GetAwaiter().GetResult();
+            }, (through, deadline) =>
+            {
+                var unavailable = ++attempts <= 6;
+                store.ReadFailsWith = unavailable && fault == "cursor-read" ? outage : null;
+                store.SearchReadFailsWith = unavailable && fault == "marker-read" ? outage : null;
+                store.SearchWriteFailsWith = unavailable && fault == "marker-write" ? outage : null;
+                if (!unavailable && disposition == "changed-cursor") store.CursorUtc = through.AddMinutes(1);
+                if (!unavailable && disposition == "cleared")
+                    store.WriteSearchRetriesAsync(Array.Empty<AppInsightsSearchRetry>()).GetAwaiter().GetResult();
+                var queries = job.Source.CountRangesRequested.Count;
+                var previousScopes = scopes;
+                var pass = importer.RecoverPendingSearchesAsync(through, deadline, default, _ =>
+                {
+                    scopes++;
+                    return Task.FromResult(UserImportScope.Unfiltered);
+                }).GetAwaiter().GetResult();
+                if (unavailable) Assert.IsNull(pass.PendingSearchHours, "Do not report an unknown checkpoint as empty.");
+                if ((unavailable && fault != "marker-write") || (!unavailable && disposition != "recover"))
+                {
+                    Assert.AreEqual(previousScopes, scopes, "No scope lookup or SQL work on stale or unknown state.");
+                    Assert.AreEqual(queries, job.Source.CountRangesRequested.Count);
+                }
+                return pass;
+            }, 1440, wait =>
+            {
+                Assert.IsTrue(wait > TimeSpan.Zero);
+                job.Waits.Add(wait);
+                job.Clock.Advance(wait);
+            }, () => job.Clock.UtcNow >= Start.AddDays(1), job.Clock);
+
+            Assert.AreEqual(1, normalPolls);
+            CollectionAssert.AreEqual(new[] { 1d, 5d, 10d, 20d, 40d, 60d, 60d },
+                job.Waits.Take(7).Select(w => w.TotalMinutes).ToArray());
+            Assert.AreEqual(7, attempts, "A transient checkpoint outage must not consume the daily pause.");
+            Assert.AreEqual(Start.AddDays(1), job.Clock.UtcNow);
+            Assert.AreEqual(disposition == "recover" ? 9 : 8, job.Sql.Facts.Count);
+            Assert.AreEqual(disposition == "changed-cursor" ? 1 : 0, (await store.ReadSearchRetriesAsync()).Count);
+        }
+
         [TestMethod]
         public async Task OneShot_DoesNotDrainTheBacklog_AndHealthyContinuousPollingDoesNotSweepOldSearches()
         {

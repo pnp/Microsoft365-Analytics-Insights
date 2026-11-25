@@ -24,13 +24,15 @@ namespace WebJob.AppInsightsImporter.Engine
                 var nextNormal = clock.UtcNow.AddMinutes(Math.Max(1, pauseMinutes));
                 var pass = normal;
                 var failureDelayMinutes = 5;
-                while (normal?.CursorAdvancedToUtc != null && pass?.HasDueSearchRetries == true && !shutdownRequested())
+                while (normal?.CursorAdvancedToUtc != null && pass != null && pass.SearchWork != SearchRecoveryWork.NoneDue && !shutdownRequested())
                 {
-                    var minutes = pass.SearchRetryUnavailable ? failureDelayMinutes : 1;
+                    // An unknown checkpoint is a reason to re-read it, never permission to reuse the last batch.
+                    var backOff = pass.SearchRetryUnavailable || pass.SearchWork == SearchRecoveryWork.CheckpointUnknown;
+                    var minutes = backOff ? failureDelayMinutes : 1;
                     if (clock.UtcNow.AddMinutes(minutes) >= nextNormal) break;
                     wait(TimeSpan.FromMinutes(minutes));
                     if (shutdownRequested() || clock.UtcNow >= nextNormal) break;
-                    failureDelayMinutes = pass.SearchRetryUnavailable ? Math.Min(60, minutes * 2) : 5;
+                    failureDelayMinutes = backOff ? Math.Min(60, minutes * 2) : 5;
                     pass = runRecovery(normal.CursorAdvancedToUtc.Value, nextNormal);
                 }
                 var remaining = nextNormal - clock.UtcNow;

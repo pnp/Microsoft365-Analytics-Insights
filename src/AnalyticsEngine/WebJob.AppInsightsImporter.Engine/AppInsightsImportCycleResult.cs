@@ -78,6 +78,8 @@ namespace WebJob.AppInsightsImporter.Engine
         public Exception Exception { get; set; }
     }
 
+    internal enum SearchRecoveryWork { NoneDue, Due, CheckpointUnknown }
+
     /// <summary>What one import cycle did. The host reports it as an <c>AppInsightsImportCycle</c> event.</summary>
     public sealed class AppInsightsImportCycleResult
     {
@@ -99,7 +101,12 @@ namespace WebJob.AppInsightsImporter.Engine
         public int? PendingSearchHours { get; internal set; }
         public int ReconciledSearches { get; internal set; }
         /// <summary>More persisted hours can be attempted without importing newer telemetry first.</summary>
-        public bool HasDueSearchRetries { get; internal set; }
+        public bool HasDueSearchRetries
+        {
+            get => SearchWork == SearchRecoveryWork.Due;
+            internal set => SearchWork = value ? SearchRecoveryWork.Due : SearchRecoveryWork.NoneDue;
+        }
+        internal SearchRecoveryWork SearchWork { get; set; }
         internal bool SearchRetryUnavailable { get; set; }
 
         internal void Degrade(string reason)
