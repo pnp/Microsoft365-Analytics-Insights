@@ -18,9 +18,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private sealed class DirectResponseOption : IRequestOption
         {
             internal bool Collection { get; set; }
+            internal Action<HttpStatusCode> ObserveStatus { get; set; }
         }
         internal static readonly IRequestOption RequireDirect = new DirectResponseOption();
         internal static readonly IRequestOption RequireCollection = new DirectResponseOption { Collection = true };
+        internal static IRequestOption CaptureDirectStatus(Action<HttpStatusCode> observe) => new DirectResponseOption { ObserveStatus = observe };
+        internal static void ReportDirectStatus(HttpRequestMessage request, HttpStatusCode status) =>
+            request.GetRequestOption<DirectResponseOption>()?.ObserveStatus?.Invoke(status);
         internal static bool IsRequired(HttpRequestMessage request) => request.GetRequestOption<DirectResponseOption>() != null;
         internal static bool RequiresCollection(HttpRequestMessage request) => request.GetRequestOption<DirectResponseOption>()?.Collection == true;
 

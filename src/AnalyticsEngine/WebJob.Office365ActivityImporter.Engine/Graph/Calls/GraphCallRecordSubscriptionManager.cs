@@ -3,6 +3,7 @@ using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -86,6 +87,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         {
             if (notificationUrl is null) throw new ArgumentNullException(nameof(notificationUrl));
 
+            HttpStatusCode? status = null;
             var result = await _client.Subscriptions.PostAsync(new Subscription()
             {
                 NotificationUrl = notificationUrl.ToString(),
@@ -93,13 +95,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 ClientState = clientState,
                 ChangeType = "created",
                 ExpirationDateTime = expiryUtc
-            }, rc => rc.Options.Add(GraphResponseEvidence.RequireDirect), _stopping);
+            }, rc => rc.Options.Add(GraphResponseEvidence.CaptureDirectStatus(code => status = code)), _stopping);
 
             if (string.IsNullOrWhiteSpace(result?.Id))
                 throw new InvalidOperationException("Graph returned no subscription ID; subscription maintenance cannot continue.");
             var id = result.Id;
             CheckCreateFields(result, notificationUrl, clientState);
-            if (!HasCreateFields(result))
+            // Only a 201 creation body is definitive; another 2xx can supply an ID to check, not proof.
+            if (status != HttpStatusCode.Created || !HasCreateFields(result))
             {
                 result = await ReadBackAsync(id);
                 if (result?.Id != id || !HasCreateFields(result))
@@ -131,7 +134,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (string.IsNullOrWhiteSpace(id)) throw new InvalidOperationException("Graph returned no subscription ID to confirm.");
             try
             {
-                return await _client.Subscriptions[id].GetAsync(rc => rc.Options.Add(GraphResponseEvidence.RequireDirect), _stopping);
+                HttpStatusCode? status = null;
+                var detail = await _client.Subscriptions[id].GetAsync(rc =>
+                    rc.Options.Add(GraphResponseEvidence.CaptureDirectStatus(code => status = code)), _stopping);
+                _stopping.ThrowIfCancellationRequested();
+                return status == HttpStatusCode.OK ? detail : null;
             }
             catch (Exception ex) when (!(ex is OperationCanceledException || ex is GraphDecisionRedirectException || ex is TimeoutException))
             {

@@ -78,6 +78,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
                 cancellationToken.ThrowIfCancellationRequested(); // Cancellation can also surface as EOF.
+                if (direct) GraphResponseEvidence.ReportDirectStatus(request, response.StatusCode);
                 return response;
             }
             catch (Exception ex)

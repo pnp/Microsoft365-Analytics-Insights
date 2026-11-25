@@ -478,6 +478,9 @@ namespace Tests.UnitTests
         [DataTestMethod]
         [DataRow("direct", true)]
         [DataRow("confirmed", true)]
+        [DataRow("accepted-then-ok", true)]
+        [DataRow("ok-then-accepted", false)]
+        [DataRow("accepted-read", false)]
         [DataRow("missing", false)]
         [DataRow("different-id", false)]
         [DataRow("conflict-on-read", false)]
@@ -489,20 +492,26 @@ namespace Tests.UnitTests
             if (evidence == "missing") readback.Remove("notificationUrl");
             if (evidence == "different-id") readback["id"] = "another";
             var transport = SubscriptionTransport(1, operations,
-                () => Json(201, evidence == "direct" ? Replacement().ToString() : "{\"id\":\"replacement\"}"),
+                () => evidence == "accepted-then-ok" ? Json(202, Replacement().ToString())
+                    : evidence == "ok-then-accepted" ? Json(200, Replacement().ToString())
+                    : Json(201, evidence == "direct" ? Replacement().ToString() : "{\"id\":\"replacement\"}"),
                 () => throw new AssertFailedException(), () => new HttpResponseMessage(HttpStatusCode.NoContent),
                 read: () => evidence == "conflict-on-read"
                     ? Json(409, JsonConvert.SerializeObject(new { error = new { code = "Conflict", message = DuplicateMessage } }))
-                    : evidence == "redirect-on-read" ? Redirect() : Json(200, readback.ToString()));
+                    : evidence == "redirect-on-read" ? Redirect()
+                    : Json(evidence == "accepted-read" || evidence == "ok-then-accepted" ? 202 : 200, readback.ToString()));
+            var records = new CallSubscriptionRecordStore(null, new InMemoryKeyValueStore());
             using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
             {
-                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph, CancellationToken.None, AppId), NullLogger.Instance, Clock);
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph, CancellationToken.None, AppId), records, NullLogger.Instance, Clock);
                 if (confirmed)
                     Assert.AreEqual(CallWebhookChange.Replaced, (await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState)).Change);
                 else if (evidence == "redirect-on-read")
                     await Assert.ThrowsAsync<GraphDecisionRedirectException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
                 else
                     await Assert.ThrowsAsync<InvalidOperationException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
+                var record = await records.GetAsync(CallSubscriptionRules.CurrentNotificationUrl(WebhookUrl));
+                Assert.AreEqual(confirmed ? "replacement" : null, record?.SubscriptionId);
             }
             var expected = new List<string> { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions" };
             if (evidence != "direct") expected.Add("GET /v1.0/subscriptions/replacement");
