@@ -9,6 +9,7 @@ using System;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
+using System.Threading.Tasks;
 using DataUtils.Http;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -20,7 +21,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     /// </summary>
     public static class GraphServiceClientFactory
     {
-        private static readonly string[] DefaultScopes = new[] { "https://graph.microsoft.com/.default" };
+        // This factory uses GraphClientFactory's Global cloud. Bind the token to that cloud's
+        // host and audience together; a redirect can point to a preauthenticated download host.
+        private const string GraphHost = "graph.microsoft.com";
+        private static readonly string[] GraphHosts = { GraphHost };
+        private static readonly string[] DefaultScopes = { "https://" + GraphHost + "/.default" };
         public static readonly TimeSpan DefaultGraphSdkTimeout = TimeSpan.FromSeconds(100);
 
         /// <summary>
@@ -30,6 +35,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// add a bounded handler inside it for local per-attempt request-deadline timeouts. The
         /// deadline covers headers and the body transfer; only bodyless GET/HEAD requests get local
         /// timeout retries. The handler buffers up to 32 MiB per SDK page, with at most 16 fills at a time.
+        /// Kiota owns redirects; only the Global Graph HTTPS origin receives the Graph credential.
         /// Bulk usage reports use the separate streaming client.
         /// </summary>
         public static GraphServiceClient CreateForGraphImport(TokenCredential credential, ILogger logger = null)
@@ -41,7 +47,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         internal static GraphServiceClient CreateForGraphImport(TokenCredential credential, GraphRequestBudgetOptions budget, ILogger logger, HttpMessageHandler finalHandler = null)
         {
             if (credential == null) throw new ArgumentNullException(nameof(credential));
-            var authProvider = new AzureIdentityAuthenticationProvider(credential, scopes: DefaultScopes);
+            var authProvider = CreateAuthenticationProvider(credential);
             var httpClient = CreateHttpClient(authProvider, budget, logger, finalHandler);
             return new GraphServiceClient(httpClient, authProvider);
         }
@@ -56,10 +62,54 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 handlers.Insert(0, new MessageTraceHandler("graph"));
             }
-            var httpClient = GraphClientFactory.Create(authProvider, handlers, finalHandler: finalHandler);
+            // The SDK appends an AuthorizationHandler after the redirect handler. It must use the
+            // same host-restricted provider as the request adapter, including on redirected hops.
+            var httpClient = GraphClientFactory.Create(authProvider, handlers, nationalCloud: GraphClientFactory.Global_Cloud,
+                finalHandler: new GraphOriginHandler(finalHandler));
             httpClient.Timeout = Timeout.InfiniteTimeSpan;
             budget.Log(logger);
             return httpClient;
+        }
+
+        internal static AzureIdentityAuthenticationProvider CreateAuthenticationProvider(TokenCredential credential)
+            => new AzureIdentityAuthenticationProvider(credential, allowedHosts: GraphHosts, scopes: DefaultScopes);
+
+        internal static HttpMessageHandler CreateTransport()
+        {
+            // Keep the SDK's proxy, decompression and timeout defaults, but expose each redirect
+            // to Kiota. In the net48 transport WinHTTP otherwise rewrites the request URI in place.
+            var transport = GraphClientFactory.CreatePipeline(Array.Empty<DelegatingHandler>());
+            if (transport is WinHttpHandler winHttp)
+                winHttp.AutomaticRedirection = false;
+            else if (transport is HttpClientHandler http)
+                http.AllowAutoRedirect = false;
+            else
+            {
+                transport.Dispose();
+                throw new InvalidOperationException("Cannot disable native redirects on the Graph SDK transport.");
+            }
+            return transport;
+        }
+
+        private sealed class GraphOriginHandler : DelegatingHandler
+        {
+            public GraphOriginHandler(HttpMessageHandler transport) : base(transport ?? CreateTransport()) { }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var uri = request.RequestUri;
+                // Kiota's token allowlist checks host, not port, and its authorization handler
+                // passes through an existing header. Enforce the credential boundary at the wire.
+                request.Headers.Host = null; // Let the transport derive the authority from the URI we checked.
+                if (uri.Scheme != Uri.UriSchemeHttps || !uri.IsDefaultPort || !string.Equals(uri.Host, GraphHost, StringComparison.OrdinalIgnoreCase))
+                {
+                    request.Headers.Authorization = null;
+                    request.Headers.ProxyAuthorization = null;
+                    request.Headers.Remove("Cookie");
+                    request.Headers.Remove("Cookie2");
+                }
+                return base.SendAsync(request, cancellationToken);
+            }
         }
 
         /// <summary>
@@ -99,7 +149,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         public static GraphServiceClient CreateWithTimeout(TokenCredential credential, TimeSpan timeout)
         {
-            var authProvider = new AzureIdentityAuthenticationProvider(credential, scopes: DefaultScopes);
+            var authProvider = CreateAuthenticationProvider(credential);
             return CreateWithTimeout(authProvider, timeout);
         }
 
@@ -114,7 +164,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 handlers.Insert(0, new MessageTraceHandler("graph"));
             }
-            var httpClient = GraphClientFactory.Create(handlers, finalHandler: finalHandler);
+            var httpClient = GraphClientFactory.Create(handlers, nationalCloud: GraphClientFactory.Global_Cloud,
+                finalHandler: new GraphOriginHandler(finalHandler));
             httpClient.Timeout = timeout;
             return new GraphServiceClient(httpClient, authProvider);
         }

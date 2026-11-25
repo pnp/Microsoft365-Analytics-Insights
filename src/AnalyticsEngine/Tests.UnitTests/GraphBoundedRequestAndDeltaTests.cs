@@ -187,6 +187,51 @@ namespace Tests.UnitTests
             }
         }
 
+        [DataTestMethod]
+        [DataRow(403)]
+        [DataRow(404)]
+        public async Task GraphUserLoader_UnreadableSubscribedSkus_OnlyForbiddenUsesPerUserFallback(int status)
+        {
+            using (var body = new GatedJsonContent())
+            {
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(new HttpResponseMessage((HttpStatusCode)status) { Content = body }));
+                using (var graph = GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(250, 1, 2000), null, terminal))
+                {
+                    var loader = new GraphUserLoader(null, null, AnalyticsLogger.ConsoleOnlyTracer(), graph);
+                    if (status == 403)
+                    {
+                        Assert.IsNull(await WithinWatchdog(loader.LoadTenantSkus()), "Null selects the per-user fallback, not an empty SKU inventory.");
+                    }
+                    else
+                    {
+                        var error = await Assert.ThrowsExceptionAsync<ApiException>(() => WithinWatchdog(loader.LoadTenantSkus()));
+                        Assert.AreEqual(status, error.ResponseStatusCode);
+                    }
+                    Assert.IsTrue(body.Started.Task.IsCompleted && body.Disposed);
+                    CollectionAssert.AreEqual(new[] { "GET /v1.0/subscribedSkus" }, terminal.Requests);
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task GraphUserLoader_CancelledSubscribedSkus_DoesNotUsePermissionFallback()
+        {
+            using (var body = new GatedJsonContent())
+            {
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = body }));
+                using (var http = BuildGraphImportPipelineClient(terminal, 30000, 1, 60000))
+                using (var graph = new Microsoft.Graph.GraphServiceClient(http, new AnonymousAuthenticationProvider()))
+                {
+                    var load = new GraphUserLoader(null, null, AnalyticsLogger.ConsoleOnlyTracer(), graph).LoadTenantSkus();
+                    await WithinWatchdog(body.Started.Task);
+                    http.CancelPendingRequests();
+                    await Assert.ThrowsAsync<OperationCanceledException>(() => WithinWatchdog(load));
+                    Assert.IsTrue(body.Disposed);
+                    Assert.AreEqual(1, terminal.Attempts);
+                }
+            }
+        }
+
         [TestMethod]
         public async Task GraphImportSdk_OversizedPage_RefusesBodyWithoutReadingOrRetrying()
         {
@@ -282,6 +327,89 @@ namespace Tests.UnitTests
                     Assert.IsFalse(redirectBody.Started.Task.IsCompleted);
                     Assert.IsTrue(redirectBody.Disposed);
                     Assert.IsTrue(finalBody.Started.Task.IsCompleted && finalBody.Disposed, "The deadline must abort the destination body.");
+                }
+            }
+        }
+
+        [TestMethod]
+        public void GraphImportTransport_LeavesRedirectsToKiota()
+        {
+            using (var transport = GraphServiceClientFactory.CreateTransport())
+            {
+                Assert.IsInstanceOfType(transport, typeof(WinHttpHandler), "The Graph SDK's Windows .NET Framework transport.");
+                Assert.IsFalse(((WinHttpHandler)transport).AutomaticRedirection);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("https://download.contoso.invalid/page")]
+        [DataRow("https://graph.microsoft.us/v1.0/users")]
+        [DataRow("https://graph.microsoft.com:8443/v1.0/users")]
+        public async Task GraphImportSdk_RedirectTimeout_AuthenticatesOnlyTheConfiguredGraphOrigin(string destination)
+        {
+            var origin = new Uri("https://graph.microsoft.com/v1.0/users");
+            var target = new Uri(destination);
+            var hops = new List<Uri>();
+            var authorized = new List<Uri>();
+            var credential = new SyntheticTokenCredential();
+            Func<CancellationToken, Task<HttpResponseMessage>> redirect = ct => Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.Found) { Headers = { Location = target } });
+            using (var stalled = new GatedJsonContent())
+            {
+                var terminal = new SequenceHttpHandler(redirect, ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = stalled }),
+                    redirect, ct => Task.FromResult(JsonResponse(HttpStatusCode.OK)))
+                {
+                    ObserveRequest = request =>
+                    {
+                        hops.Add(request.RequestUri);
+                        if (request.Headers.Authorization != null) authorized.Add(request.RequestUri);
+                    }
+                };
+                using (var graph = GraphServiceClientFactory.CreateForGraphImport(credential, TestBudget(500, 1, 3000), null, terminal))
+                {
+                    Assert.IsNotNull(await WithinWatchdog(graph.Users.GetAsync()));
+                    CollectionAssert.AreEqual(new[] { origin, target, origin, target }, hops);
+                    CollectionAssert.AreEqual(new[] { origin, origin }, authorized);
+                    if (target.Host != origin.Host)
+                        Assert.AreEqual(2, credential.Requests, "Only the two requests to the Global Graph host may ask for a token.");
+                    Assert.IsTrue(stalled.Started.Task.IsCompleted && stalled.Disposed);
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task GraphImportPipeline_TimeoutThenThrottle_ReplaysOnlyOriginalTargetAndHeaders()
+        {
+            using (var stalled = new GatedJsonContent())
+            {
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = stalled }),
+                    ct => Task.FromResult(JsonResponse((HttpStatusCode)429, retryAfterSeconds: 1)), ct => Task.FromResult(JsonResponse(HttpStatusCode.OK)));
+                terminal.ObserveRequest = request =>
+                {
+                    Assert.AreEqual("/v1.0/users?$top=1", request.RequestUri.PathAndQuery);
+                    Assert.AreEqual("eventual", request.Headers.GetValues("ConsistencyLevel").Single());
+                    if (terminal.Attempts == 1)
+                    {
+                        // Model post-send transport mutations with a harmless, same-host URI and header.
+                        request.RequestUri = new Uri(request.RequestUri, "/changed-after-send");
+                        request.Headers.Remove("ConsistencyLevel");
+                    }
+                    else
+                    {
+                        Assert.IsFalse(request.Headers.Contains("Cookie"));
+                        Assert.IsNull(request.Headers.Host);
+                        Assert.IsNotNull(request.Headers.Authorization, "The SDK authenticates the replay for the original Graph host.");
+                    }
+                };
+                using (var http = BuildGraphImportPipelineClient(terminal, 500, 1, 3000))
+                using (var request = new HttpRequestMessage(HttpMethod.Get, "https://graph.microsoft.com/v1.0/users?$top=1"))
+                {
+                    request.Headers.Add("ConsistencyLevel", "eventual");
+                    request.Headers.Add("Cookie", "example=synthetic");
+                    request.Headers.Host = request.RequestUri.Host;
+                    using (var response = await WithinWatchdog(http.SendAsync(request)))
+                        Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+                    CollectionAssert.AreEqual(new[] { null, null, "1" }, terminal.RetryAttemptHeaders);
                 }
             }
         }
@@ -429,8 +557,7 @@ namespace Tests.UnitTests
 
         private static HttpClient BuildGraphImportPipelineClient(SequenceHttpHandler terminal, int perRequestMs, int timeoutRetryCount, int totalBudgetMs, int sdkRetryCount = 3)
         {
-            var authProvider = new Microsoft.Kiota.Authentication.Azure.AzureIdentityAuthenticationProvider(
-                new SyntheticTokenCredential(), scopes: new[] { "https://graph.microsoft.com/.default" });
+            var authProvider = GraphServiceClientFactory.CreateAuthenticationProvider(new SyntheticTokenCredential());
             return GraphServiceClientFactory.CreateHttpClient(authProvider, TestBudget(perRequestMs, timeoutRetryCount, totalBudgetMs, sdkRetryCount), AnalyticsLogger.ConsoleOnlyTracer(), terminal);
         }
 
@@ -476,8 +603,13 @@ namespace Tests.UnitTests
 
         private sealed class SyntheticTokenCredential : Azure.Core.TokenCredential
         {
+            public int Requests { get; private set; }
+
             public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
-                => new Azure.Core.AccessToken("synthetic-token", DateTimeOffset.UtcNow.AddHours(1));
+            {
+                Requests++;
+                return new Azure.Core.AccessToken("synthetic-token", DateTimeOffset.UtcNow.AddHours(1));
+            }
 
             public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken)
                 => new ValueTask<Azure.Core.AccessToken>(GetToken(requestContext, cancellationToken));
@@ -619,6 +751,7 @@ namespace Tests.UnitTests
             public List<string> RetryAttemptHeaders { get; } = new List<string>();
             public List<string> Requests { get; } = new List<string>();
             public bool LastRequestHadContent { get; private set; }
+            public Action<HttpRequestMessage> ObserveRequest { get; set; }
 
             public SequenceHttpHandler(params Func<CancellationToken, Task<HttpResponseMessage>>[] responses)
             {
@@ -631,6 +764,7 @@ namespace Tests.UnitTests
                 Requests.Add(request.Method + " " + request.RequestUri.PathAndQuery);
                 LastRequestHadContent = request.Content != null;
                 RetryAttemptHeaders.Add(request.Headers.TryGetValues("Retry-Attempt", out var values) ? string.Join(",", values) : null);
+                ObserveRequest?.Invoke(request);
                 var response = _responses.Count == 0
                     ? new HttpResponseMessage(HttpStatusCode.OK)
                     : await _responses.Dequeue()(cancellationToken).ConfigureAwait(false);

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
@@ -22,6 +23,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
     {
         private readonly GraphRequestBudgetOptions _options;
         private readonly ILogger _logger;
+        private static readonly HashSet<string> CredentialAndRoutingHeaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "Authorization", "Proxy-Authorization", "Cookie", "Cookie2", "Host" };
 
         public BoundedGraphRequestHandler(GraphRequestBudgetOptions options, ILogger logger)
         {
@@ -32,8 +35,27 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var started = Stopwatch.StartNew();
-            OperationCanceledException lastTimeout = null;
+            cancellationToken.ThrowIfCancellationRequested();
             var maxAttempts = IsRetryableRead(request) ? _options.MaxAttempts : 1;
+            // Never reconstruct a retry from a request the transport has already seen: both its
+            // URI and headers can change. Kiota authenticates each replay for its actual target.
+            var replayTemplate = maxAttempts > 1 ? CloneRead(request) : null;
+            HttpResponseMessage result = null;
+            try
+            {
+                result = await SendAttemptsAsync(request, replayTemplate, maxAttempts, started, cancellationToken).ConfigureAwait(false);
+                return result;
+            }
+            finally
+            {
+                if (result?.RequestMessage != replayTemplate) replayTemplate?.Dispose();
+            }
+        }
+
+        private async Task<HttpResponseMessage> SendAttemptsAsync(HttpRequestMessage request, HttpRequestMessage replayTemplate,
+            int maxAttempts, Stopwatch started, CancellationToken cancellationToken)
+        {
+            OperationCanceledException lastTimeout = null;
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
@@ -47,7 +69,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 var timeout = remaining < _options.PerRequestTimeout ? remaining : _options.PerRequestTimeout;
                 using (var requestDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-                using (var retryRequest = attempt == 1 ? null : CloneRead(request))
+                using (var retryRequest = attempt == 1 ? null : CloneRead(replayTemplate))
                 {
                     requestDeadline.CancelAfter(timeout);
                     try
@@ -59,10 +81,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             response.Dispose();
                             cancellationToken.ThrowIfCancellationRequested();
                         }
-                        if (retryRequest != null && response.RequestMessage == retryRequest)
+                        if (replayTemplate != null && response.RequestMessage == (retryRequest ?? request)
+                            && (retryRequest != null || !response.IsSuccessStatusCode))
                         {
-                            // Kiota may clone this request after a Retry-After. Don't give it a disposed clone.
-                            response.RequestMessage = request;
+                            // Kiota may clone this for a Retry-After. Hand it the original target,
+                            // not a mutated wire request or a retry clone about to be disposed.
+                            response.RequestMessage = replayTemplate;
                         }
                         if (attempt > 1)
                         {
@@ -109,7 +133,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
             foreach (var header in request.Headers)
             {
-                clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                if (!CredentialAndRoutingHeaders.Contains(header.Key))
+                    clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
             }
 
             foreach (var property in request.Properties)

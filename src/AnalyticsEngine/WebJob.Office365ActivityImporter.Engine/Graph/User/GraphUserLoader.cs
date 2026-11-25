@@ -591,7 +591,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 return allSkus;
             }
-            catch (ODataError ex)
+            catch (ApiException ex)
             {
                 if (ex.ResponseStatusCode != (int)System.Net.HttpStatusCode.Forbidden)
                 {
@@ -601,13 +601,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // transient, and falling back would turn one cheap failed request into one Graph
                     // call per user (200k on a large tenant, while we are already being throttled),
                     // down a path whose own comment warns it can run out of memory. Fail the cycle
-                    // and retry instead; the delta token is not committed, so nothing is lost. This
-                    // also keeps first-page failures consistent with page 2+, which throw
-                    // ServiceException from the PageIterator and already abort. See issue #392.
+                    // and retry instead; the delta token is not committed, and no partial SKU
+                    // inventory is returned if a later page fails. See issue #392.
                     _logger.LogError(ex, $"User import - couldn't load SKUs for org - {ex.Message}");
                     throw;
                 }
 
+                // An unreadable error body leaves a plain Kiota ApiException, not an ODataError.
+                // The known HTTP status still identifies the permission fallback.
                 _logger.LogError($"User import - couldn't load SKUs for org - {ex.Message}. Ensure 'Organization.Read.All' in granted.");
 
                 // If we can't get tenant SKUs to find all users by, we can get SKUs per user instead, but this can be very slow.
