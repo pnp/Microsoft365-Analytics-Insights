@@ -1,6 +1,7 @@
 ﻿using Azure;
 using Azure.Core;
 using Azure.ResourceManager.Resources;
+using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -64,6 +65,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
             try
             {
                 resourceGroup = await resourceGroups.GetAsync(_config.ResourceName, CancellationToken);
+                var expected = ResourceGroupResource.CreateResourceIdentifier(_subscription.Id.SubscriptionId, _config.ResourceName);
+                if (resourceGroup?.HasData != true || !expected.Equals(resourceGroup.Id))
+                    throw new InstallException("Azure did not return the configured resource group. Verify the subscription and resource group, then retry.");
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
             {

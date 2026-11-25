@@ -1785,6 +1785,28 @@ namespace Tests.UnitTests.InstallTests
         [DataRow("CONTOSO", Sub, true)]
         [DataRow("contoso-other", Sub, false)]
         [DataRow("contoso", "00000000-0000-0000-0000-000000000001", false)]
+        public async Task ResourceGroup_VerifierNeverHandsAnUnverifiedGroupToItsChecks(string returnedName, string returnedSub, bool matches)
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddResourceGroup();
+                arm.Resource(Rg)["id"] = $"/subscriptions/{returnedSub}/resourceGroups/{returnedName}";
+                arm.Resource(Rg)["name"] = returnedName;
+                var lookup = new ResourceGroupTestOnlyInstallJob(NullLogger.Instance, new AzureLocation("westeurope"), arm.Subscription, "contoso");
+
+                if (matches) await lookup.Install();
+                else await Assert.ThrowsAsync<InstallException>(() => lookup.Install());
+
+                Assert.AreEqual(matches, lookup.ResourceGroupFound != null);
+                Assert.AreEqual(1, arm.Requests.Count);
+                Assert.AreEqual("GET", arm.Requests.Single().Method);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("CONTOSO", Sub, true)]
+        [DataRow("contoso-other", Sub, false)]
+        [DataRow("contoso", "00000000-0000-0000-0000-000000000001", false)]
         public async Task Plan_VerifierChecksOnlyTheConfiguredResourceGroup(string groupName, string subscriptionId, bool matches)
         {
             using (var arm = new FakeArm())
