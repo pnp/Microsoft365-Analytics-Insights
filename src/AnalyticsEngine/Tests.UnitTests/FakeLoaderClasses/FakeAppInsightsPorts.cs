@@ -364,7 +364,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         public InMemoryPageUpdatePersistenceManager(List<string> callLog = null) : base("Page updates", callLog) { }
 
-        public Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events) => RecordAndRespond(events);
+        public Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default) => RecordAndRespond(events);
     }
 
     /// <summary>In-memory <see cref="IClicksPersistenceManager"/>.</summary>

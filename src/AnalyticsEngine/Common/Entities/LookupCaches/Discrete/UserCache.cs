@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities.LookupCaches
@@ -9,6 +10,7 @@ namespace Common.Entities.LookupCaches
     public class UserCache : DBLookupCache<User>
     {
         public UserCache(AnalyticsEntitiesContext context) : base(context) { }
+        public UserCache(AnalyticsEntitiesContext context, CancellationToken cancellationToken) : base(context, cancellationToken) { }
 
         public override DbSet<User> EntityStore => this.DB.users;
 
@@ -67,7 +69,7 @@ namespace Common.Entities.LookupCaches
         {
             // Use FirstOrDefaultAsync instead of SingleOrDefaultAsync to handle existing duplicate records gracefully
             // Order by ID to ensure consistent results if duplicates exist
-            return await EntityStore.Where(t => t.UserPrincipalName == DbFunctions.AsNonUnicode(upn)).OrderBy(t => t.ID).FirstOrDefaultAsync();
+            return await EntityStore.Where(t => t.UserPrincipalName == DbFunctions.AsNonUnicode(upn)).OrderBy(t => t.ID).FirstOrDefaultAsync(OperationToken);
         }
 
         /// <summary>

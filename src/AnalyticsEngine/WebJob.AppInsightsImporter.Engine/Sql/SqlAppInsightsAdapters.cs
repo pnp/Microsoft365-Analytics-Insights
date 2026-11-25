@@ -226,8 +226,8 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
         }
 
-        public Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events)
-            => events.SavePageUpdatesToSQL(_logger, _config, _contextFactory);
+        public Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default)
+            => events.SavePageUpdatesToSQL(_logger, _config, _contextFactory, cancellationToken);
     }
 
     /// <summary>SQL <see cref="IClicksPersistenceManager"/>.</summary>

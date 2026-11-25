@@ -132,11 +132,13 @@ namespace Tests.UnitTests
         [DataTestMethod]
         [DataRow("page-view")]
         [DataRow("normal-search")]
+        [DataRow("page-update-after-search")]
         [DataRow("search-only")]
         public async Task StopDuringBlockedMerge_PreservesEarlierCommitsAndReplaysOnce(string boundary)
         {
             var searchesOnly = boundary == "search-only";
             var stopInPageView = boundary == "page-view";
+            var stopAfterSearch = boundary == "page-update-after-search";
             var source = new FakeAppInsightsSourceLoader
             {
                 PageViewAt = t => Page(t, "eligible"),
@@ -152,6 +154,15 @@ namespace Tests.UnitTests
                 await cursor.WriteSearchRetriesAsync(new[] { new AppInsightsSearchRetry(arrival, Start) });
             source.ExtraCustomEvents.Add((arrival, arrival));
             source.ExtraPageViews.Add((Start.AddHours(1), Start.AddHours(1)));
+            if (stopAfterSearch)
+            {
+                var updateTime = arrival.AddSeconds(1);
+                source.ExtraCustomEvents.Add((updateTime, updateTime));
+                source.EventAt = t => t == updateTime
+                    ? new PageUpdateEventAppInsightsQueryResult { AppInsightsTimestamp = t, Username = Reader,
+                        CustomProperties = new PageUpdateEventCustomProps { Url = Page(t, "eligible").Url, PropsString = "{\"ExampleField\":\"Example value\"}" } }
+                    : (BaseCustomEventAppInsightsQueryResult)Search(t, "eligible", "Example", Reader);
+            }
             clock.Advance(TimeSpan.FromHours(2));
 
             using (var stop = new CancellationTokenSource())
@@ -165,6 +176,7 @@ namespace Tests.UnitTests
                 {
                     command.Transaction = tx;
                     command.CommandText = stopInPageView ? "SELECT COUNT(*) FROM dbo.page_titles WITH (TABLOCKX, HOLDLOCK);"
+                        : stopAfterSearch ? "SELECT COUNT(*) FROM dbo.file_field_definitions WITH (TABLOCKX, HOLDLOCK);"
                         : "SELECT COUNT(*) FROM dbo.searches WITH (TABLOCKX, HOLDLOCK);";
                     await command.ExecuteScalarAsync();
                     import = RunCycle(clock, source, state, token: stop.Token);
@@ -196,8 +208,10 @@ namespace Tests.UnitTests
             Assert.AreEqual(searchesOnly ? 1 : 0, markers.Count);
             if (searchesOnly) Assert.AreEqual(Start, markers.Single().RetryAfterUtc, "The stop must not reschedule the hour.");
             Assert.AreEqual(stopInPageView ? 1 : 2, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"), "Earlier SQL commits survive.");
-            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms"), "The blocked lookup and fact roll back together.");
-            Assert.AreEqual((0L, 0L), SearchKpis());
+            var committed = stopAfterSearch ? 1 : 0;
+            Assert.AreEqual(committed, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms"), "A lookup and its search fact commit together.");
+            Assert.AreEqual(((long)committed, (long)committed), SearchKpis());
+            if (stopAfterSearch) Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.file_metadata_property_values"));
 
             var recovered = await RunCycle(clock, source, state);
             Assert.AreEqual(clock.UtcNow, recovered.CursorAdvancedToUtc);
@@ -205,6 +219,11 @@ namespace Tests.UnitTests
             Assert.AreEqual(searchesOnly ? 1 : 0, recovered.ReconciledSearches);
             Assert.AreEqual(2, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"));
             Assert.AreEqual((1L, 1L), SearchKpis());
+            if (stopAfterSearch)
+            {
+                Assert.AreEqual(1, recovered.Events, "Only the page update counts; the search was already saved.");
+                Assert.AreEqual(1, _database.Scalar("SELECT COUNT(*) FROM dbo.file_metadata_property_values WHERE field_value = N'Example value'"));
+            }
         }
 
         [TestMethod]

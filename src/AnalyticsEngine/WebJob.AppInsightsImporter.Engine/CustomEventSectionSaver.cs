@@ -65,7 +65,7 @@ namespace WebJob.AppInsightsImporter.Engine
             }, failedSections, cancellationToken);
 
             var pagesUpdated = await SaveSectionSafe(_logger, "Page updates",
-                () => _pageUpdates.SavePageUpdatesAsync(events), failedSections, cancellationToken);
+                () => _pageUpdates.SavePageUpdatesAsync(events, cancellationToken), failedSections, cancellationToken);
 
             var clicks = await SaveSectionSafe(_logger, "Clicks",
                 () => _clicks.SaveClicksAsync(events, cancellationToken), failedSections, cancellationToken);
