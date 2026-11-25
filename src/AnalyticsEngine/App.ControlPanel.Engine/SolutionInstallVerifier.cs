@@ -354,10 +354,12 @@ namespace App.ControlPanel.Engine
 
         /// <summary>
         /// Warn when an existing App Service plan cannot run Always On / 64-bit workers so Test Configuration
-        /// catches under-provisioned plans before the install writes App Service settings. Logs only; never throws.
+        /// catches under-provisioned plans before the install writes App Service settings. Unverifiable reads warn;
+        /// caller cancellation still stops the check.
         /// </summary>
-        async Task VerifyAppServicePlanCapabilities(ResourceGroupResource testRg)
+        internal async Task VerifyAppServicePlanCapabilities(ResourceGroupResource testRg)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             if (testRg == null)
             {
                 _logger.LogInformation("Skipping App Service plan capability check - resource group is not available.");
@@ -375,11 +377,11 @@ namespace App.ControlPanel.Engine
             {
                 // Check the plan the install will really use: an existing web app keeps the plan it runs on, whatever the
                 // configured plan name (earlier installers named that plan after the web app).
-                var plan = await AppServicePlanTask.FindHostingPlanAsync(testRg, Config.AppServiceWebAppName)
-                    ?? AppServicePlanTask.FindConfiguredPlan(testRg, planName);
+                var hosting = await AppServiceResourceLookup.DiscoverHostingAsync(testRg, Config.AppServiceWebAppName, planName, CancellationToken);
+                var plan = hosting.Plan;
                 if (plan == null)
                 {
-                    _logger.LogInformation($"App Service plan '{planName}' not found yet; skipping capability check (it will be created during install).");
+                    _logger.LogInformation($"App Service plan '{planName}' not found yet; the installer will request a new plan. There is no existing tier to check.");
                     return;
                 }
                 if (!string.Equals(plan.Data.Name, planName, StringComparison.OrdinalIgnoreCase))
@@ -399,6 +401,7 @@ namespace App.ControlPanel.Engine
             }
             catch (Exception ex)
             {
+                CancellationToken.ThrowIfCancellationRequested();
                 _logger.LogWarning($"Could not check App Service plan '{planName}' capabilities: {ex.Message}");
             }
         }

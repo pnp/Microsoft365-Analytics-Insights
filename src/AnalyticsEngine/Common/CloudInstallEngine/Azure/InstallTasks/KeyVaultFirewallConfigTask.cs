@@ -72,7 +72,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
 
             // 2. App Service outbound IPs - needed so the web app / WebJobs can read secrets.
-            var appIps = GetAppServiceOutboundIps(appServiceName);
+            var appIps = await GetAppServiceOutboundIpsAsync(appServiceName);
             if (appIps.Count > 0)
             {
                 allowIps.AddRange(appIps);
@@ -136,9 +136,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
         }
 
-        List<string> GetAppServiceOutboundIps(string appServiceName)
+        async Task<List<string>> GetAppServiceOutboundIpsAsync(string appServiceName)
         {
-            var site = AppServiceResourceLookup.FindSite(Container, appServiceName, CancellationToken);
+            var site = await AppServiceResourceLookup.FindSiteForDeploymentAsync(Container, appServiceName, CancellationToken);
             if (site == null)
             {
                 _logger.LogWarning($"App Service '{appServiceName}' not found in the resource group; cannot allow its outbound IPs on the Key Vault firewall.");

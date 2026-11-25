@@ -439,7 +439,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     }, ct);
                     var updated = (await site.GetAsync(ct)).Value;
                     if (updated.Data.VirtualNetworkSubnetId != null ||
-                        ((await site.GetWebSiteConfig().GetAsync(ct)).Value.Data.IsVnetRouteAllEnabled == true) != artifact.PreviousRouteAllEnabled)
+                        ((await AppServiceResourceLookup.ReadSiteConfigAsync(site, ct)).IsVnetRouteAllEnabled == true) != artifact.PreviousRouteAllEnabled)
                         throw PrivateNetworkProvenance.Blocked(artifact.Id, "Azure did not confirm App Service integration reset");
                     SiteNetworkChangeVerified?.Invoke(updated);
                 }

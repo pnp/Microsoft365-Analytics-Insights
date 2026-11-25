@@ -153,6 +153,162 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        [DataTestMethod]
+        [DataRow(false, "config", "missing properties")]
+        [DataRow(true, "config", "null properties")]
+        [DataRow(true, "config", "array properties")]
+        [DataRow(true, "config", "wrong ID")]
+        [DataRow(false, "FTP", "missing properties")]
+        [DataRow(true, "FTP", "missing allow")]
+        [DataRow(false, "FTP", "null allow")]
+        [DataRow(true, "FTP", "invalid allow")]
+        [DataRow(true, "FTP", "wrong ID")]
+        [DataRow(true, "FTP", "denied")]
+        [DataRow(true, "config", "cancelled")]
+        [DataRow(true, "FTP", "cancelled")]
+        public async Task AppService_UnverifiableSecurityReadStopsBeforeAnyChange(bool websiteOnly, string section, string failure)
+        {
+            using (var arm = new FakeArm())
+            using (var cancellation = new CancellationTokenSource())
+            {
+                const string subnet = Rg + "/providers/Microsoft.Network/virtualNetworks/contoso-vnet/subnets/integration";
+                const string privateDetail = "Contoso private diagnostic";
+                var config = BackendConfig("CoNtOsO-WeB", "contoso-plan");
+                arm.AddBackendInventory(config);
+                arm.AddSite("1.3", subnet);
+                arm.Resource(Site)["properties"]["publicNetworkAccess"] = "Disabled"; // A PATCH is pending even with valid TLS.
+                var integration = new PrivateNetworkArtifact { Id = Site, TargetId = Site, SubnetId = subnet,
+                    Kind = PrivateNetworkProvenance.Integration, CreatedByInstaller = true, CreationConfirmed = true };
+                config.PrivateNetworking.AppliedTopology = "Private";
+                config.PrivateNetworking.Artifacts.Add(integration);
+                var checkpoints = 0;
+                var job = new AzurePaaSInstallJob(NullLogger.Instance, config, arm.Subscription, () => checkpoints++)
+                    { CancellationToken = cancellation.Token };
+                var path = section == "config" ? Site + "/config/web" : FtpPolicy;
+                arm.OverrideResponse = (m, p) =>
+                {
+                    if (m != "GET" || !path.Equals(p, StringComparison.OrdinalIgnoreCase)) return null;
+                    var reply = (JObject)arm.Resource(path).DeepClone();
+                    switch (failure)
+                    {
+                        case "missing properties": reply.Property("properties").Remove(); break;
+                        case "null properties": reply["properties"] = null; break;
+                        case "array properties": reply["properties"] = new JArray(); break;
+                        case "missing allow": ((JObject)reply["properties"]).Property("allow").Remove(); break;
+                        case "null allow": reply["properties"]["allow"] = null; break;
+                        case "invalid allow": reply["properties"]["allow"] = "false"; break;
+                        case "wrong ID": reply["id"] = path.Replace("contoso-web", "contoso-other"); break;
+                        case "denied": return FakeArm.Json(HttpStatusCode.Forbidden, new JObject { ["error"] = new JObject { ["message"] = privateDetail } });
+                        case "cancelled": cancellation.Cancel(); break;
+                    }
+                    reply["detail"] = privateDetail;
+                    return FakeArm.Json(HttpStatusCode.OK, reply);
+                };
+                var website = job.WebsiteTask;
+                website.Container = arm.Group;
+                website.CancellationToken = cancellation.Token;
+                var plan = await arm.Plan("contoso-web");
+                Func<Task> run = () => websiteOnly ? website.ExecuteTaskReturnResult(plan) : job.Install();
+
+                var error = await CaptureDiscoveryFailure(run);
+                Assert.IsTrue(arm.Requests.Any(r => r.Method == "GET" && r.Path.Equals(path, StringComparison.OrdinalIgnoreCase)));
+                Assert.AreEqual(0, arm.Mutations.Count, string.Join(", ", arm.Mutations.Select(r =>
+                    $"{r.Method} {r.Path} (TLS: {r.Body?.SelectToken("properties.siteConfig.minTlsVersion")})")));
+                Assert.AreEqual(0, checkpoints);
+                Assert.IsFalse(integration.Removed);
+                Assert.AreEqual("Private", config.PrivateNetworking.AppliedTopology);
+                if (failure == "cancelled")
+                    Assert.IsInstanceOfType(error, typeof(OperationCanceledException));
+                else
+                {
+                    Assert.IsNotNull(error);
+                    StringAssert.Contains(error.Message, section == "config" ? "site configuration" : "FTP");
+                    StringAssert.Contains(error.Message, "retry");
+                    Assert.IsFalse(error.ToString().Contains(privateDetail));
+                }
+            }
+        }
+
+        private static async Task<Exception> CaptureDiscoveryFailure(Func<Task> run)
+        {
+            try { await run(); return null; }
+            catch (Exception ex) { return ex; }
+        }
+
+        [DataTestMethod]
+        [DataRow("1.3", false)]
+        [DataRow(null, false)]
+        [DataRow(null, true)]
+        public async Task AppService_VerifiedSecuritySettingsPreserveOrRaiseTls(string tls, bool omitTls)
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite(tls);
+                var properties = (JObject)arm.Resource(Site + "/config/web")["properties"];
+                if (omitTls) properties.Property("minTlsVersion").Remove();
+                properties["alwaysOn"] = false; // Force a site patch so we can inspect precisely what ARM receives.
+                arm.Resource(FtpPolicy)["properties"]["allow"] = true;
+                var website = new AzurePaaSInstallJob(NullLogger.Instance, BackendConfig("CONTOSO-WEB", "contoso-plan"), arm.Subscription).WebsiteTask;
+                website.Container = arm.Group;
+
+                await website.ExecuteTaskReturnResult(await arm.Plan("contoso-web"));
+
+                var patch = arm.Mutations.Single(r => r.Method == "PATCH" && r.Path == Site).Body;
+                Assert.AreEqual(true, (bool)patch.SelectToken("properties.siteConfig.alwaysOn"));
+                Assert.AreEqual(tls == null ? "1.2" : null, (string)patch.SelectToken("properties.siteConfig.minTlsVersion"));
+                Assert.AreEqual(false, (bool)arm.Mutations.Single(r => r.Method == "PUT" && r.Path == FtpPolicy).Body.SelectToken("properties.allow"));
+                Assert.IsTrue(arm.Requests.FindIndex(r => r.Method == "GET" && r.Path == FtpPolicy) < arm.Requests.FindIndex(r => r.Method == "PATCH"));
+            }
+        }
+
+        [TestMethod]
+        public async Task AppService_StandaloneWebsiteChecksTheCurrentHostingSkuBeforeEnablingAlwaysOn()
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.3");
+                var previous = await arm.Plan("contoso-web");
+                arm.Resource(Plans + "/contoso-web")["sku"] = new JObject { ["name"] = "F1", ["tier"] = "Free" };
+                arm.Resource(Site + "/config/web")["properties"]["alwaysOn"] = false;
+                var website = new AzurePaaSInstallJob(NullLogger.Instance, BackendConfig("CONTOSO-WEB", "contoso-web"), arm.Subscription).WebsiteTask;
+                website.Container = arm.Group;
+
+                await website.ExecuteTaskReturnResult(previous);
+
+                Assert.AreEqual(0, arm.Mutations.Count, "The earlier plan object is not evidence that the site can use Always On now.");
+            }
+        }
+
+        [TestMethod]
+        public async Task AppService_NewWebsiteDoesNotChangeAnUnreadableFtpPolicy()
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.KnownLists.Add(Sites);
+                arm.AddPlan("contoso-plan");
+                var website = new AzurePaaSInstallJob(NullLogger.Instance, BackendConfig("contoso-web", "contoso-plan"), arm.Subscription).WebsiteTask;
+                website.Container = arm.Group;
+                arm.OverrideResponse = (m, p) =>
+                {
+                    if (m == "PUT" && p == Site)
+                    {
+                        arm.AddSite("1.2");
+                        arm.Resource(Site)["properties"]["serverFarmId"] = Plans + "/contoso-plan";
+                        return FakeArm.Json(HttpStatusCode.OK, arm.Resource(Site));
+                    }
+                    if (m == "GET" && p == FtpPolicy)
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject { ["id"] = FtpPolicy, ["properties"] = new JObject() });
+                    return null;
+                };
+                var plan = await arm.Plan("contoso-plan");
+
+                var failure = await Assert.ThrowsAsync<InstallException>(() => website.ExecuteTaskReturnResult(plan));
+
+                StringAssert.Contains(failure.Message, "FTP");
+                CollectionAssert.AreEqual(new[] { "PUT " + Site }, ConfigurationRequests(arm), "Only the confirmed new site can have been created.");
+            }
+        }
+
         [TestMethod]
         public async Task AppService_ConfigurationReplaysPreserveOperatorSettingsAndRefreshOnlyOwnedNames()
         {
@@ -875,6 +1031,22 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        [TestMethod]
+        public async Task KeyVault_RegisteredFirewallDoesNotTreatAnOmittedSiteAsAbsent()
+        {
+            using (var arm = new FakeArm())
+            {
+                var (firewall, vault) = await RegisteredVaultTask<KeyVaultFirewallConfigTask>(arm, "CONTOSO-WEB", NullLogger.Instance);
+                firewall.ResolveInstallerIpAsync = (name, log, token) => Task.FromResult("192.0.2.20");
+                arm.OverrideResponse = (m, p) => m == "GET" && p.Equals(Sites, StringComparison.OrdinalIgnoreCase)
+                    ? FakeArm.Json(HttpStatusCode.OK, new JObject { ["value"] = new JArray() }) : null;
+
+                var failure = await Assert.ThrowsAsync<InstallException>(() => firewall.ExecuteTask(vault));
+                StringAssert.Contains(failure.Message, "disagree");
+                Assert.AreEqual(0, arm.Mutations.Count);
+            }
+        }
+
         [DataTestMethod]
         [DataRow("UserAssigned", false)]
         [DataRow("UserAssigned", true)]
@@ -1099,17 +1271,21 @@ namespace Tests.UnitTests.InstallTests
         [DataRow("omitted site")]
         [DataRow("missing hosting plan ID")]
         [DataRow("configured plan list denied")]
+        [DataRow("omitted configured plan")]
         [DataRow("site config denied")]
         [DataRow("FTP policy denied")]
         [DataRow("cancelled plan read")]
+        [DataRow("unverified reset")]
         [DataRow("healthy")]
         public async Task Backend_HostingDiscoveryGuardsPrivateToPublic(string scenario)
         {
             using (var arm = new FakeArm())
             using (var cancellation = new CancellationTokenSource())
             {
-                var config = BackendConfig(scenario == "configured plan list denied" ? "contoso-new" : "CoNtOsO-WeB", "contoso-unused");
+                var missingSite = scenario == "configured plan list denied" || scenario == "omitted configured plan";
+                var config = BackendConfig(missingSite ? "contoso-new" : "CoNtOsO-WeB", "contoso-unused");
                 arm.AddBackendInventory(config);
+                if (scenario == "omitted configured plan") arm.AddPlan(config.AppServicePlanName);
                 var subnet = Rg + "/providers/Microsoft.Network/virtualNetworks/contoso-vnet/subnets/integration";
                 arm.AddSite("1.3", subnet);
                 arm.Resource(Site)["properties"]["publicNetworkAccess"] = "Disabled";
@@ -1121,6 +1297,7 @@ namespace Tests.UnitTests.InstallTests
                 config.PrivateNetworking.Artifacts.Add(integration);
                 config.PrivateNetworking.AppliedTopology = "Private";
                 var checkpoints = new List<string>();
+                var configReads = 0;
                 var job = new AzurePaaSInstallJob(NullLogger.Instance, config, arm.Subscription,
                     () => checkpoints.Add(config.PrivateNetworking.AppliedTopology)) { CancellationToken = cancellation.Token };
                 arm.OverrideResponse = (method, path) =>
@@ -1129,6 +1306,10 @@ namespace Tests.UnitTests.InstallTests
                         return FakeArm.Json(HttpStatusCode.OK, new JObject());
                     if (method == "GET" && path.Equals(Sites, StringComparison.OrdinalIgnoreCase) && scenario == "omitted site")
                         return FakeArm.Json(HttpStatusCode.OK, new JObject { ["value"] = new JArray() });
+                    if (method == "GET" && path.Equals(Plans, StringComparison.OrdinalIgnoreCase) && scenario == "omitted configured plan")
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject { ["value"] = new JArray() });
+                    if (method == "GET" && path.Equals(Site + "/config/web", StringComparison.OrdinalIgnoreCase) && scenario == "unverified reset" && ++configReads == 2)
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject { ["id"] = path, ["name"] = "web" });
                     if (method == "GET" && ((path.Equals(Plans, StringComparison.OrdinalIgnoreCase) && scenario == "configured plan list denied") ||
                         (path.Equals(Site + "/config/web", StringComparison.OrdinalIgnoreCase) && scenario == "site config denied") ||
                         (path.Equals(FtpPolicy, StringComparison.OrdinalIgnoreCase) && scenario == "FTP policy denied")))
@@ -1143,6 +1324,15 @@ namespace Tests.UnitTests.InstallTests
                     return null;
                 };
 
+                if (scenario == "unverified reset")
+                {
+                    var failure = await Assert.ThrowsAsync<InstallException>(() => job.Install());
+                    StringAssert.Contains(failure.Message, "site configuration");
+                    Assert.IsTrue(arm.Mutations.Any(r => r.Method == "DELETE")); // The readback, not the preflight, was incomplete.
+                    Assert.IsFalse(integration.Removed, "A metadata-only config cannot confirm the route-all reset.");
+                    Assert.AreNotEqual("Public", config.PrivateNetworking.AppliedTopology);
+                    return;
+                }
                 if (scenario == "healthy")
                 {
                     // The fixture ends at the very next registered step: no database or IP resolver is needed.
@@ -1170,6 +1360,8 @@ namespace Tests.UnitTests.InstallTests
                     await Assert.ThrowsAsync<InstallException>(() => job.Install());
                 Assert.AreEqual(0, arm.Mutations.Count, "Unexpected requests: " + string.Join(", ", ConfigurationRequests(arm)));
                 Assert.AreEqual(0, checkpoints.Count);
+                if (scenario == "omitted configured plan")
+                    Assert.IsTrue(arm.Requests.Any(r => r.Method == "GET" && r.Path.Equals(Plans + "/" + config.AppServicePlanName, StringComparison.OrdinalIgnoreCase)));
                 Assert.AreEqual("Private", config.PrivateNetworking.AppliedTopology);
                 Assert.IsFalse(integration.Removed);
                 Assert.AreEqual("Disabled", (string)arm.Resource(Site)["properties"]["publicNetworkAccess"]);
@@ -1220,6 +1412,8 @@ namespace Tests.UnitTests.InstallTests
                     "A diagnostic lookup must not strand a newly created paid plan before the site is created.");
                 Assert.AreEqual(Plans + "/contoso-new", job.CreatedWebSiteResource.Data.AppServicePlanId.ToString(), true);
                 Assert.AreEqual(existingGroup ? 1 : 0, lists);
+                Assert.AreEqual(existingGroup, arm.Requests.TakeWhile(r => r.Method == "GET")
+                    .Any(r => r.Path.Equals(Plans + "/contoso-new", StringComparison.OrdinalIgnoreCase)));
                 Assert.AreEqual(localLegacyPlan, logger.Lines.Any(l => l.Level == LogLevel.Warning && l.Message.Contains("stops being billed")));
             }
         }
@@ -1236,6 +1430,8 @@ namespace Tests.UnitTests.InstallTests
                 var plan = await task.ExecuteTaskReturnResult(null);
 
                 var write = arm.Mutations.Single();
+                Assert.IsTrue(arm.Requests.TakeWhile(r => r.Method == "GET").Any(r => r.Path.Equals(write.Path, StringComparison.OrdinalIgnoreCase)),
+                    "Only a known 404 on the exact plan authorizes the subsequent create-or-update.");
                 Assert.AreEqual("PUT", write.Method);
                 Assert.AreEqual(Rg + "/providers/Microsoft.Web/serverfarms/contoso-plan", write.Path, true,
                     "The plan used to be created under the web app's name, whatever the configuration said.");
@@ -1367,6 +1563,151 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        [DataTestMethod]
+        [DataRow("Contoso-Premium", "omitted")]
+        [DataRow("cOnToSo-PrEmIuM", "omitted")]
+        [DataRow("contoso-premium", "listed but missing")]
+        [DataRow("contoso-premium", "denied")]
+        [DataRow("contoso-premium", "ambiguous 404")]
+        [DataRow("contoso-premium", "missing parent")]
+        [DataRow("contoso-premium", "wrong resource group")]
+        [DataRow("contoso-premium", "missing properties")]
+        [DataRow("contoso-premium", "missing sku")]
+        [DataRow("contoso-premium", "different sku")]
+        [DataRow("contoso-premium", "cancelled")]
+        public async Task Plan_UnverifiedConfiguredPlanCannotBeCreatedOrReused(string configuredName, string failure)
+        {
+            using (var arm = new FakeArm())
+            using (var cancellation = new CancellationTokenSource())
+            {
+                const string name = "Contoso-Premium";
+                const string path = Plans + "/" + name;
+                const string detail = "Contoso private diagnostic";
+                arm.KnownLists.Add(Sites);
+                arm.AddPlan(name);
+                arm.Resource(path)["sku"] = new JObject { ["name"] = "P1v3", ["tier"] = "PremiumV3" };
+                var original = arm.Resource(path).DeepClone();
+                arm.OverrideResponse = (m, p) =>
+                {
+                    if (m != "GET") return null;
+                    if (p.Equals(Plans, StringComparison.OrdinalIgnoreCase) &&
+                        (failure == "omitted" || failure == "denied" || failure == "ambiguous 404" || failure == "missing parent"))
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject { ["value"] = new JArray() });
+                    if (!p.Equals(path, StringComparison.OrdinalIgnoreCase)) return null;
+                    var reply = (JObject)original.DeepClone();
+                    switch (failure)
+                    {
+                        case "listed but missing": return FakeArm.Json(HttpStatusCode.NotFound, new JObject { ["error"] = new JObject { ["code"] = "ResourceNotFound" } });
+                        case "denied": return FakeArm.Json(HttpStatusCode.Forbidden, new JObject { ["error"] = new JObject { ["message"] = detail } });
+                        case "ambiguous 404": return FakeArm.Json(HttpStatusCode.NotFound, new JObject { ["error"] = new JObject { ["code"] = detail } });
+                        case "missing parent": return FakeArm.Json(HttpStatusCode.NotFound, new JObject { ["error"] = new JObject { ["code"] = "ResourceGroupNotFound" } });
+                        case "wrong resource group": reply["id"] = path.Replace("resourceGroups/contoso/", "resourceGroups/contoso-other/"); break;
+                        case "missing properties": reply.Property("properties").Remove(); break;
+                        case "missing sku": reply["sku"] = new JObject(); break;
+                        case "different sku": reply["sku"] = new JObject { ["name"] = "F1", ["tier"] = "Free" }; break;
+                        case "cancelled": cancellation.Cancel(); break;
+                    }
+                    return FakeArm.Json(HttpStatusCode.OK, reply);
+                };
+                var task = PlanTaskFromTheInstallJob(arm, "contoso-new", configuredName);
+                task.CancellationToken = cancellation.Token;
+
+                var error = await CaptureDiscoveryFailure(() => task.ExecuteTaskReturnResult(null));
+                Assert.AreEqual(0, arm.Mutations.Count, string.Join(", ", arm.Mutations.Select(r => $"{r.Method} {r.Path} (SKU: {r.Body?.SelectToken("sku.name")})")));
+                if (failure == "cancelled")
+                    Assert.IsInstanceOfType(error, typeof(OperationCanceledException));
+                else
+                {
+                    Assert.IsInstanceOfType(error, typeof(InstallException));
+                    StringAssert.Contains(error.Message, "plan");
+                    StringAssert.Contains(error.Message, "retry");
+                    if (failure == "denied") StringAssert.Contains(error.Message, "HTTP 403");
+                    if (failure == "ambiguous 404" || failure == "missing parent" || failure == "listed but missing") StringAssert.Contains(error.Message, "HTTP 404");
+                    Assert.IsFalse(error.ToString().Contains(detail));
+                }
+                Assert.IsTrue(arm.Requests.Any(r => r.Method == "GET" && r.Path.Equals(path, StringComparison.OrdinalIgnoreCase)));
+                Assert.IsTrue(JToken.DeepEquals(original, arm.Resource(path)), "The existing Premium plan must not be resized to Basic.");
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("omitted site", "warn")]
+        [DataRow("denied site", "warn")]
+        [DataRow("omitted plan", "warn")]
+        [DataRow("denied plan", "warn")]
+        [DataRow("cancelled site", "cancelled")]
+        [DataRow("unreadable config", "warn")]
+        [DataRow("unreadable FTP", "warn")]
+        [DataRow("existing site", "Free")]
+        [DataRow("partial site list", "Free")]
+        [DataRow("existing configured plan", "PremiumV3")]
+        [DataRow("new site and plan", "not found yet")]
+        public async Task Plan_VerifierUsesTheSameAuthoritativeDiscovery(string scenario, string expected)
+        {
+            using (var arm = new FakeArm())
+            using (var cancellation = new CancellationTokenSource())
+            {
+                const string premium = Plans + "/Contoso-Premium";
+                arm.KnownLists.UnionWith(new[] { Sites, Plans });
+                if (scenario != "new site and plan")
+                {
+                    arm.AddPlan("Contoso-Premium");
+                    arm.Resource(premium)["sku"] = new JObject { ["name"] = "P1v3", ["tier"] = "PremiumV3" };
+                }
+                if (new[] { "existing site", "partial site list", "omitted site", "denied site", "cancelled site", "unreadable config", "unreadable FTP" }.Contains(scenario))
+                {
+                    arm.AddSite("1.3");
+                    arm.Resource(Plans + "/contoso-web")["sku"] = new JObject { ["name"] = "F1", ["tier"] = "Free" };
+                }
+                arm.OverrideResponse = (m, p) =>
+                {
+                    if (m != "GET") return null;
+                    if (scenario == "cancelled site" && p.Equals(Site, StringComparison.OrdinalIgnoreCase)) cancellation.Cancel();
+                    if (scenario == "partial site list" && p.Equals(Sites, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var projection = (JObject)arm.Resource(Site).DeepClone();
+                        ((JObject)projection["properties"]).Property("serverFarmId").Remove();
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject { ["value"] = new JArray(projection) });
+                    }
+                    if ((scenario == "omitted site" && p.Equals(Sites, StringComparison.OrdinalIgnoreCase)) ||
+                        (scenario == "omitted plan" && p.Equals(Plans, StringComparison.OrdinalIgnoreCase)))
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject { ["value"] = new JArray() });
+                    if ((scenario == "denied site" && p.Equals(Site, StringComparison.OrdinalIgnoreCase)) ||
+                        (scenario == "denied plan" && p.Equals(premium, StringComparison.OrdinalIgnoreCase)))
+                        return FakeArm.Json(HttpStatusCode.Forbidden, new JObject { ["error"] = new JObject { ["message"] = "Contoso private diagnostic" } });
+                    if ((scenario == "unreadable config" && p.Equals(Site + "/config/web", StringComparison.OrdinalIgnoreCase)) ||
+                        (scenario == "unreadable FTP" && p.Equals(FtpPolicy, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        var reply = (JObject)arm.Resource(p).DeepClone();
+                        reply.Property("properties").Remove();
+                        return FakeArm.Json(HttpStatusCode.OK, reply);
+                    }
+                    return null;
+                };
+                var logger = new CapturingLogger();
+                var verifier = new SolutionInstallVerifier(BackendConfig("CoNtOsO-WeB", "cOnToSo-PrEmIuM"), logger, null) { CancellationToken = cancellation.Token };
+                if (expected == "cancelled")
+                    await Assert.ThrowsAsync<OperationCanceledException>(() => verifier.VerifyAppServicePlanCapabilities(arm.Group));
+                else
+                    await verifier.VerifyAppServicePlanCapabilities(arm.Group);
+
+                Assert.AreEqual(0, arm.Mutations.Count);
+                if (expected == "warn")
+                {
+                    Assert.IsTrue(logger.Lines.Any(l => l.Level == LogLevel.Warning && l.Message.Contains("Could not check")), string.Join("; ", logger.Lines.Select(l => l.Message)));
+                    Assert.IsFalse(logger.Lines.Any(l => l.Message.Contains("supports Always On") || l.Message.Contains("not found yet")));
+                    Assert.IsFalse(logger.Lines.Any(l => l.Message.Contains("Contoso private diagnostic")));
+                }
+                else if (expected == "Free")
+                    Assert.IsTrue(logger.Lines.Any(l => l.Level == LogLevel.Warning && l.Message.Contains("Free (F1)") && l.Message.Contains("does not support Always On")));
+                else if (expected != "cancelled")
+                    Assert.IsTrue(logger.Lines.Any(l => l.Level == LogLevel.Information && l.Message.Contains(expected)));
+                Assert.IsTrue(arm.Requests.Any(r => r.Path.Equals(Site, StringComparison.OrdinalIgnoreCase)), "A list miss is not a verified missing site.");
+                if (arm.Requests.Any(r => r.Path.Equals(Plans, StringComparison.OrdinalIgnoreCase)))
+                    Assert.IsTrue(arm.Requests.Any(r => r.Path.Equals(premium, StringComparison.OrdinalIgnoreCase)), "A list miss is not a verified missing plan.");
+            }
+        }
+
         [TestMethod]
         public async Task Plan_VerifierWarnsInsteadOfCheckingAnUnrelatedConfiguredPlanForAnExistingSite()
         {
@@ -1377,9 +1718,7 @@ namespace Tests.UnitTests.InstallTests
                 arm.AddPlan("contoso-unused");
                 var logger = new CapturingLogger();
                 var verifier = new SolutionInstallVerifier(BackendConfig("contoso-web", "contoso-unused"), logger, null);
-                var check = typeof(SolutionInstallVerifier).GetMethod("VerifyAppServicePlanCapabilities", BindingFlags.NonPublic | BindingFlags.Instance);
-
-                await (Task)check.Invoke(verifier, new object[] { arm.Group });
+                await verifier.VerifyAppServicePlanCapabilities(arm.Group);
 
                 Assert.AreEqual(0, arm.Mutations.Count);
                 Assert.IsFalse(arm.Requests.Any(r => r.Path.Equals(Plans, StringComparison.OrdinalIgnoreCase)));

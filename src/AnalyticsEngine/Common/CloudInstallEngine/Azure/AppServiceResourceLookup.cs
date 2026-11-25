@@ -4,6 +4,7 @@ using Azure.ResourceManager;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Models;
 using Azure.ResourceManager.Resources;
+using CloudInstallEngine.Azure.InstallTasks;
 using CloudInstallEngine.Models;
 using System;
 using System.IO;
@@ -11,28 +12,110 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AppServiceSkuDescription = Azure.ResourceManager.AppService.Models.AppServiceSkuDescription;
 
 namespace CloudInstallEngine.Azure
 {
-    internal static class AppServiceResourceLookup
+    public static class AppServiceResourceLookup
     {
-        internal static WebSiteResource FindSite(ResourceGroupResource group, string name, CancellationToken token) =>
-            FindByName(group.GetWebSites().GetAll(cancellationToken: token), s => s.Data.Name,
-                WebSiteResource.CreateResourceIdentifier(group.Id.SubscriptionId, group.Id.Name, name), "App Services", token);
+        /// <summary>
+        /// Reads the hosting state before provisioning or network teardown. A null group is a confirmed new group;
+        /// otherwise, a list miss and a not-found GET on the exact resource must agree before treating it as new.
+        /// An existing site uses its own serverFarmId, site configuration and FTP policy, never the configured plan as a fallback.
+        /// </summary>
+        public static async Task<AppServiceHostingDiscovery> DiscoverHostingAsync(ResourceGroupResource group, string webAppName,
+            string planName, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (group == null) return new AppServiceHostingDiscovery(null, false);
+            var hosting = await DiscoverExistingSiteAsync(group, webAppName, token);
+            return hosting ?? await DiscoverConfiguredPlanAsync(group, planName, webAppName, token);
+        }
 
-        internal static (AppServicePlanResource Plan, bool LegacyNameFound) FindPlans(ResourceGroupResource group,
+        internal static async Task<AppServiceHostingDiscovery> DiscoverExistingSiteAsync(ResourceGroupResource group, string webAppName, CancellationToken token)
+        {
+            var site = string.IsNullOrWhiteSpace(webAppName) ? null : await FindSiteForDeploymentAsync(group, webAppName, token);
+            if (site == null) return null;
+
+            // An existing site keeps its actual plan, including a shared plan outside the deployment group.
+            var id = site.Data.AppServicePlanId;
+            if (id == null || !ResourceIdentifier.TryParse(id.ToString(), out var planId) ||
+                planId.ResourceType != AppServicePlanResource.ResourceType || planId.Parent?.ResourceType != ResourceGroupResource.ResourceType)
+                throw new InstallException("Azure did not return a valid hosting plan ID (serverFarmId) for the existing App Service. " +
+                    "Verify the site's App Service plan association and retry.");
+            var plan = await ReadPlanAsync(group, planId, "the existing App Service's hosting plan", false, token);
+            var config = await ReadSiteConfigAsync(site, token);
+            var ftpAllowed = await ReadFtpAllowedAsync(site, token);
+            return new AppServiceHostingDiscovery(site, plan, config, ftpAllowed);
+        }
+
+        private static async Task<AppServiceHostingDiscovery> DiscoverConfiguredPlanAsync(ResourceGroupResource group,
             string planName, string legacyName, CancellationToken token)
         {
             var planId = AppServicePlanResource.CreateResourceIdentifier(group.Id.SubscriptionId, group.Id.Name, planName);
             var legacyId = string.IsNullOrWhiteSpace(legacyName) || string.Equals(legacyName, planName, StringComparison.OrdinalIgnoreCase)
                 ? null : AppServicePlanResource.CreateResourceIdentifier(group.Id.SubscriptionId, group.Id.Name, legacyName);
             var legacyNameFound = false;
-            var plan = FindByName(group.GetAppServicePlans().GetAll(cancellationToken: token), p => p.Data.Name, planId,
+            var listed = FindByName(group.GetAppServicePlans().GetAll(cancellationToken: token), p => p.Data, planId,
                 "App Service plans", token, p => { if (legacyId?.Equals(p.Id) == true) legacyNameFound = true; });
-            return (plan, legacyNameFound);
+            // A PUT is create-or-update: treating an omitted paid plan as new would resize it to Basic.
+            var plan = await ReadPlanAsync(group, planId, "the configured App Service plan", listed == null, token);
+            if (plan != null && (listed == null || SkuDisagrees(listed.Data.Sku, plan.Data.Sku)))
+                throw new InstallException("The App Service plan list and the exact plan read disagree. " +
+                    "Verify the configured plan and its SKU in the deployment resource group, then retry; the installer will not replace it.");
+            return new AppServiceHostingDiscovery(plan, legacyNameFound);
         }
 
-        private static T FindByName<T>(Pageable<T> resources, Func<T, string> getName, ResourceIdentifier expectedId,
+        private static bool SkuDisagrees(AppServiceSkuDescription listed, AppServiceSkuDescription actual)
+        {
+            bool Differs(string a, string b) => !string.IsNullOrWhiteSpace(a) && !string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+            return Differs(listed?.Tier, actual.Tier) || Differs(listed?.Name, actual.Name) || Differs(listed?.Size, actual.Size);
+        }
+
+        private static async Task<AppServicePlanResource> ReadPlanAsync(ResourceGroupResource group, ResourceIdentifier id,
+            string description, bool allowMissing, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                var arm = group.GetCachedClient(client => client);
+                var response = await arm.GetAppServicePlanResource(id).GetAsync(token);
+                token.ThrowIfCancellationRequested();
+                var plan = response.Value;
+                RequireIdentity(plan?.Data, id);
+                using (var body = JsonDocument.Parse(response.GetRawResponse().Content.ToMemory()))
+                    RequireProperties(body.RootElement, id);
+                var sku = plan.Data.Sku;
+                if (string.IsNullOrWhiteSpace(sku?.Name) && string.IsNullOrWhiteSpace(sku?.Size) && string.IsNullOrWhiteSpace(sku?.Tier))
+                    throw new InvalidDataException();
+                return plan;
+            }
+            catch (RequestFailedException ex) when (allowMissing && IsResourceNotFound(ex))
+            {
+                token.ThrowIfCancellationRequested();
+                return null;
+            }
+            catch (Exception ex)
+            {
+                token.ThrowIfCancellationRequested();
+                throw ReadFailure($"read {description}", ex,
+                    "Verify the plan's identity and SKU and the installer's read access in the plan's resource group, then retry.");
+            }
+        }
+
+        // A missing parent can contradict the group we just read. Only the named resource's absence counts here.
+        private static bool IsResourceNotFound(RequestFailedException error) => error.Status == 404 &&
+            (string.Equals(error.ErrorCode, "ResourceNotFound", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(error.ErrorCode, "NotFound", StringComparison.OrdinalIgnoreCase));
+
+        private static void RequireIdentity(ResourceData data, ResourceIdentifier expected)
+        {
+            if (data?.Id == null || !expected.Equals(data.Id) || data.ResourceType != expected.ResourceType ||
+                string.IsNullOrWhiteSpace(data.Name) || !string.Equals(data.Name, expected.Name, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException();
+        }
+
+        private static T FindByName<T>(Pageable<T> resources, Func<T, ResourceData> getData, ResourceIdentifier expectedId,
             string collection, CancellationToken token, Action<T> observe = null) where T : ArmResource
         {
             T match = null;
@@ -51,13 +134,11 @@ namespace CloudInstallEngine.Azure
                     }
                     foreach (var resource in page.Values)
                     {
-                        var listedName = getName(resource);
-                        if (string.IsNullOrWhiteSpace(listedName) || resource.Id == null ||
-                            resource.Id.ResourceType != expectedId.ResourceType ||
-                            !string.Equals(resource.Id.Name, listedName, StringComparison.OrdinalIgnoreCase))
+                        if (resource.Id == null || resource.Id.ResourceType != expectedId.ResourceType)
                             throw new InvalidDataException();
+                        RequireIdentity(getData(resource), resource.Id);
                         observe?.Invoke(resource);
-                        if (!string.Equals(listedName, expectedId.Name, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (!string.Equals(resource.Id.Name, expectedId.Name, StringComparison.OrdinalIgnoreCase)) continue;
                         if (match != null || !expectedId.Equals(resource.Id)) throw new InvalidDataException();
                         match = resource;
                     }
@@ -77,7 +158,8 @@ namespace CloudInstallEngine.Azure
         // identity from that projection. A 404 after the site was listed is not permission to recreate it.
         internal static async Task<WebSiteResource> FindSiteForDeploymentAsync(ResourceGroupResource group, string name, CancellationToken token)
         {
-            var listed = FindSite(group, name, token);
+            var listed = FindByName(group.GetWebSites().GetAll(cancellationToken: token), s => s.Data,
+                WebSiteResource.CreateResourceIdentifier(group.Id.SubscriptionId, group.Id.Name, name), "App Services", token);
             var site = await ReadSiteAsync(group, listed?.Data.Name ?? name, token, allowMissing: listed == null);
             if (site == null) return null;
             if (listed == null || (listed.Data.AppServicePlanId != null && !listed.Data.AppServicePlanId.Equals(site.Data.AppServicePlanId)))
@@ -112,19 +194,18 @@ namespace CloudInstallEngine.Azure
                 token.ThrowIfCancellationRequested();
                 var site = response.Value;
                 var expected = WebSiteResource.CreateResourceIdentifier(group.Id.SubscriptionId, group.Id.Name, name);
-                if (site?.HasData != true || !expected.Equals(site.Id) || !string.Equals(name, site.Data.Name, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException();
+                RequireIdentity(site?.Data, expected);
                 using (var body = JsonDocument.Parse(response.GetRawResponse().Content.ToMemory()))
                 {
                     // An omitted/null identity on a complete site is valid; an empty identity object is not "None".
-                    if (body.RootElement.GetProperty("properties").ValueKind != JsonValueKind.Object ||
-                        (body.RootElement.TryGetProperty("identity", out var identity) && identity.ValueKind != JsonValueKind.Null &&
-                         string.IsNullOrWhiteSpace(identity.GetProperty("type").GetString())))
+                    RequireProperties(body.RootElement, expected);
+                    if (body.RootElement.TryGetProperty("identity", out var identity) && identity.ValueKind != JsonValueKind.Null &&
+                        string.IsNullOrWhiteSpace(identity.GetProperty("type").GetString()))
                         throw new InvalidDataException();
                 }
                 return site;
             }
-            catch (RequestFailedException ex) when (allowMissing && PrivateNetworkProvenance.IsMissing(ex))
+            catch (RequestFailedException ex) when (allowMissing && IsResourceNotFound(ex))
             {
                 token.ThrowIfCancellationRequested();
                 return null;
@@ -136,11 +217,57 @@ namespace CloudInstallEngine.Azure
             }
         }
 
-        internal static InstallException ReadFailure(string operation, Exception error, string advice)
+        public static Task<SiteConfigData> ReadSiteConfigAsync(WebSiteResource site, CancellationToken token)
+        {
+            var config = site.GetWebSiteConfig();
+            return ReadChildAsync(config, config.GetAsync, (resource, _) => resource.Data, "App Service site configuration (config/web)", token);
+        }
+
+        internal static Task<bool> ReadFtpAllowedAsync(WebSiteResource site, CancellationToken token)
+        {
+            var policy = site.GetWebSiteFtpPublishingCredentialsPolicy();
+            return ReadChildAsync(policy, policy.GetAsync, (_, properties) => properties.GetProperty("allow").GetBoolean(),
+                "App Service FTP basic publishing policy", token);
+        }
+
+        private static async Task<T> ReadChildAsync<TResource, T>(TResource expected, Func<CancellationToken, Task<Response<TResource>>> get,
+            Func<TResource, JsonElement, T> select, string description, CancellationToken token) where TResource : ArmResource
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                var response = await get(token);
+                token.ThrowIfCancellationRequested();
+                using (var body = JsonDocument.Parse(response.GetRawResponse().Content.ToMemory()))
+                    return select(response.Value, RequireProperties(body.RootElement, expected.Id));
+            }
+            catch (Exception ex)
+            {
+                token.ThrowIfCancellationRequested();
+                var message = ReadFailureMessage($"read the {description}", ex, "Verify the site's settings and the installer's read access, then retry.");
+                // Preserve the HTTP status for installer diagnostics, never the response body.
+                if (ex is RequestFailedException http) throw new RequestFailedException(http.Status, message);
+                throw new InstallException(message);
+            }
+        }
+
+        private static JsonElement RequireProperties(JsonElement resource, ResourceIdentifier expectedId)
+        {
+            // HasData also holds for metadata-only success bodies. Only a real properties object can describe an unset setting.
+            if (!string.Equals(resource.GetProperty("id").GetString(), expectedId.ToString(), StringComparison.OrdinalIgnoreCase) ||
+                !resource.TryGetProperty("properties", out var properties) || properties.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException();
+            return properties;
+        }
+
+        private static InstallException ReadFailure(string operation, Exception error, string advice) =>
+            new InstallException(ReadFailureMessage(operation, error, advice));
+
+        private static string ReadFailureMessage(string operation, Exception error, string advice)
         {
             var reason = error is RequestFailedException response && response.Status >= 100 && response.Status <= 599
                 ? $"HTTP {response.Status}" : "no usable response";
-            return new InstallException($"Could not {operation} ({reason}). {advice}");
+            return $"Could not {operation} ({reason}). {advice}";
         }
     }
 }
