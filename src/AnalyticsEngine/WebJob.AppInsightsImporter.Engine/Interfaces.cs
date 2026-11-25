@@ -60,20 +60,20 @@ namespace WebJob.AppInsightsImporter.Engine
     /// searches, clicks, page-updates, hit-updates); those become collaborators of the SQL adapter rather
     /// than changes to this port. Both saves are idempotent, so a window read again saves nothing twice.
     ///
-    /// Either method throwing means the day did not save completely, and the importer retries it before any
-    /// later day (see <see cref="AppInsightsDayFailureTracker"/>). <see cref="SaveCustomEventsAsync"/> therefore
-    /// throws after the event sections have all been attempted if any of them failed.
+    /// Either normal save throwing means the day did not save completely, and the importer retries it before any
+    /// later day (see <see cref="AppInsightsDayFailureTracker"/>). The separate search-only retry never runs the
+    /// other event sections.
     /// </summary>
     public interface IAppInsightsDayPersistenceManager
     {
         Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls);
-        Task SaveCustomEventsAsync(CustomEventsResultCollection events);
+        Task<CustomEventSaveResult> SaveCustomEventsAsync(CustomEventsResultCollection events);
+        /// <summary>Reconcile one window of searches after the normal imports have saved their eligible visits.</summary>
+        Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection searches);
     }
 
     /// <summary>
-    /// Writes a batch of page-views. The one write port of the day persistence manager that has anything
-    /// to report back: the staging rules already work out how many rows were dropped and why, and those
-    /// numbers previously reached a log line and nothing else. See issue #369.
+    /// Writes a batch of page-views, reporting how many rows the staging rules dropped and why. See issue #369.
     /// </summary>
     public interface IPageViewsPersistenceManager
     {
@@ -91,14 +91,12 @@ namespace WebJob.AppInsightsImporter.Engine
     }
 
     /// <summary>
-    /// Writes the search events in a batch. Returns the merge script's ADO.NET rows-affected total, which
-    /// covers the new <c>search_terms</c> lookup rows as well as the <c>searches</c> rows - "Migrate
-    /// Searches Import.sql" runs both inserts in one batch with no <c>SET NOCOUNT ON</c>, so
-    /// <c>ExecuteNonQuery</c> sums them. It is not a count of searches alone.
+    /// Writes searches with a matching visit. Reports real inserts (terms plus facts), new facts alone,
+    /// and how many inputs had no matching visit per ingestion hour, so they can be reread without storing telemetry.
     /// </summary>
     public interface ISearchesPersistenceManager
     {
-        Task<int> SaveSearchesAsync(CustomEventsResultCollection events);
+        Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection events);
     }
 
     /// <summary>
@@ -114,7 +112,7 @@ namespace WebJob.AppInsightsImporter.Engine
     }
 
     /// <summary>
-    /// Writes the click events in a batch. Like <see cref="ISearchesPersistenceManager"/> this is the
+    /// Writes the click events in a batch. Like <see cref="SearchSaveResult.RowsAffected"/> this is the
     /// merge script's ADO.NET rows-affected total, not a count of clicks: "Migrate clicks from
     /// staging.sql" inserts into <c>hits_clicked_element_class_names</c>, <c>urls</c> and
     /// <c>hits_clicked_element_titles</c> before <c>hits_clicked_elements</c>, all in one batch with no

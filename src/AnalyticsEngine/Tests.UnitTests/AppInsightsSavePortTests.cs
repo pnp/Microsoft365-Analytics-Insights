@@ -169,8 +169,11 @@ namespace Tests.UnitTests
             // able to take the rest of the event save down with it.
             var h = new SectionHarness();
             h.PageUpdates.FailWith = new InvalidOperationException("boom");
+            h.Searches.SearchResult = new SearchSaveResult(0, 0, 0, new Dictionary<DateTime, int> { { new DateTime(2000, 1, 1), 1 } });
 
-            await h.RunAsync(SomeEvents());
+            var result = await h.RunAsync(SomeEvents());
+            var incomplete = Assert.ThrowsException<CustomEventSaveIncompleteException>(result.ThrowIfIncomplete);
+            Assert.AreSame(h.Searches.SearchResult, incomplete.Searches, "A failed sibling cannot erase a search hour still awaiting a visit.");
 
             CollectionAssert.AreEqual(
                 new[] { "Hit updates", "Searches", "Page updates", "Clicks" },

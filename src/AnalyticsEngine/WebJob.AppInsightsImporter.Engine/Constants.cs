@@ -12,17 +12,7 @@
         public static string EVENT_NAME_PAGE_UPDATE => "PageMetadataUpdate";
         public static string ANON_USER_NAME => "Anonymous User";
 
-        public static string STAGING_TABLE_SEARCHES
-        {
-            get
-            {
-#if !DEBUG
-                return "##import_staging_searches";
-#else
-                return "debug_staging_searches";
-#endif
-            }
-        }
+        public static string STAGING_TABLE_SEARCHES => "#import_staging_searches";
 
     }
 }

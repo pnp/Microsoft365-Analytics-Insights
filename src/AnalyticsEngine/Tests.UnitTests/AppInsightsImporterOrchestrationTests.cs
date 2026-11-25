@@ -15,6 +15,7 @@ using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using UnitTests.FakeLoaderClasses;
 using WebJob.AppInsightsImporter.Engine;
+using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 
 namespace Tests.UnitTests
 {
@@ -66,6 +67,88 @@ namespace Tests.UnitTests
         private static string EventPattern(AnalyticsLogger.AnalyticsEvent e) => "New event '" + e + "'";
 
         private static int CountOf(string log, AnalyticsLogger.AnalyticsEvent e) => Regex.Matches(log, Regex.Escape(EventPattern(e))).Count;
+
+        [TestMethod]
+        public async Task SearchRetryAfterLongPause_QueriesOnlyTheRetainedPartOfTheLastHour()
+        {
+            var clock = new FixedClock(FixedNowUtc.AddMinutes(15));
+            var h = new Harness { Clock = clock, Cursor = new InMemoryIngestionCursorStore(FixedNowUtc) };
+            h.Watermark.NewestHitTimestampUtc = FixedNowUtc;
+            var edge = FixedNowUtc - AppInsightsIngestionCursorPolicy.MaxLookback;
+            await h.Cursor.WriteSearchRetriesAsync(new[]
+            {
+                new AppInsightsSearchRetry(edge.AddHours(-1), edge), new AppInsightsSearchRetry(edge, edge)
+            });
+            var result = await h.RunAsync();
+            Assert.IsTrue(result.Reasons.Contains("SearchRetriesStopped"));
+            var query = h.Source.CountRangesRequested.Single(w => w.SearchesOnly);
+            Assert.AreEqual(edge.AddMinutes(15), query.IngestedFromUtc);
+            Assert.AreEqual(edge.AddHours(1), query.IngestedBeforeUtc);
+            Assert.AreEqual(0, result.PendingSearchHours);
+        }
+
+        [TestMethod]
+        public async Task SearchRetryBacklog_DrainsInBoundedBatchesWithoutHoldingNormalImportsOrChangingManualBackfill()
+        {
+            var h = new Harness { Cursor = new InMemoryIngestionCursorStore(FixedNowUtc.AddMinutes(-10)) };
+            h.Watermark.NewestHitTimestampUtc = h.Cursor.CursorUtc;
+            h.Source.EventAt = time => new SearchEventAppInsightsQueryResult
+            {
+                AppInsightsTimestamp = time, Username = "reader@contoso.com",
+                CustomProperties = new SearchCustomProps { SessionId = "existing", SearchText = "Example" }
+            };
+            var backlog = Enumerable.Range(1, 9).Select(i => new AppInsightsSearchRetry(FixedNowUtc.AddHours(-i), FixedNowUtc)).ToList();
+            await h.Cursor.WriteSearchRetriesAsync(backlog);
+            foreach (var marker in backlog) h.Source.ExtraCustomEvents.Add((marker.HourUtc, marker.HourUtc));
+            h.Source.ExtraPageViews.Add((FixedNowUtc.AddMinutes(-2), FixedNowUtc.AddMinutes(-2)));
+
+            var backfill = await h.RunAsync(daysBeforeOverride: 1);
+            Assert.IsNull(backfill.CursorAdvancedToUtc);
+            Assert.AreEqual(9, (await h.Cursor.ReadSearchRetriesAsync()).Count);
+            Assert.IsFalse(h.Source.CountRangesRequested.Any(w => w.SearchesOnly));
+            var first = await h.RunAsync();
+            Assert.AreEqual(1, first.PageViews);
+            Assert.AreEqual(FixedNowUtc, first.CursorAdvancedToUtc);
+            Assert.AreEqual(1, first.PendingSearchHours);
+            h.Clock.Advance(TimeSpan.FromMinutes(10));
+            Assert.AreEqual(0, (await h.RunAsync()).PendingSearchHours);
+            CollectionAssert.AreEquivalent(backlog.Select(hh => hh.HourUtc).ToArray(),
+                h.Source.CountRangesRequested.Where(w => w.SearchesOnly).Select(w => w.IngestedFromUtc.Value).ToArray());
+        }
+
+        [TestMethod]
+        public async Task SearchRetryStoreFailure_DoesNotMoveTheCursorPastAnUncheckpointedSearch()
+        {
+            var before = FixedNowUtc.AddMinutes(-10);
+            var h = new Harness { Cursor = new InMemoryIngestionCursorStore(before) };
+            h.Watermark.NewestHitTimestampUtc = before;
+            h.Source.EventAt = time => new SearchEventAppInsightsQueryResult
+            {
+                AppInsightsTimestamp = time, Username = "reader@contoso.com",
+                CustomProperties = new SearchCustomProps { SessionId = "missing", SearchText = "Example" }
+            };
+            h.Source.ExtraCustomEvents.Add((before.AddMinutes(1), before.AddMinutes(1)));
+            h.Persistence.SearchResult = new SearchSaveResult(0, 0, 0, new Dictionary<DateTime, int> { { FixedNowUtc.AddHours(-1), 1 } });
+            h.Cursor.SearchWriteFailsWith = new IOException("synthetic checkpoint outage");
+            var writeFailed = await h.RunAsync();
+            Assert.IsTrue(writeFailed.Reasons.Contains("SearchRetryWriteFailed"));
+            Assert.IsNull(writeFailed.PendingSearchHours, "Unpersisted markers are not known pending work.");
+            Assert.AreEqual(before, h.Cursor.CursorUtc);
+            Assert.AreEqual(0, h.Cursor.Writes);
+
+            h.Cursor.SearchWriteFailsWith = null;
+            var restored = await h.RunAsync();
+            Assert.AreEqual(FixedNowUtc, restored.CursorAdvancedToUtc);
+            Assert.AreEqual(1, restored.PendingSearchHours);
+            h.Clock.Advance(TimeSpan.FromMinutes(10));
+            h.Cursor.SearchReadFailsWith = new IOException("synthetic checkpoint outage");
+            var readFailed = await h.RunAsync();
+            Assert.IsTrue(readFailed.Reasons.Contains("SearchRetryReadFailed"));
+            Assert.IsNull(readFailed.PendingSearchHours);
+            Assert.AreEqual(FixedNowUtc, h.Cursor.CursorUtc);
+            h.Cursor.SearchReadFailsWith = null;
+            Assert.AreEqual(1, (await h.Cursor.ReadSearchRetriesAsync()).Count);
+        }
 
         internal static async Task<string> CaptureConsole(Func<Task> action)
         {

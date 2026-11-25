@@ -33,7 +33,9 @@ VALUES ('session-a', 'reader@contoso.com', N'Καλημέρα', '2000-01-01T09:0
                     connection.Open();
                     Assert.AreEqual(2, command.ExecuteNonQuery(), "Only the new term and search count as inserted rows.");
                     Assert.AreEqual(0, command.ExecuteNonQuery(), "Replaying on the same connection must report no inserts.");
-                    command.CommandText = "SET NOCOUNT ON;\n" + merge + "\nSELECT @@OPTIONS & 512;";
+                    command.CommandText = "SET NOCOUNT ON;\n" + merge;
+                    command.ExecuteNonQuery();
+                    command.CommandText = "SELECT @@OPTIONS & 512;";
                     Assert.AreEqual(512, command.ExecuteScalar(), "A caller that disabled row counts must keep its setting.");
                 }
                 Assert.AreEqual(1, db.Scalar("SELECT COUNT(*) FROM dbo.searches"), "Replaying a saved search must not add a row.");
@@ -85,6 +87,33 @@ INSERT dbo.staged_searches (ai_session_id, user_name, search_term, date_time) VA
                     "A genuinely new fact uses the lowest session id, just as the hit import does.");
                 Assert.AreEqual(1, db.Scalar(count + "s.session_id = 3"), "The same tracker id for a different user is another visit.");
                 Assert.AreEqual(1, db.Scalar(count + "s.session_id = 5"), "Tracker ids differing only by case are different visits.");
+
+                db.Execute(@"TRUNCATE TABLE dbo.staged_searches;
+INSERT dbo.staged_searches (ai_session_id, user_name, search_term, date_time, ingestion_hour) VALUES
+('session-a', 'reader@contoso.com', N'New', '2000-01-01T09:02:00', '2000-01-01T10:00:00'),
+('SESSION-A', 'reader@contoso.com', N'Not in SQL', NULL, '2000-01-01T10:00:00'),
+('session-a', 'other@contoso.com', N'Not in SQL', NULL, '2000-01-01T10:00:00'),
+('session-missing', 'reader@contoso.com', N'Not in SQL', NULL, NULL);");
+                using (var connection = new SqlConnection(db.ConnectionString))
+                using (var command = new SqlCommand("SET NOCOUNT ON;\n" + merge, connection))
+                {
+                    connection.Open();
+                    using (var reader = command.ExecuteReader())
+                    {
+                        Assert.IsTrue(reader.Read());
+                        Assert.AreEqual(1, reader.GetInt32(0), "A new search fact.");
+                        Assert.AreEqual(2, reader.GetInt32(1), "The lookup and fact count, even if DONE row counts are disabled.");
+                        Assert.IsTrue(reader.NextResult());
+                        var missing = 0;
+                        while (reader.Read())
+                        {
+                            Assert.AreEqual(reader.IsDBNull(0) ? 1 : 2, reader.GetInt32(1));
+                            missing += reader.GetInt32(1);
+                        }
+                        Assert.AreEqual(3, missing, "A case-different tracker id or the same id for the wrong user cannot resolve a search.");
+                    }
+                }
+                Assert.AreEqual(0, db.Scalar("SELECT COUNT(*) FROM dbo.search_terms WHERE search_term=N'Not in SQL'"));
             }
         }
     }

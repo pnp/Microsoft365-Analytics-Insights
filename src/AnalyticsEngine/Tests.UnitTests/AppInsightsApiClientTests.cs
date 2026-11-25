@@ -547,11 +547,45 @@ namespace Tests.UnitTests
                 ProjectedColumns(handler.Queries[0]));
 
             StringAssert.StartsWith(handler.Queries[1], "customEvents ");
-            CollectionAssert.AreEquivalent(new[] { "timestamp", "customDimensions", "user_AuthenticatedId", "name" },
+            CollectionAssert.AreEquivalent(new[] { "timestamp", "customDimensions", "user_AuthenticatedId", "name", "searchIngestionHour" },
                 ProjectedColumns(handler.Queries[1]));
             foreach (var eventName in new[] { "PAGE_EXIT", "UserSearch", "LinkClick", "PageMetadataUpdate" })
             {
                 StringAssert.Contains(handler.Queries[1], eventName, "Only the custom events the importer reads are requested.");
+            }
+        }
+
+        [TestMethod]
+        public async Task SearchRetry_CountsAndReadsOnlySearchesInTheOriginalIngestionHour()
+        {
+            var hour = Day.AddHours(10);
+            var window = AppInsightsReadWindow.SearchRetryHour(hour, hour.AddDays(1));
+            var columns = new[] { "timestamp", "name", "customDimensions", "user_AuthenticatedId", "searchIngestionHour" };
+            var row = new object[] { Day.AddDays(-1), "UserSearch", "{\"sessionId\":\"contoso\",\"userSearch\":\"Καλημέρα\"}", "reader@contoso.com", hour };
+            var handler = new StubHandler
+            {
+                RespondToQuery = kql =>
+                {
+                    if (kql.Contains("| summarize")) return Table(null, new[] { "Kind", "Hour", "RowCount" }, new[] { new object[] { "event", Day.AddDays(-1), 1 } });
+                    var bounds = WindowOf(kql);
+                    if (bounds == (window.FromUtc, window.ToUtc)) return Table("PartialError", columns, new[] { row });
+                    var containsRow = Day.AddDays(-1) >= bounds.From && Day.AddDays(-1) < bounds.To;
+                    return Table(null, columns, containsRow ? new[] { row } : Array.Empty<object[]>());
+                }
+            };
+            using (var client = NewClient(handler))
+            {
+                Assert.AreEqual(1L, (await client.GetHourlyRowCountsAsync(window)).Single().Count);
+                var events = await client.GetCustomEventsAsync(window, false);
+                Assert.AreEqual(hour, events.Rows.Single().SearchIngestionHourUtc);
+            }
+            Assert.AreEqual(4, handler.RequestCount, "One count, one partial read and both halves of that read.");
+            foreach (var kql in handler.Queries)
+            {
+                StringAssert.Contains(kql, "where name == 'UserSearch'");
+                StringAssert.Contains(kql, "ingestion_time() >= todatetime('2026-05-30 10:00:00')");
+                StringAssert.Contains(kql, "ingestion_time() < todatetime('2026-05-30 11:00:00')");
+                Assert.IsFalse(kql.Contains("pageViews") || kql.Contains("LinkClick"));
             }
         }
 

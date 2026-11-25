@@ -27,6 +27,8 @@ namespace WebJob.AppInsightsImporter.Engine
 
         private readonly object _lock = new object();
         private readonly Dictionary<DateTime, int> _consecutiveFailuresByDay = new Dictionary<DateTime, int>();
+        // Legacy callers without a cursor store must still carry pending search hours into their next cycle.
+        internal Common.Entities.State.InMemoryKeyValueStore InMemorySearchRetryState { get; } = new Common.Entities.State.InMemoryKeyValueStore();
 
         public AppInsightsDayFailureTracker() : this(DefaultMaxAttempts)
         {

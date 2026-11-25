@@ -54,8 +54,12 @@ namespace WebJob.AppInsightsImporter.Engine
             var hitUpdatesCount = await SaveSectionSafe(_logger, "Hit updates",
                 () => _hitUpdates.SaveHitUpdatesAsync(events), failedSections);
 
-            var searchesInserted = await SaveSectionSafe(_logger, "Searches",
-                () => _searches.SaveSearchesAsync(events), failedSections);
+            var searches = SearchSaveResult.Empty;
+            var searchesInserted = await SaveSectionSafe(_logger, "Searches", async () =>
+            {
+                searches = await _searches.SaveSearchesAsync(events);
+                return searches.RowsAffected;
+            }, failedSections);
 
             var pagesUpdated = await SaveSectionSafe(_logger, "Page updates",
                 () => _pageUpdates.SavePageUpdatesAsync(events), failedSections);
@@ -65,7 +69,7 @@ namespace WebJob.AppInsightsImporter.Engine
 
             _logger.LogInformation($"Event save summary: {hitUpdatesCount:n0} hit-updates, {searchesInserted:n0} searches, {pagesUpdated:n0} page-updates, {clicks:n0} clicks");
 
-            return new CustomEventSaveResult(failedSections);
+            return new CustomEventSaveResult(failedSections, searches);
         }
 
         /// <summary>

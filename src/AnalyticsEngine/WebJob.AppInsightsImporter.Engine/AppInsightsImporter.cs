@@ -34,7 +34,8 @@ namespace WebJob.AppInsightsImporter.Engine
     /// <para>
     /// A day that fails - to download or to save - stops the cycle there, and the next cycle retries it before any later
     /// day; after <see cref="AppInsightsDayFailureTracker.MaxAttempts"/> failures in a row its forced retries stop. The
-    /// cursor only moves when the cycle got to the end.
+    /// cursor only moves when the cycle got to the end and the ingestion hours of retryable searches still awaiting visits have
+    /// been checkpointed. Those hours are retried separately without rereading unrelated telemetry.
     /// </para>
     /// </remarks>
     public class AppInsightsImporter
@@ -63,6 +64,7 @@ namespace WebJob.AppInsightsImporter.Engine
 
         // Durable: how far App Insights' ingestion has been imported. Null reads whole days from the newest stored hit.
         private readonly IAppInsightsIngestionCursorStore _cursorStore;
+        private readonly IAppInsightsIngestionCursorStore _searchRetryStore;
 
         private readonly int _maxRowsPerWindow;
 
@@ -106,6 +108,8 @@ namespace WebJob.AppInsightsImporter.Engine
             _scanWatermark = scanWatermark;
             _dayFailures = dayFailureTracker ?? AppInsightsDayFailureTracker.ProcessDefault;
             _cursorStore = cursorStore;
+            _searchRetryStore = cursorStore ?? new KeyValueIngestionCursorStore(_dayFailures.InMemorySearchRetryState,
+                AppInsightsAPIClient.ParseConnectionStringValue(importConfig?.AppInsightsConnectionString, "ApplicationId"));
             if (maxRowsPerWindow < 1) throw new ArgumentOutOfRangeException(nameof(maxRowsPerWindow));
             _maxRowsPerWindow = maxRowsPerWindow;
         }
@@ -165,6 +169,7 @@ namespace WebJob.AppInsightsImporter.Engine
 
             AppInsightsReadWindow range;
             DateTime? cursorUtc = null;
+            DateTime? storedCursorUtc = null;
             DateTime? newestStoredHitAtCursorUtc = null;
             var cursorReadFailed = false;
             if (scanFromDateOverride.HasValue)
@@ -179,7 +184,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 {
                     try
                     {
-                        cursorUtc = await _cursorStore.ReadAsync();
+                        storedCursorUtc = cursorUtc = await _cursorStore.ReadAsync();
                         if (cursorUtc.HasValue)
                         {
                             newestStoredHitAtCursorUtc = await _cursorStore.ReadNewestStoredHitAtCursorAsync();
@@ -237,10 +242,60 @@ namespace WebJob.AppInsightsImporter.Engine
             var jobTimer = new JobTimer(_logger, "Hits import");
             jobTimer.Start();
 
+            AppInsightsSearchRetries searchRetries = null;
+            if (!cursorReadFailed && result.Mode != AppInsightsReadMode.Backfill)
+            {
+                try
+                {
+                    searchRetries = new AppInsightsSearchRetries(await _searchRetryStore.ReadSearchRetriesAsync());
+                    var lost = searchRetries.RemoveOutsideRetention(nowUtc);
+                    if (lost > 0)
+                    {
+                        result.Degrade("SearchRetriesStopped");
+                        _logger.LogWarning($"AppInsightsSearchRetry: {lost} pending ingestion hour(s) exceeded the source lookback after a pause; automatic retries stopped.");
+                    }
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                {
+                    searchRetries = null;
+                    result.Degrade("SearchRetryReadFailed");
+                    _logger.LogWarning($"AppInsightsSearchRetry: checkpoint could not be read. Leaving it and the ingestion cursor unchanged. {SearchFailure(ex)}");
+                }
+            }
+
+            async Task<bool> ImportWithRetriesAsync(IAppInsightsSourceLoader source)
+            {
+                var finished = await ImportRangeAsync(source, range, saveRestResponses, filterUrls, persistence, result, cancellationToken);
+                var withoutHour = result.Days.Sum(d => d.SearchesWithoutIngestionTime);
+                if (withoutHour > 0)
+                {
+                    result.Degrade("SearchNoIngestionTime");
+                    _logger.LogWarning($"AppInsightsSearchRetry: {withoutHour} unmatched search event(s) had no ingestion hour to retry. " +
+                        "ReadHitsDaysBeforeToday can reread the timestamp day.");
+                }
+                if (result.Mode == AppInsightsReadMode.Backfill && result.Days.Any(d => d.UnmatchedSearches > 0))
+                    result.Degrade("UnmatchedBackfillSearches");
+                if (searchRetries == null) return finished;
+                foreach (var hour in result.Days.SelectMany(d => d.UnmatchedSearchHours).Distinct())
+                {
+                    // Without hits Bootstrap can reread the same historical days every cycle; do not rearm an
+                    // expired hour already passed by the stored cursor. Respect a restore's explicit rewind.
+                    var alreadyCovered = cursorUtc ?? storedCursorUtc;
+                    bool newlyRead = _cursorStore != null && (!alreadyCovered.HasValue || hour.AddHours(1) > alreadyCovered.Value);
+                    if (!searchRetries.Observe(hour, nowUtc, newlyRead)) result.Degrade("SearchRetriesStopped");
+                }
+                // A later day's page view may create an earlier day's missing visit. Reconcile only after normal imports.
+                if (finished)
+                    await ReconcileSearchHoursAsync(source, persistence, searchRetries, nowUtc, result);
+                result.PendingSearchHours = searchRetries.Hours.Count;
+                if (result.PendingSearchHours > 0) result.Degrade("SearchSessionsPending");
+                return finished;
+            }
+
             bool completed;
             if (_source != null)
             {
-                completed = await ImportRangeAsync(_source, range, saveRestResponses, filterUrls, persistence, result, cancellationToken);
+                completed = await ImportWithRetriesAsync(_source);
             }
             else
             {
@@ -250,7 +305,23 @@ namespace WebJob.AppInsightsImporter.Engine
                     this._importConfig.ClientSecret);
                 using (var ai = new AppInsightsAPIClient(this._importConfig.AppInsightsConnectionString, credential, _logger))
                 {
-                    completed = await ImportRangeAsync(ai, range, saveRestResponses, filterUrls, persistence, result, cancellationToken);
+                    completed = await ImportWithRetriesAsync(ai);
+                }
+            }
+
+            if (searchRetries?.Changed == true)
+            {
+                try
+                {
+                    // Never move the main cursor past unfinished searches until their source hours are durable.
+                    await _searchRetryStore.WriteSearchRetriesAsync(searchRetries.Hours);
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                {
+                    result.PendingSearchHours = null;
+                    result.Degrade("SearchRetryWriteFailed");
+                    _logger.LogWarning($"AppInsightsSearchRetry: checkpoint could not be saved. The ingestion cursor was not advanced. {SearchFailure(ex)}");
+                    return result;
                 }
             }
 
@@ -262,7 +333,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 return result;
             }
 
-            if (result.Mode != AppInsightsReadMode.Backfill && _cursorStore != null && !cursorReadFailed)
+            if (result.Mode != AppInsightsReadMode.Backfill && _cursorStore != null && searchRetries != null)
             {
                 var newCursor = range.IngestedBeforeUtc.Value;
                 try
@@ -277,7 +348,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 {
                     result.Degrade("CursorWriteFailed");
                     _logger.LogWarning($"AppInsightsCursor: Outcome=WriteFailed; Store={_cursorStore.Description}; {ExceptionDescriber.Chain(ex)}. " +
-                        "Everything read was saved; the next cycle reads from the previous cursor again.", ex);
+                        "The next cycle reads from the previous cursor again; the SQL merges skip facts already stored.", ex);
                 }
             }
 
@@ -464,15 +535,18 @@ namespace WebJob.AppInsightsImporter.Engine
                     var read = events.Rows.Count;
                     Add(removed, AppInsightsUserScopeRules.Apply(null, events, _userScope));
 
+                    int accepted = 0;
                     if (events.Rows.Count > 0)
                     {
                         stage = StageSave;
                         var save = Stopwatch.StartNew();
-                        await persistence.SaveCustomEventsAsync(events);
+                        var saved = await persistence.SaveCustomEventsAsync(events);
                         day.SaveSeconds += save.Elapsed.TotalSeconds;
-                        day.Events += events.Rows.Count;
+                        day.RecordSearches(saved.Searches);
+                        accepted = events.Rows.Count - saved.Searches.Unmatched - saved.Searches.Skipped;
+                        day.Events += accepted;
                     }
-                    _logger.LogDebug($"AppInsightsWindow: Kind=Events; Window={window}; Read={read}; Saved={events.Rows.Count}; FetchMs={fetch.ElapsedMilliseconds}.");
+                    _logger.LogDebug($"AppInsightsWindow: Kind=Events; Window={window}; Read={read}; Saved={accepted}; FetchMs={fetch.ElapsedMilliseconds}.");
                 }
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException) && !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
@@ -484,7 +558,11 @@ namespace WebJob.AppInsightsImporter.Engine
                 day.ConsecutiveFailures = failures;
                 day.FailedStage = stage;
                 day.Exception = ex;
-                day.FailedSections = (ex as CustomEventSaveIncompleteException)?.FailedSections ?? (IReadOnlyList<string>)new string[0];
+                if (ex is CustomEventSaveIncompleteException incomplete)
+                {
+                    day.FailedSections = incomplete.FailedSections;
+                    day.RecordSearches(incomplete.Searches);
+                }
                 var what = stage == StageDownload ? "downloading" : "saving";
                 string Detail(AppInsightsDayOutcome outcome) =>
                     string.Format(CultureInfo.InvariantCulture,
@@ -531,7 +609,8 @@ namespace WebJob.AppInsightsImporter.Engine
                     $"{removed.EventsRemoved:n0} event(s), {removed.CommentsRemoved:n0} page comment(s) and {removed.LikesRemoved:n0} like(s).");
             }
 
-            day.Outcome = day.PageViews + day.Events > 0 ? AppInsightsDayOutcome.Saved : AppInsightsDayOutcome.NoData;
+            day.Outcome = day.UnmatchedSearches > 0 ? AppInsightsDayOutcome.UnmatchedSearches :
+                day.PageViews + day.Events > 0 ? AppInsightsDayOutcome.Saved : AppInsightsDayOutcome.NoData;
             _logger.LogInformation(string.Format(CultureInfo.InvariantCulture,
                 "AppInsightsDay: Day={0:yyyy-MM-dd}; Outcome={1}; Mode={2}; Windows={3}; PageViews={4}; Events={5}; FetchMs={6:0}; SaveMs={7:0}; ElapsedMs={8}.",
                 dayUtc, day.Outcome, mode, day.Windows, day.PageViews, day.Events, day.FetchSeconds * 1000, day.SaveSeconds * 1000, dayTimer.ElapsedMilliseconds));
@@ -544,6 +623,61 @@ namespace WebJob.AppInsightsImporter.Engine
             }
             return day;
         }
+
+        private async Task ReconcileSearchHoursAsync(IAppInsightsSourceLoader source, IAppInsightsDayPersistenceManager persistence,
+            AppInsightsSearchRetries retries, DateTime nowUtc, AppInsightsImportCycleResult result)
+        {
+            foreach (var hour in retries.Due(nowUtc))
+            {
+                var expired = nowUtc >= hour.ExpiresUtc;
+                try
+                {
+                    var range = AppInsightsReadWindow.SearchRetryHour(hour.HourUtc, nowUtc);
+                    var counts = await source.GetHourlyRowCountsAsync(range);
+                    var missing = 0;
+                    var filtered = 0;
+                    var read = 0;
+                    var windows = counts.GroupBy(c => c.HourUtc.Date).OrderBy(d => d.Key)
+                        .SelectMany(d => PlanWindows(d.Key, d.ToList(), AppInsightsTelemetryKind.Events, range));
+                    foreach (var window in windows)
+                    {
+                        var events = await source.GetCustomEventsAsync(window, false);
+                        read += events.Rows.Count;
+                        filtered += AppInsightsUserScopeRules.Apply(null, events, _userScope).EventsRemoved;
+                        if (events.Rows.Count == 0) continue;
+                        var saved = await persistence.SaveSearchesAsync(events);
+                        result.ReconciledSearches += saved.FactsInserted;
+                        missing += saved.Unmatched;
+                    }
+                    // An empty source result cannot prove an earlier, known unmatched search was saved or
+                    // filtered. It may have disappeared from Application Insights before this attempt.
+                    retries.Finished(hour, missing > 0 || read == 0, nowUtc);
+                    _logger.LogInformation($"AppInsightsSearchRetry: Hour={hour.HourUtc:O}; Unmatched={missing}; Filtered={filtered}; Final={expired}.");
+                    if (read == 0)
+                    {
+                        result.Degrade(expired ? "SearchRetriesStopped" : "SearchRetrySourceEmpty");
+                        _logger.LogWarning($"AppInsightsSearchRetry: no searches returned for pending ingestion hour {hour.HourUtc:O}; Final={expired}.");
+                    }
+                    else if (missing > 0 && expired)
+                    {
+                        result.Degrade("SearchRetriesStopped");
+                        _logger.LogWarning($"AppInsightsSearchRetry: {missing} search event(s) still have no eligible visit for ingestion hour {hour.HourUtc:O}. " +
+                            "Automatic retries stopped. ReadHitsDaysBeforeToday can reread the day while Application Insights retains it.");
+                    }
+                }
+                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                {
+                    retries.Finished(hour, true, nowUtc);
+                    result.Degrade(expired ? "SearchRetriesStopped" : "SearchRetryFailed");
+                    _logger.LogWarning($"AppInsightsSearchRetry: failed to reconcile ingestion hour {hour.HourUtc:O}; Final={expired}. " +
+                        $"The normal import continues; ReadHitsDaysBeforeToday can reread the day. {SearchFailure(ex)}");
+                }
+            }
+        }
+
+        // Exception messages can quote a rejected value or response. Only classify search retries.
+        private static string SearchFailure(Exception ex) =>
+            string.Join("; ", ExceptionDescriber.Dimensions(ex).Select(d => $"{d.Key}={d.Value}"));
 
         /// <summary>The planned windows of one kind for a day, within the range's timestamp bounds.</summary>
         private List<AppInsightsReadWindow> PlanWindows(DateTime dayUtc, IReadOnlyList<AppInsightsHourlyRowCount> dayCounts,

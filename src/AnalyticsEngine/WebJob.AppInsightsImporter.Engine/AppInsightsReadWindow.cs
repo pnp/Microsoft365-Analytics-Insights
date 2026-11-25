@@ -19,6 +19,11 @@ namespace WebJob.AppInsightsImporter.Engine
     public sealed class AppInsightsReadWindow
     {
         public AppInsightsReadWindow(DateTime fromUtc, DateTime toUtc, DateTime? ingestedFromUtc = null, DateTime? ingestedBeforeUtc = null)
+            : this(fromUtc, toUtc, ingestedFromUtc, ingestedBeforeUtc, false)
+        {
+        }
+
+        private AppInsightsReadWindow(DateTime fromUtc, DateTime toUtc, DateTime? ingestedFromUtc, DateTime? ingestedBeforeUtc, bool searchesOnly)
         {
             if (toUtc <= fromUtc) throw new ArgumentException("A window must end after it starts.", nameof(toUtc));
             if (ingestedFromUtc.HasValue && ingestedBeforeUtc.HasValue && ingestedBeforeUtc.Value <= ingestedFromUtc.Value)
@@ -29,19 +34,31 @@ namespace WebJob.AppInsightsImporter.Engine
             ToUtc = toUtc;
             IngestedFromUtc = ingestedFromUtc;
             IngestedBeforeUtc = ingestedBeforeUtc;
+            SearchesOnly = searchesOnly;
         }
 
         public DateTime FromUtc { get; }
         public DateTime ToUtc { get; }
         public DateTime? IngestedFromUtc { get; }
         public DateTime? IngestedBeforeUtc { get; }
+        public bool SearchesOnly { get; }
+
+        internal static AppInsightsReadWindow SearchRetryHour(DateTime hourUtc, DateTime nowUtc)
+        {
+            var oldest = nowUtc - AppInsightsIngestionCursorPolicy.MaxLookback;
+            var from = hourUtc < oldest ? oldest : hourUtc;
+            var end = hourUtc.AddHours(1);
+            var to = end < nowUtc ? end : nowUtc;
+            return new AppInsightsReadWindow(from - AppInsightsIngestionCursorPolicy.LateArrivalBound,
+                to + AppInsightsIngestionCursorPolicy.FutureBound, from, to, true);
+        }
 
         /// <summary>The whole UTC day starting at <paramref name="dayUtc"/>, with no ingestion bounds.</summary>
         public static AppInsightsReadWindow WholeDay(DateTime dayUtc) => new AppInsightsReadWindow(dayUtc.Date, dayUtc.Date.AddDays(1));
 
         /// <summary>The same ingestion bounds over a different timestamp range.</summary>
         public AppInsightsReadWindow WithTimestamps(DateTime fromUtc, DateTime toUtc) =>
-            new AppInsightsReadWindow(fromUtc, toUtc, IngestedFromUtc, IngestedBeforeUtc);
+            new AppInsightsReadWindow(fromUtc, toUtc, IngestedFromUtc, IngestedBeforeUtc, SearchesOnly);
 
         public override string ToString() =>
             $"{FromUtc:yyyy-MM-dd HH:mm:ss} to {ToUtc:yyyy-MM-dd HH:mm:ss} UTC" +

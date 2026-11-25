@@ -1,5 +1,7 @@
 using Common.Entities.State;
+using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Threading.Tasks;
 
@@ -28,7 +30,8 @@ namespace WebJob.AppInsightsImporter.Engine
     /// later - a browser that was offline, a batch sent late - was never imported; and every cycle re-read and re-staged
     /// the whole current day. The cursor is <c>ingestion_time()</c> instead: when App Insights made the row queryable.
     /// Each cycle reads the rows ingested since the cursor, whatever their timestamp, and the cursor only moves once
-    /// every one of them has saved.
+    /// they have been processed. An unmatched search's ingestion hour must be checkpointed for retry before the cursor
+    /// can advance; the search itself stays in Application Insights.
     /// </para>
     /// <para>
     /// Azure Monitor documents the bounds this relies on (https://learn.microsoft.com/azure/azure-monitor/logs/data-ingestion-time):
@@ -147,10 +150,14 @@ namespace WebJob.AppInsightsImporter.Engine
         Task<DateTime?> ReadNewestStoredHitAtCursorAsync();
 
         /// <summary>
-        /// Everything ingested before <paramref name="cursorUtc"/> has been saved, and the newest stored hit is then
-        /// <paramref name="newestStoredHitUtc"/> (null: no hits).
+        /// Normal import has processed ingestion before <paramref name="cursorUtc"/>; retryable search hours have
+        /// already been checkpointed. The newest stored hit is <paramref name="newestStoredHitUtc"/> (null: no hits).
         /// </summary>
         Task WriteAsync(DateTime cursorUtc, DateTime? newestStoredHitUtc);
+
+        /// <summary>Pending ingestion-hour markers, not telemetry. Throws if the store cannot be read.</summary>
+        Task<IReadOnlyList<AppInsightsSearchRetry>> ReadSearchRetriesAsync();
+        Task WriteSearchRetriesAsync(IReadOnlyCollection<AppInsightsSearchRetry> retries);
     }
 
     /// <summary>
@@ -172,6 +179,7 @@ namespace WebJob.AppInsightsImporter.Engine
         private readonly IKeyValueStore _store;
         private readonly string _key;
         private readonly string _newestHitKey;
+        private readonly string _searchRetryKey;
 
         public KeyValueIngestionCursorStore(IKeyValueStore store, string appInsightsApplicationId)
         {
@@ -179,6 +187,7 @@ namespace WebJob.AppInsightsImporter.Engine
             var suffix = string.IsNullOrWhiteSpace(appInsightsApplicationId) ? string.Empty : ":" + appInsightsApplicationId.Trim();
             _key = KeyPrefix + suffix;
             _newestHitKey = NewestHitKeyPrefix + suffix;
+            _searchRetryKey = "IngestionCursorSearchRetries" + suffix;
         }
 
         public string Description => _store.Description + ", key '" + _key + "'";
@@ -186,6 +195,15 @@ namespace WebJob.AppInsightsImporter.Engine
         public Task<DateTime?> ReadAsync() => ReadUtcAsync(_key);
 
         public Task<DateTime?> ReadNewestStoredHitAtCursorAsync() => ReadUtcAsync(_newestHitKey);
+
+        public async Task<IReadOnlyList<AppInsightsSearchRetry>> ReadSearchRetriesAsync()
+        {
+            var value = await _store.GetStringAsync(_searchRetryKey).ConfigureAwait(false);
+            return value == null ? Array.Empty<AppInsightsSearchRetry>() : JsonConvert.DeserializeObject<AppInsightsSearchRetry[]>(value);
+        }
+
+        public Task WriteSearchRetriesAsync(IReadOnlyCollection<AppInsightsSearchRetry> retries) =>
+            _store.SetStringAsync(_searchRetryKey, retries.Count == 0 ? null : JsonConvert.SerializeObject(retries), AppInsightsIngestionCursorPolicy.MaxLookback);
 
         public async Task WriteAsync(DateTime cursorUtc, DateTime? newestStoredHitUtc)
         {

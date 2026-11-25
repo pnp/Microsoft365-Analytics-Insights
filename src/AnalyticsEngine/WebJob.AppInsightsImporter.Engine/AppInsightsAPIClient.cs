@@ -334,17 +334,24 @@ namespace WebJob.AppInsightsImporter.Engine
             $"pageViews | where {GetWhereString(window)} | project {PageViewColumns} | order by timestamp asc";
 
         internal string BuildCustomEventsQuery(AppInsightsReadWindow window) =>
-            $"customEvents | where {GetWhereString(window)} | where name in ({ImportedCustomEventNames}) | project {CustomEventColumns} | order by timestamp asc";
+            $"{FilteredEvents(window)} | extend searchIngestionHour = iff(name == '{AppInsightsImporterConstants.EVENT_NAME_USER_SEARCH}', " +
+            $"bin(ingestion_time(), 1h), datetime(null)) | project {CustomEventColumns} | order by timestamp asc";
+
+        private string FilteredEvents(AppInsightsReadWindow window) =>
+            $"customEvents | where {GetWhereString(window)} | where " +
+            (window.SearchesOnly ? $"name == '{AppInsightsImporterConstants.EVENT_NAME_USER_SEARCH}'" : $"name in ({ImportedCustomEventNames})");
 
         /// <summary>
         /// Counts the rows <see cref="BuildPageViewsQuery"/> and <see cref="BuildCustomEventsQuery"/> would return for
-        /// <paramref name="range"/>, per hour. Validated against the classic <c>api.applicationinsights.io</c> query
-        /// endpoint of a workspace-based resource, including <c>ingestion_time()</c> in the filter.
+        /// <paramref name="range"/>, per timestamp hour. A normal range counts page views and all imported event
+        /// kinds; a search retry counts only searches in its original ingestion hour.
         /// </summary>
-        internal string BuildHourlyCountsQuery(AppInsightsReadWindow range) =>
-            $"union (pageViews | where {GetWhereString(range)} | extend Kind = '{PageViewKind}'), " +
-            $"(customEvents | where {GetWhereString(range)} | where name in ({ImportedCustomEventNames}) | extend Kind = '{EventKind}') " +
-            "| summarize RowCount = count() by Kind, Hour = bin(timestamp, 1h)";
+        internal string BuildHourlyCountsQuery(AppInsightsReadWindow range)
+        {
+            var events = $"{FilteredEvents(range)} | extend Kind = '{EventKind}'";
+            var rows = range.SearchesOnly ? events : $"union (pageViews | where {GetWhereString(range)} | extend Kind = '{PageViewKind}'), ({events})";
+            return rows + " | summarize RowCount = count() by Kind, Hour = bin(timestamp, 1h)";
+        }
 
         private static string ProjectedColumns(params Type[] resultTypes)
         {

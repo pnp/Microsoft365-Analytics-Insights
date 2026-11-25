@@ -4,7 +4,6 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Data;
-using Microsoft.Data.SqlClient;
 using System.Diagnostics;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
@@ -17,22 +16,22 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
     {
 
         public static async Task<int> SaveSearchesToSQL(this CustomEventsResultCollection eventList, ILogger logger, AnalyticsEntitiesContext database)
+            => (await eventList.SaveSearchBatchAsync(logger, database)).RowsAffected;
+
+        internal static async Task<SearchSaveResult> SaveSearchBatchAsync(this CustomEventsResultCollection eventList, ILogger logger,
+            AnalyticsEntitiesContext database, int? mergeTimeoutSeconds = null)
         {
             if (eventList.Rows.Count == 0)
             {
-                return 0;
+                return SearchSaveResult.Empty;
             }
 
             var searches = new List<SearchEventAppInsightsQueryResult>();
             var skipped = 0;
             foreach (var r in eventList.Rows)
             {
-                if (r is SearchEventAppInsightsQueryResult)
+                if (r is SearchEventAppInsightsQueryResult search)
                 {
-                    var search = (SearchEventAppInsightsQueryResult)r;
-
-                    // Pure rule - see issue #369. The old code went straight to searchTerm.Length, so a
-                    // null SearchText threw a NullReferenceException that took the whole section down.
                     if (SearchTermRules.ShouldStage(search))
                     {
                         searches.Add(search);
@@ -46,62 +45,77 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
 
             if (skipped > 0)
             {
-                logger.LogWarning($"Skipped {skipped:n0} search event(s) with no search text.");
+                logger.LogWarning($"Skipped {skipped:n0} search event(s) without search text or a usable user/session identity.");
             }
 
             if (searches.Count == 0)
             {
-                return 0;
+                return skipped == 0 ? SearchSaveResult.Empty : new SearchSaveResult(0, 0, skipped, new Dictionary<DateTime, int>());
             }
 
             logger.LogInformation($"Processing {searches.Count.ToString("n0")} searches...");
             var sw = Stopwatch.StartNew();
 
-            // Read default connection-string
-            var defaultConnectionString = database.Database.Connection.ConnectionString;
-
-            // Create our own connection & context to use it
-            using (var con = AzureSqlTokenAuth.CreateConnection(defaultConnectionString))
+            using (var con = AzureSqlTokenAuth.CreateConnection(database.Database.Connection.ConnectionString))
             {
-                con.Open();
-
-                using (var db = new AnalyticsEntitiesContext(con))
+                await con.OpenAsync();
+                using (var cmd = con.CreateCommand())
                 {
-
-                    // Create staging table if doesn't exist
-                    await db.Database.ExecuteSqlCommandAsync(FixSearchScript(Resources.Create_Searches_Import_Temp_Table));
-
-                    // Bulk-insert using a single parameterised command, reusing parameters each iteration
-                    var cmd = con.CreateCommand();
+                    cmd.CommandText = FixSearchScript(Resources.Create_Searches_Import_Temp_Table);
+                    await cmd.ExecuteNonQueryAsync();
                     cmd.CommandText = $"INSERT INTO [{AppInsightsImporterConstants.STAGING_TABLE_SEARCHES}] " +
-                        "([ai_session_id], [user_name], [search_term], [date_time]) VALUES (@p0, @p1, @p2, @p3)";
+                        "([ai_session_id], [user_name], [search_term], [date_time], [ingestion_hour]) VALUES (@p0, @p1, @p2, @p3, @p4)";
 
-                    var pSessionId = cmd.Parameters.Add("@p0", SqlDbType.NVarChar, 100);
+                    var pSessionId = cmd.Parameters.Add("@p0", SqlDbType.VarChar, 50);
                     var pUserName = cmd.Parameters.Add("@p1", SqlDbType.NVarChar, 250);
                     var pSearchTerm = cmd.Parameters.Add("@p2", SqlDbType.NVarChar, SearchTermRules.MaxSearchTermLength);
                     var pDateTime = cmd.Parameters.Add("@p3", SqlDbType.DateTime);
+                    var pIngestedHour = cmd.Parameters.Add("@p4", SqlDbType.DateTime);
                     cmd.Prepare();
 
                     foreach (var customEvent in searches)
                     {
                         var searchTerm = SearchTermRules.Truncate(customEvent.CustomProperties.SearchText);
 
-                        pSessionId.Value = (object)customEvent.CustomProperties.SessionId ?? DBNull.Value;
-                        pUserName.Value = (object)customEvent.Username ?? DBNull.Value;
+                        pSessionId.Value = customEvent.CustomProperties.SessionId;
+                        pUserName.Value = customEvent.Username;
                         pSearchTerm.Value = searchTerm;
                         pDateTime.Value = customEvent.Timestamp;
+                        pIngestedHour.Value = (object)customEvent.SearchIngestionHourUtc ?? DBNull.Value;
 
                         await cmd.ExecuteNonQueryAsync();
                     }
 
                     logger.LogInformation($"Inserted {searches.Count:n0} searches into staging in {sw.Elapsed.TotalSeconds:N1}s. Running merge script...");
                     sw.Restart();
-
-                    // Run script to copy to proper tables
-                    var searchesInserted = await db.Database.ExecuteSqlCommandAsync(FixSearchScript(Resources.Migrate_Searches_Import));
-
-                    logger.LogInformation($"Search merge completed in {sw.Elapsed.TotalSeconds:N1}s - {searchesInserted:n0} new rows.");
-                    return searchesInserted;
+                }
+                // The lookup and fact inserts used to run in EF's implicit transaction. Commit them together.
+                using (var transaction = con.BeginTransaction())
+                using (var merge = con.CreateCommand())
+                {
+                    merge.Transaction = transaction;
+                    merge.CommandText = FixSearchScript(Resources.Migrate_Searches_Import);
+                    merge.CommandTimeout = mergeTimeoutSeconds ?? database.Database.CommandTimeout ?? merge.CommandTimeout;
+                    var unmatched = new Dictionary<DateTime, int>();
+                    var missingIngestionTime = 0;
+                    int facts, rows;
+                    using (var reader = await merge.ExecuteReaderAsync())
+                    {
+                        await reader.ReadAsync();
+                        facts = reader.GetInt32(0);
+                        rows = reader.GetInt32(1);
+                        await reader.NextResultAsync();
+                        while (await reader.ReadAsync())
+                        {
+                            if (reader.IsDBNull(0)) missingIngestionTime = reader.GetInt32(1);
+                            else unmatched.Add(DateTime.SpecifyKind(reader.GetDateTime(0), DateTimeKind.Utc), reader.GetInt32(1));
+                        }
+                    }
+                    transaction.Commit();
+                    var result = new SearchSaveResult(rows, facts, skipped, unmatched, missingIngestionTime);
+                    logger.LogInformation($"Search merge completed in {sw.Elapsed.TotalSeconds:N1}s - {rows:n0} new rows, " +
+                        $"{facts:n0} new searches, {searches.Count - facts - result.Unmatched:n0} replayed, {result.Unmatched:n0} without a matching visit.");
+                    return result;
                 }
             }
         }

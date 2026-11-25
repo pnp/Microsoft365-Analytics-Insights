@@ -9,12 +9,12 @@ namespace WebJob.AppInsightsImporter.Engine
     /// <summary>How an import cycle ended.</summary>
     public enum AppInsightsCycleOutcome
     {
-        /// <summary>Everything that was read saved.</summary>
+        /// <summary>The cycle ran to completion without failed or unresolved work.</summary>
         Succeeded,
 
         /// <summary>
-        /// The cycle ran to the end, but not cleanly: a day stopped being retried, or the ingestion cursor could not be
-        /// read or saved (so the next cycle re-reads more than it needs to).
+        /// The cycle ran to the end, but not cleanly: for example a search is waiting for its visit, a day's retries
+        /// stopped, or the checkpoints could not be read or saved.
         /// </summary>
         Degraded,
 
@@ -35,7 +35,10 @@ namespace WebJob.AppInsightsImporter.Engine
         Failed,
 
         /// <summary>The day failed again after its forced retries stopped; the cycle carried on with later days.</summary>
-        RetriesStopped
+        RetriesStopped,
+
+        /// <summary>The day ran to the end, but some searches have no matching visit yet.</summary>
+        UnmatchedSearches
     }
 
     /// <summary>What one day of a cycle did. One <c>AppInsightsDay</c> event carries it.</summary>
@@ -51,6 +54,15 @@ namespace WebJob.AppInsightsImporter.Engine
         public int Windows { get; set; }
         public int PageViews { get; set; }
         public int Events { get; set; }
+        public int UnmatchedSearches { get; set; }
+        internal int SearchesWithoutIngestionTime { get; private set; }
+        internal HashSet<DateTime> UnmatchedSearchHours { get; } = new HashSet<DateTime>();
+        internal void RecordSearches(SearchSaveResult searches)
+        {
+            UnmatchedSearches += searches.Unmatched;
+            SearchesWithoutIngestionTime += searches.MissingIngestionTime;
+            UnmatchedSearchHours.UnionWith(searches.UnmatchedByHour.Keys);
+        }
         public double FetchSeconds { get; set; }
         public double SaveSeconds { get; set; }
 
@@ -83,6 +95,9 @@ namespace WebJob.AppInsightsImporter.Engine
         public int PageViews => Days.Sum(d => d.PageViews);
         public int Events => Days.Sum(d => d.Events);
         public int Windows => Days.Sum(d => d.Windows);
+        /// <summary>Unknown on a checkpoint failure or manual backfill, which leaves the checkpoint alone.</summary>
+        public int? PendingSearchHours { get; internal set; }
+        public int ReconciledSearches { get; internal set; }
 
         internal void Degrade(string reason)
         {
@@ -122,6 +137,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 { "Windows", day.Windows },
                 { "PageViews", day.PageViews },
                 { "Events", day.Events },
+                { "UnmatchedSearches", day.UnmatchedSearches },
                 { "FetchSeconds", Math.Round(day.FetchSeconds, 3) },
                 { "SaveSeconds", Math.Round(day.SaveSeconds, 3) },
                 { "ConsecutiveFailures", day.ConsecutiveFailures },
@@ -177,8 +193,10 @@ namespace WebJob.AppInsightsImporter.Engine
                 { "Windows", result?.Windows ?? 0 },
                 { "PageViews", result?.PageViews ?? 0 },
                 { "Events", result?.Events ?? 0 },
+                { "ReconciledSearches", result?.ReconciledSearches ?? 0 },
                 { "ElapsedSeconds", Math.Round(elapsed.TotalSeconds, 3) },
             };
+            if (result?.PendingSearchHours != null) metrics["PendingSearchHours"] = result.PendingSearchHours.Value;
             logger.TrackEvent(AnalyticsLogger.AnalyticsEvent.AppInsightsImportCycle, context, metrics);
 
             var line = string.Format(CultureInfo.InvariantCulture,

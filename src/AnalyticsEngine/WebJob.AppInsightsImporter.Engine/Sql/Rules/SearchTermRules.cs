@@ -17,26 +17,15 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Rules
         private const string Ellipsis = "...";
 
         /// <summary>
-        /// Whether a search event carries enough to stage a row.
-        ///
-        /// On the API path this is defence in depth rather than a behaviour change: the parser only ever
-        /// adds an event to the collection when <c>IsValid</c> holds (<c>AppInsightsQueryResultCollection</c>
-        /// calls <c>Rows.Add</c> solely on a non-null <c>Build(...)</c> result, and
-        /// <c>CustomEventsResultCollection.Build</c> returns null unless <c>e.IsValid</c>), and
-        /// <see cref="SearchEventAppInsightsQueryResult.IsValid"/> already requires a non-empty SearchText.
-        ///
-        /// It matters because <c>Rows</c> is a public settable list, so a collection can be populated by
-        /// other means. The save path only selected events by type and never re-checked validity, then
-        /// went straight to <c>searchTerm.Length</c> - so a null SearchText threw a NullReferenceException
-        /// that took the entire Searches section down with it.
-        ///
-        /// Empty (as opposed to null) is rejected for the same reason <c>IsValid</c> rejects it; note that
-        /// a whitespace-only term still stages, exactly as before, since this is IsNullOrEmpty and not
-        /// IsNullOrWhiteSpace.
+        /// A search needs a term and both components of the visit's identity, within the staging widths.
+        /// A missing identity cannot acquire a visit; truncating one could acquire somebody else's.
+        /// A whitespace-only search term is valid, as before.
         /// </summary>
         public static bool ShouldStage(SearchEventAppInsightsQueryResult searchEvent)
         {
-            return !string.IsNullOrEmpty(searchEvent?.CustomProperties?.SearchText);
+            return !string.IsNullOrEmpty(searchEvent?.CustomProperties?.SearchText)
+                && !string.IsNullOrWhiteSpace(searchEvent.Username) && searchEvent.Username.Length <= 250
+                && !string.IsNullOrWhiteSpace(searchEvent.CustomProperties.SessionId) && searchEvent.CustomProperties.SessionId.Length <= 50;
         }
 
         /// <summary>

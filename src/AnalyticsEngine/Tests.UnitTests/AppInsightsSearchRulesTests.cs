@@ -15,8 +15,22 @@ namespace Tests.UnitTests
         {
             return new SearchEventAppInsightsQueryResult
             {
+                Username = "reader@contoso.com",
                 CustomProperties = new SearchCustomProps { SearchText = text, SessionId = "session-1" }
             };
+        }
+
+        [TestMethod]
+        public void Searches_MissingOrOverlengthIdentityCannotBeRetriedAgainstAnotherVisit()
+        {
+            var search = SearchFor("Contoso");
+            search.Username = null;
+            Assert.IsFalse(SearchTermRules.ShouldStage(search));
+            search.Username = new string('x', 251);
+            Assert.IsFalse(SearchTermRules.ShouldStage(search));
+            search.Username = "reader@contoso.com";
+            search.CustomProperties.SessionId = new string('s', 51);
+            Assert.IsFalse(SearchTermRules.ShouldStage(search));
         }
 
         [TestMethod]
