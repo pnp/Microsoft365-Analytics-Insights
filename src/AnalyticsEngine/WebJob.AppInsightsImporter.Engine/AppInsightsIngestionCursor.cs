@@ -164,10 +164,10 @@ namespace WebJob.AppInsightsImporter.Engine
         Task<DateTime?> ReadAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// The newest stored hit when the cursor was last written, or null when none was recorded (a cursor written by an
-        /// older build). Throws when the store cannot be read.
+        /// The newest stored hit when the cursor was last written. An explicitly empty database differs from an
+        /// older cursor with no database watermark. Throws when the store cannot be read.
         /// </summary>
-        Task<DateTime?> ReadNewestStoredHitAtCursorAsync(CancellationToken cancellationToken = default);
+        Task<(DateTime? NewestHitUtc, bool KnownEmpty)> ReadDatabaseWatermarkAsync(CancellationToken cancellationToken);
 
         /// <summary>
         /// Normal import has processed ingestion before <paramref name="cursorUtc"/>; retryable search hours have
@@ -178,6 +178,8 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <summary>Pending ingestion-hour markers, not telemetry. Throws if the store cannot be read.</summary>
         Task<IReadOnlyList<AppInsightsSearchRetry>> ReadSearchRetriesAsync(CancellationToken cancellationToken = default);
         Task WriteSearchRetriesAsync(IReadOnlyCollection<AppInsightsSearchRetry> retries, CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<DateTime>> ReadSearchReplayHoursAsync(CancellationToken cancellationToken);
+        Task WriteSearchReplayHoursAsync(IReadOnlyCollection<DateTime> hours, CancellationToken cancellationToken);
         Task<AppInsightsReplayStart> ReadReplayStartAsync(CancellationToken cancellationToken);
         Task WriteReplayStartAsync(AppInsightsReplayStart start, CancellationToken cancellationToken);
     }
@@ -202,6 +204,7 @@ namespace WebJob.AppInsightsImporter.Engine
         private readonly string _key;
         private readonly string _newestHitKey;
         private readonly string _searchRetryKey;
+        private readonly string _searchReplayKey;
         private readonly string _replayStartKey;
 
         public KeyValueIngestionCursorStore(IKeyValueStore store, string appInsightsApplicationId)
@@ -211,6 +214,7 @@ namespace WebJob.AppInsightsImporter.Engine
             _key = KeyPrefix + suffix;
             _newestHitKey = NewestHitKeyPrefix + suffix;
             _searchRetryKey = "IngestionCursorSearchRetries" + suffix;
+            _searchReplayKey = "IngestionCursorSearchReplayHours" + suffix;
             _replayStartKey = "IngestionCursorReplayStart" + suffix;
         }
 
@@ -220,6 +224,12 @@ namespace WebJob.AppInsightsImporter.Engine
 
         public Task<DateTime?> ReadNewestStoredHitAtCursorAsync(CancellationToken cancellationToken = default) => ReadUtcAsync(_newestHitKey, cancellationToken);
 
+        public async Task<(DateTime? NewestHitUtc, bool KnownEmpty)> ReadDatabaseWatermarkAsync(CancellationToken cancellationToken)
+        {
+            var value = await _store.GetStringAsync(_newestHitKey, cancellationToken).ConfigureAwait(false);
+            return (ParseUtc(value), value == string.Empty);
+        }
+
         public async Task<IReadOnlyList<AppInsightsSearchRetry>> ReadSearchRetriesAsync(CancellationToken cancellationToken = default)
         {
             var value = await _store.GetStringAsync(_searchRetryKey, cancellationToken).ConfigureAwait(false);
@@ -227,7 +237,19 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         public Task WriteSearchRetriesAsync(IReadOnlyCollection<AppInsightsSearchRetry> retries, CancellationToken cancellationToken = default) =>
-            _store.SetStringAsync(_searchRetryKey, retries.Count == 0 ? null : JsonConvert.SerializeObject(retries), AppInsightsIngestionCursorPolicy.MaxLookback, cancellationToken);
+            _store.SetStringAsync(_searchRetryKey, retries.Count == 0 ? null : JsonConvert.SerializeObject(retries), SearchHourTtl, cancellationToken);
+
+        // The last partial hour can still be queried just beyond 90 days from its start.
+        private static readonly TimeSpan SearchHourTtl = AppInsightsIngestionCursorPolicy.MaxLookback + TimeSpan.FromHours(1);
+
+        public async Task<IReadOnlyList<DateTime>> ReadSearchReplayHoursAsync(CancellationToken cancellationToken)
+        {
+            var value = await _store.GetStringAsync(_searchReplayKey, cancellationToken).ConfigureAwait(false);
+            return value == null ? Array.Empty<DateTime>() : JsonConvert.DeserializeObject<DateTime[]>(value);
+        }
+
+        public Task WriteSearchReplayHoursAsync(IReadOnlyCollection<DateTime> hours, CancellationToken cancellationToken) =>
+            _store.SetStringAsync(_searchReplayKey, JsonConvert.SerializeObject(hours), SearchHourTtl, cancellationToken);
 
         public async Task<AppInsightsReplayStart> ReadReplayStartAsync(CancellationToken cancellationToken)
         {
@@ -242,17 +264,20 @@ namespace WebJob.AppInsightsImporter.Engine
         {
             // The newest hit first: if the cursor then fails to save, the next cycle compares against a newer newest hit
             // than the cursor's, which is still one the database has reached.
-            if (newestStoredHitUtc.HasValue)
-            {
-                await _store.SetStringAsync(_newestHitKey, ToRoundTrip(newestStoredHitUtc.Value), cancellationToken: cancellationToken).ConfigureAwait(false);
-            }
+            // Empty text is a confirmed empty DB (also readable as null by older builds). A missing row is unknown.
+            await _store.SetStringAsync(_newestHitKey, newestStoredHitUtc.HasValue ? ToRoundTrip(newestStoredHitUtc.Value) : string.Empty,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             await _store.SetStringAsync(_key, ToRoundTrip(cursorUtc), cancellationToken: cancellationToken).ConfigureAwait(false);
         }
 
         private async Task<DateTime?> ReadUtcAsync(string key, CancellationToken cancellationToken)
         {
-            var value = await _store.GetStringAsync(key, cancellationToken).ConfigureAwait(false);
+            return ParseUtc(await _store.GetStringAsync(key, cancellationToken).ConfigureAwait(false));
+        }
+
+        private static DateTime? ParseUtc(string value)
+        {
             if (string.IsNullOrWhiteSpace(value))
             {
                 return null;

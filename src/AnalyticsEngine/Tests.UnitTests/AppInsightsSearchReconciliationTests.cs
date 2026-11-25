@@ -29,7 +29,7 @@ namespace Tests.UnitTests
     [TestClass]
     [TestCategory("SqlIntegration")]
     [DoNotParallelize]
-    public class AppInsightsSearchReconciliationTests
+    public partial class AppInsightsSearchReconciliationTests
     {
         private static readonly DateTime Start = new DateTime(2000, 1, 1, 10, 0, 0, DateTimeKind.Utc);
         private const string Reader = "reader@contoso.com";
@@ -600,6 +600,7 @@ INSERT dbo.hits(url_id,web_id,session_id,page_request_id,hit_timestamp) VALUES
                 if (key.StartsWith(KeyValueIngestionCursorStore.KeyPrefix + ":", StringComparison.Ordinal)) AtBoundary?.Invoke("cursor-read", cancellationToken);
                 if (key.StartsWith(KeyValueIngestionCursorStore.NewestHitKeyPrefix + ":", StringComparison.Ordinal)) AtBoundary?.Invoke("newest-read", cancellationToken);
                 if (key.StartsWith("IngestionCursorSearchRetries:", StringComparison.Ordinal)) AtBoundary?.Invoke("marker-read", cancellationToken);
+                if (key.StartsWith("IngestionCursorSearchReplayHours:", StringComparison.Ordinal)) AtBoundary?.Invoke("receipt-read", cancellationToken);
                 if (key.StartsWith("IngestionCursorReplayStart:", StringComparison.Ordinal)) AtBoundary?.Invoke("replay-read", cancellationToken);
                 return _state.GetStringAsync(key, cancellationToken);
             }
@@ -609,6 +610,7 @@ INSERT dbo.hits(url_id,web_id,session_id,page_request_id,hit_timestamp) VALUES
                 bool marker = key.StartsWith("IngestionCursorSearchRetries:", StringComparison.Ordinal);
                 bool cursor = key.StartsWith(KeyValueIngestionCursorStore.KeyPrefix + ":", StringComparison.Ordinal);
                 if (marker || cursor) AtBoundary?.Invoke(marker ? "marker-write" : "cursor-write", cancellationToken);
+                if (key.StartsWith("IngestionCursorSearchReplayHours:", StringComparison.Ordinal)) AtBoundary?.Invoke("receipt-write", cancellationToken);
                 if (key.StartsWith("IngestionCursorReplayStart:", StringComparison.Ordinal)) AtBoundary?.Invoke("replay-write", cancellationToken);
                 await _state.SetStringAsync(key, value, timeToLive, cancellationToken);
                 if (marker || cursor) AtBoundary?.Invoke(marker ? "between-writes" : "after-cursor", cancellationToken);
