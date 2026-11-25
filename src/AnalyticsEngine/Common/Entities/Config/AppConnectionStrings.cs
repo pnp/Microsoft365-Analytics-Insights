@@ -22,7 +22,7 @@ namespace Common.Entities.Config
 
         /// <summary>Read-only one-shot preflight. Bound connection opening, including token acquisition, and the query;
         /// do not invoke the import context's unlimited command timeout or its database initializer.</summary>
-        public async Task<bool> TestWebTrafficSqlOnceAsync(ILogger logger)
+        public async Task<bool> TestWebTrafficSqlOnceAsync(ILogger logger, CancellationToken shutdownToken = default)
         {
             const int timeoutSeconds = 30;
             try
@@ -30,21 +30,25 @@ namespace Common.Entities.Config
                 var builder = new SqlConnectionStringBuilder(DatabaseConnectionString);
                 if (builder.ConnectTimeout == 0 || builder.ConnectTimeout > timeoutSeconds)
                     builder.ConnectTimeout = timeoutSeconds;
-                using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds)))
-                using (var connection = AzureSqlTokenAuth.CreateConnection(builder.ConnectionString, deadline.Token))
+                using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken))
                 {
-                    await connection.OpenAsync(deadline.Token).ConfigureAwait(false);
-                    using (var command = connection.CreateCommand())
+                    deadline.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+                    using (var connection = AzureSqlTokenAuth.CreateConnection(builder.ConnectionString, deadline.Token))
                     {
-                        command.CommandText = "SELECT TOP (1) 1 FROM dbo.hits;";
-                        command.CommandTimeout = timeoutSeconds;
-                        await command.ExecuteScalarAsync(deadline.Token).ConfigureAwait(false);
+                        await connection.OpenAsync(deadline.Token).ConfigureAwait(false);
+                        using (var command = connection.CreateCommand())
+                        {
+                            command.CommandText = "SELECT TOP (1) 1 FROM dbo.hits;";
+                            command.CommandTimeout = timeoutSeconds;
+                            await command.ExecuteScalarAsync(deadline.Token).ConfigureAwait(false);
+                        }
                     }
                 }
                 return true;
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
+                if (shutdownToken.IsCancellationRequested) return false;
                 logger.LogError(ex, "One-shot SQL startup probe failed: table=hits; {Chain}. Check SQL connectivity, permissions and schema.",
                     DataUtils.ExceptionDescriber.Chain(ex));
                 return false;

@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace DataUtils
@@ -21,8 +22,10 @@ namespace DataUtils
         private static string _jobName = "Importer";
         private static bool _handlersInstalled;
         private static ShutdownWatcher _shutdown;
+        private static readonly CancellationTokenSource Stopping = new CancellationTokenSource();
 
         public static bool ShutdownRequested => _shutdown?.IsRequested == true;
+        public static CancellationToken ShutdownToken => Stopping.Token;
 
         /// <summary>
         /// Registers the process-wide handlers. Call first thing in <c>Main</c>, before configuration is read, so
@@ -88,10 +91,16 @@ namespace DataUtils
 
         private static void OnShutdownRequested()
         {
-            // The process may be killed when Kudu's stop wait runs out, and the main loop may be hours into a phase,
-            // so send what is buffered now instead of waiting for the loop to notice.
-            _logger?.LogWarning($"Shutdown requested by host ({_jobName}); not starting new work. Flushing telemetry.");
-            AnalyticsLogger.DrainSharedTelemetry();
+            try
+            {
+                Stopping.Cancel();
+            }
+            finally
+            {
+                // Kudu can kill the process when its stop wait runs out; don't wait for the import loop to drain.
+                _logger?.LogWarning($"Shutdown requested by host ({_jobName}); not starting new work. Flushing telemetry.");
+                AnalyticsLogger.DrainSharedTelemetry();
+            }
         }
 
         /// <summary>Sleeps for up to <paramref name="timeout"/>, waking early on a shutdown request. True when shutdown was requested.</summary>

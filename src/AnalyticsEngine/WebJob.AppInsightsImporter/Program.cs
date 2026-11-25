@@ -268,7 +268,7 @@ namespace WebJob.AppInsightsImporter
 
             if (HostRuntime.ShutdownRequested) return false;
             var reachable = oneShot
-                ? settings.ConnectionStrings.TestWebTrafficSqlOnceAsync(logger).GetAwaiter().GetResult()
+                ? settings.ConnectionStrings.TestWebTrafficSqlOnceAsync(logger, HostRuntime.ShutdownToken).GetAwaiter().GetResult()
                 : StartupSqlCheck.WaitUntilReachable(() => settings.ConnectionStrings.TestSQLSettings(logger), logger, ImporterHeartbeat.WebTrafficJob);
             if (!reachable)
             {
