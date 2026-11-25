@@ -3,23 +3,22 @@
  */
 
 import { AppInsightsWrapper } from '../src/AppInsightsWrapper';
-import { ApplicationInsights, IEventTelemetry, IPageViewTelemetry } from '@microsoft/applicationinsights-web';
+import type { IEventTelemetry, IPageViewTelemetry } from '@microsoft/applicationinsights-core-js';
+import type { TrackerTelemetry } from '../src/TrackerTelemetry';
 import { ClickData } from '../src/Definitions';
 import { PageProps } from '../src/PageProps/Models/PageProps';
 
 // Mock ApplicationInsights
-function createMockAI() {
+function createMockAI(): TrackerTelemetry {
     return {
         trackPageView: jest.fn(),
         trackEvent: jest.fn(),
-        setAuthenticatedUserContext: jest.fn(),
-        loadAppInsights: jest.fn(),
-    } as unknown as ApplicationInsights;
+    };
 }
 
 describe('AppInsightsWrapper', () => {
 
-    let mockAI: ApplicationInsights;
+    let mockAI: TrackerTelemetry;
     let wrapper: AppInsightsWrapper;
     const sessionId = 'test-session-id';
 

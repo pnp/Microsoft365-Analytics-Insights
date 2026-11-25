@@ -4,19 +4,17 @@
 
 import { PageViewTracker } from '../src/PageViewTracker';
 import { AppInsightsWrapper } from '../src/AppInsightsWrapper';
-import { ApplicationInsights } from '@microsoft/applicationinsights-web';
+import type { TrackerTelemetry } from '../src/TrackerTelemetry';
 import { InMemoryPageStateManager } from '../src/PageProps/PageState';
 import { spPageContextInfo } from '../src/Definitions';
 import { TestPagePropertyManager, TestPageDataService } from './MockLoaders';
 import Cookies from 'js-cookie';
 
-function createMockAI(): ApplicationInsights {
+function createMockAI(): TrackerTelemetry {
     return {
         trackPageView: jest.fn(),
         trackEvent: jest.fn(),
-        setAuthenticatedUserContext: jest.fn(),
-        loadAppInsights: jest.fn(),
-    } as unknown as ApplicationInsights;
+    };
 }
 
 function createContext(): spPageContextInfo {
@@ -40,7 +38,7 @@ jest.mock('timeme.js', () => ({
 }));
 
 describe('PageViewTracker', () => {
-    let mockAppInsights: ApplicationInsights;
+    let mockAppInsights: TrackerTelemetry;
     let wrapper: AppInsightsWrapper;
     let tracker: PageViewTracker;
     let context: spPageContextInfo;
