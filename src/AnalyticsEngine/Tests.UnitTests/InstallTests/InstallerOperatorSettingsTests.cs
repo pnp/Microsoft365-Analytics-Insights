@@ -1302,6 +1302,7 @@ namespace Tests.UnitTests.InstallTests
         [DataRow("unverified reset")]
         [DataRow("site appeared before cleanup")]
         [DataRow("parent unavailable before cleanup")]
+        [DataRow("parent unavailable during public enable")]
         [DataRow("healthy")]
         public async Task Backend_HostingDiscoveryGuardsPrivateToPublic(string scenario)
         {
@@ -1330,6 +1331,9 @@ namespace Tests.UnitTests.InstallTests
                     () => checkpoints.Add(config.PrivateNetworking.AppliedTopology)) { CancellationToken = cancellation.Token };
                 arm.OverrideResponse = (method, path) =>
                 {
+                    if (scenario == "parent unavailable during public enable" && method == "GET" &&
+                        path.Equals(Site, StringComparison.OrdinalIgnoreCase) && checkpoints.Count != 0)
+                        return FakeArm.Json(HttpStatusCode.NotFound, new JObject { ["error"] = new JObject { ["code"] = "ResourceGroupNotFound" } });
                     if (recheckMissing && method == "GET" && path.Equals(Sites + "/contoso-new", StringComparison.OrdinalIgnoreCase))
                     {
                         if (++missingSiteReads == 1) return new HttpResponseMessage(HttpStatusCode.NotFound);
@@ -1362,6 +1366,15 @@ namespace Tests.UnitTests.InstallTests
                     return null;
                 };
 
+                if (scenario == "parent unavailable during public enable")
+                {
+                    var error = await Assert.ThrowsAsync<Azure.RequestFailedException>(() => job.Install());
+                    Assert.AreEqual("ResourceGroupNotFound", error.ErrorCode);
+                    CollectionAssert.AreEqual(new[] { "PublicTransitionPending" }, checkpoints);
+                    Assert.AreEqual(0, arm.Mutations.Count, "A failed site recheck must not enable public access or remove private networking.");
+                    Assert.IsFalse(integration.Removed);
+                    return;
+                }
                 if (scenario == "unverified reset")
                 {
                     var failure = await Assert.ThrowsAsync<InstallException>(() => job.Install());

@@ -537,10 +537,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 }
                 if (apply) await VerifyPublicTarget(id, ct);
             }
-            catch (RequestFailedException ex) when (!readSucceeded && PrivateNetworkProvenance.IsMissing(ex))
+            catch (RequestFailedException ex) when (id.ResourceType != WebSiteResource.ResourceType &&
+                !readSucceeded && PrivateNetworkProvenance.IsMissing(ex))
             {
-                // A deleted target has no public access setting to change; the ordinary install task
-                // will recreate configured resources publicly after owned stale networking is gone.
+                // A site may skip the public-access gate only through the corroborated hosting-discovery recheck.
+                // For other deleted targets, the ordinary install task recreates configured resources publicly.
             }
         }
 
