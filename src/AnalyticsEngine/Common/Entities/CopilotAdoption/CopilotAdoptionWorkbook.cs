@@ -2543,7 +2543,7 @@ namespace Common.Entities.CopilotAdoption
             CopilotAdoptionOptions model,
             LicenceEstimateCohort cohort = LicenceEstimateCohort.Recommended)
         {
-            if (estimate == null || estimate.CohortUsers <= 0)
+            if (estimate?.WorkloadAssessed != true)
             {
                 return new LicenceValueEstimate { CandidatesCapped = estimate?.CandidatesCapped ?? false };
             }
@@ -2569,28 +2569,10 @@ namespace Common.Entities.CopilotAdoption
                 second.HasValue ? (object)XlsxCell.Number(second.Value) : null, XlsxCell.Wrapped(notes));
         }
 
-        /// <summary>A row of three cohorts' figures - the licence estimate's.</summary>
-        private static void AddEstimateRow(XlsxSheet sheet, string measure, double first, double second, double third, string notes)
-        {
-            sheet.AddRow(measure, XlsxCell.Number(first), XlsxCell.Number(second), XlsxCell.Number(third), XlsxCell.Wrapped(notes));
-        }
-
         /// <summary>An assumption applies to both cohorts alike, so it is written once per column, unformatted.</summary>
         private static void AddAssumptionRow(XlsxSheet sheet, string measure, double value, string notes)
         {
-            AddAssumptionRow(sheet, measure, value, 2, notes);
-        }
-
-        /// <summary>An assumption written once for each of <paramref name="cohorts"/> columns, unformatted.</summary>
-        private static void AddAssumptionRow(XlsxSheet sheet, string measure, double value, int cohorts, string notes)
-        {
-            var cells = new List<object> { measure };
-            for (var i = 0; i < cohorts; i++)
-            {
-                cells.Add(value);
-            }
-            cells.Add(XlsxCell.Wrapped(notes));
-            sheet.AddRow(cells.ToArray());
+            sheet.AddRow(measure, value, value, XlsxCell.Wrapped(notes));
         }
 
         /// <summary>
@@ -2786,7 +2768,7 @@ namespace Common.Entities.CopilotAdoption
             var recommended = RestateLicence(summary.LicenceOpportunityEstimate, model);
             var chatUsers = RestateLicence(summary.LicenceChatUsersEstimate, model);
             var allCandidates = RestateLicence(summary.LicenceAllCandidatesEstimate, model, LicenceEstimateCohort.AllCandidates);
-            if (recommended.CohortUsers == 0 && allCandidates.CohortUsers == 0) return;
+            if (recommended.CohortUsers == 0 && chatUsers.CohortUsers == 0 && allCandidates.CohortUsers == 0) return;
 
             // Customised only by the figures this sheet uses: a reader who changed the Cowork figures has
             // changed the Cowork estimate, not this one.
@@ -2798,6 +2780,12 @@ namespace Common.Entities.CopilotAdoption
 
             var sheet = workbook.AddSheet("Licence estimate (modelled)");
             sheet.SetColumnWidths(46, 18, 22, 20, 62);
+            void CohortRow(string measure, object first, object second, object third, string notes) =>
+                sheet.AddRow(measure, recommended.WorkloadAssessed ? first : null, chatUsers.WorkloadAssessed ? second : null,
+                    allCandidates.WorkloadAssessed ? third : null, XlsxCell.Wrapped(notes));
+            void EstimateRow(string measure, double first, double second, double third, string notes) =>
+                CohortRow(measure, XlsxCell.Number(first), XlsxCell.Number(second), XlsxCell.Number(third), notes);
+            void AssumptionRow(string measure, object value, string notes) => CohortRow(measure, value, value, value, notes);
 
             sheet.AddTitle("Potential time back from licensing - MODELLED, NOT MEASURED");
             sheet.AddRow(XlsxCell.Wrapped(
@@ -2805,7 +2793,8 @@ namespace Common.Entities.CopilotAdoption
                 + "Microsoft's usage reports for the people recommended for a Microsoft 365 Copilot licence, and "
                 + "for every licence candidate beside them; the hours are those volumes multiplied by the "
                 + "minutes-saved assumptions listed with them. Treat this as a way to size a licence purchase, "
-                + "not as a result, and never quote the hours without the assumptions underneath them."));
+                + "not as a result, and never quote the hours without the assumptions underneath them. "
+                + "A blank cohort column means it could not be assessed, not zero."));
             sheet.AddRow(XlsxCell.Wrapped(
                 "Each minutes-saved default is derived from Microsoft's published Copilot credits and checked "
                 + "against published studies of Microsoft 365 Copilot - the largest of which randomised who "
@@ -2826,14 +2815,14 @@ namespace Common.Entities.CopilotAdoption
 
             sheet.AddHeaderRow("Measure", "Recommended for a licence", "Already using Copilot Chat", "Every licence candidate", "What it means");
 
-            AddEstimateRow(sheet, "People covered", recommended.CohortUsers, chatUsers.CohortUsers, allCandidates.CohortUsers,
+            EstimateRow("People covered", recommended.CohortUsers, chatUsers.CohortUsers, allCandidates.CohortUsers,
                 "Recommended: every unlicensed person recommended for a licence - proven demand or a "
                 + "workload-inferred business case. Already using Copilot Chat: the recommended candidates with "
                 + "Copilot Chat use this period, the strongest part of the case because the demand is observed. "
                 + "Every licence candidate: everyone without a licence who used Microsoft 365 or Copilot Chat this "
                 + "period, recommended or not - the potential if all of them were licensed, not the purchase "
                 + "the list recommends."
-                + (recommended.CandidatesCapped || allCandidates.CandidatesCapped
+                + (recommended.CandidatesCapped || chatUsers.CandidatesCapped || allCandidates.CandidatesCapped
                     ? $" TRUNCATED: the candidate list reached its {configured.MaxOpportunityCandidates:N0}-candidate "
                       + "limit, so people beyond it are not counted and these figures are a floor."
                     : string.Empty));
@@ -2841,13 +2830,13 @@ namespace Common.Entities.CopilotAdoption
             // ---- Observed work ----
             sheet.AddBlankRow();
             AddSectionRow(sheet, "OBSERVED WORK");
-            AddEstimateRow(sheet, "Meetings a month (observed)",
+            EstimateRow("Meetings a month (observed)",
                 recommended.AddressableMeetings, chatUsers.AddressableMeetings, allCandidates.AddressableMeetings,
                 "OBSERVED. Teams meetings attended across the cohort, from Microsoft's Teams usage report.");
-            AddEstimateRow(sheet, "Emails a month (observed)",
+            EstimateRow("Emails a month (observed)",
                 recommended.AddressableMailThreads, chatUsers.AddressableMailThreads, allCandidates.AddressableMailThreads,
                 "OBSERVED. Emails sent and read across the cohort, from Microsoft's Outlook usage report.");
-            AddEstimateRow(sheet, "Document touches a month (observed)",
+            EstimateRow("Document touches a month (observed)",
                 recommended.AddressableDocuments, chatUsers.AddressableDocuments, allCandidates.AddressableDocuments,
                 "OBSERVED. SharePoint and OneDrive files viewed or edited across the cohort.");
 
@@ -2856,37 +2845,33 @@ namespace Common.Entities.CopilotAdoption
             AddSectionRow(sheet, "TIME SAVED WITH MICROSOFT 365 COPILOT");
             // Plain numbers rather than XlsxCell.Number: that style is the whole-number "#,##0", and
             // half a minute per email would be displayed as 1.
-            AddAssumptionRow(sheet, "Minutes saved per meeting (assumption)",
-                Math.Max(0d, model.CopilotMinutesSavedPerMeeting), 3,
+            AssumptionRow("Minutes saved per meeting (assumption)",
+                Math.Max(0d, model.CopilotMinutesSavedPerMeeting),
                 "ASSUMPTION. Preparation, notes, recap and follow-up Copilot takes off each meeting.");
-            AddAssumptionRow(sheet, "Minutes saved per email (assumption)",
-                Math.Max(0d, model.CopilotMinutesSavedPerMailThread), 3,
+            AssumptionRow("Minutes saved per email (assumption)",
+                Math.Max(0d, model.CopilotMinutesSavedPerMailThread),
                 "ASSUMPTION. Averaged over every email sent or read - triage, thread summaries and drafted replies.");
-            AddAssumptionRow(sheet, "Minutes saved per document (assumption)",
-                Math.Max(0d, model.CopilotMinutesSavedPerDocument), 3,
+            AssumptionRow("Minutes saved per document (assumption)",
+                Math.Max(0d, model.CopilotMinutesSavedPerDocument),
                 "ASSUMPTION. Drafting, summarising and revising, averaged over every document viewed or edited.");
 
             var recommendedByActivity = CopilotAdoptionScoring.LicenceHoursByActivity(recommended, model);
             var chatByActivity = CopilotAdoptionScoring.LicenceHoursByActivity(chatUsers, model);
             var allByActivity = CopilotAdoptionScoring.LicenceHoursByActivity(allCandidates, model);
 
-            AddEstimateRow(sheet, "Hours a month - meetings", recommendedByActivity[0], chatByActivity[0], allByActivity[0],
+            EstimateRow("Hours a month - meetings", recommendedByActivity[0], chatByActivity[0], allByActivity[0],
                 "MODELLED. Meetings a month x minutes saved per meeting.");
-            AddEstimateRow(sheet, "Hours a month - email", recommendedByActivity[1], chatByActivity[1], allByActivity[1],
+            EstimateRow("Hours a month - email", recommendedByActivity[1], chatByActivity[1], allByActivity[1],
                 "MODELLED. Emails a month x minutes saved per email.");
-            AddEstimateRow(sheet, "Hours a month - documents", recommendedByActivity[2], chatByActivity[2], allByActivity[2],
+            EstimateRow("Hours a month - documents", recommendedByActivity[2], chatByActivity[2], allByActivity[2],
                 "MODELLED. Document touches a month x minutes saved per document.");
             var lowerBound = XlsxCell.Percent(CopilotAdoptionScoring.TimeSavedLowerBoundRatio(model));
-            sheet.AddRow(
-                "Lower bound (share of every assumption)",
-                lowerBound,
-                lowerBound,
-                lowerBound,
-                XlsxCell.Wrapped("ASSUMPTION. The conservative end applies this share of every minute above."));
-            AddEstimateRow(sheet, "Modelled hours a month (low)",
+            AssumptionRow("Lower bound (share of every assumption)", lowerBound,
+                "ASSUMPTION. The conservative end applies this share of every minute above.");
+            EstimateRow("Modelled hours a month (low)",
                 recommended.HoursPerMonthLow, chatUsers.HoursPerMonthLow, allCandidates.HoursPerMonthLow,
                 "MODELLED. The conservative end.");
-            AddEstimateRow(sheet, "Modelled hours a month (high)",
+            EstimateRow("Modelled hours a month (high)",
                 recommended.HoursPerMonthHigh, chatUsers.HoursPerMonthHigh, allCandidates.HoursPerMonthHigh,
                 "MODELLED. The full assumption - the three activity rows add up to it. Quote the range, never a "
                 + "single figure.");

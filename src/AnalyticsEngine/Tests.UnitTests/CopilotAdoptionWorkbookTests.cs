@@ -1968,6 +1968,32 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Workbook_OnlyChatCohortHasAnEstimate_LeavesOtherColumnsBlank()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Opportunities.Single(c => c.UnlicensedCopilotInteractions == 0).EmailsRead = null;
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            var book = CopilotAdoptionWorkbook.Build(analysis, new TimeSavedOverrides { MinutesSavedPerMeeting = 0 });
+            CollectionAssert.Contains(WorkbookSheetNames(book), "Licence estimate (modelled)");
+            var cells = SheetCellElements(book, "Licence estimate (modelled)");
+            foreach (var label in new[] { "People covered", "Meetings a month (observed)", "Minutes saved per meeting (assumption)",
+                "Lower bound (share of every assumption)", "Hours a month - meetings", "Modelled hours a month (high)" })
+            {
+                var row = cells.Single(c => c.Value == label).Parent;
+                XElement Column(string column) => row.Elements().SingleOrDefault(c => ((string)c.Attribute("r"))?.StartsWith(column) == true);
+                foreach (var missing in new[] { "B", "D" })
+                    Assert.IsFalse(Column(missing)?.HasElements == true, label + " " + missing);
+                var chat = Column("C");
+                var value = (string)chat?.Element(chat.Name.Namespace + "v");
+                Assert.IsNotNull(value, label);
+                if (label == "People covered") Assert.AreEqual("1", value);
+                if (label == "Minutes saved per meeting (assumption)" || label == "Hours a month - meetings")
+                    Assert.AreEqual("0", value, label);
+            }
+            Assert.IsTrue(cells.Any(c => c.Value.StartsWith("Assumes Microsoft 365 Copilot saves 0 minutes per meeting")));
+        }
+
+        [TestMethod]
         public void Workbook_WritesNoLicenceEstimate_WhenThereAreNoCandidates()
         {
             var analysis = SyntheticAnalysis();
