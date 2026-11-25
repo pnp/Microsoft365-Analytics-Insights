@@ -10,6 +10,7 @@ using System.Linq;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine;
 
 namespace Tests.UnitTests
 {
@@ -72,6 +73,28 @@ namespace Tests.UnitTests
             Assert.IsTrue(await store.ExistsAsync("GraphUsersMetadataLastImported"));
             Assert.IsTrue(await store.DeleteAsync("GraphUsersMetadataLastImported"));
             Assert.IsNull(await store.GetStringAsync("GraphUsersMetadataLastImported"));
+        }
+
+        [TestMethod]
+        public async Task ConcurrentDailyPhaseCompletionsPublishOnlyTheirOwnRetainedDataEvidence()
+        {
+            var partition = "Phase" + Guid.NewGuid().ToString("N");
+            var table = _table ?? Skip();
+            PersistedActivityReportsPhaseStore Reopen() => new PersistedActivityReportsPhaseStore(new AzureTableKeyValueStore(table, partition));
+            var start = new DateTime(2026, 6, 20, 23, 59, 59, DateTimeKind.Utc);
+            DailyPhaseFacts Facts(int index) => index % 2 == 0 ? DailyPhaseFacts.RowsPresent : DailyPhaseFacts.ExpectedEmpty;
+            await Task.WhenAll(Enumerable.Range(0, 10).Select(i => Reopen().SavePhaseAsync(start.AddTicks(i), Facts(i))));
+            var reader = Reopen();
+            var winner = (await reader.GetLastDT()).Value;
+            Assert.AreEqual(Facts((int)(winner - start).Ticks), await reader.ReadFactsAsync(winner),
+                "The last timestamp and last receipt must be from the same transaction.");
+            Assert.IsNull(await reader.ReadFactsAsync(start.AddHours(-1)));
+
+            // Clock resolution or a clock correction can put consecutive successes on exactly the same tick.
+            await Reopen().SavePhaseAsync(winner, DailyPhaseFacts.ExpectedEmpty);
+            Assert.AreEqual(DailyPhaseFacts.ExpectedEmpty, await reader.ReadFactsAsync(winner));
+            await Reopen().SavePhaseAsync(winner, DailyPhaseFacts.RowsPresent);
+            Assert.AreEqual(DailyPhaseFacts.RowsPresent, await reader.ReadFactsAsync(winner));
         }
 
         [TestMethod]

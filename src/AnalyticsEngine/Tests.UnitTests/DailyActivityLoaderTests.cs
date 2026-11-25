@@ -729,6 +729,94 @@ namespace Tests.UnitTests
             => (await coverage.ReadAsync(day, day)).Single(c => c.Source == "teams").Status;
 
         [DataTestMethod]
+        [DataRow(2)]  // downloaded again, unchanged
+        [DataRow(5)]  // skipped when a mature download still matches SQL
+        [DataRow(40)] // retained history outside the Graph window
+        public async Task AHealthyZeroWriteReplayStillDetectsTheLossOfItsLastFact(int age)
+        {
+            var clock = new FixedClock(new DateTime(2026, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+            var day = clock.UtcNow.Date.AddDays(-age);
+            var phase = new InMemorySingleDateStore();
+            var completion = new InMemoryReportCompletionStore();
+            var sql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>().Seed(StoredRow(day, UserAId, 4));
+            GraphImporter.DailyReportOutcome outcome = null;
+            List<DateTime> requested = null;
+            Task<bool> Run()
+            {
+                var importer = new GraphImporter(AnalyticsLogger.ConsoleOnlyTracer(), null, null, null, new Common.Entities.Config.AppConfig(),
+                    phase, null, null, clock, completion);
+                var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+                    { Clock = clock, ReportStore = sql, StorageInspector = new FakeUsageReportStorageInspector() };
+                loader.PagesByDate[day] = new List<FakeUserActivityDetail> { Page(UserA, 4) };
+                requested = loader.GraphRequests;
+                return importer.RunActivityReportPhaseAsync(5, () => Task.FromResult(sql.Stored.Any()), (_, stamp) => new[]
+                {
+                    new GraphImporter.ActivityReportRun("Synthetic report", async () => outcome = await importer.LoadAndSaveDailyImportReport(
+                        loader, 5, "Synthetic report", NullLogger.Instance, SeededIdCache(), stamp)),
+                }, _ => Task.CompletedTask);
+            }
+
+            Assert.IsTrue(await Run());
+            await phase.DeleteDt(); // run the next phase, keeping the per-report skip list
+            Assert.IsTrue(await Run());
+            Assert.AreEqual(0, outcome.RowsWritten, "This replay must not depend on INSERT/UPDATE counts.");
+            Assert.AreEqual(age == 2, requested.Contains(day), "Only a recent retained date is downloaded again.");
+            Assert.IsFalse(await Run(), "Unchanged SQL facts keep their normal throttle.");
+            sql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>(); // a SQL restore that lost its facts
+            Assert.IsTrue(await Run(), "Zero writes last time cannot excuse the loss of an existing row.");
+            Assert.AreEqual(age <= 5 ? 1 : 0, sql.Stored.Count, "Only facts still in Graph's look-back can be recovered.");
+            Assert.IsFalse(await Run(), "Recovery establishes a new, matching result.");
+        }
+
+        [DataTestMethod]
+        [DataRow("unavailable")]
+        [DataRow("blank identity")]
+        [DataRow("missing value")]
+        [DataRow("missing continuation")]
+        [DataRow("forbidden")]
+        public async Task AnUnavailableOrIncompleteReportCannotExplainAnEmptyDatabase(string problem)
+        {
+            var clock = new FixedClock(new DateTime(2026, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+            var phase = (IActivityReportsPhaseStore)new InMemorySingleDateStore();
+            var completion = new InMemoryReportCompletionStore();
+            var sql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            var empty = GraphPage(null);
+            async Task<bool> Run(bool force, params Tuple<System.Net.HttpStatusCode, string>[] pages)
+            {
+                var graph = new ScriptedGraphHandler(pages);
+                using (var client = new ManualGraphCallClient(graph, NullLogger.Instance))
+                {
+                    var importer = new GraphImporter(AnalyticsLogger.ConsoleOnlyTracer(), null, null, null,
+                        new Common.Entities.Config.AppConfig { ForceUsageReportsImport = force }, phase, null, null, clock, completion);
+                    var loader = new InMemoryDailyActivityLoader(NullLogger.Instance, client)
+                        { Clock = clock, ReportStore = sql, StorageInspector = new FakeUsageReportStorageInspector() };
+                    var result = await importer.RunActivityReportPhaseAsync(3, () => Task.FromResult(sql.Stored.Any()), (_, stamp) => new[]
+                    {
+                        new GraphImporter.ActivityReportRun("Synthetic report", () => importer.LoadAndSaveDailyImportReport(
+                            loader, 3, "Synthetic report", NullLogger.Instance, SeededIdCache(), stamp)),
+                    }, _ => Task.CompletedTask);
+                    Assert.AreEqual(pages.Length, graph.CallCount, "Run the real pager, not just a simulated report outcome.");
+                    return result;
+                }
+            }
+
+            Assert.IsTrue(await Run(false, empty, empty, empty));
+            var soft = problem == "unavailable" || problem == "blank identity";
+            var badDay = problem == "unavailable" ? new[] { GraphNotFound }
+                : problem == "blank identity" ? new[] { GraphPage(null, "") }
+                : problem == "missing continuation" ? new[] { GraphPage(GraphPage2), GraphNotFound }
+                : new[] { Tuple.Create(problem == "forbidden" ? System.Net.HttpStatusCode.Forbidden : System.Net.HttpStatusCode.OK, "{}") };
+            Assert.AreEqual(soft, await Run(true, new[] { empty, empty }.Concat(badDay).ToArray()));
+            var completedAt = await phase.GetLastDT();
+            if (soft)
+                Assert.AreEqual(DailyPhaseFacts.Unverified, await phase.ReadFactsAsync(completedAt.Value), "An unavailable or unusable report is not a successful empty.");
+            else
+                Assert.IsNull(completedAt, "A failed download cannot inherit the previous empty success, even at the same tick.");
+            Assert.IsTrue(await Run(false, empty, empty, empty), "The still-empty database must be rechecked immediately.");
+            Assert.IsFalse(await Run(false), "A genuinely successful retry waits out its day.");
+        }
+
+        [DataTestMethod]
         [DataRow(false)]
         [DataRow(true)]
         public async Task AContinuation404KeepsItsRowsButCannotStampTheReportOrPhase(bool ledger)

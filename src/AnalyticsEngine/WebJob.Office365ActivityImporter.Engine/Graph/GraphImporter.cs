@@ -45,14 +45,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly IClock _clock;
         private readonly CancellationToken _shutdownToken;
 
-        // What each daily report of the usage-report phase did, and what became of the weekly one: for the phase's one summary line.
-        private readonly System.Collections.Concurrent.ConcurrentQueue<DailyReportOutcome> _dailyReportOutcomes = new System.Collections.Concurrent.ConcurrentQueue<DailyReportOutcome>();
+        // Status for the weekly report's part of the phase summary.
         private volatile string _weeklyStatus = "not run";
 
         /// <summary>The last usage-report phase run's summary line, as logged. For tests.</summary>
         internal string LastPhaseSummary { get; private set; }
 
-        private sealed class DailyReportOutcome
+        internal sealed class DailyReportOutcome
         {
             public string Name;
             public int RowsRead;
@@ -60,6 +59,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             public int Dates;
             public int DatesSkipped;
             public long Milliseconds;
+            public bool? HadRetainedRows;
         }
 
         internal static readonly TimeSpan WeeklyReportNoSundayBackoff = WeeklyUsageReportRetryPolicy.RetryInterval;
@@ -574,14 +574,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// <summary>One report of the usage-report phase: its name for log lines, and the work that imports it.</summary>
         internal sealed class ActivityReportRun
         {
-            public ActivityReportRun(string name, Func<Task> run)
+            public ActivityReportRun(string name, Func<Task<DailyReportOutcome>> run)
             {
                 Name = name;
                 Run = run;
             }
 
             public string Name { get; }
-            public Func<Task> Run { get; }
+            public Func<Task<DailyReportOutcome>> Run { get; }
         }
 
         /// <param name="userScope">The <c>UserGroupsFilter</c> scope for this cycle; null means unfiltered.</param>
@@ -617,10 +617,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 .Concat(db.YammerDeviceActivityLogs.Select(_ => 1))
                 .AnyAsync();
 
-        private IReadOnlyList<ActivityReportRun> CreateDailyReports(int daysBackMax, ManualGraphCallClient client, UserImportScope userScope,
-            ConcurrentLookupDbIdsCache lookupIdCache, DateTime? lastImportedDate)
+        internal IReadOnlyList<ActivityReportRun> CreateDailyReports(int daysBackMax, ManualGraphCallClient client, UserImportScope userScope,
+            ConcurrentLookupDbIdsCache lookupIdCache, DateTime? lastImportedDate,
+            Common.Entities.State.UsageReportCoverageStore coverage = null, IAnalyticsDbContextFactory dbFactory = null)
         {
-            var coverage = Common.Entities.State.UsageReportCoverageStore.Open(_settings, _logger);
+            coverage = coverage ?? Common.Entities.State.UsageReportCoverageStore.Open(_settings, _logger);
             ActivityReportRun Daily<TLog, TDetail, TLookup, TCache>(string name,
                 AbstractDailyActivityLoader<TLog, TDetail, TLookup, TCache> loader, string coverageSource = null)
                 where TLog : AbstractUsageActivityLog, new() where TDetail : AbstractActivityRecord<TLookup>
@@ -633,7 +634,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     loader.CoverageSource = coverageSource;
                     loader.CoverageWholeTenant = userScope?.IsFiltered != true;
                 }
-                return new ActivityReportRun(name, () => LoadAndSaveDailyImportReport(loader, daysBackMax, name, _logger, lookupIdCache, lastImportedDate));
+                return new ActivityReportRun(name, () => LoadAndSaveDailyImportReport(loader, daysBackMax, name, _logger, lookupIdCache, lastImportedDate, dbFactory));
             }
 
             return new List<ActivityReportRun>
@@ -644,7 +645,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 Daily("OneDrive usage", new OneDriveUsageLoader(client, userScope, _logger)),
                 Daily("OneDrive activity", new OneDriveUserActivityLoader(client, userScope, _logger), "onedrive"),
                 Daily("SharePoint user activity", new SharePointUserActivityLoader(client, userScope, _logger), "sharepoint"),
-                Daily("Yammer user activity", new YammerUserUsageLoader(client, userScope, _logger)),
+                Daily("Yammer user activity", new YammerUserUsageLoader(client, userScope, _logger), "yammer"),
                 Daily("Yammer group activity", new YammerGroupUsageLoader(client, _logger)),
                 Daily("Yammer device activity", new YammerDeviceUsageLoader(client, userScope, _logger)),
                 Daily("Apps & platform activity", new AppPlatformUserActivityLoader(client, userScope, _logger)),
@@ -665,8 +666,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// each outcome stamps. The SQL- and Graph-bound parts are passed in, so this runs in a test with neither.
         /// </summary>
         /// <param name="hasAnyActivityData">
-        /// Whether any usage data is stored at all; when not, the gate is reset - unless a refusal for concealed
-        /// identities (<see cref="ConcealedIdentityRefusalKey"/>) stands, which is why the table is empty.
+        /// Whether any daily fact remains, including outside the configured look-back. Distinguishes an
+        /// unexpected loss of previously retained rows from a run that legitimately left no rows.
         /// </param>
         /// <param name="createDailyReports">The daily reports, given the shared lookup cache and the previous phase stamp.</param>
         /// <param name="withWeeklyLoader">Builds the weekly SharePoint sites loader, runs the callback with it, and disposes it.</param>
@@ -700,20 +701,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // and a failure of one no longer changes the other's cadence.
             var weeklyHasOwnSchedule = _reportCompletionStore is IReportAttemptScheduleStore;
 
-            // Compare instants, not wall-clock readings: the store stamps DateTime.Now, so lastImportedDate
-            // comes back as a LOCAL time, and the old `DateTime.Now.Subtract(lastImportedDate)` compared two
-            // local readings - which is the wall-clock difference, not the elapsed time, across a DST change.
-            // ActivityReportsCadenceGate normalises to UTC and takes "now" from the injected clock.
+            // Cadence is elapsed time. Old timestamps can be local, including across a DST change.
             var runImport = ActivityReportsCadenceGate.ShouldRun(lastImportedDate, MIN_WAIT, _clock.UtcNow);
             if (_settings.ForceUsageReportsImport)
             {
                 _logger.LogInformation("ForceUsageReportsImport=true; bypassing recently-imported gate.");
                 runImport = true;
             }
-            else if (!runImport && !await IsConcealedIdentityRefusalCurrentAsync() && !await hasAnyActivityData())
+            else if (!runImport && !await IsConcealedIdentityRefusalCurrentAsync() && !await hasAnyActivityData()
+                && await ShouldRecheckEmptyPhaseAsync(lastImportedDate.Value))
             {
-                // All daily report tables are empty despite a recent phase stamp. Recover a wiped database now,
-                // but not a known refusal for concealed identities. An already-due phase needs no SQL probe.
                 lastImportedDate = null;
                 runImport = true;
             }
@@ -721,7 +718,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 var phaseWatch = Stopwatch.StartNew();
                 _weeklyStatus = "not run";
-                while (_dailyReportOutcomes.TryDequeue(out _)) { }
+                var outcomes = new System.Collections.Concurrent.ConcurrentBag<DailyReportOutcome>();
 
                 // The timestamp is both the once-a-day throttle and the proof that every daily report
                 // completed. Clear it before any batched writes: if this phase fails after a
@@ -784,7 +781,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Daily imports
                 foreach (var report in createDailyReports(lookupIdCache, lastImportedDate))
                 {
-                    importTasks.Add(RunReportSafely(report.Name, report.Run, failedReports, PhaseRetries));
+                    importTasks.Add(RunReportSafely(report.Name, async () => outcomes.Add(await report.Run()), failedReports, PhaseRetries));
                 }
 
                 // Weekly import
@@ -794,7 +791,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 await Task.WhenAll(importTasks);
 
-                LogPhaseSummary(importTasks.Count - 1, failedReports, concealedReports, weeklyHasOwnSchedule ? weeklyFailures : Enumerable.Empty<string>(), phaseWatch.ElapsedMilliseconds);
+                LogPhaseSummary(importTasks.Count - 1, outcomes, failedReports, concealedReports, weeklyHasOwnSchedule ? weeklyFailures : Enumerable.Empty<string>(), phaseWatch.ElapsedMilliseconds);
                 // Recorded whatever else failed, so the next cycles know an empty table is the tenant's privacy
                 // setting at work, not a fresh database; and cleared by a run that refused nothing.
                 await RecordConcealedIdentityRefusalAsync(concealedReports.Count > 0, MIN_WAIT);
@@ -816,7 +813,23 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     return false;
                 }
 
-                if (lastImportedStore != null)
+                if (lastImportedStore is IActivityReportsPhaseStore phaseStore)
+                {
+                    var facts = DailyPhaseFacts.Unverified;
+                    if (concealedReports.IsEmpty && !outcomes.IsEmpty)
+                    {
+                        if (outcomes.Any(o => o.HadRetainedRows == true))
+                            facts = DailyPhaseFacts.RowsPresent;
+                        else if (outcomes.All(o => o.HadRetainedRows == false))
+                        {
+                            // Our window was rowless, but SQL may still hold older history. Check existence
+                            // once, not a count per table. A later wipe must invalidate a populated database.
+                            facts = await hasAnyActivityData() ? DailyPhaseFacts.RowsPresent : DailyPhaseFacts.ExpectedEmpty;
+                        }
+                    }
+                    await phaseStore.SavePhaseAsync(DateTime.SpecifyKind(_clock.UtcNow, DateTimeKind.Utc), facts);
+                }
+                else if (lastImportedStore != null)
                 {
                     await lastImportedStore.SaveDT();
                 }
@@ -860,16 +873,42 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
+        private async Task<bool> ShouldRecheckEmptyPhaseAsync(DateTime completion)
+        {
+            DailyPhaseFacts? facts = null;
+            if (_activityReportsLastImportedStore is IActivityReportsPhaseStore phaseStore)
+            {
+                try
+                {
+                    facts = await phaseStore.ReadFactsAsync(completion);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning($"Could not read the daily phase's retained-data evidence ({ex.GetType().Name}); rechecking the empty usage tables.");
+                    return true;
+                }
+            }
+            if (facts == DailyPhaseFacts.ExpectedEmpty && completion.ToUniversalTime() <= _clock.UtcNow) return false;
+
+            var reason = facts == DailyPhaseFacts.RowsPresent ? "the last daily phase retained rows"
+                : facts == DailyPhaseFacts.Unverified ? "the last daily phase could not verify why no rows were retained"
+                : facts == DailyPhaseFacts.ExpectedEmpty ? "the matching completion is in the future"
+                : "the phase timestamp has no matching retained-data receipt (older build or reset)";
+            _logger.LogInformation($"All daily usage tables are empty and {reason}; rechecking the configured report window.");
+            return true;
+        }
+
         /// <summary>
         /// The one line a usage-report phase run writes however it ended: how many reports imported, failed or were refused,
         /// rows read and written, and per report its rows, dates, finalized dates skipped and time; then the weekly report's status.
         /// A Warning when anything failed or was refused, otherwise Information. No identifiers, only counts.
         /// </summary>
-        private void LogPhaseSummary(int dailyReportCount, IEnumerable<string> failedDaily, IEnumerable<string> refused, IEnumerable<string> failedWeekly, long elapsedMs)
+        private void LogPhaseSummary(int dailyReportCount, IEnumerable<DailyReportOutcome> completedDaily,
+            IEnumerable<string> failedDaily, IEnumerable<string> refused, IEnumerable<string> failedWeekly, long elapsedMs)
         {
             var failed = failedDaily.Concat(failedWeekly).OrderBy(r => r).ToList();
             var refusedList = refused.OrderBy(r => r).ToList();
-            var outcomes = _dailyReportOutcomes.ToArray().OrderBy(o => o.Name).ToList();
+            var outcomes = completedDaily.OrderBy(o => o.Name).ToList();
             var message = $"Usage report phase: {outcomes.Count} of {dailyReportCount} daily report(s) imported, {failed.Count} failed, {refusedList.Count} refused for concealed identities; " +
                 $"{outcomes.Sum(o => (long)o.RowsRead):N0} row(s) read, {outcomes.Sum(o => (long)o.RowsWritten):N0} written, in {elapsedMs:N0} ms. " +
                 (outcomes.Count > 0
@@ -941,15 +980,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             $"The SharePoint sites weekly usage report retries on its own schedule, in {WeeklyReportNoSundayBackoff.TotalMinutes} minutes, " +
             "whether or not the daily reports are due.";
 
-        internal async Task<int> LoadAndSaveDailyImportReport<TReportDbType, TUserActivityUserDetail, TLookupType, CACHETYPE>
+        internal async Task<DailyReportOutcome> LoadAndSaveDailyImportReport<TReportDbType, TUserActivityUserDetail, TLookupType, CACHETYPE>
             (AbstractDailyActivityLoader<TReportDbType, TUserActivityUserDetail, TLookupType, CACHETYPE> abstractActivityLoader,
             int daysBackMax, string thingWeAreImporting, ILogger logger, ConcurrentLookupDbIdsCache userEmailToDbIdCache,
-            DateTime? lastSuccessfulPhaseImport)
+            DateTime? lastSuccessfulPhaseImport, IAnalyticsDbContextFactory dbFactory = null)
             where TReportDbType : AbstractUsageActivityLog, new()
             where TUserActivityUserDetail : AbstractActivityRecord<TLookupType>
             where TLookupType : AbstractEFEntity
             where CACHETYPE : DBLookupCache<TLookupType>
         {
+            dbFactory = dbFactory ?? DefaultAnalyticsDbContextFactory.Instance;
             logger.LogInformation($"Importing {thingWeAreImporting} reports...");
             var reportWatch = Stopwatch.StartNew();
 
@@ -980,7 +1020,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 if (!_settings.ForceUsageReportsImport)
                 {
                     abstractActivityLoader.PreviousWindow = await ReadCompletedWindowAsync(reportKey, lastSuccessfulImport, logger);
-                    using (var db = new AnalyticsEntitiesContext())
+                    using (var db = dbFactory.Create())
                     {
                         datesToSkip = await abstractActivityLoader.GetFinalizedStoredDatesToSkipAsync(
                             db,
@@ -1009,7 +1049,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // One date at a time: each is saved before the next is downloaded, so this report holds one date's rows rather
                 // than its whole window (at 200,000 users, up to 28 x 200,000 rows for each report running at once).
-                using (var db = new AnalyticsEntitiesContext())
+                using (var db = dbFactory.Create())
                 {
                     // The completion stamp is cleared before any write, for the same reason the phase marker is cleared:
                     // if this report fails part-way through, the next cycle must re-import rather than trust a stamp that
@@ -1054,16 +1094,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 var total = abstractActivityLoader.LastLoadedRowCount;
                 logger.LogInformation($"Imported {total.ToString("N0")} {thingWeAreImporting} reports.");
-                _dailyReportOutcomes.Enqueue(new DailyReportOutcome
-                {
-                    Name = thingWeAreImporting,
-                    RowsRead = total,
-                    RowsWritten = abstractActivityLoader.LastSaveDbWriteCount,
-                    Dates = abstractActivityLoader.LastLoadedDateCount,
-                    DatesSkipped = datesToSkip?.Count ?? 0,
-                    Milliseconds = reportWatch.ElapsedMilliseconds,
-                });
-
                 if (instrumentationEnabled)
                 {
                     phaseWatch.Stop();
@@ -1079,7 +1109,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     });
                 }
 
-                return total;
+                return new DailyReportOutcome
+                {
+                    Name = thingWeAreImporting,
+                    RowsRead = total,
+                    RowsWritten = abstractActivityLoader.LastSaveDbWriteCount,
+                    Dates = abstractActivityLoader.LastLoadedDateCount,
+                    DatesSkipped = datesToSkip?.Count ?? 0,
+                    Milliseconds = reportWatch.ElapsedMilliseconds,
+                    HadRetainedRows = abstractActivityLoader.LastRunHadRetainedRows,
+                };
             }
             catch (Exception ex)
             {

@@ -27,8 +27,7 @@ namespace Common.Entities.State
         public const int MaximumDays = 366;
         public const int ReadConcurrency = 8;
         public static readonly string[] Sources = { "teams", "outlook", "sharepoint", "onedrive" };
-        // Viva Engage is weekly-chart only. Its importer does not certify empty/complete days, but
-        // a purge must still override the chart's historical row-presence fallback for affected dates.
+        // Viva Engage user activity is certified for the weekly chart, not used in Copilot Adoption.
         public static IReadOnlyList<string> WeeklySources { get; } = Array.AsReadOnly(Sources.Concat(new[] { "yammer" }).ToArray());
         private const string ScopePurgeKey = "v1:scopePurge";
         private const string PendingPurge = "purge";

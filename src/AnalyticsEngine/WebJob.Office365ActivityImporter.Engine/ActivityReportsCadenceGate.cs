@@ -8,10 +8,9 @@ namespace WebJob.Office365ActivityImporter.Engine
     /// gates the per-section Graph imports.
     ///
     /// <para>
-    /// <b>Why this takes a UTC "now" while the stored timestamp may be local.</b> Both
-    /// <see cref="ISingleDateStore"/> implementations stamp <c>DateTime.Now</c> - <c>InMemorySingleDateStore</c>
-    /// stores it directly, and <c>KeyValueSingleDateStore</c> round-trips it through <c>"o"</c> format, which
-    /// keeps the offset - so <paramref name="lastImported"/> comes back with <see cref="DateTimeKind.Local"/>.
+    /// <b>Why this takes a UTC "now" while the stored timestamp may be local.</b> Phase receipts use UTC.
+    /// Older <see cref="ISingleDateStore"/> timestamps came from <c>DateTime.Now</c> and round-tripped their
+    /// offset through <c>"o"</c> format, so a stored completion may still have <see cref="DateTimeKind.Local"/>.
     /// The original comparison was <c>DateTime.Now.Subtract(lastImported) &gt; minWait</c>: local minus local.
     /// That is right in the ordinary case and wrong across a daylight-saving transition, where subtracting two
     /// local wall-clock readings gives the wall-clock difference rather than the elapsed time - so twice a year

@@ -5,16 +5,24 @@ using Common.Entities.CopilotAdoption;
 using Common.Entities.Entities.Teams;
 using Common.Entities.State;
 using Common.Entities.UserFilters;
+using Common.Entities.UserScope;
 using Common.Entities.UserScope.Purge;
+using DataUtils;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Entity.Migrations;
 using System.Linq;
+using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+using Tests.UnitTests.FakeLoaderClasses;
+using UnitTests.FakeLoaderClasses;
+using WebJob.Office365ActivityImporter.Engine;
+using WebJob.Office365ActivityImporter.Engine.Graph;
 using Configuration = Common.Entities.Migrations.Configuration;
 using ReportsAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.ReportsAPIController;
 
@@ -198,6 +206,78 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task RegisteredYammerUserReportKeepsAPartialWeekUntilTheWholeTenantDownloadFinishes()
+        {
+            var monday = DateTime.SpecifyKind(CompleteWeek.AddDays(-112), DateTimeKind.Utc);
+            var clock = new FixedClock(monday.AddDays(10));
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            const string userPath = "/beta/reports/getYammerActivityUserDetail(date=";
+            string Day(DateTime day) => userPath + day.ToString("yyyy-MM-dd") + ")";
+            const string nextPath = "/beta/reports/nextSyntheticPage";
+            var first = new { userPrincipalName = "monday.only@contoso.com", lastActivityDate = monday.ToString("yyyy-MM-dd"), postedCount = 1 };
+            var second = new { userPrincipalName = "friday.only@contoso.com", lastActivityDate = monday.ToString("yyyy-MM-dd"), postedCount = 2 };
+            var graph = new FakeGraphDirectoryHandler()
+                .On(userPath, FakeGraphDirectoryHandler.Page(null, first))
+                .On(Day(monday), FakeGraphDirectoryHandler.Page("https://graph.microsoft.com" + nextPath, first))
+                .On(nextPath, "{}", HttpStatusCode.NotFound)
+                .On(Day(clock.UtcNow.AddDays(-3)), FakeGraphDirectoryHandler.Page(null))
+                .On(Day(clock.UtcNow.AddDays(-1)), FakeGraphDirectoryHandler.Page(null))
+                .On("/beta/reports/getYammerGroupsActivityDetail", FakeGraphDirectoryHandler.Page(null))
+                .On("/beta/reports/getYammerDeviceUsageUserDetail", FakeGraphDirectoryHandler.Page(null));
+            using (var client = new ManualGraphCallClient(graph, NullLogger.Instance))
+            {
+                var importer = new GraphImporter(AnalyticsLogger.ConsoleOnlyTracer(), null, null, null,
+                    new Common.Entities.Config.AppConfig { ForceUsageReportsImport = true }, null, null, null,
+                    clock, new InMemoryReportCompletionStore());
+                Task Import(string report, UserImportScope scope = null) =>
+                    importer.CreateDailyReports(10, client, scope, new ConcurrentLookupDbIdsCache(), null,
+                        coverage, new ConnectionStringAnalyticsDbContextFactory(_connectionString)).Single(r => r.Name == report).Run();
+                async Task<Dictionary<DateTime, string>> Outcomes() =>
+                    (await coverage.ReadWeeklyChartOutcomesAsync(monday, clock.UtcNow))["yammer"];
+                Week Chart(Dictionary<DateTime, string> outcomes) =>
+                    Run("dbo.yammer_user_activity_log", outcomes: outcomes, from: monday, through: monday)[monday];
+
+                const string userReport = "Yammer user activity";
+                await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => Import(userReport));
+                await Import("Yammer device activity");
+                await Import("Yammer group activity");
+                var partial = await Outcomes();
+                var week = Chart(partial);
+                Assert.AreEqual(1d, week.Value, "The first page's activity survives the continuation failure.");
+                Assert.AreEqual(7, week.ImportedDays, "Every day has rows; legacy presence alone would verify this week.");
+                Assert.IsTrue(week.Incomplete, "The user report's partial day must override row presence; neither sibling can certify it.");
+                Assert.AreEqual(UsageReportCoverageStore.Partial, partial[monday]);
+                Assert.AreEqual(UsageReportCoverageStore.Empty, partial[clock.UtcNow.AddDays(-3)]);
+                Assert.AreEqual(UsageReportCoverageStore.Partial, partial[clock.UtcNow.AddDays(-1)]);
+
+                graph.On(nextPath, FakeGraphDirectoryHandler.Page(null, second));
+                await Import(userReport, TestUserScopes.Of("monday.only@contoso.com"));
+                Assert.AreEqual(UsageReportCoverageStore.ScopeUnverified, (await Outcomes())[monday]);
+                graph.On(nextPath, FakeGraphDirectoryHandler.Page(null, new { userPrincipalName = "" }));
+                await Import(userReport);
+                Assert.AreEqual(UsageReportCoverageStore.Incomplete, (await Outcomes())[monday]);
+                graph.On(Day(monday), "{}", HttpStatusCode.NotFound);
+                await Import(userReport);
+                Assert.AreEqual(UsageReportCoverageStore.Partial, (await Outcomes())[monday], "An unavailable first page is not a zero.");
+
+                graph.On(Day(monday), FakeGraphDirectoryHandler.Page("https://graph.microsoft.com" + nextPath, first))
+                    .On(nextPath, FakeGraphDirectoryHandler.Page(null, second));
+                await coverage.StartScopePurgeAsync("synthetic");
+                await coverage.RevokeScopeDaysAsync("yammer", new[] { monday }, CancellationToken.None);
+                await coverage.EndScopePurgeAsync("synthetic", clock.UtcNow);
+                Assert.AreEqual(UsageReportCoverageStore.ScopeUnverified, (await Outcomes())[monday]);
+                clock.Advance(TimeSpan.FromTicks(1));
+                await Import(userReport);
+                var complete = await Outcomes();
+                Assert.AreEqual(UsageReportCoverageStore.Complete, complete[monday]);
+                Assert.AreEqual(2d, Chart(complete).Value);
+                Assert.IsFalse(Chart(complete).Incomplete);
+                CollectionAssert.AreEquivalent(new[] { "teams", "outlook", "onedrive", "sharepoint" },
+                    (await coverage.ReadAsync(monday, monday)).Select(s => s.Source).ToArray());
+            }
+        }
+
+        [TestMethod]
         public void OldEmptyCertificateWithSqlRowsKeepsTheObservationButCannotVerifyTheWeek()
         {
             var outcomes = Enumerable.Range(0, 7).ToDictionary(day => CompleteWeek.AddDays(day),
@@ -354,7 +434,7 @@ namespace Tests.UnitTests
             var vivaAfter = (await store.ReadWeeklyChartOutcomesAsync(mixed, mixed.AddDays(6)))["yammer"];
             var viva = Run("dbo.yammer_user_activity_log", outcomes: vivaAfter, from: mixed, through: mixed)[mixed];
             Assert.AreEqual(1d, viva.Value);
-            Assert.IsTrue(viva.Incomplete, "The legacy-only chart must not certify the reduced count either.");
+            Assert.IsTrue(viva.Incomplete, "Legacy Viva Engage data must not certify the reduced count either.");
         }
 
         private sealed class PurgeBeforeOpportunityRead : CopilotAdoptionService

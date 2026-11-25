@@ -29,8 +29,8 @@
                  deletion. If durable state is configured, upsert those v1:<source>:yyyyMMdd rows in the
                  AnalyticsState table's UsageReportCoverage partition with Value = scopeUnverified and no
                  ExpiresUtc. Do not delete the keys: legacy reports may treat surviving rows as coverage.
-                 Only a fresh tenant-wide download can reverify a date, and Graph has limited retention.
-                 Viva Engage has no positive coverage ledger; its purged dates remain unverified.
+                 Fresh tenant-wide downloads can reverify dates for all five user activity reports,
+                 including Viva Engage (yammer), but only while Graph still retains those dates.
   Returns:     Return code (0=OK), @ReturnMessage OUTPUT
 ======================================================================*/
 

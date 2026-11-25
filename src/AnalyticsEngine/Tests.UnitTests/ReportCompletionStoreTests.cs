@@ -1,4 +1,5 @@
 using Common.Entities.Config;
+using Common.Entities.State;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -53,6 +54,13 @@ namespace Tests.UnitTests
                 reportCompletionStore: store,
                 clock: clock);
         }
+
+        private static GraphImporter.ActivityReportRun CompletedDailyReport(Action run, bool? retainedRows = true) =>
+            new GraphImporter.ActivityReportRun("Teams user activity", () =>
+            {
+                run();
+                return Task.FromResult(new GraphImporter.DailyReportOutcome { Name = "Teams user activity", HadRetainedRows = retainedRows });
+            });
 
         #region The store itself
 
@@ -372,7 +380,7 @@ namespace Tests.UnitTests
                 () => Task.FromResult(true),
                 (lookupIdCache, lastImported) => new[]
                 {
-                    new GraphImporter.ActivityReportRun("Teams user activity", () => { dailyRuns++; return Task.CompletedTask; }),
+                    CompletedDailyReport(() => dailyRuns++),
                 },
                 run => run(weekly));
 
@@ -437,7 +445,7 @@ namespace Tests.UnitTests
                 () => Task.FromResult(true),
                 (lookupIdCache, lastImported) => new[]
                 {
-                    new GraphImporter.ActivityReportRun("Teams user activity", () => { dailyRuns++; return Task.CompletedTask; }),
+                    CompletedDailyReport(() => dailyRuns++),
                 },
                 run => run(weekly));
 
@@ -465,7 +473,7 @@ namespace Tests.UnitTests
             // stores a row, so the usage table stays empty - and the "fresh or wiped database" reset must not take that
             // for a reason to run the whole phase, every report downloading a day, again on every cycle.
             var clock = new FixedClock(new DateTime(2026, 9, 14, 4, 0, 0, DateTimeKind.Utc));
-            var phaseStore = new ClockedSingleDateStore(clock);
+            var phaseStore = ActivityReportsLastImportedStoreFactory.Create(null, null);
             var importer = NewImporter(new InMemoryReportCompletionStore(), clock: clock, phaseStore: phaseStore);
             var attempts = 0;
             var concealed = true;
@@ -474,17 +482,18 @@ namespace Tests.UnitTests
                 () => Task.FromResult(false),
                 (lookupIdCache, lastImported) => new[]
                 {
-                    new GraphImporter.ActivityReportRun("Teams user activity", () =>
+                    CompletedDailyReport(() =>
                     {
                         attempts++;
                         if (concealed) throw new ConcealedUsageReportException("TeamsUserUsageLoader", 3);
-                        return Task.CompletedTask;
                     }),
                 },
                 run => Task.CompletedTask);
 
             Assert.IsFalse(await RunPhase(), "A refused report means the phase did not fully import.");
             Assert.IsNotNull(await phaseStore.GetLastDT());
+            Assert.AreEqual(DailyPhaseFacts.Unverified,
+                await ((IActivityReportsPhaseStore)phaseStore).ReadFactsAsync((await phaseStore.GetLastDT()).Value));
 
             clock.Advance(TimeSpan.FromMinutes(20));
             await RunPhase();
@@ -510,7 +519,7 @@ namespace Tests.UnitTests
         public async Task AnOutlookOnlyDatabaseKeepsItsDailyThrottleUntilTheUsageDataIsWiped()
         {
             var clock = new FixedClock(new DateTime(2026, 6, 20, 10, 0, 0, DateTimeKind.Utc));
-            var importer = NewImporter(new InMemoryReportCompletionStore(), clock: clock, phaseStore: new ClockedSingleDateStore(clock));
+            var importer = NewImporter(new InMemoryReportCompletionStore(), clock: clock, phaseStore: new InMemorySingleDateStore());
             var runs = 0;
             var probes = 0;
             using (var scratch = ScratchDatabase.Create("DailyUsageGate"))
@@ -521,7 +530,7 @@ namespace Tests.UnitTests
                     "yammer_user_activity_log", "yammer_group_activity_log", "yammer_device_activity_log", "platform_user_activity_log" };
                 foreach (var table in tables) scratch.Execute($"CREATE TABLE dbo.[{table}] (id int PRIMARY KEY)");
                 Task<bool> RunPhase() => importer.RunActivityReportPhaseAsync(7, () => { probes++; return GraphImporter.HasAnyActivityDataAsync(db); },
-                    (_, stamp) => new[] { new GraphImporter.ActivityReportRun("Synthetic report", () => { runs++; return Task.CompletedTask; }) },
+                    (_, stamp) => new[] { CompletedDailyReport(() => runs++) },
                     _ => Task.CompletedTask);
 
                 scratch.Execute("INSERT dbo.outlook_user_activity_log VALUES (1)");
@@ -542,6 +551,169 @@ namespace Tests.UnitTests
                     scratch.Execute($"TRUNCATE TABLE dbo.[{table}]");
                 }
             }
+        }
+
+        [DataTestMethod]
+        [DataRow(false, false)]
+        [DataRow(false, true)]
+        [DataRow(true, false)]
+        [DataRow(true, true)]
+        public async Task ACompletedDailyPhaseWithNoRetainedFactsWaitsADayAcrossNewImporterInstances(bool filtered, bool persisted)
+        {
+            var clock = new FixedClock(new DateTime(2026, 6, 20, 23, 57, 0, DateTimeKind.Utc));
+            var state = new InMemoryKeyValueStore();
+            var phase = ActivityReportsLastImportedStoreFactory.Create(null, null);
+            var completion = ReportCompletionStoreFactory.Create(null, null);
+            var sql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            var runs = 0;
+            Task<bool> Run(bool force = false)
+            {
+                var importer = NewImporter(persisted ? new PersistedReportCompletionStore(state) : completion, force, clock,
+                    persisted ? new PersistedActivityReportsPhaseStore(state) : phase);
+                return importer.RunActivityReportPhaseAsync(3, () => Task.FromResult(sql.Stored.Any()), (cache, stamp) =>
+                {
+                    runs++;
+                    var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
+                    {
+                        Clock = clock, StorageInspector = new FakeUsageReportStorageInspector(), ReportStore = sql,
+                        InScopeRule = upn => !filtered,
+                    };
+                    if (filtered)
+                    {
+                        const string outside = "outside@contoso.example";
+                        cache.AddOrUpdateForName<Common.Entities.User>(outside, 1);
+                        loader.PagesByDate[clock.UtcNow.Date.AddDays(-2)] = new List<FakeUserActivityDetail>
+                            { new FakeUserActivityDetail { UserPrincipalName = outside, ThingCount = 1 } };
+                    }
+                    return new[] { new GraphImporter.ActivityReportRun("Synthetic report", () =>
+                        importer.LoadAndSaveDailyImportReport(loader, 3, "Synthetic report", NullLogger.Instance, cache, stamp)) };
+                }, _ => Task.CompletedTask);
+            }
+
+            Assert.IsTrue(await Run());
+            Assert.AreEqual(0, sql.Stored.Count);
+            clock.Advance(TimeSpan.FromMinutes(10));
+            Assert.IsFalse(await Run(), "A successful rowless phase is not evidence of a wiped database.");
+            Assert.AreEqual(1, runs);
+            Assert.IsTrue(await Run(force: true), "A forced reimport must not trust a rowless completion.");
+            clock.Advance(TimeSpan.FromDays(1));
+            Assert.IsFalse(await Run(), "The strict 24-hour boundary is still gated.");
+            clock.Advance(TimeSpan.FromTicks(1));
+            Assert.IsTrue(await Run(), "Recent dates must still refresh on the next due run.");
+            Assert.AreEqual(3, runs);
+        }
+
+        [TestMethod]
+        public async Task ARowlessPhaseRechecksLegacyReplacedMissingAndFutureTimestampsOnce()
+        {
+            var clock = new FixedClock(new DateTime(2026, 6, 20, 0, 5, 0, DateTimeKind.Utc));
+            var state = new InMemoryKeyValueStore();
+            var legacy = new KeyValueSingleDateStore(state, ActivityReportsLastImportedStoreFactory.UserActivityLastImportedKey);
+            var runs = 0;
+            Task<bool> Run(ISingleDateStore phase) => NewImporter(new InMemoryReportCompletionStore(), clock: clock, phaseStore: phase)
+                .RunActivityReportPhaseAsync(3, () => Task.FromResult(false),
+                    (_, stamp) => new[] { CompletedDailyReport(() => runs++, false) }, _ => Task.CompletedTask);
+
+            // Reopen both stores each poll. An older build knows only the operator-facing timestamp.
+            async Task RecheckOnce(string reason)
+            {
+                Assert.IsTrue(await Run(new PersistedActivityReportsPhaseStore(state)), reason);
+                Assert.IsFalse(await Run(new PersistedActivityReportsPhaseStore(state)), "The replacement receipt is current: " + reason);
+            }
+            await legacy.SaveDT(clock.UtcNow.AddHours(-1).ToLocalTime());
+            await RecheckOnce("Legacy timestamp, no receipt");
+            await legacy.SaveDT(clock.UtcNow.ToLocalTime());
+            await RecheckOnce("An old writer at the same instant still wrote only a legacy local timestamp");
+            clock.Advance(TimeSpan.FromMinutes(10));
+            await legacy.SaveDT(clock.UtcNow.AddMinutes(-20));
+            await RecheckOnce("Timestamp older than receipt");
+            clock.Advance(TimeSpan.FromMinutes(10));
+            await legacy.SaveDT(clock.UtcNow.AddMinutes(-5));
+            await RecheckOnce("Timestamp newer than receipt");
+            clock.Advance(TimeSpan.FromTicks(-1));
+            await RecheckOnce("Even a matching receipt from the future cannot explain an empty database");
+            await legacy.DeleteDt();
+            await RecheckOnce("An operator deleting just the public timestamp must force a refresh");
+            Assert.AreEqual(6, runs);
+
+            Assert.IsTrue(await Run(null));
+            Assert.IsTrue(await Run(null), "Without a phase store neither a previous importer's receipt nor a global cache gates this caller.");
+        }
+
+        [TestMethod]
+        public async Task StorageFailuresNeverTurnOldPhaseEvidenceIntoACurrentSuccess()
+        {
+            var clock = new FixedClock(new DateTime(2026, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+            var state = new FaultingPhaseState();
+            var phase = new PersistedActivityReportsPhaseStore(state);
+            var runs = 0;
+            Task<bool> Run(bool force = false) => NewImporter(new InMemoryReportCompletionStore(), force, clock, phase)
+                .RunActivityReportPhaseAsync(3, () => Task.FromResult(false),
+                    (_, stamp) => new[] { CompletedDailyReport(() => runs++, false) }, _ => Task.CompletedTask);
+
+            Assert.IsTrue(await Run());
+            state.FailReceiptRead = true;
+            Assert.IsTrue(await Run(), "Unreadable evidence is not evidence that a rowless database was expected.");
+            state.FailReceiptRead = false;
+            Assert.IsFalse(await Run());
+
+            state.FailPublicRead = true;
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => Run());
+            Assert.AreEqual(2, runs, "An unavailable public timestamp is still an outage, not a first import.");
+            state.FailPublicRead = false;
+            state.FailWrite = true;
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => Run(force: true));
+            Assert.IsNull(await phase.GetLastDT(), "Even at the same clock tick, an interrupted completion leaves no public success.");
+            Assert.IsNull(await phase.ReadFactsAsync(clock.UtcNow), "The old receipt is invalidated too.");
+            state.FailWrite = false;
+            Assert.IsTrue(await Run());
+            Assert.IsFalse(await Run());
+        }
+
+        [DataTestMethod]
+        [DataRow(true, false)]
+        [DataRow(true, true)]
+        [DataRow(false, false)]
+        [DataRow(false, true)]
+        public async Task ConcurrentReportsMustAllExplainEmptinessRegardlessOfCompletionOrder(bool hasRows, bool finishEmptyFirst)
+        {
+            var phase = (IActivityReportsPhaseStore)new InMemorySingleDateStore();
+            var start = new DateTime(2026, 6, 20, 23, 59, 0, DateTimeKind.Utc);
+            var clock = new FixedClock(start);
+            var importer = NewImporter(new InMemoryReportCompletionStore(), clock: clock, phaseStore: phase);
+            var empty = new TaskCompletionSource<GraphImporter.DailyReportOutcome>();
+            var other = new TaskCompletionSource<GraphImporter.DailyReportOutcome>();
+            var run = importer.RunActivityReportPhaseAsync(3, () => Task.FromResult(false), (_, stamp) => new[]
+            {
+                new GraphImporter.ActivityReportRun("Empty", () => empty.Task),
+                new GraphImporter.ActivityReportRun("Other", () => other.Task),
+            }, _ => Task.CompletedTask);
+            var emptyResult = new GraphImporter.DailyReportOutcome { Name = "Empty", HadRetainedRows = false };
+            var otherResult = new GraphImporter.DailyReportOutcome { Name = "Other", HadRetainedRows = hasRows ? true : (bool?)null };
+            if (finishEmptyFirst) empty.SetResult(emptyResult); else other.SetResult(otherResult);
+            Assert.IsNull(await phase.GetLastDT(), "A report still in flight cannot publish a phase receipt.");
+            clock.Advance(TimeSpan.FromMinutes(2));
+            if (finishEmptyFirst) other.SetResult(otherResult); else empty.SetResult(emptyResult);
+            Assert.IsTrue(await run);
+            Assert.AreEqual(clock.UtcNow, await phase.GetLastDT(), "The gate measures from completion, even across midnight.");
+            Assert.AreEqual(hasRows ? DailyPhaseFacts.RowsPresent : DailyPhaseFacts.Unverified, await phase.ReadFactsAsync(clock.UtcNow));
+            Assert.IsNull(await phase.ReadFactsAsync(start));
+        }
+
+        private sealed class FaultingPhaseState : IBatchKeyValueStore
+        {
+            private readonly InMemoryKeyValueStore _inner = new InMemoryKeyValueStore();
+            public bool FailPublicRead, FailReceiptRead, FailWrite;
+            public string Description => "Synthetic phase state";
+            public Task<string> GetStringAsync(string key, CancellationToken ct = default)
+                => (key == ActivityReportsLastImportedStoreFactory.UserActivityLastImportedKey ? FailPublicRead : FailReceiptRead)
+                    ? Task.FromException<string>(new InvalidOperationException("Synthetic read failure.")) : _inner.GetStringAsync(key, ct);
+            public Task SetManyAsync(IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken ct = default)
+                => FailWrite ? Task.FromException(new InvalidOperationException("Synthetic write failure.")) : _inner.SetManyAsync(values, ct);
+            public Task<bool> DeleteAsync(string key, CancellationToken ct = default) => _inner.DeleteAsync(key, ct);
+            public Task<bool> ExistsAsync(string key, CancellationToken ct = default) => _inner.ExistsAsync(key, ct);
+            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken ct = default)
+                => _inner.SetStringAsync(key, value, timeToLive, ct);
         }
 
         [TestMethod]
@@ -704,7 +876,7 @@ namespace Tests.UnitTests
                 () => Task.FromResult(true),
                 (lookupIdCache, lastImported) => new[]
                 {
-                    new GraphImporter.ActivityReportRun("Teams user activity", () => { dailyRuns++; return Task.CompletedTask; }),
+                    CompletedDailyReport(() => dailyRuns++),
                 },
                 run => run(weekly));
 

@@ -51,7 +51,7 @@ namespace WebJob.Office365ActivityImporter.Engine
             await _store.SetStringAsync(_key, dt.ToString("o", CultureInfo.InvariantCulture));
         }
 
-        public async Task DeleteDt()
+        public virtual async Task DeleteDt()
         {
             await _store.DeleteAsync(_key);
         }

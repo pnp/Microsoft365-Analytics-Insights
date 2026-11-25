@@ -112,6 +112,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         public bool CoverageWholeTenant { get; set; }
         internal DailyReportWindow PreviousWindow { get; set; }
         internal DailyReportWindow SavedWindow { get; private set; }
+        // For the phase's wipe check only. False means every date was accounted for and retained no rows
+        // (including rows deliberately filtered out); null means the report could not explain an empty SQL table.
+        internal bool? LastRunHadRetainedRows { get; private set; }
 
         /// <summary>
         /// Opt-in, privacy-safe stage diagnostics for the daily usage-report save path. The default is a
@@ -201,7 +204,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             catch (Exception ex)
             {
                 Telemetry.LogWarning($"{GetType().Name}: could not read usage-report coverage outcomes ({ex.GetType().Name}); " +
-                    "stored dates are skipped as before and stay unverified for Copilot Adoption.");
+                    "among the unread dates, only those with stored rows are skipped; their coverage is not certified.");
                 // Keep outcomes already checked. For unread dates only retain the existing rows fallback;
                 // a missing fact cannot be called successfully empty without a matching ledger outcome.
                 skip.UnionWith(candidates.Skip(checkedDates).Where(storedDates.Contains));
@@ -485,6 +488,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             _unfinishedDownloads.Clear();
             LastLoadedRowCount = 0;
             LastLoadedDateCount = 0;
+            LastRunHadRetainedRows = null;
+            bool? hadRetainedRows = false;
 
             var datesLoaded = new HashSet<DateTime>();
             var sawIdentifiableRow = false;
@@ -502,7 +507,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                     {
                         var skipped = nowUtc.Date.AddDays(-1 - daysBackIdx);
                         if (PreviousWindow != null && PreviousWindow.HasRows.TryGetValue(skipped, out var hasRows))
+                        {
                             SavedWindow.HasRows[skipped] = hasRows;
+                            hadRetainedRows |= hasRows;
+                        }
+                        else if (hadRetainedRows == false)
+                        {
+                            hadRetainedRows = null;
+                        }
                         continue;
                     }
 
@@ -555,7 +567,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                     }
 
                     await PreResolveAsync(run, new[] { dayReports }, userEmailToDbIdCache, lookupCache);
-                    await SaveDateAsync(run, dt.Value, dayReports, userEmailToDbIdCache, lookupCache, requestedUtc, SavedWindow);
+                    hadRetainedRows |= await SaveDateAsync(run, dt.Value, dayReports, userEmailToDbIdCache, lookupCache, requestedUtc, SavedWindow);
                 }
 
                 bulkWrite?.Dispose();
@@ -565,6 +577,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                     RefuseOrReportConcealedRows(run.LoaderType, concealedRowCount, identifiableRowCount);
                     CompleteSave(run);
                 }
+                LastRunHadRetainedRows = hadRetainedRows;
             }
             catch (Exception ex)
             {
@@ -696,7 +709,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         /// When Graph was asked for <paramref name="dateTime"/>. The coverage ledger judges settlement at this
         /// instant, never at the end of the save: what Graph had published is fixed when it answered.
         /// </param>
-        private async Task SaveDateAsync(SaveRun run, DateTime dateTime, List<TUserActivityUserDetail> rows,
+        private async Task<bool?> SaveDateAsync(SaveRun run, DateTime dateTime, List<TUserActivityUserDetail> rows,
             ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache, DateTime requestedUtc, DailyReportWindow window = null)
         {
             var downloadFinished = !_unfinishedDownloads.ContainsKey(dateTime.Date);
@@ -981,6 +994,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 // A day on which every returned row was filtered out is not a successful empty.
                 window.HasRows[dateTime.Date] = existingByLookupId.Count > 0;
             }
+            // Includes unchanged rows and older rows the upsert did not delete. Zero writes alone says
+            // nothing about SQL presence; a missing first page or unusable identity cannot prove emptiness.
+            if (existingByLookupId.Count > 0) return true;
+            return downloadFinished && missingLookupRows == 0 && concealedRows == 0 ? false : (bool?)null;
         }
 
         private void CompleteSave(SaveRun run)
