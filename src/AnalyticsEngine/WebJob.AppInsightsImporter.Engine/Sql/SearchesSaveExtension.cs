@@ -58,7 +58,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             logger.LogInformation($"Processing {searches.Count.ToString("n0")} searches...");
             var sw = Stopwatch.StartNew();
 
-            using (var con = AzureSqlTokenAuth.CreateConnection(database.Database.Connection.ConnectionString))
+            using (var con = AzureSqlTokenAuth.CreateConnection(database.Database.Connection.ConnectionString, cancellationToken))
             {
                 await con.OpenAsync(cancellationToken);
                 using (var cmd = con.CreateCommand())

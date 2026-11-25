@@ -1,6 +1,7 @@
 using Azure.Identity;
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.Sql;
 using Common.Entities.UserScope;
 using DataUtils;
 using System;
@@ -131,6 +132,7 @@ namespace WebJob.AppInsightsImporter.Engine
         public async Task<AppInsightsImportCycleResult> ImportAndSave(bool saveRestResponses, int? daysBeforeOverride, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            using (AzureSqlAccessTokenInterceptor.UseCancellationToken(cancellationToken))
             try
             {
                 if (AllDatabasePortsSupplied)
@@ -147,9 +149,10 @@ namespace WebJob.AppInsightsImporter.Engine
                         _persistence ?? new SqlAppInsightsDayPersistenceManager(db, _logger, _importConfig, _contextFactory), cancellationToken);
                 }
             }
-            catch (Exception ex) when (cancellationToken.IsCancellationRequested && !(ex is OperationCanceledException || ex is OutOfMemoryException))
+            catch (Exception ex) when (cancellationToken.IsCancellationRequested && !(ex is OutOfMemoryException)
+                && !(ex is OperationCanceledException cancelled && cancelled.CancellationToken == cancellationToken))
             {
-                // SQL and storage can surface a provider exception instead of OperationCanceledException.
+                // EF6 can discard the token on a cancelled task; SQL and storage can throw a provider exception.
                 throw new OperationCanceledException("Web-traffic import stopped by the host.", ex, cancellationToken);
             }
         }

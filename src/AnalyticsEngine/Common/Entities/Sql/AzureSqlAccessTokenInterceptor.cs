@@ -1,7 +1,9 @@
 using DataUtils.Sql;
+using System;
 using System.Data;
 using System.Data.Common;
 using System.Data.Entity.Infrastructure.Interception;
+using System.Threading;
 using Microsoft.Data.SqlClient;
 
 namespace Common.Entities.Sql
@@ -27,12 +29,26 @@ namespace Common.Entities.Sql
     /// </remarks>
     public class AzureSqlAccessTokenInterceptor : IDbConnectionInterceptor
     {
+        // EF6 does not expose the OpenAsync token to Opening. Bind it to this async flow, never to the
+        // shared interceptor or credential: a concurrent migration may still need either after a cycle stops.
+        private static readonly AsyncLocal<CancellationToken> OperationToken = new AsyncLocal<CancellationToken>();
+
+        /// <summary>Use the caller's token for EF opens on this execution flow; disposing restores any enclosing scope.</summary>
+        public static IDisposable UseCancellationToken(CancellationToken token) => new TokenScope(token);
+
+        private sealed class TokenScope : IDisposable
+        {
+            private readonly CancellationToken _previous = OperationToken.Value;
+            public TokenScope(CancellationToken token) => OperationToken.Value = token;
+            public void Dispose() => OperationToken.Value = _previous;
+        }
+
         public void Opening(DbConnection connection, DbConnectionInterceptionContext interceptionContext)
         {
             var sqlConnection = connection as SqlConnection;
             if (sqlConnection == null) return;
 
-            AzureSqlTokenAuth.ApplyAccessTokenIfNeeded(sqlConnection);
+            AzureSqlTokenAuth.ApplyAccessTokenIfNeeded(sqlConnection, OperationToken.Value);
         }
 
         #region Interface members with nothing to do
