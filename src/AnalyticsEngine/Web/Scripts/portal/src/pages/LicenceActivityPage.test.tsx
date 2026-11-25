@@ -737,22 +737,20 @@ describe('LicenceActivityPage - demographic filter options', () => {
     mockOverview.mockImplementation(async (q) => {
       const departments =
         q.departmentId == null ? [sales, support] : [sales, support].filter((d) => d.id === q.departmentId);
-      return overview({ departments });
+      return overview({ departments, snapshotId: `ov-dept-${q.departmentId ?? 'all'}` });
     });
 
     renderWithProvider(<LicenceActivityPage />);
-    await screen.findByText('Compare licences');
-
     const deptSelect = await screen.findByLabelText('Filter by department');
-    expect(screen.getByRole('option', { name: 'Sales' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Support' })).toBeInTheDocument();
+    expect(await within(deptSelect).findByRole('option', { name: 'Sales' })).toBeInTheDocument();
+    expect(within(deptSelect).getByRole('option', { name: 'Support' })).toBeInTheDocument();
 
     // Select Sales -> overview refetches scoped to department 1 (its reply contains only Sales)...
     fireEvent.change(deptSelect, { target: { value: '1' } });
-    await waitFor(() => expect(mockOverview.mock.calls.some((c) => c[0].departmentId === 1)).toBe(true));
+    await waitFor(() => expect(mockUsers.mock.calls.some(([query]) => query.overviewId === 'ov-dept-1')).toBe(true));
 
     // ...yet Support is STILL an option, so we can switch straight to it without going via "All".
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Support' })).toBeInTheDocument());
+    expect(within(deptSelect).getByRole('option', { name: 'Support' })).toBeInTheDocument();
     fireEvent.change(deptSelect, { target: { value: '2' } });
     await waitFor(() => expect(mockOverview.mock.calls.some((c) => c[0].departmentId === 2)).toBe(true));
   });
