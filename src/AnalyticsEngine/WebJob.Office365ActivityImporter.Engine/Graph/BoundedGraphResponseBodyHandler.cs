@@ -1,3 +1,5 @@
+using Microsoft.Kiota.Http.HttpClientLibrary.Extensions;
+using Microsoft.Kiota.Http.HttpClientLibrary.Middleware.Options;
 using System;
 using System.Net;
 using System.Net.Http;
@@ -6,13 +8,14 @@ using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
-    /// <summary>Finishes the wire read under the current attempt's deadline, before Kiota's
-    /// redirect, inspection or retry handlers or HttpClient can start a tokenless body read.</summary>
+    /// <summary>Closes optional redirect bodies and buffers data-bearing responses under the
+    /// attempt's deadline before Kiota or HttpClient can start a tokenless body read.</summary>
     internal sealed class BoundedGraphResponseBodyHandler : DelegatingHandler
     {
         // SDK importer calls return pages, not whole-tenant report downloads.
         private const int MaxPageBytes = 32 * 1024 * 1024;
         private static readonly SemaphoreSlim BodyReadSlots = new SemaphoreSlim(16, 16);
+        private static readonly Func<HttpResponseMessage, bool> DefaultShouldRedirect = new RedirectHandlerOption().ShouldRedirect;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -30,6 +33,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     empty.Headers.Clear();
                     foreach (var header in content.Headers) empty.Headers.TryAddWithoutValidation(header.Key, header.Value);
                     response.Content = empty;
+                    content.Dispose();
+                }
+                else if (content != null && HasOptionalRedirectBody(request, response))
+                {
+                    // Kiota drains a redirect before sending its next request. It needs only the
+                    // status and Location; close the transport without spending the attempt on it.
+                    response.Content = null;
                     content.Dispose();
                 }
                 else if (content != null)
@@ -63,6 +73,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 response.Dispose();
                 cancellationToken.ThrowIfCancellationRequested();
                 throw;
+            }
+        }
+
+        private static bool HasOptionalRedirectBody(HttpRequestMessage request, HttpResponseMessage response)
+        {
+            switch (response.StatusCode)
+            {
+                case HttpStatusCode.MovedPermanently:
+                case HttpStatusCode.Found:
+                case HttpStatusCode.SeeOther:
+                case HttpStatusCode.TemporaryRedirect:
+                case (HttpStatusCode)308: // Permanent Redirect has no name on net48.
+                    if (response.Headers.Location == null) return false;
+                    // A custom predicate may inspect the body or return it to the caller. Don't
+                    // invoke it speculatively; let Kiota evaluate it once with the bounded body.
+                    var option = request.GetRequestOption<RedirectHandlerOption>();
+                    return option == null || (option.MaxRedirect > 0 && option.ShouldRedirect == DefaultShouldRedirect);
+                default:
+                    return false;
             }
         }
 

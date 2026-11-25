@@ -228,6 +228,90 @@ namespace Tests.UnitTests
             }
         }
 
+        [DataTestMethod]
+        [DataRow(301, false)]
+        [DataRow(302, false)]
+        [DataRow(302, true)]
+        [DataRow(303, false)]
+        [DataRow(307, false)]
+        [DataRow(308, false)]
+        public async Task GraphImportSdk_Redirect_FollowsLocationWithoutReadingOptionalBody(int status, bool configureHandlers)
+        {
+            using (var body = new GatedJsonContent())
+            {
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(ResponseWithLocation((HttpStatusCode)status, body)), ct =>
+                {
+                    Assert.IsTrue(body.Disposed, "Release the redirect transport before requesting the destination.");
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent("{\"value\":[{\"displayName\":\"Contoso\"}]}", System.Text.Encoding.UTF8, "application/json")
+                    });
+                });
+                using (var client = GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(500, 1, 2000), null, terminal))
+                {
+                    var page = await WithinWatchdog(client.Users.GetAsync(rc =>
+                    {
+                        if (configureHandlers)
+                        {
+                            rc.Options.Add(new RedirectHandlerOption { MaxRedirect = 1 });
+                            rc.Options.Add(new BodyInspectionHandlerOption { InspectResponseBody = true });
+                        }
+                    }));
+                    Assert.AreEqual("Contoso", page.Value.Single().DisplayName);
+                    CollectionAssert.AreEqual(new[] { "GET /v1.0/users", "GET /v1.0/users?$select=id" }, terminal.Requests);
+                    Assert.IsFalse(body.Started.Task.IsCompleted, "Neither the bounded reader nor Kiota should drain the redirect.");
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(303, "GET")]
+        [DataRow(307, "POST")]
+        public async Task GraphImportSdk_RedirectedPost_FinalBodyDeadlineDoesNotReplayWrite(int status, string redirectedMethod)
+        {
+            using (var redirectBody = new GatedJsonContent())
+            using (var finalBody = new GatedJsonContent())
+            {
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(ResponseWithLocation((HttpStatusCode)status, redirectBody)),
+                    ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = finalBody }));
+                using (var client = GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(250, 2, 2000), null, terminal))
+                {
+                    await Assert.ThrowsExceptionAsync<TimeoutException>(() => WithinWatchdog(client.Users.PostAsync(new Microsoft.Graph.Models.User())));
+                    CollectionAssert.AreEqual(new[] { "POST /v1.0/users", redirectedMethod + " /v1.0/users?$select=id" }, terminal.Requests);
+                    Assert.AreEqual(redirectedMethod == "POST", terminal.LastRequestHadContent);
+                    Assert.IsFalse(redirectBody.Started.Task.IsCompleted);
+                    Assert.IsTrue(redirectBody.Disposed);
+                    Assert.IsTrue(finalBody.Started.Task.IsCompleted && finalBody.Disposed, "The deadline must abort the destination body.");
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(201, false)]
+        [DataRow(300, false)]
+        [DataRow(302, false)]
+        [DataRow(302, true)]
+        public async Task GraphImportPipeline_LocationOnPassThroughResponse_PreservesBody(int status, bool disableRedirects)
+        {
+            var terminal = new SequenceHttpHandler(ct => Task.FromResult(ResponseWithLocation((HttpStatusCode)status, new StringContent("Contoso"))));
+            using (var client = BuildGraphImportPipelineClient(terminal, 500, 0, 500))
+            using (var request = new HttpRequestMessage(HttpMethod.Get, "https://graph.microsoft.com/v1.0/users"))
+            {
+                if (status == 302)
+                {
+                    request.Properties[typeof(RedirectHandlerOption).FullName] = disableRedirects
+                        ? new RedirectHandlerOption { MaxRedirect = 0 }
+                        : new RedirectHandlerOption { ShouldRedirect = _ => false };
+                }
+                using (var response = await WithinWatchdog(client.SendAsync(request)))
+                {
+                    Assert.AreEqual((HttpStatusCode)status, response.StatusCode);
+                    Assert.AreEqual("Contoso", await response.Content.ReadAsStringAsync());
+                    Assert.AreEqual(1, terminal.Attempts);
+                }
+            }
+        }
+
         [TestMethod]
         public async Task GraphImportPipeline_RetryAfterLongerThanAttemptDeadline_IsHonouredByRetryHandler()
         {
@@ -311,6 +395,13 @@ namespace Tests.UnitTests
             Assert.IsInstanceOfType(handlers[retryIndex + 1], typeof(BoundedGraphRequestHandler));
             Assert.AreEqual(1, handlers.Count(h => h is BoundedGraphRequestHandler));
         }
+
+        private static HttpResponseMessage ResponseWithLocation(HttpStatusCode status, HttpContent body)
+            => new HttpResponseMessage(status)
+            {
+                Headers = { Location = new Uri("https://graph.microsoft.com/v1.0/users?$select=id") },
+                Content = body
+            };
 
         private static HttpResponseMessage JsonResponse(HttpStatusCode status, int? retryAfterSeconds = null)
         {
@@ -526,6 +617,8 @@ namespace Tests.UnitTests
             private readonly Queue<Func<CancellationToken, Task<HttpResponseMessage>>> _responses;
             public int Attempts { get; private set; }
             public List<string> RetryAttemptHeaders { get; } = new List<string>();
+            public List<string> Requests { get; } = new List<string>();
+            public bool LastRequestHadContent { get; private set; }
 
             public SequenceHttpHandler(params Func<CancellationToken, Task<HttpResponseMessage>>[] responses)
             {
@@ -535,6 +628,8 @@ namespace Tests.UnitTests
             protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
                 Attempts++;
+                Requests.Add(request.Method + " " + request.RequestUri.PathAndQuery);
+                LastRequestHadContent = request.Content != null;
                 RetryAttemptHeaders.Add(request.Headers.TryGetValues("Retry-Attempt", out var values) ? string.Join(",", values) : null);
                 var response = _responses.Count == 0
                     ? new HttpResponseMessage(HttpStatusCode.OK)
