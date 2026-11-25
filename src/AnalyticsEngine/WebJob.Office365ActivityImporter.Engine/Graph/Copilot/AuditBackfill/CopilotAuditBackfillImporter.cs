@@ -10,6 +10,7 @@ using System.Data.Entity;
 using System.Diagnostics;
 using System.Linq;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp;
@@ -20,13 +21,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
 {
     public static class CopilotAuditBackfillSafeRunner
     {
-        public static async Task AdvanceSafely(Func<Task> advance, AnalyticsLogger logger)
+        public static Task AdvanceSafely(Func<Task> advance, AnalyticsLogger logger)
+            => AdvanceSafely(advance, logger, CancellationToken.None);
+
+        public static async Task AdvanceSafely(Func<Task> advance, AnalyticsLogger logger, CancellationToken shutdownToken)
         {
             try
             {
                 await advance().ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (shutdownToken.IsCancellationRequested)
+            {
+                throw new ShutdownRequestedException();
+            }
+            catch (Exception ex) when (!(ex is ShutdownRequestedException))
             {
                 logger?.TrackException(ex);
                 logger?.LogWarning($"Copilot audit backfill failed independently of the live activity import: {ex.Message}. It will retry next cycle.");
@@ -227,6 +235,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
         internal static readonly TimeSpan TerminalDegradedHealthWindow = TimeSpan.FromDays(7);
 
         private readonly CopilotAuditBackfillStateStore _state;
+        private readonly JobProgress _progress;
         private readonly ICopilotAuditSearchSource _source;
         private readonly IActivityReportPersistenceManager _persistence;
         private readonly ICopilotAuditBackfillExistingEventFilter _existingEvents;
@@ -246,6 +255,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _logger = logger;
             _utcNow = utcNow ?? (() => DateTime.UtcNow);
+            _progress = new JobProgress(_state, logger, _utcNow);
             _delay = delay ?? (d => Task.Delay(d));
             _existingEvents = existingEvents ?? new SqlCopilotAuditBackfillExistingEventFilter();
             _elapsedOverride = elapsedOverride;
@@ -256,43 +266,44 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             var job = await _state.GetLatestAsync().ConfigureAwait(false);
             if (job == null || !job.IsActive)
             {
-                if (job != null) TrackHealth(job);
+                if (job != null) _progress.TrackHealth(job);
                 return job;
             }
-
             return await AdvanceAsync(job).ConfigureAwait(false);
+        }
+
+        /// <summary>Only the importer may acknowledge cancellation or close a published job. Neither needs a live audit feed.</summary>
+        public static async Task FinishLatestWhenDisabledAsync(CopilotAuditBackfillStateStore state, ILogger logger, CancellationToken shutdownToken)
+        {
+            var job = await state.GetLatestAsync(shutdownToken).ConfigureAwait(false);
+            shutdownToken.ThrowIfCancellationRequested();
+            if (job?.IsActive == true)
+            {
+                await new JobProgress(state, logger, () => DateTime.UtcNow)
+                    .FinishIfCancelledOrDisabledAsync(job, copilotEnabled: false, cancellationToken: shutdownToken).ConfigureAwait(false);
+            }
         }
 
         internal async Task<CopilotAuditBackfillJob> AdvanceAsync(CopilotAuditBackfillJob job)
         {
             var sw = _elapsedOverride == null ? Stopwatch.StartNew() : null;
             Func<TimeSpan> elapsed = () => _elapsedOverride != null ? _elapsedOverride() : sw.Elapsed;
-            job.CopilotImportEnabled = _settings.ImportJobSettings.Copilot;
             NormaliseJob(job);
-
-            if (job.CancelRequested || await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false))
-            {
-                return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
-            }
-
-            if (!job.CopilotImportEnabled)
-            {
-                return await FinishAsync(job, CopilotAuditBackfillStates.Failed, CopilotAuditBackfillErrorCodes.CopilotImportOff,
-                    "The Copilot audit import toggle is off.").ConfigureAwait(false);
-            }
+            await _progress.FinishIfCancelledOrDisabledAsync(job, _settings.ImportJobSettings.Copilot).ConfigureAwait(false);
+            if (!job.IsActive) return job;
 
             var access = await _source.GetPermissionAccessAsync().ConfigureAwait(false);
             job.PermissionStatus = ToPermissionStatus(access);
             // The portal can acknowledge cancellation while the permission check is in flight.
             if (job.CancelRequested || await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false))
             {
-                return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
+                return await _progress.FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
             }
 
             if (access == AppTokenPermissionAccess.NotGranted || access == AppTokenPermissionAccess.NoIdentityToInspect)
             {
                 _logger?.LogWarning("Skipping Copilot audit backfill: the runtime identity does not hold AuditLogsQuery.Read.All. This permission is opt-in and is not granted by the installer.");
-                return await FinishAsync(job, CopilotAuditBackfillStates.Failed, CopilotAuditBackfillErrorCodes.MissingPermission,
+                return await _progress.FinishAsync(job, CopilotAuditBackfillStates.Failed, CopilotAuditBackfillErrorCodes.MissingPermission,
                     "AuditLogsQuery.Read.All is missing from the runtime app token.").ConfigureAwait(false);
             }
 
@@ -300,8 +311,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             {
                 job.State = CopilotAuditBackfillStates.Running;
                 job.StartedUtc = _utcNow();
-                Track(job, "started");
-                TrackHealth(job);
+                _progress.Track(job, "started");
+                _progress.TrackHealth(job);
             }
 
             try
@@ -310,41 +321,41 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 {
                     if (job.CancelRequested || await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false))
                     {
-                        return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
+                        return await _progress.FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
                     }
 
                     await TopUpQueriesAsync(job, () => elapsed() >= MaxCycleBudget).ConfigureAwait(false);
                     if (job.CancelRequested || await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false))
                     {
-                        return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
+                        return await _progress.FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
                     }
                     if (job.InFlightSlices.Count == 0)
                     {
                         if (job.PendingSlices.Count > 0)
                         {
                             await _state.SaveAsync(job).ConfigureAwait(false);
-                            TrackHealth(job);
+                            _progress.TrackHealth(job);
                             return job;
                         }
 
                         var final = job.Gaps.Count > 0 ? CopilotAuditBackfillStates.CompletedWithGaps : CopilotAuditBackfillStates.Completed;
-                        return await FinishAsync(job, final, null, null).ConfigureAwait(false);
+                        return await _progress.FinishAsync(job, final, null, null).ConfigureAwait(false);
                     }
 
                     var progressed = await PollInFlightAsync(job, () => elapsed() >= MaxCycleBudget).ConfigureAwait(false);
                     if (job.CancelRequested)
                     {
-                        return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
+                        return await _progress.FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
                     }
                     if (job.InFlightSlices.Count == 0 && job.PendingSlices.Count > 0)
                     {
                         await _state.SaveAsync(job).ConfigureAwait(false);
-                        TrackHealth(job);
+                        _progress.TrackHealth(job);
                         return job;
                     }
 
                     await _state.SaveAsync(job).ConfigureAwait(false);
-                    TrackHealth(job);
+                    _progress.TrackHealth(job);
 
                     if (elapsed() >= MaxCycleBudget)
                     {
@@ -362,11 +373,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             }
             catch (CopilotAuditBackfillFatalException ex)
             {
-                return await FinishAsync(job, CopilotAuditBackfillStates.Failed, ex.Code, ex.Message).ConfigureAwait(false);
+                return await _progress.FinishAsync(job, CopilotAuditBackfillStates.Failed, ex.Code, ex.Message).ConfigureAwait(false);
             }
             catch (GraphHttpException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized || ex.StatusCode == HttpStatusCode.Forbidden)
             {
-                return await FinishAsync(job, CopilotAuditBackfillStates.Failed, CopilotAuditBackfillErrorCodes.GraphAccessDenied, ex.GraphErrorCode ?? ex.StatusCode.ToString()).ConfigureAwait(false);
+                return await _progress.FinishAsync(job, CopilotAuditBackfillStates.Failed, CopilotAuditBackfillErrorCodes.GraphAccessDenied, ex.GraphErrorCode ?? ex.StatusCode.ToString()).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -374,8 +385,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 job.LastErrorCode = CopilotAuditBackfillErrorCodes.Unexpected;
                 job.LastErrorDetail = Truncate(ex.Message);
                 await _state.SaveAsync(job).ConfigureAwait(false);
-                Track(job, "cycleError");
-                TrackHealth(job);
+                _progress.Track(job, "cycleError");
+                _progress.TrackHealth(job);
                 return job;
             }
         }
@@ -424,7 +435,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 {
                     job.SubmissionsPausedUntilUtc = job.SubmissionTimestampsUtc.Min().Add(SubmissionBudgetWindow);
                     await SaveLedgerAsync(job).ConfigureAwait(false);
-                    Track(job, "submissionBudgetPaused");
+                    _progress.Track(job, "submissionBudgetPaused");
                     return;
                 }
 
@@ -444,7 +455,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                     job.LastErrorCode = CopilotAuditBackfillErrorCodes.QueryThrottled;
                     job.LastErrorDetail = "Microsoft Graph throttled Audit Search query submissions.";
                     await SaveLedgerAsync(job).ConfigureAwait(false);
-                    Track(job, "throttled");
+                    _progress.Track(job, "throttled");
                     return;
                 }
                 catch (GraphHttpException ex) when (ex.StatusCode == HttpStatusCode.BadRequest)
@@ -571,7 +582,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                                 job.PendingSlices.InsertRange(0, split);
                                 job.SlicesSplit++;
                                 _logger?.LogWarning($"Copilot audit backfill {job.Id}: Audit Search query was truncated; split its slice into {split.Count} smaller slice(s).");
-                                Track(job, "truncated");
+                                _progress.Track(job, "truncated");
                                 continue;
                             }
 
@@ -684,7 +695,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             job.LastErrorCode = errorCode;
             job.LastErrorDetail = gap.Detail;
             _logger?.LogWarning($"Copilot audit backfill {job.Id}: recorded {(incomplete ? "incomplete" : "failed")} slice {slice.StartUtc:o}-{slice.EndUtc:o} after {slice.AttemptCount} attempt(s).");
-            Track(job, incomplete ? "sliceIncomplete" : "sliceFailed");
+            _progress.Track(job, incomplete ? "sliceIncomplete" : "sliceFailed");
         }
 
         private async Task<ImportOutcome> ImportRecordsAsync(CopilotAuditBackfillJob job, CopilotAuditBackfillSlice slice, Func<bool> budgetExpired)
@@ -786,31 +797,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             return new CommitOutcome { Imported = stats.Imported, AlreadyPresent = mapped.Count - toCommit.Count };
         }
 
-        private Task<CopilotAuditBackfillJob> FinishAsync(CopilotAuditBackfillJob job, string state, string errorCode, string detail)
-        {
-            if (state == CopilotAuditBackfillStates.CompletedWithGaps && errorCode == null && job.Gaps.Count > 0)
-            {
-                var gap = job.Gaps[job.Gaps.Count - 1];
-                errorCode = gap.ErrorCode;
-                detail = gap.Detail;
-            }
-            job.State = state;
-            if (state == CopilotAuditBackfillStates.Cancelled) job.CancelRequested = true;
-            job.CompletedDays = job.GetCompletedDays().ToList();
-            job.CompletedUtc = _utcNow();
-            job.LastErrorCode = errorCode;
-            job.LastErrorDetail = Truncate(detail);
-            Track(job, state);
-            TrackHealth(job);
-            return SaveAndReturnAsync(job);
-        }
-
-        private async Task<CopilotAuditBackfillJob> SaveAndReturnAsync(CopilotAuditBackfillJob job)
-        {
-            await _state.SaveAsync(job).ConfigureAwait(false);
-            return job;
-        }
-
         private static string ToPermissionStatus(AppTokenPermissionAccess access)
         {
             switch (access)
@@ -861,48 +847,95 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             public string Code { get; }
         }
 
-        private void Track(CopilotAuditBackfillJob job, string outcome)
+        private sealed class JobProgress
         {
-            var analytics = _logger as AnalyticsLogger;
-            if (analytics == null || job == null) return;
+            private readonly CopilotAuditBackfillStateStore _state;
+            private readonly AnalyticsLogger _analytics;
+            private readonly Func<DateTime> _utcNow;
 
-            var metrics = new Dictionary<string, double>
+            public JobProgress(CopilotAuditBackfillStateStore state, ILogger logger, Func<DateTime> utcNow)
             {
-                { "PendingSlices", job.PendingSlices?.Count ?? 0 },
-                { "InFlightSlices", job.InFlightSlices?.Count ?? 0 },
-                { "SlicesCompleted", job.SlicesCompleted },
-                { "Gaps", job.Gaps?.Count ?? 0 },
-                { "RecordsSeen", job.RecordsSeen },
-                { "RecordsImported", job.RecordsImported },
-                { "RecordsAlreadyPresent", job.RecordsAlreadyPresent },
-            };
-            if (job.MappingFailureCounts != null)
+                _state = state;
+                _analytics = logger as AnalyticsLogger;
+                _utcNow = utcNow;
+            }
+
+            public async Task FinishIfCancelledOrDisabledAsync(CopilotAuditBackfillJob job, bool copilotEnabled,
+                CancellationToken cancellationToken = default)
             {
-                foreach (var failure in job.MappingFailureCounts)
+                job.CopilotImportEnabled = copilotEnabled;
+                if (job.CancelRequested || await _state.IsCancelRequestedAsync(job.Id, cancellationToken).ConfigureAwait(false))
                 {
-                    metrics["MappingFailure_" + failure.Key] = failure.Value;
+                    await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null, cancellationToken).ConfigureAwait(false);
+                }
+                else if (!copilotEnabled)
+                {
+                    await FinishAsync(job, CopilotAuditBackfillStates.Failed, CopilotAuditBackfillErrorCodes.CopilotImportOff,
+                        "The Copilot audit import toggle is off.", cancellationToken).ConfigureAwait(false);
                 }
             }
 
-            analytics.TrackEvent(
-                AnalyticsLogger.AnalyticsEvent.CopilotAuditBackfill,
-                new Dictionary<string, string>
+            public async Task<CopilotAuditBackfillJob> FinishAsync(CopilotAuditBackfillJob job, string state, string errorCode, string detail,
+                CancellationToken cancellationToken = default)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (state == CopilotAuditBackfillStates.CompletedWithGaps && errorCode == null && job.Gaps.Count > 0)
                 {
-                    { "Outcome", outcome ?? string.Empty },
-                    { "State", job.State ?? string.Empty },
-                    { "ErrorCode", job.LastErrorCode ?? string.Empty },
-                    { "PermissionStatus", job.PermissionStatus ?? string.Empty },
-                },
-                metrics);
-        }
+                    var gap = job.Gaps[job.Gaps.Count - 1];
+                    errorCode = gap.ErrorCode;
+                    detail = gap.Detail;
+                }
+                job.State = state;
+                if (state == CopilotAuditBackfillStates.Cancelled) job.CancelRequested = true;
+                job.CompletedDays = job.GetCompletedDays().ToList();
+                job.CompletedUtc = _utcNow();
+                job.LastErrorCode = errorCode;
+                job.LastErrorDetail = Truncate(detail);
+                await _state.SaveAsync(job, cancellationToken).ConfigureAwait(false);
+                Track(job, state);
+                TrackHealth(job);
+                return job;
+            }
 
-        private void TrackHealth(CopilotAuditBackfillJob job)
-        {
-            var analytics = _logger as AnalyticsLogger;
-            if (analytics == null || job == null) return;
+            public void Track(CopilotAuditBackfillJob job, string outcome)
+            {
+                if (_analytics == null) return;
+                var metrics = new Dictionary<string, double>
+                {
+                    { "PendingSlices", job.PendingSlices?.Count ?? 0 },
+                    { "InFlightSlices", job.InFlightSlices?.Count ?? 0 },
+                    { "SlicesCompleted", job.SlicesCompleted },
+                    { "Gaps", job.Gaps?.Count ?? 0 },
+                    { "RecordsSeen", job.RecordsSeen },
+                    { "RecordsImported", job.RecordsImported },
+                    { "RecordsAlreadyPresent", job.RecordsAlreadyPresent },
+                };
+                if (job.MappingFailureCounts != null)
+                {
+                    foreach (var failure in job.MappingFailureCounts)
+                    {
+                        metrics["MappingFailure_" + failure.Key] = failure.Value;
+                    }
+                }
 
-            var health = ResolveHealth(job, _utcNow());
-            analytics.TrackHealthCheck(HealthComponent.CopilotAuditBackfill, health.Status, health.Detail, reasonKey: health.ReasonKey);
+                _analytics.TrackEvent(
+                    AnalyticsLogger.AnalyticsEvent.CopilotAuditBackfill,
+                    new Dictionary<string, string>
+                    {
+                        { "Outcome", outcome ?? string.Empty },
+                        { "State", job.State ?? string.Empty },
+                        { "ErrorCode", job.LastErrorCode ?? string.Empty },
+                        { "PermissionStatus", job.PermissionStatus ?? string.Empty },
+                    },
+                    metrics);
+            }
+
+            public void TrackHealth(CopilotAuditBackfillJob job)
+            {
+                if (_analytics == null) return;
+                var health = ResolveHealth(job, _utcNow());
+                _analytics.TrackHealthCheck(HealthComponent.CopilotAuditBackfill, health.Status, health.Detail, reasonKey: health.ReasonKey);
+            }
         }
 
         internal static CopilotAuditBackfillHealth ResolveHealth(CopilotAuditBackfillJob job, DateTime? nowUtc = null)

@@ -2,6 +2,7 @@ using Common.Entities.State;
 using Newtonsoft.Json;
 using System;
 using System.Globalization;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities.CopilotAuditBackfill
@@ -176,9 +177,11 @@ namespace Common.Entities.CopilotAuditBackfill
             return job;
         }
 
-        public async Task<CopilotAuditBackfillJob> GetAsync(int id)
+        public Task<CopilotAuditBackfillJob> GetAsync(int id) => GetAsync(id, CancellationToken.None);
+
+        private async Task<CopilotAuditBackfillJob> GetAsync(int id, CancellationToken cancellationToken)
         {
-            var json = await ReadAsync(JobKey(id)).ConfigureAwait(false);
+            var json = await ReadAsync(JobKey(id), cancellationToken).ConfigureAwait(false);
             if (json == null) return null;
             var job = JsonConvert.DeserializeObject<CopilotAuditBackfillJob>(json);
             if (job == null) return null;
@@ -194,21 +197,25 @@ namespace Common.Entities.CopilotAuditBackfill
             job.SubmissionTimestampsUtc = job.SubmissionTimestampsUtc ?? new System.Collections.Generic.List<DateTime>();
             job.MappingFailureCounts = job.MappingFailureCounts ?? new System.Collections.Generic.Dictionary<string, long>(StringComparer.Ordinal);
             job.CancelRequested = job.CancelRequested || job.State == CopilotAuditBackfillStates.Cancelled
-                || await IsCancelRequestedAsync(id).ConfigureAwait(false);
+                || await IsCancelRequestedAsync(id, cancellationToken).ConfigureAwait(false);
             return job;
         }
 
-        public async Task<CopilotAuditBackfillJob> GetLatestAsync()
+        public Task<CopilotAuditBackfillJob> GetLatestAsync() => GetLatestAsync(CancellationToken.None);
+
+        public async Task<CopilotAuditBackfillJob> GetLatestAsync(CancellationToken cancellationToken)
         {
-            var id = await GetLatestIdAsync().ConfigureAwait(false);
-            return id > 0 ? await GetAsync(id).ConfigureAwait(false) : null;
+            var id = await GetLatestIdAsync(cancellationToken).ConfigureAwait(false);
+            return id > 0 ? await GetAsync(id, cancellationToken).ConfigureAwait(false) : null;
         }
 
-        public Task SaveAsync(CopilotAuditBackfillJob job)
+        public Task SaveAsync(CopilotAuditBackfillJob job) => SaveAsync(job, CancellationToken.None);
+
+        public Task SaveAsync(CopilotAuditBackfillJob job, CancellationToken cancellationToken)
         {
             if (job == null) throw new ArgumentNullException(nameof(job));
             job.UpdatedUtc = _utcNow();
-            return WriteAsync(JobKey(job.Id), JsonConvert.SerializeObject(job), JobRetention);
+            return WriteAsync(JobKey(job.Id), JsonConvert.SerializeObject(job), JobRetention, cancellationToken);
         }
 
         public async Task<bool> RequestCancelAsync(int id)
@@ -244,7 +251,10 @@ namespace Common.Entities.CopilotAuditBackfill
             }
         }
 
-        public async Task<bool> IsCancelRequestedAsync(int id) => await ReadAsync(CancelKey(id)).ConfigureAwait(false) != null;
+        public Task<bool> IsCancelRequestedAsync(int id) => IsCancelRequestedAsync(id, CancellationToken.None);
+
+        public async Task<bool> IsCancelRequestedAsync(int id, CancellationToken cancellationToken)
+            => await ReadAsync(CancelKey(id), cancellationToken).ConfigureAwait(false) != null;
 
         public async Task<CopilotAuditBackfillSubmissionLedger> GetSubmissionLedgerAsync()
         {
@@ -263,7 +273,8 @@ namespace Common.Entities.CopilotAuditBackfill
             return WriteAsync(SubmissionLedgerKey, JsonConvert.SerializeObject(ledger), TimeSpan.FromDays(2));
         }
 
-        private async Task<int> GetLatestIdAsync() => ParseId(await ReadAsync(LatestKey).ConfigureAwait(false));
+        private async Task<int> GetLatestIdAsync(CancellationToken cancellationToken = default)
+            => ParseId(await ReadAsync(LatestKey, cancellationToken).ConfigureAwait(false));
 
         private static int ParseId(string value)
             => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0;
@@ -271,15 +282,15 @@ namespace Common.Entities.CopilotAuditBackfill
         private static string JobKey(int id) => "Job:" + id.ToString(CultureInfo.InvariantCulture);
         private static string CancelKey(int id) => JobKey(id) + ":Cancel";
 
-        private async Task<string> ReadAsync(string key)
+        private async Task<string> ReadAsync(string key, CancellationToken cancellationToken = default)
         {
-            try { return await _values.GetStringAsync(key).ConfigureAwait(false); }
+            try { return await _values.GetStringAsync(key, cancellationToken).ConfigureAwait(false); }
             catch (Exception ex) when (!(ex is OperationCanceledException)) { throw new CopilotAuditBackfillStateUnavailableException($"Couldn't read '{key}' from {_values.Description}: {ex.Message}", ex); }
         }
 
-        private async Task WriteAsync(string key, string value, TimeSpan? ttl)
+        private async Task WriteAsync(string key, string value, TimeSpan? ttl, CancellationToken cancellationToken = default)
         {
-            try { await _values.SetStringAsync(key, value, ttl).ConfigureAwait(false); }
+            try { await _values.SetStringAsync(key, value, ttl, cancellationToken).ConfigureAwait(false); }
             catch (Exception ex) when (!(ex is OperationCanceledException)) { throw new CopilotAuditBackfillStateUnavailableException($"Couldn't save '{key}' to {_values.Description}: {ex.Message}", ex); }
         }
 

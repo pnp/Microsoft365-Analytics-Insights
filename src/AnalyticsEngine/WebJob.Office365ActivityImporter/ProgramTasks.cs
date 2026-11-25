@@ -46,7 +46,6 @@ namespace WebJob.Office365ActivityImporter
         private readonly IReportCompletionStore _reportCompletionStore;
         private readonly IImportLastRunStore _graphLastRunStore;
         private readonly ISentEmailMailboxSkipList _sentEmailMailboxSkipList;
-        private static readonly InMemoryKeyValueStore InMemoryCopilotAuditBackfillStore = new InMemoryKeyValueStore();
 
         // Process-lifetime agent-cost state. ProgramTasks is rebuilt every cycle, so these must be static to outlive
         // it: the per-agent read's resume checkpoint where no Storage account is configured, and the Entra object ids
@@ -371,7 +370,7 @@ namespace WebJob.Office365ActivityImporter
         /// <summary>
         /// Activity API
         /// </summary>
-        internal async Task DownloadActivityData()
+        internal async Task DownloadActivityData(CopilotAuditBackfillStateStore backfillState)
         {
             await InitAuth();
             await AdvanceCopilotEnrichmentSafely();
@@ -447,18 +446,14 @@ namespace WebJob.Office365ActivityImporter
                     _logger.LogError($"Got unexpected exception importing activity: {CommonExceptionHandler.GetErrorText(ex)}", ex);
                 }
 
-                await AdvanceCopilotAuditBackfillSafely(sqlAdaptor);
+                await AdvanceCopilotAuditBackfillSafely(backfillState, sqlAdaptor);
             }
         }
 
-        internal async Task AdvanceCopilotAuditBackfillSafely(IActivityReportPersistenceManager sqlAdaptor)
+        private async Task AdvanceCopilotAuditBackfillSafely(CopilotAuditBackfillStateStore backfillState, IActivityReportPersistenceManager sqlAdaptor)
         {
             await CopilotAuditBackfillSafeRunner.AdvanceSafely(async () =>
             {
-                var durableBackfillStore = StateStore.TryOpen(_settings, StatePartitions.CopilotAuditBackfill, _logger);
-                var backfillState = new CopilotAuditBackfillStateStore(
-                    durableBackfillStore ?? InMemoryCopilotAuditBackfillStore,
-                    isDurable: durableBackfillStore != null);
                 var backfill = new CopilotAuditBackfillImporter(
                     backfillState,
                     new GraphCopilotAuditSearchSource(_manualGraphCallClient, _graphAppIndentityOAuthContext, _logger),

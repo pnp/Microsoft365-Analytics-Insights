@@ -7,6 +7,7 @@
 #region Usings
 using Common.Entities;
 using Common.Entities.Config;
+using Common.Entities.CopilotAuditBackfill;
 using Common.Entities.Installer;
 using Common.Entities.State;
 using Common.Entities.UserScope;
@@ -19,11 +20,13 @@ using System;
 using System.Configuration;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine;
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI; // for AuditTraceConfig
 using WebJob.Office365ActivityImporter.Engine.ActivityAPI.Dlp;
 using WebJob.Office365ActivityImporter.Engine.Graph.Calls;
+using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill;
 using WebJob.Office365ActivityImporter.Engine.Graph.Email;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Maintenance;
 using WebJob.Office365ActivityImporter.Engine.MessageTracing;
@@ -294,6 +297,10 @@ namespace WebJob.Office365ActivityImporter
             // its full window every time.
             IReportCompletionStore reportCompletionStore = ReportCompletionStoreFactory.Create(configuredSettings, logger);
 
+            var durableBackfillStore = StateStore.TryOpen(configuredSettings, StatePartitions.CopilotAuditBackfill, logger);
+            var backfillState = new CopilotAuditBackfillStateStore(durableBackfillStore ?? new InMemoryKeyValueStore(),
+                isDurable: durableBackfillStore != null);
+
             // Cadence-gate store for the non-fresh Graph imports (user metadata, user apps, Teams).
             // Created ONCE here, outside the cycle loop, so the in-memory fallback retains its "last run"
             // timestamps across cycles (mirrors statsDatesLoader above). The state table when Storage is
@@ -447,30 +454,10 @@ namespace WebJob.Office365ActivityImporter
                 HostRuntime.ThrowIfShutdownRequested();
                 if (userRefreshWorker != null) await userRefreshWorker.DrainAsync();
 
-                // Activity import (Office 365 Management Activity API). Runs when any workload needs
-                // Audit.SharePoint or Audit.General (SharePoint audit, Copilot, or Power Platform).
+                // The live import needs an enabled Activity API workload; closing an existing backfill does not.
                 HostRuntime.ThrowIfShutdownRequested();
-                if (configuredSettings.ImportJobSettings.UsesActivityApi)
-                {
-#if !DEBUG
-                    try
-                    {
-#endif
-                        await stages.RunAsync(logger, "ActivityImport", () => tasks.DownloadActivityData());
-#if !DEBUG
-                    }
-                    catch (Exception ex)
-                    {
-                        // A save/merge failure that escapes here means the whole cycle was aborted. Batch-level failures
-                        // are now isolated in LoadReportsAndSave, so reaching here indicates a non-batch failure.
-                        logger.LogError($"Audit import cycle ABORTED by an unhandled exception in {nameof(ProgramTasks.DownloadActivityData)}: {CommonExceptionHandler.GetErrorText(ex)}. The cycle will restart on the next timer interval.", ex);
-                    }
-#endif
-                }
-                else
-                {
-                    logger.LogInformation("Skipping Activity API import.");
-                }
+                await RunActivityPhaseAsync(configuredSettings.ImportJobSettings, backfillState, tasks.DownloadActivityData,
+                    logger, HostRuntime.ShutdownToken);
 
                 // Repair any Copilot interactions left without their denormalised user_id / time_stamp
                 // (migration DenormaliseCopilotChatUserAndTime). Such rows are INVISIBLE to every Copilot
@@ -608,6 +595,39 @@ namespace WebJob.Office365ActivityImporter
             }
             await ShutdownMessageTracingAsync(messageTraceUploader);
             ConsoleApp.BombOut(false);
+        }
+
+        internal static async Task RunActivityPhaseAsync(ImportTaskSettings workloads, CopilotAuditBackfillStateStore backfillState,
+            Func<CopilotAuditBackfillStateStore, Task> downloadActivityData, AnalyticsLogger logger, CancellationToken shutdownToken)
+        {
+            if (shutdownToken.IsCancellationRequested) throw new ShutdownRequestedException();
+            if (!workloads.UsesActivityApi)
+            {
+                logger.LogInformation("Skipping Activity API import.");
+                // A job published before the last workload was switched off still needs its terminal checkpoint.
+                // Without shared Storage the portal cannot publish a job.
+                if (backfillState.IsDurable)
+                {
+                    await CopilotAuditBackfillSafeRunner.AdvanceSafely(
+                        () => CopilotAuditBackfillImporter.FinishLatestWhenDisabledAsync(backfillState, logger, shutdownToken),
+                        logger, shutdownToken);
+                }
+                return;
+            }
+
+#if !DEBUG
+            try
+            {
+#endif
+                await StageTracker.Process.RunAsync(logger, "ActivityImport", () => downloadActivityData(backfillState));
+#if !DEBUG
+            }
+            catch (Exception ex) when (!(ex is ShutdownRequestedException))
+            {
+                // Batch-level failures are isolated in LoadReportsAndSave. A failure here aborted the live import.
+                logger.LogError($"Audit import cycle ABORTED by an unhandled exception in {nameof(ProgramTasks.DownloadActivityData)}: {CommonExceptionHandler.GetErrorText(ex)}. The cycle will restart on the next timer interval.", ex);
+            }
+#endif
         }
 
         private static async Task ShutdownMessageTracingAsync(MessageTraceBlobUploader messageTraceUploader)
