@@ -51,6 +51,13 @@ describe('TimeSeriesChart many series', () => {
 });
 
 describe('TimeSeriesChart gaps', () => {
+  it('keeps the unit column on an ordinary single-series lower-bound chart', () => {
+    const { getByRole, getByText } = renderWithProvider(<TimeSeriesChart valueLabel="People"
+      series={[{ name: 'Contoso', points: [{ weekStart: '2026-03-02', value: 5, incomplete: true }] }]} />);
+    fireEvent.click(getByText('Weekly values'));
+    expect(within(getByRole('table')).getByRole('columnheader', { name: 'People' })).toBeVisible();
+  });
+
   it.each([
     { language: 'en' as const, first: 'at least 12,345.25', second: 'at least 0', negative: '-2.5', missing: 'No data', values: 'Weekly values' },
     { language: 'es' as const, first: 'al menos 12.345,25', second: 'al menos 0', negative: '-2,5', missing: 'Sin datos', values: 'Valores semanales' },

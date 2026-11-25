@@ -117,7 +117,7 @@ type TimeSeriesChartProps = {
   height?: number;
   /** Optional legend caveat shown when null points should be explained in-place. */
   gapNote?: string;
-  /** Offer the weekly values table even when no numeric point is a lower bound. */
+  /** Always offer the weekly workload table and identify each workload, even if just one survived. */
   showWeeklyValues?: boolean;
   /** Labels are tenant-authored or already localised, not server placeholder wording. */
   literalLabels?: boolean;
@@ -404,7 +404,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
             <table className={styles.table} aria-label={t('charts.timeSeries.ariaLabel', { valueLabel })}>
               <thead><tr>
                 <th scope="col">{t('charts.timeSeries.week')}</th>
-                {series.map(s => <th key={s.name} scope="col">{series.length > 1 ? seriesLabel(s) : valueLabel}</th>)}
+                {series.map(s => <th key={s.name} scope="col">{showWeeklyValues || series.length > 1 ? seriesLabel(s) : valueLabel}</th>)}
               </tr></thead>
               <tbody>
                 {weeks.map((wk, i) => <tr key={wk}>

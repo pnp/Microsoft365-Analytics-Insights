@@ -409,16 +409,16 @@ describe('ReportsPage', () => {
   });
 
   it.each([
-    { language: 'en' as const, label: 'Weekly values', table: 'Active users per week', missing: 'No data', week: 'Week' },
-    { language: 'es' as const, label: 'Valores semanales', table: 'Usuarios activos por semana', missing: 'Sin datos', week: 'Semana' },
-  ])('offers the exact and missing weekly usage values without a mouse in $language', async ({ language, label, table, missing, week }) => {
+    { language: 'en' as const, label: 'Weekly values', table: 'Active users per week', missing: 'No data', week: 'Week', workload: 'Teams' },
+    { language: 'es' as const, label: 'Valores semanales', table: 'Usuarios activos por semana', missing: 'Sin datos', week: 'Semana', workload: 'OneDrive' },
+  ])('offers the exact and missing weekly usage values without a mouse in $language', async ({ language, label, table, missing, week, workload }) => {
     await loadCatalog(language);
     const user = userEvent.setup();
     mockAreas.mockResolvedValue({ ...NO_AREAS, usage: true });
     mockArea.mockResolvedValue({
       ...areaData, area: 'usage', charts: [baseChart({
         key: 'usage-active-users', type: 'timeseries',
-        series: [{ name: 'Teams', points: [
+        series: [{ name: workload, points: [
           { weekStart: '2026-03-02', value: 0 },
           { weekStart: '2026-03-09', value: null },
           { weekStart: '2026-03-16', value: 5 },
@@ -436,6 +436,7 @@ describe('ReportsPage', () => {
     const readout = screen.getByRole('table', { name: table });
     expect(readout).toBeVisible();
     expect(within(readout).getByRole('columnheader', { name: week })).toBeVisible();
+    expect(within(readout).getByRole('columnheader', { name: workload })).toBeVisible();
     expect(within(readout).getAllByRole('cell').map(cell => cell.textContent)).toEqual(['0', missing, '5']);
     expect(within(readout).getAllByRole('rowheader')).toHaveLength(3);
     expect(screen.getByRole('img', { name: table }).querySelector('rect[transform]')).toBeNull();
