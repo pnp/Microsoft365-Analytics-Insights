@@ -6,8 +6,7 @@ import { ClickData, ClickEventProps, PageViewDataProperties, SearchEventProperti
 import { AI_TRACKER_VER, EVENT_CLICK, EVENT_METADATA_UPDATE, EVENT_PAGE_EXIT } from "./AiTrackerConstants";
 import { isSamePage, uuidv4 } from "./DataFunctions";
 
-// Clicks made before the page's first page view is tracked are held for it, up to this many
-const MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW = 20;
+const MAX_PENDING_CLICKS = 20;
 
 export class AppInsightsWrapper {
 
@@ -15,7 +14,7 @@ export class AppInsightsWrapper {
     _sessionId: string;
     _pageRequestId: string | null = null;               // Page request GUID to join before & after AI events together on import
     _lastTrackedUrl: string | null = null;
-    _clicksBeforeFirstPageView: { data: ClickData, timeStamp: string, pageUrl: string }[] = [];
+    private pendingClicks: { pageUrl: string, clicks: { data: ClickData, timeStamp: string }[] } | null = null;
 
     constructor(instance: TrackerTelemetry, sessionId: string) {
         this._ai = instance;
@@ -25,12 +24,16 @@ export class AppInsightsWrapper {
     // Page views. Returns false if the URL was the page already tracked
     trackCurrentPageView(pageLoadDuration: number | undefined, spRequestDuration: number | null, webUrl: string, siteUrl: string, webTitle: string): boolean {
 
-        if (this._lastTrackedUrl === document.URL) {
+        const pageUrl = document.URL;
+        this.discardPendingClicksUnlessOn(pageUrl);
+        if (this._lastTrackedUrl === pageUrl) {
             debug("Ignoring duplicate pageview with request Id: " + this._pageRequestId);
             return false;
         }
 
-        this._lastTrackedUrl = document.URL;
+        const pending = this.pendingClicks;
+        this.pendingClicks = null;
+        this._lastTrackedUrl = pageUrl;
 
         // New page req
         this._pageRequestId = uuidv4();
@@ -55,7 +58,7 @@ export class AppInsightsWrapper {
 
         const pv: IPageViewTelemetry =
         {
-            uri: document.URL,
+            uri: pageUrl,
             name: document.title,
             properties: appInsightsPageViewData
         };
@@ -99,17 +102,7 @@ export class AppInsightsWrapper {
             debugObj('Page view telemetry:', pv);
         }
 
-        // Clicks made before this page view was tracked belong to this page - if they were made on it. SharePoint can navigate to
-        // another page before the first has loaded, and so before it was tracked: those clicks have no page view to belong to,
-        // and counting them against this page would put them on the wrong page in the reports.
-        this._clicksBeforeFirstPageView.splice(0).forEach(c => {
-            if (isSamePage(c.pageUrl, document.URL)) {
-                this.sendClick(c.data, this._pageRequestId!, c.timeStamp);
-            }
-            else {
-                debug(`Not sending ${EVENT_CLICK} on "${c.data.linkText}": it was made on ${c.pageUrl}, which was left before it was tracked`);
-            }
-        });
+        pending?.clicks.forEach(c => this.sendClick(c.data, appInsightsPageViewData.pageRequestId, c.timeStamp));
 
         return true;
     }
@@ -171,20 +164,33 @@ export class AppInsightsWrapper {
         }
     }
 
-    // Click event receiver
+    // An unreported visit ends if the browser leaves its page or its site is no longer registered.
+    // A later visit to the same URL must not inherit those clicks.
+    discardPendingClicksUnlessOn(pageUrl: string | null): void {
+        if (this.pendingClicks && (!pageUrl || !isSamePage(this.pendingClicks.pageUrl, pageUrl))) {
+            this.pendingClicks = null;
+        }
+    }
+
     trackClick(d: ClickData) {
 
+        const pageUrl = document.URL;
         const timeStamp = new Date().toISOString();
-        if (this._pageRequestId) {
+        this.discardPendingClicksUnlessOn(pageUrl);
+        if (this._pageRequestId && this._lastTrackedUrl && isSamePage(this._lastTrackedUrl, pageUrl)) {
             this.sendClick(d, this._pageRequestId, timeStamp);
+            return;
         }
-        else if (this._clicksBeforeFirstPageView.length < MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW) {
-            // The page view is tracked once the page has loaded. Hold the click for it rather than drop it
+
+        // The first view can still be loading, or the modern router can already be displaying
+        // the next page while SPFx is waiting to report it. Neither click has an accepted ID yet.
+        const pending = this.pendingClicks ??= { pageUrl, clicks: [] };
+        if (pending.clicks.length < MAX_PENDING_CLICKS) {
             debug(`Holding ${EVENT_CLICK} on "${d.linkText}" until this page's page view is tracked`);
-            this._clicksBeforeFirstPageView.push({ data: d, timeStamp: timeStamp, pageUrl: document.URL });
+            pending.clicks.push({ data: d, timeStamp });
         }
         else {
-            warn(`Can't track ${EVENT_CLICK}: no page request ID yet, and ${MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW} clicks are already waiting for one`);
+            warn(`Can't track ${EVENT_CLICK}: ${MAX_PENDING_CLICKS} clicks are already waiting for this page's request ID`);
         }
     }
 

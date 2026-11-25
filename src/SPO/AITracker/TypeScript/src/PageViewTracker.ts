@@ -1,6 +1,6 @@
 import { AppInsightsWrapper } from "./AppInsightsWrapper";
 import { ClearLastPageStatsVal, GetLastPageStatsVal, SetLastPageStatsVal } from "./Cookies";
-import { getSPRequestDurationFromScripts } from "./DataFunctions";
+import { getSPRequestDurationFromScripts, isSamePage } from "./DataFunctions";
 import { debug, error, log, warn } from "./Logger";
 import TimeMe from 'timeme.js'
 import { PagePropertyManager } from "./PageProps/PagePropertyManager";
@@ -175,9 +175,10 @@ export class PageViewTracker {
                 return;
             }
 
-            // The page the time was spent on. Away from the tracked sites that's the page tracked last, not the one the browser is on,
-            // which isn't tracked
-            const url = this._leftTrackedSitesAt !== null && this._ai._lastTrackedUrl ? this._ai._lastTrackedUrl : document.URL;
+            // SPFx may not have reported the destination before unload. Save the address and ID
+            // of the same accepted page, just as when the browser has left the tracked sites.
+            const lastUrl = this._ai._lastTrackedUrl;
+            const url = lastUrl && (this._leftTrackedSitesAt !== null || !isSamePage(lastUrl, document.URL)) ? lastUrl : document.URL;
             debug('Saving page exit stats with ' + secondsOnPage + ' seconds spent on ' + url + ' to cookie SPOInsightsLastPageStats.');
 
             // Set cookie for next "page load" to pick-up & send, for 7 days. Can't send stats onpageunload due to time it would take to send.

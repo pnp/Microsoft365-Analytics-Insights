@@ -56,21 +56,26 @@ window._spPageContextInfo = window._spPageContextInfo ||
 function initPageControls() {
     TimeMe.initialize();
 
-    // Listen for link click events at the document level
-    document.addEventListener('mousedown', interceptClickEvent);    // Mousedown for links that use stopPropagation etc
-    document.addEventListener('click', interceptClickEvent);        // Click for links that only raise click (megamenu links)
+    // On modern pages capture before the link's own handler can change document.URL or replace the link.
+    const modern = !!window._o365AnalyticsInfo;
+    document.addEventListener('mousedown', interceptClickEvent, modern);    // Mousedown for links that use stopPropagation etc
+    document.addEventListener('click', interceptClickEvent, modern);        // Click for links that only raise click (megamenu links)
 
     // Save time on page for the next page load to send. Not window.onbeforeunload: SharePoint assigns that too, so
     // whichever was set last silently replaced the other - losing either this or SharePoint's own handler.
     window.addEventListener('pagehide', () => {
         checkStillOnTrackedSite();
+        ai?.discardPendingClicksUnlessOn(null); // The back/forward cache can keep this document alive for a later visit.
         pageTracker?.savePageExitToCookie();
     });
 
     // SharePoint can navigate to a site collection that isn't tracked without reloading the page, and back. Note when it does, so
     // the time spent there is no tracked page's time on page. Classic pages have no such navigations: every one loads a new page.
-    if (window._o365AnalyticsInfo) {
+    if (modern) {
         window.setInterval(checkStillOnTrackedSite, TRACKED_SITE_CHECK_MS);
+        // A quick detour and return can fit between two site checks. This only discards clicks;
+        // SPFx still decides when to report a page view.
+        window.navigation?.addEventListener?.('currententrychange', () => ai?.discardPendingClicksUnlessOn(document.URL));
     }
 }
 
@@ -78,7 +83,9 @@ function initPageControls() {
 // page: SharePoint navigates between site collections without reloading the page, so this script keeps running on one the
 // installer didn't set up for tracking.
 function checkStillOnTrackedSite(): boolean {
-    const onTrackedSite = isOnTrackedSite(document.URL, window._o365AnalyticsInfo);
+    const url = document.URL;
+    const onTrackedSite = isOnTrackedSite(url, window._o365AnalyticsInfo);
+    ai?.discardPendingClicksUnlessOn(onTrackedSite ? url : null);
     if (onTrackedSite) {
         pageTracker?.seenOnTrackedSite();
     }

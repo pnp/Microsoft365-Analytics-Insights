@@ -44,10 +44,12 @@ const UNTRACKED_PAGE_URL = UNTRACKED_SITE_URL + '/SitePages/Private.aspx';
 
 let readyState: DocumentReadyState = 'complete';
 let navigationEntries: any[] = [];
-let listeners: { target: EventTarget, type: string, listener: any }[] = [];
+let historyChanges: EventTarget | undefined;
+let listeners: { target: EventTarget, type: string, listener: any, options?: AddEventListenerOptions | boolean }[] = [];
 let intervals: Function[] = [];
 
 Object.defineProperty(document, 'readyState', { configurable: true, get: () => readyState });
+Object.defineProperty(window, 'navigation', { configurable: true, get: () => historyChanges });
 Object.defineProperty(window.performance, 'getEntriesByType', {
     configurable: true,
     value: (type: string) => type === 'navigation' ? navigationEntries : [],
@@ -99,7 +101,7 @@ describe('AITracker page bootstrap', () => {
         for (const target of [document, window] as EventTarget[]) {
             const original = target.addEventListener;
             jest.spyOn(target, 'addEventListener').mockImplementation(function (type: string, listener: any, options?: any) {
-                listeners.push({ target, type, listener });
+                listeners.push({ target, type, listener, options });
                 return original.call(target, type, listener, options);
             } as any);
         }
@@ -122,6 +124,7 @@ describe('AITracker page bootstrap', () => {
 
         mockAiInstances.length = 0;
         mockSecondsOnPage = 12;
+        historyChanges = undefined;
         Object.keys(Cookies.get()).forEach(name => Cookies.remove(name));
         document.body.innerHTML = '';
         readyState = 'complete';
@@ -131,7 +134,7 @@ describe('AITracker page bootstrap', () => {
 
     afterEach(async () => {
         await settle();     // Let a copy's pending setTimeout finish here, not in the next test
-        listeners.forEach(l => l.target.removeEventListener(l.type, l.listener));
+        listeners.forEach(l => l.target.removeEventListener(l.type, l.listener, l.options));
         listeners = [];
         jest.restoreAllMocks();
     });
@@ -259,8 +262,9 @@ describe('AITracker page bootstrap', () => {
         expect(mockAiInstances.length).toBe(1);
         expect(listeners.length).toBe(listenersAddedByFirstCopy);
 
+        window.modernPageNav(OTHER_SITE_URL, 'Other', OTHER_SITE_URL);
         mousedownOnLink('Link');
-        expect(eventsNamed(mockAiInstances[0], 'LinkClick').length).toBe(1);
+        expect(eventsNamed(mockAiInstances[0], 'LinkClick').map(c => c.properties.pageRequestId)).toEqual([pageRequestIdOf(mockAiInstances[0], 1)]);
         expect(noPageRequestIdErrors(errorSpy)).toEqual([]);
     });
 
@@ -367,6 +371,98 @@ describe('AITracker page bootstrap', () => {
 
         const sentAnything = (ai: any) => JSON.stringify([ai.trackPageView.mock.calls, ai.trackEvent.mock.calls]);
         const savedExit = () => JSON.parse(Cookies.get('SPOInsightsLastPageStats')!);
+
+        test.each(['mousedown and click', 'click only'])('source and destination clicks keep their own page IDs across the SPFx reporting gap: %s', async input => {
+            const search = SITE_URL + '/_layouts/15/search.aspx/siteall?q=';
+            setUrl(search + 'first');
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+            const sourceId = pageRequestIdOf(ai, 0);
+
+            setUrl(search + 'first#top');
+            document.body.innerHTML = '<a>Next search</a><a>Open result</a>';
+            const [go, result] = Array.from(document.querySelectorAll('a'));
+            go.href = search + 'second';
+            go.addEventListener('click', e => { e.preventDefault(); setUrl(go.href); });
+            if (input === 'mousedown and click') go.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            go.click(); // The router changes document.URL before the click bubbles to document.
+
+            result.href = SITE_URL + '/Shared Documents/Result.pdf';
+            result.addEventListener('click', e => e.preventDefault());
+            const beforeClick = Date.now();
+            result.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            result.click();
+            const afterClick = Date.now();
+
+            window.modernPageNav(OTHER_SITE_URL, 'Other', OTHER_SITE_URL); // Stale callback cannot accept this view.
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+            expect(eventsNamed(ai, 'LinkClick').map(c => [c.properties.linkText, c.properties.pageRequestId]))
+                .toEqual([['Next search', sourceId]]);
+
+            await settle();
+            setUrl(search + 'second#results');
+            window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+            window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+            const destinationId = pageRequestIdOf(ai, 1);
+            expect(destinationId).not.toBe(sourceId);
+            const clicks = eventsNamed(ai, 'LinkClick');
+            expect(clicks.map(c => [c.properties.linkText, c.properties.pageRequestId]))
+                .toEqual([['Next search', sourceId], ['Open result', destinationId]]);
+            expect(Date.parse(clicks[1].properties.timeStamp)).toBeGreaterThanOrEqual(beforeClick);
+            expect(Date.parse(clicks[1].properties.timeStamp)).toBeLessThanOrEqual(afterClick);
+            expect(eventsNamed(ai, 'PAGE_EXIT').map(e => e.properties.pageRequestId)).toEqual([sourceId]);
+        });
+
+        test.each(['different query', 'untracked site', 'already tracked page', 'history change between polls'])('does not replay an abandoned destination click on a later visit (%s)', async via => {
+            if (via === 'history change between polls') historyChanges = new EventTarget();
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+            const destination = PAGE_URL + '?q=one';
+            setUrl(destination);
+            mousedownOnLink('Abandoned visit');
+
+            if (via === 'untracked site') {
+                navigateToUntrackedSite();
+                mousedownOnLink('Not tracked');
+            } else if (via === 'already tracked page') {
+                setUrl(PAGE_URL);
+                window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+            } else {
+                setUrl(PAGE_URL + '?q=two');
+                if (historyChanges) historyChanges.dispatchEvent(new Event('currententrychange'));
+                else checkSite();
+            }
+
+            setUrl(destination);
+            sitesTrackedInPage(SITE_URL);
+            mousedownOnLink('Current visit');
+            window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+            expect(eventsNamed(ai, 'LinkClick').map(c => [c.properties.linkText, c.properties.pageRequestId]))
+                .toEqual([['Current visit', pageRequestIdOf(ai, 1)]]);
+        });
+
+        test('leaving before SPFx reports the destination saves the accepted exit and never replays the abandoned click', async () => {
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+            setUrl(PAGE_URL + '?q=next');
+            mousedownOnLink('No destination view');
+            window.dispatchEvent(new Event('pagehide'));
+            expect(decodeURI(savedExit().url)).toBe(PAGE_URL);
+            expect(savedExit().pageRequestId).toBe(pageRequestIdOf(ai, 0));
+            expect(eventsNamed(ai, 'LinkClick')).toHaveLength(0);
+
+            // A browser can restore this document from its back/forward cache, including its JS heap and delayed callbacks.
+            mousedownOnLink('After restore');
+            window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+            expect(eventsNamed(ai, 'LinkClick').map(c => [c.properties.linkText, c.properties.pageRequestId]))
+                .toEqual([['After restore', pageRequestIdOf(ai, 1)]]);
+        });
 
         test('tracked site, then one that isn\'t: its clicks aren\'t sent, and the time saved as the browser leaves is the tracked page\'s', async () => {
             sitesTrackedInPage(SITE_URL);
@@ -542,7 +638,8 @@ describe('AITracker page bootstrap', () => {
             expect(listeners.length).toBe(listenersAddedByFirstCopy);
             expect(intervals.length).toBe(1);
             mousedownOnLink('Link', OTHER_SITE_URL + '/SitePages/Events.aspx');
-            expect(eventsNamed(mockAiInstances[0], 'LinkClick').length).toBe(1);
+            window.modernPageNav(OTHER_SITE_URL, 'Other', OTHER_SITE_URL);
+            expect(eventsNamed(mockAiInstances[0], 'LinkClick').map(c => c.properties.pageRequestId)).toEqual([pageRequestIdOf(mockAiInstances[0], 1)]);
         });
     });
 });
