@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
@@ -49,7 +50,7 @@ LEFT JOIN dbo.sites AS site ON site.id = w.site_id;";
                 cmd.CommandTimeout = timeout;
                 cmd.CommandText = @"SELECT url_base, exact_match INTO #appinsights_search_site_rules FROM dbo.org_urls;
 SELECT url_base, exact_match FROM #appinsights_search_site_rules;";
-                var rules = new List<(Uri Url, bool Exact)>();
+                var rules = new List<(SiteAddress Url, bool Exact)>();
                 bool restricted = false;
                 using (var r = await cmd.ExecuteReaderAsync(token))
                 {
@@ -100,28 +101,50 @@ SELECT url_base, exact_match FROM #appinsights_search_site_rules;";
         // separately so a host-name prefix cannot cross origins. Exact-site rules need the stored
         // site collection as well: the general page-view filter's fallback to a URL prefix when
         // site metadata is missing cannot verify historical hits under a narrower configuration.
-        private static bool Allows((Uri Url, bool Exact) rule, Uri page, Uri site)
+        private static bool Allows((SiteAddress Url, bool Exact) rule, SiteAddress page, SiteAddress site)
         {
-            if (!SameOrigin(rule.Url, page)) return false;
+            if (!SameOrigin(rule.Url.Uri, page.Uri)) return false;
             return rule.Exact
-                ? site != null && string.Equals(rule.Url.AbsolutePath.TrimEnd('/'), site.AbsolutePath.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)
-                : page.AbsolutePath.StartsWith(rule.Url.AbsolutePath, StringComparison.OrdinalIgnoreCase);
+                ? site != null && string.Equals(rule.Url.Path.TrimEnd('/'), site.Path.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)
+                : page.Path.StartsWith(rule.Url.Path, StringComparison.OrdinalIgnoreCase);
         }
 
-        private static bool WithinSite(Uri page, Uri site)
+        private static bool WithinSite(SiteAddress page, SiteAddress site)
         {
-            var path = site.AbsolutePath.TrimEnd('/');
-            return SameOrigin(page, site) && (string.Equals(page.AbsolutePath, path, StringComparison.OrdinalIgnoreCase)
-                || page.AbsolutePath.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase));
+            if (!SameOrigin(page.Uri, site.Uri)) return false;
+            var path = site.Path.TrimEnd('/');
+            // The tracker excludes managed collections from root ownership. This is not a
+            // restriction on an explicitly configured prefix for correctly attributed pages.
+            if (path.Length == 0) return !ManagedCollection.IsMatch(Uri.UnescapeDataString(page.Uri.AbsolutePath));
+            return string.Equals(page.Path, path, StringComparison.OrdinalIgnoreCase)
+                || page.Path.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static readonly Regex ManagedCollection = new Regex(@"^/+(?:sites|teams)/+[^/]", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        private static readonly Regex EscapedUnicode = new Regex(@"(?:%[89A-Fa-f][0-9A-Fa-f])+");
+
+        private sealed class SiteAddress
+        {
+            internal readonly Uri Uri;
+            internal readonly string Path;
+
+            internal SiteAddress(Uri uri)
+            {
+                Uri = uri;
+                // Decode only UTF-8 bytes above ASCII. Escaped separators, percent signs and
+                // reserved punctuation stay literal; the comparison path is never parsed as a URL.
+                var path = uri.AbsolutePath;
+                Path = path.IndexOf('%') < 0 ? path : EscapedUnicode.Replace(path, m => System.Uri.UnescapeDataString(m.Value));
+            }
         }
 
         private static bool SameOrigin(Uri first, Uri second) =>
             first.Scheme == second.Scheme && first.Port == second.Port && string.Equals(first.IdnHost, second.IdnHost, StringComparison.OrdinalIgnoreCase);
 
-        private static Uri HttpUrl(string value) =>
+        private static SiteAddress HttpUrl(string value) =>
             Uri.TryCreate(value, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp)
             && !string.IsNullOrEmpty(uri.Host) && uri.IsWellFormedOriginalString()
-            && uri.UserInfo.Length == 0 && uri.Query.Length == 0 && uri.Fragment.Length == 0 ? uri : null;
+            && uri.UserInfo.Length == 0 && uri.Query.Length == 0 && uri.Fragment.Length == 0 ? new SiteAddress(uri) : null;
 
         internal int? Resolve(SearchEventAppInsightsQueryResult search, ISet<Guid> rejectedRequests, out bool pending)
         {

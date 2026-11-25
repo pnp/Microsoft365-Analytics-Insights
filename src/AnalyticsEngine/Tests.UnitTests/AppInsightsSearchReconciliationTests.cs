@@ -178,6 +178,40 @@ INSERT dbo.hits(url_id,web_id,session_id,page_request_id,hit_timestamp) VALUES
             }
         }
 
+        [DataTestMethod]
+        [DataRow("/", "/SitePages/Home.aspx", "/", true, true)]
+        [DataRow("/", "/sites/example/SitePages/Home.aspx", "/", true, false)]
+        [DataRow("/", "/Teams/example/SitePages/Home.aspx", "/", true, false)]
+        [DataRow("/sites/example", "/sites/example/SitePages/Home.aspx", "/", false, true)]
+        [DataRow("/sites/Équipe", "/sites/%C3%A9quipe/SitePages/Home.aspx", "/sites/équipe/", true, true)]
+        [DataRow("/sites/%C3%89quipe", "/sites/équipe/SitePages/Home.aspx", "/sites/Éq", false, true)]
+        [DataRow("/sites/Équipe", "/sites/équipe/SitePages/Home.aspx", "/sites/Éq", true, false)]
+        public async Task SearchAdmission_ChecksStoredCollectionAndConfiguredRule(string storedSite, string pagePath,
+            string rulePath, bool exact, bool expected)
+        {
+            const string origin = "https://contoso.sharepoint.com";
+            var source = new FakeAppInsightsSourceLoader
+            {
+                PageViewAt = t =>
+                {
+                    var page = Page(t, "site-case");
+                    page.Url = origin + pagePath;
+                    page.CustomProperties.SiteUrl = page.CustomProperties.WebUrl = origin + storedSite;
+                    return page;
+                }
+            };
+            source.ExtraPageViews.Add((Start, Start));
+            await RunCycle(new FixedClock(Start.AddMinutes(1)), source, new InMemoryKeyValueStore());
+            _database.Execute($"INSERT dbo.org_urls(url_base, exact_match) VALUES (N'{origin}{rulePath}', {(exact ? 1 : 0)});");
+            var batch = new CustomEventsResultCollection();
+            batch.Rows.Add(Search(Start, "site-case", "Guide", Reader));
+            using (var db = _factory.Create())
+            {
+                var result = await batch.SaveSearchBatchAsync(AnalyticsLogger.ConsoleOnlyTracer(), db);
+                Assert.AreEqual((expected ? 1 : 0, expected ? 0 : 1, 0), (result.FactsInserted, result.Skipped, result.Unmatched));
+            }
+        }
+
         [TestMethod]
         public async Task SearchAdmission_SiteNarrowedDuringStagingMustNotCommitTheOldDecision()
         {
