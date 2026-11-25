@@ -38,7 +38,15 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         internal IReadOnlyCollection<AppInsightsSearchRetry> Hours => _hours.Values;
-        internal bool Changed { get; private set; }
+        private bool Changed { get; set; }
+
+        internal async Task PersistChangesAsync(CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (Changed) await _store.WriteSearchRetriesAsync(Hours, token);
+            token.ThrowIfCancellationRequested();
+            Changed = false;
+        }
 
         internal int RemoveOutsideRetention(DateTime now)
         {

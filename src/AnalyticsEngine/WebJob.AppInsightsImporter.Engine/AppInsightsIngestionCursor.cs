@@ -124,8 +124,12 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </para>
         /// </remarks>
         public static DateTime? CursorAfterDatabaseRestore(DateTime cursorUtc, DateTime newestStoredHitUtc, DateTime? newestStoredHitAtCursorUtc)
+            => CursorAfterDatabaseRestore(cursorUtc, newestStoredHitUtc, newestStoredHitAtCursorUtc, out _);
+
+        internal static DateTime? CursorAfterDatabaseRestore(DateTime cursorUtc, DateTime newestStoredHitUtc,
+            DateTime? newestStoredHitAtCursorUtc, out bool hitsWentMissing)
         {
-            bool hitsWentMissing = newestStoredHitAtCursorUtc.HasValue
+            hitsWentMissing = newestStoredHitAtCursorUtc.HasValue
                 ? newestStoredHitUtc < newestStoredHitAtCursorUtc.Value - NewestHitComparisonTolerance
                 : cursorUtc > newestStoredHitUtc + LateArrivalBound;
             if (!hitsWentMissing)

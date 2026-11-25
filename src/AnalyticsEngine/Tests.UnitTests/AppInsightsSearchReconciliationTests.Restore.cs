@@ -102,6 +102,94 @@ namespace Tests.UnitTests
             Assert.AreEqual((1L, 1L), SearchKpis());
         }
 
+        [TestMethod]
+        public async Task FailedCatchUpCursorWrite_RestoreReopensHoursEvenWhenTheOldCursorNeedsNoRewind()
+        {
+            var state = new CheckpointStore();
+            var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
+            var clock = new FixedClock(Start.AddMinutes(10));
+            var visit = Start.AddHours(2);
+            var backupHit = Start.AddDays(2);
+            var newest = Start.AddDays(4);
+            var source = new FakeAppInsightsSourceLoader
+            {
+                PageViewAt = t => Page(t, t == visit ? "delayed" : "other"),
+                EventAt = t => SearchOnRecordedPage(t, visit, "delayed"),
+            };
+            foreach (var t in new[] { Start.AddMinutes(-5), visit, backupHit, newest }) source.ExtraPageViews.Add((t, t));
+            source.ExtraCustomEvents.Add((Start.AddMinutes(1), Start.AddMinutes(1)));
+            await RunCycle(clock, source, state);
+            clock.Advance(TimeSpan.FromMinutes(40));
+            var oldCursor = (await RunCycle(clock, source, state)).CursorAdvancedToUtc;
+            clock.Advance(TimeSpan.FromDays(5));
+            state.AtBoundary = (op, _) => { if (op == "cursor-write") throw new IOException("synthetic checkpoint outage"); };
+            CollectionAssert.Contains((await RunCycle(clock, source, state)).Reasons, "CursorWriteFailed");
+            Assert.AreEqual((1L, 1L), SearchKpis());
+            Assert.AreEqual(oldCursor, await cursor.ReadAsync());
+            Assert.AreEqual(newest, await cursor.ReadNewestStoredHitAtCursorAsync());
+            Assert.AreEqual(0, (await cursor.ReadSearchRetriesAsync()).Count);
+
+            _database.Execute("DELETE dbo.searches; DELETE dbo.search_terms; DELETE dbo.hits WHERE hit_timestamp >= '20000105';");
+            state.AtBoundary = (op, _) => { if (op == "marker-write") throw new IOException("synthetic checkpoint outage"); };
+            var blocked = await RunCycle(clock, source, state);
+            Assert.AreEqual(AppInsightsCycleOutcome.Failed, blocked.Outcome);
+            Assert.AreEqual(backupHit, _database.Scalar("SELECT MAX(hit_timestamp) FROM dbo.hits"),
+                "Do not let normal SQL conceal the watermark drop before the recovered hours are durable.");
+            state.AtBoundary = null;
+            using (var stop = new CancellationTokenSource())
+            {
+                source.OnEventWindow = w => { if (w.SearchesOnly) stop.Cancel(); };
+                await Assert.ThrowsAsync<OperationCanceledException>(() => RunCycle(clock, source, state, token: stop.Token));
+            }
+            Assert.AreEqual(newest, _database.Scalar("SELECT MAX(hit_timestamp) FROM dbo.hits"));
+            Assert.AreEqual(Start, (await cursor.ReadSearchRetriesAsync()).Single().HourUtc);
+            Assert.AreEqual(oldCursor, await cursor.ReadAsync());
+            source.OnEventWindow = null;
+            var replay = await RunCycle(clock, source, state);
+            Assert.AreEqual(oldCursor - AppInsightsIngestionCursorPolicy.Overlap,
+                source.CountRangesRequested.Last(w => !w.SearchesOnly).IngestedFromUtc);
+            Assert.AreEqual(1, replay.ReconciledSearches);
+            Assert.AreEqual((1L, 1L), SearchKpis());
+            Assert.AreEqual(0, replay.PendingSearchHours);
+        }
+
+        [TestMethod]
+        public async Task EmptyRestore_RebuildsTheVisitForAnOlderRetainedSearchBeforeItsFinalAttempt()
+        {
+            var state = new InMemoryKeyValueStore();
+            var clock = new FixedClock(Start.AddMinutes(10));
+            var visit = Start.AddDays(1);
+            var source = new FakeAppInsightsSourceLoader
+            {
+                PageViewAt = t => Page(t, "delayed"),
+                EventAt = t => SearchOnRecordedPage(t, visit, "delayed"),
+            };
+            source.ExtraCustomEvents.Add((Start, Start));
+            source.ExtraPageViews.Add((visit, visit));
+            _database.Execute("INSERT dbo.org_urls(url_base) VALUES (N'https://contoso.sharepoint.com/');");
+            var first = await RunCycle(clock, source, state);
+            Assert.AreEqual(1, first.PendingSearchHours);
+            Assert.AreEqual(clock.UtcNow.AddDays(-31).Date, source.CountRangesRequested.Single().FromUtc);
+            clock.Advance(TimeSpan.FromDays(4));
+            Assert.AreEqual(1, (await RunCycle(clock, source, state)).ReconciledSearches);
+            Assert.AreEqual((1L, 1L), SearchKpis());
+
+            _database.Execute("DELETE dbo.searches; DELETE dbo.search_terms; DELETE dbo.hits; DELETE dbo.sessions;");
+            clock.Advance(TimeSpan.FromDays(41));
+            var oldest = clock.UtcNow - AppInsightsIngestionCursorPolicy.MaxLookback;
+            source.ExtraPageViews.Add((oldest, oldest.AddSeconds(-1)));
+            source.CountRangesRequested.Clear();
+            var restored = await RunCycle(clock, source, state);
+            Assert.AreEqual(AppInsightsReadMode.Bootstrap, restored.Mode);
+            Assert.AreEqual(1, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"),
+                "Rebuild the retained visit, not the page outside ingestion retention.");
+            Assert.AreEqual(1, restored.ReconciledSearches);
+            Assert.AreEqual((1L, 1L), SearchKpis());
+            Assert.AreEqual(0, restored.PendingSearchHours);
+            Assert.AreEqual(clock.UtcNow, restored.CursorAdvancedToUtc);
+            Assert.IsFalse(restored.Reasons.Contains("SearchRetriesStopped"));
+        }
+
         [DataTestMethod]
         [DataRow(true, false)]
         [DataRow(true, true)]

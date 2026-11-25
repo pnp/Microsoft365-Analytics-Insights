@@ -405,6 +405,8 @@ With a site filter, a search needs its **own** admitted page request, the same u
 
 This gates new writes and retries. Existing search rows do not record their page request or site; the importer does not reclassify or delete them retrospectively.
 
+After a database restore, a drop in the newest SQL hit reopens the recorded search hours even if the last committed ingestion cursor is already early enough. The importer saves the reopened hours before writing new hits. If the restored hits table is empty and retained search hours need replay, the normal import first rebuilds visit coverage across the retained 90-day ingestion window under the current filters. A first install still uses the ordinary 31-day bootstrap.
+
 | Last evidence | What it proves |
 |---|---|
 | Cycle `Failed`, same `FailedDays` repeating, `ConsecutiveFailures` climbing | The cycle stops at the failed day and retries it before any later day, so nothing after it imports. `FailedStage` separates download (App Insights query, permission, throttle) from save (SQL) |

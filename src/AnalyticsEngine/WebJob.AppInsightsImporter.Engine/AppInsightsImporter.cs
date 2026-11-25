@@ -260,6 +260,8 @@ namespace WebJob.AppInsightsImporter.Engine
             DateTime? storedCursorUtc = null;
             DateTime? newestStoredHitAtCursorUtc = null;
             var previouslyEmpty = false;
+            var restoring = false;
+            AppInsightsSearchRetries searchRetries = null;
             AppInsightsReplayStart replayStartToSave = null;
             if (scanFromDateOverride.HasValue)
             {
@@ -294,6 +296,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
                 if (cursorUtc.HasValue && !newestHitTimestamp.HasValue && !previouslyEmpty)
                 {
+                    restoring = true;
                     _logger.LogWarning($"AppInsightsCursor: the ingestion cursor ({cursorUtc.Value:O}) says data was imported, but the hits table is empty " +
                         "(a new or restored database?). Ignoring the cursor and starting again from scratch.");
                     cursorUtc = null;
@@ -301,7 +304,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 else if (cursorUtc.HasValue && newestHitTimestamp.HasValue && !previouslyEmpty)
                 {
                     var newestStoredHitUtc = AppInsightsImportWindow.NormalizeStoredHitTimestampUtc(newestHitTimestamp).Value;
-                    var rewound = AppInsightsIngestionCursorPolicy.CursorAfterDatabaseRestore(cursorUtc.Value, newestStoredHitUtc, newestStoredHitAtCursorUtc);
+                    var rewound = AppInsightsIngestionCursorPolicy.CursorAfterDatabaseRestore(cursorUtc.Value, newestStoredHitUtc, newestStoredHitAtCursorUtc, out restoring);
                     if (rewound.HasValue)
                     {
                         _logger.LogWarning($"AppInsightsCursor: Outcome=RewoundAfterRestore; Cursor={cursorUtc.Value:O}; RewoundTo={rewound.Value:O}; " +
@@ -309,6 +312,10 @@ namespace WebJob.AppInsightsImporter.Engine
                             "The database holds fewer hits than when the cursor was written (a point-in-time restore or an older copy?), so " +
                             "ingestion since the newest stored hit is read again; rows already stored are skipped.");
                         cursorUtc = rewound;
+                    }
+                    else if (restoring)
+                    {
+                        _logger.LogWarning("AppInsightsCursor: the newest stored hit moved backwards. The committed cursor already covers the rewind; reopening search recovery hours.");
                     }
                 }
 
@@ -332,14 +339,50 @@ namespace WebJob.AppInsightsImporter.Engine
                         cursorUtc = replay.EffectiveCursorUtc;
                 }
 
+                restoring |= storedCursorUtc.HasValue && cursorUtc != storedCursorUtc;
+                result.Mode = cursorUtc.HasValue ? AppInsightsReadMode.Incremental : AppInsightsReadMode.Bootstrap;
+                try
+                {
+                    searchRetries = await LoadPendingSearchesAsync(nowUtc, result, cancellationToken);
+                    if (restoring) await searchRetries.ReopenAfterRestoreAsync(nowUtc, cancellationToken);
+                }
+                catch (Exception ex) when (CanRecover(ex, cancellationToken))
+                {
+                    searchRetries = null;
+                    if (restoring)
+                    {
+                        result.Fail("SearchReplayReadFailed");
+                        _logger.LogError($"AppInsightsSearchRetry: restore checkpoints could not be read. Nothing imported this cycle. {FailureDimensions(ex)}");
+                        return result;
+                    }
+                    result.Degrade("SearchRetryReadFailed");
+                    _logger.LogWarning($"AppInsightsSearchRetry: checkpoint could not be read. Leaving it and the ingestion cursor unchanged. {FailureDimensions(ex)}");
+                }
+                if (restoring)
+                {
+                    // An interrupted catch-up can leave the SQL watermark ahead of the committed cursor. Even if
+                    // the cursor need not move back, the next SQL insert can erase the only evidence of the restore.
+                    try { await searchRetries.PersistChangesAsync(cancellationToken); }
+                    catch (Exception ex) when (CanRecover(ex, cancellationToken))
+                    {
+                        result.Fail("SearchRetryWriteFailed");
+                        _logger.LogError($"AppInsightsSearchRetry: reopened hours could not be saved. Nothing imported this cycle. {FailureDimensions(ex)}");
+                        return result;
+                    }
+                }
+
                 if (cursorUtc.HasValue)
                 {
-                    result.Mode = AppInsightsReadMode.Incremental;
                     range = AppInsightsIngestionCursorPolicy.IncrementalRange(cursorUtc.Value, nowUtc);
+                }
+                else if (restoring && searchRetries.Hours.Count > 0)
+                {
+                    // The saved hours identify searches, not when their matching visits arrived. Rebuild retained
+                    // page coverage before a final search attempt; the ordinary first install still reads 31 days.
+                    range = AppInsightsIngestionCursorPolicy.IncrementalRange(nowUtc - AppInsightsIngestionCursorPolicy.MaxLookback, nowUtc);
                 }
                 else
                 {
-                    result.Mode = AppInsightsReadMode.Bootstrap;
                     // A process-local scan from before an empty restore is not coverage of the restored DB.
                     var startDate = ResolveStartFromStoredHits(newestHitTimestamp, nowUtc, useScanWatermark: !storedCursorUtc.HasValue);
                     if (replay != null && replay.FromUtc < startDate)
@@ -361,30 +404,6 @@ namespace WebJob.AppInsightsImporter.Engine
             // L-8: started, or the "Hits import" ElapsedSeconds was always 0.
             var jobTimer = new JobTimer(_logger, "Hits import");
             jobTimer.Start();
-
-            AppInsightsSearchRetries searchRetries = null;
-            if (result.Mode != AppInsightsReadMode.Backfill)
-            {
-                bool restoring = storedCursorUtc.HasValue && cursorUtc != storedCursorUtc;
-                try
-                {
-                    searchRetries = await LoadPendingSearchesAsync(nowUtc, result, cancellationToken);
-                    if (restoring) await searchRetries.ReopenAfterRestoreAsync(nowUtc, cancellationToken);
-                }
-                catch (Exception ex) when (CanRecover(ex, cancellationToken))
-                {
-                    searchRetries = null;
-                    if (restoring)
-                    {
-                        // Do not let a new SQL hit hide the restore before its search work is known.
-                        result.Fail("SearchReplayReadFailed");
-                        _logger.LogError($"AppInsightsSearchRetry: restore checkpoints could not be read. Nothing imported this cycle. {FailureDimensions(ex)}");
-                        return result;
-                    }
-                    result.Degrade("SearchRetryReadFailed");
-                    _logger.LogWarning($"AppInsightsSearchRetry: checkpoint could not be read. Leaving it and the ingestion cursor unchanged. {FailureDimensions(ex)}");
-                }
-            }
 
             async Task<bool> ImportWithRetriesAsync(IAppInsightsSourceLoader source)
             {
@@ -763,8 +782,7 @@ namespace WebJob.AppInsightsImporter.Engine
             try
             {
                 // Never move the main cursor past unfinished searches until their source hours are durable.
-                if (retries.Changed) await _searchRetryStore.WriteSearchRetriesAsync(retries.Hours, token);
-                token.ThrowIfCancellationRequested();
+                await retries.PersistChangesAsync(token);
                 result.PendingSearchHours = retries.Hours.Count;
                 result.HasDueSearchRetries = retries.HasDue(coveredThroughUtc);
                 if (result.PendingSearchHours > 0) result.Degrade("SearchSessionsPending");
