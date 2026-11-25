@@ -60,20 +60,12 @@ namespace Common.Entities.State
         public const string Complete = "complete";
         public const string Empty = "empty";
 
-        /// <summary>Begins a save whose download cannot be confirmed empty.</summary>
-        public Task BeginDayAsync(string source, DateTime day) => BeginDayAsync(source, day, confirmedEmptyDownload: false);
-
         /// <summary>
-        /// Marks a day in progress before writing it. An upsert never deletes rows, so a complete day stays
-        /// verified. An empty day keeps its previous outcome during the save only if the download finished without rows.
+        /// A new import attempt supersedes the previous certificate. Until every page and SQL batch finishes,
+        /// neither a previous empty day nor a previously complete set of users proves what this attempt saw.
         /// </summary>
-        public async Task BeginDayAsync(string source, DateTime day, bool confirmedEmptyDownload)
-        {
-            var key = Key(source, day);
-            var outcome = await _store.GetStringAsync(key).ConfigureAwait(false);
-            if (outcome == Complete || (outcome == Empty && confirmedEmptyDownload)) return;
-            await _store.SetStringAsync(key, Partial, TimeSpan.FromDays(400)).ConfigureAwait(false);
-        }
+        public Task BeginDayAsync(string source, DateTime day) =>
+            _store.SetStringAsync(Key(source, day), Partial, TimeSpan.FromDays(400));
 
         /// <summary>
         /// Records the outcome of a saved day. <paramref name="settlementDays"/> is the analysis' settlement lag
@@ -98,11 +90,7 @@ namespace Common.Entities.State
         }
 
         /// <summary>
-        /// Records a download Graph ended before its last page - the pager returns the rows gathered so far on a 404 -
-        /// so the rows saved for the day are not known to be all of them. Not an outcome: the day is left partial and
-        /// downloaded again. A day already certified complete keeps its outcome, as in <see cref="BeginDayAsync(string, DateTime)"/>: the
-        /// upsert never deletes, so every user it was certified with is still stored. A day certified empty does not,
-        /// because rows may now be stored for it, and its outcome would still say nobody used the workload.
+        /// The rows returned by an interrupted download cannot certify the day, even if older rows are retained.
         /// </summary>
         public Task RecordUnfinishedDownloadAsync(string source, DateTime day) => BeginDayAsync(source, day);
 

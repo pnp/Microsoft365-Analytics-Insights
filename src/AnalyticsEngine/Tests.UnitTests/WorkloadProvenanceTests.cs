@@ -293,16 +293,15 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task ReDownloadOfAVerifiedDay_StaysVerified_ButAFirstDownloadIsInProgress()
+        public async Task ReDownloadOfAVerifiedDay_IsInProgressUntilTheNewReportIsCommitted()
         {
             var store = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
             await store.CompleteDayAsync("teams", Day, true, true, false, Day.AddDays(2), 3);
             Assert.IsTrue((await store.ReadAsync(Day, Day)).Single(c => c.Source == "teams").IsComplete,
                 "A day with rows is certified lag - 1 days after it, before the analysis first assesses it.");
             await store.BeginDayAsync("teams", Day);
-            Assert.IsTrue((await store.ReadAsync(Day, Day)).Single(c => c.Source == "teams").IsComplete,
-                "The upsert never deletes, so a re-download in progress cannot leave fewer users stored.");
-            Assert.IsFalse(await store.NeedsReimportAsync("teams", Day, true));
+            Assert.IsFalse((await store.ReadAsync(Day, Day)).Single(c => c.Source == "teams").IsComplete);
+            Assert.IsTrue(await store.NeedsReimportAsync("teams", Day, true));
 
             await store.BeginDayAsync("outlook", Day);
             Assert.AreEqual("partial", (await store.ReadAsync(Day, Day)).Single(c => c.Source == "outlook").Status);

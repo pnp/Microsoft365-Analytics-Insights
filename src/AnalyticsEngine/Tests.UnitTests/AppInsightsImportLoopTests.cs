@@ -1,3 +1,4 @@
+using Common.Entities.Config;
 using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
@@ -9,6 +10,20 @@ namespace Tests.UnitTests
     [TestClass]
     public class AppInsightsImportLoopTests
     {
+        [TestMethod]
+        [TestCategory("SqlIntegration")]
+        public async Task OneShotSqlPreflight_FailsForMissingTableAndAcceptsAnEmptyHitsTable()
+        {
+            using (var db = ScratchDatabase.Create("OneShotPreflight"))
+            {
+                var settings = new AppConnectionStrings(name => name == "SPOInsightsEntities" ? db.ConnectionString : null);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                Assert.IsFalse(await settings.TestWebTrafficSqlOnceAsync(logger));
+                db.Execute("CREATE TABLE dbo.hits (id int PRIMARY KEY)");
+                Assert.IsTrue(await settings.TestWebTrafficSqlOnceAsync(logger));
+            }
+        }
+
         [DataTestMethod]
         [DataRow(AppInsightsCycleOutcome.Succeeded, 0)]
         [DataRow(AppInsightsCycleOutcome.Degraded, 0)]

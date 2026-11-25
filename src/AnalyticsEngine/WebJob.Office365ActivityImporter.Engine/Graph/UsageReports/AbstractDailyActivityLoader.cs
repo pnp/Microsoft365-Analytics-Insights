@@ -400,6 +400,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             // rows can only be filtered in SQL by the mapped Date column - we key them by lookup id in memory.
             try
             {
+                // This path also accepts caller-supplied pages. Invalidate them before validating the whole buffer:
+                // a concealed report or a failed lookup can stop the save before it reaches any one date.
+                if (CoverageStore != null)
+                {
+                    foreach (var date in LoadedReportPages.Keys)
+                        await CoverageStore.BeginDayAsync(CoverageSource, date.Date);
+                }
                 // Concealed identities are dealt with before anything is resolved or written, so a pseudonym never
                 // reaches the batched pre-resolution, the scope filter or the get-or-create path below. Every
                 // identifiable row concealed means the tenant conceals identities: refuse the whole report rather
@@ -484,6 +491,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
                     // Taken before the request, so the coverage ledger never credits Graph with a day it could only
                     // have published after this moment (see SaveDateAsync).
+                    if (CoverageStore != null)
+                        await CoverageStore.BeginDayAsync(CoverageSource, dt.Value.Date);
                     var requestedUtc = Clock.UtcNow;
                     var dayReports = await LoadReportPageForDateFromGraph(dt.Value) ?? new List<TUserActivityUserDetail>();
                     if (!datesLoaded.Add(dt.Value.Date))
@@ -671,13 +680,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache, DateTime requestedUtc)
         {
             var downloadFinished = !_unfinishedDownloads.Contains(dateTime.Date);
-            if (CoverageStore != null)
-            {
-                if (downloadFinished)
-                    await CoverageStore.BeginDayAsync(CoverageSource, dateTime.Date, confirmedEmptyDownload: rows.Count == 0);
-                else
-                    await CoverageStore.RecordUnfinishedDownloadAsync(CoverageSource, dateTime.Date);
-            }
             var store = run.Store;
             var instrumentation = run.Instrumentation;
             var instrumentationEnabled = run.InstrumentationEnabled;

@@ -86,11 +86,12 @@ namespace WebJob.AppInsightsImporter
             // request is reported through this logger.
             HostRuntime.Attach(logger, ImporterHeartbeat.WebTrafficJob, config.BuildLabel);
 
+            bool oneShot = debugSwitchDetected || DebugBuild;
             if (!importJobSettings.WebTraffic)
             {
                 logger.LogWarning("WARNING: Web-traffic import is disabled in app configuration. Stopping here until the app is restarted.");
                 // Keep the continuous job idle until Kudu asks it to stop. An explicit one-shot has no work to do.
-                while (!debugSwitchDetected && !HostRuntime.Wait(TimeSpan.FromHours(1)))
+                while (!oneShot && !HostRuntime.Wait(TimeSpan.FromHours(1)))
                 {
                 }
                 return 0;
@@ -109,7 +110,7 @@ namespace WebJob.AppInsightsImporter
                 Console.WriteLine($"Using ReadHitsDaysBeforeToday='{daysBeforeReadOverride}' from app configuration.");
             }
 
-            if (!ValidateAndPrintConfig(config, logger))
+            if (!ValidateAndPrintConfig(config, logger, oneShot))
             {
                 if (HostRuntime.ShutdownRequested)
                 {
@@ -122,7 +123,6 @@ namespace WebJob.AppInsightsImporter
             Console.WriteLine();
             logger.LogInformation("Starting Application Insights import.");
 
-            bool oneShot = debugSwitchDetected || DebugBuild;
             int exitCode;
             var stages = StageTracker.Process;
             using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.WebTrafficJob))
@@ -253,11 +253,10 @@ namespace WebJob.AppInsightsImporter
         }
 
         /// <summary>
-        /// Output the config and check it's good. The SQL check retries with a back-off rather than letting the
-        /// import start against a database it cannot reach.
+        /// Only a continuous WebJob waits for SQL to recover. An explicit one-shot must report failure to its caller.
         /// </summary>
         /// <returns>If the config is valid</returns>
-        private static bool ValidateAndPrintConfig(AppConfig settings, AnalyticsLogger logger)
+        private static bool ValidateAndPrintConfig(AppConfig settings, AnalyticsLogger logger, bool oneShot)
         {
             ConsoleApp.PrintStartupAndLoggingConfig(settings.ConnectionStrings.DatabaseConnectionString, settings.BuildLabel, settings.UserGroupsFilter, logger);
 
@@ -267,8 +266,11 @@ namespace WebJob.AppInsightsImporter
                 return false;
             }
 
-            // Have config object test: a failure is Critical, then retried until SQL answers (or Kudu asks the job to stop).
-            if (!StartupSqlCheck.WaitUntilReachable(() => settings.ConnectionStrings.TestSQLSettings(logger), logger, ImporterHeartbeat.WebTrafficJob))
+            if (HostRuntime.ShutdownRequested) return false;
+            var reachable = oneShot
+                ? settings.ConnectionStrings.TestWebTrafficSqlOnceAsync(logger).GetAwaiter().GetResult()
+                : StartupSqlCheck.WaitUntilReachable(() => settings.ConnectionStrings.TestSQLSettings(logger), logger, ImporterHeartbeat.WebTrafficJob);
+            if (!reachable)
             {
                 return false;
             }
