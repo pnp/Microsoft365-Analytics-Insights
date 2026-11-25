@@ -881,9 +881,19 @@ namespace App.ControlPanel.Engine
             {
                 token.ThrowIfCancellationRequested();
                 // SDK exceptions can contain the response body. The installer logs inner exceptions too.
-                var reason = ex is RequestFailedException azureError ? $"HTTP {azureError.Status}" : ex.GetType().Name;
+                var reason = ex.GetType().Name;
+                var readAdvice = "Verify that Azure can return the complete collection and retry.";
+                if (ex is RequestFailedException azureError)
+                {
+                    reason = $"HTTP {azureError.Status}";
+                    // Distinguish a policy or lock from missing permissions. Never echo an arbitrary service field.
+                    if (azureError.ErrorCode == "RequestDisallowedByPolicy" || azureError.ErrorCode == "ScopeLocked")
+                        reason += $", {azureError.ErrorCode}";
+                    else if (azureError.Status == 401 || azureError.Status == 403)
+                        readAdvice = "Check the installer's access and retry.";
+                }
                 throw new InvalidOperationException(reading
-                    ? $"Could not read the existing App Service {section} ({reason}). No replacement was sent; check the installer's access and retry."
+                    ? $"Could not read the existing App Service {section} ({reason}). No replacement was sent. {readAdvice}"
                     : $"Could not update the App Service {section} ({reason}).");
             }
         }
@@ -972,10 +982,13 @@ namespace App.ControlPanel.Engine
         /// </remarks>
         private void PreserveUnmanagedAppSettings(IReadOnlyDictionary<string, string> existing, AppServiceConfigurationDictionary appSettings)
         {
+            // The SDK dictionary distinguishes casing; Windows App Service settings do not. Never send a
+            // stale spelling alongside the canonical managed value. Keep operator-only keys as supplied.
+            var managed = new HashSet<string>(appSettings.Properties.Keys, StringComparer.OrdinalIgnoreCase);
             var preserved = new List<string>();
             foreach (var entry in existing)
             {
-                if (appSettings.Properties.ContainsKey(entry.Key)) continue;
+                if (managed.Contains(entry.Key)) continue;
                 appSettings.Properties.Add(entry.Key, entry.Value);
                 preserved.Add(entry.Key);
             }

@@ -1,6 +1,6 @@
 import { AnalyticsPlugin } from '@microsoft/applicationinsights-analytics-js';
 import { Sender } from '@microsoft/applicationinsights-channel-js';
-import { AppInsightsCore, DEFAULT_BREEZE_PATH, addPageHideEventListener, addPageUnloadEventListener, parseConnectionString } from '@microsoft/applicationinsights-core-js';
+import { AppInsightsCore, DEFAULT_BREEZE_PATH, PageViewDataType, PageViewPerformanceDataType, addPageHideEventListener, addPageUnloadEventListener, parseConnectionString } from '@microsoft/applicationinsights-core-js';
 import type { IConfig, IConfiguration } from '@microsoft/applicationinsights-core-js';
 import { PropertiesPlugin } from '@microsoft/applicationinsights-properties-js';
 
@@ -22,7 +22,28 @@ export function createTrackerTelemetry(connectionString: string, userLoginName: 
         isBeaconApiDisabled: true
     };
     // No dependency or remote-configuration plugin: never instrument SharePoint's fetch/XHR requests.
-    new AppInsightsCore().initialize(config, [properties, analytics, sender]);
+    const core = new AppInsightsCore();
+    core.initialize(config, [properties, analytics, sender]);
+    // A site registration can outlive its page while SPFx waits for this script. No view has
+    // been accepted yet: a saved exit must not inherit a name from the ambient browser location.
+    let unnamedTrace = core.getTraceCtx();
+    if (unnamedTrace) unnamedTrace.pageName = 'SPOInsights';
+    core.addTelemetryInitializer(item => {
+        if (item.baseType === PageViewDataType && item.baseData) {
+            // Analytics adds document.referrer even though we didn't supply it. The referring
+            // document need not be a tracked site; the importer doesn't use it.
+            delete item.baseData.refUri;
+            const props = item.baseData.properties;
+            if (props?.duration === 0) {
+                // SDK 3 dates its first view from the browser's navigation entry, even for a soft
+                // navigation a day later. The importer filters on envelope time before reading Part C.
+                const viewed = Date.parse(props.timeStamp);
+                if (!isNaN(viewed)) item.baseData.startTime = new Date(viewed);
+            }
+        }
+        // The SDK also offers the old document's performance breakdown for a no-load navigation.
+        if (item.baseType === PageViewPerformanceDataType && item.data?.duration === 0) return false;
+    });
     properties.context.user.setAuthenticatedUserContext(userLoginName);
 
     // The full web SDK wires these itself. Keep short visits and clicks that navigate off the page.
@@ -32,5 +53,19 @@ export function createTrackerTelemetry(connectionString: string, userLoginName: 
     };
     addPageHideEventListener(flush);
     addPageUnloadEventListener(flush);
-    return analytics;
+    return {
+        trackEvent: (event, customProperties) => analytics.trackEvent(event, customProperties),
+        trackPageView(view, customProperties) {
+            // Keep one operation per document as before. Bind its name to the first explicitly
+            // tracked view, synchronously: the SDK may queue a view until its timings are ready.
+            if (unnamedTrace && view?.uri) {
+                try {
+                    const page = new URL(view.uri);
+                    unnamedTrace.pageName = page.pathname + page.hash;
+                    unnamedTrace = null;
+                } catch { /* No usable page address: leave the name neutral. */ }
+            }
+            analytics.trackPageView(view, customProperties);
+        }
+    };
 }

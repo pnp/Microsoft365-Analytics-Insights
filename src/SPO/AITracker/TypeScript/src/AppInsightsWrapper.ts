@@ -61,6 +61,9 @@ export class AppInsightsWrapper {
         };
         if (pageLoadDuration !== undefined) {
             appInsightsPageViewData['pageLoad'] = pageLoadDuration;
+            // The SDK reads "duration", not our importer-specific "pageLoad". A soft navigation
+            // has no new document timings; never borrow those of the document the tab first loaded.
+            if (pageLoadDuration === 0) appInsightsPageViewData['duration'] = 0;
 
             this._ai.trackPageView(pv);
             log('Uploaded page-view data with pageLoad override ' + pageLoadDuration + ' for pageRequestId: ' + this._pageRequestId + ', url: ' + document.URL + '. Page title: ' + document.title);
