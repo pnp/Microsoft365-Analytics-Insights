@@ -200,7 +200,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     (escalated ? " Teams call notifications are at risk until it succeeds - see the [Calls Webhook] diagnosis above." : string.Empty);
                 if (escalated)
                 {
-                    _logger.LogError(ex, message);
+                    // Kiota retry aggregates can include response bodies in their nested exception messages.
+                    _logger.LogError(ex is AggregateException ? null : ex, message);
                 }
                 else
                 {
@@ -274,6 +275,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// <summary>Type, HTTP status and Graph error code - enough to classify it from a log export. No response body.</summary>
         private static string Describe(Exception ex)
         {
+            if (ex is AggregateException aggregate)
+            {
+                var statuses = CallWebhook.HttpRejectionStatuses(aggregate);
+                return statuses == null ? nameof(AggregateException) : $"{nameof(AggregateException)}, HTTP {statuses}";
+            }
             if (ex is ODataError graphError)
             {
                 var code = graphError.Error?.Code;

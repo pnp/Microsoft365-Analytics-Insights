@@ -360,20 +360,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             catch (ApiException ex) when (ex is ODataError || (ex.ResponseStatusCode >= 400 && ex.ResponseStatusCode < 600))
             {
                 LogSubscriptionFailure(ex, currentUrl, isUpdate: false, replacingSubId: existing[0].Id);
-
-                // Keep the old subscription from lapsing while the replacement is retried.
-                if (CallSubscriptionRules.NeedsRenewal(existing[0].ExpirationDateTime, _clock.UtcNow))
-                {
-                    try
-                    {
-                        await RenewAsync(existing[0].Id, expiryUtc, existingUrl);
-                    }
-                    catch (Exception renewalFailure) when (!(renewalFailure is OperationCanceledException))
-                    {
-                        // The maintainer retries the replacement, not this best-effort renewal.
-                        Telemetry.LogWarning(renewalFailure, $"{LOG_TAG} The fallback renewal of '{existing[0].Id}' also failed; reporting the original replacement failure.");
-                    }
-                }
+                await RenewAfterRefusedReplacementAsync(existing[0], expiryUtc, existingUrl);
+                throw;
+            }
+            catch (AggregateException ex) when (HttpRejectionStatuses(ex) is string statuses)
+            {
+                // Kiota aggregates the HTTP errors when its retries are exhausted. Even a wrapped 409 is
+                // only a reason to keep what we have, never permission to delete or replay the POST.
+                Telemetry.Log(SubscriptionFailureLevel, $"{LOG_TAG} Graph refused the replacement after retries (HTTP {statuses}). " +
+                    $"Leaving subscription '{existing[0].Id}' in place and renewing it if due.");
+                await RenewAfterRefusedReplacementAsync(existing[0], expiryUtc, existingUrl);
                 throw;
             }
 
@@ -381,6 +377,33 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 $"replacing '{existingIds}'; expires {ExpiryOf(created, expiryUtc):u}.");
             await RecordAsync(currentUrl, created, clientState, ExpiryOf(created, expiryUtc));
             return created;
+        }
+
+        internal static string HttpRejectionStatuses(AggregateException failures)
+        {
+            var statuses = new SortedSet<int>();
+            bool Collect(Exception failure)
+            {
+                if (failure is AggregateException group) return group.InnerExceptions.Count > 0 && group.InnerExceptions.All(Collect);
+                if (!(failure is ApiException http) || http.InnerException != null || http.ResponseStatusCode < 400 || http.ResponseStatusCode >= 600) return false;
+                statuses.Add(http.ResponseStatusCode);
+                return true;
+            }
+            return Collect(failures) ? string.Join(", ", statuses) : null;
+        }
+
+        private async Task RenewAfterRefusedReplacementAsync(CallRecordSubscription existing, DateTime expiryUtc, Uri existingUrl)
+        {
+            if (!CallSubscriptionRules.NeedsRenewal(existing.ExpirationDateTime, _clock.UtcNow)) return;
+            try
+            {
+                await RenewAsync(existing.Id, expiryUtc, existingUrl);
+            }
+            catch (Exception renewalFailure) when (!(renewalFailure is OperationCanceledException))
+            {
+                // The maintainer retries the replacement, not this best-effort renewal.
+                Telemetry.LogWarning($"{LOG_TAG} The fallback renewal of '{existing.Id}' also failed ({renewalFailure.GetType().Name}); reporting the original replacement failure.");
+            }
         }
 
         /// <summary>

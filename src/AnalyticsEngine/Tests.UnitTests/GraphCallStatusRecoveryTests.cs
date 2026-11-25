@@ -20,6 +20,10 @@ namespace Tests.UnitTests
     [TestClass]
     public class GraphCallStatusRecoveryTests
     {
+        private static readonly Uri WebhookUrl = new Uri("https://contoso-analytics.example/api/CallRecordWebhook");
+        private static readonly FixedClock Clock = new FixedClock(new DateTime(2020, 1, 1, 12, 0, 0, DateTimeKind.Utc));
+        private static readonly CallWebhookClientState ClientState = CallWebhookClientState.For("synthetic", Guid.Empty.ToString(), Guid.Empty.ToString());
+
         internal static HttpResponseMessage ErrorResponse(int status, string mediaType)
         {
             var result = new HttpResponseMessage((HttpStatusCode)status);
@@ -201,49 +205,25 @@ namespace Tests.UnitTests
         public async Task Webhook_FailedCreate_ReplacesOnlyOnConflict_OtherwiseKeepsOwnedSubscription(int? status,
             int? ownedHoursLeft, string mediaType, int renewStatus)
         {
-            var webhookUrl = new Uri("https://contoso.example/api/CallRecordWebhook");
-            var currentUrl = CallSubscriptionRules.CurrentNotificationUrl(webhookUrl).AbsoluteUri;
-            var clock = new FixedClock(new DateTime(2020, 1, 1, 12, 0, 0, DateTimeKind.Utc));
-            var subs = new List<object>
-            {
-                new { id = "other-url", resource = CallSubscriptionRules.CallRecordsResource, notificationUrl = "https://other.example/webhook" },
-                new { id = "other-resource", resource = "/users", notificationUrl = currentUrl }
-            };
-            if (ownedHoursLeft.HasValue)
-                subs.Add(new { id = "owned", resource = CallSubscriptionRules.CallRecordsResource, notificationUrl = currentUrl,
-                    expirationDateTime = clock.UtcNow.AddHours(ownedHoursLeft.Value) });
-
             var operations = new List<string>();
             var creates = 0;
-            var transport = new TeamsCrawlTests.StubGraphHandler().Route("", request =>
-            {
-                var operation = request.Method + " " + request.RequestUri.AbsolutePath;
-                operations.Add(operation);
-                switch (operation)
+            var transport = SubscriptionTransport(ownedHoursLeft, operations,
+                create: () =>
                 {
-                    case "GET /v1.0/subscriptions":
-                        return TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, JsonConvert.SerializeObject(new { value = subs }));
-                    case "POST /v1.0/subscriptions":
-                        if (status == null) throw new OperationCanceledException();
-                        if (++creates > 1)
-                            return TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.Created, "{\"id\":\"replacement\"}");
-                        return ErrorResponse(status.Value, mediaType);
-                    case "DELETE /v1.0/subscriptions/owned":
-                        return new HttpResponseMessage(HttpStatusCode.NotFound); // Already removed between list and delete.
-                    case "PATCH /v1.0/subscriptions/owned":
-                        return renewStatus == 200 ? TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, "{\"id\":\"owned\"}")
-                            : new HttpResponseMessage((HttpStatusCode)renewStatus);
-                    default: throw new AssertFailedException("Unexpected subscription operation: " + operation);
-                }
-            });
+                    if (status == null) throw new OperationCanceledException();
+                    if (++creates > 1)
+                        return TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.Created, "{\"id\":\"replacement\"}");
+                    return ErrorResponse(status.Value, mediaType);
+                },
+                renew: () => renewStatus == 200 ? TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, "{\"id\":\"owned\"}")
+                    : new HttpResponseMessage((HttpStatusCode)renewStatus));
             using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
             {
                 var logger = new CallsImportTests.CapturingLogger();
-                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), logger, clock);
-                var state = CallWebhookClientState.For("synthetic", Guid.Empty.ToString(), Guid.Empty.ToString());
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), logger, Clock);
                 if (status == 409 && ownedHoursLeft.HasValue && mediaType != "text/html")
                 {
-                    var result = await webhook.CreateOrUpdateWebhook(webhookUrl, state);
+                    var result = await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
                     Assert.AreEqual(CallWebhookChange.Replaced, result.Change);
                     Assert.AreEqual("replacement", result.SubscriptionId);
                     CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions", "DELETE /v1.0/subscriptions/owned",
@@ -253,12 +233,12 @@ namespace Tests.UnitTests
                 {
                     if (status.HasValue)
                     {
-                        var failure = await Assert.ThrowsAsync<ApiException>(() => webhook.CreateOrUpdateWebhook(webhookUrl, state));
+                        var failure = await Assert.ThrowsAsync<ApiException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
                         Assert.AreEqual(status.Value, failure.ResponseStatusCode, "Surface the create failure even if the fallback renewal fails.");
                     }
                     else
                     {
-                        await Assert.ThrowsAsync<OperationCanceledException>(() => webhook.CreateOrUpdateWebhook(webhookUrl, state));
+                        await Assert.ThrowsAsync<OperationCanceledException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
                     }
                     var expected = new List<string> { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions" };
                     if (status.HasValue && ownedHoursLeft < 24) expected.Add("PATCH /v1.0/subscriptions/owned");
@@ -268,6 +248,90 @@ namespace Tests.UnitTests
                             "A gateway page is not an authoritative Graph diagnosis, nor should its content be logged.");
                 }
             }
+        }
+
+        [DataTestMethod]
+        [DataRow(23)]
+        [DataRow(24)]
+        [DataRow(null)]
+        public async Task Webhook_ExhaustedPostRetries_RethrowsTheSdkAggregateAndRenewsOnlyADueOwnedSubscription(int? ownedHoursLeft)
+        {
+            var operations = new List<string>();
+            var transport = SubscriptionTransport(ownedHoursLeft, operations,
+                create: () =>
+                {
+                    var failure = ErrorResponse(503, "text/html");
+                    failure.Headers.TryAddWithoutValidation("Retry-After", "0");
+                    return failure;
+                },
+                renew: () => TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, "{\"id\":\"owned\"}"));
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(30), transport))
+            {
+                var logger = new CallsImportTests.CapturingLogger();
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), logger, Clock);
+                var failure = await Assert.ThrowsExceptionAsync<AggregateException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
+                var attempts = failure.Flatten().InnerExceptions;
+                Assert.IsTrue(attempts.Count > 0 && attempts.All(e => e is ApiException api && api.ResponseStatusCode == 503));
+                var expected = new List<string> { "GET /v1.0/subscriptions" };
+                expected.AddRange(Enumerable.Repeat("POST /v1.0/subscriptions", 4)); // SDK retries only; no local POST replay.
+                if (ownedHoursLeft < 24) expected.Add("PATCH /v1.0/subscriptions/owned");
+                CollectionAssert.AreEqual(expected, operations);
+                Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains("Synthetic gateway response")));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("wrapped-conflict", true)]
+        [DataRow("mixed-transport", false)]
+        [DataRow("mixed-cancel", false)]
+        [DataRow("no-status", false)]
+        [DataRow("empty", false)]
+        public async Task Webhook_AggregateRequiresKnownHttpFailuresAndNeverEnablesDeletion(string kind, bool renew)
+        {
+            var http = new ApiException { ResponseStatusCode = 409 };
+            var failure = kind == "wrapped-conflict" ? new AggregateException(http)
+                : kind == "mixed-transport" ? new AggregateException(http, new HttpRequestException())
+                : kind == "mixed-cancel" ? new AggregateException(http, new OperationCanceledException())
+                : kind == "no-status" ? new AggregateException(new ApiException())
+                : new AggregateException();
+            var subscriptions = new FakeCallRecordSubscriptionManager()
+                .WithExistingSubscription("owned", Clock.UtcNow.AddHours(1)).FailingCreateWith(failure);
+            var webhook = new CallWebhook(subscriptions, NullLogger.Instance, Clock);
+
+            Assert.AreSame(failure, await Assert.ThrowsExceptionAsync<AggregateException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState)));
+            Assert.AreEqual(1, subscriptions.Creates.Count);
+            Assert.AreEqual(0, subscriptions.Deletes.Count);
+            CollectionAssert.AreEqual(renew ? new[] { "owned" } : Array.Empty<string>(), subscriptions.Renewals.Select(r => r.SubscriptionId).ToArray());
+        }
+
+        private static TeamsCrawlTests.StubGraphHandler SubscriptionTransport(int? ownedHoursLeft, List<string> operations,
+            Func<HttpResponseMessage> create, Func<HttpResponseMessage> renew)
+        {
+            var currentUrl = CallSubscriptionRules.CurrentNotificationUrl(WebhookUrl).AbsoluteUri;
+            var subs = new List<object>
+            {
+                new { id = "other-url", resource = CallSubscriptionRules.CallRecordsResource, notificationUrl = "https://other.example/webhook" },
+                new { id = "other-resource", resource = "/users", notificationUrl = currentUrl }
+            };
+            if (ownedHoursLeft.HasValue)
+                subs.Add(new { id = "owned", resource = CallSubscriptionRules.CallRecordsResource, notificationUrl = currentUrl,
+                    expirationDateTime = Clock.UtcNow.AddHours(ownedHoursLeft.Value) });
+
+            return new TeamsCrawlTests.StubGraphHandler().Route("", request =>
+            {
+                var operation = request.Method + " " + request.RequestUri.AbsolutePath;
+                operations.Add(operation);
+                switch (operation)
+                {
+                    case "GET /v1.0/subscriptions":
+                        return TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, JsonConvert.SerializeObject(new { value = subs }));
+                    case "POST /v1.0/subscriptions": return create();
+                    case "PATCH /v1.0/subscriptions/owned": return renew();
+                    case "DELETE /v1.0/subscriptions/owned":
+                        return new HttpResponseMessage(HttpStatusCode.NotFound); // Removed between list and delete.
+                    default: throw new AssertFailedException("Unexpected subscription operation: " + operation);
+                }
+            });
         }
     }
 }

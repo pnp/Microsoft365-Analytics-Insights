@@ -833,6 +833,26 @@ namespace Tests.UnitTests
             Assert.AreEqual(4, logger.Entries.Count(e => e.Level == LogLevel.Error && e.Message.Contains("Retry pending")));
         }
 
+        [TestMethod]
+        public async Task SubscriptionTimer_RetryAggregateLogsStatusesNotResponseBodies_EvenWhenEscalated()
+        {
+            const string payload = "synthetic response body";
+            var logger = new CapturingLogger();
+            var failure = new AggregateException(new Microsoft.Kiota.Abstractions.ApiException(payload) { ResponseStatusCode = 503 });
+            var subscriptions = new FakeCallRecordSubscriptionManager().WithCurrentSubscription("owned", Now.AddHours(1)).FailingCreateWith(failure);
+            var clock = new FixedClock(Now);
+            using (var timer = new CallSubscriptionMaintainer(new CallWebhook(subscriptions, logger, clock), WebhookUrl, ClientState, null, logger, clock))
+            {
+                for (int i = 0; i < CallSubscriptionMaintainer.EscalateAtAttempt; i++)
+                {
+                    await timer.RunOnceAsync();
+                    clock.Advance(timer.NextRunUtc - clock.UtcNow);
+                }
+            }
+            Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Error && e.Message.Contains("HTTP 503")));
+            Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains(payload) || e.Exception?.ToString().Contains(payload) == true));
+        }
+
         /// <summary>The hourly summary names the subscription and its expiry, so a log export shows the webhook's state at any hour.</summary>
         [TestMethod]
         public async Task SubscriptionTimer_LogsAnHourlySummary_WithTheSubscriptionAndItsExpiry()
@@ -2281,6 +2301,7 @@ namespace Tests.UnitTests
             {
                 public LogLevel Level { get; set; }
                 public string Message { get; set; }
+                public Exception Exception { get; set; }
             }
 
             public List<Entry> Entries { get; } = new List<Entry>();
@@ -2291,7 +2312,7 @@ namespace Tests.UnitTests
 
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
             {
-                Entries.Add(new Entry { Level = logLevel, Message = formatter(state, exception) });
+                Entries.Add(new Entry { Level = logLevel, Message = formatter(state, exception), Exception = exception });
             }
 
             private class NoopScope : IDisposable

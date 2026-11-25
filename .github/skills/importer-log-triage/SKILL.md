@@ -334,6 +334,7 @@ Healthy: `Created`/`Renewed` on schedule with a future expiry, one `listening` l
 | `Subscription lapsed`, then `Created` | Self-healed; a problem only if it repeats quickly |
 | `Graph refused a second call-records subscription ... 409` | Another subscription exists for the resource; the replacement path runs. An Error on the next line means calls are down |
 | `HTTP ... without a JSON Graph error` on replacement | The response may be from a gateway. It does not prove missing consent or a duplicate subscription, even if the status is 403 or 409. The importer leaves the old subscription in place and attempts renewal if due; it does not delete it on that evidence. |
+| `Graph refused the replacement after retries (HTTP ...)` | The SDK exhausted its retries. The importer does not issue another create or delete. It attempts to renew this webhook's existing subscription if due; look for `Renewed subscription id` to confirm that worked. The timer still retries the failed replacement. |
 | `Webhook warm-up failed` or a Graph validation timeout | Web app cold or unreachable from Graph; it must answer within seconds |
 | `DeadLettered:{reason}` | The importer gave up on the notification; the reason names why. A default replay replays it unless the reason is one of the never-importable ones above (`--include-invalid` for those) |
 | `paused for N minute(s)` | Systemic failure (SQL down, for example); resumes after one success. The `Retry:{kind}` lines before it say why |
