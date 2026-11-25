@@ -172,8 +172,10 @@ WHERE users.user_name LIKE @p0 AND history.valid_to_utc IS NULL", token + "%").S
             }
         }
 
-        [TestMethod]
-        public async Task ScheduledAppOnly_DeniedInventory_SavesMetadataWithoutLicenceReadsOrHistory_ThenRecoversOutsideDelta()
+        [DataTestMethod]
+        [DataRow(null)]
+        [DataRow("{")]
+        public async Task ScheduledAppOnly_DeniedInventory_SavesMetadataWithoutLicenceReadsOrHistory_ThenRecoversOutsideDelta(string refusalBody)
         {
             var prefix = "appsku" + Guid.NewGuid().ToString("N").Substring(0, 10);
             var existingUpn = prefix + "-existing@contoso.example";
@@ -212,8 +214,9 @@ VALUES (@p0, @p1, '2020-01-01', NULL, 1);", existing.ID, licence.ID);
                         }.ToString());
                     });
                     var sdk = new StubGraphHandler()
-                        .Route("/subscribedSkus", _ => denied ? new HttpResponseMessage(HttpStatusCode.Forbidden)
-                            : StubGraphHandler.Response(HttpStatusCode.OK, "{\"value\":[{\"skuId\":\"" + Guid.Empty + "\",\"skuPartNumber\":\"" + part + "\"}]}"))
+                        .Route("/subscribedSkus", _ => !denied
+                            ? StubGraphHandler.Response(HttpStatusCode.OK, "{\"value\":[{\"skuId\":\"" + Guid.Empty + "\",\"skuPartNumber\":\"" + part + "\"}]}")
+                            : refusalBody == null ? new HttpResponseMessage(HttpStatusCode.Forbidden) : StubGraphHandler.Response(HttpStatusCode.Forbidden, refusalBody))
                         .Json("/users", "{\"value\":[{\"userPrincipalName\":\"" + newUpn + "\"}]}");
                     var logger = AnalyticsLogger.ConsoleOnlyTracer();
                     var settings = new Common.Entities.Config.AppConfig { ConnectionStrings = new Common.Entities.Config.AppConnectionStrings(_ => "") };

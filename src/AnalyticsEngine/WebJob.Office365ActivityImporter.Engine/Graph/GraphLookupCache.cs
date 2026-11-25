@@ -119,10 +119,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </summary>
         internal static bool IsUserNotFound(ApiException ex)
         {
-            var code = (ex as ODataError)?.Error?.Code;
             return ex.ResponseStatusCode == (int)HttpStatusCode.NotFound
-                || string.Equals(code, "Request_ResourceNotFound", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(code, "ResourceNotFound", StringComparison.OrdinalIgnoreCase);
+                || GraphResponseEvidence.HasResourceNotFoundCode(ex);
         }
     }
 }

@@ -25,6 +25,19 @@ namespace Tests.UnitTests
         private static readonly FixedClock Clock = new FixedClock(new DateTime(2020, 1, 1, 12, 0, 0, DateTimeKind.Utc));
         private static readonly CallWebhookClientState ClientState = CallWebhookClientState.For("synthetic", Guid.Empty.ToString(), Guid.Empty.ToString());
 
+        private const string DuplicateMessage = "Subscription Id owned already exists for the requested combination.";
+        private static HttpResponseMessage Json(int status, string body) =>
+            TeamsCrawlTests.StubGraphHandler.Response((HttpStatusCode)status, body);
+
+        private static HttpResponseMessage Redirect() => Redirect(307);
+
+        private static HttpResponseMessage Redirect(int status)
+        {
+            var response = new HttpResponseMessage((HttpStatusCode)status);
+            response.Headers.Location = new Uri("/unrelated", UriKind.Relative);
+            return response;
+        }
+
         internal static HttpResponseMessage ErrorResponse(int status, string mediaType)
         {
             var result = new HttpResponseMessage((HttpStatusCode)status);
@@ -41,25 +54,27 @@ namespace Tests.UnitTests
         {
             var response = ErrorResponse(status, "text/html");
             // A JSON content-type isn't a parsed Graph error. The bounded reader rejects the
-            // advertised size without allocating it; the gateway page must not become a bodyless 404/409.
+            // advertised size without allocating it. Only the status survives, not evidence for deletion.
             response.Content.Headers.ContentType.MediaType = "application/json";
             response.Content.Headers.ContentLength = int.MaxValue;
             return response;
         }
 
         [DataTestMethod]
-        [DataRow(403, true)]
-        [DataRow(403, false)]
-        [DataRow(401, false)]
-        [DataRow(500, false)]
-        public async Task TenantInventory_HtmlFailure_OnlyForbiddenMeansUnavailable(int status, bool onNextPage)
+        [DataRow(403, true, false)]
+        [DataRow(403, false, false)]
+        [DataRow(403, true, true)]
+        [DataRow(403, false, true)]
+        [DataRow(401, false, false)]
+        [DataRow(500, false, false)]
+        public async Task TenantInventory_UnparseableFailure_OnlyForbiddenMeansUnavailable(int status, bool onNextPage, bool advertisedJson)
         {
             var calls = 0;
             var transport = new TeamsCrawlTests.StubGraphHandler().Route("/subscribedSkus", _ =>
                 ++calls == 1 && onNextPage
                     ? TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK,
                         "{\"value\":[{}],\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/subscribedSkus?page=2\"}")
-                    : ErrorResponse(status, "text/html"));
+                    : advertisedJson ? Json(status, "{") : ErrorResponse(status, "text/html"));
             using (var graph = GraphServiceClientFactory.CreateForGraphImport(new GraphBoundedRequestAndDeltaTests.SyntheticTokenCredential(),
                 GraphRequestBudgetOptions.GraphImportDefault, null, transport))
             {
@@ -71,6 +86,51 @@ namespace Tests.UnitTests
                 else
                     Assert.AreEqual(status, (await Assert.ThrowsAsync<ApiException>(() => loader.LoadTenantSkus())).ResponseStatusCode);
                 Assert.AreEqual(onNextPage ? 2 : 1, calls);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(null, false)]
+        [DataRow("{}", false)]
+        [DataRow("{\"error\":{}}", false)]
+        [DataRow("{\"error\":{\"code\":\" \"}}", false)]
+        [DataRow("{\"error\":{\"code\":\"BadRequest\"}}", false)]
+        [DataRow("{", false)]
+        [DataRow("{\"error\":{\"code\":\"Request_ResourceNotFound\"}}", true)]
+        public async Task ReusedUpn_OnlyStructuredAbsenceAllowsTheIndependentOwnerCheck(string body, bool confirmed)
+        {
+            var current = new GraphUser { Id = Guid.Empty.ToString(), UserPrincipalName = "person@contoso.example", AccountEnabled = true };
+            const string previousId = "00000000-0000-0000-0000-000000000001";
+            var json = JsonConvert.SerializeObject(new { id = current.Id, userPrincipalName = current.UserPrincipalName, accountEnabled = true });
+            var transport = new TeamsCrawlTests.StubGraphHandler().Json("/users/" + current.Id, json)
+                .Route("/users/" + previousId, _ => body == null ? new HttpResponseMessage(HttpStatusCode.NotFound) : Json(404, body))
+                .Json("/users", "{\"value\":[" + json + "]}");
+            using (var graph = GraphServiceClientFactory.CreateForGraphImport(new GraphBoundedRequestAndDeltaTests.SyntheticTokenCredential(),
+                GraphRequestBudgetOptions.GraphImportDefault, null, transport))
+            {
+                Assert.AreEqual(confirmed, await new GraphUserLoader(null, null, NullLogger.Instance, graph).VerifyReusedUpnAsync(current, previousId));
+                Assert.AreEqual(confirmed ? 3 : 2, transport.Requests.Count);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(1)]
+        [DataRow(2)]
+        [DataRow(3)]
+        public async Task ReusedUpn_RedirectInAnyVerificationReadKeepsQuarantine(int redirectedRead)
+        {
+            var current = new GraphUser { Id = Guid.Empty.ToString(), UserPrincipalName = "person@contoso.example", AccountEnabled = true };
+            const string previousId = "00000000-0000-0000-0000-000000000001";
+            var json = JsonConvert.SerializeObject(new { id = current.Id, userPrincipalName = current.UserPrincipalName, accountEnabled = true });
+            var transport = new TeamsCrawlTests.StubGraphHandler()
+                .Route("/users/" + current.Id, _ => redirectedRead == 1 ? Redirect() : Json(200, json))
+                .Route("/users/" + previousId, _ => redirectedRead == 2 ? Redirect() : Json(404, TeamsCrawlTests.StubGraphHandler.Error("Request_ResourceNotFound")))
+                .Route("/users", _ => Redirect());
+            using (var graph = GraphServiceClientFactory.CreateForGraphImport(new GraphBoundedRequestAndDeltaTests.SyntheticTokenCredential(),
+                GraphRequestBudgetOptions.GraphImportDefault, null, transport))
+            {
+                Assert.IsFalse(await new GraphUserLoader(null, null, NullLogger.Instance, graph).VerifyReusedUpnAsync(current, previousId));
+                Assert.AreEqual(redirectedRead, transport.Requests.Count, "A verification redirect must not be followed.");
             }
         }
 
@@ -192,10 +252,8 @@ namespace Tests.UnitTests
                 Task Read() => loader.LoadUserLicenseDetails("person");
                 if (!status.HasValue)
                     await Assert.ThrowsAsync<OperationCanceledException>(Read);
-                else if (status == 500)
-                    Assert.AreEqual(500, (await Assert.ThrowsAsync<ApiException>(Read)).ResponseStatusCode);
                 else
-                    await Assert.ThrowsAsync<InvalidOperationException>(Read);
+                    Assert.AreEqual(status.Value, (await Assert.ThrowsAsync<ApiException>(Read)).ResponseStatusCode);
                 Assert.AreEqual(1, transport.Requests.Count);
             }
         }
@@ -215,51 +273,216 @@ namespace Tests.UnitTests
         [DataRow(403, 24, null, 200)]
         [DataRow(403, null, null, 200)]
         [DataRow(null, 23, null, 200)]
-        public async Task Webhook_FailedCreate_ReplacesOnlyOnConflict_OtherwiseKeepsOwnedSubscription(int? status,
+        public async Task Webhook_FailedCreateWithoutDuplicateEvidence_KeepsOwnedSubscription(int? status,
             int? ownedHoursLeft, string mediaType, int renewStatus)
         {
             var operations = new List<string>();
-            var creates = 0;
             var transport = SubscriptionTransport(ownedHoursLeft, operations,
-                create: () =>
-                {
-                    if (status == null) throw new OperationCanceledException();
-                    if (++creates > 1)
-                        return TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.Created, "{\"id\":\"replacement\"}");
-                    return ErrorResponse(status.Value, mediaType);
-                },
+                create: () => status.HasValue ? ErrorResponse(status.Value, mediaType) : throw new OperationCanceledException(),
                 renew: () => renewStatus == 200 ? TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, "{\"id\":\"owned\"}")
                     : new HttpResponseMessage((HttpStatusCode)renewStatus));
             using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
             {
                 var logger = new CallsImportTests.CapturingLogger();
                 var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), logger, Clock);
-                if (status == 409 && ownedHoursLeft.HasValue && mediaType != "text/html")
+                if (status.HasValue)
                 {
-                    var result = await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
-                    Assert.AreEqual(CallWebhookChange.Replaced, result.Change);
-                    Assert.AreEqual("replacement", result.SubscriptionId);
-                    CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions", "DELETE /v1.0/subscriptions/owned",
-                        "POST /v1.0/subscriptions" }, operations);
+                    var failure = await Assert.ThrowsAsync<ApiException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
+                    Assert.AreEqual(status.Value, failure.ResponseStatusCode, "Surface the create failure even if the fallback renewal fails.");
                 }
                 else
-                {
-                    if (status.HasValue)
-                    {
-                        var failure = await Assert.ThrowsAsync<ApiException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
-                        Assert.AreEqual(status.Value, failure.ResponseStatusCode, "Surface the create failure even if the fallback renewal fails.");
-                    }
-                    else
-                    {
-                        await Assert.ThrowsAsync<OperationCanceledException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
-                    }
-                    var expected = new List<string> { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions" };
-                    if (status.HasValue && ownedHoursLeft < 24) expected.Add("PATCH /v1.0/subscriptions/owned");
-                    CollectionAssert.AreEqual(expected, operations);
-                    if (mediaType == "text/html" || status == 403 && mediaType == null)
-                        Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains("Synthetic gateway response") || e.Message.Contains("Grant admin consent")),
-                            "A gateway page is not an authoritative Graph diagnosis, nor should its content be logged.");
-                }
+                    await Assert.ThrowsAsync<OperationCanceledException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
+                var expected = new List<string> { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions" };
+                if (status.HasValue && ownedHoursLeft < 24) expected.Add("PATCH /v1.0/subscriptions/owned");
+                CollectionAssert.AreEqual(expected, operations);
+                Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains("Synthetic gateway response") || e.Message.Contains("Grant admin consent")),
+                    "A bare status or unrelated error code is not a permission or duplicate diagnosis.");
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(409, "{}")]
+        [DataRow(409, "{\"error\":{}}")]
+        [DataRow(409, "{\"error\":{\"code\":[]}}")]
+        [DataRow(409, "{\"error\":{\"message\":\"" + DuplicateMessage + "\"}}")]
+        [DataRow(409, "{\"error\":{\"code\":\"Unrelated\",\"message\":\"" + DuplicateMessage + "\"}}")]
+        [DataRow(409, "{\"error\":{\"code\":\"ExtensionError\",\"message\":\"Unrelated conflict\"}}")]
+        [DataRow(409, "{\"error\":{\"code\":\"ExtensionError\",\"message\":\"Subscription Id other-url already exists for the requested combination.\"}}")]
+        [DataRow(409, "{")]
+        [DataRow(403, "<html>Synthetic gateway response</html>")]
+        [DataRow(500, "{")]
+        public async Task Webhook_InconclusiveCreateFailure_OnlyRenewsTheDueSubscription(int status, string body)
+        {
+            var operations = new List<string>();
+            var transport = SubscriptionTransport(1, operations, () => Json(status, body), () => Json(200, "{\"id\":\"owned\"}"));
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var logger = new CallsImportTests.CapturingLogger();
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), logger, Clock);
+                Assert.AreEqual(status, (await Assert.ThrowsAsync<ApiException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState))).ResponseStatusCode);
+                Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains("Synthetic gateway response") || e.Message.Contains("Grant admin consent")));
+            }
+            CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions", "PATCH /v1.0/subscriptions/owned" }, operations);
+        }
+
+        [DataTestMethod]
+        [DataRow("Conflict", DuplicateMessage, false)]
+        [DataRow("ExtensionError", "Subscription Id <owned> already exists for the requested combination", true)]
+        public async Task Webhook_DirectStructuredDuplicateNamesAnOwnedSubscription(string code, string message, bool alreadyGone)
+        {
+            var operations = new List<string>();
+            var posts = 0;
+            var transport = SubscriptionTransport(1, operations, () => ++posts == 1
+                ? Json(409, JsonConvert.SerializeObject(new { error = new { code, message } }))
+                : Json(201, "{\"id\":\"replacement\"}"), () => throw new AssertFailedException(),
+                () => alreadyGone ? Json(404, TeamsCrawlTests.StubGraphHandler.Error("ResourceNotFound")) : new HttpResponseMessage(HttpStatusCode.NoContent));
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var result = await new CallWebhook(new GraphCallRecordSubscriptionManager(graph), NullLogger.Instance, Clock)
+                    .CreateOrUpdateWebhook(WebhookUrl, ClientState);
+                Assert.AreEqual(CallWebhookChange.Replaced, result.Change);
+                Assert.AreEqual("replacement", result.SubscriptionId);
+            }
+            CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions", "DELETE /v1.0/subscriptions/owned",
+                "POST /v1.0/subscriptions" }, operations);
+        }
+
+        [DataTestMethod]
+        [DataRow(301)]
+        [DataRow(302)]
+        [DataRow(307)]
+        public async Task Webhook_RedirectedReplacementIsInconclusiveAndStartsNoSubsequentWrite(int status)
+        {
+            var operations = new List<string>();
+            var transport = SubscriptionTransport(1, operations, () => Redirect(status), () => throw new AssertFailedException());
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), NullLogger.Instance, Clock);
+                var refusal = await Assert.ThrowsAsync<ApiException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
+                Assert.AreEqual(status, refusal.ResponseStatusCode);
+                StringAssert.Contains(refusal.Message, "not followed");
+            }
+            CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions" }, operations);
+        }
+
+        [TestMethod]
+        public async Task Webhook_EmptyReplacementResponseStopsBeforeCleanup()
+        {
+            var operations = new List<string>();
+            var transport = SubscriptionTransport(1, operations, () => Json(201, "{}"), () => throw new AssertFailedException());
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), NullLogger.Instance, Clock);
+                await Assert.ThrowsAsync<InvalidOperationException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
+            }
+            CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions" }, operations);
+        }
+
+        [TestMethod]
+        public async Task SubscriptionRead_KiotaStatusRetryKeepsTheDirectResponseRequirement()
+        {
+            var calls = 0;
+            var transport = new TeamsCrawlTests.StubGraphHandler().Route("/subscriptions", request =>
+            {
+                Assert.AreEqual(HttpMethod.Get, request.Method);
+                if (++calls > 1) return Redirect();
+                var retry = Json(503, "{");
+                retry.Headers.TryAddWithoutValidation("Retry-After", "0");
+                return retry;
+            });
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(10), transport))
+            {
+                await Assert.ThrowsAsync<GraphDecisionRedirectException>(() => new GraphCallRecordSubscriptionManager(graph).FindCallRecordSubscriptions(WebhookUrl));
+            }
+            Assert.AreEqual(2, transport.Requests.Count);
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task Webhook_RedirectedInventoryPageStopsBeforeMutation(bool secondPage)
+        {
+            var calls = 0;
+            var transport = new TeamsCrawlTests.StubGraphHandler().Route("/subscriptions", request =>
+            {
+                Assert.AreEqual(HttpMethod.Get, request.Method);
+                return ++calls == 1 && secondPage
+                    ? Json(200, "{\"value\":[],\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/subscriptions?page=2\"}")
+                    : Redirect();
+            });
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), NullLogger.Instance, Clock);
+                await Assert.ThrowsAsync<GraphDecisionRedirectException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
+            }
+            Assert.AreEqual(secondPage ? 2 : 1, transport.Requests.Count);
+        }
+
+        [DataTestMethod]
+        [DataRow(404, null)]
+        [DataRow(404, "{\"error\":{\"code\":\"BadRequest\"}}")]
+        [DataRow(307, null)]
+        public async Task Webhook_InconclusiveDeleteDoesNotStartAnotherCreate(int status, string body)
+        {
+            var operations = new List<string>();
+            var transport = SubscriptionTransport(1, operations,
+                () => Json(409, JsonConvert.SerializeObject(new { error = new { code = "ExtensionError", message = DuplicateMessage } })),
+                () => throw new AssertFailedException(),
+                () => status == 307 ? Redirect() : body == null ? new HttpResponseMessage(HttpStatusCode.NotFound) : Json(status, body));
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), NullLogger.Instance, Clock);
+                Assert.AreEqual(status, (await Assert.ThrowsAsync<ApiException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState))).ResponseStatusCode);
+            }
+            CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions", "DELETE /v1.0/subscriptions/owned" }, operations);
+        }
+
+        [TestMethod]
+        public async Task TenantInventory_MalformedSuccessDoesNotSelectThePermissionFallback()
+        {
+            var transport = new TeamsCrawlTests.StubGraphHandler().Json("/subscribedSkus", "{");
+            using (var graph = GraphServiceClientFactory.CreateForGraphImport(new GraphBoundedRequestAndDeltaTests.SyntheticTokenCredential(),
+                GraphRequestBudgetOptions.GraphImportDefault, null, transport))
+            {
+                var loader = new GraphUserLoader(null, null, NullLogger.Instance, graph);
+                await Assert.ThrowsAsync<System.Text.Json.JsonException>(() => loader.LoadTenantSkus());
+            }
+            Assert.AreEqual(1, transport.Requests.Count);
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task DirectError_PrebufferedByTheTransportIsStillSizeLimited(bool large)
+        {
+            var body = TeamsCrawlTests.StubGraphHandler.Error("ResourceNotFound");
+            var response = Json(404, large ? body.PadRight(GraphResponseEvidence.MaxErrorBytes + 1) : body);
+            await response.Content.LoadIntoBufferAsync();
+            var transport = new TeamsCrawlTests.StubGraphHandler().Route("/subscribedSkus", _ => response);
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var error = await Assert.ThrowsAsync<ApiException>(() => graph.SubscribedSkus.GetAsync(rc => rc.Options.Add(GraphResponseEvidence.RequireDirect)));
+                Assert.AreEqual(404, error.ResponseStatusCode);
+                Assert.AreEqual(!large, GraphResponseEvidence.ConfirmsNotFound(error));
+            }
+        }
+
+        [TestMethod]
+        public async Task TenantInventory_AuthenticationChallengeStillReachesKiota()
+        {
+            var calls = 0;
+            var transport = new TeamsCrawlTests.StubGraphHandler().Route("/subscribedSkus", _ =>
+            {
+                if (++calls != 1) return Json(200, "{\"value\":[]}");
+                var challenge = Json(401, "{");
+                challenge.Headers.WwwAuthenticate.ParseAdd("Bearer claims=\"e30=\""); // Base64 for an empty JSON object.
+                return challenge;
+            });
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var skus = await new GraphUserLoader(null, null, NullLogger.Instance, graph).LoadTenantSkus();
+                Assert.AreEqual(0, skus.Count, "The second, successful response is the inventory, not a permission fallback.");
+                Assert.AreEqual(2, calls);
             }
         }
 
@@ -267,10 +490,8 @@ namespace Tests.UnitTests
         public async Task Webhook_UnreadableConflictBody_DoesNotAuthorizeDeletingAnOwnedSubscription()
         {
             var operations = new List<string>();
-            var posts = 0;
             var transport = SubscriptionTransport(1, operations,
-                () => ++posts == 1 ? UnreadableJsonRefusal(409)
-                    : TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.Created, "{\"id\":\"replacement\"}"),
+                () => UnreadableJsonRefusal(409),
                 () => TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, "{\"id\":\"owned\"}"));
             using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
             {
@@ -454,7 +675,7 @@ namespace Tests.UnitTests
         }
 
         private static TeamsCrawlTests.StubGraphHandler SubscriptionTransport(int? ownedHoursLeft, List<string> operations,
-            Func<HttpResponseMessage> create, Func<HttpResponseMessage> renew)
+            Func<HttpResponseMessage> create, Func<HttpResponseMessage> renew, Func<HttpResponseMessage> delete = null)
         {
             var currentUrl = CallSubscriptionRules.CurrentNotificationUrl(WebhookUrl).AbsoluteUri;
             var subs = new List<object>
@@ -477,7 +698,7 @@ namespace Tests.UnitTests
                     case "POST /v1.0/subscriptions": return create();
                     case "PATCH /v1.0/subscriptions/owned": return renew();
                     case "DELETE /v1.0/subscriptions/owned":
-                        return new HttpResponseMessage(HttpStatusCode.NotFound); // Removed between list and delete.
+                        return delete == null ? Json(404, TeamsCrawlTests.StubGraphHandler.Error("ResourceNotFound")) : delete();
                     default: throw new AssertFailedException("Unexpected subscription operation: " + operation);
                 }
             });

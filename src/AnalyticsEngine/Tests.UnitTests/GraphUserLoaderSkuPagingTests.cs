@@ -40,13 +40,13 @@ namespace Tests.UnitTests
         private const string NotFoundJson = "{\"error\":{\"code\":\"Request_ResourceNotFound\",\"message\":\"synthetic missing object\"}}";
 
         [DataTestMethod]
-        [DataRow(true)]
-        [DataRow(false)]
-        public async Task ReusedUpn_FreshOwnerAndCorroboratedAbsence_UsesOnlyTheConflictingPair(bool hasErrorBody)
+        [DataRow("Request_ResourceNotFound")]
+        [DataRow("ResourceNotFound")]
+        public async Task ReusedUpn_FreshOwnerAndCorroboratedAbsence_UsesOnlyTheConflictingPair(string code)
         {
             var handler = new ScriptedGraphHandler()
                 .Then(HttpStatusCode.OK, CurrentJson)
-                .Then(HttpStatusCode.NotFound, hasErrorBody ? NotFoundJson : null)
+                .Then(HttpStatusCode.NotFound, TeamsCrawlTests.StubGraphHandler.Error(code))
                 .Then(HttpStatusCode.OK, "{\"value\":[" + CurrentJson + "]}");
             Assert.IsTrue(await NewLoader(handler).VerifyReusedUpnAsync(CurrentOwner(), PreviousId));
             Assert.AreEqual(3, handler.Requests.Count);
@@ -103,7 +103,7 @@ namespace Tests.UnitTests
         {
             var handler = new ScriptedGraphHandler()
                 .Then(HttpStatusCode.OK, CurrentJson)
-                .Then(HttpStatusCode.NotFound, null)
+                .Then(HttpStatusCode.NotFound, NotFoundJson)
                 .Then(HttpStatusCode.Forbidden, NotFoundJson);
             Assert.IsFalse(await NewLoader(handler).VerifyReusedUpnAsync(CurrentOwner(), PreviousId));
             Assert.AreEqual(3, handler.Requests.Count);

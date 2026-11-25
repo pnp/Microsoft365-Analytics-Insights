@@ -3,7 +3,7 @@ using Common.Entities.Config;
 using Common.Entities.State;
 using DataUtils;
 using Microsoft.Extensions.Logging;
-using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -213,8 +213,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     (escalated ? " Teams call notifications are at risk until it succeeds - see the [Calls Webhook] diagnosis above." : string.Empty);
                 if (escalated)
                 {
-                    // Kiota retry aggregates can include response bodies in their nested exception messages.
-                    _logger.LogError(ex is AggregateException ? null : ex, message);
+                    // Graph errors and retry aggregates can contain response bodies or consent details.
+                    _logger.LogError(ex is AggregateException || ex is ApiException ? null : ex, message);
                 }
                 else
                 {
@@ -285,7 +285,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             _nextSummaryUtc = now + SummaryInterval;
         }
 
-        /// <summary>Type, HTTP status and Graph error code - enough to classify it from a log export. No response body.</summary>
+        /// <summary>Report HTTP outcomes without logging the server's error text or an SDK retry body.</summary>
         private static string Describe(Exception ex)
         {
             if (ex is AggregateException aggregate)
@@ -293,11 +293,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 var statuses = CallWebhook.HttpRejectionStatuses(aggregate);
                 return statuses == null ? nameof(AggregateException) : $"{nameof(AggregateException)}, HTTP {statuses}";
             }
-            if (ex is ODataError graphError)
-            {
-                var code = graphError.Error?.Code;
-                return $"{nameof(ODataError)}, HTTP {graphError.ResponseStatusCode}" + (string.IsNullOrEmpty(code) ? string.Empty : $", Graph code '{code}'");
-            }
+            if (ex is GraphDecisionRedirectException) return ex.Message;
+            if (ex is ApiException http) return $"HTTP {http.ResponseStatusCode}";
 
             return ex.GetType().Name + ": " + ex.Message;
         }

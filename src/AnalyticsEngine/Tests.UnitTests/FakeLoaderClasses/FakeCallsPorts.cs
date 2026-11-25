@@ -127,14 +127,14 @@ namespace UnitTests.FakeLoaderClasses
                 return Task.FromException<CallRecordSubscription>(_createFailure);
             }
 
-            if (_refuseDuplicates && _existing.Any(s => s.Resource == CallSubscriptionRules.CallRecordsResource
-                && CallSubscriptionRules.IsCallRecordsSubscriptionFor(s.Resource, s.NotificationUrl, new Uri("https://contoso-analytics.example/api/CallRecordWebhook"))))
+            if (_refuseDuplicates && _existing.FirstOrDefault(s =>
+                CallSubscriptionRules.IsCallRecordsSubscriptionFor(s.Resource, s.NotificationUrl, new Uri("https://contoso-analytics.example/api/CallRecordWebhook"))) is CallRecordSubscription duplicate)
             {
                 Operations.Add("conflict");
                 return Task.FromException<CallRecordSubscription>(new Microsoft.Graph.Models.ODataErrors.ODataError
                 {
                     ResponseStatusCode = 409,
-                    Error = new Microsoft.Graph.Models.ODataErrors.MainError { Code = "ExtensionError", Message = "Subscription already exists for the requested combination." }
+                    Error = new Microsoft.Graph.Models.ODataErrors.MainError { Code = "ExtensionError", Message = $"Subscription Id {duplicate.Id} already exists for the requested combination." }
                 });
             }
 

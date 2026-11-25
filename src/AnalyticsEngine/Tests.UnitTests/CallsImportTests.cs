@@ -46,7 +46,7 @@ namespace Tests.UnitTests
             return new ODataError
             {
                 ResponseStatusCode = statusCode,
-                Error = new MainError { Message = message }
+                Error = new MainError { Code = statusCode == 403 ? "Authorization_RequestDenied" : ((HttpStatusCode)statusCode).ToString(), Message = message }
             };
         }
 
@@ -164,7 +164,8 @@ namespace Tests.UnitTests
             await Assert.ThrowsExceptionAsync<ODataError>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
 
             var critical = logger.Entries.Where(e => e.Level == LogLevel.Critical).Single();
-            StringAssert.Contains(critical.Message, "Too many requests. Please retry later.");
+            StringAssert.Contains(critical.Message, "429");
+            StringAssert.Contains(critical.Message, "throttled");
             Assert.IsFalse(critical.Message.Contains("CallRecords.Read.All"),
                 "Only a 403 should point the admin at the Graph permission; saying so for every failure sends them down the wrong path.");
             Assert.IsFalse(critical.Message.Contains("called BACK"),
@@ -833,12 +834,18 @@ namespace Tests.UnitTests
             Assert.AreEqual(4, logger.Entries.Count(e => e.Level == LogLevel.Error && e.Message.Contains("Retry pending")));
         }
 
-        [TestMethod]
-        public async Task SubscriptionTimer_RetryAggregateLogsStatusesNotResponseBodies_EvenWhenEscalated()
+        [DataTestMethod]
+        [DataRow(503)]
+        [DataRow(400)]
+        [DataRow(403)]
+        [DataRow(409)]
+        public async Task SubscriptionTimer_LogsStatusesNotRefusalBodies_EvenWhenEscalated(int status)
         {
             const string payload = "synthetic response body";
             var logger = new CapturingLogger();
-            var failure = new AggregateException(new Microsoft.Kiota.Abstractions.ApiException(payload) { ResponseStatusCode = 503 });
+            Exception failure = status == 503
+                ? (Exception)new AggregateException(new Microsoft.Kiota.Abstractions.ApiException(payload) { ResponseStatusCode = status })
+                : GraphError(status, payload);
             var subscriptions = new FakeCallRecordSubscriptionManager().WithCurrentSubscription("owned", Now.AddHours(1)).FailingCreateWith(failure);
             var clock = new FixedClock(Now);
             using (var timer = new CallSubscriptionMaintainer(new CallWebhook(subscriptions, logger, clock), WebhookUrl, ClientState, null, logger, clock))
@@ -849,7 +856,7 @@ namespace Tests.UnitTests
                     clock.Advance(timer.NextRunUtc - clock.UtcNow);
                 }
             }
-            Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Error && e.Message.Contains("HTTP 503")));
+            Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Error && e.Message.Contains("HTTP " + status)));
             Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains(payload) || e.Exception?.ToString().Contains(payload) == true));
         }
 

@@ -20,13 +20,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             cancellationToken.ThrowIfCancellationRequested();
             var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            var direct = GraphResponseEvidence.IsRequired(request);
+            var status = (int)response.StatusCode;
+            if (direct && status >= 300 && status < 400)
+            {
+                // Below Kiota's redirect handler, with native redirects disabled in both production factories.
+                response.Dispose();
+                throw new GraphDecisionRedirectException(status);
+            }
             var content = response.Content;
             try
             {
                 // Custom redirect predicates receive the response, not the current request.
                 if (response.RequestMessage == null) response.RequestMessage = request;
-                var refusal = NonJsonGraphRefusal.FromResponse(request, response);
-                if (refusal != null) throw refusal;
+                var checkError = direct && GraphResponseEvidence.CheckErrorBody(status);
                 var automaticRedirect = IsAutomaticRedirect(request, response);
                 if (automaticRedirect)
                     GraphRedirectLocationHandler.ResolveLocation(response, request.RequestUri);
@@ -41,17 +48,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     response.Content = empty;
                     content.Dispose();
                 }
-                else if (content != null && automaticRedirect)
+                else if (content != null && (automaticRedirect || checkError && !GraphTransientErrorHandler.IsJson(content.Headers.ContentType?.MediaType)))
                 {
-                    // Kiota drains a redirect before sending its next request. It needs only the
-                    // status and Location; close the transport without spending the attempt on it.
+                    // Only the headers are useful. Kiota still sees the status and any Retry-After.
                     response.Content = null;
                     content.Dispose();
                 }
                 else if (content != null)
                 {
                     await BodyReadSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    var read = BufferAndReleaseSlotAsync(content);
+                    var read = BufferAndReleaseSlotAsync(content, checkError, cancellationToken);
                     if (!read.IsCompleted && await Task.WhenAny(read, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false) != read)
                     {
                         // net48 LoadIntoBufferAsync has no cancellation overload. Dispose the transport
@@ -61,28 +67,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
                         throw new OperationCanceledException(cancellationToken);
                     }
-                    await read.ConfigureAwait(false);
+                    if (!await read.ConfigureAwait(false))
+                    {
+                        // Otherwise Kiota can throw a parser exception without the known HTTP status.
+                        response.Content = null;
+                        content.Dispose();
+                    }
                 }
                 cancellationToken.ThrowIfCancellationRequested(); // Cancellation can also surface as EOF.
                 return response;
-            }
-            catch (NonJsonGraphRefusal)
-            {
-                response.Dispose();
-                throw;
             }
             catch (Exception ex)
             {
                 if (HasHttpErrorStatus(response) && (cancellationToken.IsCancellationRequested || ex is HttpRequestException))
                 {
-                    // Once discarded, even an advertised JSON error cannot be distinguished from a
-                    // genuinely bodyless duplicate/absence by Kiota. Preserve the uncertainty.
-                    var refusal = NonJsonGraphRefusal.FromResponse(request, response, unreadableBody: true);
-                    if (refusal != null)
-                    {
-                        response.Dispose();
-                        throw refusal;
-                    }
                     // Kiota reads even a throttling error's body before waiting. Give it the known status
                     // and Retry-After, not a local timeout retry. The outer handler checks caller cancellation.
                     response.Content?.Dispose();
@@ -132,9 +130,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
         }
 
-        private static async Task BufferAndReleaseSlotAsync(HttpContent content)
+        private static async Task<bool> BufferAndReleaseSlotAsync(HttpContent content, bool checkError, CancellationToken cancellationToken)
         {
-            try { await content.LoadIntoBufferAsync(MaxPageBytes).ConfigureAwait(false); }
+            try
+            {
+                await content.LoadIntoBufferAsync(checkError ? GraphResponseEvidence.MaxErrorBytes : MaxPageBytes).ConfigureAwait(false);
+                return !checkError || await GraphResponseEvidence.HasStructuredErrorAsync(content, cancellationToken).ConfigureAwait(false);
+            }
             finally { BodyReadSlots.Release(); }
         }
     }

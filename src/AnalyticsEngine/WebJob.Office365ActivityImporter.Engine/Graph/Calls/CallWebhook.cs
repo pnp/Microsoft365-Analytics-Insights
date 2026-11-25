@@ -338,7 +338,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// Graph cannot change a subscription's clientState, so create the replacement and only then remove the old
         /// one(s) - never a moment with no subscription. Notifications from both in between are harmless: a call is saved
         /// by its Graph id, replacing any copy already saved. If Graph refuses the duplicate (409, as documented though not
-        /// observed for call records), this webhook's subscriptions are deleted first instead - see <see cref="ReplaceAfterConflictAsync"/>.
+        /// observed for call records) and names one of this webhook's subscriptions, only that one is removed first.
         /// </summary>
         /// <returns>The new subscription.</returns>
         private async Task<CallRecordSubscription> ReplaceAsync(Uri currentUrl, IReadOnlyList<CallRecordSubscription> existing, Uri existingUrl,
@@ -355,9 +355,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 created = await _subscriptions.CreateSubscription(currentUrl, clientState.Value, expiryUtc);
             }
-            catch (ApiException ex) when (!(ex is NonJsonGraphRefusal) && CallSubscriptionRules.IsDuplicateSubscriptionConflict(ex.ResponseStatusCode))
+            catch (ODataError ex) when (DuplicateSubscriptionId(ex) is string duplicateId
+                && allOurs.Any(s => s.Id == duplicateId))
             {
-                created = await ReplaceAfterConflictAsync(currentUrl, allOurs, clientState, expiryUtc, ex, deleted);
+                created = await ReplaceAfterConflictAsync(currentUrl, duplicateId, clientState, expiryUtc, deleted);
                 await RecordAsync(currentUrl, created, clientState, ExpiryOf(created, expiryUtc));
                 return created;
             }
@@ -413,32 +414,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         }
 
         /// <summary>
-        /// Graph's documented answer to a second subscription for the same resource and change type is 409 Conflict. Then the
-        /// only way to a subscription with the current clientState is to delete this webhook's own first (never another
-        /// URL's) and create straight after - a gap of a Graph round-trip or two, which is logged. If the create then fails,
-        /// there is no subscription at all until the subscription timer's retry, which is why that is an Error.
+        /// Graph explicitly named this owned subscription as the duplicate. Remove it, not a sibling or another URL's
+        /// subscription, and create straight after. If the create fails, delivery is at risk until the timer retries.
         /// </summary>
-        private async Task<CallRecordSubscription> ReplaceAfterConflictAsync(Uri currentUrl, IReadOnlyList<CallRecordSubscription> allOurs,
-            CallWebhookClientState clientState, DateTime expiryUtc, ApiException conflict, ISet<string> deleted)
+        private async Task<CallRecordSubscription> ReplaceAfterConflictAsync(Uri currentUrl, string duplicateId,
+            CallWebhookClientState clientState, DateTime expiryUtc, ISet<string> deleted)
         {
-            var ids = string.Join("', '", allOurs.Select(s => s.Id));
-            Telemetry.LogWarning($"{LOG_TAG} Graph refused a second call-records subscription: {StatusLine(conflict)} Graph error: " +
-                $"'{GraphErrorMessage(conflict)}'. Deleting this webhook's subscription(s) '{ids}' first, then creating the replacement; " +
+            Telemetry.LogWarning($"{LOG_TAG} Graph refused a second call-records subscription (409 Conflict). " +
+                $"Deleting this webhook's conflicting subscription '{duplicateId}' first, then creating the replacement; " +
                 "call notifications are not delivered in between.");
 
             var gap = Stopwatch.StartNew();
-            foreach (var old in allOurs)
+            try
             {
-                try
-                {
-                    await _subscriptions.DeleteSubscription(old.Id);
-                }
-                catch (ApiException ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
-                {
-                    // Already gone: nothing in the way.
-                }
-                deleted.Add(old.Id);
+                await _subscriptions.DeleteSubscription(duplicateId);
             }
+            catch (ODataError ex) when (GraphResponseEvidence.ConfirmsNotFound(ex))
+            {
+                // Graph confirmed that the named subscription disappeared between the list and the delete.
+            }
+            deleted.Add(duplicateId);
 
             CallRecordSubscription created;
             try
@@ -448,12 +443,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             catch (ApiException ex)
             {
                 LogSubscriptionFailure(ex, currentUrl, isUpdate: false);
-                Telemetry.LogError($"{LOG_TAG} Deleted subscription(s) '{ids}' to make room after a 409 Conflict, but the replacement could not be created " +
-                    $"({StatusLine(ex)}): this webhook has NO call-records subscription until the next attempt.");
+                Telemetry.LogError($"{LOG_TAG} Removed conflicting subscription '{duplicateId}', but the replacement could not be created " +
+                    $"({StatusLine(ex)}). Call notifications are at risk until the next attempt.");
                 throw;
             }
 
-            Telemetry.LogWarning($"{LOG_TAG} Created subscription id '{created.Id}' for webhook at '{currentUrl}' after deleting '{ids}' (409 Conflict fallback); " +
+            Telemetry.LogWarning($"{LOG_TAG} Created subscription id '{created.Id}' for webhook at '{currentUrl}' after deleting '{duplicateId}' (409 Conflict fallback); " +
                 $"notifications were not delivered for {gap.ElapsedMilliseconds} ms. Expires {ExpiryOf(created, expiryUtc):u}.");
             return created;
         }
@@ -498,13 +493,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 await _subscriptions.DeleteSubscription(old.Id);
                 Telemetry.LogInformation($"{LOG_TAG} Deleted replaced subscription id '{old.Id}'.");
             }
-            catch (ApiException ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
+            catch (ODataError ex) when (GraphResponseEvidence.ConfirmsNotFound(ex))
             {
                 Telemetry.LogInformation($"{LOG_TAG} Replaced subscription id '{old.Id}' was already gone.");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!(ex is GraphDecisionRedirectException || ex is OperationCanceledException))
             {
-                var error = ex is ApiException graphError ? $"{StatusLine(graphError)} Graph error: '{GraphErrorMessage(graphError)}'" : ex.Message;
+                var error = ex is ApiException graphError ? StatusLine(graphError) : ex.GetType().Name;
                 var expires = old.ExpirationDateTime.HasValue ? $" at {old.ExpirationDateTime.Value.UtcDateTime:u}" : string.Empty;
                 Telemetry.LogWarning($"{LOG_TAG} Couldn't delete replaced subscription id '{old.Id}': {error} " +
                     $"It is no longer renewed, so Graph removes it when it expires{expires}; deleting it is retried on the next check. Until then " +
@@ -566,12 +561,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// <summary>
         /// Emit a single, actionable log - at <see cref="SubscriptionFailureLevel"/> - so operators can immediately tell:
         ///   (a) that the Teams calls import is broken,
-        ///   (b) what Graph returned (status + message),
+        ///   (b) what HTTP status Graph returned, without copying its response text into logs,
         ///   (c) for the common 403 case, exactly which Graph Application permission to grant, and
         ///   (d) for a failed validation callback, that the fault is at OUR endpoint rather than in
         ///       Graph permissions - see issue #273.
         /// The exception is then re-thrown by the caller so <c>CallSubscriptionMaintainer</c> schedules the retry and, once
-        /// it escalates, tracks the exception for App Insights' Failures blade.
+        /// it escalates, reports the failure without attaching a Graph response to telemetry.
         /// </summary>
         /// <param name="replacingSubId">
         /// Set when the failed create was to replace an existing subscription. Renewal is best effort.
@@ -583,27 +578,36 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 : replacingSubId == null ? "create subscription" : $"create a subscription to replace '{replacingSubId}'";
             var statusCode = ex.ResponseStatusCode;
             var statusLine = StatusLine(ex);
-            var graphError = GraphErrorMessage(ex);
             var impact = replacingSubId == null
                 ? "Until this is fixed, NO Teams call records will be imported."
                 : $"Subscription '{replacingSubId}' is left in place; renewal is attempted if due and the replacement is retried within minutes. " +
                   $"After a client-secret rotation the webhook accepts its notifications for at most {CallSubscriptionRules.PreviousClientStateWindow.TotalHours:0} hours.";
 
-            if (ex is NonJsonGraphRefusal || (statusCode == (int)HttpStatusCode.Forbidden && !(ex is ODataError)))
+            if (ex is GraphDecisionRedirectException)
+            {
+                Telemetry.Log(SubscriptionFailureLevel, $"{LOG_TAG} Couldn't {action} for call-records. {ex.Message}");
+                return;
+            }
+            var code = (ex as ODataError)?.Error?.Code;
+            if (string.IsNullOrWhiteSpace(code)
+                || statusCode == (int)HttpStatusCode.Forbidden && !IsPermissionCode(code)
+                || (statusCode == (int)HttpStatusCode.Conflict && (DuplicateSubscriptionId(ex) == null || replacingSubId != null)))
             {
                 Telemetry.Log(SubscriptionFailureLevel, $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. " +
-                    $"HTTP {statusCode} without a JSON Graph error. The response does not establish a permission or duplicate-subscription problem. {impact}");
+                    $"HTTP {statusCode}. The response does not establish a permission problem or a duplicate owned subscription. {impact}");
                 return;
             }
 
-            var validation = CallSubscriptionRules.ClassifyValidationCallbackFailure(graphError);
+            var validation = statusCode == (int)HttpStatusCode.BadRequest
+                ? CallSubscriptionRules.ClassifyValidationCallbackFailure((ex as ODataError)?.Error?.Message)
+                : SubscriptionValidationFailure.NotAValidationFailure;
 
             if (validation.IsValidationCallbackFailure)
             {
                 Telemetry.Log(SubscriptionFailureLevel,
                     $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
                     BuildValidationCallbackDiagnosis(validation, webAppUrl) +
-                    $" {impact} Graph error: '{graphError}'");
+                    $" {impact}");
             }
             else if (statusCode == (int)HttpStatusCode.Forbidden)
             {
@@ -615,25 +619,34 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     $"Fix: Azure portal -> Azure AD -> App registrations -> <importer app> -> API permissions -> " +
                     $"Add a permission -> Microsoft Graph -> Application permissions -> {REQUIRED_GRAPH_PERMISSION} -> " +
                     $"Grant admin consent for the tenant. " +
-                    $"{impact} Graph error: '{graphError}'");
+                    $"{impact}");
             }
-            else if (!isUpdate && CallSubscriptionRules.IsDuplicateSubscriptionConflict(statusCode))
+            else if (!isUpdate && DuplicateSubscriptionId(ex) != null)
             {
                 Telemetry.Log(SubscriptionFailureLevel,
                     $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
                     "Graph says a call-records subscription already exists for this app, but none is on this webhook's URLs, so the importer " +
                     "deletes nothing: look for one this app registration created on an earlier web app URL, and delete it if it is this deployment's. " +
-                    $"{impact} Graph error: '{graphError}'");
+                    $"{impact}");
             }
             else
             {
+                var guidance = statusCode == 429 ? " Graph throttled the request; retry later." : string.Empty;
                 Telemetry.Log(SubscriptionFailureLevel,
-                    $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine} " +
-                    $"{impact} Graph error: '{graphError}'");
+                    $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. {statusLine}{guidance} {impact}");
             }
         }
 
-        private static string GraphErrorMessage(ApiException ex) => (ex as ODataError)?.Error?.Message ?? ex.Message;
+        private static bool IsPermissionCode(string code) =>
+            string.Equals(code, "Authorization_RequestDenied", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(code, "AccessDenied", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(code, "Forbidden", StringComparison.OrdinalIgnoreCase);
+
+        private static string DuplicateSubscriptionId(ApiException ex)
+        {
+            var error = (ex as ODataError)?.Error;
+            return CallSubscriptionRules.DuplicateSubscriptionId(ex.ResponseStatusCode, error?.Code, error?.Message);
+        }
 
         private static string StatusLine(ApiException ex)
         {
@@ -671,9 +684,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             }
             else
             {
-                var returned = string.IsNullOrEmpty(validation.EndpointStatus)
-                    ? "a non-200 response"
-                    : $"'{validation.EndpointStatus}'";
+                var returned = Enum.TryParse(validation.EndpointStatus?.Replace(" ", ""), true, out HttpStatusCode status)
+                    && Enum.IsDefined(typeof(HttpStatusCode), status) ? $"'{status}'" : "a non-200 response";
 
                 diagnosis +=
                     $"The endpoint returned {returned} to Graph. Check, in order: " +

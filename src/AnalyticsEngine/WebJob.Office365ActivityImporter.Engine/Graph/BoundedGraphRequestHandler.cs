@@ -89,7 +89,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         }
                         return response;
                     }
-                    catch (NonJsonGraphRefusal) when (cancellationToken.IsCancellationRequested)
+                    catch (GraphDecisionRedirectException) when (cancellationToken.IsCancellationRequested)
                     {
                         throw new OperationCanceledException(cancellationToken);
                     }

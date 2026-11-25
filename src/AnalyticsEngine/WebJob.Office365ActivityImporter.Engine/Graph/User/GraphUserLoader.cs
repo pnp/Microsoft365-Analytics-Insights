@@ -210,8 +210,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>
         /// Only used for conflicting identities, never for the directory's general population. All requests use this
-        /// loader's tenant/app credentials. A successful bounded directory query is required even after a 404:
-        /// a 404 alone cannot distinguish absence from an unreadable object. Do not request eventual consistency.
+        /// loader's tenant/app credentials and refuse redirects. A previous-object 404 must carry a Graph
+        /// resource-not-found code; even then require the independent directory query. Do not request eventual consistency.
         /// </summary>
         public async Task<bool> VerifyReusedUpnAsync(GraphUser currentOwner, string previousObjectId)
         {
@@ -222,7 +222,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             try
             {
                 var current = await _graphServiceClient.Users[currentId.ToString()].GetAsync(rc =>
-                    rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" }, _shutdownToken);
+                {
+                    rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" };
+                    rc.Options.Add(GraphResponseEvidence.RequireDirect);
+                }, _shutdownToken);
                 if (current?.AccountEnabled != true
                     || !string.Equals(current.Id, currentOwner.Id, StringComparison.OrdinalIgnoreCase)
                     || !string.Equals(current.UserPrincipalName, currentOwner.UserPrincipalName, StringComparison.OrdinalIgnoreCase))
@@ -233,11 +236,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     await _graphServiceClient.Users[previousId.ToString()].GetAsync(rc =>
                     {
                         rc.QueryParameters.Select = new[] { "id" };
-                        rc.Options.Add(NonJsonGraphRefusal.RequireDeletionEvidence);
+                        rc.Options.Add(GraphResponseEvidence.RequireDirect);
                     }, _shutdownToken);
                     return DeclineReusedUpn("previous object still exists (disabled is not deleted)");
                 }
-                catch (ApiException ex) when (ex.ResponseStatusCode == 404 && !(ex is NonJsonGraphRefusal))
+                catch (ODataError ex) when (GraphResponseEvidence.ConfirmsNotFound(ex))
                 {
                     // Even a prior deletion can be stale after a restore, and /users can lag. Always require this
                     // fresh object-ID 404, corroborated by the successful directory query below, never on its own.
@@ -251,15 +254,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" };
                     rc.QueryParameters.Filter = $"id eq '{currentId}' or id eq '{previousId}' or userPrincipalName eq '{name}'";
+                    rc.Options.Add(GraphResponseEvidence.RequireDirect);
                 }, _shutdownToken);
                 var only = page?.Value?.Count == 1 ? page.Value[0] : null;
                 var confirmed = string.IsNullOrEmpty(page?.OdataNextLink) && only?.AccountEnabled == true
                     && string.Equals(only.Id, currentOwner.Id, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(only.UserPrincipalName, currentOwner.UserPrincipalName, StringComparison.OrdinalIgnoreCase);
+                _shutdownToken.ThrowIfCancellationRequested();
                 return confirmed || DeclineReusedUpn("directory response is partial, ambiguous or does not corroborate previous-object absence");
+            }
+            catch (GraphDecisionRedirectException)
+            {
+                return DeclineReusedUpn("Graph returned a redirect instead of answering the directory lookup");
             }
             catch (Exception ex) when (!(ex is OperationCanceledException && _shutdownToken.IsCancellationRequested))
             {
+                _shutdownToken.ThrowIfCancellationRequested();
                 _logger.LogWarning("User import - reused UPN verification unavailable ({ExceptionType}); retaining identity quarantine.", ex.GetType().Name);
                 return false;
             }
@@ -267,6 +277,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         private bool DeclineReusedUpn(string reason)
         {
+            _shutdownToken.ThrowIfCancellationRequested();
             _logger.LogInformation("User import - reused UPN verification declined: {Reason}; retaining identity quarantine.", reason);
             return false;
         }
@@ -563,7 +574,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             try
             {
-                var page = await _graphServiceClient.SubscribedSkus.GetAsync(rc => rc.Options.Add(NonJsonGraphRefusal.PreserveStatus), _shutdownToken);
+                var page = await _graphServiceClient.SubscribedSkus.GetAsync(rc => rc.Options.Add(GraphResponseEvidence.RequireDirect), _shutdownToken);
 
                 if (page?.Value == null)
                 {
@@ -588,7 +599,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         return true;
                     }, next =>
                     {
-                        next.AddRequestOptions(new[] { NonJsonGraphRefusal.PreserveStatus });
+                        next.AddRequestOptions(new[] { GraphResponseEvidence.RequireDirect });
                         return next;
                     });
 
@@ -610,7 +621,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     // Only a forbidden inventory takes the metadata-only or supported per-user path.
                     // All other failures still withhold the checkpoint; never reconcile a partial inventory.
-                    _logger.LogError(ex, $"User import - couldn't load SKUs for org - {ex.Message}");
+                    if (ex is GraphDecisionRedirectException)
+                        _logger.LogError("User import - couldn't load SKUs for org: {Reason}", ex.Message);
+                    else
+                        _logger.LogError("User import - couldn't load SKUs for org (HTTP {Status}).", ex.ResponseStatusCode);
                     throw;
                 }
 
@@ -691,7 +705,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var page = await _graphServiceClient.Users[userId].LicenseDetails.GetAsync(rc =>
                 {
                     rc.QueryParameters.Select = new[] { "skuPartNumber", "skuId" };
-                    rc.Options.Add(NonJsonGraphRefusal.PreserveStatus);
+                    rc.Options.Add(GraphResponseEvidence.RequireDirect);
                 }, _shutdownToken);
 
                 if (page?.Value == null)
@@ -709,7 +723,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 // Keep the existing per-user OData fallback even when a refusal or not-found response
                 // has no error body. Other status-only failures (including 429/5xx) still fail the cycle.
-                _logger.LogError(ex, $"User import - couldn't load service-plans for user ID '{userId}' - {ex.Message}");
+                _logger.LogError("User import - couldn't load service-plans for user ID '{UserId}' (HTTP {Status}); keeping existing licences.",
+                    userId, ex.ResponseStatusCode);
                 return null;
             }
         }

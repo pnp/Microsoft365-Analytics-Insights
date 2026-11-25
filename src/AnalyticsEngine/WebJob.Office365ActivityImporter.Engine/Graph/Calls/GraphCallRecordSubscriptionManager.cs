@@ -40,7 +40,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (notificationUrl is null) throw new ArgumentNullException(nameof(notificationUrl));
 
             var matchingSubs = new List<CallRecordSubscription>();
-            var firstPage = await _client.Subscriptions.GetAsync(cancellationToken: _stopping);
+            var firstPage = await _client.Subscriptions.GetAsync(rc => rc.Options.Add(GraphResponseEvidence.RequireDirect), _stopping);
             if (firstPage?.Value == null)
             {
                 // A 200 without the subscriptions list: whether the subscription exists is unknown, so this is a failed read.
@@ -59,6 +59,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     }
 
                     return true;
+                }, next =>
+                {
+                    next.AddRequestOptions(new[] { GraphResponseEvidence.RequireDirect });
+                    return next;
                 });
 
             await iterator.IterateAsync(_stopping);
@@ -78,7 +82,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 ClientState = clientState,
                 ChangeType = "created",
                 ExpirationDateTime = expiryUtc
-            }, rc => rc.Options.Add(NonJsonGraphRefusal.RequireDeletionEvidence), _stopping);
+            }, rc => rc.Options.Add(GraphResponseEvidence.RequireDirect), _stopping);
 
             return ToCallRecordSubscription(result);
         }
@@ -90,7 +94,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 new Subscription
                 {
                     ExpirationDateTime = expiryUtc
-                }, rc => rc.Options.Add(GraphOverallTimeoutHandler.DistinguishDeadline), _stopping);
+                }, rc =>
+                {
+                    rc.Options.Add(GraphOverallTimeoutHandler.DistinguishDeadline);
+                    rc.Options.Add(GraphResponseEvidence.RequireDirect);
+                }, _stopping);
 
             return ToCallRecordSubscription(result);
         }
@@ -100,12 +108,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (string.IsNullOrEmpty(subscriptionId)) throw new ArgumentException("A subscription id is required.", nameof(subscriptionId));
 
             // https://learn.microsoft.com/en-us/graph/api/subscription-delete?view=graph-rest-1.0
-            await _client.Subscriptions[subscriptionId].DeleteAsync(cancellationToken: _stopping);
+            await _client.Subscriptions[subscriptionId].DeleteAsync(rc => rc.Options.Add(GraphResponseEvidence.RequireDirect), _stopping);
         }
 
         private static CallRecordSubscription ToCallRecordSubscription(Subscription sub)
         {
-            if (sub == null) return null;
+            if (string.IsNullOrWhiteSpace(sub?.Id))
+                throw new InvalidOperationException("Graph returned no subscription ID; subscription maintenance cannot continue.");
 
             return new CallRecordSubscription
             {
