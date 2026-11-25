@@ -6,6 +6,8 @@ This SharePoint Framework (SPFx 1.22.2) application customizer loads the SharePo
 - loads the site collection's own copy, `<site collection>/SPOInsights/AITracker.js?ver=<cacheToken>`, unless a tracker is already running in the page;
 - passes SharePoint's in-page navigations to the running tracker.
 
+The two-second wait lets the destination's document title settle. It belongs to that visit, not to whatever URL is visible when the timer fires. Only the configured instance for the visible site can forward it, once; disposal, a different URL (including a different query), or a superseding visit makes the old report ineligible. A `#fragment` stays on the same page. Where the browser supports `currententrychange`, a detour and return invalidates the old visit even between SharePoint events; elsewhere the extension can only distinguish changes it observes at its callbacks. The running `AITracker.js` still decides whether to record a view, including suppressing its already-tracked initial page.
+
 Read the [SharePoint instructions](../.github/copilot-instructions.md) before changing either part. They explain how the two parts work together, how the package is deployed, the rules the tracker must keep, and how to validate a change on a development tenant.
 
 ## How it's deployed

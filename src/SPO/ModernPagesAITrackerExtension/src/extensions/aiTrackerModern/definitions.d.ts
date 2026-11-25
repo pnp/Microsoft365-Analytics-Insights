@@ -1,3 +1,4 @@
+import type { NavigationVisits } from './NavigationVisits';
 
 export interface SpPageContextInfo {
   userLoginName: string;
@@ -8,7 +9,7 @@ export interface SpPageContextInfo {
 
 export interface SitesTrackedByExtension {
   siteUrls: string[];
-  lastUrlTracked: string | undefined;
+  visits?: NavigationVisits;
 }
 
 export interface IAiTrackerModernApplicationCustomizerProperties {
