@@ -3,6 +3,7 @@ import { Sender } from '@microsoft/applicationinsights-channel-js';
 import { AppInsightsCore, DEFAULT_BREEZE_PATH, PageViewDataType, PageViewPerformanceDataType, addPageHideEventListener, addPageUnloadEventListener, parseConnectionString } from '@microsoft/applicationinsights-core-js';
 import type { IConfig, IConfiguration } from '@microsoft/applicationinsights-core-js';
 import { PropertiesPlugin } from '@microsoft/applicationinsights-properties-js';
+import { FirstPageViewDelivery } from './FirstPageViewDelivery';
 
 export type TrackerTelemetry = Pick<AnalyticsPlugin, 'trackPageView' | 'trackEvent'>;
 
@@ -13,6 +14,8 @@ export function createTrackerTelemetry(connectionString: string, userLoginName: 
     const analytics = new AnalyticsPlugin();
     const properties = new PropertiesPlugin();
     const sender = new Sender();
+    const firstViewDelivery = new FirstPageViewDelivery();
+    let firstView = true;
     const config: IConfiguration & IConfig = {
         connectionString,
         instrumentationKey: instrumentationkey,
@@ -53,7 +56,13 @@ export function createTrackerTelemetry(connectionString: string, userLoginName: 
             // already hidden has no later visibilitychange: drain the sender after the handoff.
             if (event.type === 'pagehide') beforePageHideFlush?.((event as PageTransitionEvent).persisted);
         } finally {
-            sender.onunloadFlush();
+            if (event.type === 'pagehide' && event.isTrusted && !(event as PageTransitionEvent).persisted) {
+                firstViewDelivery.flushOnClose(sender);
+            } else if (event.type !== 'beforeunload' || !firstViewDelivery.awaitingResponse || !('onpagehide' in window)) {
+                // A cancellable beforeunload precedes pagehide. Don't drain the queued clicks
+                // separately from their outstanding view before we know the document is going away.
+                sender.onunloadFlush();
+            }
             properties.context.sessionManager.backup();
         }
     };
@@ -71,7 +80,14 @@ export function createTrackerTelemetry(connectionString: string, userLoginName: 
                     unnamedTrace = null;
                 } catch { /* No usable page address: leave the name neutral. */ }
             }
-            analytics.trackPageView(view, customProperties);
+            const first = firstView;
+            firstView = false;
+            const props = view?.properties;
+            if (first && typeof props?.duration === 'number' && props.duration > 0) {
+                firstViewDelivery.track(sender, () => analytics.trackPageView(view, customProperties));
+            } else {
+                analytics.trackPageView(view, customProperties);
+            }
         }
     };
 }
