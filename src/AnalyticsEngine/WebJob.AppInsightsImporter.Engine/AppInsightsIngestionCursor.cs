@@ -167,7 +167,8 @@ namespace WebJob.AppInsightsImporter.Engine
         /// The newest stored hit when the cursor was last written. An explicitly empty database differs from an
         /// older cursor with no database watermark. Throws when the store cannot be read.
         /// </summary>
-        Task<(DateTime? NewestHitUtc, bool KnownEmpty)> ReadDatabaseWatermarkAsync(CancellationToken cancellationToken);
+        Task<(DateTime? NewestHitUtc, bool KnownEmpty)> ReadDatabaseWatermarkAsync(DateTime cursorUtc, CancellationToken cancellationToken);
+        Task<DateTime?> ReadNewestStoredHitAtCursorAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Normal import has processed ingestion before <paramref name="cursorUtc"/>; retryable search hours have
@@ -203,6 +204,7 @@ namespace WebJob.AppInsightsImporter.Engine
         private readonly IKeyValueStore _store;
         private readonly string _key;
         private readonly string _newestHitKey;
+        private readonly string _emptyAtCursorKey;
         private readonly string _searchRetryKey;
         private readonly string _searchReplayKey;
         private readonly string _replayStartKey;
@@ -213,6 +215,7 @@ namespace WebJob.AppInsightsImporter.Engine
             var suffix = string.IsNullOrWhiteSpace(appInsightsApplicationId) ? string.Empty : ":" + appInsightsApplicationId.Trim();
             _key = KeyPrefix + suffix;
             _newestHitKey = NewestHitKeyPrefix + suffix;
+            _emptyAtCursorKey = "IngestionCursorEmptyAt" + suffix;
             _searchRetryKey = "IngestionCursorSearchRetries" + suffix;
             _searchReplayKey = "IngestionCursorSearchReplayHours" + suffix;
             _replayStartKey = "IngestionCursorReplayStart" + suffix;
@@ -224,10 +227,11 @@ namespace WebJob.AppInsightsImporter.Engine
 
         public Task<DateTime?> ReadNewestStoredHitAtCursorAsync(CancellationToken cancellationToken = default) => ReadUtcAsync(_newestHitKey, cancellationToken);
 
-        public async Task<(DateTime? NewestHitUtc, bool KnownEmpty)> ReadDatabaseWatermarkAsync(CancellationToken cancellationToken)
+        public async Task<(DateTime? NewestHitUtc, bool KnownEmpty)> ReadDatabaseWatermarkAsync(DateTime cursorUtc, CancellationToken cancellationToken)
         {
-            var value = await _store.GetStringAsync(_newestHitKey, cancellationToken).ConfigureAwait(false);
-            return (ParseUtc(value), value == string.Empty);
+            var newest = await ReadNewestStoredHitAtCursorAsync(cancellationToken).ConfigureAwait(false);
+            var knownEmpty = !newest.HasValue && await ReadUtcAsync(_emptyAtCursorKey, cancellationToken).ConfigureAwait(false) == cursorUtc;
+            return (newest, knownEmpty);
         }
 
         public async Task<IReadOnlyList<AppInsightsSearchRetry>> ReadSearchRetriesAsync(CancellationToken cancellationToken = default)
@@ -264,8 +268,11 @@ namespace WebJob.AppInsightsImporter.Engine
         {
             // The newest hit first: if the cursor then fails to save, the next cycle compares against a newer newest hit
             // than the cursor's, which is still one the database has reached.
-            // Empty text is a confirmed empty DB (also readable as null by older builds). A missing row is unknown.
-            await _store.SetStringAsync(_newestHitKey, newestStoredHitUtc.HasValue ? ToRoundTrip(newestStoredHitUtc.Value) : string.Empty,
+            // A failed cursor write must NOT declare the previous cursor's database empty. Pair the empty
+            // observation with the cursor it belongs to; older builds still see an absent newest hit.
+            if (!newestStoredHitUtc.HasValue)
+                await _store.SetStringAsync(_emptyAtCursorKey, ToRoundTrip(cursorUtc), cancellationToken: cancellationToken).ConfigureAwait(false);
+            await _store.SetStringAsync(_newestHitKey, newestStoredHitUtc.HasValue ? ToRoundTrip(newestStoredHitUtc.Value) : null,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             await _store.SetStringAsync(_key, ToRoundTrip(cursorUtc), cancellationToken: cancellationToken).ConfigureAwait(false);

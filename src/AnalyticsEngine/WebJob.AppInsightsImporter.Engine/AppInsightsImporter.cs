@@ -200,7 +200,7 @@ namespace WebJob.AppInsightsImporter.Engine
                         cancellationToken.ThrowIfCancellationRequested();
                         if (cursorUtc.HasValue)
                         {
-                            (newestStoredHitAtCursorUtc, previouslyEmpty) = await _cursorStore.ReadDatabaseWatermarkAsync(cancellationToken);
+                            (newestStoredHitAtCursorUtc, previouslyEmpty) = await _cursorStore.ReadDatabaseWatermarkAsync(cursorUtc.Value, cancellationToken);
                             cancellationToken.ThrowIfCancellationRequested();
                         }
                     }

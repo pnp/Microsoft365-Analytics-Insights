@@ -19,6 +19,7 @@ namespace Tests.UnitTests
         [DataRow("marker-write")]
         [DataRow("between-writes")]
         [DataRow("after-newest-hit")]
+        [DataRow("restore-after-new-hit")]
         public async Task DetectedRestore_ReplaysAReconciledHourBeforeTheRewindWithoutDuplicatingIt(string interruption)
         {
             var state = new CheckpointStore();
@@ -45,7 +46,7 @@ namespace Tests.UnitTests
             await RunCycle(clock, source, state);
             Assert.AreEqual((0L, 0L), SearchKpis(), "The backup contains the eligible visit but predates the final retry.");
             clock.Advance(TimeSpan.FromDays(1) + TimeSpan.FromHours(1));
-            if (interruption != "clean")
+            if (interruption != "clean" && interruption != "restore-after-new-hit")
             {
                 using (var stop = new CancellationTokenSource())
                 {
@@ -69,6 +70,18 @@ namespace Tests.UnitTests
             _database.Execute("DELETE dbo.searches; DELETE dbo.search_terms; DELETE dbo.hits WHERE hit_timestamp >= '20000104';");
             source.CountRangesRequested.Clear();
             clock.Advance(TimeSpan.FromHours(1));
+            if (interruption == "restore-after-new-hit")
+            {
+                using (var stop = new CancellationTokenSource())
+                {
+                    source.OnEventWindow = w => { if (w.SearchesOnly) stop.Cancel(); };
+                    await Assert.ThrowsAsync<OperationCanceledException>(() => RunCycle(clock, source, state, token: stop.Token));
+                }
+                Assert.AreEqual(1, _database.Scalar("SELECT COUNT(*) FROM dbo.hits WHERE hit_timestamp >= '20000104';"));
+                Assert.AreEqual((0L, 0L), SearchKpis(), "The restored DB's newest hit no longer reveals the interrupted restore.");
+                source.OnEventWindow = null;
+                source.CountRangesRequested.Clear();
+            }
             var restored = await RunCycle(clock, source, state);
             Assert.IsTrue(source.CountRangesRequested.Single(w => !w.SearchesOnly).IngestedFromUtc > search);
             Assert.AreEqual(1, restored.ReconciledSearches, "The normal rewind starts AFTER the search's ingestion.");
@@ -93,8 +106,8 @@ namespace Tests.UnitTests
             var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
             if (oldCursor) await cursor.WriteAsync(Start.AddDays(6), Start.AddDays(5));
             var search = Start.Date.AddSeconds(-1);
-            var seed = Start.Date.AddMinutes(-2);
-            var visit = Start.Date.AddMinutes(1);
+            var seed = Start.Date.AddDays(1).AddHours(2);
+            var visit = Start.Date.AddDays(2).AddMinutes(1);
             var source = new FakeAppInsightsSourceLoader
             {
                 EventAt = t => Search(t, "delayed", "Example", Reader),
@@ -211,6 +224,53 @@ namespace Tests.UnitTests
             state.AtBoundary = (operation, _) => Assert.AreNotEqual("receipt-read", operation, "No restore or due retry.");
             clock.Advance(TimeSpan.FromDays(1));
             Assert.AreEqual(AppInsightsCycleOutcome.Succeeded, (await RunCycle(clock, source, state)).Outcome);
+        }
+
+        [TestMethod]
+        public async Task InterruptedEmptyCursorWrite_DoesNotCertifyTheOldCursorAsAnEmptyDatabase()
+        {
+            var state = new CheckpointStore();
+            var clock = new FixedClock(Start.AddDays(7));
+            var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
+            var oldCursor = Start.AddDays(6);
+            await cursor.WriteAsync(oldCursor, Start.AddDays(5));
+            var source = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "delayed"), EventAt = t => Search(t, "delayed", "Example", Reader) };
+            state.AtBoundary = (op, _) => { if (op == "cursor-write") throw new IOException("synthetic checkpoint outage"); };
+            var failed = await RunCycle(clock, source, state);
+            CollectionAssert.Contains(failed.Reasons, "CursorWriteFailed");
+            Assert.AreEqual(oldCursor, await cursor.ReadAsync());
+            state.AtBoundary = null;
+            source.ExtraCustomEvents.Add((Start.Date.AddSeconds(-1), Start));
+            source.ExtraPageViews.Add((Start, Start.AddHours(1)));
+            var replay = await RunCycle(clock, source, state);
+            Assert.AreEqual(AppInsightsReadMode.Bootstrap, replay.Mode);
+            Assert.AreEqual(1, replay.ReconciledSearches);
+            Assert.AreEqual((1L, 1L), SearchKpis());
+        }
+
+        [TestMethod]
+        public async Task UnwritableRestoreEvidence_LeavesTheDueHourPendingWithoutAReconciliationInsert()
+        {
+            var state = new CheckpointStore();
+            var clock = new FixedClock(Start);
+            var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
+            var hour = Start.AddDays(-4);
+            var source = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "eligible"), EventAt = t => Search(t, "eligible", "Example", Reader) };
+            source.ExtraPageViews.Add((hour, hour));
+            await RunCycle(clock, source, state);
+            source.ExtraCustomEvents.Add((hour, hour));
+            await cursor.WriteSearchRetriesAsync(new[] { new AppInsightsSearchRetry(hour, Start) });
+            state.AtBoundary = (op, _) => { if (op == "receipt-write") throw new IOException("synthetic checkpoint outage"); };
+            clock.Advance(TimeSpan.FromHours(1));
+            var failed = await RunCycle(clock, source, state);
+            CollectionAssert.Contains(failed.Reasons, "SearchReplayWriteFailed");
+            Assert.AreEqual(1, failed.PendingSearchHours);
+            Assert.AreEqual((0L, 0L), SearchKpis());
+            state.AtBoundary = null;
+            clock.Advance(TimeSpan.FromMinutes(1));
+            var recovered = await RunCycle(clock, source, state);
+            Assert.AreEqual(0, recovered.PendingSearchHours);
+            Assert.AreEqual((1L, 1L), SearchKpis());
         }
     }
 }

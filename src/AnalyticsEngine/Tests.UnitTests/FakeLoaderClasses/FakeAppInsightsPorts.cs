@@ -159,8 +159,9 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// <summary>The newest stored hit recorded beside the cursor; null for a cursor written by an older build.</summary>
         public DateTime? NewestStoredHitAtCursorUtc { get; set; }
 
-        public Task<(DateTime? NewestHitUtc, bool KnownEmpty)> ReadDatabaseWatermarkAsync(CancellationToken cancellationToken) =>
-            Task.FromResult((NewestStoredHitAtCursorUtc, Writes > 0 && !NewestStoredHitAtCursorUtc.HasValue));
+        public Task<DateTime?> ReadNewestStoredHitAtCursorAsync(CancellationToken cancellationToken = default) => Task.FromResult(NewestStoredHitAtCursorUtc);
+        public Task<(DateTime? NewestHitUtc, bool KnownEmpty)> ReadDatabaseWatermarkAsync(DateTime cursorUtc, CancellationToken cancellationToken) =>
+            Task.FromResult((NewestStoredHitAtCursorUtc, Writes > 0 && CursorUtc == cursorUtc && !NewestStoredHitAtCursorUtc.HasValue));
 
         private IReadOnlyList<AppInsightsSearchRetry> _searchRetries = Array.Empty<AppInsightsSearchRetry>();
         private IReadOnlyList<DateTime> _searchReplay = Array.Empty<DateTime>();
