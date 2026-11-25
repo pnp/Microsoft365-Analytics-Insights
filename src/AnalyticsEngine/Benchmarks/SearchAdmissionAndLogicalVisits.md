@@ -73,3 +73,31 @@ The denominator is the number of logical visits with a hit in the window. Search
 The 28-day term plans replaced repeated physical-session hit probes with a bounded aggregate using `IX_hits_hit_timestamp`. The KPI reads that aggregate once into a query-local temporary table. A previously tested one-pass full join also halved hit-index reads, but used **555,635 total reads** over the year; it was not shipped. The site query maps searched visits to their equivalent physical sessions and excludes hits after each visit's last search. Its broad plan scanned the clustered hit index; the scoped plan used `IX_FK_hits_sessions` seeks and hit lookups.
 
 **Slower cases matter.** The annual KPI alone took 1,651 ms instead of 514 ms despite similar reads; even including the former denominator query, measured SQL time increased. The 28-day dead-end ranking was also slower despite substantially fewer reads. The hour-wide site query and all three scoped term/site lists were slower; the scoped dead-end and site lists also did more total reads. Conversely, annual term ranking and site attribution cut both reads and elapsed time. These are trade-offs of scoring the correct logical visit, not a promise that every request will be faster.
+
+## Follow-up: count historical searches once and measure reliance among hit visits
+
+The Search tab and Overview now count one fact per comparable user/tracker visit, term ID and **full stored timestamp**. A repeat at another timestamp still counts. Facts without a comparable identity stay separate. Search-only visits still contribute to search totals, even when their page views fall outside the selected period. Reliance alone divides the number of hit visits that also searched by the number of hit visits. Neither change rewrites history.
+
+Admission uses the tracker's collection boundary for stored site/page evidence: a root collection does not own a page in a named `/sites/` or `/teams/` collection. This does not change the meaning of a configured URL prefix. Unicode path letters compare case-insensitively whether supplied directly or percent-encoded; a percent-encoded separator does not become a path boundary for a positive match. The SQL admission lookup is unchanged.
+
+For this comparison the baseline is `079bc162`, **not** the original baseline above. The same private LocalDB report harness added 8,000 duplicate facts across equivalent physical sessions to the 200,000 original synthetic search facts. Actual report SQL ran against identical data, with a discarded warm-up, alternating versions, three measured runs and separate actual plans. Values are median **total logical reads / SQL elapsed ms**, not portal latency; the VM was also running local validation.
+
+| Statement | 1 hour: before → after | 365 days: before → after |
+|---|---:|---:|
+| Search KPIs | 1,800 / 32 → 1,702 / 24 | 10,425 / 1,707 → 112,382 / 2,175 |
+| Search terms | 1,024 / 12 → 1,016 / 18 | 7,902 / 717 → 7,902 / 905 |
+| Dead-end terms | 940 / 18 → 940 / 16 | 7,889 / 785 → 7,889 / 1,747 |
+| Searches by site | 3,283 / 47 → 2,825 / 73 | 29,107 / 2,477 → 29,107 / 2,749 |
+| Searches by day/hour | 750 / 13 → 844 / 10 | 750 / 63 → 1,590 / 576 |
+| Weekly overview/search trend | 1,727 / 30 → 1,915 / 29 | 24,704 / 3,062 → 26,384 / 2,936 |
+
+| Statement | 28 days: before → after | Same window, 2,000-user scope: before → after |
+|---|---:|---:|
+| Search KPIs | 4,516 / 243 → 3,676 / 176 | 27,222 / 85 → 26,554 / 75 |
+| Search terms | 2,872 / 256 → 2,872 / 188 | 19,719 / 96 → 19,711 / 78 |
+| Dead-end terms | 2,859 / 181 → 2,859 / 146 | 19,387 / 107 → 19,387 / 77 |
+| Searches by site | 29,107 / 504 → 29,147 / 485 | 35,549 / 90 → 35,549 / 102 |
+| Searches by day/hour | 750 / 14 → 1,590 / 80 | 11,185 / 20 → 11,635 / 19 |
+| Weekly overview/search trend | 4,584 / 241 → 6,264 / 355 | 123,976 / 274 → 48,325 / 201 |
+
+This is a correctness change, not a speedup. In particular, the annual KPI did over ten times as many total reads, although both plans still sought the timestamp index and recorded 5,452 reads against hits. The annual site report still scanned hits and sessions; the annual day/hour report now also scans sessions to identify duplicate facts. No schema or index change was tested or introduced.

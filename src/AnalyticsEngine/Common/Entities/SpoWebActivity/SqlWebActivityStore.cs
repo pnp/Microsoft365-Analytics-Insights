@@ -326,7 +326,7 @@ namespace Common.Entities.SpoWebActivity
                 // matches what that minority reports.
                 P95LoadSeconds = PercentileSeconds(histogramTask.Result.Rows),
 
-                SessionsWithSearch = search.SessionsWithSearch,
+                SessionsWithSearch = search.HitVisitsWithSearch,
                 SearchRelianceVisits = search.Visits,
                 TopDecilePagePct = TopDecilePageShare(distributionTask.Result.Rows),
                 MobilePageViewPct = mobilePct,
@@ -665,7 +665,7 @@ namespace Common.Entities.SpoWebActivity
                 Terms = kpi.Terms,
                 Searchers = kpi.Searchers,
                 SessionsWithSearch = kpi.SessionsWithSearch,
-                SearchReliancePct = WebActivityScoring.Percentage(kpi.SessionsWithSearch, kpi.Visits),
+                SearchReliancePct = WebActivityScoring.Percentage(kpi.HitVisitsWithSearch, kpi.Visits),
                 SearchesPerSearchingVisit = kpi.SessionsWithSearch > 0
                     ? (double)kpi.Searches / kpi.SessionsWithSearch
                     : 0,

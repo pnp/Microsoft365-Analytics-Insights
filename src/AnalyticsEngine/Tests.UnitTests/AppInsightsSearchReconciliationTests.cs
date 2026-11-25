@@ -99,6 +99,55 @@ INSERT dbo.hits(url_id,web_id,session_id,page_request_id,hit_timestamp) VALUES
             Assert.AreEqual(0, tied.BySite.Count, "The highest hit id at the same timestamp has no web; it must not inherit the earlier site.");
         }
 
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task SearchReport_CountsDistinctFactsAndMeasuresRelianceOnlyAmongHitVisits(bool scoped)
+        {
+            var source = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "Pair") };
+            source.ExtraPageViews.Add((Start, Start));
+            await RunCycle(new FixedClock(Start.AddMinutes(1)), source, new InMemoryKeyValueStore());
+            _database.Execute(@"
+DECLARE @reader int = (SELECT id FROM dbo.users WHERE user_name='reader@contoso.com'),
+        @visit int = (SELECT id FROM dbo.sessions WHERE ai_session_id='Pair'), @url int, @web int;
+SELECT @url=url_id, @web=web_id FROM dbo.hits WHERE session_id=@visit;
+INSERT dbo.sessions(ai_session_id,user_id) VALUES ('Pair',@reader);
+DECLARE @copy int=SCOPE_IDENTITY();
+INSERT dbo.sessions(ai_session_id,user_id) VALUES ('Browse',@reader);
+DECLARE @browse int=SCOPE_IDENTITY();
+IF NOT EXISTS (SELECT 1 FROM dbo.users WHERE user_name='other@contoso.com')
+    INSERT dbo.users(user_name) VALUES ('other@contoso.com');
+DECLARE @other int=(SELECT id FROM dbo.users WHERE user_name='other@contoso.com');
+INSERT dbo.sessions(ai_session_id,user_id) VALUES ('Pair',@other);
+DECLARE @early int=SCOPE_IDENTITY();
+INSERT dbo.sessions(ai_session_id,user_id) VALUES ('Second',@other);
+DECLARE @second int=SCOPE_IDENTITY();
+INSERT dbo.hits(url_id,web_id,session_id,page_request_id,hit_timestamp) VALUES
+(@url,@web,@browse,NEWID(),'20000101 10:00'),(@url,@web,@early,NEWID(),'19991231 23:59'),
+(@url,@web,@second,NEWID(),'19991231 23:59');
+INSERT dbo.search_terms(search_term) VALUES (N'Guide');
+DECLARE @term int=SCOPE_IDENTITY();
+INSERT dbo.searches(session_id,search_term_id,date_time) VALUES
+(@visit,@term,'20000101 10:01'),(@copy,@term,'20000101 10:01'),(@copy,@term,'20000101 10:02'),
+(@early,@term,'20000101 00:01'),(@second,@term,'20000101 00:01');");
+            var query = WebActivityQuery.Create(7, Start.AddDays(6));
+            if (scoped) query = query.WithUserScope(ReportUserScope.ForUsers(new[] {
+                (int)_database.Scalar("SELECT id FROM dbo.users WHERE user_name='reader@contoso.com'") }));
+            var report = await new SqlWebActivityStore(_factory).GetSearchAsync(query);
+            Assert.IsTrue(report.Queries.All(q => q.Error == null), string.Join("; ", report.Queries.Select(q => q.Error)));
+            var count = scoped ? 2L : 4L;
+            var k = report.Kpis;
+            Assert.AreEqual((count, scoped ? 1L : 3L, 0L, count, 50d),
+                (k.Searches, k.SessionsWithSearch, k.StrugglingVisits, k.DeadEndSearches, k.SearchReliancePct));
+            var term = report.TopTerms.Single();
+            Assert.AreEqual((count, scoped ? 1 : 2, count), (term.Searches, term.Searchers, term.DeadEnds));
+            Assert.AreEqual(scoped ? 0L : count, report.DeadEndTerms.Sum(t => t.DeadEnds));
+            Assert.AreEqual(2L, report.BySite.Single().Count);
+            Assert.AreEqual((count, count, count), (report.ByDay.Sum(d => d.Count),
+                report.ByPeriodOfDay.Sum(p => p.Count), report.Trend.Sum(w => w.Searches)));
+            Assert.AreEqual(5, _database.Scalar("SELECT COUNT(*) FROM dbo.searches"));
+        }
+
         [TestMethod]
         public async Task RestrictedSearch_AdmitsOnlyItsOwnPageAndDoesNotQueueKnownExclusions()
         {
