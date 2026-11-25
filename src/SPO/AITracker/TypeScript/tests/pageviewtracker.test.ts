@@ -32,7 +32,7 @@ function createContext(): spPageContextInfo {
 jest.mock('timeme.js', () => ({
     __esModule: true,
     default: {
-        getTimeOnCurrentPageInSeconds: jest.fn(() => 10),
+        getTimeOnCurrentPageInMilliseconds: jest.fn(() => 10000),
         initialize: jest.fn(),
     },
 }));
@@ -54,12 +54,11 @@ describe('PageViewTracker', () => {
         context = createContext();
         stateManager = new InMemoryPageStateManager();
         pagePropManager = new TestPagePropertyManager('testVal', stateManager, new TestPageDataService());
-        tracker = new PageViewTracker(wrapper, context, pagePropManager);
-
         // Setup window._spPageContextInfo
         (window as any)._spPageContextInfo = context;
         Object.defineProperty(document, 'URL', { value: 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx', writable: true, configurable: true });
         Object.defineProperty(document, 'title', { value: 'Home', writable: true, configurable: true });
+        tracker = new PageViewTracker(wrapper, context, pagePropManager);
     });
 
     describe('trackCurrentPageViewAndLastPageExit', () => {
@@ -164,17 +163,6 @@ describe('PageViewTracker', () => {
         });
     });
 
-    describe('getTimeOnPageAndResetLastTotalTime', () => {
-        test('returns time on page, accounting for previous subtraction', () => {
-            const time = tracker.getTimeOnPageAndResetLastTotalTime();
-            expect(time).toBe(10); // mocked timeme returns 10
-
-            // Second call should return 0 since the mock still returns 10
-            const time2 = tracker.getTimeOnPageAndResetLastTotalTime();
-            expect(time2).toBe(0);
-        });
-    });
-
     describe('savePageExitToCookie', () => {
         test('saves page exit stats when page request ID exists', () => {
             // Track a page first to get a request ID
@@ -249,7 +237,8 @@ describe('PageViewTracker', () => {
 
             expect(mockAppInsights.trackEvent).not.toHaveBeenCalled();
             expect(mockAppInsights.trackPageView).not.toHaveBeenCalled();
-            expect(tracker._lastTimeTotalOnPages).toBe(0);      // Time on page keeps counting
+            tracker.savePageExitToCookie();
+            expect(JSON.parse(Cookies.get('SPOInsightsLastPageStats')!).secondsOnPage).toBe(10);
         });
 
         test('a page navigation ends the previous page, from this page\'s own record rather than a cookie other tabs write', () => {

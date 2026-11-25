@@ -11,6 +11,7 @@ import { AI_TRACKER_VER } from '../src/AiTrackerConstants';
 
 const mockAiInstances: any[] = [];
 let mockSecondsOnPage = 12;         // TimeMe's running total of active seconds on page
+let mockActiveClock: (() => number) | undefined;
 
 jest.mock('../src/TrackerTelemetry', () => ({
     createTrackerTelemetry: jest.fn((connectionString: string) => {
@@ -23,7 +24,11 @@ jest.mock('../src/TrackerTelemetry', () => ({
 
 jest.mock('timeme.js', () => ({
     __esModule: true,
-    default: { initialize: jest.fn(), getTimeOnCurrentPageInSeconds: jest.fn(() => mockSecondsOnPage) },
+    default: {
+        initialize: jest.fn(),
+        getTimeOnCurrentPageInSeconds: () => mockActiveClock ? mockActiveClock() / 1000 : mockSecondsOnPage,
+        getTimeOnCurrentPageInMilliseconds: () => mockActiveClock ? mockActiveClock() : mockSecondsOnPage * 1000,
+    },
 }));
 
 jest.mock('../src/Config/ConfigHandler', () => ({
@@ -223,6 +228,147 @@ describe('AITracker page bootstrap', () => {
         expect(Cookies.get('SPOInsightsLastTrackedUrl')).toBeUndefined();
         expect(Cookies.get('SPOInsightsSessionID')).toBe('00000000-0000-0000-0000-000000000001');
         expect(mockAiInstances[0].trackPageView).toHaveBeenCalledTimes(1);
+    });
+
+    describe('active time across visits', () => {
+        const destination = PAGE_URL + '?q=next';
+        const saved = () => JSON.parse(Cookies.get('SPOInsightsLastPageStats')!);
+        const report = () => window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+        const navigate = (url: string) => {
+            setUrl(url);
+            historyChanges?.dispatchEvent(new Event('currententrychange'));
+        };
+        let inactiveMs: number;
+        beforeEach(() => {
+            jest.useFakeTimers({ doNotFake: ['performance'] });
+            const start = Date.now();
+            inactiveMs = 0;
+            mockActiveClock = () => Date.now() - start - inactiveMs;
+        });
+        afterEach(() => { mockActiveClock = undefined; jest.useRealTimers(); });
+        function startModern(notifications = true) {
+            if (notifications) historyChanges = new EventTarget();
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            jest.advanceTimersByTime(0);
+            return mockAiInstances[0];
+        }
+
+        test.each([
+            ['currententrychange', 1000, 2.5, 2.2], ['popstate', 1000, 2.5, 2.2],
+            ['poll', 1000, 3, 1.7], ['click before poll', 100, 2.6, 2.1],
+        ] as const)('times both views from the first observation, not the delayed SPFx report (%s)', (signal, clickDelay, sourceTime, destinationTime) => {
+            const ai = startModern(signal === 'currententrychange');
+            jest.advanceTimersByTime(2500);
+            mousedownOnLink('Source', destination);
+            navigate(destination);
+            if (signal === 'popstate') window.dispatchEvent(new PopStateEvent('popstate'));
+            setTimeout(report, 2000);
+            jest.advanceTimersByTime(clickDelay); // With no notification, the first poll on B is at 3 s.
+            mousedownOnLink('Gap');
+            jest.advanceTimersByTime(2000 - clickDelay);
+            mousedownOnLink('After report', PAGE_URL);
+            jest.advanceTimersByTime(200);
+            window.dispatchEvent(new Event('pagehide'));
+
+            const a = pageRequestIdOf(ai, 0), b = pageRequestIdOf(ai, 1);
+            expect(ai.trackPageView.mock.calls.map(c => c[0].properties.pageLoad)).toEqual([1500, 0]);
+            expect(eventsNamed(ai, 'LinkClick').map(e => e.properties.pageRequestId)).toEqual([a, b, b]);
+            expect([...eventsNamed(ai, 'PAGE_EXIT').map(e => [e.properties.pageRequestId, e.properties.activeTime]),
+                [saved().pageRequestId, saved().secondsOnPage]])
+                .toEqual([[a, sourceTime], [b, destinationTime]]);
+        });
+
+        test('a persisted pagehide before the report cannot replace the accepted exit with a short delta on restore', () => {
+            window.addEventListener('pageshow', e => {
+                if (e.persisted) mousedownOnLink('Restored click', PAGE_URL);
+            }, { once: true });
+            const ai = startModern();
+            jest.advanceTimersByTime(120000);
+            navigate(destination);
+            setTimeout(report, 2000);
+            jest.advanceTimersByTime(1250);
+            mousedownOnLink('Abandoned click');
+            window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+            const handoff = saved();
+            Cookies.remove('SPOInsightsLastPageStats'); // The intervening document sent this snapshot.
+
+            jest.setSystemTime(Date.now() + 60000); // Suspended JS: the callback still has 750 ms to go.
+            inactiveMs += 60000;                    // TimeMe stopped while away.
+            document.dispatchEvent(new Event('visibilitychange')); // Edge makes the restored document visible before pageshow.
+            window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+            jest.advanceTimersByTime(750);
+            const a = pageRequestIdOf(ai, 0), b = pageRequestIdOf(ai, 1);
+            const snapshots = [[handoff.pageRequestId, handoff.secondsOnPage],
+                ...eventsNamed(ai, 'PAGE_EXIT').map(e => [e.properties.pageRequestId, e.properties.activeTime])];
+            expect(snapshots.length).toBeLessThanOrEqual(2);
+            expect(snapshots).toEqual(snapshots.map(() => [a, 120]));
+            expect(eventsNamed(ai, 'LinkClick').map(e => [e.properties.linkText, e.properties.pageRequestId])).toEqual([['Restored click', b]]);
+            jest.advanceTimersByTime(1000);
+            window.dispatchEvent(new Event('pagehide'));
+            expect([saved().pageRequestId, saved().secondsOnPage]).toEqual([b, 1.75]);
+        });
+
+        test('repeated classic pagehide snapshots include each active interval once under the original ID', () => {
+            loadTrackerCopy();
+            jest.advanceTimersByTime(0);
+            const ai = mockAiInstances[0], id = pageRequestIdOf(ai, 0);
+            for (const [seconds, total] of [[3, 3], [5, 8], [4, 12]]) {
+                jest.advanceTimersByTime(seconds * 1000);
+                window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+                expect([saved().pageRequestId, saved().secondsOnPage]).toEqual([id, total]);
+                Cookies.remove('SPOInsightsLastPageStats');
+                const handoff = () => Cookies.set('SPOInsightsLastPageStats', JSON.stringify({ pageRequestId: 'intervening-' + total,
+                    secondsOnPage: seconds, url: encodeURI(OTHER_PAGE_URL) }));
+                if (total !== 8) handoff();
+                jest.setSystemTime(Date.now() + 60000); // No wall-clock gap may count, even if TimeMe was not paused.
+                window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+                if (total === 8) handoff(); // Another renderer can finish its pagehide after our pageshow.
+            }
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+            expect(eventsNamed(ai, 'PAGE_EXIT').map(e => [e.properties.pageRequestId, e.properties.activeTime, e.properties.url]))
+                .toEqual([['intervening-3', 3, OTHER_PAGE_URL], ['intervening-8', 5, OTHER_PAGE_URL], ['intervening-12', 4, OTHER_PAGE_URL]]);
+        });
+
+        test('return to the last accepted page resumes its ID without counting an intervening unaccepted visit', () => {
+            const ai = startModern();
+            jest.advanceTimersByTime(2500);
+            navigate(destination);
+            mousedownOnLink('Abandoned');
+            jest.advanceTimersByTime(400);
+            navigate(PAGE_URL + '#back');
+            jest.advanceTimersByTime(2000);
+            report();
+            window.dispatchEvent(new Event('pagehide'));
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+            expect(eventsNamed(ai, 'LinkClick')).toHaveLength(0);
+            expect([saved().pageRequestId, saved().secondsOnPage]).toEqual([pageRequestIdOf(ai, 0), 4.5]);
+        });
+
+        test('only the final registered visit transfers its time; superseded queries, detours and registration gaps do not', () => {
+            const ai = startModern();
+            jest.advanceTimersByTime(2500);
+            navigate(destination);
+            jest.advanceTimersByTime(300);
+            navigate(destination + '2');
+            jest.advanceTimersByTime(300);
+            navigate(destination);
+            jest.advanceTimersByTime(300);
+            sitesTrackedInPage(); // Still the same URL, but the extension unregistered its site.
+            mousedownOnLink('Outside tracking');
+            jest.advanceTimersByTime(4000);
+            sitesTrackedInPage(SITE_URL);
+            mousedownOnLink('Registered again');
+            jest.advanceTimersByTime(800);
+            navigate(destination + '#results');
+            jest.advanceTimersByTime(700);
+            report();
+            jest.advanceTimersByTime(200);
+            window.dispatchEvent(new Event('pagehide'));
+            expect(eventsNamed(ai, 'PAGE_EXIT').map(e => e.properties.activeTime)).toEqual([2.5]);
+            expect(saved().secondsOnPage).toBe(1.7);
+            expect(eventsNamed(ai, 'LinkClick').map(e => e.properties.linkText)).toEqual(['Registered again']);
+        });
     });
 
     test('loaded after the page has loaded: tracks the page straight away and can track clicks', async () => {

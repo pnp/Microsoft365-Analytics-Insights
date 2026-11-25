@@ -26,7 +26,7 @@ export class AppInsightsWrapper {
 
         const pageUrl = document.URL;
         this.discardPendingClicksUnlessOn(pageUrl);
-        if (this._lastTrackedUrl === pageUrl) {
+        if (this._lastTrackedUrl && isSamePage(this._lastTrackedUrl, pageUrl)) {
             debug("Ignoring duplicate pageview with request Id: " + this._pageRequestId);
             return false;
         }

@@ -17,7 +17,7 @@ import { AITrackerConfig } from './Models';
 import { LocalStorageUtils } from './LocalStorageUtils';
 import { ConfigHandler } from './Config/ConfigHandler';
 import { ApiConfigLoader } from './Config/ApiConfigLoader';
-import { isOnTrackedSite, isUrlInSite, SitesTrackedByExtension } from './TrackedSites';
+import type { SitesTrackedByExtension } from './TrackedSites';
 
 export { };
 
@@ -63,36 +63,20 @@ function initPageControls() {
 
     // Save time on page for the next page load to send. Not window.onbeforeunload: SharePoint assigns that too, so
     // whichever was set last silently replaced the other - losing either this or SharePoint's own handler.
-    window.addEventListener('pagehide', () => {
-        checkStillOnTrackedSite();
-        ai?.discardPendingClicksUnlessOn(null); // The back/forward cache can keep this document alive for a later visit.
-        pageTracker?.savePageExitToCookie();
-    });
+    window.addEventListener('pagehide', e => pageTracker?.savePageExitToCookie(e.persisted));
+    window.addEventListener('pageshow', e => { if (e.persisted) pageTracker?.resumeFromCache(); });
+    // On a back traversal Edge makes the document visible before notifying pageshow listeners.
+    // Resume before an earlier site listener can synchronously report a navigation or click.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) pageTracker?.resumeFromCache(); });
 
     // SharePoint can navigate to a site collection that isn't tracked without reloading the page, and back. Note when it does, so
     // the time spent there is no tracked page's time on page. Classic pages have no such navigations: every one loads a new page.
     if (modern) {
-        window.setInterval(checkStillOnTrackedSite, TRACKED_SITE_CHECK_MS);
-        // A quick detour and return can fit between two site checks. This only discards clicks;
-        // SPFx still decides when to report a page view.
-        window.navigation?.addEventListener?.('currententrychange', () => ai?.discardPendingClicksUnlessOn(document.URL));
+        window.setInterval(() => pageTracker?.observeCurrentPage(), TRACKED_SITE_CHECK_MS);
+        const navigated = () => pageTracker?.observeCurrentPage(true);
+        if (window.navigation?.addEventListener) window.navigation.addEventListener('currententrychange', navigated);
+        else window.addEventListener('popstate', navigated);
     }
-}
-
-// Whether the browser is on a page of a tracked site, noting when it leaves them and comes back. Nothing is collected on any other
-// page: SharePoint navigates between site collections without reloading the page, so this script keeps running on one the
-// installer didn't set up for tracking.
-function checkStillOnTrackedSite(): boolean {
-    const url = document.URL;
-    const onTrackedSite = isOnTrackedSite(url, window._o365AnalyticsInfo);
-    ai?.discardPendingClicksUnlessOn(onTrackedSite ? url : null);
-    if (onTrackedSite) {
-        pageTracker?.seenOnTrackedSite();
-    }
-    else {
-        pageTracker?.seenOffTrackedSites();
-    }
-    return onTrackedSite;
 }
 
 // Handle page click events
@@ -102,7 +86,7 @@ function interceptClickEvent(e: MouseEvent) {
     if (e.button !== 0 && e.button !== 1) {
         return;
     }
-    if (!checkStillOnTrackedSite()) {
+    if (!pageTracker?.observeCurrentPage()) {
         return;
     }
 
@@ -202,18 +186,9 @@ function trackPageWhenLoaded(): void {
 function trackLoadedPage(): void {
     if (!pageTracker) return;
 
-    if (checkStillOnTrackedSite()) {
-        // A document loaded for another URL means SharePoint navigated here without loading a page, so the browser's
-        // load timings belong to the earlier page. Report a load time of 0, as for any other page navigation.
-        const pageLoadDuration = documentWasLoadedForCurrentUrl() ? undefined : 0;
-        pageTracker.trackCurrentPageViewAndLastPageExit(document.URL, window._spPageContextInfo.listTitle, window._spPageContextInfo.pageItemId, pageLoadDuration);
-    }
-    else {
-        // SharePoint navigated on, to a site collection that isn't tracked, while this script loaded. The SPFx extension of a
-        // tracked site reports its page when SharePoint shows one again
-        debug("Not tracking this page: it isn't on a tracked site");
-        pageTracker.trackLastPageExit();
-    }
+    // A document loaded for another URL means SharePoint navigated here without loading a page.
+    const pageLoadDuration = documentWasLoadedForCurrentUrl() ? undefined : 0;
+    pageTracker.trackCurrentPageViewAndLastPageExit(document.URL, window._spPageContextInfo?.listTitle, window._spPageContextInfo?.pageItemId, pageLoadDuration);
 
     // Only now: the SPFx extension's calls are page navigations, which need the current page to have been tracked first
     window.modernPageNav = modernPageNav;
@@ -231,22 +206,7 @@ function documentWasLoadedForCurrentUrl(): boolean {
 // Called by the SPFx extension when SharePoint navigates to another page without reloading
 const modernPageNav = function (webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void {
 
-    if (!pageTracker) return;
-
-    // The extension reports a page a couple of seconds after SharePoint shows it, and SharePoint can have moved on since: to a site
-    // collection that isn't tracked, or to another tracked one, whose own extension reports that page
-    if (!checkStillOnTrackedSite()) {
-        debug("Not tracking a navigation to a page that isn't on a tracked site");
-        return;
-    }
-    if (siteUrl && !isUrlInSite(document.URL, siteUrl)) {
-        debug("Not tracking a navigation reported for another site: SharePoint has moved on since");
-        return;
-    }
-
-    // The extension has already updated window._spPageContextInfo for the new page
-    pageTracker.updatePageContext(window._spPageContextInfo);
-    pageTracker.handleModernPageNav(webUrl, webTitle, siteUrl, document.URL, listTitle, listItemId);
+    pageTracker?.handleModernPageNav(webUrl, webTitle, siteUrl, document.URL, listTitle, listItemId);
 }
 
 // Used to see if this is a new browsing session, with our own cookie
