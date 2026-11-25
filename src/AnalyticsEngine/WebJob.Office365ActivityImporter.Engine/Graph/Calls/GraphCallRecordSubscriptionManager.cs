@@ -78,7 +78,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 ClientState = clientState,
                 ChangeType = "created",
                 ExpirationDateTime = expiryUtc
-            }, rc => rc.Options.Add(NonJsonGraphRefusal.PreserveStatus), _stopping);
+            }, rc => rc.Options.Add(NonJsonGraphRefusal.RequireDeletionEvidence), _stopping);
 
             return ToCallRecordSubscription(result);
         }

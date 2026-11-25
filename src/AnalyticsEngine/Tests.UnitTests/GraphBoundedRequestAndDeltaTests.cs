@@ -451,6 +451,41 @@ namespace Tests.UnitTests
             }
         }
 
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task ReusedUpn_StalledPreviousObject404IsNotAbsence_AndCallerCancellationStillPropagates(bool stop)
+        {
+            var current = new GraphUser { Id = Guid.Empty.ToString(), UserPrincipalName = "person@contoso.example", AccountEnabled = true };
+            const string previous = "00000000-0000-0000-0000-000000000001";
+            var currentJson = "{\"id\":\"" + current.Id + "\",\"userPrincipalName\":\"" + current.UserPrincipalName + "\",\"accountEnabled\":true}";
+            using (var body = new GatedJsonContent())
+            using (var caller = new CancellationTokenSource())
+            {
+                var terminal = new SequenceHttpHandler(
+                    ct => Task.FromResult(TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, currentJson)),
+                    ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound) { Content = body }),
+                    ct => Task.FromResult(TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, "{\"value\":[" + currentJson + "]}")));
+                using (var graph = GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(stop ? 30000 : 250, 1, 60000), null, terminal))
+                {
+                    var loader = new GraphUserLoader(null, null, AnalyticsLogger.ConsoleOnlyTracer(), graph, caller.Token);
+                    var request = loader.VerifyReusedUpnAsync(current, previous);
+                    await WithinWatchdog(body.Started.Task);
+                    if (stop)
+                    {
+                        caller.Cancel();
+                        await Assert.ThrowsAsync<OperationCanceledException>(() => WithinWatchdog(request));
+                    }
+                    else
+                    {
+                        Assert.IsFalse(await WithinWatchdog(request));
+                    }
+                    Assert.AreEqual(2, terminal.Attempts, "An unreadable previous-object response does not permit the directory release check.");
+                    Assert.IsTrue(body.Disposed);
+                }
+            }
+        }
+
         [TestMethod]
         public async Task GraphUserLoader_CancelledSubscribedSkus_DoesNotUsePermissionFallback()
         {

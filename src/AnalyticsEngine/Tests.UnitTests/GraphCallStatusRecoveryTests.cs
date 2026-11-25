@@ -37,6 +37,16 @@ namespace Tests.UnitTests
             return result;
         }
 
+        private static HttpResponseMessage UnreadableJsonRefusal(int status)
+        {
+            var response = ErrorResponse(status, "text/html");
+            // A JSON content-type isn't a parsed Graph error. The bounded reader rejects the
+            // advertised size without allocating it; the gateway page must not become a bodyless 404/409.
+            response.Content.Headers.ContentType.MediaType = "application/json";
+            response.Content.Headers.ContentLength = int.MaxValue;
+            return response;
+        }
+
         [DataTestMethod]
         [DataRow(403, true)]
         [DataRow(403, false)]
@@ -67,6 +77,7 @@ namespace Tests.UnitTests
         [DataTestMethod]
         [DataRow("text/html")]
         [DataRow(null)]
+        [DataRow("application/json")]
         public async Task ReusedUpn_NonJson404IsNotEvidenceOfDirectoryAbsence(string mediaType)
         {
             var current = new GraphUser { Id = Guid.Empty.ToString(), UserPrincipalName = "person@contoso.example", AccountEnabled = true };
@@ -76,6 +87,7 @@ namespace Tests.UnitTests
                 .Json("/users/" + current.Id, json)
                 .Route("/users/" + previousId, _ =>
                 {
+                    if (mediaType == "application/json") return UnreadableJsonRefusal(404);
                     var response = ErrorResponse(404, "text/html");
                     if (mediaType == null) response.Content.Headers.ContentType = null;
                     return response;
@@ -249,6 +261,23 @@ namespace Tests.UnitTests
                             "A gateway page is not an authoritative Graph diagnosis, nor should its content be logged.");
                 }
             }
+        }
+
+        [TestMethod]
+        public async Task Webhook_UnreadableConflictBody_DoesNotAuthorizeDeletingAnOwnedSubscription()
+        {
+            var operations = new List<string>();
+            var posts = 0;
+            var transport = SubscriptionTransport(1, operations,
+                () => ++posts == 1 ? UnreadableJsonRefusal(409)
+                    : TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.Created, "{\"id\":\"replacement\"}"),
+                () => TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, "{\"id\":\"owned\"}"));
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), NullLogger.Instance, Clock);
+                Assert.AreEqual(409, (await Assert.ThrowsAsync<ApiException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState))).ResponseStatusCode);
+            }
+            CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions", "PATCH /v1.0/subscriptions/owned" }, operations);
         }
 
         [DataTestMethod]

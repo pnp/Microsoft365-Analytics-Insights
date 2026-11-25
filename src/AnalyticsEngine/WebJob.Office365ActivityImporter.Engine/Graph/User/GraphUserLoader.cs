@@ -233,7 +233,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     await _graphServiceClient.Users[previousId.ToString()].GetAsync(rc =>
                     {
                         rc.QueryParameters.Select = new[] { "id" };
-                        rc.Options.Add(NonJsonGraphRefusal.PreserveStatus);
+                        rc.Options.Add(NonJsonGraphRefusal.RequireDeletionEvidence);
                     }, _shutdownToken);
                     return DeclineReusedUpn("previous object still exists (disabled is not deleted)");
                 }
