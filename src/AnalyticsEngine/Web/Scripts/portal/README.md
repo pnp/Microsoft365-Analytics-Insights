@@ -75,6 +75,10 @@ report and period together. The catalog's links carry that period too. Agent rep
 Unsupported period/count values display a warning before using the corresponding default.
 These controls do not change the independent date-window semantics of Adoption or the explorers.
 
+On the weekly active-users-by-workload chart, open **Weekly values** with the mouse or keyboard to
+read each week. A verified zero is `0`; a missing week is **No data**. Hollow diamonds mark lower
+bounds, which the table identifies as **at least** the displayed value.
+
 Prompt insights exposes prompt categories when `CopilotInteractionHistory` is enabled without the
 Copilot audit import. In that mode it requests only the category report and explains why the other
 prompt charts are not requested. Those charts still share the existing audit-report endpoint, so the

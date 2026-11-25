@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { renderWithProvider } from '../test/renderWithProvider';
 import ReportsPage, { reportCategories, reportChartWarningText, reportMatrix, reportSeries } from './ReportsPage';
@@ -405,6 +406,54 @@ describe('ReportsPage', () => {
     expect(warning).toContain('Algunas series de cargas de trabajo no están disponibles: Outlook: database failed; Teams: no hay datos de uso consolidados para la semana del');
     expect(warning).not.toContain('Some workload series are unavailable');
     expect(warning).not.toContain('2026-06-15');
+  });
+
+  it.each([
+    { language: 'en' as const, label: 'Weekly values', table: 'Active users per week', missing: 'No data', week: 'Week' },
+    { language: 'es' as const, label: 'Valores semanales', table: 'Usuarios activos por semana', missing: 'Sin datos', week: 'Semana' },
+  ])('offers the exact and missing weekly usage values without a mouse in $language', async ({ language, label, table, missing, week }) => {
+    await loadCatalog(language);
+    const user = userEvent.setup();
+    mockAreas.mockResolvedValue({ ...NO_AREAS, usage: true });
+    mockArea.mockResolvedValue({
+      ...areaData, area: 'usage', charts: [baseChart({
+        key: 'usage-active-users', type: 'timeseries',
+        series: [{ name: 'Teams', points: [
+          { weekStart: '2026-03-02', value: 0 },
+          { weekStart: '2026-03-09', value: null },
+          { weekStart: '2026-03-16', value: 5 },
+        ] }],
+      })],
+    });
+    renderReport('/insights/reports/usage', language);
+    const summary = await screen.findByText(label, { selector: 'summary' });
+    screen.getByRole('button', { name: 'SQL' }).focus();
+    await user.tab();
+    expect(summary).toHaveFocus();
+    expect(summary.parentElement).not.toHaveAttribute('open');
+    // jsdom does not dispatch a summary's native Enter/Space activation; exercise its default toggle.
+    fireEvent.click(summary);
+    const readout = screen.getByRole('table', { name: table });
+    expect(readout).toBeVisible();
+    expect(within(readout).getByRole('columnheader', { name: week })).toBeVisible();
+    expect(within(readout).getAllByRole('cell').map(cell => cell.textContent)).toEqual(['0', missing, '5']);
+    expect(within(readout).getAllByRole('rowheader')).toHaveLength(3);
+    expect(screen.getByRole('img', { name: table }).querySelector('rect[transform]')).toBeNull();
+    expect(screen.queryByText(translateStatic(language, 'charts.timeSeries.lowerBoundNote'))).not.toBeInTheDocument();
+  });
+
+  it('keeps the ordinary time-series controls on a different report', async () => {
+    mockAreas.mockResolvedValue({ ...NO_AREAS, webTraffic: true });
+    mockArea.mockResolvedValue({
+      ...areaData, area: 'web-traffic', charts: [baseChart({
+        key: 'web-page-views', type: 'timeseries',
+        series: [{ name: 'Page views', points: [{ weekStart: '2026-03-02', value: 5 }] }],
+      })],
+    });
+    renderReport('/insights/reports/web-traffic');
+    expect(await screen.findByRole('img')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'SQL' })).toBeVisible();
+    expect(screen.queryByText('Weekly values')).not.toBeInTheDocument();
   });
 
   it('says which weeks may undercount activity, in the reader\'s language', async () => {

@@ -117,6 +117,8 @@ type TimeSeriesChartProps = {
   height?: number;
   /** Optional legend caveat shown when null points should be explained in-place. */
   gapNote?: string;
+  /** Offer the weekly values table even when no numeric point is a lower bound. */
+  showWeeklyValues?: boolean;
   /** Labels are tenant-authored or already localised, not server placeholder wording. */
   literalLabels?: boolean;
 };
@@ -165,7 +167,7 @@ function SeriesSwatch({ index, className }: { index: number; className: string }
  * its container, with a "nice" y-axis, thinned week labels, and an interactive hover tooltip that
  * reads out every series' value for the hovered week.
  */
-export default function TimeSeriesChart({ series, valueLabel, height = 300, gapNote, literalLabels }: TimeSeriesChartProps) {
+export default function TimeSeriesChart({ series, valueLabel, height = 300, gapNote, showWeeklyValues, literalLabels }: TimeSeriesChartProps) {
   const t = useT();
   const styles = useStyles();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -395,7 +397,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
           {hasLowerBounds && <Text size={200} className={styles.legendNote}>{t('charts.timeSeries.lowerBoundNote')}</Text>}
         </div>
       )}
-      {hasLowerBounds && (
+      {(hasLowerBounds || showWeeklyValues) && (
         <details className={styles.values}>
           <summary>{t('charts.timeSeries.weeklyValues')}</summary>
           <div className={styles.tableWrap}>
