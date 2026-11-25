@@ -15,7 +15,7 @@ namespace Common.Entities.State
     /// Exact outcomes of daily user-detail imports, independent of fact-row presence and cadence stamps.
     /// Keys are v1:{source}:yyyyMMdd, in UsageReportCoverage; no user identifiers are stored.
     /// v1:scopePurge holds the active purge run token or its UTC end ticks. A scope purge revokes affected days
-    /// before it deletes their facts; downloads overlapping it cannot publish new certificates.
+    /// before committing their SQL deletion; downloads overlapping it cannot certify the affected days.
     /// Revoked dates retain their outcome with a |purge or |endTicks suffix rather than expiring into a legacy miss.
     /// Only a whole, identifiable, tenant-wide report saved after the settlement delay certifies a day.
     /// Day outcomes: partial (in progress / unsettled), incomplete, scopeUnverified, complete, empty.
@@ -181,11 +181,15 @@ namespace Common.Entities.State
         internal const int MaxPurgeDaysPerTransaction = AzureTableKeyValueStore.MaxTransactionSize - 1;
         private IFencedBatchKeyValueStore PurgeWrites => (IFencedBatchKeyValueStore)_store;
 
-        internal async Task StartScopePurgeAsync(string runToken, Func<Task> checkOwnership, CancellationToken token = default)
+        internal async Task StartScopePurgeAsync(string runToken, Func<Task> checkOwnership, CancellationToken token = default,
+            Func<string, bool> ownsEarlierFence = null)
         {
             for (var attempt = 0; attempt < 3; attempt++)
             {
                 var fence = await Conditional.GetVersionedAsync(ScopePurgeKey, token).ConfigureAwait(false);
+                if (fence.Value?.StartsWith("active:", StringComparison.Ordinal) == true &&
+                    fence.Value != "active:" + runToken && ownsEarlierFence?.Invoke(fence.Value.Substring("active:".Length)) != true)
+                    throw new UserScopePurgeLockLostException();
                 await checkOwnership().ConfigureAwait(false);
                 if (await PurgeWrites.TrySetFencedBatchAsync(ScopePurgeKey, "active:" + runToken, fence.VersionToken,
                     Array.Empty<KeyValuePair<string, string>>(), token).ConfigureAwait(false)) return;

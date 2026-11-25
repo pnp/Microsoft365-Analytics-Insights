@@ -133,7 +133,7 @@ namespace Common.Entities.UserScope.Purge
                 // Read the ETag BEFORE proving SQL ownership. An older in-flight progress write might win this
                 // ETag, so reread and reprove on conflict; never claim on a version read after the lock was lost.
                 await checkSqlLock().ConfigureAwait(false);
-                job.RunToken = requiredOwner ?? Guid.NewGuid().ToString("N");
+                if (requiredOwner == null) job.ClaimNewRun();
                 if (await TrySaveVersionAsync(job, row.VersionToken, token).ConfigureAwait(false))
                 {
                     job.CancelRequested = await IsCancelRequestedAsync(id, token).ConfigureAwait(false);

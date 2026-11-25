@@ -147,6 +147,67 @@ OPTION (MAXRECURSION 0);");
         [DataTestMethod]
         [DataRow(false)]
         [DataRow(true)]
+        public async Task UnreadableFenceOnTakeoverStaysRecoverableUntilItsOwnerCanFinish(bool cancel)
+        {
+            var coverage = new UsageReportCoverageStore(_ledger, true);
+            var members = Members(InsideUpn);
+            var queued = await QueueAsync(members);
+            SeedTeamsDays(_db, 2, $"u.user_name IN ('{InsideUpn}', '{OutsideUpn}')");
+            foreach (var day in new[] { FirstDay, FirstDay.AddDays(1) })
+                await coverage.CompleteDayAsync("teams", day, true, true, false, FirstDay.AddDays(5), 3);
+            using (var stopping = new CancellationTokenSource())
+            {
+                var first = Engine(true);
+                first.AfterWindow = (index, window) =>
+                {
+                    if (UserScopePurgePlan.Steps[index - 1].Table == "teams_user_activity_log") stopping.Cancel();
+                    return Task.CompletedTask;
+                };
+                Assert.AreEqual(UserScopePurgeRunOutcome.Paused, await first.RunAsync(queued.Id, Provider(members), stopToken: stopping.Token));
+            }
+            var original = await _state.GetAsync(queued.Id);
+            var originalFence = await _ledger.GetStringAsync("v1:scopePurge");
+            Assert.AreEqual("active:" + original.RunToken, originalFence);
+            Assert.AreEqual(1L, original.RowsAffected["teams_user_activity_log"]);
+            if (cancel) Assert.IsTrue(await _state.RequestCancelAsync(queued.Id));
+            Assert.AreEqual(UserScopePurgeRunOutcome.Paused, await Engine(false).RunAsync(queued.Id, Provider(members)));
+            var outage = new UsageReportCoverageStore(new AzureTableKeyValueStore(_ =>
+                Task.FromException<Azure.Data.Tables.TableClient>(new Azure.RequestFailedException(503, "Synthetic fence read failure.")),
+                "Contoso", "Coverage"), true);
+            for (var i = 0; i < 2; i++)
+            {
+                var retry = new UserScopePurgeEngine(_database, _state, null, outage);
+                Assert.AreEqual(UserScopePurgeRunOutcome.Paused, await retry.RunAsync(queued.Id, Provider(members)));
+                var pending = await _state.GetLatestAsync();
+                Assert.AreEqual(UserScopePurgeStates.Running, pending.State);
+                Assert.AreNotEqual(original.RunToken, pending.RunToken);
+                Assert.IsNull(pending.CompletedUtc);
+                Assert.AreEqual(1L, pending.RowsAffected["teams_user_activity_log"]);
+                Assert.AreEqual(originalFence, await _ledger.GetStringAsync("v1:scopePurge"));
+            }
+            var touched = await coverage.IsDayVerifiedAsync("teams", FirstDay) ? FirstDay.AddDays(1) : FirstDay;
+            var overlap = DateTime.UtcNow;
+            await coverage.CompleteDayAsync("teams", touched, true, true, false, overlap, 3);
+            await coverage.CompleteDayAsync("outlook", touched, true, true, true, overlap, 3);
+            Assert.IsFalse(await coverage.IsDayVerifiedAsync("teams", touched));
+            Assert.IsTrue(await coverage.IsDayVerifiedAsync("outlook", touched));
+
+            Assert.AreEqual(cancel ? UserScopePurgeRunOutcome.Cancelled : UserScopePurgeRunOutcome.Completed,
+                await Engine(true).RunAsync(queued.Id, Provider(members)));
+            var final = await _state.GetAsync(queued.Id);
+            Assert.AreEqual(cancel ? 0 : 1, final.UsersDeleted);
+            Assert.AreEqual(cancel ? 1L : 2L, final.RowsAffected["teams_user_activity_log"]);
+            await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() => _state.SaveOwnedAsync(original, CancellationToken.None));
+            await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() => coverage.EndScopePurgeAsync(original.RunToken, DateTime.UtcNow));
+            await coverage.CompleteDayAsync("teams", touched, true, true, false, overlap, 3);
+            Assert.IsFalse(await coverage.IsDayVerifiedAsync("teams", touched));
+            await coverage.CompleteDayAsync("teams", touched, true, true, false, final.CompletedUtc.Value.AddSeconds(1), 3);
+            Assert.IsTrue(await coverage.IsDayVerifiedAsync("teams", touched));
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
         public async Task MissingStorageAllowsUnaffectedPurgeButNeverDeletesLateUsage(bool lateArrival)
         {
             _state = new UserScopePurgeStateStore(new InMemoryKeyValueStore(), false);

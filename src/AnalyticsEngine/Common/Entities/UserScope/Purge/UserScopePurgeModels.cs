@@ -1,6 +1,7 @@
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace Common.Entities.UserScope.Purge
 {
@@ -108,6 +109,34 @@ namespace Common.Entities.UserScope.Purge
         // A restarted worker claims the same job with a new token. Persisted in Table, not sent to the portal.
         [JsonProperty]
         internal string RunToken { get; set; }
+
+        [JsonProperty]
+        internal string FenceFamily { get; set; }
+        [JsonProperty]
+        internal int RunNumber { get; set; }
+
+        internal void ClaimNewRun()
+        {
+            // An older build used its bare run token as the fence. Preserve that exact predecessor
+            // across even repeated unacknowledged handoffs; a different job has a different family.
+            if (FenceFamily == null)
+            {
+                FenceFamily = RunToken ?? Guid.NewGuid().ToString("N");
+                RunNumber = RunToken == null ? 0 : 1;
+            }
+            RunNumber = checked(RunNumber + 1);
+            RunToken = FenceFamily + ":" + RunNumber.ToString(CultureInfo.InvariantCulture) + ":" + Guid.NewGuid().ToString("N");
+        }
+
+        internal bool OwnsEarlierFence(string owner)
+        {
+            if (RunNumber < 2) return false;
+            if (owner == FenceFamily) return true;
+            var parts = owner.Split(':');
+            return parts.Length == 3 && parts[0] == FenceFamily &&
+                int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var number) &&
+                number > 0 && number < RunNumber && Guid.TryParseExact(parts[2], "N", out _);
+        }
 
         // Written before a user-delete window; cleared only together with its acknowledged count.
         // Older records have no intent marker and cannot prove an interrupted users phase was checkpointed.

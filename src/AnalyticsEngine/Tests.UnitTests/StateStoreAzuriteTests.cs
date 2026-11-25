@@ -546,7 +546,7 @@ namespace Tests.UnitTests
                     // Another old request lands after the replacement read the ETag. The replacement may
                     // still claim, but only after proving SQL ownership again on the new ETag.
                     if (++proofs == 1) await other.RevokeScopeDaysAsync("original", "teams", new[] { day }, CancellationToken.None);
-                });
+                }, ownsEarlierFence: owner => owner == "original");
                 Assert.AreEqual(2, proofs);
                 await other.EndScopePurgeAsync("replacement", ended);
                 await other.CompleteDayAsync("teams", day, true, true, false, ended.AddSeconds(1), 3);
@@ -577,6 +577,30 @@ namespace Tests.UnitTests
                 _afterCommit?.Invoke(n, actions);
                 return result;
             }
+        }
+
+        [TestMethod]
+        public async Task ScopePurge_AdoptsItsLegacyFenceButNeverAFutureRunOrAnotherJobsFence()
+        {
+            var state = new UserScopePurgeStateStore(NewStore(), true);
+            var ledger = NewStore();
+            var coverage = new UsageReportCoverageStore(ledger, true);
+            var job = await state.CreateAsync("admin@contoso.example", null, 1, 1);
+            job.RunToken = Guid.NewGuid().ToString("N"); // Pre-handoff-format record.
+            await state.SaveAsync(job);
+            Task Check() => Task.CompletedTask;
+            await coverage.StartScopePurgeAsync(job.RunToken, Check);
+            var older = await state.TryClaimAsync(job.Id, Check, CancellationToken.None);
+            var newer = await state.TryClaimAsync(job.Id, Check, CancellationToken.None);
+            await coverage.StartScopePurgeAsync(newer.RunToken, Check, ownsEarlierFence: newer.OwnsEarlierFence);
+            await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() =>
+                coverage.StartScopePurgeAsync(older.RunToken, Check, ownsEarlierFence: older.OwnsEarlierFence));
+            var unrelated = new UserScopePurgeJob();
+            unrelated.ClaimNewRun();
+            unrelated.ClaimNewRun();
+            await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() =>
+                coverage.StartScopePurgeAsync(unrelated.RunToken, Check, ownsEarlierFence: unrelated.OwnsEarlierFence));
+            Assert.AreEqual("active:" + newer.RunToken, await ledger.GetStringAsync("v1:scopePurge"));
         }
 
         [TestMethod]

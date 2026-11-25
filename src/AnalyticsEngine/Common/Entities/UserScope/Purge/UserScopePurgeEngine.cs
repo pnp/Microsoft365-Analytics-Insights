@@ -21,8 +21,8 @@ namespace Common.Entities.UserScope.Purge
         Cancelled,
 
         /// <summary>
-        /// The host is shutting down. The purge lock went with the session; a durable record lets the purge start again
-        /// when the web app next starts.
+        /// The host is stopping or the coverage fence still needs recovery. The job remains active so startup
+        /// or a later status request can try again under the purge lock.
         /// </summary>
         Paused,
 
@@ -38,7 +38,7 @@ namespace Common.Entities.UserScope.Purge
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Every run starts from the beginning with a fresh snapshot, including one that carries on after a restart. Each
+    /// A run that can safely resume starts from the beginning with a fresh snapshot. Each
     /// step deletes or anonymises whatever still matches and user rows go last, so starting again finishes the job - and
     /// it asks Graph who is outside the scope now, rather than trusting a list chosen before the restart. So the list of
     /// users being removed is never stored anywhere: it exists only in the purge's session, as <c>#purge_candidates</c>.
@@ -48,6 +48,8 @@ namespace Common.Entities.UserScope.Purge
     /// have been removed in all than the number they confirmed (<see cref="UserScopePurgeJob.ConfirmedOutsideScopeCount"/>),
     /// and one that had to read the groups again stops if they no longer resolve to the people it was confirmed against
     /// (<see cref="UserScopePurgeJob.ScopeMembershipFingerprint"/>).
+    /// A takeover with an unaccounted user-delete window stops before taking another snapshot. Its count is a
+    /// lower bound, not evidence that the remaining confirmation can be spent.
     /// </para>
     /// <para>
     /// Only one purge runs at a time, on any web app instance: the run holds the purge lock on its session (see
@@ -184,15 +186,26 @@ namespace Common.Entities.UserScope.Purge
         private async Task<UserScopePurgeRunOutcome> RunClaimedAsync(UserScopePurgeJob job, UserScopePurgeSession session,
             IUserImportScopeProvider scopeProvider, UserImportScopeResolution preResolved, CancellationToken stopToken)
         {
+            var openingFence = _coverage.IsDurable;
+            var mayHaveFence = job.RunNumber > 1 || job.StartedUtc.HasValue;
             try
             {
                 if (_coverage.IsDurable)
                 {
                     // A resumed, cancelled job must also close an abandoned fence. Bind its replacement
                     // to this run, not the job id that another host may have taken over.
-                    await CoverageWriteAsync(() => _coverage.StartScopePurgeAsync(job.RunToken,
-                        () => CheckSessionForStateWriteAsync(session, stopToken), stopToken), stopToken).ConfigureAwait(false);
+                    await CoverageWriteAsync(() => _coverage.StartScopePurgeAsync(job.RunToken, async () =>
+                    {
+                        await CheckSessionForStateWriteAsync(session, stopToken).ConfigureAwait(false);
+                        mayHaveFence = true; // Even if Table never acknowledges the pending write.
+                    }, stopToken, job.OwnsEarlierFence), stopToken).ConfigureAwait(false);
                     session.CoverageFence = job.RunToken;
+                    openingFence = false;
+                }
+                else if (_state.IsDurable && mayHaveFence)
+                {
+                    _logger.LogWarning($"User scope purge {job.Id}: durable report coverage is missing on takeover. Leaving the job active until its fence can be checked.");
+                    return UserScopePurgeRunOutcome.Paused;
                 }
                 if (job.CancelRequested || session.StopRequestedOnReconnect)
                 {
@@ -249,6 +262,11 @@ namespace Common.Entities.UserScope.Purge
             }
             catch (Exception ex) when (!(ex is UserScopePurgeLockLostException) && !(ex is OperationCanceledException && stopToken.IsCancellationRequested))
             {
+                if (openingFence && mayHaveFence)
+                {
+                    _logger.LogWarning(ex, $"User scope purge {job.Id}: coverage fence ownership could not be confirmed. Leaving the job active for recovery.");
+                    return UserScopePurgeRunOutcome.Paused;
+                }
                 var sql = ex as SqlException ?? ex.InnerException as SqlException;
                 var stateLost = ex is UserScopePurgeStateUnavailableException;
                 var code = job.HasUnaccountedUserDeletes ? UserScopePurgeErrorCodes.UserDeleteOutcomeUnknown
@@ -267,7 +285,7 @@ namespace Common.Entities.UserScope.Purge
                 catch (Exception finishError) when (!(finishError is UserScopePurgeLockLostException))
                 {
                     _logger.LogError(finishError, $"User scope purge {job.Id}: could not record the failure ({finishError.GetType().Name}).");
-                    return UserScopePurgeRunOutcome.Failed;
+                    return session.CoverageFence == null ? UserScopePurgeRunOutcome.Failed : UserScopePurgeRunOutcome.Paused;
                 }
             }
             catch (OperationCanceledException)
