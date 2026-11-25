@@ -419,9 +419,11 @@ namespace Tests.UnitTests
             var today = now.Date;
             var certified = today.AddDays(-6);
             var uncertified = today.AddDays(-5);
+            var wronglyEmpty = today.AddDays(-7);
             var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
             await coverage.CompleteDayAsync("teams", certified, true, true, false, now, 3);
             await coverage.CompleteDayAsync("teams", uncertified, true, true, false, uncertified, 3);
+            await coverage.CompleteDayAsync("teams", wronglyEmpty, true, true, true, now, 3);
             var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
             {
                 Clock = new FixedClock(now),
@@ -429,7 +431,7 @@ namespace Tests.UnitTests
                 CoverageStore = coverage, CoverageSource = "teams", CoverageWholeTenant = true,
             };
             loader.ReportStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>()
-                .Seed(StoredRow(certified, UserAId, 1), StoredRow(uncertified, UserAId, 1));
+                .Seed(StoredRow(certified, UserAId, 1), StoredRow(uncertified, UserAId, 1), StoredRow(wronglyEmpty, UserAId, 1));
 
             var skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: now);
 
@@ -437,7 +439,7 @@ namespace Tests.UnitTests
 
             loader.CoverageStore = new UsageReportCoverageStore(new InMemoryKeyValueStore(), false);
             skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: now);
-            CollectionAssert.AreEquivalent(new[] { certified, uncertified }, skip.ToArray(),
+            CollectionAssert.AreEquivalent(new[] { certified, uncertified, wronglyEmpty }, skip.ToArray(),
                 "Without durable state nothing can be certified, so the existing skip behaviour is kept.");
         }
 
@@ -717,20 +719,27 @@ namespace Tests.UnitTests
             Assert.AreEqual("empty", (await coverage.ReadAsync(day, day)).Single(c => c.Source == "teams").Status);
         }
 
-        [TestMethod]
-        public async Task DailyCoverage_AFirstDownloadThatFailsMidway_IsNotCertified()
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task DailyCoverage_InterruptedNonemptySave_IsNotCertified(bool previouslyEmpty)
         {
             var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
-            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveBatchSize = 1 };
-            loader.CoverageStore = coverage;
-            loader.CoverageSource = "teams";
-            loader.CoverageWholeTenant = true;
+            var sql = new FailOnSaveNumberUsageReportStore(2);
+            var loader = CoverageLoader(Day1.AddDays(5), coverage, sql);
+            loader.SaveBatchSize = 1;
+            if (previouslyEmpty)
+            {
+                loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail>();
+                await loader.SaveLoadedReportsToSql(SeededIdCache(), new UserCache(null));
+                Assert.AreEqual("empty", await TeamsStatusAsync(coverage, Day1));
+            }
             loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail> { Page(UserA, 1), Page(UserB, 2) };
-            loader.ReportStore = new FailOnSaveNumberUsageReportStore(2);
             await Assert.ThrowsExceptionAsync<InvalidOperationException>(
                 () => loader.SaveLoadedReportsToSql(SeededIdCache(), new UserCache(null)));
-            Assert.IsFalse(await coverage.IsDayVerifiedAsync("teams", Day1));
-            Assert.IsTrue(await coverage.NeedsReimportAsync("teams", Day1, true), "An unfinished first download is retried.");
+            Assert.AreEqual(1, sql.Stored.Count, "The first batch committed before the second failed.");
+            Assert.AreEqual("partial", await TeamsStatusAsync(coverage, Day1));
+            Assert.IsTrue(await coverage.NeedsReimportAsync("teams", Day1, true));
         }
 
         [TestMethod]
