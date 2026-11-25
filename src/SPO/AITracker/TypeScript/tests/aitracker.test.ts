@@ -12,19 +12,11 @@ import { AI_TRACKER_VER } from '../src/AiTrackerConstants';
 const mockAiInstances: any[] = [];
 let mockSecondsOnPage = 12;         // TimeMe's running total of active seconds on page
 
-jest.mock('@microsoft/applicationinsights-web', () => ({
-    ApplicationInsights: jest.fn().mockImplementation((settings: any) => {
-        const instance = {
-            config: settings.config,
-            // As the SDK does for a connection string without an instrumentation key
-            loadAppInsights: jest.fn(() => {
-                if (settings.config.connectionString.indexOf('InstrumentationKey=') === -1) throw new Error('Please provide instrumentation key');
-            }),
-            setAuthenticatedUserContext: jest.fn(),
-            trackPageView: jest.fn(),
-            trackEvent: jest.fn(),
-        };
+jest.mock('../src/TrackerTelemetry', () => ({
+    createTrackerTelemetry: jest.fn((connectionString: string) => {
+        const instance = { trackPageView: jest.fn(), trackEvent: jest.fn() };
         mockAiInstances.push(instance);
+        if (!connectionString.includes('InstrumentationKey=')) throw new Error('Missing instrumentation key');
         return instance;
     }),
 }));
@@ -352,15 +344,6 @@ describe('AITracker page bootstrap', () => {
         await settle();
 
         expect(eventsNamed(mockAiInstances[0], 'UserSearch').map((e: any) => e.properties.userSearch)).toEqual(['contoso']);
-    });
-
-    test('does not send SharePoint\'s own requests to App Insights', () => {
-        loadTrackerCopy();
-
-        const config = mockAiInstances[0].config;
-        expect(config.disableAjaxTracking).toBe(true);
-        expect(config.disableFetchTracking).toBe(true);
-        expect(config.enableDebug).toBeFalsy();
     });
 
     test('without a connection string, does not start - so a configured copy still can', async () => {

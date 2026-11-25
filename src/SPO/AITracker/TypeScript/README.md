@@ -11,3 +11,5 @@ npm run build:prod    # writes ../aitracker.js
 ```
 
 Bump `AI_TRACKER_VER` in `src/AiTrackerConstants.ts` with every change. It is logged in the browser console on every tracked page, and sent with every page view.
+
+`TrackerTelemetry.ts` uses the Application Insights core, analytics, properties and sender packages. Update the four together. The full web SDK also bundles dependency collection and remote configuration, neither of which the tracker uses. The production build fails above 190 KiB of minified JavaScript; compare the actual bundle and compressed sizes before raising that limit. The tracker must still load as one site-hosted script on classic and modern pages.

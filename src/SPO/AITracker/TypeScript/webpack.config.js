@@ -39,6 +39,7 @@ const config = {
 module.exports = () => {
   if (isProduction) {
     config.mode = "production";
+    config.performance = { hints: "error", maxEntrypointSize: 190 * 1024, maxAssetSize: 190 * 1024 };
   } else {
     config.mode = "development";
   }

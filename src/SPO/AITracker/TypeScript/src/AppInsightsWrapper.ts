@@ -1,4 +1,5 @@
-import { ApplicationInsights, IEventTelemetry, IPageViewTelemetry } from "@microsoft/applicationinsights-web";
+import type { IEventTelemetry, IPageViewTelemetry } from "@microsoft/applicationinsights-core-js";
+import type { TrackerTelemetry } from "./TrackerTelemetry";
 import { debug, debugObj, error, log, warn } from "./Logger";
 import { PageProps } from "./PageProps/Models/PageProps";
 import { ClickData, ClickEventProps, PageViewDataProperties, SearchEventProperties, TimingEventProperties } from "./Definitions";
@@ -10,13 +11,13 @@ const MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW = 20;
 
 export class AppInsightsWrapper {
 
-    _ai: ApplicationInsights;
+    _ai: TrackerTelemetry;
     _sessionId: string;
     _pageRequestId: string | null = null;               // Page request GUID to join before & after AI events together on import
     _lastTrackedUrl: string | null = null;
     _clicksBeforeFirstPageView: { data: ClickData, timeStamp: string, pageUrl: string }[] = [];
 
-    constructor(instance: ApplicationInsights, sessionId: string) {
+    constructor(instance: TrackerTelemetry, sessionId: string) {
         this._ai = instance;
         this._sessionId = sessionId;
     }

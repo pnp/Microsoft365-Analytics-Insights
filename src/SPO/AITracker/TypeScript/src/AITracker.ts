@@ -1,5 +1,5 @@
 ﻿import TimeMe from 'timeme.js'
-import { ApplicationInsights } from '@microsoft/applicationinsights-web'
+import { createTrackerTelemetry, TrackerTelemetry } from './TrackerTelemetry';
 
 import { AppInsightsWrapper } from './AppInsightsWrapper';
 import { debug, error, log, warn } from './Logger';
@@ -144,23 +144,9 @@ function startAppInsights(): boolean {
         debug("Resuming session '" + GetSessionCookieVal() + "' for '" + window._spPageContextInfo.userLoginName + "'.");
     }
 
-    // Init AppInsights. Reference: https://github.com/Microsoft/ApplicationInsights-JS/blob/master/API-reference.md
-    let appInsights: ApplicationInsights;
+    let appInsights: TrackerTelemetry;
     try {
-        appInsights = new ApplicationInsights({
-            config: {
-                connectionString: atob(window.appInsightsConnectionStringHash!),
-                disableExceptionTracking: true,
-                disableAjaxTracking: true,
-                disableFetchTracking: true,     // Don't send every fetch SharePoint makes as a dependency: it's cost, and nothing reads it
-                isCookieUseDisabled: true,
-                isBeaconApiDisabled: true
-            }
-        });
-        appInsights.loadAppInsights();
-
-        // Set auth context
-        appInsights.setAuthenticatedUserContext(window._spPageContextInfo.userLoginName);
+        appInsights = createTrackerTelemetry(atob(window.appInsightsConnectionStringHash!), window._spPageContextInfo.userLoginName);
     } catch (e) {
         error("Couldn't start Application Insights with the connection string this site is configured with, so this page isn't tracked. Re-run the installer for this site.");
         error(e);
