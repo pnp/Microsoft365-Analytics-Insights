@@ -153,7 +153,8 @@ namespace Tests.UnitTests.InstallTests
                 arm.AddSite("1.2");
                 arm.Resource(AppSettings)["properties"] = new JObject
                 {
-                    ["UserGroupsFilter"] = "Contoso pilot", ["ClientID"] = "old", ["ContosoEmpty"] = ""
+                    ["UserGroupsFilter"] = "Contoso pilot", ["ClientID"] = "old", ["ContosoEmpty"] = "",
+                    ["iMpOrTjObSeTtInGs"] = "stale"
                 };
                 var operatorPair = new JObject { ["type"] = "PostgreSQL", ["value"] = "Contoso; preserve exactly " };
                 var otherBus = new JObject { ["type"] = "ServiceBus", ["value"] = "Contoso operator bus" };
@@ -173,6 +174,8 @@ namespace Tests.UnitTests.InstallTests
                     Assert.AreEqual("Contoso pilot", (string)settings["UserGroupsFilter"]);
                     Assert.AreEqual("", (string)settings["ContosoEmpty"]);
                     Assert.AreEqual(Sub, (string)settings["ClientID"]);
+                    Assert.IsNotNull(settings["ImportJobSettings"]);
+                    Assert.IsNull(settings["iMpOrTjObSeTtInGs"], "Windows setting names are case-insensitive. Send only the managed value.");
                     var properties = (JObject)arm.Resource(ConnectionStrings)["properties"];
                     Assert.IsTrue(JToken.DeepEquals(operatorPair, properties["ContosoReporting"]));
                     Assert.IsTrue(JToken.DeepEquals(otherBus, properties["ServiceBusBackup"]));
@@ -321,6 +324,7 @@ namespace Tests.UnitTests.InstallTests
 
         [DataTestMethod]
         [DataRow(AppSettings, "denied")]
+        [DataRow(AppSettings, "policy")]
         [DataRow(AppSettings, "missing properties")]
         [DataRow(AppSettings, "null properties")]
         [DataRow(AppSettings, "invalid setting")]
@@ -338,8 +342,10 @@ namespace Tests.UnitTests.InstallTests
                 switch (failure)
                 {
                     case "denied":
+                    case "policy":
                         arm.PostStatuses[list] = HttpStatusCode.Forbidden;
-                        arm.PostResponses[list] = new JObject { ["error"] = new JObject { ["code"] = "Forbidden", ["message"] = privateValue } };
+                        arm.PostResponses[list] = new JObject { ["error"] = new JObject
+                            { ["code"] = failure == "policy" ? "RequestDisallowedByPolicy" : "Forbidden", ["message"] = privateValue } };
                         break;
                     case "missing properties": arm.PostResponses[list] = new JObject(); break;
                     case "null properties": arm.PostResponses[list] = new JObject { ["properties"] = JValue.CreateNull() }; break;
@@ -352,7 +358,13 @@ namespace Tests.UnitTests.InstallTests
                 CollectionAssert.AreEqual(collection == AppSettings ? new[] { "POST " + list } :
                     new[] { "POST " + AppSettings + "/list", "POST " + list }, ConfigurationRequests(arm));
                 StringAssert.Contains(error.Message, "No replacement was sent");
-                if (failure == "denied") StringAssert.Contains(error.Message, "HTTP 403");
+                if (failure == "denied")
+                {
+                    StringAssert.Contains(error.Message, "HTTP 403");
+                    StringAssert.Contains(error.Message, "access");
+                }
+                else if (failure == "policy") StringAssert.Contains(error.Message, "RequestDisallowedByPolicy");
+                else StringAssert.Contains(error.Message, "complete collection", "Invalid list data is not a permissions diagnosis.");
                 Assert.IsFalse(error.ToString().Contains(privateValue) || logger.Lines.Any(l => l.Message.Contains(privateValue)),
                     "Neither the exception chain nor the installer log may contain a setting value or SDK error body.");
             }
@@ -399,22 +411,24 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [DataTestMethod]
-        [DataRow(AppSettings)]
-        [DataRow(ConnectionStrings)]
-        public async Task AppService_RefusedConfigurationWriteDoesNotLeakItsBodyOrClaimNoWritesWereSent(string collection)
+        [DataRow(AppSettings, 403, "Forbidden")]
+        [DataRow(ConnectionStrings, 409, "ScopeLocked")]
+        [DataRow(ConnectionStrings, 403, "Contoso do not log")]
+        public async Task AppService_RefusedConfigurationWriteDoesNotLeakItsBodyOrClaimNoWritesWereSent(string collection, int status, string code)
         {
             using (var arm = new FakeArm())
             {
                 arm.AddSite("1.2");
                 const string privateValue = "Contoso do not log";
                 arm.OverrideResponse = (method, path) => method == "PUT" && path == collection
-                    ? FakeArm.Json(HttpStatusCode.Forbidden, new JObject { ["error"] = new JObject { ["code"] = "Forbidden", ["message"] = privateValue } })
+                    ? FakeArm.Json((HttpStatusCode)status, new JObject { ["error"] = new JObject { ["code"] = code, ["message"] = privateValue } })
                     : null;
 
                 var error = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => ConfigureWebAppAsync(arm));
                 Assert.AreEqual("PUT " + collection, ConfigurationRequests(arm).Last());
                 StringAssert.Contains(error.Message, "Could not update");
-                StringAssert.Contains(error.Message, "HTTP 403");
+                StringAssert.Contains(error.Message, $"HTTP {status}");
+                if (code == "ScopeLocked") StringAssert.Contains(error.Message, code);
                 Assert.IsFalse(error.ToString().Contains(privateValue) || error.Message.Contains("No replacement was sent"));
             }
         }

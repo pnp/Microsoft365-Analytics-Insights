@@ -182,7 +182,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Teams
 
         private static HttpClient CreateSharedHttpClient()
         {
-            // The pipeline GraphServiceClientFactory.CreateWithTimeout builds, once per process rather than once per channel.
+            // Delegated channel reads share this SDK client transport and its HttpClient timeout.
+            // They do not use the app-only import factory's bounded response-body pipeline.
             var handlers = GraphClientFactory.CreateDefaultHandlers(new GraphClientOptions()).ToList();
             if (HttpMessageTracing.Current.IsEnabled)
             {

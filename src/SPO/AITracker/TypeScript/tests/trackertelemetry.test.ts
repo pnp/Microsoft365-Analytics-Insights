@@ -1,9 +1,14 @@
-/** @jest-environment jsdom */
+/**
+ * @jest-environment jsdom
+ * @jest-environment-options {"url":"https://contoso.example/sites/tracked/home","referrer":"https://contoso.example/sites/other/start"}
+ */
 import { createTrackerTelemetry } from '../src/TrackerTelemetry';
+import { DiagnosticLogger, EventDataType, PageViewDataType, PageViewPerformanceDataType } from '@microsoft/applicationinsights-core-js';
 import type { IConfiguration, ITelemetryItem } from '@microsoft/applicationinsights-core-js';
+import { AppInsightsWrapper } from '../src/AppInsightsWrapper';
 
 const mockItems: ITelemetryItem[] = [];
-const mockFlush = jest.fn();
+let mockCurrentFlush: jest.Mock;
 let mockConfig: IConfiguration;
 
 // Keep the real analytics and context plugins; capture what reaches the sender without using the network.
@@ -11,11 +16,88 @@ jest.mock('@microsoft/applicationinsights-channel-js', () => ({
     Sender: class {
         identifier = 'AppInsightsChannelPlugin';
         priority = 1001;
-        initialize(config: IConfiguration) { mockConfig = config; }
+        initialize(config: IConfiguration) { mockConfig = config; mockCurrentFlush = this.onunloadFlush; }
         processTelemetry(item: ITelemetryItem) { mockItems.push(item); }
-        onunloadFlush = mockFlush;
+        onunloadFlush = jest.fn();
     }
 }));
+
+const connectionString = 'InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://contoso.example/';
+
+// Use the shipping SDK's envelope conversion, but never its network transport.
+function envelope(baseType: string) {
+    const item = mockItems.find(i => i.baseType === baseType);
+    expect(item).toBeDefined();
+    const { Sender } = jest.requireActual<typeof import('@microsoft/applicationinsights-channel-js')>('@microsoft/applicationinsights-channel-js');
+    return Sender.constructEnvelope(item!, item!.iKey!, new DiagnosticLogger());
+}
+
+beforeEach(() => { mockItems.length = 0; });
+
+test('a tracked view keeps its own address but does not send the ambient document referrer', () => {
+    expect(document.referrer).not.toBe('');
+    const telemetry = createTrackerTelemetry(connectionString, 'reader@contoso.example');
+    telemetry.trackPageView({ name: 'Home', uri: document.URL });
+    const view = envelope(PageViewDataType);
+    expect(view.data.baseData.url).toBe(document.URL);
+    expect(view.data.baseData.properties.refUri).toBeUndefined();
+});
+
+test.each([true, false])('a saved event cannot acquire another site operation name (started on tracked site: %s)', startedOnTracked => {
+    const tracked = '/sites/tracked/home';
+    const other = '/sites/other/home';
+    const originalUrl = location.href;
+    const originalSites = window._o365AnalyticsInfo;
+    try {
+        window._o365AnalyticsInfo = { siteUrls: [location.origin + '/sites/tracked'] };
+        history.replaceState(null, '', startedOnTracked ? tracked : other);
+        const telemetry = createTrackerTelemetry(connectionString, 'reader@contoso.example');
+        history.replaceState(null, '', other);
+        // A saved exit is about the previous tracked page, not the current browser location.
+        telemetry.trackEvent({ name: 'PAGE_EXIT', properties: { url: location.origin + tracked, pageRequestId: 'previous-view' } });
+        const event = envelope(EventDataType);
+        expect(event.data.baseData.properties.pageRequestId).toBe('previous-view');
+        expect(event.tags['ai.operation.id']).toBeTruthy();
+        if (startedOnTracked) expect(event.tags['ai.operation.name']).toBe(tracked);
+        expect(JSON.stringify(event)).not.toContain(other);
+    } finally {
+        history.replaceState(null, '', originalUrl);
+        window._o365AnalyticsInfo = originalSites;
+    }
+});
+
+test.each([true, false])('the first view reports only its own document timing (soft navigation: %s)', softNavigation => {
+    jest.useFakeTimers({ doNotFake: ['performance'] });
+    const descriptors = Object.getOwnPropertyDescriptors(performance);
+    const origin = Date.UTC(2000, 0, 1);
+    const nav = { startTime: 0, connectEnd: 5, requestStart: 10, responseStart: 20, responseEnd: 30,
+        loadEventStart: 90, loadEventEnd: 100, duration: 100 };
+    const timing = { navigationStart: origin, domainLookupStart: origin + 1, domLoading: origin + 40,
+        connectEnd: origin + 5, requestStart: origin + 10, responseStart: origin + 20, responseEnd: origin + 30, loadEventEnd: origin + 100 };
+    const viewed = new Date(origin + 86400000);
+    jest.setSystemTime(viewed);
+    Object.defineProperties(performance, {
+        timeOrigin: { configurable: true, value: origin },
+        getEntriesByType: { configurable: true, value: () => [nav] },
+        timing: { configurable: true, value: timing },
+    });
+    try {
+        const telemetry = createTrackerTelemetry(connectionString, 'reader@contoso.example');
+        new AppInsightsWrapper(telemetry, 'synthetic-session').trackCurrentPageView(softNavigation ? 0 : undefined,
+            null, location.origin + '/sites/tracked', location.origin + '/sites/tracked', 'Home');
+        jest.advanceTimersByTime(200); // The SDK waits for the browser's performance entry before emitting.
+        const view = envelope(PageViewDataType);
+        expect(view.time).toBe((softNavigation ? viewed : new Date(origin + nav.loadEventStart)).toISOString());
+        expect(view.data.baseData.duration).toBe(softNavigation ? '00:00:00.000' : '00:00:00.100');
+        expect(mockItems.filter(i => i.baseType === PageViewPerformanceDataType)).toHaveLength(softNavigation ? 0 : 1);
+    } finally {
+        for (const key of ['timeOrigin', 'getEntriesByType', 'timing'] as const) {
+            if (descriptors[key]) Object.defineProperty(performance, key, descriptors[key]);
+            else Reflect.deleteProperty(performance, key);
+        }
+        jest.useRealTimers();
+    }
+});
 
 test('keeps authenticated event context and the configured destination without hooking SharePoint requests, and flushes on pagehide', () => {
     const xhrOpen = XMLHttpRequest.prototype.open;
@@ -33,8 +115,9 @@ test('keeps authenticated event context and the configured destination without h
     expect(XMLHttpRequest.prototype.open).toBe(xhrOpen);
     expect(window.fetch).toBe(fetch);
     expect(document.cookie).not.toMatch(/(?:^|;\s*)ai_(?:user|session)=/);
+    expect(mockCurrentFlush).not.toHaveBeenCalled();
     window.dispatchEvent(new Event('pagehide'));
-    expect(mockFlush).toHaveBeenCalled();
+    expect(mockCurrentFlush).toHaveBeenCalled();
 });
 
 test('refuses an endpoint without a key before installing any page handlers', () => {
