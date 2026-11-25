@@ -177,6 +177,31 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task Cancel_DoesNotOverwriteProgressSavedWhileAcknowledgingTheRequest()
+        {
+            var now = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
+            var store = new LatestJobReplyStore();
+            var state = new CopilotAuditBackfillStateStore(store, true, () => now);
+            var workerJob = await state.CreateAsync(now.AddDays(-1), now, "admin@contoso.com");
+            workerJob.State = CopilotAuditBackfillStates.Running;
+            await state.SaveAsync(workerJob);
+            store.AfterCancelMarkerWritten = async () =>
+            {
+                workerJob.State = CopilotAuditBackfillStates.Cancelled;
+                workerJob.CompletedUtc = now;
+                workerJob.RecordsImported = 10;
+                await state.SaveAsync(workerJob);
+            };
+
+            var service = new BackfillStatusService(state, new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } });
+            var reply = await service.CancelAsync(workerJob.Id);
+            Assert.IsTrue(reply.CancelRequested);
+            Assert.AreEqual(CopilotAuditBackfillStates.Cancelled, reply.State);
+            Assert.AreEqual(10L, reply.RecordsImported);
+            Assert.AreEqual(now, reply.CompletedUtc);
+        }
+
+        [TestMethod]
         public async Task Importer_PollWithinBudgetStillImportsRecords()
         {
             var state = await NewStateWithJobAsync();
@@ -912,6 +937,7 @@ namespace Tests.UnitTests
             /// can do while the reply is on its way.
             /// </summary>
             public Func<Task> WhileThePointerReplyIsOnItsWay { get; set; }
+            public Func<Task> AfterCancelMarkerWritten { get; set; }
             public List<string> JobRowsWritten { get; } = new List<string>();
             private bool _failNextPointerRead;
             public string Description => Inner.Description;
@@ -963,10 +989,12 @@ namespace Tests.UnitTests
                     "\"StartAttempt\":\"" + new string('f', 32) + "\"");
 
             public Task<string> GetStringAsync(string key, System.Threading.CancellationToken cancellationToken = default) => Inner.GetStringAsync(key, cancellationToken);
-            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, System.Threading.CancellationToken cancellationToken = default)
+            public async Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, System.Threading.CancellationToken cancellationToken = default)
             {
                 Record(key);
-                return Inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+                await Inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+                if (key.EndsWith(":Cancel", StringComparison.Ordinal) && AfterCancelMarkerWritten != null)
+                    await AfterCancelMarkerWritten();
             }
             public Task<bool> DeleteAsync(string key, System.Threading.CancellationToken cancellationToken = default) => Inner.DeleteAsync(key, cancellationToken);
             public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, System.Threading.CancellationToken cancellationToken = default)

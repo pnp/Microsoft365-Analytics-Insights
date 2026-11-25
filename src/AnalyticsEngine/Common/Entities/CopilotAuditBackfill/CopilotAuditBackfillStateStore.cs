@@ -210,9 +210,8 @@ namespace Common.Entities.CopilotAuditBackfill
         {
             var job = await GetAsync(id).ConfigureAwait(false);
             if (job == null || !job.IsActive) return false;
+            // The importer owns the job row and may have advanced it since this read. GetAsync reads the marker separately.
             await WriteAsync(CancelKey(id), "1", TimeSpan.FromDays(30)).ConfigureAwait(false);
-            job.CancelRequested = true;
-            await SaveAsync(job).ConfigureAwait(false);
             return true;
         }
 
