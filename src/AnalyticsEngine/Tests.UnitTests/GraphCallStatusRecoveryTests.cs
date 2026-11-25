@@ -186,6 +186,28 @@ namespace Tests.UnitTests
         }
 
         [DataTestMethod]
+        [DataRow(null, true)]
+        [DataRow("null", false)]
+        [DataRow("\"\"", false)]
+        [DataRow("{}", false)]
+        [DataRow("\"https://graph.microsoft.com/v1.0/users?$skiptoken=synthetic\"", false)]
+        public async Task ReusedUpn_OnlyAnAbsentContinuationCorroboratesTheCurrentOwner(string next, bool corroborated)
+        {
+            var current = new GraphUser { Id = Guid.Empty.ToString(), UserPrincipalName = "person@contoso.example", AccountEnabled = true };
+            const string previous = "00000000-0000-0000-0000-000000000001";
+            var user = JsonConvert.SerializeObject(new { id = current.Id, userPrincipalName = current.UserPrincipalName, accountEnabled = true });
+            var page = "{\"value\":[" + user + "]" + (next == null ? "" : ",\"@odata.nextLink\":" + next) + "}";
+            var transport = new TeamsCrawlTests.StubGraphHandler().Json("/users/" + current.Id, user)
+                .Json("/users/" + previous, TeamsCrawlTests.StubGraphHandler.Error("ResourceNotFound"), HttpStatusCode.NotFound)
+                .Json("/users", page);
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                Assert.AreEqual(corroborated, await new GraphUserLoader(null, null, NullLogger.Instance, graph).VerifyReusedUpnAsync(current, previous));
+                Assert.AreEqual(3, transport.Requests.Count, "Do not follow a continuation to release a quarantined identity.");
+            }
+        }
+
+        [DataTestMethod]
         [DataRow("text/html")]
         [DataRow(null)]
         [DataRow("application/json")]

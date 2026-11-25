@@ -254,10 +254,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" };
                     rc.QueryParameters.Filter = $"id eq '{currentId}' or id eq '{previousId}' or userPrincipalName eq '{name}'";
-                    rc.Options.Add(GraphResponseEvidence.RequireDirect);
+                    rc.Options.Add(GraphResponseEvidence.RequireCollection);
                 }, _shutdownToken);
                 var only = page?.Value?.Count == 1 ? page.Value[0] : null;
-                var confirmed = string.IsNullOrEmpty(page?.OdataNextLink) && only?.AccountEnabled == true
+                var confirmed = page?.OdataNextLink == null && only?.AccountEnabled == true
                     && string.Equals(only.Id, currentOwner.Id, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(only.UserPrincipalName, currentOwner.UserPrincipalName, StringComparison.OrdinalIgnoreCase);
                 _shutdownToken.ThrowIfCancellationRequested();
