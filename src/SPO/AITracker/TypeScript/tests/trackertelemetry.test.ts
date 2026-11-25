@@ -43,23 +43,34 @@ test('a tracked view keeps its own address but does not send the ambient documen
     expect(view.data.baseData.properties.refUri).toBeUndefined();
 });
 
-test.each([true, false])('a saved event cannot acquire another site operation name (started on tracked site: %s)', startedOnTracked => {
+test.each(['tracked view', 'off-site startup', 'root registration retired'])('a saved event uses only explicitly tracked page context: %s', scenario => {
     const tracked = '/sites/tracked/home';
     const other = '/sites/other/home';
     const originalUrl = location.href;
     const originalSites = window._o365AnalyticsInfo;
     try {
-        window._o365AnalyticsInfo = { siteUrls: [location.origin + '/sites/tracked'] };
+        const startedOnTracked = scenario === 'tracked view';
+        window._o365AnalyticsInfo = { siteUrls: [scenario === 'root registration retired' ? location.origin : location.origin + '/sites/tracked'] };
         history.replaceState(null, '', startedOnTracked ? tracked : other);
         const telemetry = createTrackerTelemetry(connectionString, 'reader@contoso.example');
+        if (startedOnTracked) telemetry.trackPageView({ uri: document.URL, name: 'Home' });
+        window._o365AnalyticsInfo.siteUrls.length = 0;
         history.replaceState(null, '', other);
         // A saved exit is about the previous tracked page, not the current browser location.
         telemetry.trackEvent({ name: 'PAGE_EXIT', properties: { url: location.origin + tracked, pageRequestId: 'previous-view' } });
         const event = envelope(EventDataType);
         expect(event.data.baseData.properties.pageRequestId).toBe('previous-view');
         expect(event.tags['ai.operation.id']).toBeTruthy();
-        if (startedOnTracked) expect(event.tags['ai.operation.name']).toBe(tracked);
+        expect(event.tags['ai.operation.name']).toBe(startedOnTracked ? tracked : 'SPOInsights');
         expect(JSON.stringify(event)).not.toContain(other);
+        if (!startedOnTracked) {
+            history.replaceState(null, '', tracked);
+            window._o365AnalyticsInfo.siteUrls.push(location.origin + '/sites/tracked');
+            telemetry.trackPageView({ uri: document.URL, name: 'Home' });
+            const view = envelope(PageViewDataType);
+            expect(view.tags['ai.operation.id']).toBe(event.tags['ai.operation.id']);
+            expect(view.tags['ai.operation.name']).toBe(tracked);
+        }
     } finally {
         history.replaceState(null, '', originalUrl);
         window._o365AnalyticsInfo = originalSites;

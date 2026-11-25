@@ -3,7 +3,6 @@ import { Sender } from '@microsoft/applicationinsights-channel-js';
 import { AppInsightsCore, DEFAULT_BREEZE_PATH, PageViewDataType, PageViewPerformanceDataType, addPageHideEventListener, addPageUnloadEventListener, parseConnectionString } from '@microsoft/applicationinsights-core-js';
 import type { IConfig, IConfiguration } from '@microsoft/applicationinsights-core-js';
 import { PropertiesPlugin } from '@microsoft/applicationinsights-properties-js';
-import { isOnTrackedSite } from './TrackedSites';
 
 export type TrackerTelemetry = Pick<AnalyticsPlugin, 'trackPageView' | 'trackEvent'>;
 
@@ -25,10 +24,10 @@ export function createTrackerTelemetry(connectionString: string, userLoginName: 
     // No dependency or remote-configuration plugin: never instrument SharePoint's fetch/XHR requests.
     const core = new AppInsightsCore();
     core.initialize(config, [properties, analytics, sender]);
-    // Bind the operation while we know which site the browser is on. A late-started tracker may
-    // send the previous tracked page's saved exit after SharePoint has left all registered sites.
-    const trace = core.getTraceCtx();
-    if (trace && !isOnTrackedSite(document.URL, window._o365AnalyticsInfo)) trace.pageName = 'SPOInsights';
+    // A site registration can outlive its page while SPFx waits for this script. No view has
+    // been accepted yet: a saved exit must not inherit a name from the ambient browser location.
+    let unnamedTrace = core.getTraceCtx();
+    if (unnamedTrace) unnamedTrace.pageName = 'SPOInsights';
     core.addTelemetryInitializer(item => {
         if (item.baseType === PageViewDataType && item.baseData) {
             // Analytics adds document.referrer even though we didn't supply it. The referring
@@ -54,5 +53,19 @@ export function createTrackerTelemetry(connectionString: string, userLoginName: 
     };
     addPageHideEventListener(flush);
     addPageUnloadEventListener(flush);
-    return analytics;
+    return {
+        trackEvent: (event, customProperties) => analytics.trackEvent(event, customProperties),
+        trackPageView(view, customProperties) {
+            // Keep one operation per document as before. Bind its name to the first explicitly
+            // tracked view, synchronously: the SDK may queue a view until its timings are ready.
+            if (unnamedTrace && view?.uri) {
+                try {
+                    const page = new URL(view.uri);
+                    unnamedTrace.pageName = page.pathname + page.hash;
+                    unnamedTrace = null;
+                } catch { /* No usable page address: leave the name neutral. */ }
+            }
+            analytics.trackPageView(view, customProperties);
+        }
+    };
 }
