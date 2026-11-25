@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 using WebJob.AppInsightsImporter.Engine.Properties;
@@ -19,8 +20,9 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             => (await eventList.SaveSearchBatchAsync(logger, database)).RowsAffected;
 
         internal static async Task<SearchSaveResult> SaveSearchBatchAsync(this CustomEventsResultCollection eventList, ILogger logger,
-            AnalyticsEntitiesContext database, int? mergeTimeoutSeconds = null)
+            AnalyticsEntitiesContext database, int? mergeTimeoutSeconds = null, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (eventList.Rows.Count == 0)
             {
                 return SearchSaveResult.Empty;
@@ -58,11 +60,11 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
 
             using (var con = AzureSqlTokenAuth.CreateConnection(database.Database.Connection.ConnectionString))
             {
-                await con.OpenAsync();
+                await con.OpenAsync(cancellationToken);
                 using (var cmd = con.CreateCommand())
                 {
                     cmd.CommandText = FixSearchScript(Resources.Create_Searches_Import_Temp_Table);
-                    await cmd.ExecuteNonQueryAsync();
+                    await cmd.ExecuteNonQueryAsync(cancellationToken);
                     cmd.CommandText = $"INSERT INTO [{AppInsightsImporterConstants.STAGING_TABLE_SEARCHES}] " +
                         "([ai_session_id], [user_name], [search_term], [date_time], [ingestion_hour]) VALUES (@p0, @p1, @p2, @p3, @p4)";
 
@@ -83,13 +85,14 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
                         pDateTime.Value = customEvent.Timestamp;
                         pIngestedHour.Value = (object)customEvent.SearchIngestionHourUtc ?? DBNull.Value;
 
-                        await cmd.ExecuteNonQueryAsync();
+                        await cmd.ExecuteNonQueryAsync(cancellationToken);
                     }
 
                     logger.LogInformation($"Inserted {searches.Count:n0} searches into staging in {sw.Elapsed.TotalSeconds:N1}s. Running merge script...");
                     sw.Restart();
                 }
                 // The lookup and fact inserts used to run in EF's implicit transaction. Commit them together.
+                cancellationToken.ThrowIfCancellationRequested();
                 using (var transaction = con.BeginTransaction())
                 using (var merge = con.CreateCommand())
                 {
@@ -99,19 +102,21 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
                     var unmatched = new Dictionary<DateTime, int>();
                     var missingIngestionTime = 0;
                     int facts, rows;
-                    using (var reader = await merge.ExecuteReaderAsync())
+                    using (var reader = await merge.ExecuteReaderAsync(cancellationToken))
                     {
-                        await reader.ReadAsync();
+                        await reader.ReadAsync(cancellationToken);
                         facts = reader.GetInt32(0);
                         rows = reader.GetInt32(1);
-                        await reader.NextResultAsync();
-                        while (await reader.ReadAsync())
+                        await reader.NextResultAsync(cancellationToken);
+                        while (await reader.ReadAsync(cancellationToken))
                         {
                             if (reader.IsDBNull(0)) missingIngestionTime = reader.GetInt32(1);
                             else unmatched.Add(DateTime.SpecifyKind(reader.GetDateTime(0), DateTimeKind.Utc), reader.GetInt32(1));
                         }
                     }
+                    cancellationToken.ThrowIfCancellationRequested();
                     transaction.Commit();
+                    cancellationToken.ThrowIfCancellationRequested();
                     var result = new SearchSaveResult(rows, facts, skipped, unmatched, missingIngestionTime);
                     logger.LogInformation($"Search merge completed in {sw.Elapsed.TotalSeconds:N1}s - {rows:n0} new rows, " +
                         $"{facts:n0} new searches, {searches.Count - facts - result.Unmatched:n0} replayed, {result.Unmatched:n0} without a matching visit.");

@@ -28,7 +28,7 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <summary>Everything read for the day saved.</summary>
         Saved,
 
-        /// <summary>Nothing to save once out-of-scope rows were dropped.</summary>
+        /// <summary>No events or page views to count; searches may all be filtered, invalid or already stored.</summary>
         NoData,
 
         /// <summary>The day failed and the cycle stopped at it, to retry it next cycle before any later day.</summary>

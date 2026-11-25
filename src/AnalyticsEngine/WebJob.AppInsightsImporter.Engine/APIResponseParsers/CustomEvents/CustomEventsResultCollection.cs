@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
 using WebJob.AppInsightsImporter.Engine.Sql;
@@ -70,7 +71,11 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
         /// single context still spans the whole event save exactly as it did. Returns which sections, if any,
         /// failed - see <see cref="CustomEventSaveResult"/>.
         /// </summary>
-        public async Task<CustomEventSaveResult> SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config, IAnalyticsDbContextFactory contextFactory)
+        public Task<CustomEventSaveResult> SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config, IAnalyticsDbContextFactory contextFactory)
+            => SaveAllEventTypesToSql(logger, config, contextFactory, CancellationToken.None);
+
+        internal async Task<CustomEventSaveResult> SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config,
+            IAnalyticsDbContextFactory contextFactory, CancellationToken cancellationToken)
         {
             if (contextFactory == null) throw new ArgumentNullException(nameof(contextFactory));
 
@@ -86,7 +91,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                     new SqlPageUpdatePersistenceManager(logger, config, contextFactory),
                     new SqlClicksPersistenceManager(database, logger));
 
-                return await saver.SaveAllSectionsAsync(this);
+                return await saver.SaveAllSectionsAsync(this, cancellationToken);
             }
         }
     }

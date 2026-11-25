@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
@@ -29,9 +30,9 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             _db = db ?? throw new ArgumentNullException(nameof(db));
         }
 
-        public async Task<DateTime?> GetNewestHitTimestampUtcAsync()
+        public async Task<DateTime?> GetNewestHitTimestampUtcAsync(CancellationToken cancellationToken = default)
         {
-            var newestHit = await _db.hits.OrderByDescending(h => h.hit_timestamp).Take(1).FirstOrDefaultAsync();
+            var newestHit = await _db.hits.OrderByDescending(h => h.hit_timestamp).Take(1).FirstOrDefaultAsync(cancellationToken);
             return newestHit?.hit_timestamp;
         }
     }
@@ -46,7 +47,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             _db = db ?? throw new ArgumentNullException(nameof(db));
         }
 
-        public Task<List<FilterUrlConfig>> LoadAsync() => SiteFilterLoader.Load(_db);
+        public Task<List<FilterUrlConfig>> LoadAsync(CancellationToken cancellationToken = default) => SiteFilterLoader.Load(_db, cancellationToken);
     }
 
     /// <summary>
@@ -60,7 +61,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         private readonly IAnalyticsDbContextFactory _contextFactory;
 
         // The four custom-event sections, run over SQL ports in production - see SaveCustomEventsAsync.
-        private readonly Func<CustomEventsResultCollection, Task<CustomEventSaveResult>> _saveEventSections;
+        private readonly Func<CustomEventsResultCollection, CancellationToken, Task<CustomEventSaveResult>> _saveEventSections;
 
         public SqlAppInsightsDayPersistenceManager(AnalyticsEntitiesContext db, AnalyticsLogger logger, AppConfig config)
             : this(db, logger, config, DefaultAnalyticsDbContextFactory.Instance)
@@ -110,33 +111,35 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             Func<CustomEventsResultCollection, Task<CustomEventSaveResult>> saveEventSections, AnalyticsLogger logger)
         {
             _pageViews = pageViews ?? throw new ArgumentNullException(nameof(pageViews));
-            _saveEventSections = saveEventSections ?? throw new ArgumentNullException(nameof(saveEventSections));
+            if (saveEventSections == null) throw new ArgumentNullException(nameof(saveEventSections));
+            _saveEventSections = (events, _) => saveEventSections(events);
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls)
-            => _pageViews.SavePageViewsAsync(pageViews, filterUrls);
+        public Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default)
+            => _pageViews.SavePageViewsAsync(pageViews, filterUrls, cancellationToken);
 
         /// <summary>
         /// Throws once every section has been attempted if any of them failed, so the importer retries the day
         /// instead of moving past it. See <see cref="CustomEventSaveResult"/>.
         /// </summary>
-        public async Task<CustomEventSaveResult> SaveCustomEventsAsync(CustomEventsResultCollection events)
+        public async Task<CustomEventSaveResult> SaveCustomEventsAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default)
         {
-            var result = await _saveEventSections(events);
+            var result = await _saveEventSections(events, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             result.ThrowIfIncomplete();
             return result;
         }
 
-        private Task<CustomEventSaveResult> SaveEventSectionsToSql(CustomEventsResultCollection events)
-            => events.SaveAllEventTypesToSql(_logger, _config, _contextFactory);
+        private Task<CustomEventSaveResult> SaveEventSectionsToSql(CustomEventsResultCollection events, CancellationToken cancellationToken)
+            => events.SaveAllEventTypesToSql(_logger, _config, _contextFactory, cancellationToken);
 
-        public async Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection searches)
+        public async Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection searches, CancellationToken cancellationToken = default)
         {
             // A locked retry merge must not strand the next normal ingestion cycle. Normal merges retain
             // the importer's configured timeout; ten minutes is the query client's own request deadline.
             using (var db = _contextFactory.Create())
-                return await searches.SaveSearchBatchAsync(_logger, db, mergeTimeoutSeconds: 600);
+                return await searches.SaveSearchBatchAsync(_logger, db, mergeTimeoutSeconds: 600, cancellationToken: cancellationToken);
         }
     }
 
@@ -163,8 +166,8 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls)
-            => pageViews.SaveToSQL(_db, _logger, filterUrls);
+        public Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default)
+            => pageViews.SaveToSQL(_db, _logger, filterUrls, cancellationToken);
     }
 
     /// <summary>SQL <see cref="IHitUpdatePersistenceManager"/>.</summary>
@@ -179,8 +182,8 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events)
-            => events.SaveHitsUpdatesToSQL(_logger, _db);
+        public Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default)
+            => events.SaveHitsUpdatesToSQL(_logger, _db, cancellationToken);
     }
 
     /// <summary>SQL <see cref="ISearchesPersistenceManager"/>.</summary>
@@ -195,8 +198,8 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection events)
-            => events.SaveSearchBatchAsync(_logger, _db);
+        public Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default)
+            => events.SaveSearchBatchAsync(_logger, _db, cancellationToken: cancellationToken);
     }
 
     /// <summary>
@@ -239,7 +242,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public Task<int> SaveClicksAsync(CustomEventsResultCollection events)
-            => events.SaveClicksToSQL(_logger, _db);
+        public Task<int> SaveClicksAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default)
+            => events.SaveClicksToSQL(_logger, _db, cancellationToken);
     }
 }

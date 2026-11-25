@@ -131,20 +131,26 @@ namespace WebJob.AppInsightsImporter.Engine
         public async Task<AppInsightsImportCycleResult> ImportAndSave(bool saveRestResponses, int? daysBeforeOverride, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (AllDatabasePortsSupplied)
+            try
             {
-                return await ImportAndSaveWith(saveRestResponses, daysBeforeOverride,
-                    _siteFilterLoader, _hitWatermarkStore, _persistence, cancellationToken);
-            }
+                if (AllDatabasePortsSupplied)
+                {
+                    return await ImportAndSaveWith(saveRestResponses, daysBeforeOverride,
+                        _siteFilterLoader, _hitWatermarkStore, _persistence, cancellationToken);
+                }
 
-            // Production: one context for the whole run, exactly as before, with SQL adapters over it for
-            // whichever ports were not supplied.
-            using (var db = _contextFactory.Create())
+                using (var db = _contextFactory.Create())
+                {
+                    return await ImportAndSaveWith(saveRestResponses, daysBeforeOverride,
+                        _siteFilterLoader ?? new SqlSiteFilterLoader(db),
+                        _hitWatermarkStore ?? new SqlHitWatermarkStore(db),
+                        _persistence ?? new SqlAppInsightsDayPersistenceManager(db, _logger, _importConfig, _contextFactory), cancellationToken);
+                }
+            }
+            catch (Exception ex) when (cancellationToken.IsCancellationRequested && !(ex is OperationCanceledException || ex is OutOfMemoryException))
             {
-                return await ImportAndSaveWith(saveRestResponses, daysBeforeOverride,
-                    _siteFilterLoader ?? new SqlSiteFilterLoader(db),
-                    _hitWatermarkStore ?? new SqlHitWatermarkStore(db),
-                    _persistence ?? new SqlAppInsightsDayPersistenceManager(db, _logger, _importConfig, _contextFactory), cancellationToken);
+                // SQL and storage can surface a provider exception instead of OperationCanceledException.
+                throw new OperationCanceledException("Web-traffic import stopped by the host.", ex, cancellationToken);
             }
         }
 
@@ -162,16 +168,19 @@ namespace WebJob.AppInsightsImporter.Engine
             var scanFromDateOverride = AppInsightsImportWindow.ResolveOverrideStartUtc(daysBeforeOverride, nowUtc);
 
             var sw = Stopwatch.StartNew();
-            var filterUrls = await siteFilterLoader.LoadAsync();
+            var filterUrls = await siteFilterLoader.LoadAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             _logger.LogInformation($"Startup: loaded {filterUrls.Count} URL filters in {sw.Elapsed.TotalSeconds:N1}s");
 
-            var newestHitTimestamp = await hitWatermarkStore.GetNewestHitTimestampUtcAsync();
+            var newestHitTimestamp = await hitWatermarkStore.GetNewestHitTimestampUtcAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             AppInsightsReadWindow range;
             DateTime? cursorUtc = null;
             DateTime? storedCursorUtc = null;
             DateTime? newestStoredHitAtCursorUtc = null;
             var cursorReadFailed = false;
+            AppInsightsReplayStart replayStartToSave = null;
             if (scanFromDateOverride.HasValue)
             {
                 result.Mode = AppInsightsReadMode.Backfill;
@@ -184,13 +193,15 @@ namespace WebJob.AppInsightsImporter.Engine
                 {
                     try
                     {
-                        storedCursorUtc = cursorUtc = await _cursorStore.ReadAsync();
+                        storedCursorUtc = cursorUtc = await _cursorStore.ReadAsync(cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
                         if (cursorUtc.HasValue)
                         {
-                            newestStoredHitAtCursorUtc = await _cursorStore.ReadNewestStoredHitAtCursorAsync();
+                            newestStoredHitAtCursorUtc = await _cursorStore.ReadNewestStoredHitAtCursorAsync(cancellationToken);
+                            cancellationToken.ThrowIfCancellationRequested();
                         }
                     }
-                    catch (Exception ex) when (!(ex is OutOfMemoryException))
+                    catch (Exception ex) when (CanRecover(ex, cancellationToken))
                     {
                         // The cursor is not written at the end of this cycle, so the next one resumes from the stored cursor
                         // and nothing ingested since is skipped.
@@ -221,6 +232,26 @@ namespace WebJob.AppInsightsImporter.Engine
                     }
                 }
 
+                AppInsightsReplayStart replay = null;
+                if (_cursorStore != null && !cursorReadFailed)
+                {
+                    try
+                    {
+                        replay = await _cursorStore.ReadReplayStartAsync(cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+                    catch (Exception ex) when (CanRecover(ex, cancellationToken))
+                    {
+                        result.Mode = cursorUtc.HasValue ? AppInsightsReadMode.Incremental : AppInsightsReadMode.Bootstrap;
+                        result.Fail("ReplayStartReadFailed");
+                        _logger.LogError($"AppInsightsCursor: could not read the interrupted import's starting range. Nothing imported this cycle. {FailureDimensions(ex)}");
+                        return result;
+                    }
+                    if (replay != null && replay.StoredCursorUtc != storedCursorUtc) replay = null;
+                    if (replay != null && (!replay.EffectiveCursorUtc.HasValue || replay.EffectiveCursorUtc < cursorUtc))
+                        cursorUtc = replay.EffectiveCursorUtc;
+                }
+
                 if (cursorUtc.HasValue)
                 {
                     result.Mode = AppInsightsReadMode.Incremental;
@@ -230,8 +261,16 @@ namespace WebJob.AppInsightsImporter.Engine
                 {
                     result.Mode = AppInsightsReadMode.Bootstrap;
                     var startDate = ResolveStartFromStoredHits(newestHitTimestamp, nowUtc);
+                    if (replay != null && replay.FromUtc < startDate)
+                    {
+                        var oldest = nowUtc - AppInsightsIngestionCursorPolicy.MaxLookback - AppInsightsIngestionCursorPolicy.LateArrivalBound;
+                        startDate = replay.FromUtc < oldest ? oldest : replay.FromUtc;
+                    }
                     range = new AppInsightsReadWindow(startDate.Date, nowUtc + AppInsightsIngestionCursorPolicy.FutureBound, null, nowUtc);
                 }
+                if (_cursorStore != null && !cursorReadFailed && (!cursorUtc.HasValue || cursorUtc != storedCursorUtc)
+                    && (replay == null || replay.FromUtc != range.FromUtc || replay.EffectiveCursorUtc != cursorUtc))
+                    replayStartToSave = new AppInsightsReplayStart(storedCursorUtc, range.FromUtc, cursorUtc);
             }
 
             _logger.LogInformation($"AppInsightsImport plan: Mode={result.Mode}; Range={range}; " +
@@ -247,7 +286,9 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 try
                 {
-                    searchRetries = new AppInsightsSearchRetries(await _searchRetryStore.ReadSearchRetriesAsync());
+                    cancellationToken.ThrowIfCancellationRequested();
+                    searchRetries = new AppInsightsSearchRetries(await _searchRetryStore.ReadSearchRetriesAsync(cancellationToken));
+                    cancellationToken.ThrowIfCancellationRequested();
                     var lost = searchRetries.RemoveOutsideRetention(nowUtc);
                     if (lost > 0)
                     {
@@ -255,17 +296,18 @@ namespace WebJob.AppInsightsImporter.Engine
                         _logger.LogWarning($"AppInsightsSearchRetry: {lost} pending ingestion hour(s) exceeded the source lookback after a pause; automatic retries stopped.");
                     }
                 }
-                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                catch (Exception ex) when (CanRecover(ex, cancellationToken))
                 {
                     searchRetries = null;
                     result.Degrade("SearchRetryReadFailed");
-                    _logger.LogWarning($"AppInsightsSearchRetry: checkpoint could not be read. Leaving it and the ingestion cursor unchanged. {SearchFailure(ex)}");
+                    _logger.LogWarning($"AppInsightsSearchRetry: checkpoint could not be read. Leaving it and the ingestion cursor unchanged. {FailureDimensions(ex)}");
                 }
             }
 
             async Task<bool> ImportWithRetriesAsync(IAppInsightsSourceLoader source)
             {
-                var finished = await ImportRangeAsync(source, range, saveRestResponses, filterUrls, persistence, result, cancellationToken);
+                var finished = await ImportRangeAsync(source, range, saveRestResponses, filterUrls, persistence, result, replayStartToSave, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 var withoutHour = result.Days.Sum(d => d.SearchesWithoutIngestionTime);
                 if (withoutHour > 0)
                 {
@@ -286,7 +328,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
                 // A later day's page view may create an earlier day's missing visit. Reconcile only after normal imports.
                 if (finished)
-                    await ReconcileSearchHoursAsync(source, persistence, searchRetries, nowUtc, result);
+                    await ReconcileSearchHoursAsync(source, persistence, searchRetries, nowUtc, result, cancellationToken);
                 result.PendingSearchHours = searchRetries.Hours.Count;
                 if (result.PendingSearchHours > 0) result.Degrade("SearchSessionsPending");
                 return finished;
@@ -309,18 +351,19 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             if (searchRetries?.Changed == true)
             {
                 try
                 {
                     // Never move the main cursor past unfinished searches until their source hours are durable.
-                    await _searchRetryStore.WriteSearchRetriesAsync(searchRetries.Hours);
+                    await _searchRetryStore.WriteSearchRetriesAsync(searchRetries.Hours, cancellationToken);
                 }
-                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                catch (Exception ex) when (CanRecover(ex, cancellationToken))
                 {
                     result.PendingSearchHours = null;
                     result.Degrade("SearchRetryWriteFailed");
-                    _logger.LogWarning($"AppInsightsSearchRetry: checkpoint could not be saved. The ingestion cursor was not advanced. {SearchFailure(ex)}");
+                    _logger.LogWarning($"AppInsightsSearchRetry: checkpoint could not be saved. The ingestion cursor was not advanced. {FailureDimensions(ex)}");
                     return result;
                 }
             }
@@ -338,13 +381,14 @@ namespace WebJob.AppInsightsImporter.Engine
                 var newCursor = range.IngestedBeforeUtc.Value;
                 try
                 {
-                    var newestStoredHitUtc = await ReadNewestStoredHitAfterImportAsync(hitWatermarkStore, newestHitTimestamp);
+                    var newestStoredHitUtc = await ReadNewestStoredHitAfterImportAsync(hitWatermarkStore, newestHitTimestamp, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
-                    await _cursorStore.WriteAsync(newCursor, newestStoredHitUtc);
+                    await _cursorStore.WriteAsync(newCursor, newestStoredHitUtc, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     result.CursorAdvancedToUtc = newCursor;
                     _logger.LogInformation($"AppInsightsCursor: Outcome=Advanced; Cursor={newCursor:O}; Previous={(cursorUtc.HasValue ? cursorUtc.Value.ToString("O", CultureInfo.InvariantCulture) : "none")}.");
                 }
-                catch (Exception ex) when (!(ex is OutOfMemoryException) && !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+                catch (Exception ex) when (CanRecover(ex, cancellationToken))
                 {
                     result.Degrade("CursorWriteFailed");
                     _logger.LogWarning($"AppInsightsCursor: Outcome=WriteFailed; Store={_cursorStore.Description}; {ExceptionDescriber.Chain(ex)}. " +
@@ -352,6 +396,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             jobTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport);
             return result;
         }
@@ -361,14 +406,15 @@ namespace WebJob.AppInsightsImporter.Engine
         /// the database lost hits (#849). Falls back to the value read at the start of the cycle, which is older but
         /// still one this database has reached, if it cannot be read.
         /// </summary>
-        private async Task<DateTime?> ReadNewestStoredHitAfterImportAsync(IHitWatermarkStore hitWatermarkStore, DateTime? newestAtStart)
+        private async Task<DateTime?> ReadNewestStoredHitAfterImportAsync(IHitWatermarkStore hitWatermarkStore, DateTime? newestAtStart,
+            CancellationToken cancellationToken)
         {
             try
             {
-                var newest = await hitWatermarkStore.GetNewestHitTimestampUtcAsync();
+                var newest = await hitWatermarkStore.GetNewestHitTimestampUtcAsync(cancellationToken);
                 return AppInsightsImportWindow.NormalizeStoredHitTimestampUtc(newest ?? newestAtStart);
             }
-            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            catch (Exception ex) when (CanRecover(ex, cancellationToken))
             {
                 _logger.LogWarning($"AppInsightsCursor: could not re-read the newest stored hit after saving ({ExceptionDescriber.Chain(ex)}); " +
                     "recording the one read at the start of the cycle beside the cursor.", ex);
@@ -417,19 +463,18 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         /// <returns>False when the cycle stopped early: the counts could not be read, or a day failed and will be retried.</returns>
         private async Task<bool> ImportRangeAsync(IAppInsightsSourceLoader source, AppInsightsReadWindow range, bool saveRestResponses,
-            List<FilterUrlConfig> filterUrls, IAppInsightsDayPersistenceManager persistence, AppInsightsImportCycleResult result, CancellationToken cancellationToken)
+            List<FilterUrlConfig> filterUrls, IAppInsightsDayPersistenceManager persistence, AppInsightsImportCycleResult result,
+            AppInsightsReplayStart replayStartToSave, CancellationToken cancellationToken)
         {
             var sw = Stopwatch.StartNew();
             IReadOnlyList<AppInsightsHourlyRowCount> counts;
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                counts = source is ICancellableAppInsightsSourceLoader cancellable
-                    ? await cancellable.GetHourlyRowCountsAsync(range, cancellationToken)
-                    : await source.GetHourlyRowCountsAsync(range);
+                counts = await source.GetHourlyRowCountsAsync(range, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
             }
-            catch (Exception ex) when (!(ex is OutOfMemoryException) && !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+            catch (Exception ex) when (CanRecover(ex, cancellationToken))
             {
                 result.Fail("RowCountQueryFailed");
                 _logger.LogError($"AppInsightsRowCounts: Outcome=Failed; Mode={result.Mode}; ElapsedMs={sw.ElapsedMilliseconds}; {ExceptionDescriber.Chain(ex)}. " +
@@ -449,12 +494,31 @@ namespace WebJob.AppInsightsImporter.Engine
                 counts.Where(c => c.Kind == AppInsightsTelemetryKind.Events).Sum(c => c.Count),
                 sw.ElapsedMilliseconds));
 
+            // Before the first SQL write which could move the start of a bootstrap/restore range. A normal
+            // incremental range already has a durable start: its still-unchanged ingestion cursor.
+            if (countsByDay.Count > 0 && replayStartToSave != null)
+            {
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await _cursorStore.WriteReplayStartAsync(replayStartToSave, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                catch (Exception ex) when (CanRecover(ex, cancellationToken))
+                {
+                    result.Fail("ReplayStartWriteFailed");
+                    _logger.LogError($"AppInsightsCursor: could not preserve the bootstrap or restore range before saving. Nothing imported this cycle. {FailureDimensions(ex)}");
+                    return false;
+                }
+            }
+
             var position = 0;
             foreach (var day in countsByDay)
             {
                 position++;
                 var dayResult = await ImportDayAsync(source, day.Key, day.ToList(), range, saveRestResponses, filterUrls, persistence,
                     result.Mode, position, countsByDay.Count, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 result.Days.Add(dayResult);
                 AppInsightsImportTelemetry.TrackDay(_logger, dayResult, result.Mode);
 
@@ -490,7 +554,6 @@ namespace WebJob.AppInsightsImporter.Engine
             DateTime? newestRead = null;
             var removed = new AppInsightsScopeFilterResult();
             var stage = StageDownload;
-            var cancellable = source as ICancellableAppInsightsSourceLoader;
             try
             {
                 foreach (var window in pageViewWindows)
@@ -498,8 +561,7 @@ namespace WebJob.AppInsightsImporter.Engine
                     stage = StageDownload;
                     var fetch = Stopwatch.StartNew();
                     cancellationToken.ThrowIfCancellationRequested();
-                    var pageViews = cancellable == null ? await source.GetPageViewsAsync(window, saveRestResponses)
-                        : await cancellable.GetPageViewsAsync(window, saveRestResponses, cancellationToken);
+                    var pageViews = await source.GetPageViewsAsync(window, saveRestResponses, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                     day.FetchSeconds += fetch.Elapsed.TotalSeconds;
                     day.Windows++;
@@ -515,7 +577,9 @@ namespace WebJob.AppInsightsImporter.Engine
                     {
                         stage = StageSave;
                         var save = Stopwatch.StartNew();
-                        await persistence.SavePageViewsAsync(pageViews, filterUrls);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        await persistence.SavePageViewsAsync(pageViews, filterUrls, cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
                         day.SaveSeconds += save.Elapsed.TotalSeconds;
                         day.PageViews += pageViews.Rows.Count;
                     }
@@ -527,8 +591,7 @@ namespace WebJob.AppInsightsImporter.Engine
                     stage = StageDownload;
                     var fetch = Stopwatch.StartNew();
                     cancellationToken.ThrowIfCancellationRequested();
-                    var events = cancellable == null ? await source.GetCustomEventsAsync(window, saveRestResponses)
-                        : await cancellable.GetCustomEventsAsync(window, saveRestResponses, cancellationToken);
+                    var events = await source.GetCustomEventsAsync(window, saveRestResponses, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
                     day.FetchSeconds += fetch.Elapsed.TotalSeconds;
                     day.Windows++;
@@ -540,16 +603,18 @@ namespace WebJob.AppInsightsImporter.Engine
                     {
                         stage = StageSave;
                         var save = Stopwatch.StartNew();
-                        var saved = await persistence.SaveCustomEventsAsync(events);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var saved = await persistence.SaveCustomEventsAsync(events, cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
                         day.SaveSeconds += save.Elapsed.TotalSeconds;
                         day.RecordSearches(saved.Searches);
-                        accepted = events.Rows.Count - saved.Searches.Unmatched - saved.Searches.Skipped;
+                        accepted = events.Rows.Count(e => !(e is SearchEventAppInsightsQueryResult)) + saved.Searches.FactsInserted;
                         day.Events += accepted;
                     }
                     _logger.LogDebug($"AppInsightsWindow: Kind=Events; Window={window}; Read={read}; Saved={accepted}; FetchMs={fetch.ElapsedMilliseconds}.");
                 }
             }
-            catch (Exception ex) when (!(ex is OutOfMemoryException) && !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+            catch (Exception ex) when (CanRecover(ex, cancellationToken))
             {
                 // Every exception counts, not just SqlException or HttpRequestException: one that escaped used to stall
                 // the importer on the same day for months, and a download failure used to stop the cycle with no limit
@@ -562,6 +627,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 {
                     day.FailedSections = incomplete.FailedSections;
                     day.RecordSearches(incomplete.Searches);
+                    day.Events += incomplete.Searches.FactsInserted;
                 }
                 var what = stage == StageDownload ? "downloading" : "saving";
                 string Detail(AppInsightsDayOutcome outcome) =>
@@ -625,7 +691,7 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         private async Task ReconcileSearchHoursAsync(IAppInsightsSourceLoader source, IAppInsightsDayPersistenceManager persistence,
-            AppInsightsSearchRetries retries, DateTime nowUtc, AppInsightsImportCycleResult result)
+            AppInsightsSearchRetries retries, DateTime nowUtc, AppInsightsImportCycleResult result, CancellationToken cancellationToken)
         {
             foreach (var hour in retries.Due(nowUtc))
             {
@@ -633,7 +699,9 @@ namespace WebJob.AppInsightsImporter.Engine
                 try
                 {
                     var range = AppInsightsReadWindow.SearchRetryHour(hour.HourUtc, nowUtc);
-                    var counts = await source.GetHourlyRowCountsAsync(range);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var counts = await source.GetHourlyRowCountsAsync(range, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
                     var missing = 0;
                     var filtered = 0;
                     var read = 0;
@@ -641,16 +709,21 @@ namespace WebJob.AppInsightsImporter.Engine
                         .SelectMany(d => PlanWindows(d.Key, d.ToList(), AppInsightsTelemetryKind.Events, range));
                     foreach (var window in windows)
                     {
-                        var events = await source.GetCustomEventsAsync(window, false);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var events = await source.GetCustomEventsAsync(window, false, cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
                         read += events.Rows.Count;
                         filtered += AppInsightsUserScopeRules.Apply(null, events, _userScope).EventsRemoved;
                         if (events.Rows.Count == 0) continue;
-                        var saved = await persistence.SaveSearchesAsync(events);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var saved = await persistence.SaveSearchesAsync(events, cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
                         result.ReconciledSearches += saved.FactsInserted;
                         missing += saved.Unmatched;
                     }
                     // An empty source result cannot prove an earlier, known unmatched search was saved or
                     // filtered. It may have disappeared from Application Insights before this attempt.
+                    cancellationToken.ThrowIfCancellationRequested();
                     retries.Finished(hour, missing > 0 || read == 0, nowUtc);
                     _logger.LogInformation($"AppInsightsSearchRetry: Hour={hour.HourUtc:O}; Unmatched={missing}; Filtered={filtered}; Final={expired}.");
                     if (read == 0)
@@ -665,18 +738,20 @@ namespace WebJob.AppInsightsImporter.Engine
                             "Automatic retries stopped. ReadHitsDaysBeforeToday can reread the day while Application Insights retains it.");
                     }
                 }
-                catch (Exception ex) when (!(ex is OutOfMemoryException))
+                catch (Exception ex) when (CanRecover(ex, cancellationToken))
                 {
                     retries.Finished(hour, true, nowUtc);
                     result.Degrade(expired ? "SearchRetriesStopped" : "SearchRetryFailed");
                     _logger.LogWarning($"AppInsightsSearchRetry: failed to reconcile ingestion hour {hour.HourUtc:O}; Final={expired}. " +
-                        $"The normal import continues; ReadHitsDaysBeforeToday can reread the day. {SearchFailure(ex)}");
+                        $"The normal import continues; ReadHitsDaysBeforeToday can reread the day. {FailureDimensions(ex)}");
                 }
             }
         }
 
-        // Exception messages can quote a rejected value or response. Only classify search retries.
-        private static string SearchFailure(Exception ex) =>
+        private static bool CanRecover(Exception ex, CancellationToken token) => !(ex is OutOfMemoryException) && !token.IsCancellationRequested;
+
+        // Exception messages can quote a rejected value or response. Only classify these failures.
+        private static string FailureDimensions(Exception ex) =>
             string.Join("; ", ExceptionDescriber.Dimensions(ex).Select(d => $"{d.Key}={d.Value}"));
 
         /// <summary>The planned windows of one kind for a day, within the range's timestamp bounds.</summary>

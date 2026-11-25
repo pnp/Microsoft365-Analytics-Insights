@@ -3,6 +3,7 @@ using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
@@ -56,6 +57,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
         public Func<DateTime, PageViewAppInsightsQueryResult> PageViewAt { get; set; }
         public Func<DateTime, BaseCustomEventAppInsightsQueryResult> EventAt { get; set; }
+        public Action<AppInsightsReadWindow> OnEventWindow { get; set; }
 
         private IEnumerable<(DateTime Timestamp, DateTime Ingested, string Username)> PageViewRows() =>
             PageViewCountByDay.SelectMany(d => Enumerable.Range(0, d.Value)
@@ -112,6 +114,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
         public Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses)
         {
+            OnEventWindow?.Invoke(window);
             CustomEventDaysRequested.Add(window.FromUtc.Date);
             CustomEventWindowsRequested.Add(window);
             CallLog?.Add($"fetch events {window.FromUtc:yyyy-MM-dd HH:mm}");
@@ -151,24 +154,32 @@ namespace Tests.UnitTests.FakeLoaderClasses
 
         public string Description => "fake cursor store";
 
-        public Task<DateTime?> ReadAsync() => ReadFailsWith != null ? Task.FromException<DateTime?>(ReadFailsWith) : Task.FromResult(CursorUtc);
+        public Task<DateTime?> ReadAsync(CancellationToken cancellationToken = default) => ReadFailsWith != null ? Task.FromException<DateTime?>(ReadFailsWith) : Task.FromResult(CursorUtc);
 
         /// <summary>The newest stored hit recorded beside the cursor; null for a cursor written by an older build.</summary>
         public DateTime? NewestStoredHitAtCursorUtc { get; set; }
 
-        public Task<DateTime?> ReadNewestStoredHitAtCursorAsync() => Task.FromResult(NewestStoredHitAtCursorUtc);
+        public Task<DateTime?> ReadNewestStoredHitAtCursorAsync(CancellationToken cancellationToken = default) => Task.FromResult(NewestStoredHitAtCursorUtc);
 
         private IReadOnlyList<AppInsightsSearchRetry> _searchRetries = Array.Empty<AppInsightsSearchRetry>();
-        public Task<IReadOnlyList<AppInsightsSearchRetry>> ReadSearchRetriesAsync() => SearchReadFailsWith == null
+        private AppInsightsReplayStart _replayStart;
+        public Task<AppInsightsReplayStart> ReadReplayStartAsync(CancellationToken cancellationToken) => Task.FromResult(_replayStart);
+        public Task WriteReplayStartAsync(AppInsightsReplayStart start, CancellationToken cancellationToken)
+        {
+            _replayStart = start;
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<AppInsightsSearchRetry>> ReadSearchRetriesAsync(CancellationToken cancellationToken = default) => SearchReadFailsWith == null
             ? Task.FromResult(_searchRetries) : Task.FromException<IReadOnlyList<AppInsightsSearchRetry>>(SearchReadFailsWith);
-        public Task WriteSearchRetriesAsync(IReadOnlyCollection<AppInsightsSearchRetry> retries)
+        public Task WriteSearchRetriesAsync(IReadOnlyCollection<AppInsightsSearchRetry> retries, CancellationToken cancellationToken = default)
         {
             if (SearchWriteFailsWith != null) return Task.FromException(SearchWriteFailsWith);
             _searchRetries = retries.ToList();
             return Task.CompletedTask;
         }
 
-        public Task WriteAsync(DateTime cursorUtc, DateTime? newestStoredHitUtc)
+        public Task WriteAsync(DateTime cursorUtc, DateTime? newestStoredHitUtc, CancellationToken cancellationToken = default)
         {
             if (WriteFailsWith != null) return Task.FromException(WriteFailsWith);
             Writes++;
@@ -189,7 +200,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public DateTime? NewestHitTimestampUtc { get; set; }
         public int ReadCount { get; private set; }
 
-        public Task<DateTime?> GetNewestHitTimestampUtcAsync()
+        public Task<DateTime?> GetNewestHitTimestampUtcAsync(CancellationToken cancellationToken = default)
         {
             ReadCount++;
             return Task.FromResult(NewestHitTimestampUtc);
@@ -201,7 +212,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         public List<FilterUrlConfig> Filters { get; set; } = new List<FilterUrlConfig>();
 
-        public Task<List<FilterUrlConfig>> LoadAsync() => Task.FromResult(Filters);
+        public Task<List<FilterUrlConfig>> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(Filters);
     }
 
     /// <summary>
@@ -227,7 +238,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// </summary>
         public HashSet<DateTime> DaysWhoseEventsFailToSave { get; } = new HashSet<DateTime>();
 
-        public Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls)
+        public Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default)
         {
             FiltersSeen = filterUrls;
             CallLog?.Add($"save pageviews {pageViews.Rows.Count}");
@@ -240,7 +251,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
             return Task.CompletedTask;
         }
 
-        public Task<CustomEventSaveResult> SaveCustomEventsAsync(CustomEventsResultCollection events)
+        public Task<CustomEventSaveResult> SaveCustomEventsAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default)
         {
             CallLog?.Add($"save events {events.Rows.Count}");
             var day = events.Rows.Count > 0 ? events.Rows[0].Timestamp.Date : (DateTime?)null;
@@ -252,7 +263,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
             return Task.FromResult(new CustomEventSaveResult(null, SearchResult));
         }
 
-        public Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection searches) => Task.FromResult(SearchSaveResult.Empty);
+        public Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection searches, CancellationToken cancellationToken = default) => Task.FromResult(SearchSaveResult.Empty);
     }
 
     /// <summary>
@@ -267,7 +278,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// <summary>What the next save reports back. Defaults to an all-zero result.</summary>
         public PageViewSaveResult NextResult { get; set; } = PageViewSaveResult.Empty;
 
-        public Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls)
+        public Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default)
         {
             SavedPageViews.Add(pageViews);
             FiltersSeen = filterUrls;
@@ -332,7 +343,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         public InMemoryHitUpdatePersistenceManager(List<string> callLog = null) : base("Hit updates", callLog) { }
 
-        public Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events) => RecordAndRespond(events);
+        public Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default) => RecordAndRespond(events);
     }
 
     /// <summary>In-memory <see cref="ISearchesPersistenceManager"/>.</summary>
@@ -341,10 +352,10 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public InMemorySearchesPersistenceManager(List<string> callLog = null) : base("Searches", callLog) { }
 
         public SearchSaveResult SearchResult { get; set; }
-        public async Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection events)
+        public async Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default)
         {
             var count = await RecordAndRespond(events);
-            return SearchResult ?? new SearchSaveResult(count, 0, 0, new Dictionary<DateTime, int>());
+            return SearchResult ?? new SearchSaveResult(count, count, 0, new Dictionary<DateTime, int>());
         }
     }
 
@@ -361,6 +372,6 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         public InMemoryClicksPersistenceManager(List<string> callLog = null) : base("Clicks", callLog) { }
 
-        public Task<int> SaveClicksAsync(CustomEventsResultCollection events) => RecordAndRespond(events);
+        public Task<int> SaveClicksAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default) => RecordAndRespond(events);
     }
 }

@@ -37,13 +37,30 @@ namespace WebJob.AppInsightsImporter.Engine
         Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses, CancellationToken cancellationToken);
     }
 
+    internal static class AppInsightsSourceReads
+    {
+        // Both normal ingestion and reconciliation use these overloads. Legacy injected sources can
+        // finish an in-flight read; callers check for a stop before consuming its result.
+        internal static Task<IReadOnlyList<AppInsightsHourlyRowCount>> GetHourlyRowCountsAsync(this IAppInsightsSourceLoader source,
+            AppInsightsReadWindow range, CancellationToken token) => source is ICancellableAppInsightsSourceLoader cancellable
+                ? cancellable.GetHourlyRowCountsAsync(range, token) : source.GetHourlyRowCountsAsync(range);
+
+        internal static Task<PageViewCollection> GetPageViewsAsync(this IAppInsightsSourceLoader source,
+            AppInsightsReadWindow window, bool dump, CancellationToken token) => source is ICancellableAppInsightsSourceLoader cancellable
+                ? cancellable.GetPageViewsAsync(window, dump, token) : source.GetPageViewsAsync(window, dump);
+
+        internal static Task<CustomEventsResultCollection> GetCustomEventsAsync(this IAppInsightsSourceLoader source,
+            AppInsightsReadWindow window, bool dump, CancellationToken token) => source is ICancellableAppInsightsSourceLoader cancellable
+                ? cancellable.GetCustomEventsAsync(window, dump, token) : source.GetCustomEventsAsync(window, dump);
+    }
+
     /// <summary>
     /// The newest hit already stored. Returns <c>null</c> when nothing has been imported yet. The import resumes from it
     /// only until it has an ingestion cursor (see <see cref="AppInsightsIngestionCursorPolicy"/>).
     /// </summary>
     public interface IHitWatermarkStore
     {
-        Task<DateTime?> GetNewestHitTimestampUtcAsync();
+        Task<DateTime?> GetNewestHitTimestampUtcAsync(CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -51,7 +68,7 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public interface ISiteFilterLoader
     {
-        Task<List<FilterUrlConfig>> LoadAsync();
+        Task<List<FilterUrlConfig>> LoadAsync(CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -66,10 +83,10 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public interface IAppInsightsDayPersistenceManager
     {
-        Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls);
-        Task<CustomEventSaveResult> SaveCustomEventsAsync(CustomEventsResultCollection events);
+        Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default);
+        Task<CustomEventSaveResult> SaveCustomEventsAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default);
         /// <summary>Reconcile one window of searches after the normal imports have saved their eligible visits.</summary>
-        Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection searches);
+        Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection searches, CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -77,7 +94,7 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public interface IPageViewsPersistenceManager
     {
-        Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls);
+        Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -87,7 +104,7 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public interface IHitUpdatePersistenceManager
     {
-        Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events);
+        Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -96,7 +113,7 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public interface ISearchesPersistenceManager
     {
-        Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection events);
+        Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -120,6 +137,6 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public interface IClicksPersistenceManager
     {
-        Task<int> SaveClicksAsync(CustomEventsResultCollection events);
+        Task<int> SaveClicksAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default);
     }
 }

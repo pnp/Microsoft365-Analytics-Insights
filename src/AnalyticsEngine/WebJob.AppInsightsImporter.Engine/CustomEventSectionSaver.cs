@@ -2,6 +2,7 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 
@@ -43,7 +44,9 @@ namespace WebJob.AppInsightsImporter.Engine
         /// Saves every section, in order, each isolated from the others' failures. Returns which failed, if any,
         /// so the caller can treat the batch's day as not saved - see <see cref="CustomEventSaveResult"/>.
         /// </summary>
-        public async Task<CustomEventSaveResult> SaveAllSectionsAsync(CustomEventsResultCollection events)
+        public Task<CustomEventSaveResult> SaveAllSectionsAsync(CustomEventsResultCollection events) => SaveAllSectionsAsync(events, CancellationToken.None);
+
+        internal async Task<CustomEventSaveResult> SaveAllSectionsAsync(CustomEventsResultCollection events, CancellationToken cancellationToken)
         {
             // Each section runs inside its own isolation boundary (see SaveSectionSafe). A failure
             // in one section (e.g. a page-update that trips a DbUpdateException) is logged in full
@@ -52,20 +55,20 @@ namespace WebJob.AppInsightsImporter.Engine
             var failedSections = new List<string>();
 
             var hitUpdatesCount = await SaveSectionSafe(_logger, "Hit updates",
-                () => _hitUpdates.SaveHitUpdatesAsync(events), failedSections);
+                () => _hitUpdates.SaveHitUpdatesAsync(events, cancellationToken), failedSections, cancellationToken);
 
             var searches = SearchSaveResult.Empty;
             var searchesInserted = await SaveSectionSafe(_logger, "Searches", async () =>
             {
-                searches = await _searches.SaveSearchesAsync(events);
-                return searches.RowsAffected;
-            }, failedSections);
+                searches = await _searches.SaveSearchesAsync(events, cancellationToken);
+                return searches.FactsInserted;
+            }, failedSections, cancellationToken);
 
             var pagesUpdated = await SaveSectionSafe(_logger, "Page updates",
-                () => _pageUpdates.SavePageUpdatesAsync(events), failedSections);
+                () => _pageUpdates.SavePageUpdatesAsync(events), failedSections, cancellationToken);
 
             var clicks = await SaveSectionSafe(_logger, "Clicks",
-                () => _clicks.SaveClicksAsync(events), failedSections);
+                () => _clicks.SaveClicksAsync(events, cancellationToken), failedSections, cancellationToken);
 
             _logger.LogInformation($"Event save summary: {hitUpdatesCount:n0} hit-updates, {searchesInserted:n0} searches, {pagesUpdated:n0} page-updates, {clicks:n0} clicks");
 
@@ -79,13 +82,16 @@ namespace WebJob.AppInsightsImporter.Engine
         /// bad section can neither abort its sibling sections nor escape up the call stack and stall the whole
         /// importer.
         /// </summary>
-        private static async Task<int> SaveSectionSafe(AnalyticsLogger logger, string sectionName, Func<Task<int>> saveAction, List<string> failedSections)
+        private static async Task<int> SaveSectionSafe(AnalyticsLogger logger, string sectionName, Func<Task<int>> saveAction,
+            List<string> failedSections, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var timer = new JobTimer(logger, sectionName);
             timer.Start();
             try
             {
                 var count = await saveAction();
+                cancellationToken.ThrowIfCancellationRequested();
                 timer.PrintElapsed();
                 if (count > 0)
                 {
@@ -93,7 +99,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
                 return count;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 failedSections.Add(sectionName);
                 logger.TrackException(ex);

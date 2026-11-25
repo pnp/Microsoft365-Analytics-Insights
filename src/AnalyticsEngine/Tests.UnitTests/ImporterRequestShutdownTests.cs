@@ -3,7 +3,9 @@ using Common.Entities.Config;
 using DataUtils;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
@@ -151,6 +153,108 @@ namespace Tests.UnitTests
                     Assert.AreEqual(0, persistence.SavedPageViews.Count);
                     Assert.AreEqual(0, persistence.SavedCustomEvents.Count);
                 }
+            }
+        }
+
+        [DataTestMethod]
+        [DoNotParallelize]
+        [DataRow("count")]
+        [DataRow("read")]
+        [DataRow("backoff")]
+        public async Task WebTraffic_SearchReconciliationStopPreservesTheFinalAttempt(string boundary)
+        {
+            using (var stop = new CancellationTokenSource())
+            {
+                var hour = Day.AddDays(-4);
+                var cursor = new InMemoryIngestionCursorStore(Day);
+                await cursor.WriteSearchRetriesAsync(new[] { new AppInsightsSearchRetry(hour, Day) });
+                var calls = 0;
+                bool sawHostStop = false;
+                void Stop(CancellationToken token)
+                {
+                    stop.Cancel();
+                    sawHostStop = token.IsCancellationRequested;
+                    token.ThrowIfCancellationRequested();
+                }
+                var handler = new Transport((request, token) =>
+                {
+                    calls++;
+                    var query = Uri.UnescapeDataString(request.RequestUri.Query);
+                    if (query.Contains("union (pageViews"))
+                        return Task.FromResult(Json(request, CountResponse(null)));
+                    StringAssert.Contains(query, "name == 'UserSearch'");
+                    if (query.Contains("summarize RowCount"))
+                    {
+                        if (boundary == "count") Stop(token);
+                        return Task.FromResult(Json(request, CountResponse("[\"event\",\"" + hour.ToString("O") + "\",1]")));
+                    }
+                    if (boundary == "read") Stop(token);
+                    var response = Json(request, "{\"tables\":[{\"columns\":[],\"rows\":[]}]}");
+                    if (boundary == "backoff" && calls == 3) response.StatusCode = HttpStatusCode.ServiceUnavailable;
+                    return Task.FromResult(response);
+                });
+                using (var api = new AppInsightsAPIClient("ApplicationId=" + Guid.Empty, new Credential(), NullLogger.Instance, handler))
+                {
+                    api.RetryDelay = (_, token) => { Stop(token); return Task.CompletedTask; };
+                    var importer = new AppInsightsImporter(null, AnalyticsLogger.ConsoleOnlyTracer(), new FixedClock(Day.AddMinutes(10)),
+                        api, new FakeSiteFilterLoader(), new InMemoryHitWatermarkStore(Day), new InMemoryAppInsightsDayPersistenceManager(),
+                        cursorStore: cursor);
+                    var output = await AppInsightsImporterOrchestrationTests.CaptureConsole(async () =>
+                        await Assert.ThrowsAsync<OperationCanceledException>(() => importer.ImportAndSave(false, null, stop.Token)));
+                    Assert.IsTrue(sawHostStop, "The actual search-only transport or its retry delay must receive the host stop.");
+                    Assert.AreEqual(boundary == "count" ? 2 : 3, calls, "A stop must not send another request.");
+                    Assert.AreEqual(Day, (await cursor.ReadSearchRetriesAsync()).Single().RetryAfterUtc);
+                    Assert.AreEqual(0, cursor.Writes);
+                    Assert.IsFalse(output.Contains("AppInsightsSearchRetry: failed") || output.Contains("Final=True")
+                        || output.Contains("New event 'FinishedSectionImport'"));
+                }
+            }
+        }
+
+        private static string CountResponse(string row) =>
+            "{\"tables\":[{\"columns\":[{\"name\":\"Kind\"},{\"name\":\"Hour\"},{\"name\":\"RowCount\"}],\"rows\":[" + row + "]}]}";
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task WebTraffic_SearchRetryTimeout_WithoutHostStopRetriesAndKeepsOnlyUnfinishedHours(bool recovers)
+        {
+            var hour = Day.AddHours(-2);
+            var cursor = new InMemoryIngestionCursorStore(Day);
+            await cursor.WriteSearchRetriesAsync(new[] { new AppInsightsSearchRetry(hour, Day) });
+            var attempts = 0;
+            var waits = 0;
+            var handler = new Transport((request, token) =>
+            {
+                var query = Uri.UnescapeDataString(request.RequestUri.Query);
+                if (query.Contains("union (pageViews")) return Task.FromResult(Json(request, CountResponse(null)));
+                StringAssert.Contains(query, "where name == 'UserSearch'");
+                if (query.Contains("summarize RowCount"))
+                    return Task.FromResult(Json(request, CountResponse("[\"event\",\"" + hour.ToString("O") + "\",1]")));
+                if (++attempts == 1 || !recovers) throw new TaskCanceledException("synthetic request timeout");
+                return Task.FromResult(Json(request, JsonConvert.SerializeObject(new
+                {
+                    tables = new[] { new {
+                        columns = new[] { "timestamp", "name", "customDimensions", "user_AuthenticatedId", "searchIngestionHour" }.Select(name => new { name }),
+                        rows = new[] { new object[] { hour, "UserSearch", "{\"sessionId\":\"example\",\"userSearch\":\"Example\"}", "reader@contoso.com", hour } }
+                    } }
+                })));
+            });
+            using (var api = new AppInsightsAPIClient("ApplicationId=" + Guid.Empty, new Credential(), NullLogger.Instance, handler))
+            using (var host = new CancellationTokenSource())
+            {
+                api.RetryDelay = (_, token) => { Assert.AreEqual(host.Token, token); waits++; return Task.CompletedTask; };
+                var importer = new AppInsightsImporter(null, AnalyticsLogger.ConsoleOnlyTracer(), new FixedClock(Day.AddMinutes(10)),
+                    api, new FakeSiteFilterLoader(), new InMemoryHitWatermarkStore(Day), new InMemoryAppInsightsDayPersistenceManager(),
+                    cursorStore: cursor);
+                var result = await importer.ImportAndSave(false, null, host.Token);
+                Assert.AreEqual(recovers ? 1 : AppInsightsAPIClient.MaxRetries, waits);
+                Assert.AreEqual(waits + 1, attempts);
+                Assert.AreEqual(recovers ? AppInsightsCycleOutcome.Succeeded : AppInsightsCycleOutcome.Degraded, result.Outcome);
+                Assert.AreEqual(!recovers, result.Reasons.Contains("SearchRetryFailed"));
+                Assert.AreEqual(recovers ? 0 : 1, result.PendingSearchHours);
+                if (!recovers) Assert.IsTrue((await cursor.ReadSearchRetriesAsync()).Single().RetryAfterUtc > Day);
+                Assert.AreEqual(Day.AddMinutes(10), result.CursorAdvancedToUtc);
             }
         }
 

@@ -223,7 +223,7 @@ namespace Tests.UnitTests
             // so every section gets a distinct count and one is >= 1000 to pin the ':n0' formatting too.
             var h = new SectionHarness();
             h.HitUpdates.ReturnCount = 1234;
-            h.Searches.ReturnCount = 22;
+            h.Searches.SearchResult = new SearchSaveResult(24, 22, 0, new Dictionary<DateTime, int>());
             h.PageUpdates.ReturnCount = 333;
             h.Clicks.ReturnCount = 45;
 

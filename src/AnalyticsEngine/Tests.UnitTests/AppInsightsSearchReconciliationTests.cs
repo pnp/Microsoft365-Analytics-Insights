@@ -10,7 +10,10 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Data.Entity.Infrastructure;
 using System.Data.Entity.Migrations;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using UnitTests.FakeLoaderClasses;
@@ -126,6 +129,121 @@ namespace Tests.UnitTests
             Assert.AreEqual((1L, 1L), SearchKpis());
         }
 
+        [DataTestMethod]
+        [DataRow("page-view")]
+        [DataRow("normal-search")]
+        [DataRow("search-only")]
+        public async Task StopDuringBlockedMerge_PreservesEarlierCommitsAndReplaysOnce(string boundary)
+        {
+            var searchesOnly = boundary == "search-only";
+            var stopInPageView = boundary == "page-view";
+            var source = new FakeAppInsightsSourceLoader
+            {
+                PageViewAt = t => Page(t, "eligible"),
+                EventAt = t => Search(t, "eligible", "Example", Reader)
+            };
+            var state = new InMemoryKeyValueStore();
+            var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
+            var clock = new FixedClock(Start);
+            source.ExtraPageViews.Add((Start.AddMinutes(-5), Start.AddMinutes(-5)));
+            await RunCycle(clock, source, state);
+            var arrival = searchesOnly ? Start.AddHours(-1) : Start.AddHours(1);
+            if (searchesOnly)
+                await cursor.WriteSearchRetriesAsync(new[] { new AppInsightsSearchRetry(arrival, Start) });
+            source.ExtraCustomEvents.Add((arrival, arrival));
+            source.ExtraPageViews.Add((Start.AddHours(1), Start.AddHours(1)));
+            clock.Advance(TimeSpan.FromHours(2));
+
+            using (var stop = new CancellationTokenSource())
+            using (var blocker = new SqlConnection(_database.ConnectionString))
+            {
+                await blocker.OpenAsync();
+                Task<AppInsightsImportCycleResult> import;
+                bool interrupted;
+                using (var tx = blocker.BeginTransaction())
+                using (var command = blocker.CreateCommand())
+                {
+                    command.Transaction = tx;
+                    command.CommandText = stopInPageView ? "SELECT COUNT(*) FROM dbo.page_titles WITH (TABLOCKX, HOLDLOCK);"
+                        : "SELECT COUNT(*) FROM dbo.searches WITH (TABLOCKX, HOLDLOCK);";
+                    await command.ExecuteScalarAsync();
+                    import = RunCycle(clock, source, state, token: stop.Token);
+                    try
+                    {
+                        // Cancel only after the production merge is blocked, not while starting EF.
+                        command.CommandText = "SELECT COUNT(*) FROM sys.dm_exec_requests WHERE blocking_session_id = @@SPID AND database_id = DB_ID();";
+                        var wait = Stopwatch.StartNew();
+                        while ((int)await command.ExecuteScalarAsync() == 0)
+                        {
+                            Assert.IsFalse(import.IsCompleted || wait.Elapsed > TimeSpan.FromSeconds(30), "The merge did not reach the lock.");
+                            await Task.Delay(25);
+                        }
+                        stop.Cancel();
+                        interrupted = await Task.WhenAny(import, Task.Delay(TimeSpan.FromSeconds(5))) == import;
+                    }
+                    finally
+                    {
+                        tx.Rollback();
+                        stop.Cancel();
+                        try { await import; } catch (OperationCanceledException) { }
+                    }
+                }
+                Assert.IsTrue(interrupted, "The host stop must interrupt the blocked SQL command without releasing its lock.");
+                await Assert.ThrowsAsync<OperationCanceledException>(() => import);
+            }
+            Assert.AreEqual(Start, await cursor.ReadAsync());
+            var markers = await cursor.ReadSearchRetriesAsync();
+            Assert.AreEqual(searchesOnly ? 1 : 0, markers.Count);
+            if (searchesOnly) Assert.AreEqual(Start, markers.Single().RetryAfterUtc, "The stop must not reschedule the hour.");
+            Assert.AreEqual(stopInPageView ? 1 : 2, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"), "Earlier SQL commits survive.");
+            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms"), "The blocked lookup and fact roll back together.");
+            Assert.AreEqual((0L, 0L), SearchKpis());
+
+            var recovered = await RunCycle(clock, source, state);
+            Assert.AreEqual(clock.UtcNow, recovered.CursorAdvancedToUtc);
+            Assert.AreEqual(0, recovered.PendingSearchHours);
+            Assert.AreEqual(searchesOnly ? 1 : 0, recovered.ReconciledSearches);
+            Assert.AreEqual(2, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"));
+            Assert.AreEqual((1L, 1L), SearchKpis());
+        }
+
+        [TestMethod]
+        public async Task StopAfterFirstSearchWindow_RetriesTheSameHourWithoutCountingCommittedFactsAgain()
+        {
+            var hour = Start.AddHours(-2);
+            var earlier = Start.Date.AddSeconds(-1);
+            var source = new FakeAppInsightsSourceLoader
+            {
+                PageViewAt = t => Page(t, "eligible"),
+                EventAt = t => Search(t, "eligible", t == earlier ? "Earlier" : "Later", Reader)
+            };
+            var state = new InMemoryKeyValueStore();
+            var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
+            var clock = new FixedClock(Start);
+            source.ExtraPageViews.Add((Start.AddMinutes(-5), Start.AddMinutes(-5)));
+            await RunCycle(clock, source, state);
+            await cursor.WriteSearchRetriesAsync(new[] { new AppInsightsSearchRetry(hour, Start) });
+            source.ExtraCustomEvents.Add((earlier, hour));
+            source.ExtraCustomEvents.Add((hour, hour));
+            clock.Advance(TimeSpan.FromMinutes(20));
+
+            using (var stop = new CancellationTokenSource())
+            {
+                var windows = 0;
+                source.OnEventWindow = w => { if (w.SearchesOnly && ++windows == 2) stop.Cancel(); };
+                await Assert.ThrowsAsync<OperationCanceledException>(() => RunCycle(clock, source, state, token: stop.Token));
+                Assert.AreEqual(2, windows);
+            }
+            Assert.AreEqual(Start, await cursor.ReadAsync());
+            Assert.AreEqual(Start, (await cursor.ReadSearchRetriesAsync()).Single().RetryAfterUtc);
+            Assert.AreEqual((1L, 1L), SearchKpis());
+            source.OnEventWindow = null;
+            var recovered = await RunCycle(clock, source, state);
+            Assert.AreEqual(1, recovered.ReconciledSearches, "Only the second window inserted a fact on replay.");
+            Assert.AreEqual(0, recovered.PendingSearchHours);
+            Assert.AreEqual((2L, 1L), SearchKpis());
+        }
+
         [TestMethod]
         public async Task Retry_DoesNotClaimAnEmptySourceOrSaveSearchesForSomeoneNowOutsideTheFilter()
         {
@@ -163,6 +281,171 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, removed.PendingSearchHours, "A positively excluded user does not need further retries.");
             Assert.AreEqual(AppInsightsCycleOutcome.Succeeded, removed.Outcome);
             Assert.AreEqual((0L, 0L), SearchKpis(), "The visit exists, but the user is no longer in scope.");
+        }
+
+        [DataTestMethod]
+        [DataRow("marker-read")]
+        [DataRow("marker-write")]
+        [DataRow("between-writes")]
+        [DataRow("after-newest-hit")]
+        [DataRow("cursor-write")]
+        [DataRow("after-cursor")]
+        public async Task StopAtCheckpoint_RestartReadsOnlyDurableProgressAndDoesNotDuplicateFacts(string boundary)
+        {
+            var source = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "eligible") };
+            var state = new CheckpointStore();
+            var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
+            var clock = new FixedClock(Start);
+            source.ExtraPageViews.Add((Start.AddMinutes(-5), Start.AddMinutes(-5)));
+            await RunCycle(clock, source, state);
+            var matched = Start.AddMinutes(1);
+            var missing = Start.AddMinutes(2);
+            source.EventAt = t => Search(t, t == matched ? "eligible" : "delayed", "Example", Reader);
+            source.ExtraCustomEvents.Add((matched, matched));
+            source.ExtraCustomEvents.Add((missing, missing));
+            clock.Advance(TimeSpan.FromMinutes(10));
+            bool markerCommitted = boundary != "marker-read" && boundary != "marker-write";
+            using (var stop = new CancellationTokenSource())
+            {
+                bool receivedToken = false;
+                state.AtBoundary = (operation, token) =>
+                {
+                    if (operation != boundary) return;
+                    receivedToken = token == stop.Token;
+                    stop.Cancel();
+                    // A provider may throw its own error, throw cancellation, or finish a write despite the stop.
+                    if (operation == "marker-read") throw new IOException("synthetic interrupted read");
+                    if (operation == "marker-write" || operation == "cursor-write")
+                        token.ThrowIfCancellationRequested();
+                };
+                var output = await AppInsightsImporterOrchestrationTests.CaptureConsole(async () =>
+                    await Assert.ThrowsAsync<OperationCanceledException>(() => RunCycle(clock, source, state, token: stop.Token)));
+                Assert.IsTrue(receivedToken, "The production checkpoint must receive the cycle token.");
+                Assert.IsFalse(output.Contains("checkpoint could not") || output.Contains("AppInsightsCursor: Outcome=WriteFailed")
+                    || output.Contains("OperationName=Hits import") || output.Contains("AppInsightsCursor: Outcome=Advanced"));
+            }
+            state.AtBoundary = null;
+            Assert.AreEqual(markerCommitted ? 1 : 0, (await cursor.ReadSearchRetriesAsync()).Count);
+            Assert.AreEqual(boundary == "after-cursor" ? clock.UtcNow : Start, await cursor.ReadAsync());
+            Assert.AreEqual(boundary == "marker-read" ? (0L, 0L) : (1L, 1L), SearchKpis());
+
+            var replay = await RunCycle(clock, source, state);
+            Assert.AreEqual(boundary == "marker-read" ? 1 : 0, replay.Events, "An existing search fact is not a new save.");
+            Assert.AreEqual(clock.UtcNow, replay.CursorAdvancedToUtc);
+            Assert.AreEqual(1, replay.PendingSearchHours);
+            Assert.AreEqual((1L, 1L), SearchKpis());
+            clock.Advance(TimeSpan.FromMinutes(15));
+            Assert.AreEqual(1, (await RunCycle(clock, source, state)).PendingSearchHours);
+            source.PageViewAt = t => Page(t, "delayed");
+            source.ExtraPageViews.Clear();
+            source.ExtraPageViews.Add((Start.AddMinutes(32), Start.AddMinutes(32)));
+            clock.Advance(TimeSpan.FromMinutes(16));
+            var recovered = await RunCycle(clock, source, state);
+            Assert.AreEqual(1, recovered.ReconciledSearches);
+            Assert.AreEqual(0, recovered.PendingSearchHours);
+            Assert.AreEqual((2L, 2L), SearchKpis());
+        }
+
+        private sealed class CheckpointStore : IKeyValueStore
+        {
+            private readonly InMemoryKeyValueStore _state = new InMemoryKeyValueStore();
+            public Action<string, CancellationToken> AtBoundary;
+            public string Description => _state.Description;
+
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default)
+            {
+                if (key.StartsWith("IngestionCursorSearchRetries:", StringComparison.Ordinal)) AtBoundary?.Invoke("marker-read", cancellationToken);
+                if (key.StartsWith("IngestionCursorReplayStart:", StringComparison.Ordinal)) AtBoundary?.Invoke("replay-read", cancellationToken);
+                return _state.GetStringAsync(key, cancellationToken);
+            }
+
+            public async Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default)
+            {
+                bool marker = key.StartsWith("IngestionCursorSearchRetries:", StringComparison.Ordinal);
+                bool cursor = key.StartsWith(KeyValueIngestionCursorStore.KeyPrefix + ":", StringComparison.Ordinal);
+                if (marker || cursor) AtBoundary?.Invoke(marker ? "marker-write" : "cursor-write", cancellationToken);
+                if (key.StartsWith("IngestionCursorReplayStart:", StringComparison.Ordinal)) AtBoundary?.Invoke("replay-write", cancellationToken);
+                await _state.SetStringAsync(key, value, timeToLive, cancellationToken);
+                if (marker || cursor) AtBoundary?.Invoke(marker ? "between-writes" : "after-cursor", cancellationToken);
+                if (key.StartsWith(KeyValueIngestionCursorStore.NewestHitKeyPrefix + ":", StringComparison.Ordinal))
+                    AtBoundary?.Invoke("after-newest-hit", cancellationToken);
+            }
+
+            public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default) => _state.DeleteAsync(key, cancellationToken);
+            public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken = default) => _state.ExistsAsync(key, cancellationToken);
+        }
+
+        [DataTestMethod]
+        [DataRow("replay-read", "ReplayStartReadFailed")]
+        [DataRow("replay-write", "ReplayStartWriteFailed")]
+        public async Task BootstrapStartStoreOutage_DoesNotLetSqlChangeTheOnlyResumePoint(string fault, string reason)
+        {
+            var clock = new FixedClock(Start.AddMinutes(1));
+            var source = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "example") };
+            source.ExtraPageViews.Add((Start, Start));
+            var state = new CheckpointStore { AtBoundary = (op, _) => { if (op == fault) throw new IOException("synthetic outage"); } };
+            var failed = await RunCycle(clock, source, state);
+            Assert.AreEqual(AppInsightsCycleOutcome.Failed, failed.Outcome);
+            CollectionAssert.Contains(failed.Reasons, reason);
+            Assert.IsNull(failed.CursorAdvancedToUtc);
+            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"));
+            state.AtBoundary = null;
+            Assert.AreEqual(clock.UtcNow, (await RunCycle(clock, source, state)).CursorAdvancedToUtc);
+            Assert.AreEqual(1, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"));
+        }
+
+        [DataTestMethod]
+        [DataRow("bootstrap")]
+        [DataRow("empty-restore")]
+        [DataRow("rewind")]
+        public async Task BootstrapOrRestoreStopBeforeMarker_NewerSqlHitDoesNotHideAnOlderSearch(string mode)
+        {
+            var clock = new FixedClock(Start.AddHours(1));
+            var state = new CheckpointStore();
+            var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
+            DateTime? previousCursor = null;
+            if (mode != "bootstrap")
+            {
+                previousCursor = Start.AddMinutes(20);
+                await cursor.WriteAsync(previousCursor.Value, Start);
+            }
+            if (mode == "rewind")
+            {
+                var old = Start.AddDays(-6);
+                var restoredSource = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "old") };
+                restoredSource.ExtraPageViews.Add((old, old));
+                await RunCycle(new FixedClock(old.AddMinutes(1)), restoredSource, new InMemoryKeyValueStore());
+            }
+            var source = new FakeAppInsightsSourceLoader
+            {
+                PageViewAt = t => Page(t, t == Start ? "seed" : "delayed"),
+                EventAt = t => Search(t, "delayed", "Example", Reader)
+            };
+            source.ExtraCustomEvents.Add((Start.AddDays(-1), Start.AddMinutes(-2)));
+            source.ExtraPageViews.Add((Start, Start.AddMinutes(-1)));
+
+            using (var stop = new CancellationTokenSource())
+            {
+                state.AtBoundary = (operation, token) =>
+                {
+                    if (operation == "marker-write") { stop.Cancel(); token.ThrowIfCancellationRequested(); }
+                };
+                await Assert.ThrowsAsync<OperationCanceledException>(() => RunCycle(clock, source, state, token: stop.Token));
+            }
+            Assert.AreEqual(previousCursor, await cursor.ReadAsync());
+            Assert.AreEqual(0, (await cursor.ReadSearchRetriesAsync()).Count);
+            Assert.AreEqual(mode == "rewind" ? 2 : 1, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"), "The later page view is already committed.");
+            state.AtBoundary = null;
+            source.ExtraPageViews.Add((Start.AddHours(1), Start.AddHours(1)));
+            clock.Advance(TimeSpan.FromMinutes(10));
+            var replay = await RunCycle(clock, source, state);
+            Assert.AreEqual(mode == "rewind" ? AppInsightsReadMode.Incremental : AppInsightsReadMode.Bootstrap, replay.Mode);
+            Assert.AreEqual(1, replay.PendingSearchHours, "The newer stored hit must not hide an uncheckpointed search from an earlier timestamp day.");
+            clock.Advance(TimeSpan.FromMinutes(31));
+            var recovered = await RunCycle(clock, source, state);
+            Assert.AreEqual(1, recovered.ReconciledSearches);
+            Assert.AreEqual(0, recovered.PendingSearchHours);
+            Assert.AreEqual((1L, 1L), SearchKpis());
         }
 
         [TestMethod]
@@ -248,10 +531,10 @@ namespace Tests.UnitTests
         }
 
         private static Task<AppInsightsImportCycleResult> RunCycle(FixedClock clock, FakeAppInsightsSourceLoader source,
-            IKeyValueStore state, UserImportScope scope = null) =>
+            IKeyValueStore state, UserImportScope scope = null, CancellationToken token = default) =>
             new AppInsightsImporter(new AppConfig { CognitiveEndpoint = null }, AnalyticsLogger.ConsoleOnlyTracer(), clock, source,
                 contextFactory: _factory, userScope: scope, cursorStore: new KeyValueIngestionCursorStore(state, "contoso-test"))
-                .ImportAndSave(false, null);
+                .ImportAndSave(false, null, token);
 
         private static SearchEventAppInsightsQueryResult Search(DateTime sourceTime, string session, string term, string user) =>
             new SearchEventAppInsightsQueryResult
