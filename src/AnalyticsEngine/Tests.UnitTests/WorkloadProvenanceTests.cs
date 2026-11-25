@@ -1,3 +1,5 @@
+extern alias AnalyticsWeb;
+
 using Common.Entities.CopilotAdoption;
 using Common.Entities.State;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -8,6 +10,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using ReportsAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.ReportsAPIController;
 
 namespace Tests.UnitTests
 {
@@ -436,6 +439,105 @@ namespace Tests.UnitTests
             }
             finally { release.TrySetResult(true); }
         }
+
+        [TestMethod]
+        [Timeout(10000)]
+        public async Task WeeklyTimeout_StalledEarlyClosingReadLeavesTimeToVerifyLaterWorkloads()
+        {
+            var week = Day.AddDays(1); // Monday
+            var state = new ProbeStore();
+            var budget = TimeSpan.FromSeconds(3);
+            var store = new UsageReportCoverageStore(state, true, budget);
+            for (var i = 0; i < 7; i++)
+                foreach (var source in UsageReportCoverageStore.WeeklySources)
+                    await state.SetStringAsync($"v1:{source}:{week.AddDays(i):yyyyMMdd}", source == "teams" || source == "sharepoint"
+                        ? UsageReportCoverageStore.Empty : UsageReportCoverageStore.Complete);
+
+            var queried = new List<string>();
+            var closing = new List<string>();
+            var elapsed = new Stopwatch();
+            var stalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            state.BeforeRange = (first, _) =>
+            {
+                var source = first.Split(':')[1];
+                if (queried.Contains(source))
+                {
+                    closing.Add(source);
+                    if (source == "teams" || source == "yammer")
+                    {
+                        elapsed.Start();
+                        return stalled.Task; // Non-cooperative on both the early and final closing pass.
+                    }
+                }
+                return Task.CompletedTask;
+            };
+            try
+            {
+                var chart = await ReportsAPIController.UsageCharts(week, new List<DateTime> { week }, store, sql =>
+                {
+                    var source = WeeklySource(sql);
+                    queried.Add(source);
+                    if (source == "outlook") throw new TimeoutException();
+                    return Task.FromResult(WeekRows(week, source == "onedrive" || source == "yammer"));
+                }).Single();
+                elapsed.Stop();
+                Assert.IsNull(chart.Error);
+                var points = chart.Series.ToDictionary(s => s.Name, s => s.Points.Single());
+                Assert.IsFalse(points.ContainsKey("Teams"), "An opening empty certificate alone cannot draw a zero.");
+                Assert.AreEqual(5d, points["OneDrive"].Value);
+                Assert.IsFalse(points["OneDrive"].Incomplete);
+                Assert.AreEqual(0d, points["SharePoint"].Value);
+                Assert.IsFalse(points["SharePoint"].Incomplete, "The later source's confirmed empty week is a real zero.");
+                Assert.AreEqual(5d, points["Viva Engage"].Value);
+                Assert.IsTrue(points["Viva Engage"].Incomplete, "Rows with no closing certificate are only a lower bound.");
+                CollectionAssert.AreEqual(new[] { "teams", "outlook", "onedrive", "sharepoint", "yammer" }, queried);
+                CollectionAssert.AreEquivalent(new[] { "teams", "onedrive", "sharepoint", "yammer" }, closing);
+                Assert.AreEqual(9, state.Reads, "One opening range per workload and one closing range per successful SQL query.");
+                Assert.IsTrue(elapsed.Elapsed < budget + TimeSpan.FromMilliseconds(500),
+                    $"Early and final closing reads must share the storage budget; elapsed {elapsed.Elapsed}.");
+            }
+            finally { stalled.TrySetResult(true); }
+        }
+
+        [DataTestMethod]
+        [DataRow(true, true)]
+        [DataRow(false, true)]
+        [DataRow(true, false)]
+        public async Task WeeklyFailure_StopsOnlyOnTimeoutWithDrawableData(bool empty, bool timeout)
+        {
+            var week = Day.AddDays(1);
+            var store = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            for (var i = 0; i < 7; i++)
+                await store.CompleteDayAsync("teams", week.AddDays(i), true, true, empty, week.AddDays(12), 3);
+
+            var queried = new List<string>();
+            var chart = await ReportsAPIController.UsageCharts(week, new List<DateTime> { week }, store, sql =>
+            {
+                var source = WeeklySource(sql);
+                queried.Add(source);
+                if (source == "outlook")
+                {
+                    if (timeout) throw new TimeoutException();
+                    throw new InvalidOperationException("Synthetic query failure.");
+                }
+                return Task.FromResult(WeekRows(week, !empty));
+            }).Single();
+            Assert.IsNull(chart.Error);
+            var teams = chart.Series.Single(s => s.Name == "Teams").Points.Single();
+            Assert.AreEqual(empty ? 0d : 5d, teams.Value);
+            Assert.IsFalse(teams.Incomplete);
+            Assert.AreEqual(timeout ? 2 : 5, queried.Count);
+            Assert.AreEqual(timeout ? 3 : 0, chart.SeriesWarnings.Count(w => w.Reason == "notAttempted"));
+        }
+
+        private static string WeeklySource(string sql) => UsageReportCoverageStore.WeeklySources
+            .Single(source => sql.Contains("dbo." + source + "_user_activity_log"));
+
+        private static List<ReportsAPIController.UsageWeekRow> WeekRows(DateTime week, bool hasRows) =>
+            Enumerable.Range(0, 7).Select(day => new ReportsAPIController.UsageWeekRow
+            {
+                WeekStart = week, CoverageDate = week.AddDays(day), HasRows = hasRows, Value = hasRows ? 5 : 0,
+            }).ToList();
 
         [TestMethod]
         public async Task Synthetic200kUsers_ProvenanceReadsAreBoundedAndIndependentOfPeopleCount()

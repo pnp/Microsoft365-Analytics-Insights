@@ -940,12 +940,13 @@ namespace Web.AnalyticsWeb.Controllers
             var coverageRead = await UsageReportCoverageStore.BeginPublicationAsync(UsageReportCoverageStore.WeeklySources,
                 from, lastWeek.AddDays(6), () => coverage ?? UsageReportCoverageStore.Open(new AppConfig(), readTimeout: TimeSpan.FromSeconds(3)),
                 cancellationToken);
-            async Task ProjectFetchedAsync()
+            async Task ProjectFetchedAsync(int sourcesStillToQuery = 0)
             {
                 if (fetched.Count == 0) return;
                 // Each successful source has one closing range read after its facts. A timeout may
                 // require an early projection to decide whether we have enough to draw; never reread it.
-                var outcomesBySource = await coverageRead.ReadStableOutcomesAsync(fetched.Select(item => item.Query.CoverageSource).ToArray(), cancellationToken);
+                var outcomesBySource = await coverageRead.ReadStableOutcomesAsync(
+                    fetched.Select(item => item.Query.CoverageSource).ToArray(), sourcesStillToQuery, cancellationToken);
                 foreach (var item in fetched)
                 {
                     var outcomes = outcomesBySource[item.Query.CoverageSource];
@@ -988,7 +989,13 @@ namespace Web.AnalyticsWeb.Controllers
                     // in a fixed order and the first one is not special. Once at least one series has
                     // data we stop, so a struggling database costs one extra timeout, not one per
                     // remaining workload.
-                    if (IsQueryTimeout(ex)) await ProjectFetchedAsync();
+                    if (IsQueryTimeout(ex))
+                    {
+                        // SQL rows are drawable even without a certificate (as a lower bound). Only
+                        // empty SQL weeks need a closing certificate to decide whether to stop.
+                        var hasStoredRows = fetched.Any(item => item.Rows.Any(day => day.HasRows));
+                        await ProjectFetchedAsync(hasStoredRows ? 0 : series.Count - i - 1);
+                    }
                     if (ShouldStopAfterSeriesFailure(ex, rowsBySeries))
                     {
                         warnings.Add("Remaining workloads were not attempted after the database timeout");

@@ -109,10 +109,19 @@ namespace Common.Entities.State
 
             internal Dictionary<string, Dictionary<DateTime, string>> InitialOutcomes() => Project(_sources, _before);
 
-            public async Task<Dictionary<string, Dictionary<DateTime, string>>> ReadStableOutcomesAsync(
+            public Task<Dictionary<string, Dictionary<DateTime, string>>> ReadStableOutcomesAsync(
                 IReadOnlyList<string> sources, CancellationToken token = default)
+                => ReadStableOutcomesAsync(sources, 0, token);
+
+            /// <summary>When SQL may still fetch other sources, leave their share of the remaining Table budget.</summary>
+            public async Task<Dictionary<string, Dictionary<DateTime, string>>> ReadStableOutcomesAsync(
+                IReadOnlyList<string> sources, int sourcesStillToQuery, CancellationToken token)
             {
-                var after = await ReadSourcesAsync(sources.Where(_before.ContainsKey), _timeout - _storageTime.Elapsed, token).ConfigureAwait(false);
+                var closing = sources.Where(_before.ContainsKey).ToArray();
+                var budget = _timeout - _storageTime.Elapsed;
+                if (sourcesStillToQuery > 0)
+                    budget = TimeSpan.FromTicks(budget.Ticks / (closing.Length + sourcesStillToQuery) * closing.Length);
+                var after = await ReadSourcesAsync(closing, budget, token).ConfigureAwait(false);
                 return Project(sources, after);
             }
 
