@@ -59,6 +59,32 @@ JOIN dbo.search_terms t ON t.id = s.search_term_id WHERE ";
                 db.Execute(merge);
                 Assert.AreEqual(1, db.Scalar(count + "s.session_id = 2 AND t.search_term = N'Καλημέρα' AND s.date_time IS NULL"),
                     "The batch's date bounds must not exclude an undated replay.");
+
+                // An old importer wrote to a higher physical session id. The next hit in that logical visit
+                // uses the lowest id, but replaying the old search must not create a second searching visit.
+                db.Execute(@"INSERT dbo.sessions VALUES (4, 'session-b', 1), (5, 'SESSION-B', 1);
+UPDATE dbo.searches SET session_id = 4 WHERE session_id = 2;
+TRUNCATE TABLE dbo.staged_searches;
+INSERT dbo.staged_searches (ai_session_id, user_name, search_term, date_time) VALUES
+('session-b', 'reader@contoso.com', N'Καλημέρα', NULL),
+('session-b', 'reader@contoso.com', N'Καλημέρα', '2000-01-01T09:00:00');");
+                using (var connection = new SqlConnection(db.ConnectionString))
+                using (var command = new SqlCommand(merge, connection))
+                {
+                    connection.Open();
+                    Assert.AreEqual(0, command.ExecuteNonQuery(), "Both the dated and undated historical facts already exist.");
+                    Assert.AreEqual(0, db.Scalar("SELECT COUNT(*) FROM dbo.searches WHERE session_id = 2"));
+                    db.Execute(@"INSERT dbo.staged_searches (ai_session_id, user_name, search_term, date_time) VALUES
+('session-b', 'reader@contoso.com', N'Καλημέρα', '2000-01-01T09:00:00.003'),
+('session-b', 'other@contoso.com',  N'Καλημέρα', '2000-01-01T09:00:00'),
+('SESSION-B', 'reader@contoso.com', N'Καλημέρα', '2000-01-01T09:00:00');");
+                    Assert.AreEqual(3, command.ExecuteNonQuery());
+                    Assert.AreEqual(0, command.ExecuteNonQuery());
+                }
+                Assert.AreEqual(1, db.Scalar(count + "s.session_id = 2 AND s.date_time = '2000-01-01T09:00:00.003'"),
+                    "A genuinely new fact uses the lowest session id, just as the hit import does.");
+                Assert.AreEqual(1, db.Scalar(count + "s.session_id = 3"), "The same tracker id for a different user is another visit.");
+                Assert.AreEqual(1, db.Scalar(count + "s.session_id = 5"), "Tracker ids differing only by case are different visits.");
             }
         }
     }
