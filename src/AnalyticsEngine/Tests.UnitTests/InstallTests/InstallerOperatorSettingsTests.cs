@@ -43,6 +43,8 @@ namespace Tests.UnitTests.InstallTests
         private const string Sub = "00000000-0000-0000-0000-000000000000";
         private const string Rg = "/subscriptions/" + Sub + "/resourceGroups/contoso";
         private const string Site = Rg + "/providers/Microsoft.Web/sites/contoso-web";
+        private const string AppSettings = Site + "/config/appsettings";
+        private const string ConnectionStrings = Site + "/config/connectionstrings";
         private const string SqlServer = Rg + "/providers/Microsoft.Sql/servers/contoso-sql";
         private const string Storage = Rg + "/providers/Microsoft.Storage/storageAccounts/contosoanalytics";
 
@@ -142,32 +144,34 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [TestMethod]
-        public async Task AppService_ConnectionStringReplaysPreserveOperatorPairsAndRefreshOnlyOwnedNames()
+        public async Task AppService_ConfigurationReplaysPreserveOperatorSettingsAndRefreshOnlyOwnedNames()
         {
-            const string config = Site + "/config/connectionstrings";
-            const string list = config + "/list";
             using (var arm = new FakeArm())
             {
                 arm.AddSite("1.2");
-                var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
+                arm.Resource(AppSettings)["properties"] = new JObject
+                {
+                    ["UserGroupsFilter"] = "Contoso pilot", ["ClientID"] = "old", ["ContosoEmpty"] = ""
+                };
                 var operatorPair = new JObject { ["type"] = "PostgreSQL", ["value"] = "Contoso; preserve exactly " };
                 var otherBus = new JObject { ["type"] = "ServiceBus", ["value"] = "Contoso operator bus" };
-                arm.Add(config, new JObject
+                arm.Resource(ConnectionStrings)["properties"] = new JObject
                 {
-                    ["name"] = "connectionstrings", ["type"] = "Microsoft.Web/sites/config",
-                    ["properties"] = new JObject
-                    {
-                        ["ContosoReporting"] = operatorPair, ["ServiceBusBackup"] = otherBus,
-                        ["sToRaGe"] = otherBus, ["rEdIs"] = otherBus, ["sErViCeBuS"] = otherBus
-                    }
-                });
-                arm.PostResponses[list] = arm.Resource(config);
+                    ["ContosoReporting"] = operatorPair, ["ServiceBusBackup"] = otherBus,
+                    ["sToRaGe"] = otherBus, ["rEdIs"] = otherBus, ["sErViCeBuS"] = otherBus
+                };
 
                 foreach (var bus in new[] { "Contoso managed bus", null, null })
                 {
-                    await ConfigureAzureComponentsTasks.ConfigureConnectionStringsAsync(site, "Contoso SQL", "Contoso storage", bus, CancellationToken.None);
-                    var stored = arm.Resource(config);
-                    var properties = (JObject)stored["properties"];
+                    arm.Requests.Clear();
+                    await ConfigureWebAppAsync(arm, bus);
+                    CollectionAssert.AreEqual(new[] { "POST " + AppSettings + "/list", "POST " + ConnectionStrings + "/list",
+                        "PATCH " + Site, "PUT " + AppSettings, "PUT " + ConnectionStrings }, ConfigurationRequests(arm));
+                    var settings = arm.Resource(AppSettings)["properties"];
+                    Assert.AreEqual("Contoso pilot", (string)settings["UserGroupsFilter"]);
+                    Assert.AreEqual("", (string)settings["ContosoEmpty"]);
+                    Assert.AreEqual(Sub, (string)settings["ClientID"]);
+                    var properties = (JObject)arm.Resource(ConnectionStrings)["properties"];
                     Assert.IsTrue(JToken.DeepEquals(operatorPair, properties["ContosoReporting"]));
                     Assert.IsTrue(JToken.DeepEquals(otherBus, properties["ServiceBusBackup"]));
                     Assert.AreEqual("SQLAzure", (string)properties["SPOInsightsEntities"]["type"]);
@@ -188,46 +192,125 @@ namespace Tests.UnitTests.InstallTests
                     // The next run must also preserve an operator edit made since the previous one.
                     operatorPair["value"] = "Contoso revised";
                     properties["ContosoReporting"] = operatorPair.DeepClone();
-                    arm.PostResponses[list] = stored;
                 }
-                Assert.AreEqual(3, arm.Requests.Count(r => r.Method == "POST" && r.Path == list));
             }
         }
 
         [DataTestMethod]
-        [DataRow("empty", true)]
-        [DataRow("denied", false)]
-        [DataRow("missing properties", false)]
-        [DataRow("incomplete pair", false)]
-        public async Task AppService_ConnectionStringReplacementRequiresACompleteRead(string response, bool writable)
+        [DataRow(AppSettings, "denied")]
+        [DataRow(AppSettings, "missing properties")]
+        [DataRow(AppSettings, "null properties")]
+        [DataRow(AppSettings, "invalid setting")]
+        [DataRow(ConnectionStrings, "denied")]
+        [DataRow(ConnectionStrings, "missing properties")]
+        [DataRow(ConnectionStrings, "incomplete pair")]
+        public async Task AppService_RefusedOrIncompleteReadMakesNoConfigurationWrites(string collection, string failure)
         {
-            const string config = Site + "/config/connectionstrings";
-            const string list = config + "/list";
             const string privateValue = "Contoso do not log";
             using (var arm = new FakeArm())
             {
                 arm.AddSite("1.2");
-                var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
-                if (response == "empty")
-                    arm.PostResponses[list] = new JObject { ["properties"] = new JObject() };
-                if (response == "denied")
+                arm.Resource(AppSettings)["properties"]["ContosoOperatorSetting"] = privateValue;
+                var list = collection + "/list";
+                switch (failure)
                 {
-                    arm.PostStatuses[list] = HttpStatusCode.Forbidden;
-                    arm.PostResponses[list] = new JObject { ["error"] = new JObject { ["code"] = "Forbidden", ["message"] = privateValue } };
+                    case "denied":
+                        arm.PostStatuses[list] = HttpStatusCode.Forbidden;
+                        arm.PostResponses[list] = new JObject { ["error"] = new JObject { ["code"] = "Forbidden", ["message"] = privateValue } };
+                        break;
+                    case "missing properties": arm.PostResponses[list] = new JObject(); break;
+                    case "null properties": arm.PostResponses[list] = new JObject { ["properties"] = JValue.CreateNull() }; break;
+                    case "invalid setting": arm.PostResponses[list] = new JObject { ["properties"] = new JObject { ["UserGroupsFilter"] = JValue.CreateNull() } }; break;
+                    case "incomplete pair": arm.PostResponses[list] = new JObject { ["properties"] = new JObject { ["Contoso"] = new JObject { ["value"] = privateValue } } }; break;
                 }
-                if (response == "incomplete pair")
-                    arm.PostResponses[list] = new JObject { ["properties"] = new JObject { ["Contoso"] = new JObject { ["value"] = privateValue } } };
 
-                var update = ConfigureAzureComponentsTasks.ConfigureConnectionStringsAsync(site, "Contoso SQL", "Contoso storage", null, CancellationToken.None);
-                if (writable) await update;
-                else
-                {
-                    var failure = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => update);
-                    StringAssert.Contains(failure.Message, "No replacement was sent");
-                    Assert.IsFalse(failure.ToString().Contains(privateValue), "An SDK response body must not reach the installer log.");
-                }
-                Assert.AreEqual(writable ? 1 : 0, arm.Requests.Count(r => r.Method == "PUT" && r.Path == config));
+                var logger = new CapturingLogger();
+                var error = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => ConfigureWebAppAsync(arm, logger: logger));
+                CollectionAssert.AreEqual(collection == AppSettings ? new[] { "POST " + list } :
+                    new[] { "POST " + AppSettings + "/list", "POST " + list }, ConfigurationRequests(arm));
+                StringAssert.Contains(error.Message, "No replacement was sent");
+                if (failure == "denied") StringAssert.Contains(error.Message, "HTTP 403");
+                Assert.IsFalse(error.ToString().Contains(privateValue) || logger.Lines.Any(l => l.Message.Contains(privateValue)),
+                    "Neither the exception chain nor the installer log may contain a setting value or SDK error body.");
             }
+        }
+
+        [TestMethod]
+        public async Task AppService_ExplicitlyEmptyCollectionsAreReadBeforeTheSitePatchAndItsPlanRetry()
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.2");
+                var patches = 0;
+                arm.OverrideResponse = (method, path) => method == "PATCH" && path == Site && ++patches == 1
+                    ? FakeArm.Json(HttpStatusCode.Conflict, new JObject()) : null;
+
+                await ConfigureWebAppAsync(arm);
+
+                CollectionAssert.AreEqual(new[] { "POST " + AppSettings + "/list", "POST " + ConnectionStrings + "/list",
+                    "PATCH " + Site, "PATCH " + Site, "PUT " + AppSettings, "PUT " + ConnectionStrings }, ConfigurationRequests(arm));
+                var siteConfigs = arm.Requests.Where(r => r.Method == "PATCH").Select(r => r.Body["properties"]["siteConfig"]).ToList();
+                Assert.AreEqual(true, (bool)siteConfigs[0]["alwaysOn"]);
+                Assert.AreEqual(false, (bool)siteConfigs[0]["use32BitWorkerProcess"]);
+                Assert.IsNull(siteConfigs[1]["alwaysOn"]);
+                Assert.IsNull(siteConfigs[1]["use32BitWorkerProcess"]);
+            }
+        }
+
+        [TestMethod]
+        public async Task AppService_CancellationDuringTheLastReadMakesNoConfigurationWrites()
+        {
+            using (var arm = new FakeArm())
+            using (var cancellation = new CancellationTokenSource())
+            {
+                arm.AddSite("1.2");
+                arm.OverrideResponse = (method, path) =>
+                {
+                    if (method == "POST" && path == ConnectionStrings + "/list") cancellation.Cancel();
+                    return null;
+                };
+
+                await Assert.ThrowsAsync<OperationCanceledException>(() => ConfigureWebAppAsync(arm, token: cancellation.Token));
+                CollectionAssert.AreEqual(new[] { "POST " + AppSettings + "/list", "POST " + ConnectionStrings + "/list" }, ConfigurationRequests(arm));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(AppSettings)]
+        [DataRow(ConnectionStrings)]
+        public async Task AppService_RefusedConfigurationWriteDoesNotLeakItsBodyOrClaimNoWritesWereSent(string collection)
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.2");
+                const string privateValue = "Contoso do not log";
+                arm.OverrideResponse = (method, path) => method == "PUT" && path == collection
+                    ? FakeArm.Json(HttpStatusCode.Forbidden, new JObject { ["error"] = new JObject { ["code"] = "Forbidden", ["message"] = privateValue } })
+                    : null;
+
+                var error = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => ConfigureWebAppAsync(arm));
+                Assert.AreEqual("PUT " + collection, ConfigurationRequests(arm).Last());
+                StringAssert.Contains(error.Message, "Could not update");
+                StringAssert.Contains(error.Message, "HTTP 403");
+                Assert.IsFalse(error.ToString().Contains(privateValue) || error.Message.Contains("No replacement was sent"));
+            }
+        }
+
+        private static string[] ConfigurationRequests(FakeArm arm) =>
+            arm.Requests.Where(r => r.Method != "GET").Select(r => r.Method + " " + r.Path).ToArray();
+
+        private static async Task ConfigureWebAppAsync(FakeArm arm, string bus = null, ILogger logger = null, CancellationToken token = default)
+        {
+            var config = new SolutionInstallConfig
+            {
+                ActivityAccount = new AppRegistrationCredentials(Sub, "synthetic-secret", Sub),
+                CognitiveServicesEnabled = false,
+                FoundryPromptEnabled = false
+            };
+            var tasks = new ConfigureAzureComponentsTasks(config, logger ?? NullLogger.Instance, null, null, null) { CancellationToken = token };
+            var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
+            await tasks.ConfigureWebApp(site, await arm.Plan("contoso-web"), "Contoso SQL", "Contoso storage",
+                null, null, null, bus, new Uri("https://contoso-vault.vault.azure.net/"));
         }
 
         // ---------------------------------------------------------------- Kudu without SCM basic auth (R11-5)
@@ -658,6 +741,7 @@ namespace Tests.UnitTests.InstallTests
             public readonly Dictionary<string, JObject> PostResponses = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
             public readonly Dictionary<string, HttpStatusCode> PostStatuses = new Dictionary<string, HttpStatusCode>(StringComparer.OrdinalIgnoreCase);
             public readonly Dictionary<string, string> PostText = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            public Func<string, string, HttpResponseMessage> OverrideResponse;
             public readonly Dictionary<string, JArray> InheritedAssignments = new Dictionary<string, JArray>(StringComparer.OrdinalIgnoreCase);
             public readonly List<(string Method, string Path, JObject Body)> Requests = new List<(string, string, JObject)>();
             public readonly List<(string Method, string Path, JObject Body)> Mutations = new List<(string, string, JObject)>();
@@ -711,6 +795,8 @@ namespace Tests.UnitTests.InstallTests
                     ["name"] = "web", ["type"] = "Microsoft.Web/sites/config",
                     ["properties"] = new JObject { ["minTlsVersion"] = minTls, ["ftpsState"] = "Disabled", ["alwaysOn"] = true }
                 });
+                foreach (var name in new[] { "appsettings", "connectionstrings" })
+                    Add(Site + "/config/" + name, new JObject { ["name"] = name, ["type"] = "Microsoft.Web/sites/config", ["properties"] = new JObject() });
                 Add(Site + "/basicPublishingCredentialsPolicies/ftp", new JObject
                 {
                     ["name"] = "ftp", ["type"] = "Microsoft.Web/sites/basicPublishingCredentialsPolicies", ["properties"] = new JObject { ["allow"] = false }
@@ -802,11 +888,14 @@ namespace Tests.UnitTests.InstallTests
                 }
 
                 Mutations.Add(entry);
+                var response = OverrideResponse?.Invoke(request.Method.Method, path);
+                if (response != null) return response;
                 if (request.Method.Method == "POST")
                 {
                     if (PostText.TryGetValue(path, out var xml)) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(xml, Encoding.UTF8, "application/xml") };
-                    return Json(PostStatuses.TryGetValue(path, out var status) ? status : HttpStatusCode.OK,
-                        PostResponses.TryGetValue(path, out var posted) ? posted : new JObject());
+                    if (!PostResponses.TryGetValue(path, out var posted) && (path == AppSettings + "/list" || path == ConnectionStrings + "/list"))
+                        posted = Resource(Parent(path));
+                    return Json(PostStatuses.TryGetValue(path, out var status) ? status : HttpStatusCode.OK, posted ?? new JObject());
                 }
                 if (request.Method == HttpMethod.Delete)
                 {
@@ -840,7 +929,7 @@ namespace Tests.UnitTests.InstallTests
 
             private static string Parent(string path) => path.Substring(0, Math.Max(0, path.LastIndexOf('/')));
 
-            private static HttpResponseMessage Json(HttpStatusCode status, JObject value) =>
+            public static HttpResponseMessage Json(HttpStatusCode status, JObject value) =>
                 new HttpResponseMessage(status) { Content = new StringContent(value.ToString(), Encoding.UTF8, "application/json") };
 
             protected override void Dispose(bool disposing)

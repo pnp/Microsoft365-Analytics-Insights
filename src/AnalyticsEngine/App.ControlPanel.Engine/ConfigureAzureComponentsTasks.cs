@@ -50,7 +50,9 @@ namespace App.ControlPanel.Engine
             SqlServerResource sqlServer = null, SqlAuthDecision sqlAuthDecision = null, Guid installerObjectId = default(Guid))
         {
             CancellationToken.ThrowIfCancellationRequested();
-            await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, cognitiveServicesInfo, foundryPromptInfo, appInsights, serviceBusConnectionString, keyVault);
+            var storageInfo = new AzStorageConnectionInfo(storage);
+            await ConfigureWebApp(webApp, appServicePlan, dbInfo.ConnectionString, storageInfo.StorageConnectionString,
+                cognitiveServicesInfo, foundryPromptInfo, appInsights, serviceBusConnectionString, keyVault.Data.Properties.VaultUri);
 
             using (var workspace = new InstallPackageWorkspace(_logger))
             {
@@ -693,11 +695,9 @@ namespace App.ControlPanel.Engine
             await installJob.Install();
         }
 
-        async Task ConfigureWebApp(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo backendInfo,
-            StorageAccountResource storage,
-            CognitiveServicesInfo cognitiveServicesInfo,
-            FoundryPromptInfo foundryPromptInfo,
-            AppInsightsInfo appInsights, string serviceBusConnectionString, KeyVaultResource keyVault)
+        internal async Task ConfigureWebApp(WebSiteResource webApp, AppServicePlanResource appServicePlan, string sqlConnectionString,
+            string storageConnectionString, CognitiveServicesInfo cognitiveServicesInfo, FoundryPromptInfo foundryPromptInfo,
+            AppInsightsInfo appInsights, string serviceBusConnectionString, Uri keyVaultUri)
         {
             // App settings
             var url = $"https://{webApp.Data.HostNames.First()}/";
@@ -707,7 +707,7 @@ namespace App.ControlPanel.Engine
             appSettings.Properties.Add("ClientID", this.Config.RuntimeAccountOffice365.ClientId);
             appSettings.Properties.Add("ClientSecret", this.Config.RuntimeAccountOffice365.Secret);
             appSettings.Properties.Add("TenantGUID", this.Config.RuntimeAccountOffice365.DirectoryId);
-            appSettings.Properties.Add("KeyVaultURL", keyVault.Data.Properties.VaultUri.ToString());
+            appSettings.Properties.Add("KeyVaultURL", keyVaultUri.ToString());
             appSettings.Properties.Add("WEBSITE_LOAD_USER_PROFILE", "1");       // So certificate loading works - https://learn.microsoft.com/en-us/azure/app-service/reference-app-settings?tabs=kudu%2Cdotnet#build-automation
 
             // App Insights REST calls have sometimes failed. If they did & we have no config, just don't update this bit of the config & they'll have to do it manually
@@ -768,29 +768,39 @@ namespace App.ControlPanel.Engine
             }
 
             // Connection strings
-            var storageInfo = new AzStorageConnectionInfo(storage);
             if (string.IsNullOrWhiteSpace(serviceBusConnectionString))
             {
                 _logger.LogInformation("Service Bus is disabled; the App Service will not have a 'ServiceBus' connection string.");
             }
-            var siteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku);
-            try
-            {
-                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = siteConfig }, CancellationToken);
-            }
-            catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
-            {
-                _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan?.Data?.Name ?? Config.AppServicePlanName, appServicePlan?.Data?.Sku));
-                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku, includePlanSensitiveSettings: false) }, CancellationToken);
-            }
+
+            // A settings PUT can restart the app. Prepare both replacements before even patching the site;
+            // once writes start, the PATCH and the two PUTs are separate ARM operations.
             await PreserveUnmanagedAppSettingsAsync(webApp, appSettings);
-            await webApp.UpdateApplicationSettingsAsync(appSettings, CancellationToken);
-            await ConfigureConnectionStringsAsync(webApp, backendInfo.ConnectionString, storageInfo.StorageConnectionString, serviceBusConnectionString, CancellationToken);
+            var connectionStrings = await PrepareConnectionStringsAsync(webApp, sqlConnectionString, storageConnectionString, serviceBusConnectionString);
+
+            await RunConfigurationStepAsync("site configuration", token => UpdatePostCreateSiteConfigAsync(webApp, appServicePlan, token));
+            await RunConfigurationStepAsync("application settings", token => webApp.UpdateApplicationSettingsAsync(appSettings, token));
+            await RunConfigurationStepAsync("connection strings", token => webApp.UpdateConnectionStringsAsync(connectionStrings, token));
 
             _logger.LogInformation("App Service connection-strings & app-settings configured");
         }
 
-        internal static async Task ConfigureConnectionStringsAsync(WebSiteResource webApp, string sql, string storage, string serviceBus, CancellationToken cancellationToken)
+        private async Task UpdatePostCreateSiteConfigAsync(WebSiteResource webApp, AppServicePlanResource appServicePlan, CancellationToken token)
+        {
+            var sku = appServicePlan?.Data?.Sku;
+            try
+            {
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = BuildPostCreateSiteConfig(sku) }, token);
+            }
+            catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
+            {
+                token.ThrowIfCancellationRequested();
+                _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan?.Data?.Name ?? Config.AppServicePlanName, sku));
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = BuildPostCreateSiteConfig(sku, includePlanSensitiveSettings: false) }, token);
+            }
+        }
+
+        private async Task<ConnectionStringDictionary> PrepareConnectionStringsAsync(WebSiteResource webApp, string sql, string storage, string serviceBus)
         {
             var replacement = new ConnectionStringDictionary();
             replacement.Properties.Add("SPOInsightsEntities", new ConnStringValueTypePair(sql, ConnectionStringType.SqlAzure));
@@ -802,37 +812,48 @@ namespace App.ControlPanel.Engine
 
             // The PUT replaces every string. Redis was retired; ServiceBus is still ours even when disabled.
             var owned = new HashSet<string>(replacement.Properties.Keys, StringComparer.OrdinalIgnoreCase) { "Redis", "ServiceBus" };
-            var readyToWrite = false;
-            try
+            await ReadConfigurationPropertiesAsync("connection strings", webApp.GetConnectionStringsAsync, (entry, listed) =>
             {
-                var listed = await webApp.GetConnectionStringsAsync(cancellationToken);
-                // The SDK models missing/null properties as an empty dictionary, and a missing type as the
-                // first enum value. Neither is a reliable snapshot to PUT back. Explicitly empty {} is valid.
+                if (owned.Contains(entry.Name)) return;
+                // The SDK defaults a missing type to the first enum value. Do not guess an operator's type or value.
+                if (entry.Value.GetProperty("type").ValueKind != JsonValueKind.String ||
+                    entry.Value.GetProperty("value").ValueKind != JsonValueKind.String)
+                    throw new InvalidDataException();
+                replacement.Properties.Add(entry.Name, listed.Properties[entry.Name]);
+            });
+            return replacement;
+        }
+
+        private Task ReadConfigurationPropertiesAsync<T>(string collection, Func<CancellationToken, Task<Response<T>>> list, Action<JsonProperty, T> preserve)
+        {
+            return RunConfigurationStepAsync(collection, async token =>
+            {
+                var listed = await list(token);
+                // Both SDK models can turn missing/null properties into an empty dictionary. Only an explicit {} is empty.
                 using (var body = JsonDocument.Parse(listed.GetRawResponse().Content.ToMemory()))
                 {
-                    var strings = body.RootElement.GetProperty("properties");
-                    foreach (var entry in strings.EnumerateObject())
-                    {
-                        if (owned.Contains(entry.Name)) continue;
-                        if (entry.Value.GetProperty("type").ValueKind != JsonValueKind.String ||
-                            entry.Value.GetProperty("value").ValueKind != JsonValueKind.String)
-                            throw new InvalidDataException();
-                        replacement.Properties.Add(entry.Name, listed.Value.Properties[entry.Name]);
-                    }
+                    foreach (var entry in body.RootElement.GetProperty("properties").EnumerateObject())
+                        preserve(entry, listed.Value);
                 }
+            }, reading: true);
+        }
 
-                cancellationToken.ThrowIfCancellationRequested();
-                readyToWrite = true;
-                await webApp.UpdateConnectionStringsAsync(replacement, cancellationToken);
+        private async Task RunConfigurationStepAsync(string section, Func<CancellationToken, Task> step, bool reading = false)
+        {
+            var token = CancellationToken;
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                await step(token);
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                token.ThrowIfCancellationRequested();
                 // SDK exceptions can contain the response body. The installer logs inner exceptions too.
                 var reason = ex is RequestFailedException azureError ? $"HTTP {azureError.Status}" : ex.GetType().Name;
-                throw new InvalidOperationException(readyToWrite
-                    ? $"Could not update the App Service connection strings ({reason})."
-                    : $"Could not read the existing App Service connection strings ({reason}). No replacement was sent; check the installer's access and retry.");
+                throw new InvalidOperationException(reading
+                    ? $"Could not read the existing App Service {section} ({reason}). No replacement was sent; check the installer's access and retry."
+                    : $"Could not update the App Service {section} ({reason}).");
             }
         }
 
@@ -920,37 +941,15 @@ namespace App.ControlPanel.Engine
         /// </remarks>
         private async Task PreserveUnmanagedAppSettingsAsync(WebSiteResource webApp, AppServiceConfigurationDictionary appSettings)
         {
-            Response<AppServiceConfigurationDictionary> existing;
-            try
-            {
-                existing = await webApp.GetApplicationSettingsAsync(CancellationToken);
-            }
-            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
-            {
-                throw new InvalidOperationException(
-                    "Could not read the existing App Service application settings, so this deployment was "
-                    + "stopped before it could overwrite them. Updating app settings replaces the whole "
-                    + "collection, so continuing would have deleted every setting the installer does not "
-                    + "manage - including any UserGroupsFilter scope and all import tuning values. Resolve "
-                    + "the access problem and re-run the installer. Reason: " + ex.Message, ex);
-            }
-
-            if (existing?.Value?.Properties == null)
-            {
-                return;
-            }
-
             var preserved = new List<string>();
-            foreach (var setting in existing.Value.Properties)
+            await ReadConfigurationPropertiesAsync("application settings", webApp.GetApplicationSettingsAsync, (entry, listed) =>
             {
-                if (appSettings.Properties.ContainsKey(setting.Key))
-                {
-                    continue;
-                }
+                if (entry.Value.ValueKind != JsonValueKind.String) throw new InvalidDataException();
+                if (appSettings.Properties.ContainsKey(entry.Name)) return;
 
-                appSettings.Properties.Add(setting.Key, setting.Value);
-                preserved.Add(setting.Key);
-            }
+                appSettings.Properties.Add(entry.Name, listed.Properties[entry.Name]);
+                preserved.Add(entry.Name);
+            });
 
             if (preserved.Count > 0)
             {
