@@ -26,21 +26,25 @@ namespace DataUtils.Http
 
     public class ConfidentialClientApplicationHttpHandler : DelegatingHandler
     {
-        private readonly ImportAppIndentityOAuthContext appIndentity;
+        private readonly Func<CancellationToken, Task<AccessToken>> _getAccessToken;
         private AccessToken auth;
         public ConfidentialClientApplicationHttpHandler(ImportAppIndentityOAuthContext appIndentity)
+            : this(_ => appIndentity.GetAccessToken(), new HttpClientHandler()) { }
+
+        public ConfidentialClientApplicationHttpHandler(Func<CancellationToken, Task<AccessToken>> getAccessToken, HttpMessageHandler transport)
+            : base(transport)
         {
-            InnerHandler = new HttpClientHandler();
-            this.appIndentity = appIndentity;
+            _getAccessToken = getAccessToken ?? throw new ArgumentNullException(nameof(getAccessToken));
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (auth.ExpiresOn < DateTimeOffset.Now.AddMinutes(5))
             {
-                auth = await appIndentity.GetAccessToken();
+                auth = await _getAccessToken(cancellationToken);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", auth.Token);
 
             var response = await base.SendAsync(request, cancellationToken);

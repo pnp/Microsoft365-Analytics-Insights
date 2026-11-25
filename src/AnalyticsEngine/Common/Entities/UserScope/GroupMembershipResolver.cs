@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities.UserScope
@@ -75,8 +76,11 @@ namespace Common.Entities.UserScope
             _maxMemberPagesPerGroup = maxMemberPagesPerGroup > 0 ? maxMemberPagesPerGroup : DefaultMaxMemberPagesPerGroup;
         }
 
-        public async Task<UserImportScopeResolution> ResolveAsync(UserGroupsFilterModel filter)
+        public Task<UserImportScopeResolution> ResolveAsync(UserGroupsFilterModel filter) => ResolveAsync(filter, CancellationToken.None);
+
+        internal async Task<UserImportScopeResolution> ResolveAsync(UserGroupsFilterModel filter, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // A missing, blank or match-everything filter narrows nothing. Resolving '*' group-first would page
             // the whole directory and every group's membership only to conclude "everyone" (issue #297).
             if (filter == null || !filter.IsNarrowing)
@@ -85,13 +89,14 @@ namespace Common.Entities.UserScope
             }
 
             var members = new UserScopeMembers();
-            var budget = new CallBudget(_maxTotalGraphCalls);
+            var budget = new CallBudget(_maxTotalGraphCalls, cancellationToken);
+            var reader = (_reader as GraphGroupDirectoryReader)?.ForResolution(cancellationToken) ?? _reader;
             var unmatchedPatterns = new List<string>();
             var groups = new List<MatchedGroup>();
 
             try
             {
-                groups = await LoadMatchingGroupsAsync(filter, budget, unmatchedPatterns);
+                groups = await LoadMatchingGroupsAsync(reader, filter, budget, unmatchedPatterns);
 
                 foreach (var group in groups)
                 {
@@ -101,19 +106,21 @@ namespace Common.Entities.UserScope
                     }
 
                     var before = members.Count;
-                    group.UserMemberCount = await AddGroupMembersAsync(group.Group, members, budget);
+                    group.UserMemberCount = await AddGroupMembersAsync(reader, group.Group, members, budget);
                     _logger.LogInformation($"User import scope: group '{group.Group.DisplayName}' has {group.UserMemberCount:N0} " +
                         $"direct user member(s), {members.Count - before:N0} not already in scope through another group.");
                 }
             }
             catch (Exception ex)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 // Defensive: the loaders below record failures on the budget rather than throwing, so this is
                 // only reachable through a bug. It still must not escape, or an import would crash on it.
                 return UserImportScopeResolution.Unavailable(members, Summaries(groups), $"{ex.GetType().Name}: {ex.Message}", _clock.UtcNow,
                     UserImportScopeFailureKind.Unexpected);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             if (budget.Exhausted)
             {
                 return UserImportScopeResolution.Unavailable(members, Summaries(groups), budget.Reason, _clock.UtcNow, budget.Kind, budget.HttpStatus);
@@ -138,7 +145,7 @@ namespace Common.Entities.UserScope
             public int UserMemberCount { get; set; }
         }
 
-        private async Task<List<MatchedGroup>> LoadMatchingGroupsAsync(UserGroupsFilterModel filter, CallBudget budget, List<string> unmatchedPatterns)
+        private async Task<List<MatchedGroup>> LoadMatchingGroupsAsync(IGroupDirectoryReader reader, UserGroupsFilterModel filter, CallBudget budget, List<string> unmatchedPatterns)
         {
             // Keyed by object id: the same group can be named by an id and by a display name, and two wildcard
             // patterns can both match it.
@@ -171,7 +178,7 @@ namespace Common.Entities.UserScope
                 }
                 else if (Guid.TryParse(pattern, out var groupId))
                 {
-                    var group = await LoadGroupByIdAsync(groupId, budget);
+                    var group = await LoadGroupByIdAsync(reader, groupId, budget);
                     if (group != null)
                     {
                         Match(group, pattern);
@@ -183,7 +190,7 @@ namespace Common.Entities.UserScope
                 }
                 else
                 {
-                    var byName = await LoadGroupsByExactNameAsync(pattern, budget);
+                    var byName = await LoadGroupsByExactNameAsync(reader, pattern, budget);
                     foreach (var group in byName)
                     {
                         Match(group, pattern);
@@ -197,7 +204,7 @@ namespace Common.Entities.UserScope
 
             if (wildcardPatterns.Count > 0 && !budget.Exhausted)
             {
-                var enumerated = await EnumerateGroupsAsync(wildcardPatterns, budget);
+                var enumerated = await EnumerateGroupsAsync(reader, wildcardPatterns, budget);
                 foreach (var hit in enumerated)
                 {
                     Match(hit.Key, hit.Value);
@@ -213,7 +220,7 @@ namespace Common.Entities.UserScope
         }
 
         /// <summary>Direct lookup by object id - one call, exact, and immune to a group being renamed.</summary>
-        private async Task<DirectoryGroup> LoadGroupByIdAsync(Guid groupId, CallBudget budget)
+        private async Task<DirectoryGroup> LoadGroupByIdAsync(IGroupDirectoryReader reader, Guid groupId, CallBudget budget)
         {
             if (!budget.TrySpend())
             {
@@ -222,7 +229,7 @@ namespace Common.Entities.UserScope
 
             try
             {
-                var group = await _reader.GetGroupByIdAsync(groupId);
+                var group = await reader.GetGroupByIdAsync(groupId);
                 if (group == null)
                 {
                     _logger.LogWarning($"User import scope: no Entra ID group has the object id '{groupId}'.");
@@ -240,7 +247,7 @@ namespace Common.Entities.UserScope
         /// Exact display-name lookup, server-side. One call whatever the directory size, so this never depends on
         /// a group appearing before the enumeration cap.
         /// </summary>
-        private async Task<IReadOnlyList<DirectoryGroup>> LoadGroupsByExactNameAsync(string displayName, CallBudget budget)
+        private async Task<IReadOnlyList<DirectoryGroup>> LoadGroupsByExactNameAsync(IGroupDirectoryReader reader, string displayName, CallBudget budget)
         {
             if (!budget.TrySpend())
             {
@@ -249,7 +256,7 @@ namespace Common.Entities.UserScope
 
             try
             {
-                var results = await _reader.FindGroupsByDisplayNameAsync(displayName);
+                var results = await reader.FindGroupsByDisplayNameAsync(displayName);
                 if (results.Count == 0)
                 {
                     _logger.LogWarning($"User import scope: no Entra ID group is named '{displayName}'. The match is on the " +
@@ -274,7 +281,7 @@ namespace Common.Entities.UserScope
         /// The fallback for genuine wildcard patterns: page the directory and match client-side, because Graph
         /// has no server-side equivalent of the product's '*' syntax. Returns each (group, pattern) match.
         /// </summary>
-        private async Task<List<KeyValuePair<DirectoryGroup, string>>> EnumerateGroupsAsync(List<string> wildcardPatterns, CallBudget budget)
+        private async Task<List<KeyValuePair<DirectoryGroup, string>>> EnumerateGroupsAsync(IGroupDirectoryReader reader, List<string> wildcardPatterns, CallBudget budget)
         {
             var matched = new List<KeyValuePair<DirectoryGroup, string>>();
             var matchers = wildcardPatterns.Select(p => new KeyValuePair<string, UserGroupsFilterModel>(p, new UserGroupsFilterModel(p))).ToList();
@@ -300,7 +307,7 @@ namespace Common.Entities.UserScope
                 DirectoryPage<DirectoryGroup> page;
                 try
                 {
-                    page = await _reader.ListGroupsAsync(nextLink);
+                    page = await reader.ListGroupsAsync(nextLink);
                 }
                 catch (Exception ex)
                 {
@@ -344,7 +351,7 @@ namespace Common.Entities.UserScope
         }
 
         /// <summary>Adds the group's direct user members to <paramref name="members"/>; returns how many were read.</summary>
-        private async Task<int> AddGroupMembersAsync(DirectoryGroup group, UserScopeMembers members, CallBudget budget)
+        private async Task<int> AddGroupMembersAsync(IGroupDirectoryReader reader, DirectoryGroup group, UserScopeMembers members, CallBudget budget)
         {
             string nextLink = null;
             var pages = 0;
@@ -368,7 +375,7 @@ namespace Common.Entities.UserScope
                 DirectoryPage<DirectoryUser> page;
                 try
                 {
-                    page = await _reader.ListUserMembersAsync(group.Id, nextLink);
+                    page = await reader.ListUserMembersAsync(group.Id, nextLink);
                 }
                 catch (Exception ex)
                 {
@@ -410,10 +417,12 @@ namespace Common.Entities.UserScope
         private class CallBudget
         {
             private readonly int _total;
+            private readonly CancellationToken _cancellationToken;
             private int _remaining;
 
-            public CallBudget(int total)
+            public CallBudget(int total, CancellationToken cancellationToken)
             {
+                _cancellationToken = cancellationToken;
                 _total = total;
                 _remaining = total;
             }
@@ -432,6 +441,7 @@ namespace Common.Entities.UserScope
             /// <summary>Takes one call from the budget; false (and stopped) when none are left.</summary>
             public bool TrySpend()
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 if (Exhausted)
                 {
                     return false;
@@ -459,8 +469,11 @@ namespace Common.Entities.UserScope
 
             /// <summary>Records a failed Graph read as the reason resolution stopped.</summary>
             public void Stop(string reason, Exception cause)
-                => Stop(reason, UserImportScopeFailureKind.DirectoryRead,
+            {
+                _cancellationToken.ThrowIfCancellationRequested();
+                Stop(reason, UserImportScopeFailureKind.DirectoryRead,
                     cause is DirectoryReadException read ? (int)read.StatusCode : (int?)null);
+            }
         }
     }
 }

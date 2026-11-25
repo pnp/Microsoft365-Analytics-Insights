@@ -164,7 +164,8 @@ namespace WebJob.AppInsightsImporter
                         Exception cycleException = null;
                         try
                         {
-                            var userScope = userScopeProvider.GetScopeForCycleAsync().GetAwaiter().GetResult();
+                            var userScope = userScopeProvider.GetScopeForCycleAsync(HostRuntime.ShutdownToken).GetAwaiter().GetResult();
+                            HostRuntime.ThrowIfShutdownRequested();
                             var importer = new Engine.AppInsightsImporter(config, logger, userScope: userScope, scanWatermark: scanWatermark,
                                 dayFailureTracker: dayFailures, cursorStore: cursorStore);
                             int? readDaysBefore = daysBeforeReadOverride > 0 ? daysBeforeReadOverride : (int?)null;

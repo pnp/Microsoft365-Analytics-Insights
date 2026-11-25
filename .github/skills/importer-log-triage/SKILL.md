@@ -398,6 +398,8 @@ Job `AppInsightsImporter`, stage `AppInsightsImport`. Reads App Insights by an i
 
 Healthy: `AppInsightsImportCycle` Succeeded each interval, days `Saved` or `NoData`, cursor `Advanced`.
 
+If Kudu stops the job while it is resolving `UserGroupsFilter`, the `AppInsightsImport` stage has not started. Expect no outcome for that cycle and no cursor advance. This is not a directory failure or a decision to import everyone. If the stage has already started and is waiting for an Entra SQL token, that connection has not yet issued a command; earlier connections may already have committed.
+
 | Last evidence | What it proves |
 |---|---|
 | Cycle `Failed`, same `FailedDays` repeating, `ConsecutiveFailures` climbing | The cycle stops at the failed day and retries it before any later day, so nothing after it imports. `FailedStage` separates download (App Insights query, permission, throttle) from save (SQL) |

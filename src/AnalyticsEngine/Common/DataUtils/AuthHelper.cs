@@ -13,14 +13,20 @@ namespace DataUtils
     {
         public const string CertificateName = "O365AdvancedAnalytics";
         private static X509Certificate2 _cachedCert = null;
-        public static async Task<IConfidentialClientApplication> GetNewClientApp(
+        public static Task<IConfidentialClientApplication> GetNewClientApp(
             string tenantId, string clientId, string clientSecret, string keyVaultUrl, bool useClientCertificate, ILogger logger,
             string redirectUri = null)
+            => GetNewClientApp(tenantId, clientId, clientSecret, keyVaultUrl, useClientCertificate, logger, redirectUri, CancellationToken.None);
+
+        internal static async Task<IConfidentialClientApplication> GetNewClientApp(
+            string tenantId, string clientId, string clientSecret, string keyVaultUrl, bool useClientCertificate, ILogger logger,
+            string redirectUri, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             IConfidentialClientApplication app = null;
             if (useClientCertificate)
             {
-                var appRegistrationCert = await RetrieveKeyVaultCertificate(CertificateName, keyVaultUrl, logger);
+                var appRegistrationCert = await RetrieveKeyVaultCertificate(CertificateName, keyVaultUrl, logger, cancellationToken);
 
                 var builder = ConfidentialClientApplicationBuilder.Create(clientId)
                     .WithCertificate(appRegistrationCert)
