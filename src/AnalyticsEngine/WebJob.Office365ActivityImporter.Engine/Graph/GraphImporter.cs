@@ -36,6 +36,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         // complete?" - withholding it after one report fails also emptied the skip list for the ten that
         // succeeded, making them re-download their full window every cycle (issue #311).
         private readonly IReportCompletionStore _reportCompletionStore;
+        private readonly IDailyReportWindowStore _dailyReportWindows;
         private readonly IImportLastRunStore _lastRunStore;
 
         private readonly IGraphImportSectionFactory _sectionFactory;
@@ -81,6 +82,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             _graphClient = graphClient;
             _activityReportsLastImportedStore = activityReportsLastImportedStore;
             _reportCompletionStore = reportCompletionStore;
+            _dailyReportWindows = reportCompletionStore as IDailyReportWindowStore ?? new InMemoryReportCompletionStore();
 
             // Defensive: a per-instance in-memory store still works (just doesn't persist the gate
             // across cycles). Production passes the process-lifetime store hoisted in Program.cs.
@@ -364,6 +366,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             return await _reportCompletionStore.GetLastSuccessAsync(reportKey);
         }
 
+        private async Task<DailyReportWindow> ReadCompletedWindowAsync(string reportKey, DateTime? lastSuccess, ILogger logger)
+        {
+            // A legacy timestamp alone cannot distinguish a D+2 fetch from a mature one, or a truncated
+            // continuation from a complete day. Recheck such a window once, while Graph still has it.
+            if (lastSuccess.HasValue)
+            {
+                try
+                {
+                    var previous = await _dailyReportWindows.ReadWindowAsync(reportKey);
+                    var stampUtc = lastSuccess.Value.ToUniversalTime();
+                    // With no per-report store the caller supplies a phase stamp written AFTER the reports.
+                    // Only this importer's own successfully saved window can then be reused.
+                    if (previous?.HasRows != null && (_reportCompletionStore == null
+                        ? previous.CompletedUtc <= stampUtc : previous.CompletedUtc == stampUtc))
+                        return previous;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning($"{reportKey}: could not read the finalized dates ({ex.GetType().Name}); rechecking the window.");
+                }
+            }
+            return new DailyReportWindow();
+        }
+
         /// <summary>
         /// Whether a report that has no finalized-date skip list of its own is due to run again.
         /// </summary>
@@ -545,54 +571,58 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         private static async Task<bool> HasAnyActivityDataAsync()
         {
-            // EXISTS (AnyAsync) rather than COUNT(*): this only needs "is the table empty", and runs every cycle.
             using (var db = new AnalyticsEntitiesContext())
             {
-                return await db.TeamUserActivityLogs.AnyAsync();
+                return await HasAnyActivityDataAsync(db);
             }
         }
+
+        // One EXISTS over UNION ALL. A single row from any daily report is enough; neither a count nor a
+        // distinct union over the tenant's usage history belongs on the cadence check.
+        internal static Task<bool> HasAnyActivityDataAsync(AnalyticsEntitiesContext db) =>
+            db.TeamUserActivityLogs.Select(_ => 1)
+                .Concat(db.OutlookUsageActivityLogs.Select(_ => 1))
+                .Concat(db.SharePointUserActivityLogs.Select(_ => 1))
+                .Concat(db.OneDriveUserActivityLogs.Select(_ => 1))
+                .Concat(db.OneDriveUsageLogs.Select(_ => 1))
+                .Concat(db.TeamsUserDeviceUsageLog.Select(_ => 1))
+                .Concat(db.AppPlatformUserUsageLog.Select(_ => 1))
+                .Concat(db.YammerUserActivityLogs.Select(_ => 1))
+                .Concat(db.YammerGroupActivityLogs.Select(_ => 1))
+                .Concat(db.YammerDeviceActivityLogs.Select(_ => 1))
+                .AnyAsync();
 
         private IReadOnlyList<ActivityReportRun> CreateDailyReports(int daysBackMax, ManualGraphCallClient client, UserImportScope userScope,
             ConcurrentLookupDbIdsCache lookupIdCache, DateTime? lastImportedDate)
         {
-            // Parallel-load all, each one with own DB context.
-            var teamsUserUsageLoader = new TeamsUserUsageLoader(client, userScope, _logger);
-            var teamsUserDeviceLoader = new TeamsUserDeviceLoader(client, userScope, _logger);
-            var outlookLoader = new OutlookUserActivityLoader(client, userScope, _logger);
-            var oneDriveUsageLoader = new OneDriveUsageLoader(client, userScope, _logger);
-            var oneDriveUserActivityLoader = new OneDriveUserActivityLoader(client, userScope, _logger);
-            var sharePointUserActivityLoader = new SharePointUserActivityLoader(client, userScope, _logger);
-            var yammerUserActivityLoader = new YammerUserUsageLoader(client, userScope, _logger);
-            var yammerGroupsActivityLoader = new YammerGroupUsageLoader(client, _logger);
-            var yammerDeviceActivityLoader = new YammerDeviceUsageLoader(client, userScope, _logger);
-            var userPlatActivityLoader = new AppPlatformUserActivityLoader(client, userScope, _logger);
-
             var coverage = Common.Entities.State.UsageReportCoverageStore.Open(_settings, _logger);
-            teamsUserUsageLoader.CoverageStore = coverage;
-            teamsUserUsageLoader.CoverageSource = "teams";
-            teamsUserUsageLoader.CoverageWholeTenant = userScope?.IsFiltered != true;
-            outlookLoader.CoverageStore = coverage;
-            outlookLoader.CoverageSource = "outlook";
-            outlookLoader.CoverageWholeTenant = userScope?.IsFiltered != true;
-            sharePointUserActivityLoader.CoverageStore = coverage;
-            sharePointUserActivityLoader.CoverageSource = "sharepoint";
-            sharePointUserActivityLoader.CoverageWholeTenant = userScope?.IsFiltered != true;
-            oneDriveUserActivityLoader.CoverageStore = coverage;
-            oneDriveUserActivityLoader.CoverageSource = "onedrive";
-            oneDriveUserActivityLoader.CoverageWholeTenant = userScope?.IsFiltered != true;
+            ActivityReportRun Daily<TLog, TDetail, TLookup, TCache>(string name,
+                AbstractDailyActivityLoader<TLog, TDetail, TLookup, TCache> loader, string coverageSource = null)
+                where TLog : AbstractUsageActivityLog, new() where TDetail : AbstractActivityRecord<TLookup>
+                where TLookup : AbstractEFEntity where TCache : DBLookupCache<TLookup>
+            {
+                loader.Clock = _clock;
+                if (coverageSource != null)
+                {
+                    loader.CoverageStore = coverage;
+                    loader.CoverageSource = coverageSource;
+                    loader.CoverageWholeTenant = userScope?.IsFiltered != true;
+                }
+                return new ActivityReportRun(name, () => LoadAndSaveDailyImportReport(loader, daysBackMax, name, _logger, lookupIdCache, lastImportedDate));
+            }
 
             return new List<ActivityReportRun>
             {
-                new ActivityReportRun("Teams user activity", () => LoadAndSaveDailyImportReport(teamsUserUsageLoader, daysBackMax, "Teams user activity", _logger, lookupIdCache, lastImportedDate)),
-                new ActivityReportRun("Teams user device", () => LoadAndSaveDailyImportReport(teamsUserDeviceLoader, daysBackMax, "Teams user device", _logger, lookupIdCache, lastImportedDate)),
-                new ActivityReportRun("Outlook activity", () => LoadAndSaveDailyImportReport(outlookLoader, daysBackMax, "Outlook activity", _logger, lookupIdCache, lastImportedDate)),
-                new ActivityReportRun("OneDrive usage", () => LoadAndSaveDailyImportReport(oneDriveUsageLoader, daysBackMax, "OneDrive usage", _logger, lookupIdCache, lastImportedDate)),
-                new ActivityReportRun("OneDrive activity", () => LoadAndSaveDailyImportReport(oneDriveUserActivityLoader, daysBackMax, "OneDrive activity", _logger, lookupIdCache, lastImportedDate)),
-                new ActivityReportRun("SharePoint user activity", () => LoadAndSaveDailyImportReport(sharePointUserActivityLoader, daysBackMax, "SharePoint user activity", _logger, lookupIdCache, lastImportedDate)),
-                new ActivityReportRun("Yammer user activity", () => LoadAndSaveDailyImportReport(yammerUserActivityLoader, daysBackMax, "Yammer user activity", _logger, lookupIdCache, lastImportedDate)),
-                new ActivityReportRun("Yammer group activity", () => LoadAndSaveDailyImportReport(yammerGroupsActivityLoader, daysBackMax, "Yammer group activity", _logger, lookupIdCache, lastImportedDate)),
-                new ActivityReportRun("Yammer device activity", () => LoadAndSaveDailyImportReport(yammerDeviceActivityLoader, daysBackMax, "Yammer device activity", _logger, lookupIdCache, lastImportedDate)),
-                new ActivityReportRun("Apps & platform activity", () => LoadAndSaveDailyImportReport(userPlatActivityLoader, daysBackMax, "Apps & platform activity", _logger, lookupIdCache, lastImportedDate)),
+                Daily("Teams user activity", new TeamsUserUsageLoader(client, userScope, _logger), "teams"),
+                Daily("Teams user device", new TeamsUserDeviceLoader(client, userScope, _logger)),
+                Daily("Outlook activity", new OutlookUserActivityLoader(client, userScope, _logger), "outlook"),
+                Daily("OneDrive usage", new OneDriveUsageLoader(client, userScope, _logger)),
+                Daily("OneDrive activity", new OneDriveUserActivityLoader(client, userScope, _logger), "onedrive"),
+                Daily("SharePoint user activity", new SharePointUserActivityLoader(client, userScope, _logger), "sharepoint"),
+                Daily("Yammer user activity", new YammerUserUsageLoader(client, userScope, _logger)),
+                Daily("Yammer group activity", new YammerGroupUsageLoader(client, _logger)),
+                Daily("Yammer device activity", new YammerDeviceUsageLoader(client, userScope, _logger)),
+                Daily("Apps & platform activity", new AppPlatformUserActivityLoader(client, userScope, _logger)),
             };
         }
 
@@ -631,15 +661,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var lastImportedStore = _activityReportsLastImportedStore;
             if (lastImportedStore != null)
             {
-                // Clear the "last imported" date if there's no activity data in the DB at all, so a fresh or
-                // wiped database imports immediately instead of waiting out a stale timestamp. Not while a refusal for
-                // concealed identities stands: such a tenant never stores a row, so the table stays empty and the reset
-                // would re-run the whole phase - every report downloading at least a day - on every cycle.
-                if (!await IsConcealedIdentityRefusalCurrentAsync() && !await hasAnyActivityData())
-                {
-                    await lastImportedStore.DeleteDt();
-                }
-
                 lastImportedDate = await lastImportedStore.GetLastDT();
             }
             else
@@ -662,6 +683,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             if (_settings.ForceUsageReportsImport)
             {
                 _logger.LogInformation("ForceUsageReportsImport=true; bypassing recently-imported gate.");
+                runImport = true;
+            }
+            else if (!runImport && !await IsConcealedIdentityRefusalCurrentAsync() && !await hasAnyActivityData())
+            {
+                // All daily report tables are empty despite a recent phase stamp. Recover a wiped database now,
+                // but not a known refusal for concealed identities. An already-due phase needs no SQL probe.
+                lastImportedDate = null;
                 runImport = true;
             }
             if (runImport)
@@ -926,6 +954,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 ISet<DateTime> datesToSkip = null;
                 if (!_settings.ForceUsageReportsImport)
                 {
+                    abstractActivityLoader.PreviousWindow = await ReadCompletedWindowAsync(reportKey, lastSuccessfulImport, logger);
                     using (var db = new AnalyticsEntitiesContext())
                     {
                         datesToSkip = await abstractActivityLoader.GetFinalizedStoredDatesToSkipAsync(
@@ -935,8 +964,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                     if (datesToSkip.Count > 0)
                     {
-                        logger.LogInformation($"{thingWeAreImporting}: skipping {datesToSkip.Count} already-stored finalized day(s); " +
-                            $"only re-importing the most recent {abstractActivityLoader.RefreshableRecentDays} day(s) that can still change in Graph.");
+                        logger.LogInformation($"{thingWeAreImporting}: skipping {datesToSkip.Count} finalized day(s) with matching SQL outcomes; " +
+                            "re-importing recent days and any date without a matching mature download.");
                     }
                 }
 
@@ -949,7 +978,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         ? "ForceUsageReportsImport=true"
                         : lastSuccessfulImport == null
                             ? "this report has no completion stamp (never completed, the runtime state store is not configured or unreachable, or its last save failed)"
-                            : "no finalized date in the window is stored yet";
+                            : "no date has a matching mature download and SQL outcome";
                     logger.LogInformation($"{thingWeAreImporting}: downloading the full {windowDates}-date window from Graph (UsageReportsDaysBack): {reason}.");
                 }
 
@@ -962,14 +991,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // claims a window it only partly wrote. Not before the first date has downloaded, though: a download
                     // that fails then has written nothing, so the previous stamp - and with it this report's finalized-date
                     // skip list - still holds, and the retry fetches only what is missing instead of the whole window.
-                    Func<Task> clearCompletionStamp = null;
-                    if (_reportCompletionStore != null)
-                    {
-                        clearCompletionStamp = () => _reportCompletionStore.ClearAsync(reportKey);
-                    }
+                    var stamps = _reportCompletionStore ?? _dailyReportWindows;
 
-                    await abstractActivityLoader.LoadAndSaveEachDateAsync(daysBackMax, datesToSkip, clearCompletionStamp,
+                    await abstractActivityLoader.LoadAndSaveEachDateAsync(daysBackMax, datesToSkip, () => stamps.ClearAsync(reportKey),
                         userEmailToDbIdCache, DBLookupCache<TLookupType>.Create<CACHETYPE>(db));
+                    abstractActivityLoader.ThrowIfContinuationMissing();
                     _logger.LogInformation($"{this.GetType().Name} read {abstractActivityLoader.LastLoadedRowCount.ToString("N0")} {thingWeAreImporting} records from Graph API");
 
                     // Keep the columnstore index (ColumnstoreUsageReportMetrics) compacted. The upserts above
@@ -988,6 +1014,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     }
                 }
 
+                // Publish only after every continuation and SQL batch completed. A missing first page is a
+                // normal unavailable date; it was not recorded as final and is checked next time.
+                var completed = abstractActivityLoader.SavedWindow;
+                completed.CompletedUtc = DateTime.SpecifyKind(_clock.UtcNow, DateTimeKind.Utc);
+                if (_reportCompletionStore != null && !(_reportCompletionStore is IDailyReportWindowStore))
+                {
+                    // A custom timestamp-only store chooses its own instant; bind its process-local window
+                    // to that exact public stamp. The built-in stores publish both together below.
+                    await _reportCompletionStore.SaveSuccessAsync(reportKey);
+                    completed.CompletedUtc = (await _reportCompletionStore.GetLastSuccessAsync(reportKey))?.ToUniversalTime() ?? completed.CompletedUtc;
+                }
+                await _dailyReportWindows.SaveWindowAsync(reportKey, completed);
+
                 var total = abstractActivityLoader.LastLoadedRowCount;
                 logger.LogInformation($"Imported {total.ToString("N0")} {thingWeAreImporting} reports.");
                 _dailyReportOutcomes.Enqueue(new DailyReportOutcome
@@ -999,14 +1038,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     DatesSkipped = datesToSkip?.Count ?? 0,
                     Milliseconds = reportWatch.ElapsedMilliseconds,
                 });
-
-                // Only reached when every download AND save completed - anything else threw and is caught by
-                // RunReportSafely. A failure after the first date downloaded leaves this report's stamp cleared, so its
-                // window is retried next cycle; a failure downloading the first date leaves the previous stamp in place.
-                if (_reportCompletionStore != null)
-                {
-                    await _reportCompletionStore.SaveSuccessAsync(reportKey);
-                }
 
                 if (instrumentationEnabled)
                 {

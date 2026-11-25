@@ -506,6 +506,45 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        [TestCategory("SqlIntegration")]
+        public async Task AnOutlookOnlyDatabaseKeepsItsDailyThrottleUntilTheUsageDataIsWiped()
+        {
+            var clock = new FixedClock(new DateTime(2026, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+            var importer = NewImporter(new InMemoryReportCompletionStore(), clock: clock, phaseStore: new ClockedSingleDateStore(clock));
+            var runs = 0;
+            var probes = 0;
+            using (var scratch = ScratchDatabase.Create("DailyUsageGate"))
+            using (var db = new Common.Entities.AnalyticsEntitiesContext(scratch.ConnectionString, true, false))
+            {
+                var tables = new[] { "teams_user_activity_log", "outlook_user_activity_log", "onedrive_user_activity_log",
+                    "sharepoint_user_activity_log", "onedrive_usage_activity_log", "teams_user_device_usage_log",
+                    "yammer_user_activity_log", "yammer_group_activity_log", "yammer_device_activity_log", "platform_user_activity_log" };
+                foreach (var table in tables) scratch.Execute($"CREATE TABLE dbo.[{table}] (id int PRIMARY KEY)");
+                Task<bool> RunPhase() => importer.RunActivityReportPhaseAsync(7, () => { probes++; return GraphImporter.HasAnyActivityDataAsync(db); },
+                    (_, stamp) => new[] { new GraphImporter.ActivityReportRun("Synthetic report", () => { runs++; return Task.CompletedTask; }) },
+                    _ => Task.CompletedTask);
+
+                scratch.Execute("INSERT dbo.outlook_user_activity_log VALUES (1)");
+                Assert.IsTrue(await RunPhase());
+                Assert.AreEqual(0, probes, "A new or already-due phase doesn't need a wipe probe.");
+                clock.Advance(TimeSpan.FromMinutes(30));
+                Assert.IsFalse(await RunPhase(), "No Teams rows does not mean the database was wiped.");
+                Assert.AreEqual(1, runs);
+                scratch.Execute("TRUNCATE TABLE dbo.outlook_user_activity_log");
+                Assert.IsTrue(await RunPhase(), "A truly wiped database bypasses even a recent stamp.");
+                Assert.AreEqual(2, runs);
+                Assert.AreEqual(2, probes);
+
+                foreach (var table in tables)
+                {
+                    scratch.Execute($"INSERT dbo.[{table}] VALUES (1)");
+                    Assert.IsTrue(await GraphImporter.HasAnyActivityDataAsync(db), table + " alone is sufficient evidence.");
+                    scratch.Execute($"TRUNCATE TABLE dbo.[{table}]");
+                }
+            }
+        }
+
+        [TestMethod]
         public async Task AFullWindowDownload_IsLoggedOncePerReport_WithItsReasonAndTheNumberOfDates()
         {
             // Reports with no completion stamp (no runtime state store, or a failed save) download the whole look-back window, 25 dates
