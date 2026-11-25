@@ -703,19 +703,19 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task AppInsightsImporter_ACursorThatCannotBeRead_FallsBackToWholeDays_AndDoesNotOverwriteIt()
+        public async Task AppInsightsImporter_AnUnreadableCursorStopsBeforeAnyFallbackWrites()
         {
-            // Writing "now" after a fallback read would skip whatever was ingested since the stored cursor for days before
-            // the newest stored hit, so the stored cursor is left for the next cycle.
             var h = ThreeDaysOfPageViews();
             h.Cursor = new InMemoryIngestionCursorStore(FixedNowUtc.AddHours(-3)) { ReadFailsWith = new InvalidOperationException("Fake storage outage") };
 
             var result = await h.RunAsync();
 
             Assert.AreEqual(AppInsightsReadMode.Bootstrap, result.Mode);
-            Assert.AreEqual(AppInsightsCycleOutcome.Degraded, result.Outcome);
+            Assert.AreEqual(AppInsightsCycleOutcome.Failed, result.Outcome);
             CollectionAssert.Contains(result.Reasons, "CursorReadFailed");
             Assert.AreEqual(0, h.Cursor.Writes);
+            Assert.AreEqual(0, h.Source.CountRangesRequested.Count);
+            Assert.AreEqual(0, h.Persistence.SavedPageViews.Count);
         }
 
         #endregion

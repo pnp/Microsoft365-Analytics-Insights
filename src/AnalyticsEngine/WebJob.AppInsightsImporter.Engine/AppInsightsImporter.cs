@@ -179,7 +179,6 @@ namespace WebJob.AppInsightsImporter.Engine
             DateTime? cursorUtc = null;
             DateTime? storedCursorUtc = null;
             DateTime? newestStoredHitAtCursorUtc = null;
-            var cursorReadFailed = false;
             AppInsightsReplayStart replayStartToSave = null;
             if (scanFromDateOverride.HasValue)
             {
@@ -203,13 +202,13 @@ namespace WebJob.AppInsightsImporter.Engine
                     }
                     catch (Exception ex) when (CanRecover(ex, cancellationToken))
                     {
-                        // The cursor is not written at the end of this cycle, so the next one resumes from the stored cursor
-                        // and nothing ingested since is skipped.
-                        cursorReadFailed = true;
-                        cursorUtc = null;
-                        result.Degrade("CursorReadFailed");
-                        _logger.LogWarning($"AppInsightsCursor: Outcome=ReadFailed; Store={_cursorStore.Description}; {ExceptionDescriber.Chain(ex)}. " +
-                            "Reading whole days from the newest stored hit this cycle, and leaving the stored cursor as it is.", ex);
+                        // A store outage is not a confirmed miss. Saving fallback hits could move the only bootstrap
+                        // or restore start past earlier, still-unmarked searches, even without writing the cursor.
+                        result.Mode = storedCursorUtc.HasValue ? AppInsightsReadMode.Incremental : AppInsightsReadMode.Bootstrap;
+                        result.Fail("CursorReadFailed");
+                        _logger.LogError($"AppInsightsCursor: Outcome=ReadFailed; {FailureDimensions(ex)}. " +
+                            "The cursor or its restore watermark could not be read. Nothing imported; retrying next cycle.");
+                        return result;
                     }
                 }
                 if (cursorUtc.HasValue && !newestHitTimestamp.HasValue)
@@ -233,7 +232,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
 
                 AppInsightsReplayStart replay = null;
-                if (_cursorStore != null && !cursorReadFailed)
+                if (_cursorStore != null)
                 {
                     try
                     {
@@ -268,7 +267,7 @@ namespace WebJob.AppInsightsImporter.Engine
                     }
                     range = new AppInsightsReadWindow(startDate.Date, nowUtc + AppInsightsIngestionCursorPolicy.FutureBound, null, nowUtc);
                 }
-                if (_cursorStore != null && !cursorReadFailed && (!cursorUtc.HasValue || cursorUtc != storedCursorUtc)
+                if (_cursorStore != null && (!cursorUtc.HasValue || cursorUtc != storedCursorUtc)
                     && (replay == null || replay.FromUtc != range.FromUtc || replay.EffectiveCursorUtc != cursorUtc))
                     replayStartToSave = new AppInsightsReplayStart(storedCursorUtc, range.FromUtc, cursorUtc);
             }
@@ -282,7 +281,7 @@ namespace WebJob.AppInsightsImporter.Engine
             jobTimer.Start();
 
             AppInsightsSearchRetries searchRetries = null;
-            if (!cursorReadFailed && result.Mode != AppInsightsReadMode.Backfill)
+            if (result.Mode != AppInsightsReadMode.Backfill)
             {
                 try
                 {

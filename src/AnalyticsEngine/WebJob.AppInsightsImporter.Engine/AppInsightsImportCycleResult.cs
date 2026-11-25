@@ -18,7 +18,7 @@ namespace WebJob.AppInsightsImporter.Engine
         /// </summary>
         Degraded,
 
-        /// <summary>The cycle stopped early. The day it stopped at is retried next cycle; the cursor did not move.</summary>
+        /// <summary>The cycle could not start safely or stopped partway through. The next cycle retries; the cursor did not move.</summary>
         Failed
     }
 

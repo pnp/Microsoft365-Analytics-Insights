@@ -373,6 +373,8 @@ namespace Tests.UnitTests
 
             public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default)
             {
+                if (key.StartsWith(KeyValueIngestionCursorStore.KeyPrefix + ":", StringComparison.Ordinal)) AtBoundary?.Invoke("cursor-read", cancellationToken);
+                if (key.StartsWith(KeyValueIngestionCursorStore.NewestHitKeyPrefix + ":", StringComparison.Ordinal)) AtBoundary?.Invoke("newest-read", cancellationToken);
                 if (key.StartsWith("IngestionCursorSearchRetries:", StringComparison.Ordinal)) AtBoundary?.Invoke("marker-read", cancellationToken);
                 if (key.StartsWith("IngestionCursorReplayStart:", StringComparison.Ordinal)) AtBoundary?.Invoke("replay-read", cancellationToken);
                 return _state.GetStringAsync(key, cancellationToken);
@@ -411,6 +413,40 @@ namespace Tests.UnitTests
             state.AtBoundary = null;
             Assert.AreEqual(clock.UtcNow, (await RunCycle(clock, source, state)).CursorAdvancedToUtc);
             Assert.AreEqual(1, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"));
+        }
+
+        [DataTestMethod]
+        [DataRow("cursor-read")]
+        [DataRow("newest-read")]
+        public async Task UnreadableCursor_DoesNotLetFallbackSqlHideAnOlderSearch(string fault)
+        {
+            var state = new CheckpointStore();
+            var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
+            if (fault == "newest-read") await cursor.WriteAsync(Start.AddMinutes(20), Start);
+            var source = new FakeAppInsightsSourceLoader
+            {
+                PageViewAt = t => Page(t, t == Start ? "seed" : "delayed"),
+                EventAt = t => Search(t, "delayed", "Example", Reader)
+            };
+            var clock = new FixedClock(Start.AddHours(1));
+            source.ExtraCustomEvents.Add((Start.AddDays(-1), Start.AddMinutes(-2)));
+            source.ExtraPageViews.Add((Start, Start));
+            state.AtBoundary = (op, _) => { if (op == fault) throw new IOException("synthetic checkpoint outage"); };
+            var outage = await RunCycle(clock, source, state);
+            CollectionAssert.Contains(outage.Reasons, "CursorReadFailed");
+            Assert.AreEqual(AppInsightsCycleOutcome.Failed, outage.Outcome);
+            Assert.IsNull(outage.CursorAdvancedToUtc);
+            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"));
+
+            state.AtBoundary = null;
+            var replay = await RunCycle(clock, source, state);
+            Assert.AreEqual(1, replay.PendingSearchHours, "An unreadable cursor must not let fallback SQL move the next run past the search.");
+            source.ExtraPageViews.Add((clock.UtcNow, clock.UtcNow));
+            clock.Advance(TimeSpan.FromMinutes(31));
+            var recovered = await RunCycle(clock, source, state);
+            Assert.AreEqual(1, recovered.ReconciledSearches);
+            Assert.AreEqual(0, recovered.PendingSearchHours);
+            Assert.AreEqual((1L, 1L), SearchKpis());
         }
 
         [DataTestMethod]
@@ -453,6 +489,9 @@ namespace Tests.UnitTests
             }
             Assert.AreEqual(previousCursor, await cursor.ReadAsync());
             Assert.AreEqual(0, (await cursor.ReadSearchRetriesAsync()).Count);
+            var anchor = JObject.Parse(await state.GetStringAsync("IngestionCursorReplayStart:contoso-test"));
+            Assert.IsTrue(anchor.Properties().All(p => p.Value.Type == JTokenType.Date || p.Value.Type == JTokenType.Null),
+                "A pinned start must never contain searches, user/session identities or other telemetry.");
             Assert.AreEqual(mode == "rewind" ? 2 : 1, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"), "The later page view is already committed.");
             state.AtBoundary = null;
             source.ExtraPageViews.Add((Start.AddHours(1), Start.AddHours(1)));
