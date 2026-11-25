@@ -21,9 +21,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
     /// </summary>
     public class ProfilingScriptsLocateTask : InstallTaskInAzResourceGroup<RunbookFileLocalLocations>
     {
-        public ProfilingScriptsLocateTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags)
+        private readonly InstallPackageWorkspace _workspace;
+
+        public ProfilingScriptsLocateTask(TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, InstallPackageWorkspace workspace)
             : base(config, logger, azureLocation, tags)
         {
+            _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
         }
 
         public override Task<RunbookFileLocalLocations> ExecuteTaskReturnResult(object contextArg)
@@ -62,7 +65,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             DirectoryInfo zipContentsDir;
             try
             {
-                zipContentsDir = ZipFileTasks.Unzip(localStorageBlobInfo, _logger, CancellationToken);
+                zipContentsDir = _workspace.Unzip(localStorageBlobInfo, CancellationToken);
             }
             catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {

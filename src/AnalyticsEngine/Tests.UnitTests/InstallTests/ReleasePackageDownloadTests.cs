@@ -8,6 +8,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -35,13 +36,19 @@ namespace Tests.UnitTests.InstallTests
         };
 
         string _directory;
+        InstallPackageWorkspace _workspace;
 
         [TestInitialize]
-        public void CreateDirectory() => _directory = Path.Combine(Path.GetTempPath(), "contoso-release-" + Guid.NewGuid().ToString("N"));
+        public void CreateDirectory()
+        {
+            _directory = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            _workspace = new InstallPackageWorkspace(new CapturingLogger(), _directory);
+        }
 
         [TestCleanup]
         public void DeleteDirectory()
         {
+            _workspace.Dispose();
             if (Directory.Exists(_directory)) Directory.Delete(_directory, true);
         }
 
@@ -54,10 +61,108 @@ namespace Tests.UnitTests.InstallTests
             var result = await NewTask(github, new CapturingLogger()).ExecuteTaskReturnResult(null);
 
             Assert.IsTrue(result.IsValid);
+            foreach (var component in result.Components.Values)
+            {
+                var package = Path.GetFileName(component.FileLocation);
+                CollectionAssert.AreEqual(FakeGitHub.Content(package), File.ReadAllBytes(component.FileLocation), package);
+            }
+        }
+
+        [TestMethod]
+        public async Task OverlappingInstalls_KeepTheirOwnVerifiedZipsExtractedFilesAndUpload()
+        {
+            var first = await NewTask(ReleaseWithZips("contoso-a"), new CapturingLogger()).ExecuteTaskReturnResult(null);
+            var firstControl = first.GetSolutionComponentLocation(SoftwareComponent.ControlPanel);
+            var firstExtraction = _workspace.Unzip(firstControl, CancellationToken.None);
+            var firstUpload = InstallAppServiceContentsTask.BuildDeploymentPackage(first, _workspace);
+            var scripts = await new ProfilingScriptsLocateTask(TaskConfig.NoConfig, new CapturingLogger(),
+                Azure.Core.AzureLocation.WestEurope, new Dictionary<string, string>(), _workspace).ExecuteTaskReturnResult(first);
+
+            string secondRoot;
+            using (var secondWorkspace = new InstallPackageWorkspace(new CapturingLogger(), _directory))
+            {
+                secondRoot = secondWorkspace.RootPath;
+                var second = await NewTask(ReleaseWithZips("contoso-b"), new CapturingLogger(), secondWorkspace).ExecuteTaskReturnResult(null);
+                var secondControl = second.GetSolutionComponentLocation(SoftwareComponent.ControlPanel);
+                var secondExtraction = secondWorkspace.Unzip(secondControl, CancellationToken.None);
+                var secondUpload = InstallAppServiceContentsTask.BuildDeploymentPackage(second, secondWorkspace);
+
+                // Kudu opens the file by path after assembly (and reopens it if authentication falls back).
+                Assert.AreEqual("contoso-b", ReadEntry(secondUpload.FullName, "release.txt"));
+                Assert.AreEqual("contoso-a", ReadEntry(firstUpload.FullName, "release.txt"));
+                Assert.AreEqual("contoso-a", ReadEntry(firstUpload.FullName, "app_data/jobs/continuous/Office365ActivityImporter/release.txt"));
+                Assert.AreEqual("contoso-a", ReadEntry(firstUpload.FullName, "app_data/jobs/continuous/AppInsightsImporter/release.txt"));
+                Assert.AreEqual("contoso-b", File.ReadAllText(Path.Combine(secondExtraction.FullName, "release.txt")));
+            }
+            Assert.IsFalse(Directory.Exists(secondRoot));
+            Assert.AreEqual("contoso-a", ReadEntry(firstControl.FileLocation, "release.txt"));
+            Assert.AreEqual("contoso-a", File.ReadAllText(Path.Combine(firstExtraction.FullName, "release.txt")));
+            Assert.AreEqual("contoso-a", File.ReadAllText(scripts.WeeklyPS), "The later runbook upload opens the script by path.");
+            Assert.AreEqual("contoso-a", ReadEntry(firstUpload.FullName, "release.txt"));
+        }
+
+        [TestMethod]
+        public async Task FailedLocalOverrideReplayLeavesOriginalsAndEarlierRunUnchanged()
+        {
+            var inputs = new LocalStorageInstallSourceInfo();
+            foreach (var component in new[] { SoftwareComponent.WebSite, SoftwareComponent.WebJobActivity })
+            {
+                // Operators need not use the release's filenames, or a different basename for each ZIP.
+                var dir = Directory.CreateDirectory(Path.Combine(_directory, component.ToString()));
+                var path = Path.Combine(dir.FullName, "override.zip");
+                using (var zip = ZipFile.Open(path, ZipArchiveMode.Create))
+                using (var writer = new StreamWriter(zip.CreateEntry("release.txt").Open()))
+                    writer.Write(component.ToString());
+                inputs.GetSolutionComponentLocation(component).FileLocation = path;
+            }
+            var first = await _workspace.StageLocalPackagesAsync(inputs, CancellationToken.None);
+            var original = inputs.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation;
+            File.WriteAllText(original, "Contoso incomplete ZIP");
+            string failedRoot;
+            using (var secondWorkspace = new InstallPackageWorkspace(new CapturingLogger(), _directory))
+            {
+                failedRoot = secondWorkspace.RootPath;
+                var second = await secondWorkspace.StageLocalPackagesAsync(inputs, CancellationToken.None);
+                Assert.ThrowsException<InvalidDataException>(() =>
+                    secondWorkspace.Unzip(second.GetSolutionComponentLocation(SoftwareComponent.WebSite), CancellationToken.None));
+            }
+            Assert.IsFalse(Directory.Exists(failedRoot));
+            Assert.AreEqual("Contoso incomplete ZIP", File.ReadAllText(original));
+            foreach (var component in inputs.Components.Keys)
+                Assert.AreEqual(component.ToString(), ReadEntry(first.GetSolutionComponentLocation(component).FileLocation, "release.txt"));
+        }
+
+        private static FakeGitHub ReleaseWithZips(string tag)
+        {
+            var github = new FakeGitHub { Tag = tag };
             foreach (var package in Packages)
             {
-                CollectionAssert.AreEqual(FakeGitHub.Content(package), File.ReadAllBytes(Path.Combine(_directory, package)), package);
+                using (var bytes = new MemoryStream())
+                {
+                    using (var zip = new ZipArchive(bytes, ZipArchiveMode.Create, leaveOpen: true))
+                    {
+                        using (var writer = new StreamWriter(zip.CreateEntry(package == "AppInsightsImporter.zip" ? "wrapper/release.txt" : "release.txt").Open()))
+                            writer.Write(tag);
+                        if (package == "Office365ActivityImporter.zip")
+                        {
+                            foreach (var script in new[] { "Weekly.ps1", "Aggregation_Status.ps1", "Database_Maintenance.ps1" })
+                                using (var writer = new StreamWriter(zip.CreateEntry("AutomationPS/ProfilingJobs/" + script).Open()))
+                                    writer.Write(tag);
+                        }
+                    }
+                    var contents = bytes.ToArray();
+                    github.Manifest[package] = FakeGitHub.Sha256(contents);
+                    github.Behaviour[package] = ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(contents) });
+                }
             }
+            return github;
+        }
+
+        private static string ReadEntry(string zipPath, string name)
+        {
+            using (var zip = ZipFile.OpenRead(zipPath))
+            using (var reader = new StreamReader(zip.GetEntry(name).Open()))
+                return reader.ReadToEnd();
         }
 
         [TestMethod]
@@ -77,7 +182,7 @@ namespace Tests.UnitTests.InstallTests
             {
                 Assert.IsFalse(ex.Message.Contains(package), package + " downloaded, so it must not be blamed.");
             }
-            Assert.IsFalse(File.Exists(Path.Combine(_directory, "ControlPanelApp.zip")));
+            Assert.AreEqual(0, Directory.GetFiles(_workspace.RootPath, "ControlPanelApp.zip", SearchOption.AllDirectories).Length);
         }
 
         /// <summary>
@@ -99,7 +204,7 @@ namespace Tests.UnitTests.InstallTests
             var ex = await Assert.ThrowsExceptionAsync<UnexpectedInstallException>(() => task.ExecuteTaskReturnResult(null));
 
             StringAssert.Contains(ex.Message, "'Website.zip' timed out: no data arrived for 1 second (0.1 MB received)");
-            Assert.IsFalse(File.Exists(Path.Combine(_directory, "Website.zip")), "A truncated package must not be left behind.");
+            Assert.AreEqual(0, Directory.GetFiles(_workspace.RootPath, "Website.zip", SearchOption.AllDirectories).Length, "A truncated package must not be left behind.");
         }
 
         /// <summary>
@@ -133,7 +238,7 @@ namespace Tests.UnitTests.InstallTests
             // so a download held for exactly trickleFor can measure a fraction of a tick less.
             var timerSlack = TimeSpan.FromMilliseconds(100);
             Assert.IsTrue(timer.Elapsed >= trickleFor - timerSlack, $"The download took {timer.Elapsed}, so it didn't trickle for {trickleFor}.");
-            CollectionAssert.AreEqual(FakeGitHub.Content(slowPackage), File.ReadAllBytes(Path.Combine(_directory, slowPackage)));
+            CollectionAssert.AreEqual(FakeGitHub.Content(slowPackage), File.ReadAllBytes(result.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation));
         }
 
         [TestMethod]
@@ -258,7 +363,7 @@ namespace Tests.UnitTests.InstallTests
             StringAssert.Contains(ex.Message, "'ControlPanelApp.zip' is not the file the release build published");
             StringAssert.Contains(ex.Message, github.Manifest["ControlPanelApp.zip"]);
             Assert.IsFalse(ex.Message.Contains("'Website.zip'"), "The packages that match must not be blamed.");
-            Assert.IsFalse(File.Exists(Path.Combine(_directory, "ControlPanelApp.zip")), "An unverified package must not be left where it could be run.");
+            Assert.AreEqual(0, Directory.GetFiles(_workspace.RootPath, "ControlPanelApp.zip", SearchOption.AllDirectories).Length, "An unverified package must not be left where it could be run.");
         }
 
         [DataTestMethod]
@@ -280,14 +385,11 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual(0, github.PackageRequests, "Nothing that can't be verified should be downloaded.");
         }
 
-        LatestStableSoftwarePackageDownloadTask NewTask(FakeGitHub github, ILogger logger)
+        LatestStableSoftwarePackageDownloadTask NewTask(FakeGitHub github, ILogger logger, InstallPackageWorkspace workspace = null)
         {
             var config = TaskConfig.GetConfigForPropAndVal(LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoOwner, Owner)
                 .AddSetting(LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoName, Repo);
-            return new LatestStableSoftwarePackageDownloadTask(config, logger, LatestStableSoftwarePackageDownloadTask.CreateHttpClient(github))
-            {
-                DownloadDirectory = _directory
-            };
+            return new LatestStableSoftwarePackageDownloadTask(config, logger, workspace ?? _workspace, LatestStableSoftwarePackageDownloadTask.CreateHttpClient(github));
         }
 
         /// <summary>GitHub's latest-release API and its asset downloads, each package behaving as a test sets it.</summary>
@@ -302,6 +404,7 @@ namespace Tests.UnitTests.InstallTests
             public Dictionary<string, string> Manifest { get; set; } = Packages.ToDictionary(p => p, p => Sha256(Content(p)));
 
             public bool ReleaseHangs { get; set; }
+            public string Tag { get; set; } = "1859";
 
             public int PackageRequests => _requested.Count;
 
@@ -334,8 +437,8 @@ namespace Tests.UnitTests.InstallTests
                     if (ReleaseHangs) return await Hang(cancellationToken);
                     var names = Manifest == null ? Packages : Packages.Concat(new[] { "release-manifest.json" });
                     var assets = string.Join(",", names.Select(p =>
-                        $"{{\"name\":\"{p}\",\"browser_download_url\":\"https://github.com/{Owner}/{Repo}/releases/download/1859/{p}\"}}"));
-                    return Json($"{{\"tag_name\":\"1859\",\"assets\":[{assets}]}}");
+                        $"{{\"name\":\"{p}\",\"browser_download_url\":\"https://github.com/{Owner}/{Repo}/releases/download/{Tag}/{p}\"}}"));
+                    return Json($"{{\"tag_name\":\"{Tag}\",\"assets\":[{assets}]}}");
                 }
 
                 var package = Path.GetFileName(request.RequestUri.AbsolutePath);

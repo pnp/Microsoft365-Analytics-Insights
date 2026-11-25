@@ -19,13 +19,13 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class RunbooksInstallJob : InstallJobInContainerJob<ResourceGroupResource>
     {
         public RunbooksInstallJob(ILogger logger, SolutionInstallConfig config, SubscriptionResource subscription,
-            AutomationAccountResource automationAccount)
+            AutomationAccountResource automationAccount, InstallPackageWorkspace workspace)
             : base(logger, new ResourceGroupContainerLoader(TaskConfig.GetConfigForName(config.ResourceGroupName), logger, subscription, config.AzureLocation, config.Tags.ToDictionary()))
         {
             var tagsDic = config.Tags.ToDictionary();
 
             // Locate the profiling PS files in the unzipped webjob package on the installer host.
-            var profilingScriptsLocate = new ProfilingScriptsLocateTask(TaskConfig.NoConfig, logger, config.AzureLocation, tagsDic);
+            var profilingScriptsLocate = new ProfilingScriptsLocateTask(TaskConfig.NoConfig, logger, config.AzureLocation, tagsDic, workspace);
 
             // Publish the runbooks straight into the Automation account via the draft content API.
             var commonConfig = TaskConfig.GetConfigForPropAndVal(RunbookUploadTask.CONFIG_PARAM_AUTOMATION_ACCOUNT_NAME, automationAccount.Data.Name);

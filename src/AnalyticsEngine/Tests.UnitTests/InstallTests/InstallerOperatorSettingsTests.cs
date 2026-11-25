@@ -141,6 +141,95 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        [TestMethod]
+        public async Task AppService_ConnectionStringReplaysPreserveOperatorPairsAndRefreshOnlyOwnedNames()
+        {
+            const string config = Site + "/config/connectionstrings";
+            const string list = config + "/list";
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.2");
+                var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
+                var operatorPair = new JObject { ["type"] = "PostgreSQL", ["value"] = "Contoso; preserve exactly " };
+                var otherBus = new JObject { ["type"] = "ServiceBus", ["value"] = "Contoso operator bus" };
+                arm.Add(config, new JObject
+                {
+                    ["name"] = "connectionstrings", ["type"] = "Microsoft.Web/sites/config",
+                    ["properties"] = new JObject
+                    {
+                        ["ContosoReporting"] = operatorPair, ["ServiceBusBackup"] = otherBus,
+                        ["sToRaGe"] = otherBus, ["rEdIs"] = otherBus, ["sErViCeBuS"] = otherBus
+                    }
+                });
+                arm.PostResponses[list] = arm.Resource(config);
+
+                foreach (var bus in new[] { "Contoso managed bus", null, null })
+                {
+                    await ConfigureAzureComponentsTasks.ConfigureConnectionStringsAsync(site, "Contoso SQL", "Contoso storage", bus, CancellationToken.None);
+                    var stored = arm.Resource(config);
+                    var properties = (JObject)stored["properties"];
+                    Assert.IsTrue(JToken.DeepEquals(operatorPair, properties["ContosoReporting"]));
+                    Assert.IsTrue(JToken.DeepEquals(otherBus, properties["ServiceBusBackup"]));
+                    Assert.AreEqual("SQLAzure", (string)properties["SPOInsightsEntities"]["type"]);
+                    Assert.AreEqual("Contoso SQL", (string)properties["SPOInsightsEntities"]["value"]);
+                    foreach (var name in new[] { "Storage", "AzureWebJobsStorage", "AzureWebJobsDashboard" })
+                    {
+                        Assert.AreEqual("Custom", (string)properties[name]["type"]);
+                        Assert.AreEqual("Contoso storage", (string)properties[name]["value"]);
+                    }
+                    Assert.IsNull(properties["sToRaGe"]);
+                    Assert.IsNull(properties["sErViCeBuS"]);
+                    Assert.IsNull(properties["rEdIs"]);
+                    if (bus == null)
+                        Assert.IsNull(properties["ServiceBus"]);
+                    else
+                        Assert.AreEqual(bus, (string)properties["ServiceBus"]["value"]);
+
+                    // The next run must also preserve an operator edit made since the previous one.
+                    operatorPair["value"] = "Contoso revised";
+                    properties["ContosoReporting"] = operatorPair.DeepClone();
+                    arm.PostResponses[list] = stored;
+                }
+                Assert.AreEqual(3, arm.Requests.Count(r => r.Method == "POST" && r.Path == list));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("empty", true)]
+        [DataRow("denied", false)]
+        [DataRow("missing properties", false)]
+        [DataRow("incomplete pair", false)]
+        public async Task AppService_ConnectionStringReplacementRequiresACompleteRead(string response, bool writable)
+        {
+            const string config = Site + "/config/connectionstrings";
+            const string list = config + "/list";
+            const string privateValue = "Contoso do not log";
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.2");
+                var site = (await arm.Group.GetWebSiteAsync("contoso-web")).Value;
+                if (response == "empty")
+                    arm.PostResponses[list] = new JObject { ["properties"] = new JObject() };
+                if (response == "denied")
+                {
+                    arm.PostStatuses[list] = HttpStatusCode.Forbidden;
+                    arm.PostResponses[list] = new JObject { ["error"] = new JObject { ["code"] = "Forbidden", ["message"] = privateValue } };
+                }
+                if (response == "incomplete pair")
+                    arm.PostResponses[list] = new JObject { ["properties"] = new JObject { ["Contoso"] = new JObject { ["value"] = privateValue } } };
+
+                var update = ConfigureAzureComponentsTasks.ConfigureConnectionStringsAsync(site, "Contoso SQL", "Contoso storage", null, CancellationToken.None);
+                if (writable) await update;
+                else
+                {
+                    var failure = await Assert.ThrowsExceptionAsync<InvalidOperationException>(() => update);
+                    StringAssert.Contains(failure.Message, "No replacement was sent");
+                    Assert.IsFalse(failure.ToString().Contains(privateValue), "An SDK response body must not reach the installer log.");
+                }
+                Assert.AreEqual(writable ? 1 : 0, arm.Requests.Count(r => r.Method == "PUT" && r.Path == config));
+            }
+        }
+
         // ---------------------------------------------------------------- Kudu without SCM basic auth (R11-5)
 
         [TestMethod]
@@ -567,6 +656,7 @@ namespace Tests.UnitTests.InstallTests
             private readonly HttpClient _http;
             public readonly HashSet<string> KnownLists = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public readonly Dictionary<string, JObject> PostResponses = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
+            public readonly Dictionary<string, HttpStatusCode> PostStatuses = new Dictionary<string, HttpStatusCode>(StringComparer.OrdinalIgnoreCase);
             public readonly Dictionary<string, string> PostText = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             public readonly Dictionary<string, JArray> InheritedAssignments = new Dictionary<string, JArray>(StringComparer.OrdinalIgnoreCase);
             public readonly List<(string Method, string Path, JObject Body)> Requests = new List<(string, string, JObject)>();
@@ -715,7 +805,8 @@ namespace Tests.UnitTests.InstallTests
                 if (request.Method.Method == "POST")
                 {
                     if (PostText.TryGetValue(path, out var xml)) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(xml, Encoding.UTF8, "application/xml") };
-                    return Json(HttpStatusCode.OK, PostResponses.TryGetValue(path, out var posted) ? posted : new JObject());
+                    return Json(PostStatuses.TryGetValue(path, out var status) ? status : HttpStatusCode.OK,
+                        PostResponses.TryGetValue(path, out var posted) ? posted : new JObject());
                 }
                 if (request.Method == HttpMethod.Delete)
                 {

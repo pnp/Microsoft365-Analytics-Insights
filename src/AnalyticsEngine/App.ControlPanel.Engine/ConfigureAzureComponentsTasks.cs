@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -51,9 +52,19 @@ namespace App.ControlPanel.Engine
             CancellationToken.ThrowIfCancellationRequested();
             await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, cognitiveServicesInfo, foundryPromptInfo, appInsights, serviceBusConnectionString, keyVault);
 
+            using (var workspace = new InstallPackageWorkspace(_logger))
+            {
+                await InstallReleaseAsync(workspace, webApp, dbInfo, automationAccount, appInsights, subscription, sqlServer, sqlAuthDecision, installerObjectId);
+            }
+        }
+
+        private async Task InstallReleaseAsync(InstallPackageWorkspace workspace, WebSiteResource webApp, DatabasePaaSInfo dbInfo,
+            AutomationAccountResource automationAccount, AppInsightsInfo appInsights, SubscriptionResource subscription,
+            SqlServerResource sqlServer, SqlAuthDecision sqlAuthDecision, Guid installerObjectId)
+        {
             // Download/extract the release while the App Service is still available. Kudu/SCM
             // rejects deployments while the site resource is stopped.
-            var solutionSources = await GetSolutionFromSource(subscription, automationAccount, downloadReleaseOnly: true);
+            var solutionSources = await GetSolutionFromSource(workspace, subscription, automationAccount, downloadReleaseOnly: true);
 
             // Prove SQL is reachable BEFORE taking the site offline, self-healing a stale firewall rule if
             // that is what is blocking us. Previously the site was stopped first and the connectivity test ran
@@ -92,7 +103,7 @@ namespace App.ControlPanel.Engine
             }
 
             // Find downloaded installer app
-            var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel));
+            var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel), workspace);
 
             var sqlInstallerTasks = new SqlInstallerTasks(Config, installerExeFile, dbInfo, _logger, _installedByUsername,
                 async (connectionString) => await VerifySqlWithFirewallSelfHeal(connectionString, repairFirewall));
@@ -109,7 +120,7 @@ namespace App.ControlPanel.Engine
                 // Recovery must finish even when the operation was cancelled after stopping the site.
                 async () => { await webApp.StartAsync(); },
                 () => sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLog),
-                () => InstallSolutionContent(solutionSources, subscription, automationAccount), _logger, CancellationToken,
+                () => InstallSolutionContent(solutionSources, workspace, subscription, automationAccount), _logger, CancellationToken,
                 () => sqlInstallerTasks.SchemaUpgradeDeferred,
                 () => sqlInstallerTasks.CheckDownloadedBuildBeforeUpgradeAsync());
 
@@ -123,7 +134,7 @@ namespace App.ControlPanel.Engine
 
                     var spTasks = new SharePointWebComponentsInstallJob(Config, _logger, webApp.Data.DefaultHostName);
                     spTasks.CancellationToken = CancellationToken;
-                    await spTasks.InstallAITracker(this.Config.SharePointConfig, aiTrackerDownload, appInsights.ConnectionString);
+                    await spTasks.InstallAITracker(this.Config.SharePointConfig, aiTrackerDownload, appInsights.ConnectionString, workspace);
                 }
                 else
                 {
@@ -608,7 +619,7 @@ namespace App.ControlPanel.Engine
             };
         }
 
-        FileInfo GetInstallerExe(LocalStorageBlobInfo localStorageBlobInfo)
+        FileInfo GetInstallerExe(LocalStorageBlobInfo localStorageBlobInfo, InstallPackageWorkspace workspace)
         {
             CancellationToken.ThrowIfCancellationRequested();
             // Get control-panel
@@ -616,7 +627,7 @@ namespace App.ControlPanel.Engine
             DirectoryInfo zipContentsDirControlPanel = null;
             try
             {
-                zipContentsDirControlPanel = ZipFileTasks.Unzip(localStorageBlobInfo, _logger, CancellationToken);
+                zipContentsDirControlPanel = workspace.Unzip(localStorageBlobInfo, CancellationToken);
             }
             catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
@@ -639,6 +650,7 @@ namespace App.ControlPanel.Engine
         }
 
         async Task<LocalStorageInstallSourceInfo> GetSolutionFromSource(
+            InstallPackageWorkspace workspace,
             SubscriptionResource subscription,
             AutomationAccountResource automationAccount,
             bool downloadReleaseOnly)
@@ -647,12 +659,13 @@ namespace App.ControlPanel.Engine
             if (this.Config.DownloadLatestStable)
             {
                 // Download webjobs from blob storage. Optionally install.
-                appServiceContentInstallJob = new DownloadLatestAppServiceContentInstallJob(_logger, subscription, _softwareConfig, _proxyConfig, this.Config, downloadReleaseOnly, automationAccount);
+                appServiceContentInstallJob = new DownloadLatestAppServiceContentInstallJob(_logger, subscription, _softwareConfig, _proxyConfig, this.Config, downloadReleaseOnly, automationAccount, workspace);
             }
             else
             {
                 // Use local sources. Optionally install.
-                appServiceContentInstallJob = new UseLocalAppServiceContentInstallJob(_logger, subscription, this.Config.LocalSourceOverride, _proxyConfig, this.Config, downloadReleaseOnly, automationAccount);
+                var staged = await workspace.StageLocalPackagesAsync(this.Config.LocalSourceOverride, CancellationToken);
+                appServiceContentInstallJob = new UseLocalAppServiceContentInstallJob(_logger, subscription, staged, _proxyConfig, this.Config, downloadReleaseOnly, automationAccount, workspace);
             }
 
             appServiceContentInstallJob.CancellationToken = CancellationToken;
@@ -663,6 +676,7 @@ namespace App.ControlPanel.Engine
 
         async Task InstallSolutionContent(
             LocalStorageInstallSourceInfo solutionSources,
+            InstallPackageWorkspace workspace,
             SubscriptionResource subscription,
             AutomationAccountResource automationAccount)
         {
@@ -673,7 +687,8 @@ namespace App.ControlPanel.Engine
                 _proxyConfig,
                 this.Config,
                 downloadReleaseOnly: false,
-                automationAccount: automationAccount);
+                automationAccount: automationAccount,
+                workspace: workspace);
             installJob.CancellationToken = CancellationToken;
             await installJob.Install();
         }
@@ -754,18 +769,9 @@ namespace App.ControlPanel.Engine
 
             // Connection strings
             var storageInfo = new AzStorageConnectionInfo(storage);
-            var connectionStrings = new ConnectionStringDictionary();
-            connectionStrings.Properties.Add("SPOInsightsEntities", new ConnStringValueTypePair(backendInfo.ConnectionString, ConnectionStringType.SqlAzure));
-            connectionStrings.Properties.Add("AzureWebJobsDashboard", new ConnStringValueTypePair(storageInfo.StorageConnectionString, ConnectionStringType.Custom));
-            connectionStrings.Properties.Add("AzureWebJobsStorage", new ConnStringValueTypePair(storageInfo.StorageConnectionString, ConnectionStringType.Custom));
-            connectionStrings.Properties.Add("Storage", new ConnStringValueTypePair(storageInfo.StorageConnectionString, ConnectionStringType.Custom));
-            if (!string.IsNullOrWhiteSpace(serviceBusConnectionString))
+            if (string.IsNullOrWhiteSpace(serviceBusConnectionString))
             {
-                connectionStrings.Properties.Add("ServiceBus", new ConnStringValueTypePair(serviceBusConnectionString, ConnectionStringType.Custom));
-            }
-            else
-            {
-                _logger.LogInformation("Service Bus is disabled; skipping 'ServiceBus' connection-string on the App Service.");
+                _logger.LogInformation("Service Bus is disabled; the App Service will not have a 'ServiceBus' connection string.");
             }
             var siteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku);
             try
@@ -779,11 +785,55 @@ namespace App.ControlPanel.Engine
             }
             await PreserveUnmanagedAppSettingsAsync(webApp, appSettings);
             await webApp.UpdateApplicationSettingsAsync(appSettings, CancellationToken);
-            // The App Service connection string PUT replaces the collection with the dictionary supplied
-            // here. Obsolete installer-managed connection strings are deliberately absent on upgrades.
-            await webApp.UpdateConnectionStringsAsync(connectionStrings, CancellationToken);
+            await ConfigureConnectionStringsAsync(webApp, backendInfo.ConnectionString, storageInfo.StorageConnectionString, serviceBusConnectionString, CancellationToken);
 
             _logger.LogInformation("App Service connection-strings & app-settings configured");
+        }
+
+        internal static async Task ConfigureConnectionStringsAsync(WebSiteResource webApp, string sql, string storage, string serviceBus, CancellationToken cancellationToken)
+        {
+            var replacement = new ConnectionStringDictionary();
+            replacement.Properties.Add("SPOInsightsEntities", new ConnStringValueTypePair(sql, ConnectionStringType.SqlAzure));
+            replacement.Properties.Add("AzureWebJobsDashboard", new ConnStringValueTypePair(storage, ConnectionStringType.Custom));
+            replacement.Properties.Add("AzureWebJobsStorage", new ConnStringValueTypePair(storage, ConnectionStringType.Custom));
+            replacement.Properties.Add("Storage", new ConnStringValueTypePair(storage, ConnectionStringType.Custom));
+            if (!string.IsNullOrWhiteSpace(serviceBus))
+                replacement.Properties.Add("ServiceBus", new ConnStringValueTypePair(serviceBus, ConnectionStringType.Custom));
+
+            // The PUT replaces every string. Redis was retired; ServiceBus is still ours even when disabled.
+            var owned = new HashSet<string>(replacement.Properties.Keys, StringComparer.OrdinalIgnoreCase) { "Redis", "ServiceBus" };
+            var readyToWrite = false;
+            try
+            {
+                var listed = await webApp.GetConnectionStringsAsync(cancellationToken);
+                // The SDK models missing/null properties as an empty dictionary, and a missing type as the
+                // first enum value. Neither is a reliable snapshot to PUT back. Explicitly empty {} is valid.
+                using (var body = JsonDocument.Parse(listed.GetRawResponse().Content.ToMemory()))
+                {
+                    var strings = body.RootElement.GetProperty("properties");
+                    foreach (var entry in strings.EnumerateObject())
+                    {
+                        if (owned.Contains(entry.Name)) continue;
+                        if (entry.Value.GetProperty("type").ValueKind != JsonValueKind.String ||
+                            entry.Value.GetProperty("value").ValueKind != JsonValueKind.String)
+                            throw new InvalidDataException();
+                        replacement.Properties.Add(entry.Name, listed.Value.Properties[entry.Name]);
+                    }
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                readyToWrite = true;
+                await webApp.UpdateConnectionStringsAsync(replacement, cancellationToken);
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                // SDK exceptions can contain the response body. The installer logs inner exceptions too.
+                var reason = ex is RequestFailedException azureError ? $"HTTP {azureError.Status}" : ex.GetType().Name;
+                throw new InvalidOperationException(readyToWrite
+                    ? $"Could not update the App Service connection strings ({reason})."
+                    : $"Could not read the existing App Service connection strings ({reason}). No replacement was sent; check the installer's access and retry.");
+            }
         }
 
         internal const string CopilotCostConnectionSetupMessage =

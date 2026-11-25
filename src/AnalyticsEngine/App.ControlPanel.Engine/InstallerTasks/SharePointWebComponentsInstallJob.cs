@@ -23,10 +23,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _defaultHostName = defaultHostName;
         }
 
-        internal async Task InstallAITracker(SharePointInstallConfig sharePointInstallConfig, LocalStorageBlobInfo aiTrackerZipFile, string appInsightsConnectionString)
+        internal async Task InstallAITracker(SharePointInstallConfig sharePointInstallConfig, LocalStorageBlobInfo aiTrackerZipFile, string appInsightsConnectionString,
+            InstallPackageWorkspace workspace)
         {
             Console.WriteLine("Extracting AITracker from downloaded zip...");
-            var zipContentsDir = ZipFileTasks.Unzip(aiTrackerZipFile, _logger, CancellationToken);
+            var zipContentsDir = workspace.Unzip(aiTrackerZipFile, CancellationToken);
 
             // Find AI tracker
             FileInfo aiTrackerTempFile = null, aiTrackerSPFx = null;
