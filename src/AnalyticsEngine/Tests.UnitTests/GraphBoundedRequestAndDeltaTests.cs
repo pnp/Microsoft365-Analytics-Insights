@@ -5,6 +5,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -14,6 +15,7 @@ using System.Runtime.Serialization;
 using WebJob.Office365ActivityImporter.Engine.Graph;
 using Microsoft.Kiota.Abstractions;
 using Microsoft.Kiota.Abstractions.Authentication;
+using Microsoft.Kiota.Http.HttpClientLibrary.Middleware.Options;
 using ActivityImporter.Engine.ActivityAPI.Copilot;
 
 namespace Tests.UnitTests
@@ -97,6 +99,135 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, terminal.Attempts, "Non-GET SDK calls must keep a request deadline but must not be retried by the local timeout policy.");
         }
 
+        [DataTestMethod]
+        [DataRow(true, false)]
+        [DataRow(false, false)]
+        [DataRow(true, true)]
+        public async Task GraphImportSdk_StalledBody_AbortsAndRetriesGetThenParsesThePage(bool stopsOnDispose, bool inspectBody)
+        {
+            var body = new GatedJsonContent(stopsOnDispose);
+            var transportToken = CancellationToken.None;
+            var terminal = new SequenceHttpHandler(ct =>
+            {
+                transportToken = ct;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = body });
+            }, ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"value\":[{\"displayName\":\"Contoso\"}]}", System.Text.Encoding.UTF8, "application/json")
+            }));
+            using (var client = GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(),
+                TestBudget(150, 1, 2000), null, terminal))
+            {
+                try
+                {
+                    var users = await WithinWatchdog(client.Users.GetAsync(rc =>
+                    {
+                        if (inspectBody) rc.Options.Add(new BodyInspectionHandlerOption { InspectResponseBody = true });
+                    }));
+                    Assert.AreEqual("Contoso", users.Value.Single().DisplayName);
+                    Assert.IsTrue(body.Started.Task.IsCompleted && body.Disposed && transportToken.IsCancellationRequested);
+                    CollectionAssert.AreEqual(new string[] { null, null }, terminal.RetryAttemptHeaders,
+                        "The retry of the interrupted page is local, not a Kiota status retry.");
+                }
+                finally { body.Release(); }
+            }
+        }
+
+        [TestMethod]
+        public async Task GraphImportSdk_StalledCreatedBody_IsNotPermissionToReplayPost()
+        {
+            var body = new GatedJsonContent();
+            var terminal = new SequenceHttpHandler(ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Created) { Content = body }));
+            using (var client = GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(150, 2, 2000), null, terminal))
+            {
+                try
+                {
+                    await Assert.ThrowsExceptionAsync<TimeoutException>(() => WithinWatchdog(client.Users.PostAsync(new Microsoft.Graph.Models.User())));
+                    Assert.IsTrue(body.Started.Task.IsCompleted && body.Disposed);
+                    Assert.AreEqual(1, terminal.Attempts);
+                }
+                finally { body.Release(); }
+            }
+        }
+
+        [TestMethod]
+        public async Task GraphImportSdk_CallerCancelsBody_AbortsWithoutRetry()
+        {
+            var body = new GatedJsonContent();
+            var terminal = new SequenceHttpHandler(ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = body }));
+            using (var caller = new CancellationTokenSource())
+            using (var client = GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(30000, 1, 60000), null, terminal))
+            {
+                try
+                {
+                    var request = client.Users.GetAsync(cancellationToken: caller.Token);
+                    await WithinWatchdog(body.Started.Task);
+                    caller.Cancel();
+                    await Assert.ThrowsAsync<OperationCanceledException>(() => WithinWatchdog(request));
+                    Assert.IsTrue(body.Disposed);
+                    Assert.AreEqual(1, terminal.Attempts);
+                }
+                finally { body.Release(); }
+            }
+        }
+
+        [TestMethod]
+        public async Task GraphImportSdk_UnreadableForbiddenBody_PreservesStatusWithoutRetry()
+        {
+            using (var body = new GatedJsonContent())
+            {
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = body }));
+                using (var client = GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(150, 2, 2000), null, terminal))
+                {
+                    var error = await Assert.ThrowsAsync<ApiException>(() => WithinWatchdog(client.Users.GetAsync()));
+                    Assert.AreEqual(403, error.ResponseStatusCode);
+                    Assert.IsTrue(body.Started.Task.IsCompleted && body.Disposed);
+                    Assert.AreEqual(1, terminal.Attempts);
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task GraphImportSdk_OversizedPage_RefusesBodyWithoutReadingOrRetrying()
+        {
+            using (var body = new GatedJsonContent())
+            {
+                body.Headers.ContentLength = 64L * 1024 * 1024;
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = body }));
+                using (var client = GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(5000, 2, 10000), null, terminal))
+                {
+                    await Assert.ThrowsAsync<HttpRequestException>(() => WithinWatchdog(client.Users.GetAsync()));
+                    Assert.IsFalse(body.Started.Task.IsCompleted, "A known oversize page must not allocate a body buffer.");
+                    Assert.IsTrue(body.Disposed);
+                    Assert.AreEqual(1, terminal.Attempts);
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task GraphImportPipeline_HeadOrNotModified_KeepsResourceLengthWithoutBufferingIt(bool head)
+        {
+            using (var body = new GatedJsonContent())
+            {
+                const long resourceLength = 64L * 1024 * 1024;
+                body.Headers.ContentLength = resourceLength;
+                var status = head ? HttpStatusCode.OK : HttpStatusCode.NotModified;
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(new HttpResponseMessage(status) { Content = body }));
+                using (var client = BuildGraphImportPipelineClient(terminal, 500, 0, 500))
+                using (var request = new HttpRequestMessage(head ? HttpMethod.Head : HttpMethod.Get, "https://graph.microsoft.com/v1.0/users"))
+                using (var response = await WithinWatchdog(client.SendAsync(request)))
+                {
+                    Assert.AreEqual(status, response.StatusCode);
+                    Assert.AreEqual(resourceLength, response.Content.Headers.ContentLength);
+                    Assert.AreEqual(0, (await response.Content.ReadAsByteArrayAsync()).Length);
+                    Assert.IsFalse(body.Started.Task.IsCompleted);
+                    Assert.IsTrue(body.Disposed);
+                }
+            }
+        }
+
         [TestMethod]
         public async Task GraphImportPipeline_RetryAfterLongerThanAttemptDeadline_IsHonouredByRetryHandler()
         {
@@ -114,6 +245,31 @@ namespace Tests.UnitTests
             Assert.IsTrue(sw.Elapsed >= TimeSpan.FromMilliseconds(950), $"Retry-After must be waited in full, not cut short by the per-attempt deadline; elapsed {sw.ElapsedMilliseconds} ms.");
             CollectionAssert.AreEqual(new[] { null, "1" }, terminal.RetryAttemptHeaders,
                 "The second send must be Kiota's Retry-After retry, not a local timeout re-send.");
+        }
+
+        [TestMethod]
+        public async Task GraphImportSdk_StalledThrottleBody_PreservesRetryAfterAndSdkRetry()
+        {
+            var first = new GatedJsonContent();
+            var body = new GatedJsonContent();
+            var terminal = new SequenceHttpHandler(ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = first }), ct =>
+            {
+                var response = new HttpResponseMessage((HttpStatusCode)429) { Content = body };
+                response.Headers.Add("Retry-After", "1");
+                return Task.FromResult(response);
+            }, ct => Task.FromResult(JsonResponse(HttpStatusCode.OK)));
+            using (var client = GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(150, 2, 750), null, terminal))
+            {
+                var elapsed = Stopwatch.StartNew();
+                try
+                {
+                    Assert.IsNotNull(await WithinWatchdog(client.Users.GetAsync()));
+                    Assert.IsTrue(body.Started.Task.IsCompleted && body.Disposed);
+                    Assert.IsTrue(elapsed.Elapsed >= TimeSpan.FromMilliseconds(950));
+                    CollectionAssert.AreEqual(new[] { null, null, "1" }, terminal.RetryAttemptHeaders);
+                }
+                finally { first.Release(); body.Release(); }
+            }
         }
 
         [TestMethod]
@@ -170,9 +326,8 @@ namespace Tests.UnitTests
             return response;
         }
 
-        private static HttpClient BuildGraphImportPipelineClient(SequenceHttpHandler terminal, int perRequestMs, int timeoutRetryCount, int totalBudgetMs, int sdkRetryCount = 3)
-        {
-            var budget = new GraphRequestBudgetOptions(
+        private static GraphRequestBudgetOptions TestBudget(int perRequestMs, int timeoutRetryCount, int totalBudgetMs, int sdkRetryCount = 3)
+            => new GraphRequestBudgetOptions(
                 TimeSpan.FromMilliseconds(perRequestMs),
                 timeoutRetryCount,
                 TimeSpan.FromMilliseconds(1),
@@ -180,9 +335,52 @@ namespace Tests.UnitTests
                 sdkRetryCount,
                 1,
                 TimeSpan.FromSeconds(10));
+
+        private static HttpClient BuildGraphImportPipelineClient(SequenceHttpHandler terminal, int perRequestMs, int timeoutRetryCount, int totalBudgetMs, int sdkRetryCount = 3)
+        {
             var authProvider = new Microsoft.Kiota.Authentication.Azure.AzureIdentityAuthenticationProvider(
                 new SyntheticTokenCredential(), scopes: new[] { "https://graph.microsoft.com/.default" });
-            return GraphServiceClientFactory.CreateHttpClient(authProvider, budget, AnalyticsLogger.ConsoleOnlyTracer(), terminal);
+            return GraphServiceClientFactory.CreateHttpClient(authProvider, TestBudget(perRequestMs, timeoutRetryCount, totalBudgetMs, sdkRetryCount), AnalyticsLogger.ConsoleOnlyTracer(), terminal);
+        }
+
+        private static async Task<T> WithinWatchdog<T>(Task<T> task)
+        {
+            Assert.AreSame(task, await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(5))), "The SDK remained blocked reading the body.");
+            return await task;
+        }
+
+        private sealed class GatedJsonContent : HttpContent
+        {
+            private readonly bool _stopsOnDispose;
+            private readonly TaskCompletionSource<bool> _release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            public TaskCompletionSource<bool> Started { get; } = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            public bool Disposed { get; private set; }
+
+            public GatedJsonContent(bool stopsOnDispose = true)
+            {
+                _stopsOnDispose = stopsOnDispose;
+                Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            }
+
+            public void Release() => _release.TrySetResult(true);
+
+            protected override async Task SerializeToStreamAsync(Stream stream, TransportContext context)
+            {
+                Started.TrySetResult(true);
+                await _release.Task.ConfigureAwait(false);
+                if (Disposed) throw new IOException("Synthetic response stream closed.");
+                var bytes = System.Text.Encoding.UTF8.GetBytes("{\"value\":[]}");
+                await stream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
+            }
+
+            protected override bool TryComputeLength(out long length) { length = 0; return false; }
+
+            protected override void Dispose(bool disposing)
+            {
+                Disposed = true;
+                if (_stopsOnDispose) Release();
+                base.Dispose(disposing);
+            }
         }
 
         private sealed class SyntheticTokenCredential : Azure.Core.TokenCredential
@@ -302,7 +500,7 @@ namespace Tests.UnitTests
                     TimeSpan.FromMilliseconds(totalBudgetMs)),
                 AnalyticsLogger.ConsoleOnlyTracer())
             {
-                InnerHandler = terminal
+                InnerHandler = new BoundedGraphResponseBodyHandler { InnerHandler = terminal }
             };
 
             return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };

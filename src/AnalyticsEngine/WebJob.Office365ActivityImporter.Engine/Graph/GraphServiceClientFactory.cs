@@ -28,7 +28,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Microsoft.Graph 6.5.0 installs Kiota's RetryHandler in the default pipeline; we
         /// keep it for service-directed transient HTTP retries (429/503/504 and Retry-After) and
         /// add a bounded handler inside it for local per-attempt request-deadline timeouts. The
-        /// deadline applies to every method; only idempotent reads get local timeout retries.
+        /// deadline covers headers and the body transfer; only bodyless GET/HEAD requests get local
+        /// timeout retries. The handler buffers up to 32 MiB per SDK page, with at most 16 fills at a time.
+        /// Bulk usage reports use the separate streaming client.
         /// </summary>
         public static GraphServiceClient CreateForGraphImport(TokenCredential credential, ILogger logger = null)
             => CreateForGraphImport(credential, GraphRequestBudgetOptions.GraphImportDefault, logger);
@@ -65,7 +67,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// directly INSIDE Kiota's <see cref="RetryHandler"/>, so its deadline covers one HTTP
         /// attempt and never a Retry-After wait (#846 R8-10). Placed outside, a Retry-After longer
         /// than the per-request deadline was cancelled part-way, counted as a timeout and re-sent
-        /// without honouring Retry-After.
+        /// without honouring Retry-After. The body reader sits below Kiota's redirect and inspection
+        /// handlers, which can consume a response before returning it to the deadline handler.
         /// </summary>
         internal static System.Collections.Generic.List<DelegatingHandler> BuildGraphImportHandlers(GraphRequestBudgetOptions budget, ILogger logger)
         {
@@ -85,6 +88,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 RetriesTimeLimit = budget.SdkRetryTimeLimit
             });
             handlers.Insert(retryIndex + 1, new BoundedGraphRequestHandler(budget, logger));
+            handlers.Add(new BoundedGraphResponseBodyHandler());
             handlers.Insert(0, new GraphTransientErrorHandler());
             return handlers;
         }

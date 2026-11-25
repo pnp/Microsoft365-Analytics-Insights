@@ -9,8 +9,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
     /// <summary>
     /// Applies a deadline to every SDK HTTP attempt and retries idempotent reads only when
-    /// this process' request deadline expires. Any response, including 429/503/504, is returned
-    /// as-is and never retried here. Caller cancellation is never treated as a transient timeout.
+    /// this process' request deadline expires, including while receiving the response body.
+    /// HTTP error statuses are never retried here. Caller cancellation is not a transient timeout.
     /// <para>
     /// <see cref="GraphServiceClientFactory.BuildGraphImportHandlers"/> places this handler
     /// INSIDE Kiota's RetryHandler, which owns Graph-directed retries and Retry-After waits.
@@ -32,7 +32,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var started = Stopwatch.StartNew();
-            TaskCanceledException lastTimeout = null;
+            OperationCanceledException lastTimeout = null;
             var maxAttempts = IsRetryableRead(request) ? _options.MaxAttempts : 1;
 
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
@@ -47,19 +47,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 var timeout = remaining < _options.PerRequestTimeout ? remaining : _options.PerRequestTimeout;
                 using (var requestDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                using (var retryRequest = attempt == 1 ? null : CloneRead(request))
                 {
                     requestDeadline.CancelAfter(timeout);
-                    var requestForAttempt = attempt == 1 ? request : await CloneRequestAsync(request).ConfigureAwait(false);
                     try
                     {
-                        var response = await base.SendAsync(requestForAttempt, requestDeadline.Token).ConfigureAwait(false);
+                        var response = await base.SendAsync(retryRequest ?? request, requestDeadline.Token).ConfigureAwait(false);
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            // Even a known error status must not trigger a service retry during shutdown.
+                            response.Dispose();
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
+                        if (retryRequest != null && response.RequestMessage == retryRequest)
+                        {
+                            // Kiota may clone this request after a Retry-After. Don't give it a disposed clone.
+                            response.RequestMessage = request;
+                        }
                         if (attempt > 1)
                         {
                             _logger?.LogInformation($"Graph import SDK request succeeded on timeout attempt {attempt:N0} after {started.ElapsedMilliseconds:N0} ms.");
                         }
                         return response;
                     }
-                    catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested && requestDeadline.IsCancellationRequested)
+                    catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && requestDeadline.IsCancellationRequested)
                     {
                         lastTimeout = ex;
                         _logger?.LogWarning($"Graph import SDK request attempt {attempt:N0}/{maxAttempts:N0} exceeded its {timeout.TotalSeconds:N0}s deadline after {started.ElapsedMilliseconds:N0} ms.");
@@ -83,13 +94,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         }
 
         private static bool IsRetryableRead(HttpRequestMessage request)
-            => request.Method == HttpMethod.Get || request.Method == HttpMethod.Head;
+            => request.Content == null && (request.Method == HttpMethod.Get || request.Method == HttpMethod.Head);
 
         private string BuildExhaustedMessage(int attempts, TimeSpan elapsed)
             => $"Graph import SDK request deadline exhausted after {attempts:N0} attempt(s) and {elapsed.TotalSeconds:N1}s. " +
                "The affected Graph import section is deferred; any previous committed checkpoint remains in force.";
 
-        private static async Task<HttpRequestMessage> CloneRequestAsync(HttpRequestMessage request)
+        private static HttpRequestMessage CloneRead(HttpRequestMessage request)
         {
             var clone = new HttpRequestMessage(request.Method, request.RequestUri)
             {
@@ -104,16 +115,6 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             foreach (var property in request.Properties)
             {
                 clone.Properties[property.Key] = property.Value;
-            }
-
-            if (request.Content != null)
-            {
-                var bytes = await request.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-                clone.Content = new ByteArrayContent(bytes);
-                foreach (var header in request.Content.Headers)
-                {
-                    clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                }
             }
 
             return clone;
