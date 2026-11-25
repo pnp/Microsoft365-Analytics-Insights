@@ -98,6 +98,9 @@ namespace WebJob.AppInsightsImporter.Engine
         /// <summary>Unknown on a checkpoint failure or manual backfill, which leaves the checkpoint alone.</summary>
         public int? PendingSearchHours { get; internal set; }
         public int ReconciledSearches { get; internal set; }
+        /// <summary>More persisted hours can be attempted without importing newer telemetry first.</summary>
+        public bool HasDueSearchRetries { get; internal set; }
+        internal bool SearchRetryUnavailable { get; set; }
 
         internal void Degrade(string reason)
         {

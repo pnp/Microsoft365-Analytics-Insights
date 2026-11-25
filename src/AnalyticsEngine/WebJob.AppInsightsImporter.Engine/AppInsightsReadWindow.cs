@@ -43,12 +43,17 @@ namespace WebJob.AppInsightsImporter.Engine
         public DateTime? IngestedBeforeUtc { get; }
         public bool SearchesOnly { get; }
 
-        internal static AppInsightsReadWindow SearchRetryHour(DateTime hourUtc, DateTime nowUtc)
+        internal static AppInsightsReadWindow SearchRetryHour(DateTime hourUtc, DateTime nowUtc) => SearchRetryHour(hourUtc, nowUtc, nowUtc);
+
+        // Only the intersection of the retained hour with normal SQL coverage can be reconciled.
+        internal static AppInsightsReadWindow SearchRetryHour(DateTime hourUtc, DateTime nowUtc, DateTime coveredThroughUtc)
         {
             var oldest = nowUtc - AppInsightsIngestionCursorPolicy.MaxLookback;
             var from = hourUtc < oldest ? oldest : hourUtc;
             var end = hourUtc.AddHours(1);
-            var to = end < nowUtc ? end : nowUtc;
+            var to = end < coveredThroughUtc ? end : coveredThroughUtc;
+            if (to > nowUtc) to = nowUtc;
+            if (from >= to) return null;
             return new AppInsightsReadWindow(from - AppInsightsIngestionCursorPolicy.LateArrivalBound,
                 to + AppInsightsIngestionCursorPolicy.FutureBound, from, to, true);
         }

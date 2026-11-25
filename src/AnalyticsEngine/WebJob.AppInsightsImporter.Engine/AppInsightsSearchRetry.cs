@@ -26,7 +26,7 @@ namespace WebJob.AppInsightsImporter.Engine
         // Give a delayed page view longer than the normal ingestion overlap. A second, final pass covers
         // the importer's existing late-arrival allowance; neither pass holds up the ordinary ingestion cursor.
         private static readonly TimeSpan FirstDelay = AppInsightsIngestionCursorPolicy.Overlap + AppInsightsIngestionCursorPolicy.Overlap;
-        private const int MaxHoursPerCycle = 8;
+        private const int MaxHoursPerPass = 8;
         private readonly Dictionary<DateTime, AppInsightsSearchRetry> _hours;
         private readonly IAppInsightsIngestionCursorStore _store;
         private HashSet<DateTime> _replayHours;
@@ -61,9 +61,20 @@ namespace WebJob.AppInsightsImporter.Engine
             return true;
         }
 
-        internal List<AppInsightsSearchRetry> Due(DateTime now) =>
-            _hours.Values.Where(h => h.RetryAfterUtc <= now).OrderBy(h => h.RetryAfterUtc)
-                .ThenBy(h => h.HourUtc).Take(MaxHoursPerCycle).ToList();
+        private IEnumerable<AppInsightsSearchRetry> DueHours(DateTime coveredThrough) =>
+            _hours.Values.Where(h => h.RetryAfterUtc <= coveredThrough && h.HourUtc < coveredThrough);
+
+        internal bool HasDue(DateTime coveredThrough) => DueHours(coveredThrough).Any();
+
+        internal List<AppInsightsSearchRetry> Due(DateTime coveredThrough) =>
+            DueHours(coveredThrough).OrderBy(h => h.RetryAfterUtc).ThenBy(h => h.HourUtc).Take(MaxHoursPerPass).ToList();
+
+        internal void Unavailable(AppInsightsSearchRetry hour, DateTime coveredThrough)
+        {
+            // An outage did not check whether a visit exists, even on the final pass. Let other due hours go first.
+            _hours[hour.HourUtc] = new AppInsightsSearchRetry(hour.HourUtc, coveredThrough + FirstDelay);
+            Changed = true;
+        }
 
         private async Task LoadReplayHoursAsync(DateTime now, CancellationToken token)
         {

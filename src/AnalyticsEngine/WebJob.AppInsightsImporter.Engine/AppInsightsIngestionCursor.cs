@@ -18,7 +18,10 @@ namespace WebJob.AppInsightsImporter.Engine
         Bootstrap,
 
         /// <summary><c>ReadHitsDaysBeforeToday</c>: whole days from that many days ago. Leaves the cursor alone.</summary>
-        Backfill
+        Backfill,
+
+        /// <summary>Only pending search hours due by the last completed normal read. Does not advance the cursor.</summary>
+        SearchRecovery
     }
 
     /// <summary>

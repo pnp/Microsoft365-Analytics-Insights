@@ -150,7 +150,7 @@ namespace WebJob.AppInsightsImporter
                 logger.LogInformation($"App Insights ingestion cursor: {cursorStore.Description}" +
                     (StateStore.IsConfigured(config) ? "." : ". No Storage connection string, so after a restart the import starts again from the newest stored hit."));
 
-                Engine.AppInsightsCycleOutcome RunCycle()
+                Engine.AppInsightsImportCycleResult RunCycle(DateTime? normalThroughUtc = null, DateTime? nextNormalUtc = null)
                 {
                     // One operation id per cycle, so every trace, exception and event of a cycle can be pulled out together.
                     using (logger.BeginOperationScope(Guid.NewGuid().ToString("N")))
@@ -169,10 +169,12 @@ namespace WebJob.AppInsightsImporter
                             var importer = new Engine.AppInsightsImporter(config, logger, userScope: userScope, scanWatermark: scanWatermark,
                                 dayFailureTracker: dayFailures, cursorStore: cursorStore);
                             int? readDaysBefore = daysBeforeReadOverride > 0 ? daysBeforeReadOverride : (int?)null;
-                            var stage = stages.Begin(logger, "AppInsightsImport");
+                            var stage = stages.Begin(logger, normalThroughUtc.HasValue ? "AppInsightsSearchRecovery" : "AppInsightsImport");
                             try
                             {
-                                cycleResult = importer.ImportAndSave(saveRestResponses, readDaysBefore, HostRuntime.ShutdownToken).GetAwaiter().GetResult();
+                                cycleResult = normalThroughUtc.HasValue
+                                    ? importer.RecoverPendingSearchesAsync(normalThroughUtc.Value, nextNormalUtc.Value, HostRuntime.ShutdownToken).GetAwaiter().GetResult()
+                                    : importer.ImportAndSave(saveRestResponses, readDaysBefore, HostRuntime.ShutdownToken).GetAwaiter().GetResult();
                                 HostRuntime.ThrowIfShutdownRequested();
                                 if (cycleResult.Outcome == Engine.AppInsightsCycleOutcome.Failed)
                                 {
@@ -203,20 +205,23 @@ namespace WebJob.AppInsightsImporter
                             logger.LogError($"Import cycle failed: {CommonExceptionHandler.GetErrorText(ex)}.{retry}", ex);
                         }
 
-                        // Every cycle reports its outcome. Only one that got to the end - Succeeded or Degraded - counts as a
-                        // completed cycle for liveness: a cycle that stopped at a failed day, or threw, is not reported as one.
+                        // A search-only pass reports its own outcome, but cannot certify normal ingestion for liveness.
                         var outcome = Engine.AppInsightsImportTelemetry.TrackCycle(logger, cycleResult, importCycleTimer.Elapsed, cycleException);
-                        if (outcome != Engine.AppInsightsCycleOutcome.Failed)
+                        if (!normalThroughUtc.HasValue && outcome != Engine.AppInsightsCycleOutcome.Failed)
                         {
                             heartbeat.CycleCompleted(importCycleTimer.Elapsed);
                             importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
                         }
-                        return outcome;
+                        return cycleResult;
                     }
                 }
 
-                exitCode = Engine.AppInsightsImportLoop.Run(oneShot, RunCycle,
-                    () => ConsoleApp.WebjobWait(logger, config.ImportCyclePauseMinutes), () => HostRuntime.ShutdownRequested);
+                exitCode = Engine.AppInsightsImportLoop.Run(oneShot, () => RunCycle(), (through, deadline) => RunCycle(through, deadline),
+                    config.ImportCyclePauseMinutes, delay =>
+                    {
+                        logger.LogInformation($"Waiting {delay.TotalMinutes:0.##} min(s)...");
+                        HostRuntime.Wait(delay);
+                    }, () => HostRuntime.ShutdownRequested, SystemClock.Instance);
                 if (HostRuntime.ShutdownRequested)
                 {
                     logger.LogInformation("Shutdown requested by host: the import loop has stopped; flushing telemetry and exiting.");
