@@ -116,12 +116,16 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual(1, changes.Count);
         }
 
-        [TestMethod]
-        public async Task AppService_ReRunOnAHardenedSite_SendsNothing_AndNeverTouchesScmBasicAuth()
+        [DataTestMethod]
+        [DataRow("web")]
+        [DataRow("contoso-web")]
+        public async Task AppService_ReRunOnAHardenedSite_SendsNothing_AndNeverTouchesScmBasicAuth(string configurationName)
         {
             using (var arm = new FakeArm())
             {
                 arm.AddSite(minTls: "1.3");
+                arm.Resource(Site + "/config/web")["name"] = configurationName;
+                arm.Resource(Site)["properties"]["siteConfig"] = new JObject { ["minTlsVersion"] = "1.3" };
                 var task = new AppServiceWebsiteTask(TaskConfig.GetConfigForName("contoso-web"), NullLogger.Instance,
                     new AzureLocation("westeurope"), new Dictionary<string, string>()) { Container = arm.Group };
 
@@ -171,6 +175,7 @@ namespace Tests.UnitTests.InstallTests
         [DataRow(true, "FTP", "wrong ID")]
         [DataRow(false, "FTP", "wrong type")]
         [DataRow(true, "FTP", "wrong name")]
+        [DataRow(true, "FTP", "parent name")]
         [DataRow(true, "FTP", "denied")]
         [DataRow(true, "config", "cancelled")]
         [DataRow(true, "FTP", "cancelled")]
@@ -210,6 +215,7 @@ namespace Tests.UnitTests.InstallTests
                         case "different TLS": reply["properties"]["minTlsVersion"] = "1.0"; break;
                         case "wrong type": reply["type"] = "Microsoft.Web/sites"; break;
                         case "wrong name": reply["name"] = "contoso-other"; break;
+                        case "parent name": reply["name"] = "contoso-web"; break;
                         case "missing allow": ((JObject)reply["properties"]).Property("allow").Remove(); break;
                         case "null allow": reply["properties"]["allow"] = null; break;
                         case "invalid allow": reply["properties"]["allow"] = "false"; break;

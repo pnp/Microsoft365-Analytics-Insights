@@ -254,7 +254,7 @@ namespace CloudInstallEngine.Azure
                 if (!string.IsNullOrWhiteSpace(siteTls) && !string.Equals(siteTls, tls, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException();
                 return data;
-            }, "App Service site configuration (config/web)", token);
+            }, "App Service site configuration (config/web)", token, alternateName: site.Id.Name);
         }
 
         internal static Task<bool> ReadFtpAllowedAsync(WebSiteResource site, CancellationToken token)
@@ -265,7 +265,7 @@ namespace CloudInstallEngine.Azure
         }
 
         private static async Task<T> ReadChildAsync<TResource, T>(TResource expected, Func<CancellationToken, Task<Response<TResource>>> get,
-            Func<TResource, JsonElement, T> select, string description, CancellationToken token) where TResource : ArmResource
+            Func<TResource, JsonElement, T> select, string description, CancellationToken token, string alternateName = null) where TResource : ArmResource
         {
             token.ThrowIfCancellationRequested();
             try
@@ -274,10 +274,11 @@ namespace CloudInstallEngine.Azure
                 token.ThrowIfCancellationRequested();
                 using (var body = JsonDocument.Parse(response.GetRawResponse().Content.ToMemory()))
                 {
-                    // GetFtpAllowed can omit both labels. When supplied, neither may contradict the exact child ID.
+                    // FTP can omit both labels; config/web can use its parent site's name with the exact child ID.
                     var root = body.RootElement;
                     if ((root.TryGetProperty("type", out var type) && !string.Equals(type.GetString(), expected.Id.ResourceType.ToString(), StringComparison.OrdinalIgnoreCase)) ||
-                        (root.TryGetProperty("name", out var name) && !string.Equals(name.GetString(), expected.Id.Name, StringComparison.OrdinalIgnoreCase)))
+                        (root.TryGetProperty("name", out var name) && !string.Equals(name.GetString(), expected.Id.Name, StringComparison.OrdinalIgnoreCase) &&
+                         (alternateName == null || !string.Equals(name.GetString(), alternateName, StringComparison.OrdinalIgnoreCase))))
                         throw new InvalidDataException();
                     return select(response.Value, RequireProperties(root, expected.Id));
                 }
