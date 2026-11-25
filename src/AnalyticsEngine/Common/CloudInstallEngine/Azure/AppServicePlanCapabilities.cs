@@ -47,7 +47,8 @@ namespace CloudInstallEngine.Azure
         public static bool IsPlanCapabilityConflict(RequestFailedException ex)
         {
             // Removing plan-sensitive settings cannot resolve an explicit lock or policy denial.
-            return ex != null && ex.Status == 409 && ex.ErrorCode != "ScopeLocked" && ex.ErrorCode != "RequestDisallowedByPolicy";
+            return ex != null && ex.Status == 409 && !string.Equals(ex.ErrorCode, "ScopeLocked", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(ex.ErrorCode, "RequestDisallowedByPolicy", StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsTierKnownUnsupported(string tier)

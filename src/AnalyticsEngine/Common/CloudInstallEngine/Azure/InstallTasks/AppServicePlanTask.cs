@@ -9,12 +9,37 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace CloudInstallEngine.Azure.InstallTasks
 {
+    /// <summary>The site and plan selected by read-only discovery for one deployment.</summary>
+    public sealed class AppServiceHostingDiscovery
+    {
+        internal AppServiceHostingDiscovery(WebSiteResource site, AppServicePlanResource plan, bool legacyNameFound)
+        {
+            Site = site;
+            Plan = plan;
+            LegacyNameFound = legacyNameFound;
+        }
+
+        public WebSiteResource Site { get; }
+        internal AppServicePlanResource Plan { get; }
+        internal bool LegacyNameFound { get; }
+        internal SiteConfigData SiteConfig { get; set; }
+        internal bool? FtpBasicPublishingAllowed { get; set; }
+
+        public void ObserveSiteAfterTeardown(WebSiteResource verifiedSite)
+        {
+            // Teardown changes only networking. Keep the discovered identity, and don't send another site
+            // PATCH (or rely on a fresh lookup) for changes the teardown already read back and confirmed.
+            if (Site == null || !Site.Id.Equals(verifiedSite.Id)) return;
+            Site.Data.PublicNetworkAccess = verifiedSite.Data.PublicNetworkAccess;
+            Site.Data.VirtualNetworkSubnetId = verifiedSite.Data.VirtualNetworkSubnetId;
+        }
+    }
+
     public class AppServicePlanTask : InstallTaskInAzResourceGroup<AppServicePlanResource>
     {
         public const string PERF_TIER_BASIC1 = "B1";
@@ -33,15 +58,33 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         public override string TaskName => "get/create App Service plan";
 
+        public AppServiceHostingDiscovery Preflight { private get; set; }
+
+        /// <summary>Reads only. A confirmed missing resource group has neither a site nor a plan.</summary>
+        public async Task<AppServiceHostingDiscovery> DiscoverAsync(ResourceGroupResource existingGroup, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            if (existingGroup == null) return new AppServiceHostingDiscovery(null, null, false);
+            var webAppName = _config.GetOptionalConfigValue(CONFIG_KEY_WEB_APP_NAME);
+            var site = string.IsNullOrWhiteSpace(webAppName) ? null :
+                await AppServiceResourceLookup.FindSiteForDeploymentAsync(existingGroup, webAppName, token);
+            if (site != null)
+                return new AppServiceHostingDiscovery(site, await ReadHostingPlanAsync(existingGroup, site, token), false);
+
+            var plans = AppServiceResourceLookup.FindPlans(existingGroup, _config.ResourceName, webAppName, token);
+            return new AppServiceHostingDiscovery(null, plans.Plan, plans.LegacyNameFound);
+        }
 
         public override async Task<AppServicePlanResource> ExecuteTaskReturnResult(object contextArg)
         {
             // Installers before this one ignored the configured plan name and named the plan after the web app, so most
             // existing web apps are hosted on a plan with the web app's name. Keep them exactly where they are.
             var webAppName = _config.GetOptionalConfigValue(CONFIG_KEY_WEB_APP_NAME);
-            var hostingPlan = await FindHostingPlanAsync(Container, webAppName, CancellationToken);
-            if (hostingPlan != null)
+            CancellationToken.ThrowIfCancellationRequested();
+            var discovery = Preflight ?? await DiscoverAsync(Container, CancellationToken);
+            if (discovery.Site != null)
             {
+                var hostingPlan = discovery.Plan;
                 if (!string.Equals(hostingPlan.Data.Name, _config.ResourceName, System.StringComparison.OrdinalIgnoreCase))
                 {
                     _logger.LogInformation($"App Service '{webAppName}' already runs on plan '{hostingPlan.Data.Name}', so that plan is kept. " +
@@ -66,7 +109,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
 
             // Get/create plan
-            var plan = FindConfiguredPlan(Container, _config.ResourceName, CancellationToken);
+            var plan = discovery.Plan;
 
             if (plan == null)
             {
@@ -87,8 +130,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
                 _logger.LogInformation($"Created App Service plan '{plan.Data.Name}' at service level '{newPlanInfo.Sku.Name}'.");
 
-                if (!string.IsNullOrWhiteSpace(webAppName) && !string.Equals(webAppName, _config.ResourceName, System.StringComparison.OrdinalIgnoreCase) &&
-                    Container.GetAppServicePlans().GetAll(cancellationToken: CancellationToken).Any(p => string.Equals(p.Data.Name, webAppName, System.StringComparison.OrdinalIgnoreCase)))
+                if (discovery.LegacyNameFound)
                 {
                     _logger.LogWarning($"The resource group also has an App Service plan named '{webAppName}', after the web app. Earlier installers created the plan under that name. " +
                         "If it no longer hosts anything, delete it so it stops being billed.");
@@ -130,7 +172,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         // A casing difference is not a new ARM resource: a create-or-update would resize the existing plan.
         public static AppServicePlanResource FindConfiguredPlan(ResourceGroupResource resourceGroup, string planName,
             CancellationToken cancellationToken = default(CancellationToken)) =>
-            AppServiceResourceLookup.FindPlan(resourceGroup, planName, cancellationToken);
+            AppServiceResourceLookup.FindPlans(resourceGroup, planName, null, cancellationToken).Plan;
 
         /// <summary>
         /// The plan <paramref name="webAppName"/> is hosted on, or null when the web app does not exist yet (or no name
@@ -144,7 +186,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
             if (resourceGroup == null) throw new ArgumentNullException(nameof(resourceGroup));
             var site = AppServiceResourceLookup.FindSite(resourceGroup, webAppName, cancellationToken);
             if (site == null) return null;
+            return await ReadHostingPlanAsync(resourceGroup, site, cancellationToken);
+        }
 
+        private static async Task<AppServicePlanResource> ReadHostingPlanAsync(ResourceGroupResource resourceGroup,
+            WebSiteResource site, CancellationToken cancellationToken)
+        {
             var id = site.Data.AppServicePlanId;
             if (id == null || !ResourceIdentifier.TryParse(id.ToString(), out var planId)
                 || planId.ResourceType != AppServicePlanResource.ResourceType || planId.Parent?.ResourceType != ResourceGroupResource.ResourceType)
@@ -157,7 +204,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var arm = resourceGroup.GetCachedClient(client => client);
                 var plan = (await arm.GetAppServicePlanResource(planId).GetAsync(cancellationToken))?.Value;
                 cancellationToken.ThrowIfCancellationRequested();
-                if (plan?.HasData != true || !planId.Equals(plan.Id) || string.IsNullOrWhiteSpace(plan.Data.Name))
+                if (plan?.HasData != true || !planId.Equals(plan.Id) ||
+                    !string.Equals(planId.Name, plan.Data.Name, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException();
                 return plan;
             }

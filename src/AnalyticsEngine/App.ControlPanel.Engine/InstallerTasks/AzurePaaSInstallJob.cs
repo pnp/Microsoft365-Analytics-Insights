@@ -453,11 +453,23 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     "are not registered. Follow the registration guidance above, then retry.");
 
             var vnetEnabled = _config.NetworkConfig?.Enabled == true;
+            ResourceGroupResource group = null;
+            try
+            {
+                group = (await Subscription.GetResourceGroupAsync(_config.ResourceGroupName, CancellationToken)).Value;
+                if (group?.HasData != true || !string.Equals(group.Id?.ToString(), _networking.Manifest.ResourceGroupId, StringComparison.OrdinalIgnoreCase))
+                    throw new InstallException("Azure did not return the requested resource group. Verify the resource group and retry.");
+            }
+            catch (RequestFailedException ex) when (PrivateNetworkProvenance.IsMissing(ex)) { }
+
+            // Discover before touching the networking journal, even when the only owned target is SQL or Key Vault.
+            // A shared hosting plan is a required read, not a reason to fall back to creating a different plan.
+            Logger.LogInformation("Reading App Service hosting configuration. Avoid changing the site, its hosting plan or its managed identities during deployment.");
+            var hosting = await _appServicePlanTask.DiscoverAsync(group, CancellationToken);
+            await _appServiceWebsiteTask.PreflightExistingSiteAsync(hosting, CancellationToken);
+            CancellationToken.ThrowIfCancellationRequested();
             if (!vnetEnabled)
             {
-                ResourceGroupResource group = null;
-                try { group = (await Subscription.GetResourceGroupAsync(_config.ResourceGroupName, CancellationToken)).Value; }
-                catch (RequestFailedException ex) when (PrivateNetworkProvenance.IsMissing(ex)) { }
                 if (group != null)
                 {
                     var targets = NetworkingTargets(_config, _networking.Manifest.ResourceGroupId);
@@ -466,16 +478,23 @@ namespace App.ControlPanel.Engine.InstallerTasks
                         string.IsNullOrWhiteSpace(_config.NetworkConfig?.VNetName) ? null :
                             _networking.Manifest.ResourceGroupId + "/providers/Microsoft.Network/virtualNetworks/" + _config.NetworkConfig.VNetName)
                     {
-                        BeforeExistingSiteUpdateAsync = _appServiceWebsiteTask.BeforeExistingSiteUpdateAsync
+                        SiteNetworkChangeVerified = hosting.ObserveSiteAfterTeardown
                     };
                     await new PrivateNetworkTeardown(_networking, cleanup, Logger).Run(false, CancellationToken);
                 }
                 else
                     _networking.ObserveMissingResourceGroup();
             }
-            await ConfigureSqlEntraAdministrator();
-
-            await base.Install(previousRunResult);
+            _appServicePlanTask.Preflight = _appServiceWebsiteTask.Preflight = hosting;
+            try
+            {
+                await ConfigureSqlEntraAdministrator();
+                await base.Install(previousRunResult);
+            }
+            finally
+            {
+                _appServicePlanTask.Preflight = _appServiceWebsiteTask.Preflight = null;
+            }
 
             await DetectSqlAuthMethod();
             if (vnetEnabled)

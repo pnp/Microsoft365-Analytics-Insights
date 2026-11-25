@@ -35,7 +35,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly HashSet<string> _targets;
         private readonly HashSet<string> _endpointNames;
         private readonly string _previousVnetId;
-        internal Func<WebSiteResource, Task> BeforeExistingSiteUpdateAsync { get; set; }
+        internal Action<WebSiteResource> SiteNetworkChangeVerified { get; set; }
 
         public PrivateNetworkCleanupClient(ResourceGroupResource group, PrivateNetworkManifest manifest,
             IEnumerable<string> targets, IEnumerable<string> endpointNames, string previousVnetId = null)
@@ -437,9 +437,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     {
                         SiteConfig = new SiteConfigProperties { IsVnetRouteAllEnabled = artifact.PreviousRouteAllEnabled }
                     }, ct);
-                    if ((await site.GetAsync(ct)).Value.Data.VirtualNetworkSubnetId != null ||
+                    var updated = (await site.GetAsync(ct)).Value;
+                    if (updated.Data.VirtualNetworkSubnetId != null ||
                         ((await site.GetWebSiteConfig().GetAsync(ct)).Value.Data.IsVnetRouteAllEnabled == true) != artifact.PreviousRouteAllEnabled)
                         throw PrivateNetworkProvenance.Blocked(artifact.Id, "Azure did not confirm App Service integration reset");
+                    SiteNetworkChangeVerified?.Invoke(updated);
                 }
                 else if (artifact.Kind == PrivateNetworkProvenance.VirtualNetworkRule)
                 {
@@ -510,12 +512,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     case "microsoft.web/sites":
                         var site = (await _group.GetWebSiteAsync(id.Name, ct)).Value;
                         readSucceeded = true;
-                        // A private-to-public transition can change the deployment site before its ordinary website task.
-                        if (BeforeExistingSiteUpdateAsync != null && _targets.Contains(targetId))
-                        {
-                            await BeforeExistingSiteUpdateAsync(site);
-                            ct.ThrowIfCancellationRequested();
-                        }
                         if (apply) await site.UpdateAsync(new SitePatchInfo { PublicNetworkAccess = "Enabled" }, ct);
                         break;
                     case "microsoft.cognitiveservices/accounts":
@@ -562,7 +558,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     enabled = (await _group.GetServiceBusNamespaceAsync(id.Name, ct)).Value.Data.PublicNetworkAccess == ServiceBusPublicNetworkAccess.Enabled;
                     break;
                 case "microsoft.web/sites":
-                    enabled = PrivateNetworkProvenance.Same((await _group.GetWebSiteAsync(id.Name, ct)).Value.Data.PublicNetworkAccess, "Enabled");
+                    var site = (await _group.GetWebSiteAsync(id.Name, ct)).Value;
+                    enabled = PrivateNetworkProvenance.Same(site.Data.PublicNetworkAccess, "Enabled");
+                    if (enabled) SiteNetworkChangeVerified?.Invoke(site);
                     break;
                 case "microsoft.cognitiveservices/accounts":
                     enabled = (await _group.GetCognitiveServicesAccountAsync(id.Name, ct)).Value.Data.Properties.PublicNetworkAccess == ServiceAccountPublicNetworkAccess.Enabled;

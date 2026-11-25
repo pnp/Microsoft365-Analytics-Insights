@@ -219,7 +219,7 @@ namespace Tests.UnitTests.InstallTests
                 var config = BackendConfig("contoso-web", "contoso-web");
                 var logger = new CapturingLogger();
                 var subnet = Rg + "/providers/Microsoft.Network/virtualNetworks/contoso-vnet/subnets/integration";
-                arm.AddResourceGroup();
+                arm.AddBackendInventory(config);
                 arm.AddSite("1.0", privateToPublic ? subnet : null);
                 arm.Resource(Site)["properties"]["publicNetworkAccess"] = "Disabled";
                 arm.Resource(Site).Property("identity").Remove();
@@ -232,10 +232,6 @@ namespace Tests.UnitTests.InstallTests
                         Id = Site, TargetId = Site, SubnetId = subnet, Kind = PrivateNetworkProvenance.Integration,
                         CreatedByInstaller = true, CreationConfirmed = true
                     });
-                arm.KnownLists.UnionWith(new[] { Rg + "/resources", Rg + "/providers/Microsoft.Network/privateEndpoints",
-                    Rg + "/providers/Microsoft.Network/privateDnsZones" });
-                foreach (var provider in AzureResourceProviderPreflight.RequiredProviders(config))
-                    arm.Add("/subscriptions/" + Sub + "/providers/" + provider, new JObject { ["namespace"] = provider, ["registrationState"] = "Registered" });
                 arm.PostStatuses[ConnectionStrings + "/list"] = HttpStatusCode.Forbidden;
                 arm.PostResponses[ConnectionStrings + "/list"] = new JObject { ["error"] = new JObject { ["message"] = "Contoso do not log" } };
                 var before = arm.Resource(Site).DeepClone();
@@ -879,12 +875,165 @@ namespace Tests.UnitTests.InstallTests
             }
         }
 
+        [DataTestMethod]
+        [DataRow("UserAssigned", false)]
+        [DataRow("UserAssigned", true)]
+        [DataRow("SystemAssigned", false)]
+        [DataRow("SystemAssigned, UserAssigned", false)]
+        public async Task AppService_RegisteredIdentityRepairPreservesOperatorIdentitiesAndGrantsOnlyTheSite(
+            string existingType, bool retryWithoutAlwaysOn)
+        {
+            using (var arm = new FakeArm())
+            {
+                arm.AddSite("1.3");
+                var vault = await AddVault(arm);
+                var config = BackendConfig("CoNtOsO-WeB", "contoso-web");
+                config.InstallerAccount.DirectoryId = VaultTenant;
+                var job = new InspectableBackend(config, NullLogger.Instance, arm.Subscription);
+                var siteTask = job.Registered<AppServiceWebsiteTask>();
+                var grant = job.Registered<KeyVaultAddWebAppPermissionsTask>();
+                var firewall = job.Registered<KeyVaultFirewallConfigTask>();
+                siteTask.Container = grant.Container = firewall.Container = arm.Group;
+                firewall.ResolveInstallerIpAsync = (name, log, token) => Task.FromResult("192.0.2.20");
+                var identity = (JObject)arm.Resource(Site)["identity"];
+                identity["type"] = existingType;
+                if (existingType == "UserAssigned") identity.Property("principalId").Remove();
+                var ids = new[] { "contoso-worker", "contoso-reporting" }
+                    .Select(n => Rg + "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/" + n).ToArray();
+                if (existingType.Contains("UserAssigned"))
+                    identity["userAssignedIdentities"] = new JObject(ids.Select(id =>
+                        new JProperty(id, new JObject { ["principalId"] = "00000000-0000-0000-0000-000000000003" })));
+                if (retryWithoutAlwaysOn) arm.Resource(Site + "/config/web")["properties"]["alwaysOn"] = false;
+                var attempts = 0;
+                arm.OverrideResponse = (method, path) =>
+                {
+                    if (method == "GET" && path.Equals(Sites, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // List projections need not include all the identity data on the site GET.
+                        var projection = (JObject)arm.Resource(Site).DeepClone();
+                        ((JObject)projection["identity"]).Property("userAssignedIdentities")?.Remove();
+                        if (retryWithoutAlwaysOn) projection.Property("identity").Remove();
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject { ["value"] = new JArray(projection) });
+                    }
+                    if (method == "PATCH" && path.Equals(Site, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (++attempts == 1 && retryWithoutAlwaysOn) return FakeArm.Json(HttpStatusCode.Conflict, new JObject());
+                        var requested = (JObject)arm.Requests.Last().Body["identity"]?.DeepClone();
+                        if (requested != null)
+                        {
+                            requested["principalId"] = WebAppPrincipal; // ARM assigns the system principal.
+                            arm.Resource(Site)["identity"] = requested; // An identity block is replaced, not merged.
+                        }
+                        var reply = (JObject)arm.Resource(Site).DeepClone();
+                        if (retryWithoutAlwaysOn) ((JObject)reply["identity"]).Property("principalId")?.Remove();
+                        return FakeArm.Json(HttpStatusCode.OK, reply);
+                    }
+                    return null;
+                };
+
+                var site = await siteTask.ExecuteTaskReturnResult(await arm.Plan("contoso-web"));
+                var patches = arm.Requests.Where(r => r.Method == "PATCH" && r.Path.Equals(Site, StringComparison.OrdinalIgnoreCase)).ToArray();
+                Assert.AreEqual(existingType == "UserAssigned" ? (retryWithoutAlwaysOn ? 2 : 1) : 0, patches.Length);
+                foreach (var patch in patches)
+                {
+                    var sent = (JObject)patch.Body["identity"];
+                    Assert.AreEqual("SystemAssigned, UserAssigned", (string)sent["type"]);
+                    var userIds = ((JObject)sent["userAssignedIdentities"]).Properties().ToArray();
+                    CollectionAssert.AreEquivalent(ids, userIds.Select(p => p.Name).ToArray());
+                    Assert.IsTrue(userIds.All(p => !p.Value.HasValues), "ARM takes resource IDs, not read-only identity fields.");
+                }
+                if (retryWithoutAlwaysOn) Assert.IsNull(patches[1].Body.SelectToken("properties.siteConfig.alwaysOn"));
+                if (retryWithoutAlwaysOn) Assert.IsNull(site.Data.Identity.PrincipalId, "The principal is available only on the subsequent full site read.");
+                else Assert.AreEqual(Guid.Parse(WebAppPrincipal), site.Data.Identity.PrincipalId);
+                await firewall.ExecuteTask(vault);
+                await grant.ExecuteTask(vault);
+                var ips = arm.Mutations.Single(r => r.Path == Vault).Body.SelectToken("properties.networkAcls.ipRules");
+                CollectionAssert.AreEquivalent(new[] { "192.0.2.10", "192.0.2.20", "203.0.113.10", "203.0.113.11" },
+                    ips.Select(ip => (string)ip["value"]).ToArray());
+                var policy = arm.Mutations.Single(r => r.Path.Equals(Vault + "/accessPolicies/add", StringComparison.OrdinalIgnoreCase))
+                    .Body.SelectToken("properties.accessPolicies").Single();
+                Assert.AreEqual(WebAppPrincipal, (string)policy["objectId"]);
+                Assert.IsFalse(arm.Mutations.Any(r => r.Path.Contains("roleAssignments")));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("SystemAssigned", Sub)]
+        [DataRow("UserAssigned", WebAppPrincipal)]
+        [DataRow("SystemAssigned, UserAssigned", null)]
+        public async Task AppService_RegisteredVaultRefusesAnUnusableSystemPrincipal(string type, string principal)
+        {
+            using (var arm = new FakeArm())
+            {
+                var (grant, vault) = await RegisteredVaultTask<KeyVaultAddWebAppPermissionsTask>(arm, "contoso-web", NullLogger.Instance);
+                arm.Resource(Site)["identity"] = new JObject { ["type"] = type, ["principalId"] = principal };
+                var error = await Assert.ThrowsAsync<InstallException>(() => grant.ExecuteTask(vault));
+                StringAssert.Contains(error.Message, "system-assigned");
+                Assert.AreEqual(0, arm.Mutations.Count);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow("incomplete identity", 0)]
+        [DataRow("missing identity type", 0)]
+        [DataRow("site GET denied", 0)]
+        [DataRow("cancelled GET", 0)]
+        [DataRow("ScopeLocked", 1)]
+        [DataRow("scopelocked", 1)]
+        [DataRow("RequestDisallowedByPolicy", 1)]
+        [DataRow("Conflict", 1)]
+        public async Task AppService_RegisteredIdentityRepairStopsOnIncompleteReadsAndRejectedWrites(string scenario, int expectedWrites)
+        {
+            using (var arm = new FakeArm())
+            using (var cancellation = new CancellationTokenSource())
+            {
+                arm.AddSite("1.3");
+                var identity = new JObject { ["type"] = "UserAssigned" };
+                if (scenario != "incomplete identity")
+                    identity["userAssignedIdentities"] = new JObject
+                        { [Rg + "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/contoso-worker"] = new JObject() };
+                if (scenario == "missing identity type") identity.Property("type").Remove();
+                arm.Resource(Site)["identity"] = identity;
+                if (expectedWrites == 1 && scenario != "Conflict")
+                    arm.Resource(Site + "/config/web")["properties"]["alwaysOn"] = false;
+                arm.OverrideResponse = (method, path) =>
+                {
+                    if (!path.Equals(Site, StringComparison.OrdinalIgnoreCase)) return null;
+                    if (method == "GET" && scenario == "cancelled GET") cancellation.Cancel();
+                    if (method == "GET" && scenario == "site GET denied") return FakeArm.Json(HttpStatusCode.Forbidden, new JObject());
+                    if (method == "PATCH" && expectedWrites == 1)
+                        return FakeArm.Json(scenario == "RequestDisallowedByPolicy" ? HttpStatusCode.Forbidden : HttpStatusCode.Conflict,
+                            new JObject { ["error"] = new JObject { ["code"] = scenario, ["message"] = "Contoso" } });
+                    return null;
+                };
+                var task = new InspectableBackend(BackendConfig("contoso-web", "contoso-web"), NullLogger.Instance, arm.Subscription).WebsiteTask;
+                task.CancellationToken = cancellation.Token;
+                task.Container = arm.Group;
+                var plan = await arm.Plan("contoso-web");
+                if (scenario == "cancelled GET")
+                    await Assert.ThrowsAsync<OperationCanceledException>(() => task.ExecuteTaskReturnResult(plan));
+                else if (expectedWrites == 0)
+                    await Assert.ThrowsAsync<InstallException>(() => task.ExecuteTaskReturnResult(plan));
+                else
+                    await Assert.ThrowsAsync<Azure.RequestFailedException>(() => task.ExecuteTaskReturnResult(plan));
+                Assert.AreEqual(expectedWrites, arm.Mutations.Count);
+                Assert.IsTrue(JToken.DeepEquals(identity, arm.Resource(Site)["identity"]));
+            }
+        }
+
         private static async Task<(T Task, KeyVaultResource Vault)> RegisteredVaultTask<T>(FakeArm arm, string webAppName, ILogger logger)
             where T : InstallTaskInAzResourceGroup<KeyVaultResource>
         {
             arm.AddSite("1.2");
-            arm.Resource(Site)["identity"]["tenantId"] = VaultTenant;
-            arm.Resource(Site)["identity"]["principalId"] = WebAppPrincipal;
+            var config = BackendConfig(webAppName, "contoso-plan");
+            config.InstallerAccount.DirectoryId = VaultTenant;
+            var task = new InspectableBackend(config, logger, arm.Subscription).Registered<T>();
+            task.Container = arm.Group;
+            return (task, await AddVault(arm));
+        }
+
+        private static async Task<KeyVaultResource> AddVault(FakeArm arm)
+        {
             arm.Add(Vault, new JObject
             {
                 ["name"] = "contoso-vault", ["type"] = "Microsoft.KeyVault/vaults", ["location"] = "westeurope",
@@ -896,11 +1045,7 @@ namespace Tests.UnitTests.InstallTests
                         ["ipRules"] = new JArray(new JObject { ["value"] = "192.0.2.10" }) }
                 }
             });
-            var config = BackendConfig(webAppName, "contoso-plan");
-            config.InstallerAccount.DirectoryId = VaultTenant;
-            var task = new InspectableBackend(config, logger, arm.Subscription).Registered<T>();
-            task.Container = arm.Group;
-            return (task, (await arm.Group.GetKeyVaultAsync("contoso-vault")).Value);
+            return (await arm.Group.GetKeyVaultAsync("contoso-vault")).Value;
         }
 
         private sealed class InspectableBackend : AzurePaaSInstallJob
@@ -947,6 +1092,137 @@ namespace Tests.UnitTests.InstallTests
         }
 
         // ---------------------------------------------------------------- App Service plan (X4-N4)
+
+        [DataTestMethod]
+        [DataRow("shared plan denied")]
+        [DataRow("incomplete site list")]
+        [DataRow("omitted site")]
+        [DataRow("missing hosting plan ID")]
+        [DataRow("configured plan list denied")]
+        [DataRow("site config denied")]
+        [DataRow("FTP policy denied")]
+        [DataRow("cancelled plan read")]
+        [DataRow("healthy")]
+        public async Task Backend_HostingDiscoveryGuardsPrivateToPublic(string scenario)
+        {
+            using (var arm = new FakeArm())
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var config = BackendConfig(scenario == "configured plan list denied" ? "contoso-new" : "CoNtOsO-WeB", "contoso-unused");
+                arm.AddBackendInventory(config);
+                var subnet = Rg + "/providers/Microsoft.Network/virtualNetworks/contoso-vnet/subnets/integration";
+                arm.AddSite("1.3", subnet);
+                arm.Resource(Site)["properties"]["publicNetworkAccess"] = "Disabled";
+                arm.Resource(Site)["properties"]["serverFarmId"] = scenario == "missing hosting plan ID" ? null : SharedPlan;
+                arm.Add(SharedPlan, (JObject)arm.Resource(Plans + "/contoso-web").DeepClone());
+                arm.Resource(SharedPlan)["name"] = "contoso-shared";
+                var integration = new PrivateNetworkArtifact { Id = Site, TargetId = Site, SubnetId = subnet,
+                    Kind = PrivateNetworkProvenance.Integration, CreatedByInstaller = true, CreationConfirmed = true };
+                config.PrivateNetworking.Artifacts.Add(integration);
+                config.PrivateNetworking.AppliedTopology = "Private";
+                var checkpoints = new List<string>();
+                var job = new AzurePaaSInstallJob(NullLogger.Instance, config, arm.Subscription,
+                    () => checkpoints.Add(config.PrivateNetworking.AppliedTopology)) { CancellationToken = cancellation.Token };
+                arm.OverrideResponse = (method, path) =>
+                {
+                    if (method == "GET" && path.Equals(Sites, StringComparison.OrdinalIgnoreCase) && scenario == "incomplete site list")
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject());
+                    if (method == "GET" && path.Equals(Sites, StringComparison.OrdinalIgnoreCase) && scenario == "omitted site")
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject { ["value"] = new JArray() });
+                    if (method == "GET" && ((path.Equals(Plans, StringComparison.OrdinalIgnoreCase) && scenario == "configured plan list denied") ||
+                        (path.Equals(Site + "/config/web", StringComparison.OrdinalIgnoreCase) && scenario == "site config denied") ||
+                        (path.Equals(FtpPolicy, StringComparison.OrdinalIgnoreCase) && scenario == "FTP policy denied")))
+                        return FakeArm.Json(HttpStatusCode.Forbidden, new JObject());
+                    if (method == "GET" && path.Equals(SharedPlan, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (scenario == "shared plan denied") return FakeArm.Json(HttpStatusCode.Forbidden, new JObject());
+                        if (scenario == "cancelled plan read") cancellation.Cancel();
+                    }
+                    if (method == "DELETE" && path.Equals(Site + "/networkConfig/virtualNetwork", StringComparison.OrdinalIgnoreCase))
+                        arm.Resource(Site)["properties"]["virtualNetworkSubnetId"] = null;
+                    return null;
+                };
+
+                if (scenario == "healthy")
+                {
+                    // The fixture ends at the very next registered step: no database or IP resolver is needed.
+                    await Assert.ThrowsAsync<Azure.RequestFailedException>(() => job.Install());
+                    Assert.IsTrue(arm.Requests.Last().Path.EndsWith("/Microsoft.Sql/servers", StringComparison.OrdinalIgnoreCase));
+                    Assert.AreEqual("Public", config.PrivateNetworking.AppliedTopology);
+                    Assert.IsTrue(integration.Removed);
+                    Assert.AreEqual("Enabled", job.CreatedWebSiteResource.Data.PublicNetworkAccess);
+                    Assert.IsNull(job.CreatedWebSiteResource.Data.VirtualNetworkSubnetId);
+                    Assert.AreEqual(SharedPlan, job.CreatedAppServicePlan.Id.ToString(), true);
+                    Assert.AreEqual(1, arm.Requests.Count(r => r.Path.Equals(SharedPlan, StringComparison.OrdinalIgnoreCase)));
+                    Assert.AreEqual(1, arm.Requests.Count(r => r.Path.Equals(Sites, StringComparison.OrdinalIgnoreCase)));
+                    Assert.IsTrue(arm.Requests.FindIndex(r => r.Path.Equals(SharedPlan, StringComparison.OrdinalIgnoreCase)) <
+                        arm.Requests.FindIndex(r => r.Method == "PATCH"));
+                    CollectionAssert.AreEqual(new[] { "PATCH " + Site, "DELETE " + Site + "/networkConfig/virtualNetwork", "PATCH " + Site },
+                        ConfigurationRequests(arm), "No second public-access patch or shared-plan write is needed.");
+                    return;
+                }
+
+                if (scenario == "cancelled plan read")
+                    await Assert.ThrowsAsync<OperationCanceledException>(() => job.Install());
+                else if (scenario == "site config denied" || scenario == "FTP policy denied")
+                    Assert.AreEqual(403, (await Assert.ThrowsAsync<Azure.RequestFailedException>(() => job.Install())).Status);
+                else
+                    await Assert.ThrowsAsync<InstallException>(() => job.Install());
+                Assert.AreEqual(0, arm.Mutations.Count, "Unexpected requests: " + string.Join(", ", ConfigurationRequests(arm)));
+                Assert.AreEqual(0, checkpoints.Count);
+                Assert.AreEqual("Private", config.PrivateNetworking.AppliedTopology);
+                Assert.IsFalse(integration.Removed);
+                Assert.AreEqual("Disabled", (string)arm.Resource(Site)["properties"]["publicNetworkAccess"]);
+                Assert.AreEqual(subnet, (string)arm.Resource(Site)["properties"]["virtualNetworkSubnetId"]);
+                Assert.IsFalse(arm.Requests.Any(r => r.Path.IndexOf("/providers/Microsoft.Sql/", StringComparison.OrdinalIgnoreCase) >= 0));
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(true, true)]
+        [DataRow(true, false)]
+        [DataRow(false, false)]
+        public async Task Backend_NewSiteUsesThePreCreateInventoryForTheLegacyWarning(bool existingGroup, bool localLegacyPlan)
+        {
+            using (var arm = new FakeArm())
+            {
+                var logger = new CapturingLogger();
+                var config = BackendConfig("contoso-web", "contoso-new");
+                arm.AddBackendInventory(config, existingGroup);
+                arm.KnownLists.Add(Sites);
+                if (existingGroup) arm.AddPlan(localLegacyPlan ? "CONTOSO-WEB" : "contoso-other");
+                var foreign = SharedPlan.Replace("contoso-shared", "contoso-web");
+                arm.Add(foreign, new JObject { ["name"] = "contoso-web", ["type"] = "Microsoft.Web/serverfarms" });
+                var lists = 0;
+                arm.OverrideResponse = (method, path) =>
+                {
+                    if (method == "GET" && path.Equals(Plans, StringComparison.OrdinalIgnoreCase) && ++lists > 1)
+                        return FakeArm.Json(HttpStatusCode.ServiceUnavailable, new JObject());
+                    if (method == "GET" && path.Equals(Plans, StringComparison.OrdinalIgnoreCase) && !localLegacyPlan && existingGroup)
+                        return FakeArm.Json(HttpStatusCode.OK, new JObject { ["value"] = new JArray(arm.Resource(Plans + "/contoso-other"), arm.Resource(foreign)) });
+                    if (method == "PUT" && path.Equals(Rg, StringComparison.OrdinalIgnoreCase))
+                    {
+                        arm.AddResourceGroup();
+                        return FakeArm.Json(HttpStatusCode.OK, arm.Resource(Rg));
+                    }
+                    if (method == "PUT" && path == Site)
+                    {
+                        arm.AddSite("1.2");
+                        arm.Resource(Site)["properties"]["serverFarmId"] = arm.Requests.Last().Body.SelectToken("properties.serverFarmId");
+                        return FakeArm.Json(HttpStatusCode.OK, arm.Resource(Site));
+                    }
+                    return null;
+                };
+                var job = new AzurePaaSInstallJob(logger, config, arm.Subscription);
+                await Assert.ThrowsAsync<Azure.RequestFailedException>(() => job.Install());
+
+                Assert.IsTrue(arm.Requests.Last().Path.EndsWith("/Microsoft.Sql/servers", StringComparison.OrdinalIgnoreCase),
+                    "A diagnostic lookup must not strand a newly created paid plan before the site is created.");
+                Assert.AreEqual(Plans + "/contoso-new", job.CreatedWebSiteResource.Data.AppServicePlanId.ToString(), true);
+                Assert.AreEqual(existingGroup ? 1 : 0, lists);
+                Assert.AreEqual(localLegacyPlan, logger.Lines.Any(l => l.Level == LogLevel.Warning && l.Message.Contains("stops being billed")));
+            }
+        }
 
         [TestMethod]
         public async Task Plan_ANewWebApp_GetsThePlanNameTheOperatorConfigured()
@@ -1328,13 +1604,22 @@ namespace Tests.UnitTests.InstallTests
             public void AddResourceGroup() =>
                 Add(Rg, new JObject { ["name"] = "contoso", ["type"] = "Microsoft.Resources/resourceGroups", ["location"] = "westeurope", ["properties"] = new JObject() });
 
+            public void AddBackendInventory(SolutionInstallConfig config, bool existingGroup = true)
+            {
+                if (existingGroup) AddResourceGroup();
+                KnownLists.UnionWith(new[] { Rg + "/resources", Rg + "/providers/Microsoft.Network/privateEndpoints",
+                    Rg + "/providers/Microsoft.Network/privateDnsZones" });
+                foreach (var provider in AzureResourceProviderPreflight.RequiredProviders(config))
+                    Add("/subscriptions/" + Sub + "/providers/" + provider, new JObject { ["namespace"] = provider, ["registrationState"] = "Registered" });
+            }
+
             public void AddSite(string minTls, string integrationSubnet = null)
             {
                 Add(Site, new JObject
                 {
                     ["name"] = "contoso-web", ["type"] = "Microsoft.Web/sites", ["location"] = "westeurope", ["kind"] = "app",
                     ["tags"] = new JObject { ["CostCentre"] = "Contoso-42" },
-                    ["identity"] = new JObject { ["type"] = "SystemAssigned", ["principalId"] = Sub, ["tenantId"] = Sub },
+                    ["identity"] = new JObject { ["type"] = "SystemAssigned", ["principalId"] = WebAppPrincipal, ["tenantId"] = VaultTenant },
                     ["properties"] = new JObject
                     {
                         ["serverFarmId"] = Rg + "/providers/Microsoft.Web/serverfarms/contoso-web",

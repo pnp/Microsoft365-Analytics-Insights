@@ -7,6 +7,7 @@ using CloudInstallEngine.Azure;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 // Azure.ResourceManager.AppService 1.5.0 added its own ManagedServiceIdentityType, which collides with
 // the ARM-wide one. ManagedServiceIdentity's constructor takes the ARM-wide type, so pin the alias to it.
@@ -28,6 +29,17 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         /// <summary>Optional preflight for a full deployment. PaaS-only provisioning does not replace either settings collection.</summary>
         public Func<WebSiteResource, Task> BeforeExistingSiteUpdateAsync { get; set; }
+        public AppServiceHostingDiscovery Preflight { private get; set; }
+
+        public async Task PreflightExistingSiteAsync(AppServiceHostingDiscovery hosting, CancellationToken token)
+        {
+            if (hosting.Site == null) return;
+            if (BeforeExistingSiteUpdateAsync != null) await BeforeExistingSiteUpdateAsync(hosting.Site);
+            token.ThrowIfCancellationRequested();
+            hosting.SiteConfig = (await hosting.Site.GetWebSiteConfig().GetAsync(token)).Value.Data;
+            hosting.FtpBasicPublishingAllowed = (await hosting.Site.GetWebSiteFtpPublishingCredentialsPolicy().GetAsync(token)).Value.Data.Allow;
+            token.ThrowIfCancellationRequested();
+        }
 
         public override async Task<WebSiteResource> ExecuteTaskReturnResult(object contextArg)
         {
@@ -39,7 +51,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var supportsAlwaysOn = AppServicePlanCapabilities.SupportsAlwaysOn(appServicePlanSku);
 
             // Get/create app-service with plan
-            var webApp = AppServiceResourceLookup.FindSite(Container, _config.ResourceName, CancellationToken);
+            CancellationToken.ThrowIfCancellationRequested();
+            var webApp = Preflight != null ? Preflight.Site :
+                await AppServiceResourceLookup.FindSiteForDeploymentAsync(Container, _config.ResourceName, CancellationToken);
             if (webApp == null)
             {
                 var newWebAppInfo = BuildNewWebSiteData(base.AzureLocation, appServicePlan.Id, appServicePlanSku, _allowPublicAccess);
@@ -54,8 +68,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
                     var newWebAppReq = await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newWebAppInfo, cancellationToken: CancellationToken);
                     webApp = newWebAppReq.Value;
                 }
-                catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
+                catch (RequestFailedException ex) when (newWebAppInfo.SiteConfig.IsAlwaysOn == true && AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
                 {
+                    CancellationToken.ThrowIfCancellationRequested();
                     _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan.Data.Name, appServicePlanSku));
                     newWebAppInfo.SiteConfig = BuildSecureSiteConfig(appServicePlanSku, includeAlwaysOn: false);
                     var newWebAppReq = await Container.GetWebSites().CreateOrUpdateAsync(WaitUntil.Completed, _config.ResourceName, newWebAppInfo, cancellationToken: CancellationToken);
@@ -64,7 +79,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
-                if (BeforeExistingSiteUpdateAsync != null)
+                if (Preflight?.SiteConfig == null && BeforeExistingSiteUpdateAsync != null)
                 {
                     await BeforeExistingSiteUpdateAsync(webApp);
                     CancellationToken.ThrowIfCancellationRequested();
@@ -77,16 +92,16 @@ namespace CloudInstallEngine.Azure.InstallTasks
                 var needsUpdate = false;
 
                 // Ensure app has system assigned identity
-                if (webApp.HasData && webApp.Data.Identity == null)
+                if (!ManagedIdentityPlanner.GetSystemAssignedPrincipal(webApp.Data.Identity).HasValue)
                 {
-                    patch.Identity = new ManagedServiceIdentity(ManagedServiceIdentityType.SystemAssigned);
+                    patch.Identity = ManagedIdentityPlanner.BuildSystemAssignedPreservingUserAssigned(webApp.Data.Identity);
                     _logger.LogInformation($"Updating App Service '{_config.ResourceName}' to use System Assigned identity...");
                     needsUpdate = true;
                 }
 
                 // Raise a minimum TLS version below 1.2, disable FTP/FTPS and enable Always On when the plan supports it.
                 // Only the settings that need changing are sent, so a stricter setting an operator chose (TLS 1.3) stays.
-                var siteConfig = (await webApp.GetWebSiteConfig().GetAsync(cancellationToken: CancellationToken)).Value.Data;
+                var siteConfig = Preflight?.SiteConfig ?? (await webApp.GetWebSiteConfig().GetAsync(cancellationToken: CancellationToken)).Value.Data;
                 var configChanges = new List<string>();
                 var siteConfigPatch = BuildSiteConfigChanges(siteConfig, supportsAlwaysOn, configChanges);
                 if (siteConfigPatch != null)
@@ -106,15 +121,16 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
                 if (needsUpdate)
                 {
+                    CancellationToken.ThrowIfCancellationRequested();
                     try
                     {
                         webApp = (await webApp.UpdateAsync(patch, CancellationToken)).Value;
                     }
-                    catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
+                    catch (RequestFailedException ex) when (patch.SiteConfig?.IsAlwaysOn == true && AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
                     {
+                        CancellationToken.ThrowIfCancellationRequested();
                         _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan.Data.Name, appServicePlanSku));
-                        if (patch.SiteConfig != null)
-                            patch.SiteConfig.IsAlwaysOn = null;
+                        patch.SiteConfig.IsAlwaysOn = null;
                         webApp = (await webApp.UpdateAsync(patch, CancellationToken)).Value;
                     }
                 }
@@ -127,8 +143,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
             // Content is deployed through Kudu with a Microsoft Entra token (InstallAppServiceContentsTask), so the
             // installer no longer switches SCM basic publishing credentials on. A site whose operator turned them off
             // keeps them off. FTP basic credentials are still turned off, because nothing here uses FTP.
-            var ftpPolicy = await webApp.GetWebSiteFtpPublishingCredentialsPolicy().GetAsync(cancellationToken: CancellationToken);
-            if (ftpPolicy.Value.Data.Allow != false)
+            var ftpAllowed = Preflight?.Site != null ? Preflight.FtpBasicPublishingAllowed :
+                (await webApp.GetWebSiteFtpPublishingCredentialsPolicy().GetAsync(cancellationToken: CancellationToken)).Value.Data.Allow;
+            if (ftpAllowed != false)
             {
                 _logger.LogInformation($"Disabling FTP basic publishing credentials for '{_config.ResourceName}'...");
                 await webApp.GetWebSiteFtpPublishingCredentialsPolicy().CreateOrUpdateAsync(
