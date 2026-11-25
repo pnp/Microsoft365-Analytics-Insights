@@ -2192,8 +2192,9 @@ namespace Common.Entities.CopilotAdoption
             // Each department row's own candidate count, from every recommended candidate. The executive league
             // table used to look its departments up in OpportunityByDepartment below - the departments with the
             // MOST candidates - while its rows are the ones with the LOWEST habit rate, so most rows found nothing.
-            AssignRecommendedCandidates(summary.AdoptionByDepartment, recommended, "(no department)", _options.MinSeatsPerSegment, analysis.OpportunitiesCapped);
-            AssignRecommendedCandidates(summary.HabitByDepartment, recommended, "(no department)", _options.MinSeatsPerSegment, analysis.OpportunitiesCapped);
+            var candidateListIncomplete = analysis.OpportunitiesCapped != false;
+            AssignRecommendedCandidates(summary.AdoptionByDepartment, recommended, "(no department)", _options.MinSeatsPerSegment, candidateListIncomplete);
+            AssignRecommendedCandidates(summary.HabitByDepartment, recommended, "(no department)", _options.MinSeatsPerSegment, candidateListIncomplete);
 
             // Like every other department breakdown, a department needs MinSeatsPerSegment people behind its
             // figure: one or two candidates would say which of a small team's few unlicensed people work hardest.
@@ -2215,34 +2216,30 @@ namespace Common.Entities.CopilotAdoption
             // filtered view of it, said nothing about the cap, and a view whose candidates all ranked below
             // the tenant-wide cut-off read as "nobody in this tenant qualifies".
             var volumesObserved = summary.DataSources?.M365UsageReportsAvailable ?? false;
-            summary.LicenceOpportunityEstimate = volumesObserved
-                ? CopilotAdoptionScoring.EstimateLicenceValue(recommended, _options, analysis.OpportunitiesCapped)
-                : new LicenceValueEstimate { CandidatesCapped = analysis.OpportunitiesCapped };
+            var cap = analysis.OpportunitiesCapped;
+            LicenceValueEstimate LicenceEstimate(List<LicenceOpportunityRow> cohort,
+                LicenceEstimateCohort kind = LicenceEstimateCohort.Recommended)
+            {
+                if (!cap.HasValue) return null;
+                return volumesObserved
+                    ? CopilotAdoptionScoring.EstimateLicenceValue(cohort, _options, cap.Value, kind)
+                    : new LicenceValueEstimate { CandidatesCapped = cap.Value };
+            }
+            summary.LicenceOpportunityEstimate = LicenceEstimate(recommended);
 
             // Beside it, the candidates already using Copilot Chat without a licence: the same definition
             // as the list's "Already using Copilot" filter, so a reader can bring up exactly these people.
-            summary.LicenceChatUsersEstimate = volumesObserved
-                ? CopilotAdoptionScoring.EstimateLicenceValue(
-                    recommended.Where(o => o.UnlicensedCopilotInteractions > 0).ToList(),
-                    _options,
-                    analysis.OpportunitiesCapped)
-                : new LicenceValueEstimate { CandidatesCapped = analysis.OpportunitiesCapped };
+            summary.LicenceChatUsersEstimate = LicenceEstimate(recommended.Where(o => o.UnlicensedCopilotInteractions > 0).ToList());
 
             // And every candidate, recommended or not - the portal's "all users" option. Recommended stays
             // the default, but when nobody uses Microsoft 365 heavily enough to be recommended it is empty,
             // and this is then the only figure a purchase can be sized with.
-            summary.LicenceAllCandidatesEstimate = volumesObserved
-                ? CopilotAdoptionScoring.EstimateLicenceValue(
-                    opportunities,
-                    _options,
-                    analysis.OpportunitiesCapped,
-                    LicenceEstimateCohort.AllCandidates)
-                : new LicenceValueEstimate { CandidatesCapped = analysis.OpportunitiesCapped };
+            summary.LicenceAllCandidatesEstimate = LicenceEstimate(opportunities, LicenceEstimateCohort.AllCandidates);
 
             // The same people, through the Cowork model instead: what Cowork could add for everyone without
             // a seat once licensed. Offered on the Cowork tab beside the seat holders; never summed with the
             // licence figure above, which is the time the licence itself would give back.
-            summary.CoworkWithoutLicenceEstimate = volumesObserved
+            summary.CoworkWithoutLicenceEstimate = !cap.HasValue ? null : volumesObserved
                 ? CopilotAdoptionScoring.EstimateCoworkValueWithoutLicence(opportunities, _options)
                 : new CoworkValueEstimate();
 

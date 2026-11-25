@@ -23,7 +23,9 @@ It then lists every key on the *Snapshot facts* sheet that changed: the value be
 the change, and a note when a key exists in only one file (added or removed by a later build) or is
 blank in one file. A blank is unknown, never zero. For example, if workload coverage cannot support a
 licence or Cowork forecast, its cohort, volumes and hours are blank; the candidate-list cap and observed
-Copilot use can still be reported. No change is calculated against a blank. An assessed zero stays
+Copilot use can still be reported. If the candidate query itself failed, its cap is unknown too:
+both the licence forecasts and the Cowork forecast for people without a seat are blank, even when
+the workload imports are verified. No change is calculated against a blank. An assessed zero stays
 numeric. The script never reads *Run diagnostics*, whose keys vary from run to run.
 
 ```powershell

@@ -2641,7 +2641,7 @@ namespace Tests.UnitTests
             return SheetKeyColumn(bytes).SkipWhile(k => k != "Key").Skip(1).ToList();
         }
 
-        private static XElement SnapshotValueCell(byte[] bytes, string key)
+        internal static XElement SnapshotValueCell(byte[] bytes, string key)
         {
             var keyCell = SheetCellElements(bytes, "Snapshot facts").Single(c => c.Value == key
                 && ((string)c.Attribute("r")).StartsWith("A", StringComparison.Ordinal));
@@ -2653,7 +2653,7 @@ namespace Tests.UnitTests
         /// Each Snapshot fact's value as written - column B of the key's own row, empty when blank - keyed
         /// by the fact's key. Read by row number, so a blank value can never be mistaken for the next row.
         /// </summary>
-        private static Dictionary<string, string> SnapshotFactValues(byte[] bytes)
+        internal static Dictionary<string, string> SnapshotFactValues(byte[] bytes)
         {
             var rows = new Dictionary<int, Dictionary<string, string>>();
             foreach (var cell in SheetCellElements(bytes, "Snapshot facts"))
@@ -2780,7 +2780,7 @@ namespace Tests.UnitTests
         internal static CopilotAdoptionAnalysis SyntheticAnalysis()
         {
             var options = CopilotAdoptionOptions.Default;
-            var analysis = new CopilotAdoptionAnalysis();
+            var analysis = new CopilotAdoptionAnalysis { OpportunitiesCapped = false };
             var summary = analysis.Summary;
 
             summary.GeneratedUtc = Now;
