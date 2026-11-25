@@ -177,6 +177,61 @@ namespace Tests.UnitTests
         }
 
         [DataTestMethod]
+        [DataRow(false, AppTokenPermissionAccess.Granted, DisplayName = "Cancelled offline; Copilot import disabled on restart")]
+        [DataRow(true, AppTokenPermissionAccess.NotGranted, DisplayName = "Cancelled while checking a missing grant")]
+        [DataRow(true, AppTokenPermissionAccess.NoIdentityToInspect, DisplayName = "Cancelled while checking an absent identity")]
+        public async Task Importer_AcknowledgedCancelPrecedesPreflightFailure(bool cancelDuringPermissionCheck, AppTokenPermissionAccess access)
+        {
+            var now = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
+            var values = new InMemoryKeyValueStore(() => now);
+            var config = new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true, ActivityLog = true } };
+            var portal = new BackfillStatusService(new CopilotAuditBackfillStateStore(values, true, () => now), config, () => now);
+            var queued = await portal.StartAsync(null, "admin@contoso.com");
+            if (!cancelDuringPermissionCheck)
+            {
+                Assert.IsTrue((await portal.CancelAsync(queued.Id)).CancelRequested);
+                config.ImportJobSettings.Copilot = false;
+            }
+
+            now = now.AddHours(1);
+            var permissionChecked = false;
+            var source = new CallbackSource(_ => throw new AssertFailedException("No records should be fetched before start."))
+            {
+                CheckPermission = async () =>
+                {
+                    Assert.IsTrue(cancelDuringPermissionCheck, "An offline cancellation must not need a permission check.");
+                    permissionChecked = true;
+                    Assert.IsTrue((await portal.CancelAsync(queued.Id)).CancelRequested);
+                    return access;
+                }
+            };
+            using (var captured = new CapturedAnalyticsLogger())
+            {
+                var worker = new CopilotAuditBackfillImporter(new CopilotAuditBackfillStateStore(values, true, () => now),
+                    source, new CountingPersistence(), config, captured.Logger, () => now, existingEvents: new FakeExistingEventFilter());
+                var result = await worker.AdvanceLatestAsync();
+                var visible = (await portal.GetStatusAsync()).LatestJob;
+                var health = captured.Events.Single(e => e.Name == nameof(AnalyticsLogger.AnalyticsEvent.HealthCheck));
+
+                Assert.AreEqual(CopilotAuditBackfillStates.Cancelled, result.State,
+                    $"Portal error: {visible.LastErrorCode}; health: {health.Properties["Status"]}/{health.Properties["ReasonKey"]}.");
+                Assert.IsTrue(result.CancelRequested);
+                Assert.AreEqual(CopilotAuditBackfillStates.Cancelled, visible.State);
+                Assert.AreEqual(queued.Id, visible.Id);
+                Assert.IsTrue(visible.CancelRequested);
+                Assert.AreEqual(config.ImportJobSettings.Copilot, visible.CopilotImportEnabled);
+                Assert.IsNull(visible.LastErrorCode);
+                Assert.IsNull(visible.StartedUtc);
+                Assert.AreEqual(now, visible.CompletedUtc);
+                Assert.AreEqual(queued.PendingSlices, visible.PendingSlices);
+                Assert.AreEqual(0, source.Submits);
+                Assert.AreEqual(cancelDuringPermissionCheck, permissionChecked);
+                Assert.AreEqual("Healthy", health.Properties["Status"]);
+                Assert.AreEqual("copilotAuditBackfill.cancelled", health.Properties["ReasonKey"]);
+            }
+        }
+
+        [DataTestMethod]
         [DataRow(false, DisplayName = "Queued for 31 days after cancellation")]
         [DataRow(true, DisplayName = "Last tick of a checkpoint renewed after cancellation")]
         public async Task Importer_AcknowledgedCancellationSurvivesDowntime(bool lateCheckpoint)
@@ -317,6 +372,8 @@ namespace Tests.UnitTests
             Assert.AreEqual(terminalState, reply.State);
             Assert.AreEqual(10L, reply.RecordsImported);
             Assert.AreEqual(now, reply.CompletedUtc);
+            Assert.AreEqual(terminalState, (await NewImporter(state, new FakeAuditSearchSource(), new CountingPersistence())
+                .AdvanceLatestAsync()).State, "A late marker must not reclassify a job that already finished.");
         }
 
         [TestMethod]
@@ -1345,8 +1402,9 @@ namespace Tests.UnitTests
             private readonly Func<string, Task<CopilotAuditSearchRecordPage>> _page;
             public int Submits;
             public Func<Task> OnSubmit;
+            public Func<Task<AppTokenPermissionAccess>> CheckPermission = () => Task.FromResult(AppTokenPermissionAccess.Granted);
             public CallbackSource(Func<string, Task<CopilotAuditSearchRecordPage>> page) { _page = page; }
-            public Task<AppTokenPermissionAccess> GetPermissionAccessAsync() => Task.FromResult(AppTokenPermissionAccess.Granted);
+            public Task<AppTokenPermissionAccess> GetPermissionAccessAsync() => CheckPermission();
             public async Task<CopilotAuditSearchQuery> SubmitQueryAsync(CopilotAuditBackfillSlice slice)
             {
                 Submits++;

@@ -270,29 +270,30 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
             job.CopilotImportEnabled = _settings.ImportJobSettings.Copilot;
             NormaliseJob(job);
 
+            if (job.CancelRequested || await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false))
+            {
+                return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
+            }
+
             if (!job.CopilotImportEnabled)
             {
                 return await FinishAsync(job, CopilotAuditBackfillStates.Failed, CopilotAuditBackfillErrorCodes.CopilotImportOff,
                     "The Copilot audit import toggle is off.").ConfigureAwait(false);
             }
 
+            var access = await _source.GetPermissionAccessAsync().ConfigureAwait(false);
+            job.PermissionStatus = ToPermissionStatus(access);
+            // The portal can acknowledge cancellation while the permission check is in flight.
             if (job.CancelRequested || await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false))
             {
                 return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
             }
 
-            var access = await _source.GetPermissionAccessAsync().ConfigureAwait(false);
-            job.PermissionStatus = ToPermissionStatus(access);
             if (access == AppTokenPermissionAccess.NotGranted || access == AppTokenPermissionAccess.NoIdentityToInspect)
             {
                 _logger?.LogWarning("Skipping Copilot audit backfill: the runtime identity does not hold AuditLogsQuery.Read.All. This permission is opt-in and is not granted by the installer.");
                 return await FinishAsync(job, CopilotAuditBackfillStates.Failed, CopilotAuditBackfillErrorCodes.MissingPermission,
                     "AuditLogsQuery.Read.All is missing from the runtime app token.").ConfigureAwait(false);
-            }
-
-            if (job.CancelRequested || await _state.IsCancelRequestedAsync(job.Id).ConfigureAwait(false))
-            {
-                return await FinishAsync(job, CopilotAuditBackfillStates.Cancelled, null, null).ConfigureAwait(false);
             }
 
             if (job.State == CopilotAuditBackfillStates.Queued)
@@ -794,6 +795,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Copilot.AuditBackfill
                 detail = gap.Detail;
             }
             job.State = state;
+            if (state == CopilotAuditBackfillStates.Cancelled) job.CancelRequested = true;
             job.CompletedDays = job.GetCompletedDays().ToList();
             job.CompletedUtc = _utcNow();
             job.LastErrorCode = errorCode;
