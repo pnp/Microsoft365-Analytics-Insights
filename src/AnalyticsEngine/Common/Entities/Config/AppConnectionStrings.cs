@@ -1,9 +1,13 @@
+using DataUtils.Sql;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Configuration;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Common.Entities.Config
 {
@@ -15,6 +19,41 @@ namespace Common.Entities.Config
         /// (a row count would scan a table that is hundreds of millions of rows on a large tenant, on every start).
         /// </summary>
         public bool TestSQLSettings(ILogger logger) => Probe(logger, "hits", db => db.hits.Take(1).Count());
+
+        /// <summary>Read-only one-shot preflight. Bound connection opening, including token acquisition, and the query;
+        /// do not invoke the import context's unlimited command timeout or its database initializer.</summary>
+        public async Task<bool> TestWebTrafficSqlOnceAsync(ILogger logger, CancellationToken shutdownToken = default)
+        {
+            const int timeoutSeconds = 30;
+            try
+            {
+                var builder = new SqlConnectionStringBuilder(DatabaseConnectionString);
+                if (builder.ConnectTimeout == 0 || builder.ConnectTimeout > timeoutSeconds)
+                    builder.ConnectTimeout = timeoutSeconds;
+                using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken))
+                {
+                    deadline.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+                    using (var connection = AzureSqlTokenAuth.CreateConnection(builder.ConnectionString, deadline.Token))
+                    {
+                        await connection.OpenAsync(deadline.Token).ConfigureAwait(false);
+                        using (var command = connection.CreateCommand())
+                        {
+                            command.CommandText = "SELECT TOP (1) 1 FROM dbo.hits;";
+                            command.CommandTimeout = timeoutSeconds;
+                            await command.ExecuteScalarAsync(deadline.Token).ConfigureAwait(false);
+                        }
+                    }
+                }
+                return true;
+            }
+            catch (Exception ex) when (!(ex is OutOfMemoryException))
+            {
+                if (shutdownToken.IsCancellationRequested) return false;
+                logger.LogError(ex, "One-shot SQL startup probe failed: table=hits; {Chain}. Check SQL connectivity, permissions and schema.",
+                    DataUtils.ExceptionDescriber.Chain(ex));
+                return false;
+            }
+        }
 
         /// <summary>The same probe for the audit importer: at most one row of <c>audit_events</c>.</summary>
         public bool TestAuditSQLSettings(ILogger logger) => Probe(logger, "audit_events", db => db.AuditEventsCommon.Take(1).Count());

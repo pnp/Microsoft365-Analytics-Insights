@@ -306,7 +306,9 @@ function GovernanceSection({
                 {formatNumber(summary.agentsImpacted)}
               </span>
               {blockedAgents.length === 0 ? (
-                <Text size={200}>{t('dlp.governance.agents.none')}</Text>
+                <Text size={200}>{summary.agentsImpacted === 0
+                  ? t('dlp.governance.agents.none')
+                  : t('dlp.governance.agents.notListed')}</Text>
               ) : (
                 <>
                   <Text size={100} className={styles.muted}>

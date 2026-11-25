@@ -5,6 +5,7 @@ using Azure.ResourceManager.AppService.Models;
 using Azure.ResourceManager.Models;
 using CloudInstallEngine.Azure;
 using Microsoft.Extensions.Logging;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -26,6 +27,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
 
         public override string TaskName => "get/create App Service website";
 
+        /// <summary>Optional preflight for a full deployment. PaaS-only provisioning does not replace either settings collection.</summary>
+        public Func<WebSiteResource, Task> BeforeExistingSiteUpdateAsync { get; set; }
 
         public override async Task<WebSiteResource> ExecuteTaskReturnResult(object contextArg)
         {
@@ -37,7 +40,8 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var supportsAlwaysOn = AppServicePlanCapabilities.SupportsAlwaysOn(appServicePlanSku);
 
             // Get/create app-service with plan
-            var webApp = Container.GetWebSites().GetAll(cancellationToken: CancellationToken).Where(s => s.Data.Name == _config.ResourceName).SingleOrDefault();
+            var webApp = Container.GetWebSites().GetAll(cancellationToken: CancellationToken)
+                .SingleOrDefault(s => string.Equals(s.Data.Name, _config.ResourceName, StringComparison.OrdinalIgnoreCase));
             if (webApp == null)
             {
                 var newWebAppInfo = BuildNewWebSiteData(base.AzureLocation, appServicePlan.Id, appServicePlanSku, _allowPublicAccess);
@@ -62,6 +66,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
+                if (BeforeExistingSiteUpdateAsync != null)
+                {
+                    await BeforeExistingSiteUpdateAsync(webApp);
+                    CancellationToken.ThrowIfCancellationRequested();
+                }
+
                 // PATCH, never a PUT of a fresh WebSiteData. That PUT carried only the identity, public access, site
                 // config and the configured tags, so it removed every other tag on the site and risked resetting
                 // anything else it left out. A PATCH changes only the properties it names.

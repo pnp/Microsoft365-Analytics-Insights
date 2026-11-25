@@ -11,6 +11,7 @@ using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using System;
 using System.Net;
 using System.Threading.Tasks;
@@ -167,21 +168,18 @@ namespace WebJob.Office365ActivityImporter
                 await pass(graphReader);
                 return true;
             }
-            catch (ODataError ex)
+            catch (ApiException ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.Forbidden)
             {
                 // Don't make a drama if Graph permissions aren't assigned yet.
-                if (ex.ResponseStatusCode == (int)HttpStatusCode.Forbidden)
-                {
-                    _logger.LogWarning(forbiddenWarning);
-                    return false;
-                }
-                else
-                {
-                    // Tracked once: the caller that catches the rethrow below logs the same exception object again, and
-                    // the logger sends an exception to App Insights only the first time it sees it.
-                    _logger.LogError($"Graph import pass failed: {CommonExceptionHandler.GetErrorText(ex)} (HTTP {ex.ResponseStatusCode}, Graph error code '{ex.Error?.Code}').", ex);
-                    throw;
-                }
+                _logger.LogWarning(forbiddenWarning);
+                return false;
+            }
+            catch (ODataError ex)
+            {
+                // Tracked once: the caller that catches the rethrow below logs the same exception object again, and
+                // the logger sends an exception to App Insights only the first time it sees it.
+                _logger.LogError($"Graph import pass failed: {CommonExceptionHandler.GetErrorText(ex)} (HTTP {ex.ResponseStatusCode}, Graph error code '{ex.Error?.Code}').", ex);
+                throw;
             }
         }
 

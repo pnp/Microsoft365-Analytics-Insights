@@ -171,8 +171,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
         /// <summary>
         /// Stored rows are not a coverage outcome (#899): a finalized day with no durable outcome (imported before
-        /// the ledger existed) or still marked in progress (a download that never finished) is downloaded once
-        /// more so it can get a final outcome. Days with a final outcome - including the never-certifiable
+        /// the ledger existed), still marked in progress, or marked empty despite the stored rows is downloaded
+        /// again. Days with a consistent final outcome - including the never-certifiable
         /// incomplete and scopeUnverified - stay skipped, so a filtered tenant keeps #375's skip window.
         /// Bounded by the skip window (at most 25 point reads). Without durable state the skip set is unchanged.
         /// </summary>
@@ -400,6 +400,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
             // rows can only be filtered in SQL by the mapped Date column - we key them by lookup id in memory.
             try
             {
+                // This path also accepts caller-supplied pages. Invalidate them before validating the whole buffer:
+                // a concealed report or a failed lookup can stop the save before it reaches any one date.
+                if (CoverageStore != null)
+                {
+                    foreach (var date in LoadedReportPages.Keys)
+                        await CoverageStore.BeginDayAsync(CoverageSource, date.Date);
+                }
                 // Concealed identities are dealt with before anything is resolved or written, so a pseudonym never
                 // reaches the batched pre-resolution, the scope filter or the get-or-create path below. Every
                 // identifiable row concealed means the tenant conceals identities: refuse the whole report rather
@@ -484,6 +491,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
 
                     // Taken before the request, so the coverage ledger never credits Graph with a day it could only
                     // have published after this moment (see SaveDateAsync).
+                    if (CoverageStore != null)
+                        await CoverageStore.BeginDayAsync(CoverageSource, dt.Value.Date);
                     var requestedUtc = Clock.UtcNow;
                     var dayReports = await LoadReportPageForDateFromGraph(dt.Value) ?? new List<TUserActivityUserDetail>();
                     if (!datesLoaded.Add(dt.Value.Date))
@@ -670,10 +679,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
         private async Task SaveDateAsync(SaveRun run, DateTime dateTime, List<TUserActivityUserDetail> rows,
             ConcurrentLookupDbIdsCache userEmailToDbIdCache, CACHETYPE lookupCache, DateTime requestedUtc)
         {
-            if (CoverageStore != null)
-            {
-                await CoverageStore.BeginDayAsync(CoverageSource, dateTime.Date);
-            }
+            var downloadFinished = !_unfinishedDownloads.Contains(dateTime.Date);
             var store = run.Store;
             var instrumentation = run.Instrumentation;
             var instrumentationEnabled = run.InstrumentationEnabled;
@@ -931,13 +937,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports
                 });
             }
             run.DateIndex++;
-            if (CoverageStore != null && _unfinishedDownloads.Contains(dateTime.Date))
-            {
-                // Graph stopped answering part-way through (a 404 on a later page, or on the first): the rows saved may
-                // be only some of the day's, or none of a day that has rows. Neither is an outcome.
-                await CoverageStore.RecordUnfinishedDownloadAsync(CoverageSource, dateTime.Date);
-            }
-            else if (CoverageStore != null)
+            if (CoverageStore != null && downloadFinished)
             {
                 // The upsert never deletes, so rows from an earlier download that Graph no longer returns stay
                 // stored. They are positive observations of the same day and leave no user unknown, so they do

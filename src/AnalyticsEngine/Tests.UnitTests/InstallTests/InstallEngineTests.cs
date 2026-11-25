@@ -602,8 +602,8 @@ namespace Tests.UnitTests
                 sources.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation = activityZip;
                 sources.GetSolutionComponentLocation(SoftwareComponent.WebJobAppInsights).FileLocation = appInsightsZip;
 
-                var package = InstallAppServiceContentsTask.BuildDeploymentPackage(sources, _logger);
-                using (var archive = ZipFile.OpenRead(package.FullName))
+                using (var workspace = new InstallPackageWorkspace(_logger, testRoot))
+                using (var archive = ZipFile.OpenRead(InstallAppServiceContentsTask.BuildDeploymentPackage(sources, workspace).FullName))
                 {
                     var entries = archive.Entries.Select(entry => entry.FullName.Replace('\\', '/')).ToList();
                     CollectionAssert.Contains(entries, "default.htm");
@@ -1116,29 +1116,22 @@ namespace Tests.UnitTests
                     LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoOwner, SoftwareReleaseConfig.GITHUB_REPO_OWNER)
                 .AddSetting(LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoName, SoftwareReleaseConfig.GITHUB_REPO_NAME);
 
-            var task = new LatestStableSoftwarePackageDownloadTask(cfg, _logger);
-            var result = await task.ExecuteTaskReturnResult(null);
-
-            Assert.IsNotNull(result);
-            Assert.IsTrue(result.IsValid, "Downloaded release should be valid (5 non-empty .zip files)");
-
-            // Verify each component zip exists and has content
-            var components = new[]
+            using (var workspace = new InstallPackageWorkspace(_logger))
             {
-                SoftwareComponent.WebJobActivity,
-                SoftwareComponent.WebJobAppInsights,
-                SoftwareComponent.AITracker,
-                SoftwareComponent.ControlPanel,
-                SoftwareComponent.WebSite
-            };
-            foreach (var component in components)
-            {
-                var fileLocation = result.GetSolutionComponentLocation(component).FileLocation;
-                Assert.IsTrue(System.IO.File.Exists(fileLocation), $"{component} zip should exist at {fileLocation}");
+                var task = new LatestStableSoftwarePackageDownloadTask(cfg, _logger, workspace);
+                var result = await task.ExecuteTaskReturnResult(null);
 
-                var fileInfo = new System.IO.FileInfo(fileLocation);
-                Assert.IsTrue(fileInfo.Length > 0, $"{component} zip should not be empty");
-                Assert.IsTrue(fileLocation.EndsWith(".zip"), $"{component} should be a .zip file");
+                Assert.IsNotNull(result);
+                Assert.IsTrue(result.IsValid, "Downloaded release should be valid (5 non-empty .zip files)");
+
+                foreach (var component in new[] { SoftwareComponent.WebJobActivity, SoftwareComponent.WebJobAppInsights,
+                    SoftwareComponent.AITracker, SoftwareComponent.ControlPanel, SoftwareComponent.WebSite })
+                {
+                    var fileLocation = result.GetSolutionComponentLocation(component).FileLocation;
+                    Assert.IsTrue(System.IO.File.Exists(fileLocation), $"{component} zip should exist at {fileLocation}");
+                    Assert.IsTrue(new FileInfo(fileLocation).Length > 0, $"{component} zip should not be empty");
+                    Assert.IsTrue(fileLocation.EndsWith(".zip"), $"{component} should be a .zip file");
+                }
             }
         }
         [TestMethod]

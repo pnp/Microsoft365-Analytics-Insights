@@ -63,9 +63,8 @@ namespace App.ControlPanel.Engine
                 var azureSub = ConnectToSubscription(ct);
                 log.LogInformation("=== Phase: Azure backend resources ===");
                 // Get/create AppService + SQL and supporting Azure resources. Binaries installed post-create.
-                azureBackeEndCreationJob = new AzurePaaSInstallJob(log, Config, azureSub,
-                    () => Config.CheckpointPrivateNetworking(_configPassword, log));
-                azureBackeEndCreationJob.CancellationToken = ct;
+                var steps = CreateAzureInstallSteps(log, azureSub, ct);
+                azureBackeEndCreationJob = steps.Backend;
                 await azureBackeEndCreationJob.Install();
 
                 ct.ThrowIfCancellationRequested();
@@ -89,9 +88,7 @@ namespace App.ControlPanel.Engine
                 ct.ThrowIfCancellationRequested();
                 // Run stuff now everything in Azure is created
                 log.LogInformation("=== Phase: App Service configuration & content deploy ===");
-                var tasks = new ConfigureAzureComponentsTasks(Config, log, _proxyConfig, InstalledByUsername, _softwareConfig);
-                tasks.CancellationToken = ct;
-                await tasks.RunPostCreatePaaSTasks(
+                await steps.PostCreate.RunPostCreatePaaSTasks(
                     azureBackeEndCreationJob.CreatedWebSiteResource,
                     azureBackeEndCreationJob.CreatedAppServicePlan,
                     azureBackeEndCreationJob.DatabasePaaSInfo,
@@ -226,6 +223,17 @@ namespace App.ControlPanel.Engine
         /// </summary>
         internal virtual SubscriptionResource ConnectToSubscription(CancellationToken ct)
             => BaseAnalyticsSolutionInstallJob.FromConfig(this.Config, ct);
+
+        internal (AzurePaaSInstallJob Backend, ConfigureAzureComponentsTasks PostCreate) CreateAzureInstallSteps(
+            ILogger log, SubscriptionResource subscription, CancellationToken ct)
+        {
+            var postCreate = new ConfigureAzureComponentsTasks(Config, log, _proxyConfig, InstalledByUsername, _softwareConfig) { CancellationToken = ct };
+            var backend = new AzurePaaSInstallJob(log, Config, subscription,
+                () => Config.CheckpointPrivateNetworking(_configPassword, log)) { CancellationToken = ct };
+            // Only a full install replaces both collections. A PaaS-only job need not read their secrets.
+            backend.WebsiteTask.BeforeExistingSiteUpdateAsync = postCreate.PreflightExistingSiteAsync;
+            return (backend, postCreate);
+        }
 
         /// <summary>
         /// Emit final completion line + structured summary block. Uses the underlying logger

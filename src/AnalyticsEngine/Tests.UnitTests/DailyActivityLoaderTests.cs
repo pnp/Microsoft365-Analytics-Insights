@@ -419,9 +419,11 @@ namespace Tests.UnitTests
             var today = now.Date;
             var certified = today.AddDays(-6);
             var uncertified = today.AddDays(-5);
+            var wronglyEmpty = today.AddDays(-7);
             var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
             await coverage.CompleteDayAsync("teams", certified, true, true, false, now, 3);
             await coverage.CompleteDayAsync("teams", uncertified, true, true, false, uncertified, 3);
+            await coverage.CompleteDayAsync("teams", wronglyEmpty, true, true, true, now, 3);
             var loader = new InMemoryDailyActivityLoader(NullLogger.Instance)
             {
                 Clock = new FixedClock(now),
@@ -429,7 +431,7 @@ namespace Tests.UnitTests
                 CoverageStore = coverage, CoverageSource = "teams", CoverageWholeTenant = true,
             };
             loader.ReportStore = new InMemoryUsageReportStore<FakeUserUsageActivityLog>()
-                .Seed(StoredRow(certified, UserAId, 1), StoredRow(uncertified, UserAId, 1));
+                .Seed(StoredRow(certified, UserAId, 1), StoredRow(uncertified, UserAId, 1), StoredRow(wronglyEmpty, UserAId, 1));
 
             var skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: now);
 
@@ -437,7 +439,7 @@ namespace Tests.UnitTests
 
             loader.CoverageStore = new UsageReportCoverageStore(new InMemoryKeyValueStore(), false);
             skip = await loader.GetFinalizedStoredDatesToSkipAsync(null, daysBackMax: 10, lastSuccessfulImport: now);
-            CollectionAssert.AreEquivalent(new[] { certified, uncertified }, skip.ToArray(),
+            CollectionAssert.AreEquivalent(new[] { certified, uncertified, wronglyEmpty }, skip.ToArray(),
                 "Without durable state nothing can be certified, so the existing skip behaviour is kept.");
         }
 
@@ -481,10 +483,6 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, withUnsettled.ExpectedDays - withUnsettled.VerifiedDays,
                 "T - 2 is not settled for the analysis yet and stays uncertified.");
 
-            // Day T's import is under way: it re-downloads T - 3 (still in the refresh window). The upsert never
-            // deletes, so the certified day stays verified while the download is in progress.
-            await coverage.BeginDayAsync("teams", settled);
-            Assert.IsTrue((await coverage.ReadAsync(dayT.AddDays(-9), settled)).Single(c => c.Source == "teams").IsComplete);
         }
 
         [TestMethod]
@@ -635,19 +633,19 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
-        public async Task DailyCoverage_AnUnfinishedRedownload_KeepsACompleteDayComplete_ButNotAnEmptyDayEmpty()
+        public async Task DailyCoverage_AnUnfinishedRedownload_InvalidatesPreviousCompleteAndEmptyOutcomes()
         {
             var now = new DateTime(2026, 6, 20, 10, 0, 0, DateTimeKind.Utc);
             var day = now.Date.AddDays(-5);
 
-            // Certified complete: the upsert never deletes, so every user it was certified with is still stored.
+            // Old rows remain useful positive observations, but cannot prove that no new people are missing.
             var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
             var sql = await ImportOneDayThroughGraphAsync(
                 new ScriptedGraphHandler(GraphPage(GraphPage2, UserA), GraphPage(null, UserB)), coverage, day, now);
             await ImportOneDayThroughGraphAsync(
                 new ScriptedGraphHandler(GraphPage(GraphPage2, UserA), GraphNotFound), coverage, day, now, sql);
             Assert.AreEqual(2, sql.Stored.Count);
-            Assert.AreEqual("complete", await TeamsStatusAsync(coverage, day));
+            Assert.AreEqual("partial", await TeamsStatusAsync(coverage, day));
 
             // Certified empty: the unfinished re-download stored a row, so "nobody used this workload" is no longer true.
             coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
@@ -717,20 +715,91 @@ namespace Tests.UnitTests
             Assert.AreEqual("empty", (await coverage.ReadAsync(day, day)).Single(c => c.Source == "teams").Status);
         }
 
-        [TestMethod]
-        public async Task DailyCoverage_AFirstDownloadThatFailsMidway_IsNotCertified()
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task DailyCoverage_InterruptedNonemptySave_IsNotCertified(bool previouslyEmpty)
         {
             var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
-            var loader = new InMemoryDailyActivityLoader(NullLogger.Instance) { SaveBatchSize = 1 };
-            loader.CoverageStore = coverage;
-            loader.CoverageSource = "teams";
-            loader.CoverageWholeTenant = true;
+            var sql = new FailOnSaveNumberUsageReportStore(2);
+            var loader = CoverageLoader(Day1.AddDays(5), coverage, sql);
+            loader.SaveBatchSize = 1;
+            if (previouslyEmpty)
+            {
+                loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail>();
+                await loader.SaveLoadedReportsToSql(SeededIdCache(), new UserCache(null));
+                Assert.AreEqual("empty", await TeamsStatusAsync(coverage, Day1));
+            }
             loader.LoadedReportPages[Day1] = new List<FakeUserActivityDetail> { Page(UserA, 1), Page(UserB, 2) };
-            loader.ReportStore = new FailOnSaveNumberUsageReportStore(2);
             await Assert.ThrowsExceptionAsync<InvalidOperationException>(
                 () => loader.SaveLoadedReportsToSql(SeededIdCache(), new UserCache(null)));
-            Assert.IsFalse(await coverage.IsDayVerifiedAsync("teams", Day1));
-            Assert.IsTrue(await coverage.NeedsReimportAsync("teams", Day1, true), "An unfinished first download is retried.");
+            Assert.AreEqual(1, sql.Stored.Count, "The first batch committed before the second failed.");
+            Assert.AreEqual("partial", await TeamsStatusAsync(coverage, Day1));
+            Assert.IsTrue(await coverage.NeedsReimportAsync("teams", Day1, true));
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task DailyCoverage_ConcealedRefreshCannotLeaveAPreviouslyEmptyDayVerified(bool streamDates)
+        {
+            var now = Day1.AddDays(5);
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var sql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            var loader = CoverageLoader(now, coverage, sql);
+            var rows = new List<FakeUserActivityDetail>();
+            loader.PagesByDate[Day1] = rows;
+            loader.LoadedReportPages[Day1] = rows;
+            var skip = new HashSet<DateTime>(Enumerable.Range(1, 4).Select(back => now.AddDays(-back)));
+            Task Save() => streamDates
+                ? loader.LoadAndSaveEachDateAsync(5, skip, null, SeededIdCache(), new UserCache(null))
+                : loader.SaveLoadedReportsToSql(SeededIdCache(), new UserCache(null));
+
+            await Save();
+            Assert.AreEqual("empty", await TeamsStatusAsync(coverage, Day1));
+            rows.Add(Page("hash@hash", 1));
+            await Assert.ThrowsExceptionAsync<ConcealedUsageReportException>(Save);
+            Assert.AreEqual(0, sql.Stored.Count);
+            Assert.AreEqual("partial", await TeamsStatusAsync(coverage, Day1));
+
+            rows[0] = Page(UserA, 1);
+            await Save();
+            Assert.AreEqual(1, sql.Stored.Count);
+            Assert.AreEqual("complete", await TeamsStatusAsync(coverage, Day1));
+        }
+
+        [TestMethod]
+        public async Task DailyCoverage_ExpandedRefreshWithFailedBatchStaysRetryableUntilEveryRowIsSaved()
+        {
+            var now = Day1.AddDays(5);
+            var coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            var firstSql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>();
+            var first = CoverageLoader(now, coverage, firstSql);
+            var skip = new HashSet<DateTime>(Enumerable.Range(1, 4).Select(back => now.AddDays(-back)));
+            first.PagesByDate[Day1] = new List<FakeUserActivityDetail> { Page(UserA, 1) };
+            await first.LoadAndSaveEachDateAsync(5, skip, null, SeededIdCache(), new UserCache(null));
+            Assert.AreEqual("complete", await TeamsStatusAsync(coverage, Day1));
+
+            // The first batch updates A; the second would add B but fails. A new context sees only committed rows.
+            var failedSql = new FailOnSaveNumberUsageReportStore(2);
+            failedSql.Seed(firstSql.Stored.Single());
+            var retry = CoverageLoader(now, coverage, failedSql);
+            retry.SaveBatchSize = 1;
+            var expanded = new List<FakeUserActivityDetail> { Page(UserA, 2), Page(UserB, 1) };
+            retry.PagesByDate[Day1] = expanded;
+            await Assert.ThrowsExceptionAsync<InvalidOperationException>(() =>
+                retry.LoadAndSaveEachDateAsync(5, skip, null, SeededIdCache(), new UserCache(null)));
+            Assert.AreEqual(1, failedSql.SaveCount);
+            Assert.AreEqual(UserAId, failedSql.Stored.Single().UserID);
+            Assert.AreEqual("partial", await TeamsStatusAsync(coverage, Day1));
+            Assert.IsTrue(await coverage.NeedsReimportAsync("teams", Day1, true));
+
+            var recoveredSql = new InMemoryUsageReportStore<FakeUserUsageActivityLog>().Seed(failedSql.Stored.Single());
+            var recovered = CoverageLoader(now, coverage, recoveredSql);
+            recovered.PagesByDate[Day1] = expanded;
+            await recovered.LoadAndSaveEachDateAsync(5, skip, null, SeededIdCache(), new UserCache(null));
+            Assert.AreEqual(2, recoveredSql.Stored.Count);
+            Assert.AreEqual("complete", await TeamsStatusAsync(coverage, Day1));
         }
 
         [TestMethod]

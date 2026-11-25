@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace DataUtils
@@ -10,7 +11,7 @@ namespace DataUtils
     /// </summary>
     public static class HostRuntime
     {
-        /// <summary>Exit code of a process that stopped on an unhandled exception.</summary>
+        /// <summary>Exit code when the host failed to start or could not complete the requested work.</summary>
         public const int FatalExitCode = 1;
 
         /// <summary>Exit code of a process whose command line was refused.</summary>
@@ -21,8 +22,10 @@ namespace DataUtils
         private static string _jobName = "Importer";
         private static bool _handlersInstalled;
         private static ShutdownWatcher _shutdown;
+        private static readonly CancellationTokenSource Stopping = new CancellationTokenSource();
 
         public static bool ShutdownRequested => _shutdown?.IsRequested == true;
+        public static CancellationToken ShutdownToken => Stopping.Token;
 
         /// <summary>
         /// Registers the process-wide handlers. Call first thing in <c>Main</c>, before configuration is read, so
@@ -88,10 +91,16 @@ namespace DataUtils
 
         private static void OnShutdownRequested()
         {
-            // The process may be killed when Kudu's stop wait runs out, and the main loop may be hours into a phase,
-            // so send what is buffered now instead of waiting for the loop to notice.
-            _logger?.LogWarning($"Shutdown requested by host ({_jobName}); not starting new work. Flushing telemetry.");
-            AnalyticsLogger.DrainSharedTelemetry();
+            try
+            {
+                Stopping.Cancel();
+            }
+            finally
+            {
+                // Kudu can kill the process when its stop wait runs out; don't wait for the import loop to drain.
+                _logger?.LogWarning($"Shutdown requested by host ({_jobName}); not starting new work. Flushing telemetry.");
+                AnalyticsLogger.DrainSharedTelemetry();
+            }
         }
 
         /// <summary>Sleeps for up to <paramref name="timeout"/>, waking early on a shutdown request. True when shutdown was requested.</summary>
@@ -119,10 +128,23 @@ namespace DataUtils
         /// <returns>0, or <see cref="FatalExitCode"/> when the body failed.</returns>
         public static int RunGuarded(string source, Func<Task> body)
         {
-            try
+            return RunGuarded(source, () =>
             {
                 body().GetAwaiter().GetResult();
                 return 0;
+            });
+        }
+
+        /// <summary>Do not discard an async host's exit code by treating its <c>Task&lt;int&gt;</c> as a <c>Task</c>.</summary>
+        public static int RunGuarded(string source, Func<Task<int>> body) =>
+            RunGuarded(source, () => body().GetAwaiter().GetResult());
+
+        /// <summary>Preserves the host body's exit code; a requested shutdown succeeds and an unhandled exception fails.</summary>
+        public static int RunGuarded(string source, Func<int> body)
+        {
+            try
+            {
+                return body();
             }
             catch (ShutdownRequestedException)
             {

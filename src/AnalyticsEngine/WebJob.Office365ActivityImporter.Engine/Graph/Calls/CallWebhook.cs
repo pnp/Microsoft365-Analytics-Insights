@@ -6,6 +6,7 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -146,7 +147,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 {
                     result = await _subscriptions.CreateSubscription(currentUrl, clientState.Value, action.ExpiryUtc);
                 }
-                catch (ODataError ex)
+                catch (ApiException ex)
                 {
                     LogSubscriptionFailure(ex, currentUrl, isUpdate: false);
                     throw;
@@ -350,7 +351,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 created = await _subscriptions.CreateSubscription(currentUrl, clientState.Value, expiryUtc);
             }
-            catch (ODataError ex) when (CallSubscriptionRules.IsDuplicateSubscriptionConflict(ex.ResponseStatusCode))
+            catch (ApiException ex) when (CallSubscriptionRules.IsDuplicateSubscriptionConflict(ex.ResponseStatusCode))
             {
                 created = await ReplaceAfterConflictAsync(currentUrl, allOurs, clientState, expiryUtc, ex, deleted);
                 await RecordAsync(currentUrl, created, clientState, ExpiryOf(created, expiryUtc));
@@ -381,11 +382,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// there is no subscription at all until the subscription timer's retry, which is why that is an Error.
         /// </summary>
         private async Task<CallRecordSubscription> ReplaceAfterConflictAsync(Uri currentUrl, IReadOnlyList<CallRecordSubscription> allOurs,
-            CallWebhookClientState clientState, DateTime expiryUtc, ODataError conflict, ISet<string> deleted)
+            CallWebhookClientState clientState, DateTime expiryUtc, ApiException conflict, ISet<string> deleted)
         {
             var ids = string.Join("', '", allOurs.Select(s => s.Id));
             Telemetry.LogWarning($"{LOG_TAG} Graph refused a second call-records subscription: {StatusLine(conflict)} Graph error: " +
-                $"'{conflict.Error?.Message ?? conflict.Message}'. Deleting this webhook's subscription(s) '{ids}' first, then creating the replacement; " +
+                $"'{GraphErrorMessage(conflict)}'. Deleting this webhook's subscription(s) '{ids}' first, then creating the replacement; " +
                 "call notifications are not delivered in between.");
 
             var gap = Stopwatch.StartNew();
@@ -395,7 +396,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 {
                     await _subscriptions.DeleteSubscription(old.Id);
                 }
-                catch (ODataError ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
+                catch (ApiException ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
                 {
                     // Already gone: nothing in the way.
                 }
@@ -407,7 +408,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 created = await _subscriptions.CreateSubscription(currentUrl, clientState.Value, expiryUtc);
             }
-            catch (ODataError ex)
+            catch (ApiException ex)
             {
                 LogSubscriptionFailure(ex, currentUrl, isUpdate: false);
                 Telemetry.LogError($"{LOG_TAG} Deleted subscription(s) '{ids}' to make room after a 409 Conflict, but the replacement could not be created " +
@@ -460,13 +461,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 await _subscriptions.DeleteSubscription(old.Id);
                 Telemetry.LogInformation($"{LOG_TAG} Deleted replaced subscription id '{old.Id}'.");
             }
-            catch (ODataError ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
+            catch (ApiException ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
             {
                 Telemetry.LogInformation($"{LOG_TAG} Replaced subscription id '{old.Id}' was already gone.");
             }
             catch (Exception ex)
             {
-                var error = ex is ODataError graphError ? $"{StatusLine(graphError)} Graph error: '{graphError.Error?.Message ?? graphError.Message}'" : ex.Message;
+                var error = ex is ApiException graphError ? $"{StatusLine(graphError)} Graph error: '{GraphErrorMessage(graphError)}'" : ex.Message;
                 var expires = old.ExpirationDateTime.HasValue ? $" at {old.ExpirationDateTime.Value.UtcDateTime:u}" : string.Empty;
                 Telemetry.LogWarning($"{LOG_TAG} Couldn't delete replaced subscription id '{old.Id}': {error} " +
                     $"It is no longer renewed, so Graph removes it when it expires{expires}; deleting it is retried on the next check. Until then " +
@@ -485,7 +486,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 Telemetry.LogInformation($"{LOG_TAG} Renewed subscription id '{result.Id}' for webhook at '{webAppUrl}' in {timer.ElapsedMilliseconds} ms. New expiry: {result.ExpirationDateTime:u}.");
                 return result;
             }
-            catch (ODataError ex)
+            catch (ApiException ex)
             {
                 LogSubscriptionFailure(ex, webAppUrl, isUpdate: true, existingSubId: subscriptionId);
                 throw;
@@ -539,14 +540,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// Set when the failed create was to replace this subscription, which is kept alive meanwhile - so the impact is
         /// stated as it is rather than as "nothing is imported".
         /// </param>
-        private void LogSubscriptionFailure(ODataError ex, Uri webAppUrl, bool isUpdate, string existingSubId = null, string replacingSubId = null)
+        private void LogSubscriptionFailure(ApiException ex, Uri webAppUrl, bool isUpdate, string existingSubId = null, string replacingSubId = null)
         {
             var action = isUpdate
                 ? $"renew subscription '{existingSubId}'"
                 : replacingSubId == null ? "create subscription" : $"create a subscription to replace '{replacingSubId}'";
             var statusCode = ex.ResponseStatusCode;
             var statusLine = StatusLine(ex);
-            var graphError = ex.Error?.Message ?? ex.Message;
+            var graphError = GraphErrorMessage(ex);
             var impact = replacingSubId == null
                 ? "Until this is fixed, NO Teams call records will be imported."
                 : $"Subscription '{replacingSubId}' is kept alive meanwhile and the replacement retried within minutes. After a client-secret rotation the " +
@@ -589,7 +590,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             }
         }
 
-        private static string StatusLine(ODataError ex)
+        private static string GraphErrorMessage(ApiException ex) => (ex as ODataError)?.Error?.Message ?? ex.Message;
+
+        private static string StatusLine(ApiException ex)
         {
             var statusCode = ex.ResponseStatusCode;
             return statusCode > 0

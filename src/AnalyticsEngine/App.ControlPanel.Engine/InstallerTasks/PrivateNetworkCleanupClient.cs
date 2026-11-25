@@ -35,6 +35,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly HashSet<string> _targets;
         private readonly HashSet<string> _endpointNames;
         private readonly string _previousVnetId;
+        internal Func<WebSiteResource, Task> BeforeExistingSiteUpdateAsync { get; set; }
 
         public PrivateNetworkCleanupClient(ResourceGroupResource group, PrivateNetworkManifest manifest,
             IEnumerable<string> targets, IEnumerable<string> endpointNames, string previousVnetId = null)
@@ -509,6 +510,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     case "microsoft.web/sites":
                         var site = (await _group.GetWebSiteAsync(id.Name, ct)).Value;
                         readSucceeded = true;
+                        // A private-to-public transition can change the deployment site before its ordinary website task.
+                        if (BeforeExistingSiteUpdateAsync != null && _targets.Contains(targetId))
+                        {
+                            await BeforeExistingSiteUpdateAsync(site);
+                            ct.ThrowIfCancellationRequested();
+                        }
                         if (apply) await site.UpdateAsync(new SitePatchInfo { PublicNetworkAccess = "Enabled" }, ct);
                         break;
                     case "microsoft.cognitiveservices/accounts":

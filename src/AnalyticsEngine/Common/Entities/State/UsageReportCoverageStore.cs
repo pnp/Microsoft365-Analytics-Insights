@@ -61,18 +61,11 @@ namespace Common.Entities.State
         public const string Empty = "empty";
 
         /// <summary>
-        /// Marks the day in progress BEFORE any SQL write, so a first download that fails midway is never certified.
-        /// A day already certified complete/empty keeps its outcome while it is downloaded again: the upsert
-        /// never deletes stored rows, so a re-download cannot leave fewer users stored than were certified.
-        /// An unreachable durable store throws, and the SQL write does not start.
+        /// A new import attempt supersedes the previous certificate. Until every page and SQL batch finishes,
+        /// neither a previous empty day nor a previously complete set of users proves what this attempt saw.
         /// </summary>
-        public async Task BeginDayAsync(string source, DateTime day)
-        {
-            var key = Key(source, day);
-            var outcome = await _store.GetStringAsync(key).ConfigureAwait(false);
-            if (outcome == Complete || outcome == Empty) return;
-            await _store.SetStringAsync(key, Partial, TimeSpan.FromDays(400)).ConfigureAwait(false);
-        }
+        public Task BeginDayAsync(string source, DateTime day) =>
+            _store.SetStringAsync(Key(source, day), Partial, TimeSpan.FromDays(400));
 
         /// <summary>
         /// Records the outcome of a saved day. <paramref name="settlementDays"/> is the analysis' settlement lag
@@ -97,19 +90,9 @@ namespace Common.Entities.State
         }
 
         /// <summary>
-        /// Records a download Graph ended before its last page - the pager returns the rows gathered so far on a 404 -
-        /// so the rows saved for the day are not known to be all of them. Not an outcome: the day is left partial and
-        /// downloaded again. A day already certified complete keeps its outcome, as in <see cref="BeginDayAsync"/>: the
-        /// upsert never deletes, so every user it was certified with is still stored. A day certified empty does not,
-        /// because rows may now be stored for it, and its outcome would still say nobody used the workload.
+        /// The rows returned by an interrupted download cannot certify the day, even if older rows are retained.
         /// </summary>
-        public async Task RecordUnfinishedDownloadAsync(string source, DateTime day)
-        {
-            var key = Key(source, day);
-            var outcome = await _store.GetStringAsync(key).ConfigureAwait(false);
-            if (outcome == Complete) return;
-            await _store.SetStringAsync(key, Partial, TimeSpan.FromDays(400)).ConfigureAwait(false);
-        }
+        public Task RecordUnfinishedDownloadAsync(string source, DateTime day) => BeginDayAsync(source, day);
 
         /// <summary>
         /// True only for a day with a durable complete or successfully empty outcome.
@@ -121,11 +104,9 @@ namespace Common.Entities.State
         }
 
         /// <summary>
-        /// Whether a stored, finalized day should be downloaded again so it can get a final outcome: only when it
-        /// has none (imported before this ledger existed) or is still in progress (a download that never
-        /// finished). Final outcomes - complete, empty, incomplete, scopeUnverified - are skipped like before,
-        /// so a filtered or concealing tenant does not re-download its whole window every cycle. A
-        /// scopeUnverified day is retried once the importer runs tenant-wide again.
+        /// Whether a finalized day with rows in SQL should be downloaded again. An empty outcome contradicts
+        /// those rows (older builds could leave it after a failed refresh). A scopeUnverified day is retried
+        /// once the importer runs tenant-wide again.
         /// </summary>
         public async Task<bool> NeedsReimportAsync(string source, DateTime day, bool wholeTenant,
             CancellationToken cancellationToken = default)
@@ -134,7 +115,6 @@ namespace Common.Entities.State
             switch (outcome)
             {
                 case Complete:
-                case Empty:
                 case Incomplete:
                     return false;
                 case ScopeUnverified:

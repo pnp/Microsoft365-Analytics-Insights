@@ -39,12 +39,14 @@ namespace Tests.UnitTests
         private const string CurrentJson = "{\"id\":\"" + CurrentId + "\",\"userPrincipalName\":\"reused@contoso.com\",\"accountEnabled\":true}";
         private const string NotFoundJson = "{\"error\":{\"code\":\"Request_ResourceNotFound\",\"message\":\"synthetic missing object\"}}";
 
-        [TestMethod]
-        public async Task ReusedUpn_FreshOwnerAndCorroboratedAbsence_UsesOnlyTheConflictingPair()
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task ReusedUpn_FreshOwnerAndCorroboratedAbsence_UsesOnlyTheConflictingPair(bool hasErrorBody)
         {
             var handler = new ScriptedGraphHandler()
                 .Then(HttpStatusCode.OK, CurrentJson)
-                .Then(HttpStatusCode.NotFound, NotFoundJson)
+                .Then(HttpStatusCode.NotFound, hasErrorBody ? NotFoundJson : null)
                 .Then(HttpStatusCode.OK, "{\"value\":[" + CurrentJson + "]}");
             Assert.IsTrue(await NewLoader(handler).VerifyReusedUpnAsync(CurrentOwner(), PreviousId));
             Assert.AreEqual(3, handler.Requests.Count);
@@ -101,7 +103,7 @@ namespace Tests.UnitTests
         {
             var handler = new ScriptedGraphHandler()
                 .Then(HttpStatusCode.OK, CurrentJson)
-                .Then(HttpStatusCode.NotFound, NotFoundJson)
+                .Then(HttpStatusCode.NotFound, null)
                 .Then(HttpStatusCode.Forbidden, NotFoundJson);
             Assert.IsFalse(await NewLoader(handler).VerifyReusedUpnAsync(CurrentOwner(), PreviousId));
             Assert.AreEqual(3, handler.Requests.Count);
@@ -307,7 +309,7 @@ namespace Tests.UnitTests
                 var response = new HttpResponseMessage(next.Item1)
                 {
                     RequestMessage = request,
-                    Content = new StringContent(next.Item2 ?? string.Empty, Encoding.UTF8, "application/json"),
+                    Content = next.Item2 == null ? null : new StringContent(next.Item2, Encoding.UTF8, "application/json"),
                 };
                 return Task.FromResult(response);
             }

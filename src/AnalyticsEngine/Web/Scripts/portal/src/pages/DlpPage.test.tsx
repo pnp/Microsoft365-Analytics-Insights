@@ -384,6 +384,18 @@ describe('DlpPage', () => {
       expect(link).toHaveAttribute('href', '#/insights/copilot-adoption');
     });
 
+    it.each([
+      [1, 'Blocks were recorded, but no agent names are shown in this view.'],
+      [0, 'No agent was blocked in this period.'],
+    ] as const)('uses the blocked-agent count (%i) when agent names are withheld', async (agentsImpacted, message) => {
+      mockSummary.mockResolvedValue(summary({
+        agentsImpacted, topAgents: [], topUsers: [], minimumGroupSize: 5,
+        withheldRows: 1, withheldRowsByTable: { agents: 1, policies: 0, sensitivityLabels: 0, tenantPolicies: 0 },
+      }));
+      renderWithProvider(<DlpPage />, { access: { administration: false, seePii: false } });
+      expect(await screen.findByText(message)).toBeInTheDocument();
+    });
+
     it('keeps the DLP figures when the governance call fails, and says so in its own section', async () => {
       mockGovernance.mockRejectedValue(new Error('governance boom'));
       renderWithProvider(<DlpPage />);

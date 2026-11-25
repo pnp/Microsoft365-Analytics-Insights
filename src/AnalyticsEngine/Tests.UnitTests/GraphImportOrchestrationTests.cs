@@ -270,7 +270,7 @@ namespace Tests.UnitTests
         public async Task GraphImporter_SectionThrows_UnwindsAndSkipsTheSectionsAfterIt()
         {
             // Documents CURRENT behaviour rather than the behaviour #376 proposed. GraphImporter has never
-            // isolated a throwing section - ProgramTasks.GetGraphTeamsAndUserData catches only ODataError -
+            // isolated a throwing section - ProgramTasks treats only an HTTP 403 as a refused pass -
             // and adding isolation here would quietly downgrade a hard failure to a logged warning. That is a
             // behavioural change and belongs in its own issue; this test pins today's contract so the change
             // cannot happen by accident.

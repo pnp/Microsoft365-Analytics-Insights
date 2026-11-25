@@ -1,6 +1,5 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using CloudInstallEngine;
-using DataUtils;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System;
@@ -48,22 +47,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         private static readonly HttpClient _sharedHttpClient = CreateHttpClient(new HttpClientHandler());
         private readonly HttpClient _httpClient;
+        private readonly InstallPackageWorkspace _workspace;
 
-        public LatestStableSoftwarePackageDownloadTask(TaskConfig config, ILogger logger) : this(config, logger, _sharedHttpClient)
+        public LatestStableSoftwarePackageDownloadTask(TaskConfig config, ILogger logger, InstallPackageWorkspace workspace)
+            : this(config, logger, workspace, _sharedHttpClient)
         {
         }
 
         /// <summary>Test seam: downloads through <paramref name="httpClient"/>, normally one over a fake handler.</summary>
-        internal LatestStableSoftwarePackageDownloadTask(TaskConfig config, ILogger logger, HttpClient httpClient) : base(config, logger)
+        internal LatestStableSoftwarePackageDownloadTask(TaskConfig config, ILogger logger, InstallPackageWorkspace workspace, HttpClient httpClient) : base(config, logger)
         {
+            _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         }
 
         internal TimeSpan StallTimeout { get; set; } = PackageDownloadStallTimeout;
         internal TimeSpan MetadataTimeout { get; set; } = ReleaseMetadataTimeout;
-
-        /// <summary>Where the packages are written. Null is the installer's temporary folder.</summary>
-        internal string DownloadDirectory { get; set; }
 
         internal static HttpClient CreateHttpClient(HttpMessageHandler handler)
         {
@@ -216,8 +215,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _logger.LogInformation("Downloading latest stable release...");
 
             var locallyDownloadedRelease = new LocalStorageInstallSourceInfo();
-            var tempDir = DownloadDirectory ?? StringUtils.TempDirPath;
-            Directory.CreateDirectory(tempDir);
+            var tempDir = _workspace.CreateDirectory();
 
             // Download each asset, two at a time
             var downloadTasks = new Dictionary<SoftwareComponent, Task<string>>();
