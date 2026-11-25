@@ -188,7 +188,9 @@ SELECT @result;";
 IF OBJECT_ID(N'tempdb..#purge_candidates') IS NOT NULL DROP TABLE #purge_candidates;
 CREATE TABLE #purge_candidates (user_id int NOT NULL PRIMARY KEY CLUSTERED);
 IF OBJECT_ID(N'tempdb..#purge_objects') IS NOT NULL DROP TABLE #purge_objects;
-CREATE TABLE #purge_objects (object_id uniqueidentifier NOT NULL PRIMARY KEY CLUSTERED);";
+CREATE TABLE #purge_objects (object_id uniqueidentifier NOT NULL PRIMARY KEY CLUSTERED);
+IF OBJECT_ID(N'tempdb..#purge_usage_batch') IS NOT NULL DROP TABLE #purge_usage_batch;
+CREATE TABLE #purge_usage_batch (id int NOT NULL PRIMARY KEY, report_day date NOT NULL);";
             using (var command = new SqlCommand(create, Connection))
             {
                 await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);

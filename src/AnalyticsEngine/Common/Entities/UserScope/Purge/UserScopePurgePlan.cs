@@ -170,7 +170,8 @@ namespace Common.Entities.UserScope.Purge
     /// </para>
     /// <para>
     /// Tenant-wide data with no person in it (sites, teams, channels, URLs, the report aggregates) is never touched. Nor
-    /// is anything kept outside the analytics database, and nothing stops an import that does not apply the scope - the
+    /// is personal data held outside the analytics database. The non-personal coverage stamps for the days whose
+    /// user-detail facts are removed are revoked. Nothing stops an import that does not apply the scope - the
     /// Copilot credit history preview reads every directory user - storing data about someone again.
     /// <c>UserScopePurgeTests.EveryTableNamingAPerson_IsPurgedOrDeliberatelyExempt</c> lists what stays and why.
     /// </para>

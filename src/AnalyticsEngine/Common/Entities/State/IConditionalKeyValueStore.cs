@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -46,5 +47,12 @@ namespace Common.Entities.State
         /// cannot be reached.
         /// </summary>
         Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default);
+    }
+
+    /// <summary>Conditional replacement for state that must retain its normal expiry when several writers share it.</summary>
+    public interface IExpiringConditionalKeyValueStore : IConditionalKeyValueStore
+    {
+        Task<bool> TrySetExpiringStringAsync(string key, string value, string expectedVersionToken, TimeSpan? timeToLive,
+            CancellationToken cancellationToken = default);
     }
 }

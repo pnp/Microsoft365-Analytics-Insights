@@ -34,7 +34,7 @@ namespace Common.Entities.State
     /// the ones nobody reads again.</description></item>
     /// </list>
     /// </remarks>
-    public sealed class AzureTableKeyValueStore : IConditionalKeyValueStore, IBatchKeyValueStore
+    public sealed class AzureTableKeyValueStore : IExpiringConditionalKeyValueStore, IBatchKeyValueStore
     {
         internal const string KeyProperty = "Key";
         internal const string ValueProperty = "Value";
@@ -279,7 +279,11 @@ namespace Common.Entities.State
             }, cancellationToken).ConfigureAwait(false);
         }
 
-        public async Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)
+        public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)
+            => TrySetExpiringStringAsync(key, value, expectedVersionToken, null, cancellationToken);
+
+        public async Task<bool> TrySetExpiringStringAsync(string key, string value, string expectedVersionToken, TimeSpan? timeToLive,
+            CancellationToken cancellationToken = default)
         {
             if (value == null) throw new ArgumentNullException(nameof(value));
 
@@ -288,6 +292,7 @@ namespace Common.Entities.State
                 { KeyProperty, key },
             };
             EncodeValue(entity, key, value);
+            if (timeToLive.HasValue) entity[ExpiresProperty] = _utcNow() + timeToLive.Value;
 
             return await RunAsync(async table =>
             {

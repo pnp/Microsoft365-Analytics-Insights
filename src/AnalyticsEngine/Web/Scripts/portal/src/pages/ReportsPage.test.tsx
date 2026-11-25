@@ -407,7 +407,7 @@ describe('ReportsPage', () => {
     expect(warning).not.toContain('2026-06-15');
   });
 
-  it('says how many weeks a workload is missing a day of usage reports in, in the reader\'s language', async () => {
+  it('says which weeks may undercount activity, in the reader\'s language', async () => {
     await loadCatalog('es');
     const es = (key: Parameters<typeof translateStatic>[1], values?: Parameters<typeof translateStatic>[2]) =>
       translateStatic('es', key, values);
@@ -420,7 +420,8 @@ describe('ReportsPage', () => {
       ],
     }));
 
-    expect(warning).toContain('Viva Engage: a 2 de las semanas representadas les falta al menos un día de informes de uso');
+    expect(warning).toContain('Viva Engage: los informes de uso de 2 de las semanas representadas están incompletos o sin verificar');
+    expect(warning).toContain('Las cifras de esas semanas pueden ser inferiores a las reales');
     expect(warning).not.toContain('missing at least one day');
 
     // Viva Engage is charted, from the days that were imported, so it is not an unavailable series (#816).

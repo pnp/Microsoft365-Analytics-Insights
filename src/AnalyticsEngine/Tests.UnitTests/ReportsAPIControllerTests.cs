@@ -105,6 +105,11 @@ namespace Tests.UnitTests
             var historic = ReportsAPIController.AggregateUsageWeekRows(dailyRows, outcomes);
             Assert.AreEqual(0, historic.IncompleteWeeks.Count,
                 "A day predating the ledger retains the old row-presence completeness rule.");
+
+            var unavailable = ReportsAPIController.AggregateUsageWeekRows(dailyRows, new Dictionary<DateTime, string>());
+            Assert.AreEqual(4d, unavailable.WeeklyRows.Single().Value);
+            CollectionAssert.AreEqual(new[] { week }, unavailable.IncompleteWeeks,
+                "An unavailable ledger is not a confirmed key miss: it may hide a purge.");
         }
 
         [TestMethod]
@@ -325,7 +330,7 @@ namespace Tests.UnitTests
             Assert.AreEqual("Teams", warning.Series);
             Assert.AreEqual(missingADay, warning.Week);
             Assert.AreEqual(1, warning.Count);
-            StringAssert.Contains(result.Warning, "missing at least one day of usage reports");
+            StringAssert.Contains(result.Warning, "Counts for those weeks may be too low");
 
             // Teams is charted, so it must not be reported as an unavailable series (#816).
             Assert.AreEqual("incompleteWeeks", result.WarningKey);

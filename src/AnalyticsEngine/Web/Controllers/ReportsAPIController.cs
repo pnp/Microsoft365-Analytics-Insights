@@ -655,17 +655,17 @@ namespace Web.AnalyticsWeb.Controllers
         // a week charted from its Sunday - so every imported day of the week is read.
         //
         // A day with no rows is a hole unless the importer's durable provenance ledger records a
-        // successfully empty report. Older days without a ledger outcome keep the historical
-        // row-presence rule; known partial, incomplete or scoped outcomes are not treated as complete.
+        // successfully empty report AND SQL agrees. A confirmed key miss keeps the historical
+        // row-presence rule; contradictory facts, scoped/partial saves and unavailable state cannot verify a week.
         private static List<Task<ReportChart>> UsageCharts(DateTime from, List<DateTime> weekSpine)
         {
             var workloads = new[]
             {
-                new { Table = "dbo.teams_user_activity_log", Name = "Teams", CoverageSource = (string)"teams" },
-                new { Table = "dbo.outlook_user_activity_log", Name = "Outlook", CoverageSource = (string)"outlook" },
-                new { Table = "dbo.onedrive_user_activity_log", Name = "OneDrive", CoverageSource = (string)"onedrive" },
-                new { Table = "dbo.sharepoint_user_activity_log", Name = "SharePoint", CoverageSource = (string)"sharepoint" },
-                new { Table = "dbo.yammer_user_activity_log", Name = "Viva Engage", CoverageSource = (string)null },
+                new { Table = "dbo.teams_user_activity_log", Name = "Teams", CoverageSource = "teams" },
+                new { Table = "dbo.outlook_user_activity_log", Name = "Outlook", CoverageSource = "outlook" },
+                new { Table = "dbo.onedrive_user_activity_log", Name = "OneDrive", CoverageSource = "onedrive" },
+                new { Table = "dbo.sharepoint_user_activity_log", Name = "SharePoint", CoverageSource = "sharepoint" },
+                new { Table = "dbo.yammer_user_activity_log", Name = "Viva Engage", CoverageSource = "yammer" },
             };
 
             var series = workloads.Select(w => new SeriesQuery
@@ -729,7 +729,7 @@ namespace Web.AnalyticsWeb.Controllers
                 $"        FROM {table} AS available\r\n" +
                 "        WHERE available.[date] >= DATEADD(DAY, week_days.n, weeks.WeekStart)\r\n" +
                 "          AND available.[date] < DATEADD(DAY, week_days.n + 1, weeks.WeekStart)\r\n" +
-                "          AND available.[date] <= @settled\r\n" +
+                "          AND available.[date] < DATEADD(DAY, 1, @settled)\r\n" +
                 "    ) AS present\r\n" +
                 "),\r\n" +
                 "-- Everyone active on any day of the week, once per week.\r\n" +
@@ -738,7 +738,7 @@ namespace Web.AnalyticsWeb.Controllers
                 $"    FROM {table} AS activity\r\n" +
                 "    WHERE activity.[date] >= @from\r\n" +
                 "      AND activity.[date] < DATEADD(DAY, 7, @through)\r\n" +
-                "      AND activity.[date] <= @settled\r\n" +
+                "      AND activity.[date] < DATEADD(DAY, 1, @settled)\r\n" +
                 $"      AND activity.last_activity_date >= {rowWeek}\r\n" +
                 $"      AND activity.last_activity_date < DATEADD(DAY, 7, {rowWeek})" + UsageActivityScope + "\r\n" +
                 $"    GROUP BY {rowWeek}, activity.user_id\r\n" +
@@ -930,7 +930,25 @@ namespace Web.AnalyticsWeb.Controllers
             var incompleteWeeksBySeries = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
             var warnings = new List<string>();
             var warningFacts = new List<ReportSeriesWarning>();
-            var outcomesBySource = await ReadDailyUsageOutcomesAsync(from, lastWeek.AddDays(6));
+            var fetched = new List<(SeriesQuery Query, List<UsageWeekRow> Rows)>();
+            var projected = 0;
+            async Task ProjectFetchedAsync()
+            {
+                if (projected == fetched.Count) return;
+                // Revocation precedes deletion. Reading the ledger AFTER the facts means a purge cannot
+                // combine its reduced SQL count with a certificate this request read before the purge.
+                var outcomesBySource = await ReadDailyUsageOutcomesAsync(from, lastWeek.AddDays(6));
+                rowsBySeries.Clear();
+                incompleteWeeksBySeries.Clear();
+                foreach (var item in fetched)
+                {
+                    var outcomes = outcomesBySource[item.Query.CoverageSource];
+                    var aggregated = AggregateUsageWeekRows(item.Rows, outcomes);
+                    rowsBySeries.Add(new KeyValuePair<string, List<WeekValueRow>>(item.Query.Name, aggregated.WeeklyRows));
+                    incompleteWeeksBySeries[item.Query.Name] = aggregated.IncompleteWeeks;
+                }
+                projected = fetched.Count;
+            }
 
             // Sequentially per series keeps a bounded number of concurrent contexts (the area itself
             // already runs in parallel with other areas' charts); each is one index-only range seek
@@ -940,16 +958,7 @@ namespace Web.AnalyticsWeb.Controllers
                 var sq = series[i];
                 try
                 {
-                    var dailyRows = await QueryUsageWeeksAsync(sq.Body, from, lastWeek, settled);
-                    var outcomes = sq.CoverageSource != null
-                        && outcomesBySource.TryGetValue(sq.CoverageSource, out var sourceOutcomes)
-                            ? sourceOutcomes
-                            : null;
-                    var aggregated = AggregateUsageWeekRows(dailyRows, outcomes);
-                    rowsBySeries.Add(new KeyValuePair<string, List<WeekValueRow>>(
-                        sq.Name,
-                        aggregated.WeeklyRows));
-                    incompleteWeeksBySeries[sq.Name] = aggregated.IncompleteWeeks;
+                    fetched.Add((sq, await QueryUsageWeeksAsync(sq.Body, from, lastWeek, settled)));
                 }
                 catch (Exception ex)
                 {
@@ -972,6 +981,7 @@ namespace Web.AnalyticsWeb.Controllers
                     // in a fixed order and the first one is not special. Once at least one series has
                     // data we stop, so a struggling database costs one extra timeout, not one per
                     // remaining workload.
+                    if (IsQueryTimeout(ex)) await ProjectFetchedAsync();
                     if (ShouldStopAfterSeriesFailure(ex, rowsBySeries))
                     {
                         warnings.Add("Remaining workloads were not attempted after the database timeout");
@@ -987,6 +997,7 @@ namespace Web.AnalyticsWeb.Controllers
                 }
             }
 
+            await ProjectFetchedAsync();
             return CompleteMultiTimeSeries(chart, rowsBySeries, warnings, weekSpine, warningFacts, incompleteWeeksBySeries);
         }
 
@@ -995,13 +1006,12 @@ namespace Web.AnalyticsWeb.Controllers
         {
             try
             {
-                return await UsageReportCoverageStore.Open(
-                    new AppConfig(), readTimeout: TimeSpan.FromSeconds(3))
-                    .ReadDailyOutcomesAsync(from, through).ConfigureAwait(false);
+                var store = UsageReportCoverageStore.Open(new AppConfig(), readTimeout: TimeSpan.FromSeconds(3));
+                return await store.ReadWeeklyChartOutcomesAsync(from, through).ConfigureAwait(false);
             }
             catch (Exception)
             {
-                return new Dictionary<string, Dictionary<DateTime, string>>(StringComparer.Ordinal);
+                return UsageReportCoverageStore.WeeklySources.ToDictionary(source => source, _ => new Dictionary<DateTime, string>());
             }
         }
 
@@ -1014,7 +1024,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 var days = week.ToList();
                 var hasRows = days.Any(day => day.HasRows);
-                var fullyCovered = days.All(day => IsUsageDayCovered(day, outcomes));
+                var fullyCovered = outcomes?.Count != 0 && days.All(day => IsUsageDayCovered(day, outcomes));
 
                 // A week with no activity rows is a real zero only when all seven days are proven.
                 // If some rows exist, keep charting them but flag the lower-bound week as incomplete.
@@ -1035,6 +1045,7 @@ namespace Web.AnalyticsWeb.Controllers
         {
             if (outcomes != null && outcomes.TryGetValue(day.CoverageDate.Date, out var outcome) && outcome != null)
             {
+                outcome = UsageReportCoverageStore.ReconcileWithStoredRows(outcome, day.HasRows);
                 return outcome == UsageReportCoverageStore.Complete || outcome == UsageReportCoverageStore.Empty;
             }
             return day.HasRows;
@@ -1059,9 +1070,8 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <param name="incompleteWeeksBySeries">
-        /// Per series, the weeks whose usage reports are missing at least one day. Those weeks are still drawn,
-        /// from the days that were imported, but flagged <see cref="ReportTimePoint.Incomplete"/> and reported as
-        /// an <c>incompleteWeeks</c> warning, so a missed import never reads as a fall in activity.
+        /// Per series, the weeks with some observed activity but incomplete or unverified daily reports.
+        /// Draw the retained lower bound with <see cref="ReportTimePoint.Incomplete"/> and an <c>incompleteWeeks</c> warning.
         /// </param>
         internal static ReportChart CompleteMultiTimeSeries(
             ReportChart chart,
@@ -1169,8 +1179,8 @@ namespace Web.AnalyticsWeb.Controllers
                 foreach (var point in flagged) point.Incomplete = true;
 
                 var latest = flagged.Max(point => point.WeekStart);
-                incompleteWeekWarnings.Add($"{series.Name}: {flagged.Count} of the charted weeks are missing at least one day of usage reports " +
-                             $"(most recently the week of {latest:yyyy-MM-dd}), so those weeks count only the days that were imported");
+                incompleteWeekWarnings.Add($"{series.Name}: {flagged.Count} of the charted weeks have incomplete or unverified usage reports " +
+                             $"(most recently the week of {latest:yyyy-MM-dd}). Counts for those weeks may be too low");
                 warningFacts.Add(new ReportSeriesWarning
                 {
                     Series = series.Name,

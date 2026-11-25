@@ -283,13 +283,33 @@ namespace Tests.UnitTests
             await store.CompleteDayAsync("sharepoint", Day, true, true, false, Day.AddDays(1), 3);
             await state.SetStringAsync("usage-report:onedrive", Day.AddDays(4).ToString("O"));
             await state.SetStringAsync("v1:onedrive:20260510", "unknownFutureOutcome");
+            await state.SetStringAsync("v1:outlook:20260511", "empty|unrecognised");
             var coverage = await store.ReadAsync(Day, Day.AddDays(1));
             Assert.AreEqual("partial", coverage.Single(c => c.Source == "teams").Status);
             Assert.AreEqual("scopeUnverified", coverage.Single(c => c.Source == "outlook").Reason);
+            Assert.AreEqual(0, coverage.Single(c => c.Source == "outlook").VerifiedDays, "An unknown suffix cannot certify an empty date.");
             Assert.AreEqual(1, coverage.Single(c => c.Source == "sharepoint").PartialDays);
             Assert.AreEqual("unverified", coverage.Single(c => c.Source == "onedrive").Status);
             Assert.IsFalse(CopilotAdoptionWorkloadEvidence.Complete(coverage));
             Assert.IsTrue((await store.ReadAsync(Day.AddDays(10), Day.AddDays(11))).All(c => !c.IsComplete));
+        }
+
+        [TestMethod]
+        public async Task UnavailableSqlPresenceCannotVerifyASourceOrHideIndependentEvidence()
+        {
+            var store = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            await store.CompleteDayAsync("teams", Day, true, true, false, Day.AddDays(4), 3);
+            await store.CompleteDayAsync("outlook", Day, true, true, true, Day.AddDays(4), 3);
+            var probed = new List<string>();
+            var result = await store.ReadAsync(Day, Day, default, source =>
+            {
+                probed.Add(source);
+                return source == "teams" ? Task.FromException<HashSet<DateTime>>(new TimeoutException())
+                    : Task.FromResult(new HashSet<DateTime>());
+            });
+            Assert.AreEqual("storedRowsUnavailable", result.Single(c => c.Source == "teams").Reason);
+            Assert.AreEqual("empty", result.Single(c => c.Source == "outlook").Status);
+            CollectionAssert.AreEquivalent(new[] { "teams", "outlook" }, probed);
         }
 
         [TestMethod]
@@ -337,6 +357,7 @@ namespace Tests.UnitTests
             var state = new ProbeStore();
             var processOnly = new UsageReportCoverageStore(state, false);
             await processOnly.CompleteDayAsync("teams", Day, true, true, false, Day.AddDays(3), 3);
+            Assert.IsFalse(await processOnly.IsDayVerifiedAsync("teams", Day));
             Assert.IsTrue((await processOnly.ReadAsync(Day, Day)).All(c => c.Reason == "durableStateMissing"));
             Assert.AreEqual(0, state.Reads);
             state.Fail = true;

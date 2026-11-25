@@ -354,6 +354,41 @@ namespace Tests.UnitTests
             Assert.AreEqual(large, (await store.GetVersionedAsync("large")).Value);
         }
 
+        [TestMethod]
+        public async Task UsagePurgeFencesOnlyAffectedDaysAndOnlyAFreshWholeReportCanVerifyThemAgain()
+        {
+            var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+            var values = new AzureTableKeyValueStore(_table ?? Skip(), "Usage" + Guid.NewGuid().ToString("N"), () => now);
+            var store = new UsageReportCoverageStore(values, true);
+            var day = now.UtcDateTime.Date.AddDays(-4);
+            var request = now.UtcDateTime;
+            await store.CompleteDayAsync("teams", day, true, true, false, request, 3);
+            await store.StartScopePurgeAsync("first");
+            await store.RevokeScopeDaysAsync("teams", new[] { day }, CancellationToken.None);
+            await store.BeginDayAsync("teams", day);
+            await store.CompleteDayAsync("teams", day, true, true, false, request, 3);
+            Assert.IsFalse(await store.IsDayVerifiedAsync("teams", day));
+            await store.CompleteDayAsync("outlook", day, true, true, true, request, 3);
+            Assert.IsTrue(await store.IsDayVerifiedAsync("outlook", day), "An unrelated settled empty remains valid during the purge.");
+
+            await store.EndScopePurgeAsync("first", request);
+            await store.CompleteDayAsync("teams", day, true, true, false, request, 3);
+            Assert.IsFalse(await store.IsDayVerifiedAsync("teams", day), "A fetch that overlaps the purge cannot certify.");
+            await store.CompleteDayAsync("teams", day, true, true, false, request.AddSeconds(1), 3);
+            Assert.IsTrue(await store.IsDayVerifiedAsync("teams", day), "A later complete tenant-wide download can certify.");
+            await store.StartScopePurgeAsync("second");
+            await store.CompleteDayAsync("teams", day, true, true, false, request.AddSeconds(1), 3);
+            Assert.IsTrue(await store.IsDayVerifiedAsync("teams", day), "A later purge has not touched this date.");
+            await store.CompleteDayAsync("teams", day, true, true, true, request.AddSeconds(-1), 3);
+            Assert.IsFalse(await store.IsDayVerifiedAsync("teams", day), "An older download finishing last cannot restore its certificate.");
+
+            now = now.AddDays(401);
+            var outcomes = await store.ReadDailyOutcomesAsync(day, day);
+            Assert.IsNull(outcomes["outlook"][day], "Ordinary conditional writes keep their normal expiry.");
+            Assert.AreEqual(UsageReportCoverageStore.ScopeUnverified, outcomes["teams"][day],
+                "A purged day never becomes a legacy key miss that would trust surviving SQL rows.");
+        }
+
         /// <summary>
         /// Several web instances saving the score settings against one version at once: exactly one lands, the rest are
         /// conflicts, and the history holds only the change that was committed.

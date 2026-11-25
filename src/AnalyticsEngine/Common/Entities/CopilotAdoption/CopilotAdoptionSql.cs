@@ -152,6 +152,28 @@ namespace Common.Entities.CopilotAdoption
             "WHERE t.[date] <= @settled;";
 
         /// <summary>
+        /// Stop at the first row on each date. On 1M synthetic rows, IX_date took 28 / 180 / 366
+        /// seeks (112 / 722 / 1,469 table logical reads) rather than scanning the period's activity.
+        /// </summary>
+        internal static string UsageDaysWithStoredRowsSql(string source)
+        {
+            if (!State.UsageReportCoverageStore.Sources.Contains(source))
+                throw new ArgumentOutOfRangeException(nameof(source));
+            return $@"
+WITH days AS (
+    SELECT CAST(@from AS date) AS day
+    UNION ALL
+    SELECT DATEADD(DAY, 1, day) FROM days WHERE day < @through
+)
+SELECT day FROM days
+WHERE EXISTS (
+    SELECT 1 FROM dbo.[{source}_user_activity_log] AS r WITH (FORCESEEK)
+    WHERE r.[date] >= day AND r.[date] < DATEADD(DAY, 1, day)
+)
+OPTION (MAXRECURSION {State.UsageReportCoverageStore.MaximumDays});";
+        }
+
+        /// <summary>
         /// Whether the last per-user Copilot usage-report import came back with hashed identities
         /// (the tenant's "concealed user information" setting). That makes Microsoft's per-user numbers
         /// unusable while leaving the audit-derived ones untouched, which is worth saying out loud

@@ -306,29 +306,6 @@ namespace Common.Entities.CopilotAdoption
             // This is the assessed daily-report window, not a MAX(fact date) completeness claim.
             // The same settlement boundary is used by the queries and the exact per-day outcome reader.
             summary.DataSources.M365UsageReportDate = settled;
-            try
-            {
-                summary.DataSources.WorkloadCoverage = await (_usageReportCoverage ?? UsageReportCoverageStore
-                    .Open(new Config.AppConfig())).ReadAsync(windowStart.Date, settled, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch (Exception)
-            {
-                // Configuration/client construction can fail before the store's bounded reader is reached.
-                // That cannot certify a workload or prevent independent audit-based analysis.
-                summary.DataSources.WorkloadCoverage = UsageReportCoverageStore.Sources.Select(source => new UsageReportCoverage
-                {
-                    Source = source, FromUtc = windowStart.Date, ThroughUtc = settled.Date,
-                    ExpectedDays = Math.Max(0, (settled.Date - windowStart.Date).Days + 1),
-                    Reason = "durableStateUnavailable",
-                }).ToList();
-            }
-            summary.DataSources.M365UsageReportsAvailable =
-                CopilotAdoptionWorkloadEvidence.Complete(summary.DataSources.WorkloadCoverage);
-            if (!summary.DataSources.M365UsageReportsAvailable)
-            {
-                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.WorkloadCoverageUnverified);
-            }
 
             summary.DataSources.CopilotUsageReportObfuscated = await SafeScalarAsync(
                 CopilotAdoptionSql.CopilotReportObfuscatedSql,
@@ -508,6 +485,9 @@ namespace Common.Entities.CopilotAdoption
             CopilotAdoptionFailure scoringFailure = null;
             try
             {
+                // A scope purge revokes the affected days BEFORE deleting. Read the certificates after
+                // the workload queries, not before them, so reduced counts cannot inherit earlier proof.
+                await ApplyWorkloadCoverageAsync(analysis, windowStart.Date, settled, cancellationToken).ConfigureAwait(false);
                 FinaliseSummary(analysis);
             }
             catch (Exception ex)
@@ -1780,17 +1760,7 @@ namespace Common.Entities.CopilotAdoption
             // figure built from this list - the licence estimate above all - is a floor rather than a total.
             analysis.OpportunitiesCapped = rows.Count >= _options.MaxOpportunityCandidates;
 
-            analysis.Opportunities = rows
-                .Select(r => CopilotAdoptionWorkloadEvidence.Apply(
-                    CopilotAdoptionScoring.ScoreOpportunity(r, _options), summary.DataSources.WorkloadCoverage))
-                // Proven demand first. The SQL deliberately sorts proven-demand candidates into the
-                // TOP (@maxRows) window ahead of merely busy users so the cap cannot truncate them;
-                // ordering on score alone here would quietly undo that in the list the reader sees,
-                // ranking somebody who has never opened Copilot above somebody already using it.
-                .OrderBy(r => r.QualificationTier == CopilotAdoptionScoring.OpportunityTiers.ProvenDemand ? 0 : 1)
-                .ThenByDescending(r => r.OpportunityScore)
-                .ThenBy(r => r.UserPrincipalName, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            analysis.Opportunities = rows.Select(r => CopilotAdoptionScoring.ScoreOpportunity(r, _options)).ToList();
         }
 
         #endregion
@@ -3878,6 +3848,38 @@ namespace Common.Entities.CopilotAdoption
         #endregion
 
         #region Query plumbing
+
+        private async Task ApplyWorkloadCoverageAsync(CopilotAdoptionAnalysis analysis, DateTime from, DateTime through, CancellationToken token)
+        {
+            var summary = analysis.Summary;
+            try
+            {
+                var store = _usageReportCoverage ?? UsageReportCoverageStore.Open(new Config.AppConfig());
+                summary.DataSources.WorkloadCoverage = await store.ReadAsync(from, through, token, async source =>
+                    new HashSet<DateTime>(await QueryAsync<DateTime>(CopilotAdoptionSql.UsageDaysWithStoredRowsSql(source), token,
+                        new SqlParameter("@from", from), new SqlParameter("@through", through)).ConfigureAwait(false))).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (Exception)
+            {
+                // Client construction can fail before the bounded reader is reached. That cannot certify
+                // a workload or prevent independent audit-based analysis.
+                summary.DataSources.WorkloadCoverage = UsageReportCoverageStore.Sources.Select(source => new UsageReportCoverage
+                {
+                    Source = source, FromUtc = from, ThroughUtc = through,
+                    ExpectedDays = Math.Max(0, (through - from).Days + 1), Reason = "durableStateUnavailable",
+                }).ToList();
+            }
+            var coverage = summary.DataSources.WorkloadCoverage;
+            summary.DataSources.M365UsageReportsAvailable = CopilotAdoptionWorkloadEvidence.Complete(coverage);
+            if (!summary.DataSources.M365UsageReportsAvailable)
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.WorkloadCoverageUnverified);
+            analysis.Opportunities = analysis.Opportunities.Select(row => CopilotAdoptionWorkloadEvidence.Apply(row, coverage))
+                // Match the SQL's proven-demand-first cap even when the workload scores are unknown.
+                .OrderBy(row => row.QualificationTier == CopilotAdoptionScoring.OpportunityTiers.ProvenDemand ? 0 : 1)
+                .ThenByDescending(row => row.OpportunityScore)
+                .ThenBy(row => row.UserPrincipalName, StringComparer.OrdinalIgnoreCase).ToList();
+        }
 
         /// <summary>Runs a query on its own short-lived context, so one slow report cannot hold a context open.</summary>
         protected virtual async Task<List<T>> QueryAsync<T>(

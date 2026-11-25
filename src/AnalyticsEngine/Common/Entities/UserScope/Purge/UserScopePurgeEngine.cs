@@ -1,3 +1,4 @@
+using Common.Entities.State;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -82,13 +83,20 @@ namespace Common.Entities.UserScope.Purge
 
         private readonly UserScopePurgeDatabase _database;
         private readonly UserScopePurgeStateStore _state;
+        private readonly UsageReportCoverageStore _coverage;
         private readonly ILogger _logger;
+        private string _coverageFence;
         private DateTime _lastStateCheckUtc = DateTime.MinValue;
 
         public UserScopePurgeEngine(UserScopePurgeDatabase database, UserScopePurgeStateStore state, ILogger logger)
+            : this(database, state, logger, UsageReportCoverageStore.Open(new Config.AppConfig(), logger)) { }
+
+        internal UserScopePurgeEngine(UserScopePurgeDatabase database, UserScopePurgeStateStore state, ILogger logger,
+            UsageReportCoverageStore coverage)
         {
             _database = database ?? throw new ArgumentNullException(nameof(database));
             _state = state ?? throw new ArgumentNullException(nameof(state));
+            _coverage = coverage ?? throw new ArgumentNullException(nameof(coverage));
             _logger = logger ?? NullLogger.Instance;
         }
 
@@ -165,6 +173,13 @@ namespace Common.Entities.UserScope.Purge
         {
             try
             {
+                if (_coverage.IsDurable)
+                {
+                    // A resumed, cancelled job must also close an abandoned fence. Bind its replacement
+                    // to this run, not the job id that another host may have taken over.
+                    _coverageFence = Guid.NewGuid().ToString("N");
+                    await CoverageWriteAsync(() => _coverage.StartScopePurgeAsync(_coverageFence, stopToken), stopToken).ConfigureAwait(false);
+                }
                 if (job.CancelRequested)
                 {
                     return await EndAsync(job, UserScopePurgeStates.Cancelled, null, null).ConfigureAwait(false);
@@ -531,6 +546,7 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
             int? unknownUserId, CancellationToken stopToken)
         {
             string keyType;
+            var lateUsageGuard = "";
             using (var connection = await _database.OpenAsync().ConfigureAwait(false))
             {
                 keyType = IsWalkOfTheCandidates(step)
@@ -544,6 +560,14 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
                         return null;
                     }
                 }
+                if (step.Kind == UserScopePurgeStepKind.Users)
+                {
+                    // These usage FKs cascade. Do not let the final user deletion silently
+                    // erase a late row whose report day was never staged and revoked.
+                    foreach (var table in new[] { "onedrive_user_activity_log", "outlook_user_activity_log", "sharepoint_user_activity_log", "yammer_user_activity_log" })
+                        if (await TableExistsAsync(connection, table).ConfigureAwait(false))
+                            lateUsageGuard += $" AND NOT EXISTS (SELECT 1 FROM dbo.[{table}] u WITH (HOLDLOCK, FORCESEEK) WHERE u.user_id = t.id)";
+                }
             }
 
             if (keyType == null)
@@ -553,6 +577,9 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
             }
 
             var window = WindowOverride ?? step.Window;
+            var coverageSource = _coverage.IsDurable && step.Schema == "dbo" && step.Kind == UserScopePurgeStepKind.Delete
+                ? UsageReportCoverageStore.WeeklySources.SingleOrDefault(source => step.Table == source + "_user_activity_log") : null;
+            var revokedDays = new HashSet<DateTime>();
             var windowNumber = 0;
             long stepRows = 0;
             while (true)
@@ -561,7 +588,10 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
                 windowNumber++;
 
                 var result = await WithRetriesAsync(session,
-                    () => RunWindowAsync(session.Connection, step, keyType, job.StepAfter, window, unknownUserId), stopToken).ConfigureAwait(false);
+                    () => coverageSource == null
+                        ? RunWindowAsync(session.Connection, step, keyType, job.StepAfter, window, unknownUserId, lateUsageGuard)
+                        : DeleteUsageWindowAsync(session.Connection, step, job.StepAfter, window, coverageSource, revokedDays, stopToken),
+                    stopToken).ConfigureAwait(false);
                 if (result.Done)
                 {
                     break;
@@ -620,11 +650,74 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
             public Dictionary<string, long> Counts { get; set; }
         }
 
-        private async Task<WindowResult> RunWindowAsync(SqlConnection connection, UserScopePurgeStep step, string keyType, string after, int window, int? unknownUserId)
+        // Select the very same bounded batch the purge will delete. Persist just the newly affected
+        // calendar days before deleting the selected facts; never hold SQL locks while waiting for Table.
+        private async Task<WindowResult> DeleteUsageWindowAsync(SqlConnection connection, UserScopePurgeStep step,
+            string after, int window, string source, HashSet<DateTime> revoked, CancellationToken token)
+        {
+            var afterWhere = after == null ? "" : "WHERE t.id > @after ";
+            var afterAnd = after == null ? "" : " AND t.id > @after";
+            var sql = $@"
+SET NOCOUNT ON;
+TRUNCATE TABLE #purge_usage_batch;
+DECLARE @end int = (SELECT MAX(w.id) FROM (SELECT TOP (@window) t.id FROM {step.QualifiedTable} t {afterWhere}ORDER BY t.id) w);
+INSERT #purge_usage_batch (id, report_day)
+SELECT TOP (@batch) t.id, CONVERT(date, t.[date]) FROM {step.QualifiedTable} t WITH (INDEX(1))
+WHERE t.id <= @end{afterAnd} AND ({step.Match});
+SELECT @end, @@ROWCOUNT;
+SELECT DISTINCT report_day FROM #purge_usage_batch;";
+            var days = new List<DateTime>();
+            int end, selected;
+            using (var command = new SqlCommand(sql, connection) { CommandTimeout = 600 })
+            {
+                if (after != null) AddKeyParameter(command, "@after", "int", after);
+                command.Parameters.Add("@window", SqlDbType.Int).Value = window;
+                command.Parameters.Add("@batch", SqlDbType.Int).Value = BatchSize;
+                using (var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false))
+                {
+                    await reader.ReadAsync(token).ConfigureAwait(false);
+                    if (reader.IsDBNull(0)) return new WindowResult { Done = true };
+                    end = reader.GetInt32(0);
+                    selected = reader.GetInt32(1);
+                    await reader.NextResultAsync(token).ConfigureAwait(false);
+                    while (await reader.ReadAsync(token).ConfigureAwait(false))
+                    {
+                        var day = reader.GetDateTime(0);
+                        if (!revoked.Contains(day)) days.Add(day);
+                    }
+                }
+            }
+            if (days.Count != 0)
+            {
+                await CoverageWriteAsync(() => _coverage.RevokeScopeDaysAsync(source, days, token), token).ConfigureAwait(false);
+                if (revoked.Count >= UsageReportCoverageStore.MaximumDays) revoked.Clear();
+                revoked.UnionWith(days);
+            }
+            var affected = 0;
+            if (selected > 0)
+            {
+                using (var delete = new SqlCommand($@"
+DELETE t FROM #purge_usage_batch b INNER LOOP JOIN {step.QualifiedTable} t ON t.id = b.id
+WHERE CONVERT(date, t.[date]) = b.report_day AND ({step.Match}); SELECT @@ROWCOUNT;", connection) { CommandTimeout = 600 })
+                    affected = (int)await delete.ExecuteScalarAsync(token).ConfigureAwait(false);
+            }
+            return new WindowResult { Affected = affected, NextAfter = selected >= BatchSize || selected != affected ? after : KeyToString(end) };
+        }
+
+        private static async Task CoverageWriteAsync(Func<Task> write, CancellationToken token)
+        {
+            try { await write().ConfigureAwait(false); }
+            catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
+            {
+                throw new UserScopePurgeStateUnavailableException("Could not update usage-report coverage for the purge.", ex);
+            }
+        }
+
+        private async Task<WindowResult> RunWindowAsync(SqlConnection connection, UserScopePurgeStep step, string keyType, string after, int window, int? unknownUserId, string lateUsageGuard)
         {
             var sql = step.Kind == UserScopePurgeStepKind.Calls ? BuildCallsWindowSql(keyType, after != null)
                 : IsWalkOfTheCandidates(step) ? BuildCandidateWindowSql(step, after != null)
-                : BuildWindowSql(step, keyType, after != null);
+                : BuildWindowSql(step, keyType, after != null, lateUsageGuard);
 
             try
             {
@@ -634,7 +727,7 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
             {
                 // Something new points at one of these users - the importers added data about them while the purge
                 // ran. Remove the ones that are free, one at a time, and leave the rest for the next purge.
-                return await DeleteUsersOneByOneAsync(connection, keyType, after, window).ConfigureAwait(false);
+                return await DeleteUsersOneByOneAsync(connection, keyType, after, window, lateUsageGuard).ConfigureAwait(false);
             }
         }
 
@@ -679,7 +772,7 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
             }
         }
 
-        private async Task<WindowResult> DeleteUsersOneByOneAsync(SqlConnection connection, string keyType, string after, int window)
+        private async Task<WindowResult> DeleteUsersOneByOneAsync(SqlConnection connection, string keyType, string after, int window, string lateUsageGuard)
         {
             var afterFilter = after == null ? "" : "WHERE t.[id] > @after ";
             var select = $@"
@@ -720,7 +813,7 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
                     // The audit-event check again, in the delete itself: audit_events.user_id has no foreign key, so an event
                     // that arrived since the select above would otherwise be orphaned rather than keep its user.
                     using (var delete = new SqlCommand(
-                        "DELETE FROM dbo.users WHERE id = @id AND NOT EXISTS (SELECT 1 FROM dbo.audit_events e WHERE e.user_id = @id);", connection))
+                        $"DELETE t FROM dbo.users t WHERE t.id = @id AND NOT EXISTS (SELECT 1 FROM dbo.audit_events e WHERE e.user_id = @id){lateUsageGuard};", connection))
                     {
                         delete.Parameters.Add("@id", SqlDbType.Int).Value = id;
                         deleted += await delete.ExecuteNonQueryAsync().ConfigureAwait(false);
@@ -795,7 +888,7 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
         /// events (20%) from 446 ms to 131 ms. <c>OPTION (RECOMPILE)</c> reached the same plan in most windows, but only most,
         /// and compiles on every one.
         /// </remarks>
-        internal static string BuildWindowSql(UserScopePurgeStep step, string keyType, bool hasAfter)
+        internal static string BuildWindowSql(UserScopePurgeStep step, string keyType, bool hasAfter, string lateUsageGuard = "")
         {
             var key = $"t.[{step.KeyColumn}]";
             var afterWhere = hasAfter ? $"WHERE {key} > @after " : "";
@@ -817,7 +910,7 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
                     // deleting the user would silently orphan them. Any other reference fails the statement (error 547),
                     // which RunWindowAsync handles one user at a time.
                     action = $"DELETE TOP (@batch) t FROM {target} WHERE {key} <= @end{afterAnd} AND ({step.Match}) " +
-                             "AND NOT EXISTS (SELECT 1 FROM dbo.audit_events e WHERE e.user_id = t.[id]);";
+                             $"AND NOT EXISTS (SELECT 1 FROM dbo.audit_events e WHERE e.user_id = t.[id]){lateUsageGuard};";
                     break;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(step));
@@ -1078,6 +1171,8 @@ SELECT @id;";
                 job.Phase = UserScopePurgePhases.Done;
             }
 
+            if (_coverageFence != null)
+                await CoverageWriteAsync(() => _coverage.EndScopePurgeAsync(_coverageFence, now), CancellationToken.None).ConfigureAwait(false);
             await _state.SaveAsync(job).ConfigureAwait(false);
 
             switch (state)

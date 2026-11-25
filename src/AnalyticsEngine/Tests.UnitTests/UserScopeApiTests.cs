@@ -276,7 +276,8 @@ namespace Tests.UnitTests
             Assert.IsTrue(cancelled.CancelRequested);
             var unreadable = new FixedUserImportScopeProvider(UserImportScope.Everyone("down"),
                 UserImportScopeResolution.Unavailable(null, null, "down", DateTime.UtcNow), filter);
-            Assert.AreEqual(UserScopePurgeRunOutcome.Cancelled, await new UserScopePurgeEngine(database, state, NullLogger.Instance).RunAsync(job.Id, unreadable));
+            Assert.AreEqual(UserScopePurgeRunOutcome.Cancelled, await new UserScopePurgeEngine(database, state, NullLogger.Instance,
+                new UsageReportCoverageStore(new InMemoryKeyValueStore(), false)).RunAsync(job.Id, unreadable));
             Assert.AreEqual(UserScopePurgeStates.Cancelled, (await accepting.GetPurgeAsync(job.Id)).State);
             Assert.AreEqual(0, (await accepting.GetPurgeAsync(job.Id)).CandidateCount);
             Assert.AreEqual(UserScopeErrorCodes.JobNotActive,

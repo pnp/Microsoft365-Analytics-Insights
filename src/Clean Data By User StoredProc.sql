@@ -23,6 +23,14 @@
                  person meanwhile makes the delete it conflicts with fail, and everything is rolled back: run
                  it again. But an audit event saved after this procedure has deleted the person's events, and
                  before it deletes the person, has no foreign key to stop it, so it would be left behind.
+               - The portal's scope purge also revokes daily usage coverage in Azure Table storage; this
+                 SQL-only procedure cannot. With the importer stopped, identify the affected report dates
+                 for this user in each {teams,outlook,sharepoint,onedrive,yammer}_user_activity_log table before
+                 deletion. If durable state is configured, upsert those v1:<source>:yyyyMMdd rows in the
+                 AnalyticsState table's UsageReportCoverage partition with Value = scopeUnverified and no
+                 ExpiresUtc. Do not delete the keys: legacy reports may treat surviving rows as coverage.
+                 Only a fresh tenant-wide download can reverify a date, and Graph has limited retention.
+                 Viva Engage has no positive coverage ledger; its purged dates remain unverified.
   Returns:     Return code (0=OK), @ReturnMessage OUTPUT
 ======================================================================*/
 

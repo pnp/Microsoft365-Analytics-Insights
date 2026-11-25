@@ -33,6 +33,7 @@ namespace Tests.UnitTests
         private static UserScopePurgeDatabase Database => new UserScopePurgeDatabase(ConnectionString);
 
         private UserScopePurgeStateStore State;
+        private UsageReportCoverageStore Coverage;
         private int[] _candidates;
 
         [TestInitialize]
@@ -44,6 +45,7 @@ namespace Tests.UnitTests
             }
 
             State = new UserScopePurgeStateStore(new InMemoryKeyValueStore(), isDurable: false);
+            Coverage = new UsageReportCoverageStore(new InMemoryKeyValueStore(), durable: true);
             Assert.IsFalse(await Database.IsPurgeRunningAsync(), "No session should still hold the purge lock from an earlier test.");
         }
 
@@ -327,6 +329,10 @@ DELETE FROM dbo.users WHERE id IN ({users});");
         private static async Task<int> CountAsync(string sql, params (string Name, object Value)[] parameters)
             => Convert.ToInt32(await ScalarAsync(sql, parameters));
 
+        private static Task InsertLateOutlookUsageAsync(int userId) => ExecuteAsync($@"
+INSERT INTO dbo.outlook_user_activity_log (user_id, [date], email_send_count, email_receive_count,
+    email_read_count, meeting_created_count, meeting_interacted_count) VALUES ({userId}, '20260105', 1, 0, 0, 0, 0);");
+
         /// <summary>A queued purge that removes exactly <paramref name="userIds"/> (see <see cref="NewEngine"/>), confirmed for that many.</summary>
         private Task<int> StartJobWithCandidatesAsync(params int[] userIds) => StartJobWithCandidatesAsync(null, userIds);
 
@@ -343,7 +349,7 @@ DELETE FROM dbo.users WHERE id IN ({users});");
         /// An engine that removes the candidates given to <see cref="StartJobWithCandidatesAsync(int[])"/> (none: it works them
         /// out from the scope), and saves its progress and looks for a stop request after every window.
         /// </summary>
-        private UserScopePurgeEngine NewEngine() => new UserScopePurgeEngine(Database, State, NullLogger.Instance)
+        private UserScopePurgeEngine NewEngine() => new UserScopePurgeEngine(Database, State, NullLogger.Instance, Coverage)
         {
             RetryDelayOverride = TimeSpan.Zero,
             StateCheckInterval = TimeSpan.Zero,
@@ -834,14 +840,16 @@ DELETE FROM dbo.users WHERE id IN ({users});");
         public async Task Purge_SomeoneWhoseAuditEventArrivesWhileItRuns_IsKeptByTheBatchDelete()
         {
             Seed seed = null;
-            int lateEvent = 0;
+            int lateEvent = 0, lateUsage = 0;
             try
             {
                 seed = await SeedAsync();
                 lateEvent = Convert.ToInt32(await ScalarAsync("INSERT INTO dbo.users (user_name) OUTPUT inserted.id VALUES (@n);", ("@n", seed.Token + "-late-event@contoso.local")));
-                var jobId = await StartJobWithCandidatesAsync(seed.Outsider, lateEvent);
+                lateUsage = Convert.ToInt32(await ScalarAsync("INSERT INTO dbo.users (user_name) OUTPUT inserted.id VALUES (@n);", ("@n", seed.Token + "-late-usage@contoso.local")));
+                var jobId = await StartJobWithCandidatesAsync(seed.Outsider, lateEvent, lateUsage);
 
                 var arrived = false;
+                var usageArrived = false;
                 var engine = NewEngine();
                 engine.AfterWindow = async (step, window) =>
                 {
@@ -850,20 +858,27 @@ DELETE FROM dbo.users WHERE id IN ({users});");
                         arrived = true;
                         await ExecuteAsync($"INSERT INTO dbo.audit_events (id, time_stamp, user_id) VALUES (NEWID(), SYSUTCDATETIME(), {lateEvent});");
                     }
+                    if (!usageArrived && UserScopePurgePlan.PhaseOf(step) == UserScopePurgePhases.CopilotInteractions)
+                    {
+                        usageArrived = true;
+                        await InsertLateOutlookUsageAsync(lateUsage);
+                    }
                 };
                 Assert.AreEqual(UserScopePurgeRunOutcome.Completed, await engine.RunAsync(jobId, null));
 
                 var job = await State.GetAsync(jobId);
-                Assert.AreEqual(1, job.UsersSkipped, "The late arrival is kept and counted...");
+                Assert.AreEqual(2, job.UsersSkipped, "Both late arrivals are kept and counted...");
                 Assert.AreEqual(1, job.UsersDeleted, "...while the outsider is removed.");
                 Assert.AreEqual(1, await CountAsync("SELECT COUNT(*) FROM dbo.users WHERE id = @id", ("@id", lateEvent)),
                     "Kept, so the audit event that arrived is not orphaned.");
+                Assert.AreEqual(1, await CountAsync("SELECT COUNT(*) FROM dbo.outlook_user_activity_log WHERE user_id = @id", ("@id", lateUsage)),
+                    "A cascading user delete must not remove a late report without revoking its date.");
                 await AssertPurgedAsync(seed);
             }
             finally
             {
                 await ExecuteAsync($"DELETE FROM dbo.audit_events WHERE user_id = {lateEvent};");
-                await CleanupAsync(seed, lateEvent);
+                await CleanupAsync(seed, lateEvent, lateUsage);
             }
         }
 
@@ -882,7 +897,7 @@ DELETE FROM dbo.users WHERE id IN ({users});");
 
                 var killed = false;
                 var log = new CapturingLogger();
-                var engine = new UserScopePurgeEngine(Database, State, log)
+                var engine = new UserScopePurgeEngine(Database, State, log, Coverage)
                 {
                     RetryDelayOverride = TimeSpan.Zero,
                     StateCheckInterval = TimeSpan.Zero,
@@ -1144,13 +1159,14 @@ VALUES ('{run}', NEWID(), '2026-09-01', '{outsider}', SYSDATETIMEOFFSET(), 2, N'
         public async Task Purge_OneAtATimeFallback_KeepsSomeoneWhoseAuditEventArrivesJustBeforeTheirDelete()
         {
             Seed seed = null;
-            int lateSession = 0, lateEvent = 0;
+            int lateSession = 0, lateEvent = 0, lateUsage = 0;
             try
             {
                 seed = await SeedAsync();
                 lateSession = Convert.ToInt32(await ScalarAsync("INSERT INTO dbo.users (user_name) OUTPUT inserted.id VALUES (@n);", ("@n", seed.Token + "-late-session@contoso.local")));
                 lateEvent = Convert.ToInt32(await ScalarAsync("INSERT INTO dbo.users (user_name) OUTPUT inserted.id VALUES (@n);", ("@n", seed.Token + "-late-event@contoso.local")));
-                var jobId = await StartJobWithCandidatesAsync(seed.Outsider, lateSession, lateEvent);
+                lateUsage = Convert.ToInt32(await ScalarAsync("INSERT INTO dbo.users (user_name) OUTPUT inserted.id VALUES (@n);", ("@n", seed.Token + "-late-usage@contoso.local")));
+                var jobId = await StartJobWithCandidatesAsync(seed.Outsider, lateSession, lateEvent, lateUsage);
 
                 bool sessionArrived = false, eventArrived = false;
                 var engine = NewEngine();
@@ -1170,21 +1186,24 @@ VALUES ('{run}', NEWID(), '2026-09-01', '{outsider}', SYSDATETIMEOFFSET(), 2, N'
                         eventArrived = true;
                         await ExecuteAsync($"INSERT INTO dbo.audit_events (id, time_stamp, user_id) VALUES (NEWID(), SYSUTCDATETIME(), {lateEvent});");
                     }
+                    if (id == lateUsage) await InsertLateOutlookUsageAsync(lateUsage);
                 };
                 Assert.AreEqual(UserScopePurgeRunOutcome.Completed, await engine.RunAsync(jobId, null));
 
                 Assert.IsTrue(eventArrived, "The audit event arrived after the fallback chose who to delete.");
                 var job = await State.GetAsync(jobId);
                 Assert.AreEqual(1, job.UsersDeleted, "The outsider is removed...");
-                Assert.AreEqual(2, job.UsersSkipped, "...and both late arrivals are kept and counted.");
+                Assert.AreEqual(3, job.UsersSkipped, "...and all late arrivals are kept and counted.");
                 Assert.AreEqual(1, await CountAsync("SELECT COUNT(*) FROM dbo.users WHERE id = @id", ("@id", lateEvent)),
                     "Kept, so the audit event that arrived just before its delete is not orphaned.");
+                Assert.AreEqual(1, await CountAsync("SELECT COUNT(*) FROM dbo.outlook_user_activity_log WHERE user_id = @id", ("@id", lateUsage)),
+                    "Kept, so the new report cannot be silently cascade-deleted.");
                 await AssertPurgedAsync(seed);
             }
             finally
             {
                 await ExecuteAsync($"DELETE FROM dbo.audit_events WHERE user_id IN ({lateSession}, {lateEvent}); DELETE FROM dbo.sessions WHERE user_id IN ({lateSession}, {lateEvent});");
-                await CleanupAsync(seed, lateSession, lateEvent);
+                await CleanupAsync(seed, lateSession, lateEvent, lateUsage);
             }
         }
 
@@ -1243,7 +1262,7 @@ INSERT INTO dbo.teams_addons_user_installed_log (date, addon_id, user_id) VALUES
 
                 var jobId = await StartJobWithCandidatesAsync(seed.Outsider);
                 var log = new CapturingLogger();
-                var engine = new UserScopePurgeEngine(Database, State, log)
+                var engine = new UserScopePurgeEngine(Database, State, log, Coverage)
                 {
                     RetryDelayOverride = TimeSpan.Zero,
                     StateCheckInterval = TimeSpan.Zero,
