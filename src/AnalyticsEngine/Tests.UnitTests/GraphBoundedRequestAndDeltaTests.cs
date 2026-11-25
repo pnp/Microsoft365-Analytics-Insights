@@ -806,13 +806,13 @@ namespace Tests.UnitTests
             return GraphServiceClientFactory.CreateHttpClient(authProvider, TestBudget(perRequestMs, timeoutRetryCount, totalBudgetMs, sdkRetryCount), AnalyticsLogger.ConsoleOnlyTracer(), terminal);
         }
 
-        private static async Task<T> WithinWatchdog<T>(Task<T> task)
+        internal static async Task<T> WithinWatchdog<T>(Task<T> task)
         {
             Assert.AreSame(task, await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(5))), "The SDK remained blocked reading the body.");
             return await task;
         }
 
-        private sealed class GatedJsonContent : HttpContent
+        internal sealed class GatedJsonContent : HttpContent
         {
             private readonly bool _stopsOnDispose;
             private readonly TaskCompletionSource<bool> _release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);

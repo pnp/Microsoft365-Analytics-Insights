@@ -10,6 +10,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Graph;
@@ -302,6 +303,125 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, subscriptions.Creates.Count);
             Assert.AreEqual(0, subscriptions.Deletes.Count);
             CollectionAssert.AreEqual(renew ? new[] { "owned" } : Array.Empty<string>(), subscriptions.Renewals.Select(r => r.SubscriptionId).ToArray());
+        }
+
+        [DataTestMethod]
+        [DataRow(403)]
+        [DataRow(503)]
+        public async Task Webhook_FallbackPatchSdkDeadline_PreservesTheOriginalReplacementFailure(int createStatus)
+        {
+            var operations = new List<string>();
+            using (var body = new GraphBoundedRequestAndDeltaTests.GatedJsonContent())
+            {
+                var transport = SubscriptionTransport(1, operations, () =>
+                {
+                    var refusal = ErrorResponse(createStatus, "text/html");
+                    refusal.Headers.TryAddWithoutValidation("Retry-After", "0");
+                    return refusal;
+                }, () => new HttpResponseMessage(HttpStatusCode.OK) { Content = body });
+                using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromMilliseconds(500), transport))
+                {
+                    var logger = new CallsImportTests.CapturingLogger();
+                    var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), logger, Clock);
+                    var request = webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
+                    await GraphBoundedRequestAndDeltaTests.WithinWatchdog(body.Started.Task);
+                    if (createStatus == 403)
+                    {
+                        var failure = await Assert.ThrowsAsync<ApiException>(() => GraphBoundedRequestAndDeltaTests.WithinWatchdog(request));
+                        Assert.AreEqual(403, failure.ResponseStatusCode);
+                    }
+                    else
+                    {
+                        var failure = await Assert.ThrowsExceptionAsync<AggregateException>(() => GraphBoundedRequestAndDeltaTests.WithinWatchdog(request));
+                        Assert.IsTrue(failure.Flatten().InnerExceptions.Any(e => e is ApiException api && api.ResponseStatusCode == 503));
+                    }
+                    var expected = new List<string> { "GET /v1.0/subscriptions" };
+                    expected.AddRange(Enumerable.Repeat("POST /v1.0/subscriptions", createStatus == 503 ? 4 : 1));
+                    expected.Add("PATCH /v1.0/subscriptions/owned");
+                    CollectionAssert.AreEqual(expected, operations);
+                    Assert.IsTrue(body.Disposed);
+                    Assert.IsTrue(logger.Entries.Any(e => e.Message.Contains("fallback renewal") && e.Message.Contains("deadline")));
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task Webhook_ReplacementPostDeadlineWithoutARefusal_DoesNotStartAnotherMutation()
+        {
+            var operations = new List<string>();
+            using (var body = new GraphBoundedRequestAndDeltaTests.GatedJsonContent())
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromMilliseconds(500),
+                SubscriptionTransport(1, operations, () => new HttpResponseMessage(HttpStatusCode.Created) { Content = body }, () => throw new AssertFailedException())))
+            {
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), NullLogger.Instance, Clock);
+                var request = webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState);
+                await GraphBoundedRequestAndDeltaTests.WithinWatchdog(body.Started.Task);
+                await Assert.ThrowsAsync<OperationCanceledException>(() => GraphBoundedRequestAndDeltaTests.WithinWatchdog(request));
+                Assert.IsTrue(body.Disposed);
+                CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions" }, operations);
+            }
+        }
+
+        [TestMethod]
+        public async Task Webhook_FallbackPatchCancellation_PreservesAnUnrelatedCallerCancellation()
+        {
+            using (var stopping = new CancellationTokenSource())
+            {
+                stopping.Cancel();
+                var cancellation = new OperationCanceledException(stopping.Token);
+                var subscriptions = new FakeCallRecordSubscriptionManager().WithExistingSubscription("owned", Clock.UtcNow.AddHours(1))
+                    .FailingCreateWith(new ApiException { ResponseStatusCode = 403 }).FailingRenewWith(cancellation);
+                var webhook = new CallWebhook(subscriptions, NullLogger.Instance, Clock);
+                var failure = await Assert.ThrowsAsync<OperationCanceledException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
+                Assert.AreSame(cancellation, failure);
+                CollectionAssert.AreEqual(new[] { "owned" }, subscriptions.Renewals.Select(r => r.SubscriptionId).ToArray());
+                Assert.AreEqual(0, subscriptions.Deletes.Count);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task SubscriptionTimer_StoppingDuringFallbackPatch_CancelsTheSdkRequestWithoutSchedulingAFailure(bool hostStops)
+        {
+            var operations = new List<string>();
+            var logger = new CallsImportTests.CapturingLogger();
+            using (var host = new CancellationTokenSource())
+            using (var body = new GraphBoundedRequestAndDeltaTests.GatedJsonContent())
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(30),
+                SubscriptionTransport(1, operations, () => ErrorResponse(403, null), () => new HttpResponseMessage(HttpStatusCode.OK) { Content = body })))
+            using (var timer = new CallSubscriptionMaintainer(stopping => new CallWebhook(new GraphCallRecordSubscriptionManager(graph, stopping), logger, Clock),
+                WebhookUrl, ClientState, null, logger, Clock, host.Token))
+            {
+                var check = timer.RunOnceAsync();
+                await GraphBoundedRequestAndDeltaTests.WithinWatchdog(body.Started.Task);
+                if (hostStops) host.Cancel();
+                else timer.Dispose();
+                Assert.AreSame(check, await Task.WhenAny(check, Task.Delay(TimeSpan.FromSeconds(5))), "The running SDK request did not stop.");
+                await check;
+                Assert.IsTrue(body.Disposed);
+                Assert.AreEqual(0, timer.ConsecutiveFailures);
+                Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains("fallback renewal") || e.Message.Contains("Retry pending")));
+                await timer.RunOnceAsync();
+                CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions", "PATCH /v1.0/subscriptions/owned" }, operations);
+            }
+        }
+
+        [TestMethod]
+        public async Task Webhook_FallbackPatchFailure_DoesNotLogTheSecondaryResponseBody()
+        {
+            const string payload = "synthetic secondary message";
+            var logger = new CallsImportTests.CapturingLogger();
+            var transport = SubscriptionTransport(1, new List<string>(), () => ErrorResponse(403, null),
+                () => TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.BadRequest,
+                    JsonConvert.SerializeObject(new { error = new { code = "BadRequest", message = payload } })));
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph), logger, Clock);
+                Assert.AreEqual(403, (await Assert.ThrowsAsync<ApiException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState))).ResponseStatusCode);
+            }
+            Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains(payload) || e.Exception?.ToString().Contains(payload) == true));
+            Assert.IsTrue(logger.Entries.Any(e => e.Message.Contains("fallback renewal") && e.Message.Contains("HTTP 400")));
         }
 
         private static TeamsCrawlTests.StubGraphHandler SubscriptionTransport(int? ownedHoursLeft, List<string> operations,

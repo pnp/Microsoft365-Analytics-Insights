@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
@@ -44,7 +45,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         /// <param name="records">Must outlive the import cycle; see <see cref="CallSubscriptionRecordStore"/>.</param>
         public CallWebhook(AppConfig o365DownloadSettings, ILogger logger, ICallSubscriptionRecordStore records)
-            : this(CreateGraphSubscriptionManager(o365DownloadSettings), records, logger, SystemClock.Instance) { }
+            : this(o365DownloadSettings, logger, records, CancellationToken.None) { }
+
+        internal CallWebhook(AppConfig settings, ILogger logger, ICallSubscriptionRecordStore records, CancellationToken stopping)
+            : this(CreateGraphSubscriptionManager(settings, stopping), records, logger, SystemClock.Instance) { }
 
         /// <summary>
         /// Constructor taking the Graph subscription API as a port and the clock as a dependency, so
@@ -62,13 +66,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         }
 
-        private static ICallRecordSubscriptionManager CreateGraphSubscriptionManager(AppConfig settings)
+        private static ICallRecordSubscriptionManager CreateGraphSubscriptionManager(AppConfig settings, CancellationToken stopping)
         {
             if (settings == null) throw new ArgumentNullException(nameof(settings));
             if (string.IsNullOrEmpty(settings.ClientSecret)) throw new InvalidOperationException(NO_CLIENT_SECRET_MESSAGE);
 
             return new GraphCallRecordSubscriptionManager(GraphServiceClientFactory.CreateWithTimeout(
-                new ClientSecretCredential(settings.TenantGUID.ToString(), settings.ClientID, settings.ClientSecret), GraphServiceClientFactory.DefaultGraphSdkTimeout));
+                new ClientSecretCredential(settings.TenantGUID.ToString(), settings.ClientID, settings.ClientSecret), GraphServiceClientFactory.DefaultGraphSdkTimeout), stopping);
         }
 
         // Graph Application permission required to subscribe to /communications/callRecords. Surfaced in error
@@ -102,7 +106,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// <summary>
         /// Called just before every create or renewal, each of which makes Graph validate the notification endpoint.
         /// <c>CallSubscriptionMaintainer</c> warms the webhook up here so a cold web app doesn't fail the validation.
-        /// Failures are the hook's to report; they never stop the Graph call.
+        /// Operational failures are the hook's to report; only cancellation stops the Graph call.
         /// </summary>
         public Func<Task> BeforeValidatedChangeAsync { get; set; }
 
@@ -243,7 +247,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 await hook();
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!(ex is OperationCanceledException))
             {
                 Telemetry.LogWarning($"{LOG_TAG} Warming the webhook up failed ({ex.GetType().Name}: {ex.Message}); asking Graph anyway.");
             }
@@ -397,12 +401,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (!CallSubscriptionRules.NeedsRenewal(existing.ExpirationDateTime, _clock.UtcNow)) return;
             try
             {
-                await RenewAsync(existing.Id, expiryUtc, existingUrl);
+                await RenewAsync(existing.Id, expiryUtc, existingUrl, fallback: true);
             }
-            catch (Exception renewalFailure) when (!(renewalFailure is OperationCanceledException))
+            catch (Exception failure) when (!(failure is OperationCanceledException))
             {
-                // The maintainer retries the replacement, not this best-effort renewal.
-                Telemetry.LogWarning($"{LOG_TAG} The fallback renewal of '{existing.Id}' also failed ({renewalFailure.GetType().Name}); reporting the original replacement failure.");
+                // The request's own deadline is secondary. A caller/host cancellation is not ours to suppress.
+                var reason = failure is GraphSdkDeadlineExceededException ? "Graph SDK request deadline"
+                    : failure is ApiException http ? $"HTTP {http.ResponseStatusCode}" : failure.GetType().Name;
+                Telemetry.LogWarning($"{LOG_TAG} The fallback renewal of '{existing.Id}' also failed ({reason}); reporting the original replacement failure.");
             }
         }
 
@@ -506,7 +512,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             }
         }
 
-        private async Task<CallRecordSubscription> RenewAsync(string subscriptionId, DateTime expiryUtc, Uri webAppUrl)
+        private async Task<CallRecordSubscription> RenewAsync(string subscriptionId, DateTime expiryUtc, Uri webAppUrl, bool fallback = false)
         {
             // https://docs.microsoft.com/en-us/graph/api/subscription-update?view=graph-rest-beta&tabs=http
             await BeforeValidatedChange();
@@ -517,7 +523,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 Telemetry.LogInformation($"{LOG_TAG} Renewed subscription id '{result.Id}' for webhook at '{webAppUrl}' in {timer.ElapsedMilliseconds} ms. New expiry: {result.ExpirationDateTime:u}.");
                 return result;
             }
-            catch (ApiException ex)
+            catch (ApiException ex) when (!fallback)
             {
                 LogSubscriptionFailure(ex, webAppUrl, isUpdate: true, existingSubId: subscriptionId);
                 throw;
@@ -568,8 +574,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// it escalates, tracks the exception for App Insights' Failures blade.
         /// </summary>
         /// <param name="replacingSubId">
-        /// Set when the failed create was to replace this subscription, which is kept alive meanwhile - so the impact is
-        /// stated as it is rather than as "nothing is imported".
+        /// Set when the failed create was to replace an existing subscription. Renewal is best effort.
         /// </param>
         private void LogSubscriptionFailure(ApiException ex, Uri webAppUrl, bool isUpdate, string existingSubId = null, string replacingSubId = null)
         {
@@ -581,8 +586,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             var graphError = GraphErrorMessage(ex);
             var impact = replacingSubId == null
                 ? "Until this is fixed, NO Teams call records will be imported."
-                : $"Subscription '{replacingSubId}' is kept alive meanwhile and the replacement retried within minutes. After a client-secret rotation the " +
-                  $"webhook accepts its notifications for up to {CallSubscriptionRules.PreviousClientStateWindow.TotalHours:0} hours, so calls are only lost if the replacement keeps failing.";
+                : $"Subscription '{replacingSubId}' is left in place; renewal is attempted if due and the replacement is retried within minutes. " +
+                  $"After a client-secret rotation the webhook accepts its notifications for at most {CallSubscriptionRules.PreviousClientStateWindow.TotalHours:0} hours.";
 
             if (ex is NonJsonGraphRefusal || (statusCode == (int)HttpStatusCode.Forbidden && !(ex is ODataError)))
             {

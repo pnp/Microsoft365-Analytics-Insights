@@ -563,7 +563,7 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(new[] { "renew:legacy-sub-id" }, subscriptions.Operations);
             var critical = logger.Entries.Single(e => e.Level == LogLevel.Critical).Message;
             StringAssert.Contains(critical, "replace 'legacy-sub-id'");
-            StringAssert.Contains(critical, "kept alive meanwhile");
+            StringAssert.Contains(critical, "renewal is attempted if due");
         }
 
         /// <summary>

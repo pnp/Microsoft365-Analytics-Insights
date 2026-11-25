@@ -52,7 +52,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         private readonly ICallWebhookWarmer _warmer;
         private readonly ILogger _logger;
         private readonly IClock _clock;
-        private readonly CancellationTokenSource _stop = new CancellationTokenSource();
+        private CancellationTokenSource _stop;
+        private readonly CancellationToken _stopping;
 
         private DateTime _nextRunUtc = DateTime.MinValue;
         private DateTime _nextSummaryUtc;
@@ -67,13 +68,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         private int _failuresSinceSummary;
 
         public CallSubscriptionMaintainer(CallWebhook webhook, Uri webhookUrl, CallWebhookClientState clientState, ICallWebhookWarmer warmer, ILogger logger, IClock clock)
+            : this(_ => webhook, webhookUrl, clientState, warmer, logger, clock, CancellationToken.None) { }
+
+        internal CallSubscriptionMaintainer(Func<CancellationToken, CallWebhook> createWebhook, Uri webhookUrl, CallWebhookClientState clientState,
+            ICallWebhookWarmer warmer, ILogger logger, IClock clock, CancellationToken hostStopping)
         {
-            _webhook = webhook ?? throw new ArgumentNullException(nameof(webhook));
             _webhookUrl = webhookUrl ?? throw new ArgumentNullException(nameof(webhookUrl));
             _clientState = clientState ?? throw new ArgumentNullException(nameof(clientState));
             _warmer = warmer;
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _clock = clock ?? SystemClock.Instance;
+            _stop = CancellationTokenSource.CreateLinkedTokenSource(hostStopping);
+            _stopping = _stop.Token;
+            try { _webhook = createWebhook(_stopping) ?? throw new ArgumentNullException("webhook"); }
+            catch { _stop.Dispose(); throw; }
             _summarySinceUtc = _clock.UtcNow;
             _nextSummaryUtc = _summarySinceUtc + SummaryInterval;
             if (_warmer != null) _webhook.BeforeValidatedChangeAsync = WarmUpAsync;
@@ -103,8 +111,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
             // Process lifetime, like the maintainer: this process's copy of which subscription it created.
             var records = new CallSubscriptionRecordStore(StateStore.TryOpen(config, CallSubscriptionRecordStore.Partition, logger), new InMemoryKeyValueStore());
-            var maintainer = new CallSubscriptionMaintainer(new CallWebhook(config, logger, records), webhookUrl, clientState,
-                new HttpCallWebhookWarmer(), logger, SystemClock.Instance);
+            var maintainer = new CallSubscriptionMaintainer(stopping => new CallWebhook(config, logger, records, stopping), webhookUrl, clientState,
+                new HttpCallWebhookWarmer(), logger, SystemClock.Instance, HostRuntime.ShutdownToken);
             maintainer.Start();
             logger.LogInformation($"{LOG_TAG} Subscription timer started: checks every {HealthyCheckInterval.TotalMinutes:0} minutes, independently of the import cycle; " +
                 $"renews when under {CallSubscriptionRules.RenewWhenRemainingBelow.TotalHours:0} h remain; retries a failure after " +
@@ -114,7 +122,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         public void Start()
         {
-            Task.Run(() => LoopAsync(_stop.Token));
+            Task.Run(() => LoopAsync(_stopping));
         }
 
         private async Task LoopAsync(CancellationToken stop)
@@ -149,6 +157,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// <summary>Checks the subscription if a check is due, then logs the summary if that is due. Never throws for a failed check.</summary>
         public async Task RunOnceAsync()
         {
+            if (_stopping.IsCancellationRequested) return;
             if (_clock.UtcNow >= _nextRunUtc)
             {
                 await CheckAsync().ConfigureAwait(false);
@@ -185,6 +194,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 _lastFailure = null;
                 _nextRunUtc = _clock.UtcNow + HealthyCheckInterval;
             }
+            catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
+            {
+                // Stopping the importer is not a failed subscription check to schedule or escalate.
+            }
             catch (Exception ex)
             {
                 _consecutiveFailures++;
@@ -219,7 +232,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         private async Task WarmUpAsync()
         {
-            var result = await _warmer.WarmUpAsync(CallSubscriptionRules.CurrentNotificationUrl(_webhookUrl), _stop.Token).ConfigureAwait(false);
+            var result = await _warmer.WarmUpAsync(CallSubscriptionRules.CurrentNotificationUrl(_webhookUrl), _stopping).ConfigureAwait(false);
             if (result.Succeeded)
             {
                 _logger.LogInformation($"{LOG_TAG} Webhook warm-up answered in {result.ElapsedMs} ms.");
@@ -291,7 +304,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
 
         public void Dispose()
         {
-            _stop.Cancel();
+            var stop = Interlocked.Exchange(ref _stop, null);
+            if (stop == null) return;
+            try { stop.Cancel(); }
+            finally { stop.Dispose(); }
         }
     }
 }

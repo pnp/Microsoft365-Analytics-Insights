@@ -3,6 +3,7 @@ using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
@@ -19,10 +20,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     public class GraphCallRecordSubscriptionManager : ICallRecordSubscriptionManager
     {
         private readonly GraphServiceClient _client;
+        private readonly CancellationToken _stopping;
 
-        public GraphCallRecordSubscriptionManager(GraphServiceClient client)
+        public GraphCallRecordSubscriptionManager(GraphServiceClient client) : this(client, CancellationToken.None) { }
+
+        internal GraphCallRecordSubscriptionManager(GraphServiceClient client, CancellationToken stopping)
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
+            _stopping = stopping;
         }
 
         /// <summary>
@@ -35,7 +40,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (notificationUrl is null) throw new ArgumentNullException(nameof(notificationUrl));
 
             var matchingSubs = new List<CallRecordSubscription>();
-            var firstPage = await _client.Subscriptions.GetAsync();
+            var firstPage = await _client.Subscriptions.GetAsync(cancellationToken: _stopping);
             if (firstPage?.Value == null)
             {
                 // A 200 without the subscriptions list: whether the subscription exists is unknown, so this is a failed read.
@@ -56,7 +61,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     return true;
                 });
 
-            await iterator.IterateAsync();
+            await iterator.IterateAsync(_stopping);
+            _stopping.ThrowIfCancellationRequested(); // PageIterator can stop between pages without throwing.
 
             return matchingSubs;
         }
@@ -72,7 +78,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 ClientState = clientState,
                 ChangeType = "created",
                 ExpirationDateTime = expiryUtc
-            }, rc => rc.Options.Add(NonJsonGraphRefusal.PreserveStatus));
+            }, rc => rc.Options.Add(NonJsonGraphRefusal.PreserveStatus), _stopping);
 
             return ToCallRecordSubscription(result);
         }
@@ -84,8 +90,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 new Subscription
                 {
                     ExpirationDateTime = expiryUtc
-                }
-            );
+                }, rc => rc.Options.Add(GraphOverallTimeoutHandler.DistinguishDeadline), _stopping);
 
             return ToCallRecordSubscription(result);
         }
@@ -95,7 +100,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (string.IsNullOrEmpty(subscriptionId)) throw new ArgumentException("A subscription id is required.", nameof(subscriptionId));
 
             // https://learn.microsoft.com/en-us/graph/api/subscription-delete?view=graph-rest-1.0
-            await _client.Subscriptions[subscriptionId].DeleteAsync();
+            await _client.Subscriptions[subscriptionId].DeleteAsync(cancellationToken: _stopping);
         }
 
         private static CallRecordSubscription ToCallRecordSubscription(Subscription sub)
