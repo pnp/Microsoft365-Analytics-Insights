@@ -25,6 +25,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             {
                 // Custom redirect predicates receive the response, not the current request.
                 if (response.RequestMessage == null) response.RequestMessage = request;
+                NonJsonGraphRefusal.ThrowIfRequested(request, response);
                 var automaticRedirect = IsAutomaticRedirect(request, response);
                 if (automaticRedirect)
                     GraphRedirectLocationHandler.ResolveLocation(response, request.RequestUri);
@@ -66,7 +67,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             catch (Exception ex)
             {
-                if (HasHttpErrorStatus(response) && (cancellationToken.IsCancellationRequested || ex is HttpRequestException))
+                if (!(ex is NonJsonGraphRefusal) && HasHttpErrorStatus(response) && (cancellationToken.IsCancellationRequested || ex is HttpRequestException))
                 {
                     // Kiota reads even a throttling error's body before waiting. Give it the known status
                     // and Retry-After, not a local timeout retry. The outer handler checks caller cancellation.

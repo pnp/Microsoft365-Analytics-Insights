@@ -1,7 +1,6 @@
 ﻿using Common.Entities;
 using DataUtils;
 using Microsoft.Graph.Models;
-using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json.Linq;
 using System;
@@ -218,10 +217,11 @@ VALUES (@p0, @p1, '2020-01-01', NULL, 1);", existing.ID, licence.ID);
                         .Json("/users", "{\"value\":[{\"userPrincipalName\":\"" + newUpn + "\"}]}");
                     var logger = AnalyticsLogger.ConsoleOnlyTracer();
                     var settings = new Common.Entities.Config.AppConfig { ConnectionStrings = new Common.Entities.Config.AppConnectionStrings(_ => "") };
+                    var credential = new GraphBoundedRequestAndDeltaTests.SyntheticTokenCredential();
                     using (var manual = new ManualGraphCallClient(delta, logger))
-                    using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), sdk))
+                    using (var graph = GraphServiceClientFactory.CreateForGraphImport(credential, GraphRequestBudgetOptions.GraphImportDefault, null, sdk))
                     {
-                        var updater = new UserMetadataUpdater(logger, settings, null, manual, null,
+                        var updater = new UserMetadataUpdater(logger, settings, credential, manual, null,
                             TestUserScopes.Provider(TestUserScopes.Of(existingUpn, newUpn)), null, default, graph);
                         await updater.UserLoader.DeltaValueProvider.SetDeltaToken("previous-checkpoint");
                         var completed = await updater.InsertAndUpdateDatabaseFromExternalUsers();
@@ -256,12 +256,14 @@ VALUES (@p0, @p1, '2020-01-01', NULL, 1);", existing.ID, licence.ID);
         }
 
         [DataTestMethod]
-        [DataRow(403, true)]
-        [DataRow(403, false)]
-        [DataRow(404, true)]
-        [DataRow(404, false)]
-        [DataRow(204, false)]
-        public async Task PerUserFallback_UnreadableLicenceDetails_KeepsAssignmentAndProcessesNextUser(int status, bool hasErrorBody)
+        [DataRow(403, "application/json")]
+        [DataRow(403, null)]
+        [DataRow(403, "text/html")]
+        [DataRow(404, "application/json")]
+        [DataRow(404, null)]
+        [DataRow(404, "text/html")]
+        [DataRow(204, null)]
+        public async Task PerUserFallback_UnreadableLicenceDetails_KeepsAssignmentAndProcessesNextUser(int status, string mediaType)
         {
             var token = "lhnull" + Guid.NewGuid().ToString("N").Substring(0, 10);
             var userAadA = Guid.NewGuid().ToString();
@@ -297,17 +299,14 @@ INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, 
                     var delta = new StubGraphHandler().Json("/users/delta", deltaPage.ToString());
                     var sdk = new StubGraphHandler()
                         .Route("/subscribedSkus", _ => new HttpResponseMessage(HttpStatusCode.Forbidden))
-                        .Route("/users/" + userAadA + "/licenseDetails", _ => hasErrorBody
-                            ? StubGraphHandler.Response((HttpStatusCode)status,
-                                StubGraphHandler.Error(status == 403 ? "Authorization_RequestDenied" : "Request_ResourceNotFound"))
-                            : new HttpResponseMessage((HttpStatusCode)status))
+                        .Route("/users/" + userAadA + "/licenseDetails", _ => GraphCallStatusRecoveryTests.ErrorResponse(status, mediaType))
                         .Json("/users/" + userAadB + "/licenseDetails", "{\"value\":[]}");
                     var logger = AnalyticsLogger.ConsoleOnlyTracer();
                     var checkpoint = new FakeDeltaValueProvider();
                     await checkpoint.SetDeltaToken("previous-checkpoint");
                     using (var client = new ManualGraphCallClient(delta, logger))
-                    using (var http = new HttpClient(sdk))
-                    using (var graph = new Microsoft.Graph.GraphServiceClient(http, new AnonymousAuthenticationProvider(), "https://graph.contoso.invalid/v1.0"))
+                    using (var graph = GraphServiceClientFactory.CreateForGraphImport(new GraphBoundedRequestAndDeltaTests.SyntheticTokenCredential(),
+                        GraphRequestBudgetOptions.GraphImportDefault, null, sdk))
                     {
                         var loader = new GraphUserLoader(client, checkpoint, logger, graph);
                         Assert.IsTrue(await new UserMetadataUpdater(logger, null, loader).InsertAndUpdateDatabaseFromExternalUsers());

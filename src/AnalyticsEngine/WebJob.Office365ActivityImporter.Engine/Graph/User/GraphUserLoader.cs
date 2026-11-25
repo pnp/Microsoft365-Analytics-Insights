@@ -231,10 +231,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 try
                 {
                     await _graphServiceClient.Users[previousId.ToString()].GetAsync(rc =>
-                        rc.QueryParameters.Select = new[] { "id" }, _shutdownToken);
+                    {
+                        rc.QueryParameters.Select = new[] { "id" };
+                        rc.Options.Add(NonJsonGraphRefusal.PreserveStatus);
+                    }, _shutdownToken);
                     return DeclineReusedUpn("previous object still exists (disabled is not deleted)");
                 }
-                catch (ApiException ex) when (ex.ResponseStatusCode == 404)
+                catch (ApiException ex) when (ex.ResponseStatusCode == 404 && !(ex is NonJsonGraphRefusal))
                 {
                     // Even a prior deletion can be stale after a restore, and /users can lag. Always require this
                     // fresh object-ID 404, corroborated by the successful directory query below, never on its own.
@@ -560,7 +563,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             try
             {
-                var page = await _graphServiceClient.SubscribedSkus.GetAsync(cancellationToken: _shutdownToken);
+                var page = await _graphServiceClient.SubscribedSkus.GetAsync(rc => rc.Options.Add(NonJsonGraphRefusal.PreserveStatus), _shutdownToken);
 
                 if (page?.Value == null)
                 {
@@ -583,6 +586,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         allSkus.Add(sku);
                         return true;
+                    }, next =>
+                    {
+                        next.AddRequestOptions(new[] { NonJsonGraphRefusal.PreserveStatus });
+                        return next;
                     });
 
                 await iterator.IterateAsync(_shutdownToken);
@@ -684,6 +691,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var page = await _graphServiceClient.Users[userId].LicenseDetails.GetAsync(rc =>
                 {
                     rc.QueryParameters.Select = new[] { "skuPartNumber", "skuId" };
+                    rc.Options.Add(NonJsonGraphRefusal.PreserveStatus);
                 }, _shutdownToken);
 
                 if (page?.Value == null)

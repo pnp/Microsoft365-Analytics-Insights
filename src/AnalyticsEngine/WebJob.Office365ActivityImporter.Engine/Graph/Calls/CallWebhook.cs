@@ -351,7 +351,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             {
                 created = await _subscriptions.CreateSubscription(currentUrl, clientState.Value, expiryUtc);
             }
-            catch (ApiException ex) when (CallSubscriptionRules.IsDuplicateSubscriptionConflict(ex.ResponseStatusCode))
+            catch (ApiException ex) when (!(ex is NonJsonGraphRefusal) && CallSubscriptionRules.IsDuplicateSubscriptionConflict(ex.ResponseStatusCode))
             {
                 created = await ReplaceAfterConflictAsync(currentUrl, allOurs, clientState, expiryUtc, ex, deleted);
                 await RecordAsync(currentUrl, created, clientState, ExpiryOf(created, expiryUtc));
@@ -560,6 +560,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 ? "Until this is fixed, NO Teams call records will be imported."
                 : $"Subscription '{replacingSubId}' is kept alive meanwhile and the replacement retried within minutes. After a client-secret rotation the " +
                   $"webhook accepts its notifications for up to {CallSubscriptionRules.PreviousClientStateWindow.TotalHours:0} hours, so calls are only lost if the replacement keeps failing.";
+
+            if (ex is NonJsonGraphRefusal || (statusCode == (int)HttpStatusCode.Forbidden && !(ex is ODataError)))
+            {
+                Telemetry.Log(SubscriptionFailureLevel, $"{LOG_TAG} Couldn't {action} for call-records at '{webAppUrl}'. " +
+                    $"HTTP {statusCode} without a JSON Graph error. The response does not establish a permission or duplicate-subscription problem. {impact}");
+                return;
+            }
 
             var validation = CallSubscriptionRules.ClassifyValidationCallbackFailure(graphError);
 

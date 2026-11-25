@@ -848,7 +848,7 @@ namespace Tests.UnitTests
             }
         }
 
-        private sealed class SyntheticTokenCredential : Azure.Core.TokenCredential
+        internal sealed class SyntheticTokenCredential : Azure.Core.TokenCredential
         {
             public int Requests { get; private set; }
 
