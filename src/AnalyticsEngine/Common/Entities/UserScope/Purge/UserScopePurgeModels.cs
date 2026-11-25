@@ -89,6 +89,9 @@ namespace Common.Entities.UserScope.Purge
         /// </summary>
         public const string PurgeExceedsConfirmed = "purgeExceedsConfirmed";
 
+        /// <summary>A user deletion may have committed without a matching count. Only a new confirmation can authorise more.</summary>
+        public const string UserDeleteOutcomeUnknown = "userDeleteOutcomeUnknown";
+
         /// <summary>
         /// Starting again after a restart, the purge found that the members of the <c>UserGroupsFilter</c> groups are no
         /// longer the ones it was confirmed against, so it stopped rather than remove people chosen under a scope nobody
@@ -105,6 +108,14 @@ namespace Common.Entities.UserScope.Purge
         // A restarted worker claims the same job with a new token. Persisted in Table, not sent to the portal.
         [JsonProperty]
         internal string RunToken { get; set; }
+
+        // Written before a user-delete window; cleared only together with its acknowledged count.
+        // Older records have no intent marker and cannot prove an interrupted users phase was checkpointed.
+        [JsonProperty]
+        internal bool? UserDeletePending { get; set; }
+
+        internal bool HasUnaccountedUserDeletes => UserDeletePending ??
+            (StartedUtc.HasValue && (Phase == UserScopePurgePhases.Users || Phase == UserScopePurgePhases.Done));
 
         public int Id { get; set; }
         public string State { get; set; }

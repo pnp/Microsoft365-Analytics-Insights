@@ -67,6 +67,7 @@ namespace Common.Entities.UserScope.Purge
                 FilterFingerprint = filterFingerprint,
                 ScopeMemberCount = scopeMemberCount,
                 ConfirmedOutsideScopeCount = Math.Max(0, confirmedOutsideScopeCount),
+                UserDeletePending = false,
                 ScopeMembershipFingerprint = scopeMembershipFingerprint,
                 CreatedUtc = now,
                 UpdatedUtc = now,

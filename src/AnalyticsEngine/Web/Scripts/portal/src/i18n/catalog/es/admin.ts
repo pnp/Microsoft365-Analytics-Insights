@@ -784,6 +784,8 @@ const admin: Record<keyof typeof en, string> = {
     'La purga se detuvo porque UserGroupsFilter cambió mientras se ejecutaba. Lo que ya había eliminado permanece eliminado y no se eliminó a nadie más. Compruebe el filtro e inicie la purga de nuevo para ver quién queda fuera ahora.',
   'admin.userScope.jobError.purgeExceedsConfirmed':
     'La purga se detuvo porque hay más personas fuera del ámbito que el número confirmado al iniciarla: los grupos perdieron miembros o llegaron usuarios nuevos. Lo que ya había eliminado permanece eliminado y no se eliminó a nadie más. Compruebe los grupos e inicie la purga de nuevo para confirmar el nuevo número.',
+  'admin.userScope.jobError.userDeleteOutcomeUnknown':
+    'La purga se detuvo porque no pudo confirmar cuántas personas eliminó en el último lote. El recuento mostrado solo incluye las eliminaciones confirmadas. Compruebe quién queda fuera del ámbito y confirme una nueva purga antes de eliminar a nadie más.',
   'admin.userScope.jobError.scopeMembershipChanged':
     'La purga se detuvo al volver a empezar tras un reinicio, porque los miembros de los grupos de UserGroupsFilter habían cambiado desde que se confirmó. Lo que ya había eliminado permanece eliminado y no se eliminó a nadie más. Inicie la purga de nuevo para confirmar quién queda fuera del ámbito ahora.',
   'admin.userScope.jobError.databaseError':

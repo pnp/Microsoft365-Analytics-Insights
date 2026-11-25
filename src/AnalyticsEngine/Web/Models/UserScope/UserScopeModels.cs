@@ -169,7 +169,7 @@ namespace Web.AnalyticsWeb.Models.UserScope
 
         /// <summary>
         /// Why it failed: <c>scopeUnavailable</c>, <c>scopeEmpty</c>, <c>filterChanged</c>, <c>filterChangedWhileRunning</c>,
-        /// <c>purgeExceedsConfirmed</c>, <c>scopeMembershipChanged</c>, <c>databaseError</c>, <c>stateUnavailable</c> or
+        /// <c>purgeExceedsConfirmed</c>, <c>userDeleteOutcomeUnknown</c>, <c>scopeMembershipChanged</c>, <c>databaseError</c>, <c>stateUnavailable</c> or
         /// <c>unexpected</c>.
         /// </summary>
         [JsonProperty("errorCode")]

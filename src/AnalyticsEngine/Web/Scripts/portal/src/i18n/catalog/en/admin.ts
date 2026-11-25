@@ -774,6 +774,8 @@ export const admin = {
     'The purge stopped because UserGroupsFilter changed while it was running. What it had already removed stays removed, and nobody else was removed. Check the filter and start the purge again to see who is outside it now.',
   'admin.userScope.jobError.purgeExceedsConfirmed':
     'The purge stopped because more people are outside the scope than the number confirmed when it started: the groups lost members, or new users arrived. Anything it had already removed stays removed, and nobody else was removed. Check the groups, then start the purge again to confirm the new number.',
+  'admin.userScope.jobError.userDeleteOutcomeUnknown':
+    'The purge stopped because it could not confirm how many people its last batch removed. The count shown includes only acknowledged deletions. Check who is outside the scope and confirm a new purge before removing anyone else.',
   'admin.userScope.jobError.scopeMembershipChanged':
     'The purge stopped when it started again after a restart, because the members of the UserGroupsFilter groups had changed since it was confirmed. Anything it had already removed stays removed, and nobody else was removed. Start the purge again to confirm who is outside the scope now.',
   'admin.userScope.jobError.databaseError':

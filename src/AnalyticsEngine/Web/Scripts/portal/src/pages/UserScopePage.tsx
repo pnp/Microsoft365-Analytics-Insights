@@ -103,6 +103,7 @@ const JOB_ERROR_KEYS: Record<NonNullable<UserScopePurgeJob['errorCode']>, Transl
   filterChanged: 'admin.userScope.jobError.filterChanged',
   filterChangedWhileRunning: 'admin.userScope.jobError.filterChangedWhileRunning',
   purgeExceedsConfirmed: 'admin.userScope.jobError.purgeExceedsConfirmed',
+  userDeleteOutcomeUnknown: 'admin.userScope.jobError.userDeleteOutcomeUnknown',
   scopeMembershipChanged: 'admin.userScope.jobError.scopeMembershipChanged',
   databaseError: 'admin.userScope.jobError.databaseError',
   stateUnavailable: 'admin.userScope.jobError.stateUnavailable',

@@ -92,6 +92,7 @@ export interface UserScopePurgeJob {
     | 'filterChanged'
     | 'filterChangedWhileRunning'
     | 'purgeExceedsConfirmed'
+    | 'userDeleteOutcomeUnknown'
     | 'scopeMembershipChanged'
     | 'databaseError'
     | 'stateUnavailable'

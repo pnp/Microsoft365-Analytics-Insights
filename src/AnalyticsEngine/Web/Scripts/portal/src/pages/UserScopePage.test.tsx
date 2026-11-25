@@ -359,6 +359,7 @@ describe('UserScopePage', () => {
 
   it.each([
     ['purgeExceedsConfirmed', /more people are outside the scope than the number confirmed when it started/],
+    ['userDeleteOutcomeUnknown', /only acknowledged deletions.*confirm a new purge/i],
     ['scopeMembershipChanged', /the members of the UserGroupsFilter groups had changed since it was confirmed/],
   ] as const)("explains a purge that stopped with '%s' rather than remove people nobody confirmed", async (errorCode, expected) => {
     mockFetchStatus.mockResolvedValue(

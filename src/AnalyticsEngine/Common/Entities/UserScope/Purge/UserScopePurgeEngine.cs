@@ -193,8 +193,11 @@ namespace Common.Entities.UserScope.Purge
                 }
                 if (job.CancelRequested || session.StopRequestedOnReconnect)
                 {
-                    return await EndAsync(job, session, UserScopePurgeStates.Cancelled, null, null).ConfigureAwait(false);
+                    return await EndAsync(job, session, UserScopePurgeStates.Cancelled,
+                        job.HasUnaccountedUserDeletes ? UserScopePurgeErrorCodes.UserDeleteOutcomeUnknown : null, null).ConfigureAwait(false);
                 }
+                if (job.HasUnaccountedUserDeletes)
+                    return await EndAsync(job, session, UserScopePurgeStates.Failed, UserScopePurgeErrorCodes.UserDeleteOutcomeUnknown, null).ConfigureAwait(false);
 
                 var snapshot = await SnapshotAsync(job, session, scopeProvider, preResolved, stopToken).ConfigureAwait(false);
                 if (snapshot != null)
@@ -245,7 +248,8 @@ namespace Common.Entities.UserScope.Purge
             {
                 var sql = ex as SqlException ?? ex.InnerException as SqlException;
                 var stateLost = ex is UserScopePurgeStateUnavailableException;
-                var code = sql != null ? UserScopePurgeErrorCodes.DatabaseError
+                var code = job.HasUnaccountedUserDeletes ? UserScopePurgeErrorCodes.UserDeleteOutcomeUnknown
+                    : sql != null ? UserScopePurgeErrorCodes.DatabaseError
                     : stateLost ? UserScopePurgeErrorCodes.StateUnavailable
                     : UserScopePurgeErrorCodes.Unexpected;
                 var detail = sql != null ? $"{ex.GetType().Name}: SQL error {sql.Number}"
@@ -366,7 +370,7 @@ namespace Common.Entities.UserScope.Purge
             // before anything is deleted: the importers keep adding users between the confirmation and here, and a purge
             // starting again after a restart has read the groups again.
             var ceiling = job.ConfirmedOutsideScopeCount ?? job.CandidateCount;
-            var total = job.UsersDeleted + candidates.Count;
+            var total = (long)job.UsersDeleted + candidates.Count;
             if (total > ceiling)
             {
                 _logger.LogWarning($"User scope purge {job.Id}: {total:N0} user(s) are outside the scope{scopeDescription}" +
@@ -399,6 +403,7 @@ namespace Common.Entities.UserScope.Purge
 
             job.CandidateCount = job.UsersDeleted + candidates.Count;
             job.State = UserScopePurgeStates.Running;
+            job.UserDeletePending = false;
             job.StepIndex = 1;
             job.Phase = UserScopePurgePlan.PhaseOf(1);
             job.StartedUtc = job.StartedUtc ?? DateTime.UtcNow;
@@ -609,13 +614,27 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
                 stopToken.ThrowIfCancellationRequested();
                 windowNumber++;
 
-                var result = await WithRetriesAsync(session,
-                    () => coverageSource == null
+                WindowResult result;
+                if (step.Kind == UserScopePurgeStepKind.Users)
+                {
+                    // The owner-checked intent must survive a disconnect between the SQL commit and
+                    // the next progress write. Never replay an unacknowledged delete (including a
+                    // partially executed one-at-a-time fallback) as though it removed zero people.
+                    job.UserDeletePending = true;
+                    if (await SaveAndCheckForStopAsync(job, session, true, stopToken).ConfigureAwait(false))
+                    {
+                        job.UserDeletePending = false;
+                        throw new PurgeStopRequestedException();
+                    }
+                    result = await RunWindowAsync(session.Connection, step, keyType, job.StepAfter, window, unknownUserId, lateUsageGuard).ConfigureAwait(false);
+                }
+                else result = await WithRetriesAsync(session, () => coverageSource == null
                         ? RunWindowAsync(session.Connection, step, keyType, job.StepAfter, window, unknownUserId, lateUsageGuard)
                         : DeleteUsageWindowAsync(session, step, job.StepAfter, window, coverageSource, usageBatch, stopToken),
                     stopToken).ConfigureAwait(false);
                 if (result.Done)
                 {
+                    if (step.Kind == UserScopePurgeStepKind.Users) job.UserDeletePending = false;
                     break;
                 }
 
@@ -636,6 +655,7 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
                     }
                 }
                 job.StepAfter = result.NextAfter;
+                if (step.Kind == UserScopePurgeStepKind.Users) job.UserDeletePending = false;
 
                 if (await SaveAndCheckForStopAsync(job, session, false, stopToken).ConfigureAwait(false))
                 {
@@ -870,10 +890,10 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
                     // The audit-event check again, in the delete itself: audit_events.user_id has no foreign key, so an event
                     // that arrived since the select above would otherwise be orphaned rather than keep its user.
                     using (var delete = new SqlCommand(
-                        $"DELETE t FROM dbo.users t WHERE t.id = @id AND NOT EXISTS (SELECT 1 FROM dbo.audit_events e WHERE e.user_id = @id){lateUsageGuard};", connection))
+                        $"DELETE t FROM dbo.users t WHERE t.id = @id AND NOT EXISTS (SELECT 1 FROM dbo.audit_events e WHERE e.user_id = @id){lateUsageGuard}; SELECT @@ROWCOUNT;", connection))
                     {
                         delete.Parameters.Add("@id", SqlDbType.Int).Value = id;
-                        deleted += await delete.ExecuteNonQueryAsync().ConfigureAwait(false);
+                        deleted += (int)await delete.ExecuteScalarAsync().ConfigureAwait(false);
                     }
                 }
                 catch (SqlException ex) when (ex.Number == 547)

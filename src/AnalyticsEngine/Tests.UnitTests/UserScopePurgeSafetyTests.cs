@@ -41,6 +41,7 @@ namespace Tests.UnitTests
         private int _outside;
         private const string InsideUpn = "inside@contoso.example";
         private const string OutsideUpn = "outside@contoso.example";
+        private const string LaterUpn = "later@contoso.example";
         private static readonly DateTime FirstDay = new DateTime(2020, 1, 1);
 
         [ClassInitialize]
@@ -62,7 +63,7 @@ DELETE FROM dbo.copilot_studio_credit_user_daily;
 DELETE FROM dbo.audit_events;
 DELETE FROM dbo.teams_user_activity_log;
 DELETE FROM dbo.outlook_user_activity_log;
-DELETE FROM dbo.users WHERE user_name IN ('{InsideUpn}', '{OutsideUpn}');
+DELETE FROM dbo.users WHERE user_name IN ('{InsideUpn}', '{OutsideUpn}', '{LaterUpn}');
 INSERT dbo.users(user_name) VALUES ('{InsideUpn}'), ('{OutsideUpn}');
 INSERT dbo.audit_events(id, time_stamp, user_id) SELECT NEWID(), '20200101', id FROM dbo.users WHERE user_name IN ('{InsideUpn}', '{OutsideUpn}');
 INSERT dbo.copilot_studio_credit_user_daily(usage_date, entra_object_id, billed_credits, dimension_hash, imported_utc)
@@ -172,6 +173,75 @@ OPTION (MAXRECURSION 0);");
             Assert.AreEqual(lateArrival ? 1 : 0, _db.Scalar($"SELECT COUNT(*) FROM dbo.outlook_user_activity_log WHERE user_id = {_outside}"));
             Assert.AreEqual(0, _db.Scalar("SELECT COUNT(*) FROM dbo.copilot_studio_credit_user_daily"));
             Assert.AreEqual(1, _db.Scalar("SELECT COUNT(*) FROM dbo.teams_user_activity_log"));
+        }
+
+        [TestMethod]
+        public async Task AReplacementCannotSpendOnePersonsConfirmationTwice()
+        {
+            var members = Members(InsideUpn);
+            var job = await QueueAsync(members);
+            var first = Engine(true);
+            first.StateCheckInterval = TimeSpan.FromDays(1);
+            string replacementRecord = null;
+            using (var original = await _database.TryOpenPurgeSessionAsync(TimeSpan.Zero))
+            {
+                first.AfterWindow = async (step, _) =>
+                {
+                    if (first.Job.UsersDeleted != 1 || replacementRecord != null) return;
+                    Assert.AreEqual(0, _db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE id = {_outside}"));
+                    Assert.AreEqual(0, (await _state.GetAsync(job.Id)).UsersDeleted, "SQL committed before the progress checkpoint.");
+                    Assert.AreEqual(UserScopePurgeRunOutcome.NotClaimed, await Engine(true).RunAsync(job.Id, Provider(members)));
+                    original.Connection.Close();
+                    _db.Execute($"INSERT dbo.users(user_name) VALUES ('{LaterUpn}')");
+                    Assert.AreEqual(UserScopePurgeRunOutcome.Failed, await Engine(true).RunAsync(job.Id, Provider(members)));
+                    var stopped = await _state.GetAsync(job.Id);
+                    Assert.AreEqual(UserScopePurgeErrorCodes.UserDeleteOutcomeUnknown, stopped.ErrorCode);
+                    Assert.AreEqual(0, stopped.UsersDeleted, "A reservation is not proof of a deletion.");
+                    replacementRecord = Newtonsoft.Json.JsonConvert.SerializeObject(stopped);
+                };
+                Assert.AreEqual(UserScopePurgeRunOutcome.LockLost, await first.RunAsync(job.Id, Provider(members), lockedSession: original));
+            }
+            Assert.IsNotNull(replacementRecord);
+            Assert.AreEqual(replacementRecord, Newtonsoft.Json.JsonConvert.SerializeObject(await _state.GetAsync(job.Id)));
+            Assert.AreEqual(2, _db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE user_name IN ('{InsideUpn}', '{LaterUpn}')"));
+            var confirmedAgain = await QueueAsync(members);
+            Assert.AreEqual(UserScopePurgeRunOutcome.Completed, await Engine(true).RunAsync(confirmedAgain.Id, Provider(members)));
+            Assert.AreEqual(1, (await _state.GetAsync(confirmedAgain.Id)).UsersDeleted);
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task AnAcknowledgedUserWindowCanReconnectOrPauseAndResume(bool pause)
+        {
+            var members = Members(InsideUpn);
+            var job = await QueueAsync(members);
+            using (var session = await _database.TryOpenPurgeSessionAsync(TimeSpan.Zero))
+            using (var stopping = new CancellationTokenSource())
+            {
+                var engine = Engine(true);
+                engine.StateCheckInterval = TimeSpan.FromDays(1);
+                var interrupted = false;
+                engine.AfterWindow = (_, __) =>
+                {
+                    if (engine.Job.UsersDeleted == 1 && !interrupted)
+                    {
+                        interrupted = true;
+                        session.Connection.Close();
+                        if (pause) stopping.Cancel();
+                    }
+                    return Task.CompletedTask;
+                };
+                Assert.AreEqual(pause ? UserScopePurgeRunOutcome.Paused : UserScopePurgeRunOutcome.Completed,
+                    await engine.RunAsync(job.Id, Provider(members), stopToken: stopping.Token, lockedSession: session));
+                Assert.IsTrue(interrupted);
+            }
+            if (pause) Assert.AreEqual(UserScopePurgeRunOutcome.Completed, await Engine(true).RunAsync(job.Id, Provider(members)));
+            var final = await _state.GetAsync(job.Id);
+            Assert.AreEqual(1, final.UsersDeleted);
+            Assert.AreEqual(1L, final.RowsAffected["users"]);
+            Assert.AreEqual(0, final.UsersSkipped);
+            Assert.AreEqual(1, _db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE user_name = '{InsideUpn}'"));
         }
 
         [TestMethod]
