@@ -1,4 +1,11 @@
+using DataUtils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using WebJob.AppInsightsImporter.Engine.ApiImporter;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 using WebJob.AppInsightsImporter.Engine.Sql.Rules;
 
@@ -18,6 +25,27 @@ namespace Tests.UnitTests
                 Username = "reader@contoso.com",
                 CustomProperties = new SearchCustomProps { SearchText = text, SessionId = "session-1" }
             };
+        }
+
+        [TestMethod]
+        public async Task Searches_MalformedRequestIdIsRejectedWithoutLoggingTheValue()
+        {
+            const string invalid = "not-an-id-contoso";
+            var day = new DateTime(2000, 1, 1);
+            var table = new AppInsightsTable
+            {
+                Columns = new[] { "timestamp", "customDimensions", "user_AuthenticatedId", "name" }.Select(n => new Column { Name = n }).ToList(),
+                Rows = new List<List<object>> { new List<object> { day,
+                    JsonConvert.SerializeObject(new { pageRequestId = invalid, sessionId = "example", userSearch = "Contoso phrase" }),
+                    "reader@contoso.com", "UserSearch" } }
+            };
+            var log = await AppInsightsImporterOrchestrationTests.CaptureConsole(() =>
+            {
+                Assert.AreEqual(0, new CustomEventsResultCollection(table, day, AnalyticsLogger.ConsoleOnlyTracer()).Rows.Count);
+                return Task.CompletedTask;
+            });
+            StringAssert.Contains(log, "Failed to deserialise");
+            Assert.IsFalse(log.Contains(invalid) || log.Contains("Contoso phrase") || log.Contains("reader@contoso.com"));
         }
 
         [TestMethod]

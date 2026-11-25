@@ -59,6 +59,10 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         private readonly AppConfig _config;
         private readonly IPageViewsPersistenceManager _pageViews;
         private readonly IAnalyticsDbContextFactory _contextFactory;
+        // Only negative hints; an admitted SQL hit always wins. Bound the memory used by a
+        // long catch-up. A missing request beyond this bound can be retried, never admitted.
+        private readonly HashSet<Guid> _rejectedPageRequests = new HashSet<Guid>();
+        private const int MaxRejectedPageRequests = 100000;
 
         // The four custom-event sections, run over SQL ports in production - see SaveCustomEventsAsync.
         private readonly Func<CustomEventsResultCollection, CancellationToken, Task<CustomEventSaveResult>> _saveEventSections;
@@ -116,8 +120,15 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        public Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default)
-            => _pageViews.SavePageViewsAsync(pageViews, filterUrls, cancellationToken);
+        public async Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default)
+        {
+            var result = await _pageViews.SavePageViewsAsync(pageViews, filterUrls, cancellationToken);
+            foreach (var id in result.RejectedPageRequests)
+            {
+                if (_rejectedPageRequests.Count >= MaxRejectedPageRequests) break;
+                _rejectedPageRequests.Add(id);
+            }
+        }
 
         /// <summary>
         /// Throws once every section has been attempted if any of them failed, so the importer retries the day
@@ -132,14 +143,15 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         }
 
         private Task<CustomEventSaveResult> SaveEventSectionsToSql(CustomEventsResultCollection events, CancellationToken cancellationToken)
-            => events.SaveAllEventTypesToSql(_logger, _config, _contextFactory, cancellationToken);
+            => events.SaveAllEventTypesToSql(_logger, _config, _contextFactory, cancellationToken, _rejectedPageRequests);
 
         public async Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection searches, CancellationToken cancellationToken = default)
         {
             // A locked retry merge must not strand the next normal ingestion cycle. Normal merges retain
             // the importer's configured timeout; ten minutes is the query client's own request deadline.
             using (var db = _contextFactory.Create())
-                return await searches.SaveSearchBatchAsync(_logger, db, mergeTimeoutSeconds: 600, cancellationToken: cancellationToken);
+                return await searches.SaveSearchBatchAsync(_logger, db, mergeTimeoutSeconds: 600, cancellationToken: cancellationToken,
+                    rejectedPageRequests: _rejectedPageRequests);
         }
     }
 
@@ -191,15 +203,19 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
     {
         private readonly AnalyticsEntitiesContext _db;
         private readonly ILogger _logger;
+        private readonly ISet<Guid> _rejectedPageRequests;
 
-        public SqlSearchesPersistenceManager(AnalyticsEntitiesContext db, ILogger logger)
+        public SqlSearchesPersistenceManager(AnalyticsEntitiesContext db, ILogger logger) : this(db, logger, null) { }
+
+        internal SqlSearchesPersistenceManager(AnalyticsEntitiesContext db, ILogger logger, ISet<Guid> rejectedPageRequests)
         {
             _db = db ?? throw new ArgumentNullException(nameof(db));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _rejectedPageRequests = rejectedPageRequests;
         }
 
         public Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default)
-            => events.SaveSearchBatchAsync(_logger, _db, cancellationToken: cancellationToken);
+            => events.SaveSearchBatchAsync(_logger, _db, cancellationToken: cancellationToken, rejectedPageRequests: _rejectedPageRequests);
     }
 
     /// <summary>

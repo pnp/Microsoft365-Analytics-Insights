@@ -75,7 +75,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
             => SaveAllEventTypesToSql(logger, config, contextFactory, CancellationToken.None);
 
         internal async Task<CustomEventSaveResult> SaveAllEventTypesToSql(AnalyticsLogger logger, AppConfig config,
-            IAnalyticsDbContextFactory contextFactory, CancellationToken cancellationToken)
+            IAnalyticsDbContextFactory contextFactory, CancellationToken cancellationToken, ISet<Guid> rejectedPageRequests = null)
         {
             if (contextFactory == null) throw new ArgumentNullException(nameof(contextFactory));
 
@@ -87,7 +87,7 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
                 // The section orchestration itself is database-free - see CustomEventSectionSaver (#369).
                 var saver = new CustomEventSectionSaver(logger,
                     new SqlHitUpdatePersistenceManager(database, logger),
-                    new SqlSearchesPersistenceManager(database, logger),
+                    new SqlSearchesPersistenceManager(database, logger, rejectedPageRequests),
                     new SqlPageUpdatePersistenceManager(logger, config, contextFactory),
                     new SqlClicksPersistenceManager(database, logger));
 

@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using WebJob.AppInsightsImporter.Engine.Sql.Rules;
 
 namespace WebJob.AppInsightsImporter.Engine
@@ -7,8 +9,7 @@ namespace WebJob.AppInsightsImporter.Engine
     /// out - but they only ever reached a log line, so nothing above the save could assert or aggregate
     /// them. Issue #369.
     ///
-    /// This is a report, not a decision: nothing in the import branches on it today, so returning it
-    /// changes no behaviour.
+    /// The rejected request ids stay in this process so related searches need not be retried.
     /// </summary>
     public class PageViewSaveResult
     {
@@ -39,6 +40,7 @@ namespace WebJob.AppInsightsImporter.Engine
 
         /// <summary>Page-views dropped because their URL is outside the configured org URL filters.</summary>
         public int OutOfScopeUrls { get; }
+        internal IReadOnlyList<Guid> RejectedPageRequests { get; private set; } = Array.Empty<Guid>();
 
         /// <summary>
         /// The ADO.NET rows-affected total the merge script reported, NOT the number of hits inserted:
@@ -59,7 +61,7 @@ namespace WebJob.AppInsightsImporter.Engine
         internal static PageViewSaveResult FromPlan(PageViewStagingPlan plan, int mergeRowsAffected)
         {
             return new PageViewSaveResult(plan.RawPageViews, plan.RowsToStage.Count, plan.DuplicatePageRequestIds,
-                plan.OutOfScopeUrls, mergeRowsAffected);
+                plan.OutOfScopeUrls, mergeRowsAffected) { RejectedPageRequests = plan.RejectedPageRequests };
         }
     }
 }

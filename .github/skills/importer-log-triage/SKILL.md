@@ -401,6 +401,8 @@ Healthy: `AppInsightsImportCycle` Succeeded each interval, days `Saved` or `NoDa
 
 If Kudu stops the job while it is resolving `UserGroupsFilter`, the `AppInsightsImport` stage has not started. Expect no outcome for that cycle and no cursor advance. This is not a directory failure or a decision to import everyone. If the stage has already started and is waiting for an Entra SQL token, that connection has not yet issued a command; earlier connections may already have committed.
 
+With a site filter, a search needs its **own** admitted page request, the same user and case-sensitive tracker session, and a page that still matches the current rules. Exact-site rules also need the hit's stored site collection. An unrelated allowed page in the same session does not qualify. `Skipped ... search event(s) not eligible under the site filter` is an exclusion, not a request to retry. If the request id is usable but no hit or explicit exclusion is known, its ingestion hour can remain pending. Without any configured site rules, historical searches still match by user and session.
+
 | Last evidence | What it proves |
 |---|---|
 | Cycle `Failed`, same `FailedDays` repeating, `ConsecutiveFailures` climbing | The cycle stops at the failed day and retries it before any later day, so nothing after it imports. `FailedStage` separates download (App Insights query, permission, throttle) from save (SQL) |

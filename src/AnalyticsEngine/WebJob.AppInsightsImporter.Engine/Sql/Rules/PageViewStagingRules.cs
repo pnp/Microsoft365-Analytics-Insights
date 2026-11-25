@@ -25,7 +25,8 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Rules
         public int DuplicatePageRequestIds { get; set; }
 
         /// <summary>Page-views rejected because their URL is outside the configured org URL filters.</summary>
-        public int OutOfScopeUrls { get; set; }
+        public int OutOfScopeUrls => RejectedPageRequests.Count;
+        internal List<Guid> RejectedPageRequests { get; } = new List<Guid>();
 
         /// <summary>Total page-views considered, before any filtering.</summary>
         public int RawPageViews { get; set; }
@@ -86,7 +87,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql.Rules
 
                 if (!filterUrls.UrlInScope(pv.CustomProperties.SiteUrl, pv.Url))
                 {
-                    plan.OutOfScopeUrls++;
+                    plan.RejectedPageRequests.Add(pv.CustomProperties.PageRequestId.Value);
                     continue;
                 }
 

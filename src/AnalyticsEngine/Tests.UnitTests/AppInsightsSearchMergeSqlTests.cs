@@ -1,5 +1,6 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WebJob.AppInsightsImporter.Engine.Sql;
 using SearchSql = WebJob.AppInsightsImporter.Engine.Properties.Resources;
 
 namespace Tests.UnitTests
@@ -23,7 +24,7 @@ INSERT dbo.sessions VALUES (1, 'session-a', 1), (2, 'session-b', 1), (3, 'sessio
                 const string token = "${STAGING_TABLE_SEARCHES}";
                 const string staging = "staged_searches";
                 db.Execute(SearchSql.Create_Searches_Import_Temp_Table.Replace(token, staging));
-                var merge = SearchSql.Migrate_Searches_Import.Replace(token, staging);
+                var merge = SearchesSaveExtension.BuildSearchMergeSql(staging, false);
 
                 db.Execute(@"INSERT dbo.staged_searches (ai_session_id, user_name, search_term, date_time)
 VALUES ('session-a', 'reader@contoso.com', N'Καλημέρα', '2000-01-01T09:00:00');");
@@ -114,6 +115,18 @@ INSERT dbo.staged_searches (ai_session_id, user_name, search_term, date_time, in
                     }
                 }
                 Assert.AreEqual(0, db.Scalar("SELECT COUNT(*) FROM dbo.search_terms WHERE search_term=N'Not in SQL'"));
+
+                // SQL string equality ignores trailing spaces. An admitted request identifies the
+                // exact owner and ordinal tracker, even if a lower physical id compares SQL-equal.
+                db.Execute(@"TRUNCATE TABLE dbo.staged_searches;
+INSERT dbo.users VALUES (3, 'reader@contoso.com ');
+INSERT dbo.sessions VALUES (9, 'tracker ', 1), (10, 'tracker', 3), (11, 'tracker', 1);
+INSERT dbo.staged_searches(ai_session_id,user_name,search_term,date_time,verified_user_id) VALUES
+('tracker','reader@contoso.com',N'Allowed','20000101',1), ('tracker','reader@contoso.com',N'Missing owner','20000101',NULL);");
+                db.Execute(SearchesSaveExtension.BuildSearchMergeSql(staging, true));
+                Assert.AreEqual(1, db.Scalar(count + "s.session_id=11 AND t.search_term=N'Allowed'"));
+                Assert.AreEqual(1, db.Scalar("SELECT COUNT(*) FROM dbo.searches s JOIN dbo.search_terms t ON t.id=s.search_term_id WHERE t.search_term=N'Allowed'"));
+                Assert.AreEqual(0, db.Scalar("SELECT COUNT(*) FROM dbo.search_terms WHERE search_term=N'Missing owner'"));
             }
         }
     }

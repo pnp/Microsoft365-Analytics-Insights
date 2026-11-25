@@ -4,6 +4,7 @@ CREATE TABLE [${STAGING_TABLE_SEARCHES}](
 	[user_name] [nvarchar](250) COLLATE DATABASE_DEFAULT NOT NULL,
 	[search_term] [nvarchar](250) COLLATE DATABASE_DEFAULT NOT NULL,
 	[date_time] datetime NULL,
-	[ingestion_hour] datetime NULL
+	[ingestion_hour] datetime NULL,
+	[verified_user_id] int NULL
 	);
 

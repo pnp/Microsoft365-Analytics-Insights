@@ -2,9 +2,11 @@ using Common.Entities;
 using Common.Entities.Config;
 using Common.Entities.SpoWebActivity;
 using Common.Entities.State;
+using Common.Entities.UserFilters;
 using Common.Entities.UserScope;
 using DataUtils;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json.Linq;
 using System;
@@ -33,6 +35,215 @@ namespace Tests.UnitTests
         private const string Reader = "reader@contoso.com";
         private static ScratchDatabase _database;
         private static ContextFactory _factory;
+
+        [TestMethod]
+        public async Task SearchReport_ScoresLogicalVisitsAndTheirHitsWithoutRewritingHistoricalRows()
+        {
+            var source = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "Pair") };
+            source.ExtraPageViews.Add((Start, Start));
+            await RunCycle(new FixedClock(Start.AddMinutes(1)), source, new InMemoryKeyValueStore());
+            _database.Execute(@"
+DECLARE @owner int = (SELECT id FROM dbo.users WHERE user_name='reader@contoso.com'),
+        @canonical int = (SELECT id FROM dbo.sessions WHERE ai_session_id='Pair');
+DECLARE @url int, @web int;
+SELECT @url=url_id, @web=web_id FROM dbo.hits WHERE session_id=@canonical;
+INSERT dbo.sessions(ai_session_id,user_id) VALUES ('Pair',@owner);
+DECLARE @historical int=SCOPE_IDENTITY();
+INSERT dbo.sessions(ai_session_id,user_id) VALUES ('pair',@owner);
+DECLARE @differentCase int=SCOPE_IDENTITY();
+INSERT dbo.sessions(ai_session_id,user_id) VALUES (NULL,@owner);
+DECLARE @noTracker int=SCOPE_IDENTITY();
+INSERT dbo.sessions(ai_session_id,user_id) VALUES (NULL,@owner);
+DECLARE @otherNoTracker int=SCOPE_IDENTITY();
+IF NOT EXISTS (SELECT 1 FROM dbo.users WHERE user_name='other@contoso.com')
+    INSERT dbo.users(user_name) VALUES ('other@contoso.com');
+INSERT dbo.sessions(ai_session_id,user_id) SELECT 'Pair',id FROM dbo.users WHERE user_name='other@contoso.com';
+DECLARE @otherUser int=SCOPE_IDENTITY();
+INSERT dbo.hits(url_id,web_id,session_id,page_request_id,hit_timestamp) VALUES
+(@url,NULL,@historical,NEWID(),'20000101 09:50'), (@url,@web,@canonical,NEWID(),'20000101 11:00'),
+(@url,@web,@otherNoTracker,NEWID(),'20000101 12:00'), (@url,@web,@differentCase,NEWID(),'20000102 00:00'),
+(@url,NULL,@differentCase,NEWID(),'20000101 09:20'), (@url,NULL,@noTracker,NEWID(),'20000101 09:20'),
+(@url,NULL,@otherUser,NEWID(),'20000101 09:20'), (@url,@web,NULL,NEWID(),'20000101 12:30');
+INSERT dbo.search_terms(search_term) VALUES (N'Example');
+DECLARE @term int=SCOPE_IDENTITY();
+INSERT dbo.searches(session_id,search_term_id,date_time) VALUES
+(@historical,@term,'20000101 10:01'), (@canonical,@term,'20000101 10:02'), (@canonical,@term,'20000101 10:03');
+INSERT dbo.search_terms(search_term) VALUES (N'Control');
+SET @term=SCOPE_IDENTITY();
+INSERT dbo.searches(session_id,search_term_id,date_time) VALUES
+(@differentCase,@term,'20000101 10:01'), (@otherUser,@term,'20000101 10:01'),
+(@noTracker,@term,'20000101 10:01'), (@otherNoTracker,@term,'20000101 10:01');");
+            var store = new SqlWebActivityStore(_factory);
+            var query = WebActivityQuery.Create(7, Start);
+            var report = await store.GetSearchAsync(query);
+            Assert.IsTrue(report.Queries.All(q => q.Error == null), string.Join("; ", report.Queries.Select(q => q.Error)));
+            Assert.AreEqual((7L, 5L, 1L, 3L), (report.Kpis.Searches, report.Kpis.SessionsWithSearch, report.Kpis.StrugglingVisits, report.Kpis.DeadEndSearches));
+            var pair = report.TopTerms.Single(t => t.Term == "Example");
+            Assert.AreEqual((3L, 1, 0L), (pair.Searches, pair.Searchers, pair.DeadEnds));
+            Assert.AreEqual(("Control", 3L), (report.DeadEndTerms.Single().Term, report.DeadEndTerms.Single().DeadEnds));
+            Assert.AreEqual(3L, report.BySite.Single().Count, "The last prior page across equivalent sessions supplies context; other people/ids cannot.");
+            var scoped = await store.GetSearchAsync(query.WithUserScope(ReportUserScope.ForUsers(new[] { (int)_database.Scalar("SELECT id FROM dbo.users WHERE user_name='reader@contoso.com'") })));
+            Assert.AreEqual((6L, 4L, 1L, 2L), (scoped.Kpis.Searches, scoped.Kpis.SessionsWithSearch, scoped.Kpis.StrugglingVisits, scoped.Kpis.DeadEndSearches));
+            Assert.IsTrue(scoped.TopTerms.All(t => t.Searchers == 1));
+            Assert.AreEqual(100d, scoped.Kpis.SearchReliancePct, "The visit denominator must also collapse the two physical ids and omit the anonymous hit.");
+            Assert.AreEqual(1, _database.Scalar(@"SELECT COUNT(*) FROM dbo.searches WHERE session_id=(SELECT MAX(s.id) FROM dbo.sessions s
+JOIN dbo.users u ON u.id=s.user_id WHERE s.ai_session_id='Pair' AND u.user_name='reader@contoso.com')"),
+                "Reporting must not move the old search off its physical session.");
+        }
+
+        [TestMethod]
+        public async Task RestrictedSearch_AdmitsOnlyItsOwnPageAndDoesNotQueueKnownExclusions()
+        {
+            const string site = "https://contoso.sharepoint.com/sites/example";
+            _database.Execute($"INSERT dbo.org_urls(url_base, exact_match) VALUES (N'{site}/', 1);");
+            var source = new FakeAppInsightsSourceLoader();
+            var state = new InMemoryKeyValueStore();
+            var clock = new FixedClock(Start.AddMinutes(10));
+            var events = Enumerable.Range(1, 6).Select(n => Start.AddMinutes(n)).ToArray();
+            source.PageViewAt = t =>
+            {
+                var page = Page(t, t == events[3] ? "TRACKER" : "tracker");
+                if (t == events[1]) page.Url = page.CustomProperties.SiteUrl = page.CustomProperties.WebUrl = site + "-other";
+                if (t == events[2]) page.Username = "other@contoso.com";
+                return page;
+            };
+            source.EventAt = t =>
+            {
+                var search = Search(t, "tracker", t == events[0] ? "Καλημέρα" : "Excluded", Reader);
+                if (t == events[4]) search.CustomProperties.PageRequestId = null;
+                if (t == events[5]) search.CustomProperties.PageRequestId = Guid.Empty;
+                return search;
+            };
+            foreach (var t in events.Take(4)) source.ExtraPageViews.Add((t, t));
+            foreach (var t in events) source.ExtraCustomEvents.Add((t, t));
+
+            var result = await RunCycle(clock, source, state);
+            Assert.AreEqual(1, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms WHERE search_term=N'Καλημέρα'"), "The allowed request is a positive control.");
+            Assert.AreEqual(1, result.Events, "Only an admitted request with the same visitor and case-sensitive tracker id qualifies.");
+            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms WHERE search_term=N'Excluded'"));
+            Assert.AreEqual(0, result.PendingSearchHours, "A positively rejected page, wrong owner or unusable request id cannot arrive later.");
+        }
+
+        [TestMethod]
+        public async Task SearchAdmission_EmptyAndMalformedConfigurationsAreNotInterchangeable()
+        {
+            const string site = "https://contoso.sharepoint.com/sites/δοκιμή";
+            var source = new FakeAppInsightsSourceLoader
+            {
+                PageViewAt = t =>
+                {
+                    var page = Page(t, "legacy");
+                    page.CustomProperties.SiteUrl = page.CustomProperties.WebUrl = site;
+                    page.Url = site + "/page.aspx";
+                    return page;
+                }
+            };
+            source.ExtraPageViews.Add((Start, Start));
+            await RunCycle(new FixedClock(Start.AddMinutes(1)), source, new InMemoryKeyValueStore());
+            var batch = new CustomEventsResultCollection();
+            var search = Search(Start, "legacy", "Καλημέρα", Reader);
+            batch.Rows.Add(search);
+            using (var db = _factory.Create())
+            {
+                Task<SearchSaveResult> Save() => batch.SaveSearchBatchAsync(AnalyticsLogger.ConsoleOnlyTracer(), db);
+                _database.Execute("INSERT dbo.org_urls(url_base) VALUES (N'https://'), (N' ');");
+                var denied = await Save();
+                Assert.AreEqual((0, 1, 0), (denied.FactsInserted, denied.Skipped, denied.Unmatched));
+                Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms"));
+
+                _database.Execute($"INSERT dbo.org_urls(url_base,exact_match) VALUES (N'{site}/',1);");
+                Assert.AreEqual(1, (await Save()).FactsInserted, "The configured Unicode site and the escaped stored page are the same site.");
+                _database.Execute("UPDATE dbo.hits SET web_id=NULL; DELETE dbo.searches; DELETE dbo.search_terms;");
+                Assert.AreEqual(1, (await Save()).Skipped, "A historical hit with no stored site cannot prove an exact-site rule.");
+                _database.Execute("UPDATE dbo.org_urls SET exact_match=0 WHERE exact_match=1;");
+                Assert.AreEqual(1, (await Save()).FactsInserted, "A literal page URL prefix can still verify a web-less historical hit.");
+                search.CustomProperties.PageRequestId = null;
+                search.CustomProperties.SearchText = "Legacy";
+                Assert.AreEqual(1, (await Save()).Skipped);
+                _database.Execute("DELETE dbo.org_urls;");
+                Assert.AreEqual(1, (await Save()).FactsInserted, "A genuinely unfiltered import can still resolve a legacy search by its visit.");
+            }
+        }
+
+        [TestMethod]
+        public async Task SearchAdmission_SiteNarrowedDuringStagingMustNotCommitTheOldDecision()
+        {
+            var source = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "example") };
+            source.ExtraPageViews.Add((Start, Start));
+            await RunCycle(new FixedClock(Start.AddMinutes(1)), source, new InMemoryKeyValueStore());
+            var batch = new CustomEventsResultCollection();
+            batch.Rows.Add(Search(Start, "example", "Contoso", Reader));
+            using (var db = _factory.Create())
+            {
+                // An admin adds the first restriction after the unrestricted batch staged its row.
+                var logger = new AfterStagingLogger(() => _database.Execute("INSERT dbo.org_urls(url_base) VALUES (N'https://contoso.example/');"));
+                var error = await Assert.ThrowsExceptionAsync<SqlException>(() => batch.SaveSearchBatchAsync(logger, db));
+                Assert.AreEqual(51000, error.Number);
+                Assert.AreEqual(1, (await batch.SaveSearchBatchAsync(AnalyticsLogger.ConsoleOnlyTracer(), db)).Skipped);
+            }
+            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms"));
+            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.searches"));
+        }
+
+        private sealed class AfterStagingLogger : ILogger
+        {
+            private readonly Action _afterStaging;
+            internal AfterStagingLogger(Action afterStaging) => _afterStaging = afterStaging;
+            public IDisposable BeginScope<TState>(TState state) => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel level, EventId id, TState state, Exception error, Func<TState, Exception, string> format)
+            {
+                if (format(state, error).EndsWith("Running merge script...", StringComparison.Ordinal)) _afterStaging();
+            }
+        }
+
+        [TestMethod]
+        public async Task RestrictedRetry_RequiresTheActualDelayedHitAndRechecksTheCurrentSiteRules()
+        {
+            const string site = "https://contoso.sharepoint.com/sites/example";
+            var source = new FakeAppInsightsSourceLoader();
+            var state = new InMemoryKeyValueStore();
+            var clock = new FixedClock(Start.AddMinutes(10));
+            var historical = Start.AddMinutes(-10);
+            var delayed = Start.AddMinutes(1);
+            var nowExcluded = Start.AddMinutes(2);
+            source.PageViewAt = t =>
+            {
+                var page = Page(t, "shared");
+                if (t == nowExcluded)
+                {
+                    page.CustomProperties.SiteUrl = page.CustomProperties.WebUrl = site + "-retired";
+                    page.Url = page.CustomProperties.SiteUrl + "/SitePages/Home.aspx";
+                }
+                return page;
+            };
+            source.EventAt = t => Search(t, "shared", t == delayed ? "Delayed" : "Retired", Reader);
+            _database.Execute("INSERT dbo.org_urls(url_base) VALUES (N'https://contoso.sharepoint.com/');");
+            source.ExtraPageViews.Add((historical, historical));
+            source.ExtraCustomEvents.Add((delayed, delayed));
+            source.ExtraCustomEvents.Add((nowExcluded, nowExcluded));
+            var first = await RunCycle(clock, source, state);
+            Assert.AreEqual(2, first.Days.Sum(d => d.UnmatchedSearches), "Another allowed page in this visit proves neither search.");
+            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms"));
+            Assert.AreEqual(1, first.PendingSearchHours);
+
+            // Both actual pages arrive after the event overlap. Before the search-only pass one site is removed.
+            clock.Advance(TimeSpan.FromMinutes(16));
+            Assert.AreEqual(1, (await RunCycle(clock, source, state)).PendingSearchHours);
+            clock.Advance(TimeSpan.FromMinutes(10));
+            source.ExtraPageViews.Add((delayed, clock.UtcNow.AddMinutes(-1)));
+            source.ExtraPageViews.Add((nowExcluded, clock.UtcNow.AddMinutes(-1)));
+            await RunCycle(clock, source, state);
+            Assert.AreEqual(3, _database.Scalar("SELECT COUNT(*) FROM dbo.hits"));
+            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms"));
+            _database.Execute($"UPDATE dbo.org_urls SET url_base=N'{site}/', exact_match=1;");
+            clock.Advance(TimeSpan.FromMinutes(15));
+            var retry = await RunCycle(clock, source, state);
+            Assert.AreEqual(1, retry.ReconciledSearches);
+            Assert.AreEqual(0, retry.PendingSearchHours);
+            Assert.AreEqual(1, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms WHERE search_term=N'Delayed'"));
+            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms WHERE search_term=N'Retired'"));
+        }
 
         [ClassInitialize]
         public static void CreateDatabase(TestContext context)
@@ -598,8 +809,10 @@ namespace Tests.UnitTests
             new SearchEventAppInsightsQueryResult
             {
                 AppInsightsTimestamp = sourceTime, Username = user,
-                CustomProperties = new SearchCustomProps { SessionId = session, SearchText = term, EventTimestamp = Start.AddMilliseconds(3) }
+                CustomProperties = new SearchCustomProps { PageRequestId = RequestId(sourceTime), SessionId = session, SearchText = term, EventTimestamp = Start.AddMilliseconds(3) }
             };
+
+        private static Guid RequestId(DateTime time) => new Guid((int)(time - Start.Date).TotalSeconds, 0, 0, new byte[8]);
 
         private static PageViewAppInsightsQueryResult Page(DateTime time, string session) => new PageViewAppInsightsQueryResult
         {
@@ -607,8 +820,8 @@ namespace Tests.UnitTests
             Url = "https://contoso.sharepoint.com/sites/example/SitePages/Home.aspx",
             CustomProperties = new PageViewCustomProps
             {
-                PageRequestId = new Guid((int)(time - Start.Date).TotalSeconds, 0, 0, new byte[8]),
-                SessionId = session, SiteUrl = "https://contoso.sharepoint.com/sites/example"
+                PageRequestId = RequestId(time), SessionId = session, SiteUrl = "https://contoso.sharepoint.com/sites/example",
+                WebUrl = "https://contoso.sharepoint.com/sites/example"
             }
         };
 

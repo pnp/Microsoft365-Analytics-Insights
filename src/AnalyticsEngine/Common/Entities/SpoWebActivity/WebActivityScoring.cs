@@ -775,7 +775,7 @@ namespace Common.Entities.SpoWebActivity
 
         private static WebActivityJudgement SearchJudgement(WebActivityJudgementInputs inputs)
         {
-            var reliance = Percentage(inputs.SessionsWithSearch, inputs.Visits);
+            var reliance = Percentage(inputs.SessionsWithSearch, inputs.SearchRelianceVisits ?? inputs.Visits);
             var judgement = new WebActivityJudgement
             {
                 Key = "search-reliance",
@@ -942,6 +942,7 @@ namespace Common.Entities.SpoWebActivity
         public double? P95LoadSeconds { get; set; }
 
         public long SessionsWithSearch { get; set; }
+        public long? SearchRelianceVisits { get; set; }
         public double TopDecilePagePct { get; set; }
 
         /// <summary>Mobile share of page views with a known device, or null when none had one.</summary>

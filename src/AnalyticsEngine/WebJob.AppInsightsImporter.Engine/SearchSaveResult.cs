@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace WebJob.AppInsightsImporter.Engine
 {
-    /// <summary>One SQL merge: lookup plus fact inserts, facts alone, invalid inputs, and searches still awaiting visits.</summary>
+    /// <summary>One SQL merge: lookup plus fact inserts, facts alone, invalid or excluded inputs, and searches still awaiting visits.</summary>
     public sealed class SearchSaveResult
     {
         public static readonly SearchSaveResult Empty = new SearchSaveResult(0, 0, 0, new Dictionary<DateTime, int>());

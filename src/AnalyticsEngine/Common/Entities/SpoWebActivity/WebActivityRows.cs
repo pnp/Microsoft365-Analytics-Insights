@@ -278,6 +278,7 @@ namespace Common.Entities.SpoWebActivity
         public class SearchKpiRow
         {
             public long Searches { get; set; }
+            public long Visits { get; set; }
             public int Terms { get; set; }
             public int Searchers { get; set; }
             public long SessionsWithSearch { get; set; }
