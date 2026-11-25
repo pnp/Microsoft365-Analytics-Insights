@@ -10,7 +10,7 @@ namespace DataUtils
     /// </summary>
     public static class HostRuntime
     {
-        /// <summary>Exit code of a process that stopped on an unhandled exception.</summary>
+        /// <summary>Exit code when the host failed to start or could not complete the requested work.</summary>
         public const int FatalExitCode = 1;
 
         /// <summary>Exit code of a process whose command line was refused.</summary>
@@ -119,10 +119,23 @@ namespace DataUtils
         /// <returns>0, or <see cref="FatalExitCode"/> when the body failed.</returns>
         public static int RunGuarded(string source, Func<Task> body)
         {
-            try
+            return RunGuarded(source, () =>
             {
                 body().GetAwaiter().GetResult();
                 return 0;
+            });
+        }
+
+        /// <summary>Do not discard an async host's exit code by treating its <c>Task&lt;int&gt;</c> as a <c>Task</c>.</summary>
+        public static int RunGuarded(string source, Func<Task<int>> body) =>
+            RunGuarded(source, () => body().GetAwaiter().GetResult());
+
+        /// <summary>Preserves the host body's exit code; a requested shutdown succeeds and an unhandled exception fails.</summary>
+        public static int RunGuarded(string source, Func<int> body)
+        {
+            try
+            {
+                return body();
             }
             catch (ShutdownRequestedException)
             {
