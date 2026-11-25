@@ -187,6 +187,99 @@ namespace Tests.UnitTests
             }
         }
 
+        [DataTestMethod]
+        [DataRow(302, true, true)]
+        [DataRow(302, false, false)]
+        [DataRow(300, false, true)]
+        public async Task GraphImportPipeline_UnreadablePassThroughBody_FailsBeforeRedirectDecision(int status, bool disabled, bool oversized)
+        {
+            var decisions = 0;
+            using (var body = new GatedJsonContent { ReadFailure = new IOException("Synthetic body transfer failed.") })
+            {
+                if (oversized) body.Headers.ContentLength = 64L * 1024 * 1024;
+                body.Release();
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(ResponseWithLocation((HttpStatusCode)status, body)));
+                using (var http = BuildGraphImportPipelineClient(terminal, 1000, 1, 3000))
+                using (var request = new HttpRequestMessage(HttpMethod.Get, "https://graph.microsoft.com/v1.0/users"))
+                {
+                    request.Properties[typeof(RedirectHandlerOption).FullName] = new RedirectHandlerOption
+                    {
+                        MaxRedirect = disabled ? 0 : 1,
+                        ShouldRedirect = _ => { decisions++; return false; }
+                    };
+                    await Assert.ThrowsAsync<HttpRequestException>(() => WithinWatchdog(http.SendAsync(request)));
+                    Assert.AreEqual(!oversized, body.Started.Task.IsCompleted);
+                    Assert.IsTrue(body.Disposed);
+                    Assert.AreEqual(0, decisions);
+                    Assert.AreEqual(1, terminal.Attempts);
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false, false)]
+        [DataRow(true, false)]
+        [DataRow(true, true)]
+        public async Task GraphFactories_StalledCustomRedirectBody_PropagatesCancellationOrDeadline(bool singleTimeout, bool cancelCaller)
+        {
+            using (var caller = new CancellationTokenSource())
+            using (var body = new GatedJsonContent())
+            {
+                var timeoutMs = cancelCaller ? 30000 : 250;
+                var decisions = 0;
+                var terminal = new SequenceHttpHandler(ct => Task.FromResult(RelativeRedirect("?part=2", body)));
+                using (var graph = singleTimeout
+                    ? GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromMilliseconds(timeoutMs), terminal)
+                    : GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(timeoutMs, 0, timeoutMs), null, terminal))
+                {
+                    var read = graph.Users.GetAsync(rc => rc.Options.Add(new RedirectHandlerOption
+                    {
+                        ShouldRedirect = _ => { decisions++; return false; }
+                    }), caller.Token);
+                    await WithinWatchdog(body.Started.Task);
+                    if (cancelCaller) caller.Cancel();
+                    if (singleTimeout || cancelCaller)
+                        await Assert.ThrowsAsync<OperationCanceledException>(() => WithinWatchdog(read));
+                    else
+                        await Assert.ThrowsExceptionAsync<TimeoutException>(() => WithinWatchdog(read));
+                    Assert.AreEqual(0, decisions, "The redirect predicate must never see a fabricated empty body.");
+                    Assert.AreEqual(1, terminal.Attempts);
+                    Assert.IsTrue(body.Disposed);
+                }
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task GraphFactories_PassThroughRedirectReturnedAfterDeadline_DoesNotEscapeOuterTimeout(bool singleTimeout)
+        {
+            var deadline = CancellationToken.None;
+            var terminal = new SequenceHttpHandler(ct =>
+            {
+                deadline = ct;
+                return Task.FromResult(RelativeRedirect("?part=2", new StringContent("Contoso")));
+            });
+            using (var graph = singleTimeout
+                ? GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromMilliseconds(250), terminal)
+                : GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(250, 0, 250), null, terminal))
+            {
+                var read = graph.Users.GetAsync(rc => rc.Options.Add(new RedirectHandlerOption
+                {
+                    ShouldRedirect = _ =>
+                    {
+                        Assert.IsTrue(deadline.WaitHandle.WaitOne(TimeSpan.FromSeconds(3)));
+                        return false;
+                    }
+                }));
+                if (singleTimeout)
+                    await Assert.ThrowsAsync<OperationCanceledException>(() => WithinWatchdog(read));
+                else
+                    await Assert.ThrowsExceptionAsync<TimeoutException>(() => WithinWatchdog(read));
+                Assert.AreEqual(1, terminal.Attempts);
+            }
+        }
+
         [TestMethod]
         public async Task BoundedGraphRequestHandler_RequestTimeoutThenHealthyResponse_RetriesSamePageOnly()
         {
@@ -725,6 +818,7 @@ namespace Tests.UnitTests
             private readonly TaskCompletionSource<bool> _release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             public TaskCompletionSource<bool> Started { get; } = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             public bool Disposed { get; private set; }
+            public Exception ReadFailure { get; set; }
 
             public GatedJsonContent(bool stopsOnDispose = true)
             {
@@ -739,6 +833,7 @@ namespace Tests.UnitTests
                 Started.TrySetResult(true);
                 await _release.Task.ConfigureAwait(false);
                 if (Disposed) throw new IOException("Synthetic response stream closed.");
+                if (ReadFailure != null) throw ReadFailure;
                 var bytes = System.Text.Encoding.UTF8.GetBytes("{\"value\":[]}");
                 await stream.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
             }

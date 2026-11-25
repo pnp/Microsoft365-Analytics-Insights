@@ -66,7 +66,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             catch (Exception ex)
             {
-                if (!response.IsSuccessStatusCode && (cancellationToken.IsCancellationRequested || ex is HttpRequestException))
+                if (HasHttpErrorStatus(response) && (cancellationToken.IsCancellationRequested || ex is HttpRequestException))
                 {
                     // Kiota reads even a throttling error's body before waiting. Give it the known status
                     // and Retry-After, not a local timeout retry. The outer handler checks caller cancellation.
@@ -77,6 +77,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 response.Dispose();
                 cancellationToken.ThrowIfCancellationRequested();
                 throw;
+            }
+        }
+
+        private static bool HasHttpErrorStatus(HttpResponseMessage response)
+        {
+            var status = (int)response.StatusCode;
+            return status >= 400 && status < 600;
+        }
+
+        // A 4xx/5xx can still tell Kiota why the request failed and how long to wait. An
+        // unconsumed 3xx is data for the caller or its predicate, not an error substitute.
+        internal static void ThrowIfExpired(HttpResponseMessage response, CancellationToken caller, CancellationToken deadline)
+        {
+            if (caller.IsCancellationRequested || (deadline.IsCancellationRequested && !HasHttpErrorStatus(response)))
+            {
+                response.Dispose();
+                caller.ThrowIfCancellationRequested();
+                deadline.ThrowIfCancellationRequested();
             }
         }
 

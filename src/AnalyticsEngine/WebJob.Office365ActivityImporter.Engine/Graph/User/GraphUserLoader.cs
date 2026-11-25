@@ -226,7 +226,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         rc.QueryParameters.Select = new[] { "id" });
                     return DeclineReusedUpn("previous object still exists (disabled is not deleted)");
                 }
-                catch (ODataError ex) when (ex.ResponseStatusCode == 404)
+                catch (ApiException ex) when (ex.ResponseStatusCode == 404)
                 {
                     // Even a prior deletion can be stale after a restore, and /users can lag. Always require this
                     // fresh object-ID 404, corroborated by the successful directory query below, never on its own.

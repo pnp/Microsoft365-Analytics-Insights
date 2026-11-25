@@ -75,12 +75,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     try
                     {
                         var response = await base.SendAsync(retryRequest ?? request, requestDeadline.Token).ConfigureAwait(false);
-                        if (cancellationToken.IsCancellationRequested)
-                        {
-                            // Even a known error status must not trigger a service retry during shutdown.
-                            response.Dispose();
-                            cancellationToken.ThrowIfCancellationRequested();
-                        }
+                        BoundedGraphResponseBodyHandler.ThrowIfExpired(response, cancellationToken, requestDeadline.Token);
                         if (replayTemplate != null && response.RequestMessage == (retryRequest ?? request)
                             && (retryRequest != null || !response.IsSuccessStatusCode))
                         {

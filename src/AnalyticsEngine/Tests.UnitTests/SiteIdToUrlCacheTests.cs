@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Graph;
 using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
@@ -232,19 +233,22 @@ namespace Tests.UnitTests
             Assert.IsFalse(logger.Entries.Any(e => e.Level == LogLevel.Information), "Only a deleted site is quietened.");
         }
 
-        [TestMethod]
-        public async Task GraphSiteUrlCache_A404WithAnotherErrorCode_IsNotTreatedAsADeletedSite()
+        [DataTestMethod]
+        [DataRow(true)]
+        [DataRow(false)]
+        public async Task GraphSiteUrlCache_A404WithoutTheExpectedCode_IsNotTreatedAsADeletedSite(bool hasErrorBody)
         {
             // Only Graph's specific "site not found" answer is expected. Any other 404 keeps today's warnings, so a
             // broken request is not hidden behind an Information line.
             var logger = new RecordingLogger();
-            var graph = new StaticGraphResponse(HttpStatusCode.NotFound, "{\"error\":{\"code\":\"Request_ResourceNotFound\",\"message\":\"synthetic\"}}");
+            var graph = new StaticGraphResponse(HttpStatusCode.NotFound,
+                hasErrorBody ? "{\"error\":{\"code\":\"Request_ResourceNotFound\",\"message\":\"synthetic\"}}" : null);
             var cache = new GraphSPSiteIdToUrlCache(NewGraphClient(graph), new InMemorySiteUrlStore(), logger);
 
             Assert.IsNull(await cache.Load("site-other-404"));
 
             Assert.AreEqual(2, logger.Entries.Count(e => e.Level == LogLevel.Warning));
-            Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Warning && e.Exception is ODataError));
+            Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Warning && e.Exception is ApiException));
             Assert.IsFalse(logger.Entries.Any(e => e.Level == LogLevel.Information));
         }
 
@@ -293,7 +297,7 @@ namespace Tests.UnitTests
                 return Task.FromResult(new HttpResponseMessage(_status)
                 {
                     RequestMessage = request,
-                    Content = new StringContent(_body, Encoding.UTF8, "application/json"),
+                    Content = _body == null ? null : new StringContent(_body, Encoding.UTF8, "application/json"),
                 });
             }
         }

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using System;
 using System.Data.Entity;
 using System.Linq;
@@ -105,7 +106,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 return null;
             }
-            catch (ODataError ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
+            catch (ApiException ex) when (ex.ResponseStatusCode == (int)HttpStatusCode.NotFound)
             {
                 _logger.LogWarning($"{nameof(SPSiteIdToUrlCache)}: Site with ID '{id}' not found");
 

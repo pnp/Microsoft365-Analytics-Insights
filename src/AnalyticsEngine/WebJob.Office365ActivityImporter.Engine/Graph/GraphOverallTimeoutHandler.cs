@@ -26,14 +26,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 try
                 {
                     var response = await base.SendAsync(request, deadline.Token).ConfigureAwait(false);
-                    // An error with an unreadable body still has a known HTTP status. Return it on
-                    // our deadline, but never turn the caller's own cancellation into a status.
-                    if (cancellationToken.IsCancellationRequested || (deadline.IsCancellationRequested && response.IsSuccessStatusCode))
-                    {
-                        response.Dispose();
-                        cancellationToken.ThrowIfCancellationRequested();
-                        deadline.Token.ThrowIfCancellationRequested();
-                    }
+                    BoundedGraphResponseBodyHandler.ThrowIfExpired(response, cancellationToken, deadline.Token);
                     return response;
                 }
                 catch (Exception ex) when (cancellationToken.IsCancellationRequested &&
