@@ -440,9 +440,11 @@ namespace Tests.UnitTests
             finally { release.TrySetResult(true); }
         }
 
-        [TestMethod]
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
         [Timeout(10000)]
-        public async Task WeeklyTimeout_StalledEarlyClosingReadLeavesTimeToVerifyLaterWorkloads()
+        public async Task WeeklyTimeout_StalledEarlyClosingReadLeavesTimeToVerifyLaterWorkloads(bool tenantHasTeamsRows)
         {
             var week = Day.AddDays(1); // Monday
             var state = new ProbeStore();
@@ -450,7 +452,7 @@ namespace Tests.UnitTests
             var store = new UsageReportCoverageStore(state, true, budget);
             for (var i = 0; i < 7; i++)
                 foreach (var source in UsageReportCoverageStore.WeeklySources)
-                    await state.SetStringAsync($"v1:{source}:{week.AddDays(i):yyyyMMdd}", source == "teams" || source == "sharepoint"
+                    await state.SetStringAsync($"v1:{source}:{week.AddDays(i):yyyyMMdd}", source == "teams" && !tenantHasTeamsRows || source == "sharepoint"
                         ? UsageReportCoverageStore.Empty : UsageReportCoverageStore.Complete);
 
             var queried = new List<string>();
@@ -478,12 +480,19 @@ namespace Tests.UnitTests
                     var source = WeeklySource(sql);
                     queried.Add(source);
                     if (source == "outlook") throw new TimeoutException();
+                    if (source == "teams" && tenantHasTeamsRows)
+                        return Task.FromResult(WeekRows(week, hasRows: true, value: 0));
                     return Task.FromResult(WeekRows(week, source == "onedrive" || source == "yammer"));
                 }).Single();
                 elapsed.Stop();
                 Assert.IsNull(chart.Error);
                 var points = chart.Series.ToDictionary(s => s.Name, s => s.Points.Single());
-                Assert.IsFalse(points.ContainsKey("Teams"), "An opening empty certificate alone cannot draw a zero.");
+                if (tenantHasTeamsRows)
+                {
+                    Assert.AreEqual(0d, points["Teams"].Value);
+                    Assert.IsTrue(points["Teams"].Incomplete, "Nobody in scope was observed; this is not a verified zero.");
+                }
+                else Assert.IsFalse(points.ContainsKey("Teams"), "An opening empty certificate alone cannot draw a zero.");
                 Assert.AreEqual(5d, points["OneDrive"].Value);
                 Assert.IsFalse(points["OneDrive"].Incomplete);
                 Assert.AreEqual(0d, points["SharePoint"].Value);
@@ -500,15 +509,17 @@ namespace Tests.UnitTests
         }
 
         [DataTestMethod]
-        [DataRow(true, true)]
-        [DataRow(false, true)]
-        [DataRow(true, false)]
-        public async Task WeeklyFailure_StopsOnlyOnTimeoutWithDrawableData(bool empty, bool timeout)
+        [DataRow(true, true, true, 0)]
+        [DataRow(false, true, true, 5)]
+        [DataRow(true, false, true, 0)]
+        [DataRow(false, true, true, 0)]
+        [DataRow(false, true, false, 5)]
+        public async Task WeeklyFailure_StopsOnlyOnTimeoutWithDrawableData(bool empty, bool timeout, bool verified, int value)
         {
             var week = Day.AddDays(1);
             var store = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
             for (var i = 0; i < 7; i++)
-                await store.CompleteDayAsync("teams", week.AddDays(i), true, true, empty, week.AddDays(12), 3);
+                await store.CompleteDayAsync("teams", week.AddDays(i), true, verified, empty, week.AddDays(12), 3);
 
             var queried = new List<string>();
             var chart = await ReportsAPIController.UsageCharts(week, new List<DateTime> { week }, store, sql =>
@@ -520,12 +531,12 @@ namespace Tests.UnitTests
                     if (timeout) throw new TimeoutException();
                     throw new InvalidOperationException("Synthetic query failure.");
                 }
-                return Task.FromResult(WeekRows(week, !empty));
+                return Task.FromResult(WeekRows(week, !empty, value));
             }).Single();
             Assert.IsNull(chart.Error);
             var teams = chart.Series.Single(s => s.Name == "Teams").Points.Single();
-            Assert.AreEqual(empty ? 0d : 5d, teams.Value);
-            Assert.IsFalse(teams.Incomplete);
+            Assert.AreEqual(empty ? 0d : value, teams.Value);
+            Assert.AreEqual(!verified, teams.Incomplete);
             Assert.AreEqual(timeout ? 2 : 5, queried.Count);
             Assert.AreEqual(timeout ? 3 : 0, chart.SeriesWarnings.Count(w => w.Reason == "notAttempted"));
         }
@@ -533,10 +544,10 @@ namespace Tests.UnitTests
         private static string WeeklySource(string sql) => UsageReportCoverageStore.WeeklySources
             .Single(source => sql.Contains("dbo." + source + "_user_activity_log"));
 
-        private static List<ReportsAPIController.UsageWeekRow> WeekRows(DateTime week, bool hasRows) =>
+        private static List<ReportsAPIController.UsageWeekRow> WeekRows(DateTime week, bool hasRows, double value = 5) =>
             Enumerable.Range(0, 7).Select(day => new ReportsAPIController.UsageWeekRow
             {
-                WeekStart = week, CoverageDate = week.AddDays(day), HasRows = hasRows, Value = hasRows ? 5 : 0,
+                WeekStart = week, CoverageDate = week.AddDays(day), HasRows = hasRows, Value = hasRows ? value : 0,
             }).ToList();
 
         [TestMethod]

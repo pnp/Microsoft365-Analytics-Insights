@@ -991,12 +991,12 @@ namespace Web.AnalyticsWeb.Controllers
                     // remaining workload.
                     if (IsQueryTimeout(ex))
                     {
-                        // SQL rows are drawable even without a certificate (as a lower bound). Only
-                        // empty SQL weeks need a closing certificate to decide whether to stop.
-                        var hasStoredRows = fetched.Any(item => item.Rows.Any(day => day.HasRows));
-                        await ProjectFetchedAsync(hasStoredRows ? 0 : series.Count - i - 1);
+                        // HasRows describes the tenant, not the reader's scope. Only a positive scoped
+                        // count can justify stopping without verification; reserve time for later sources otherwise.
+                        var hasScopedActivity = fetched.Any(item => item.Rows.Any(day => day.Value > 0));
+                        await ProjectFetchedAsync(hasScopedActivity ? 0 : series.Count - i - 1);
                     }
-                    if (ShouldStopAfterSeriesFailure(ex, rowsBySeries))
+                    if (ShouldStopAfterSeriesFailure(ex, rowsBySeries, incompleteWeeksBySeries))
                     {
                         warnings.Add("Remaining workloads were not attempted after the database timeout");
                         warningFacts.AddRange(series
@@ -1060,11 +1060,14 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         internal static bool ShouldStopAfterSeriesFailure(
             Exception ex,
-            List<KeyValuePair<string, List<WeekValueRow>>> rowsSoFar)
+            List<KeyValuePair<string, List<WeekValueRow>>> rowsSoFar,
+            IDictionary<string, List<DateTime>> incompleteWeeksBySeries = null)
         {
             return IsQueryTimeout(ex)
                 && rowsSoFar != null
-                && rowsSoFar.Any(s => s.Value != null && s.Value.Count > 0);
+                && rowsSoFar.Any(s => s.Value != null && s.Value.Any(row => row.Value > 0
+                    || incompleteWeeksBySeries == null || !incompleteWeeksBySeries.TryGetValue(s.Key, out var incomplete)
+                    || !incomplete.Contains(row.WeekStart)));
         }
 
         /// <param name="incompleteWeeksBySeries">
