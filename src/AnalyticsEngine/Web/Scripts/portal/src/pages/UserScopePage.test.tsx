@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
+import { loadCatalog } from '../i18n';
 import UserScopePage from './UserScopePage';
 import type { UserScopePurgeJob, UserScopeStatus } from '../types/userScope';
 
@@ -307,7 +308,17 @@ describe('UserScopePage', () => {
 
     renderWithProvider(<UserScopePage />);
 
-    expect(await screen.findByText(/couldn't save its progress to Azure Table storage/)).toBeInTheDocument();
+    expect(await screen.findByText(/couldn't read or update its state in Azure Table storage/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['en', /Set the web app's Storage connection string to the account the importer uses/],
+    ['es', /Configure la cadena de conexión Storage de la aplicación web para que use la misma cuenta que el importador/],
+  ] as const)('explains how to protect report history before retrying the purge (%s)', async (language, recovery) => {
+    await loadCatalog(language);
+    mockFetchStatus.mockResolvedValue(status({ latestJob: runningJob({ state: 'failed', errorCode: 'coverageStorageRequired' }) }));
+    renderWithProvider(<UserScopePage />, { language });
+    expect(await screen.findByText(recovery)).toBeInTheDocument();
   });
 
   it('explains when the purge removed nobody because the filter changed', async () => {

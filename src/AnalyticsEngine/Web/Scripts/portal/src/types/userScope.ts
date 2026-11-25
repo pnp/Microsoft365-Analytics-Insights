@@ -95,6 +95,7 @@ export interface UserScopePurgeJob {
     | 'scopeMembershipChanged'
     | 'databaseError'
     | 'stateUnavailable'
+    | 'coverageStorageRequired'
     | 'unexpected'
     | null;
 }

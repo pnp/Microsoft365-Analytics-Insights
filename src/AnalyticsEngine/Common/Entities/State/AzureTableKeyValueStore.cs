@@ -34,7 +34,7 @@ namespace Common.Entities.State
     /// the ones nobody reads again.</description></item>
     /// </list>
     /// </remarks>
-    public sealed class AzureTableKeyValueStore : IExpiringConditionalKeyValueStore, IBatchKeyValueStore, IVersionedKeyRangeReader
+    public sealed class AzureTableKeyValueStore : IExpiringConditionalKeyValueStore, IBatchKeyValueStore, IVersionedKeyRangeReader, IFencedBatchKeyValueStore
     {
         internal const string KeyProperty = "Key";
         internal const string ValueProperty = "Value";
@@ -61,7 +61,7 @@ namespace Common.Entities.State
         internal const string HashedRowKeyPrefix = "%%";
 
         /// <summary>Azure Tables accepts at most 100 operations in one entity-group transaction.</summary>
-        private const int MaxTransactionSize = 100;
+        internal const int MaxTransactionSize = 100;
 
         /// <summary>An entity-group transaction's payload is capped at 4 MiB; this keeps the plain text of a batch far below it.</summary>
         private const int MaxTransactionChars = 400000;
@@ -228,6 +228,37 @@ namespace Common.Entities.State
             }, cancellationToken).ConfigureAwait(false);
         }
 
+        async Task<bool> IFencedBatchKeyValueStore.TrySetFencedBatchAsync(string fenceKey, string fenceValue, string expectedVersion,
+            IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken token)
+        {
+            if (values.Count == 0) return await TrySetStringAsync(fenceKey, fenceValue, expectedVersion, token).ConfigureAwait(false);
+            if (values.Count >= MaxTransactionSize) throw new ArgumentOutOfRangeException(nameof(values));
+            TableEntity Entity(string key, string value)
+            {
+                var entity = new TableEntity(_partitionKey, ToRowKey(key)) { { KeyProperty, key } };
+                EncodeValue(entity, key, value);
+                return entity;
+            }
+            var actions = new List<TableTransactionAction>(values.Count + 1)
+            {
+                new TableTransactionAction(expectedVersion == null ? TableTransactionActionType.Add : TableTransactionActionType.UpdateReplace,
+                    Entity(fenceKey, fenceValue), expectedVersion == null ? default : new ETag(expectedVersion)),
+            };
+            foreach (var pair in values) actions.Add(new TableTransactionAction(TableTransactionActionType.UpsertReplace, Entity(pair.Key, pair.Value)));
+            return await RunAsync(async table =>
+            {
+                try
+                {
+                    await table.SubmitTransactionAsync(actions, token).ConfigureAwait(false);
+                    return true;
+                }
+                catch (RequestFailedException ex) when (ex.Status == 409 || ex.Status == 412 || ex.Status == 404)
+                {
+                    return false;
+                }
+            }, token).ConfigureAwait(false);
+        }
+
         public async Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
         {
             var rowKey = ToRowKey(key);
@@ -240,6 +271,7 @@ namespace Common.Entities.State
                     // The SDK answers a delete of a missing entity with the service's 404 rather than an exception.
                     return response == null || response.Status != 404;
                 }
+
                 catch (RequestFailedException ex) when (ex.Status == 404)
                 {
                     return false;

@@ -195,7 +195,7 @@ namespace Tests.UnitTests
                 ConstantValues(typeof(UserScopeErrorCodes)));
             CollectionAssert.AreEquivalent(new[] { "notFiltered", "scopeUnavailable", "scopeEmpty", "nothingToPurge", "jobActive", "storageUnavailable" },
                 ConstantValues(typeof(UserScopePurgeUnavailableReasons)));
-            CollectionAssert.AreEquivalent(new[] { "scopeUnavailable", "scopeEmpty", "databaseError", "filterChanged", "filterChangedWhileRunning", "stateUnavailable", "purgeExceedsConfirmed", "scopeMembershipChanged", "unexpected" },
+            CollectionAssert.AreEquivalent(new[] { "scopeUnavailable", "scopeEmpty", "databaseError", "filterChanged", "filterChangedWhileRunning", "stateUnavailable", "coverageStorageRequired", "purgeExceedsConfirmed", "scopeMembershipChanged", "unexpected" },
                 ConstantValues(typeof(UserScopePurgeErrorCodes)));
             CollectionAssert.AreEquivalent(new[] { "queued", "running", "completed", "failed", "cancelled" }, ConstantValues(typeof(UserScopePurgeStates)));
             CollectionAssert.AreEquivalent(new[]

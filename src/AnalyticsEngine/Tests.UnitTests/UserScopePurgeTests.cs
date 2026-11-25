@@ -893,6 +893,7 @@ INSERT INTO dbo.outlook_user_activity_log (user_id, [date], email_send_count, em
             try
             {
                 seed = await SeedAsync();
+                State = new UserScopePurgeStateStore(new InMemoryKeyValueStore(), isDurable: true);
                 var jobId = await StartJobWithCandidatesAsync(seed.Outsider);
 
                 var killed = false;
@@ -910,7 +911,7 @@ INSERT INTO dbo.outlook_user_activity_log (user_id, [date], email_send_count, em
                         killed = true;
                         var session = Convert.ToInt32(await ScalarAsync(
                             "SELECT TOP (1) request_session_id FROM sys.dm_tran_locks " +
-                            "WHERE resource_type = 'APPLICATION' AND request_mode = 'X' AND resource_description LIKE N'%AnalyticsInsights.UserScopePurge%';"));
+                            "WHERE resource_database_id = DB_ID() AND resource_type = 'APPLICATION' AND request_mode = 'X' AND resource_description LIKE N'%AnalyticsInsights.UserScopePurge%';"));
                         await ExecuteAsync($"KILL {session};");
                     }
                 };
@@ -994,7 +995,7 @@ INSERT INTO dbo.outlook_user_activity_log (user_id, [date], email_send_count, em
                 var pilotUpn = seed.Token + "-pilot@contoso.local";
                 var scope = TestUserScopes.Of(pilotUpn);
 
-                var outside = await NewEngine().FindUsersOutsideScopeAsync(scope, seed.Unknown);
+                var outside = await NewEngine().FindUsersOutsideScopeAsync(scope);
 
                 CollectionAssert.Contains(outside, seed.Outsider);
                 CollectionAssert.Contains(outside, seed.Report);
@@ -1726,7 +1727,7 @@ INSERT INTO profiling.UsageWeekly (user_id, date) VALUES ({userId}, '2026-08-24'
     /// An in-memory store that fails like an unreachable Azure Table storage account: every operation while
     /// <see cref="Down"/>, or just the next <see cref="FailNextWrites"/> writes - a blip.
     /// </summary>
-    internal sealed class OutageKeyValueStore : IKeyValueStore
+    internal sealed class OutageKeyValueStore : IExpiringConditionalKeyValueStore
     {
         private readonly InMemoryKeyValueStore _inner = new InMemoryKeyValueStore();
         private readonly object _gate = new object();
@@ -1750,16 +1751,40 @@ INSERT INTO profiling.UsageWeekly (user_id, date) VALUES ({userId}, '2026-08-24'
 
         public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, CancellationToken cancellationToken = default)
         {
+            CheckWrite();
+            return _inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+        }
+
+        public Task<VersionedValue> GetVersionedAsync(string key, CancellationToken token)
+        {
+            ThrowIfDown();
+            return _inner.GetVersionedAsync(key, token);
+        }
+
+        public Task<bool> TrySetExpiringStringAsync(string key, string value, string expected, TimeSpan? ttl, CancellationToken token)
+        {
+            CheckWrite();
+            return _inner.TrySetExpiringStringAsync(key, value, expected, ttl, token);
+        }
+
+        public Task<bool> TrySetStringAsync(string key, string value, string expected, CancellationToken token) =>
+            TrySetExpiringStringAsync(key, value, expected, null, token);
+
+        public Task<bool> TryDeleteAsync(string key, string expected, CancellationToken token)
+        {
+            CheckWrite();
+            return _inner.TryDeleteAsync(key, expected, token);
+        }
+
+        private void CheckWrite()
+        {
             ThrowIfDown();
             lock (_gate)
             {
-                if (_failNextWrites > 0)
-                {
-                    _failNextWrites--;
-                    throw Outage();
-                }
+                if (_failNextWrites <= 0) return;
+                _failNextWrites--;
+                throw Outage();
             }
-            return _inner.SetStringAsync(key, value, timeToLive, cancellationToken);
         }
 
         public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)

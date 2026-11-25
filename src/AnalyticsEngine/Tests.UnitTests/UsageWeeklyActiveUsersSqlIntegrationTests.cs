@@ -262,8 +262,8 @@ namespace Tests.UnitTests
 
                 graph.On(Day(monday), FakeGraphDirectoryHandler.Page("https://graph.microsoft.com" + nextPath, first))
                     .On(nextPath, FakeGraphDirectoryHandler.Page(null, second));
-                await coverage.StartScopePurgeAsync("synthetic");
-                await coverage.RevokeScopeDaysAsync("yammer", new[] { monday }, CancellationToken.None);
+                await coverage.StartScopePurgeAsync("synthetic", () => Task.CompletedTask);
+                await coverage.RevokeScopeDaysAsync("synthetic", "yammer", new[] { monday }, CancellationToken.None);
                 await coverage.EndScopePurgeAsync("synthetic", clock.UtcNow);
                 Assert.AreEqual(UsageReportCoverageStore.ScopeUnverified, (await Outcomes())[monday]);
                 clock.Advance(TimeSpan.FromTicks(1));
@@ -570,16 +570,17 @@ namespace Tests.UnitTests
             }
         }
 
-        private sealed class FirstRevocationFails : IExpiringConditionalKeyValueStore, IBatchKeyValueStore, IVersionedKeyRangeReader
+        private sealed class FirstRevocationFails : IExpiringConditionalKeyValueStore, IVersionedKeyRangeReader, IFencedBatchKeyValueStore
         {
             private readonly InMemoryKeyValueStore _inner = new InMemoryKeyValueStore();
             private bool _fail = true;
             public string Description => _inner.Description;
             public Task<Dictionary<string, VersionedValue>> ReadVersionedRangeAsync(string first, string last, int max, CancellationToken token) =>
                 _inner.ReadVersionedRangeAsync(first, last, max, token);
-            public Task SetManyAsync(IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken token)
+            public Task<bool> TrySetFencedBatchAsync(string fenceKey, string fenceValue, string expectedVersion,
+                IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken token)
             {
-                if (!_fail) return _inner.SetManyAsync(values, token);
+                if (!_fail || values.Count == 0) return ((IFencedBatchKeyValueStore)_inner).TrySetFencedBatchAsync(fenceKey, fenceValue, expectedVersion, values, token);
                 _fail = false;
                 throw new InvalidOperationException("Synthetic coverage write failure.");
             }

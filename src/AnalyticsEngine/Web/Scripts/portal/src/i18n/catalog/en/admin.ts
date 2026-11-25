@@ -779,7 +779,9 @@ export const admin = {
   'admin.userScope.jobError.databaseError':
     'The purge stopped because the analytics database returned an error.',
   'admin.userScope.jobError.stateUnavailable':
-    "The purge stopped because it couldn't save its progress to Azure Table storage. What it removed stays removed; start it again to finish it.",
+    "The purge stopped because it couldn't read or update its state in Azure Table storage. Restore the web app's access to the importer's Storage account, then start the purge again. Data already removed stays removed.",
+  'admin.userScope.jobError.coverageStorageRequired':
+    "This run removed no data. Some selected users have usage-report history, but Azure Table storage is not configured to record which report days change. Set the web app's Storage connection string to the account the importer uses, then start the purge again.",
   'admin.userScope.jobError.unexpected': 'The purge stopped because of an unexpected error.',
   'admin.leadershipCohort.title': 'Leadership group',
   'admin.leadershipCohort.description': "Choose the Entra ID group whose Copilot adoption the Copilot Adoption report compares with the whole tenant. Only the group's direct members are counted; nested groups and the reporting hierarchy are not followed.",

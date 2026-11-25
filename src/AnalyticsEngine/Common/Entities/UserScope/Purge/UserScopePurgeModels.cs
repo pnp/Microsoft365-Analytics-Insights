@@ -74,10 +74,13 @@ namespace Common.Entities.UserScope.Purge
         public const string FilterChangedWhileRunning = "filterChangedWhileRunning";
 
         /// <summary>
-        /// The purge couldn't save its progress to Azure Table storage, where it keeps it. What it removed before stays
-        /// removed, and starting it again finishes it.
+        /// The purge couldn't read or update its progress or its report coverage in Azure Table storage. Once access is
+        /// restored, a new run can finish what was not removed.
         /// </summary>
         public const string StateUnavailable = "stateUnavailable";
+
+        /// <summary>Deleting daily report facts would require durable coverage revocation, but Storage is not configured.</summary>
+        public const string CoverageStorageRequired = "coverageStorageRequired";
 
         /// <summary>
         /// More people are outside the scope than the administrator confirmed when starting the purge - the groups
@@ -99,6 +102,10 @@ namespace Common.Entities.UserScope.Purge
     /// <summary>One purge's record, kept in <see cref="UserScopePurgeStateStore"/> - never in the analytics database.</summary>
     public sealed class UserScopePurgeJob
     {
+        // A restarted worker claims the same job with a new token. Persisted in Table, not sent to the portal.
+        [JsonProperty]
+        internal string RunToken { get; set; }
+
         public int Id { get; set; }
         public string State { get; set; }
         public string Phase { get; set; }

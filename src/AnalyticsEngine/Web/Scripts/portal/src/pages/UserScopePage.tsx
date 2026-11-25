@@ -106,6 +106,7 @@ const JOB_ERROR_KEYS: Record<NonNullable<UserScopePurgeJob['errorCode']>, Transl
   scopeMembershipChanged: 'admin.userScope.jobError.scopeMembershipChanged',
   databaseError: 'admin.userScope.jobError.databaseError',
   stateUnavailable: 'admin.userScope.jobError.stateUnavailable',
+  coverageStorageRequired: 'admin.userScope.jobError.coverageStorageRequired',
   unexpected: 'admin.userScope.jobError.unexpected',
 };
 

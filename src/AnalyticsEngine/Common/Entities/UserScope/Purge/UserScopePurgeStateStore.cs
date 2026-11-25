@@ -3,6 +3,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities.UserScope.Purge
@@ -10,9 +11,8 @@ namespace Common.Entities.UserScope.Purge
     /// <summary>
     /// Purge records - one per purge, which purge is the latest, and stop requests - kept in the solution's runtime state
     /// store (<see cref="StatePartitions.UserScopePurge"/>): Azure Table storage when it is configured, otherwise the web
-    /// app's memory. Never the analytics database, which holds reporting data only. Each key has a single writer, so the
-    /// store's last-writer-wins is enough: a purge's record is written only by whoever holds the purge lock (the request
-    /// that starts it, then the run), and a stop request is a key of its own that only the portal writes.
+    /// app's memory. Never the analytics database. A run claims and updates the active job using its ETag: SQL session
+    /// loss can't let a late progress or terminal write overwrite the next owner. A stop request is a separate key.
     /// </summary>
     public sealed class UserScopePurgeStateStore
     {
@@ -79,22 +79,18 @@ namespace Common.Entities.UserScope.Purge
         /// <summary>A purge's record, or null when there is none (or it has expired).</summary>
         public async Task<UserScopePurgeJob> GetAsync(int id)
         {
-            var json = await ReadAsync(JobKey(id)).ConfigureAwait(false);
-            if (json == null)
-            {
-                return null;
-            }
+            var job = ReadJob(await ReadAsync(JobKey(id), CancellationToken.None).ConfigureAwait(false));
+            if (job != null) job.CancelRequested = await IsCancelRequestedAsync(id).ConfigureAwait(false);
+            return job;
+        }
 
-            var job = JsonConvert.DeserializeObject<UserScopePurgeJob>(json);
-            if (job == null)
-            {
-                return null;
-            }
-
+        private static UserScopePurgeJob ReadJob(string json)
+        {
+            var job = json == null ? null : JsonConvert.DeserializeObject<UserScopePurgeJob>(json);
+            if (job == null) return null;
             job.RowsAffected = job.RowsAffected == null
                 ? new Dictionary<string, long>(StringComparer.Ordinal)
                 : new Dictionary<string, long>(job.RowsAffected, StringComparer.Ordinal);
-            job.CancelRequested = await IsCancelRequestedAsync(id).ConfigureAwait(false);
             return job;
         }
 
@@ -112,6 +108,73 @@ namespace Common.Entities.UserScope.Purge
             return WriteAsync(JobKey(job.Id), JsonConvert.SerializeObject(job), job.IsActive ? (TimeSpan?)null : FinishedRetention);
         }
 
+        internal Task<UserScopePurgeJob> TryClaimAsync(int id, Func<Task> checkSqlLock, CancellationToken token) =>
+            TrySetOwnerAsync(id, null, checkSqlLock, token);
+
+        internal async Task<bool> RenewOwnerAsync(int id, string owner, Func<Task> checkFences, CancellationToken token)
+        {
+            // Process-local records cannot exclude a run on another instance. A read alone is insufficient even
+            // in Table: a former SQL owner may still have a claim in flight based on the ETag we are reading.
+            if (!IsDurable || string.IsNullOrEmpty(owner)) throw new UserScopePurgeLockLostException();
+            var job = await TrySetOwnerAsync(id, owner, checkFences, token).ConfigureAwait(false);
+            if (job == null) throw new UserScopePurgeLockLostException();
+            return !job.CancelRequested;
+        }
+
+        private async Task<UserScopePurgeJob> TrySetOwnerAsync(int id, string requiredOwner, Func<Task> checkSqlLock, CancellationToken token)
+        {
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var row = await ReadVersionAsync(id, token).ConfigureAwait(false);
+                var job = ReadJob(row.Value);
+                if (job == null || job.Id != id || !job.IsActive || (requiredOwner != null && job.RunToken != requiredOwner)
+                    || await GetLatestIdAsync(token).ConfigureAwait(false) != id) return null;
+                // Read the ETag BEFORE proving SQL ownership. An older in-flight progress write might win this
+                // ETag, so reread and reprove on conflict; never claim on a version read after the lock was lost.
+                await checkSqlLock().ConfigureAwait(false);
+                job.RunToken = requiredOwner ?? Guid.NewGuid().ToString("N");
+                if (await TrySaveVersionAsync(job, row.VersionToken, token).ConfigureAwait(false))
+                {
+                    job.CancelRequested = await IsCancelRequestedAsync(id, token).ConfigureAwait(false);
+                    return job;
+                }
+            }
+            return null;
+        }
+
+        internal async Task SaveOwnedAsync(UserScopePurgeJob job, CancellationToken token)
+        {
+            if (string.IsNullOrEmpty(job.RunToken)) throw new UserScopePurgeLockLostException();
+            var row = await ReadVersionAsync(job.Id, token).ConfigureAwait(false);
+            var current = row.Value == null ? null : JsonConvert.DeserializeObject<UserScopePurgeJob>(row.Value);
+            if (current == null || !current.IsActive || current.Id != job.Id || current.RunToken != job.RunToken
+                || !await TrySaveVersionAsync(job, row.VersionToken, token).ConfigureAwait(false))
+                throw new UserScopePurgeLockLostException();
+        }
+
+        private async Task<VersionedValue> ReadVersionAsync(int id, CancellationToken token)
+        {
+            try { return await ((IExpiringConditionalKeyValueStore)_values).GetVersionedAsync(JobKey(id), token).ConfigureAwait(false); }
+            catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
+            {
+                throw new UserScopePurgeStateUnavailableException("Could not read the purge's ownership record.", ex);
+            }
+        }
+
+        private async Task<bool> TrySaveVersionAsync(UserScopePurgeJob job, string expected, CancellationToken token)
+        {
+            var json = JsonConvert.SerializeObject(job);
+            try
+            {
+                return await ((IExpiringConditionalKeyValueStore)_values).TrySetExpiringStringAsync(JobKey(job.Id), json,
+                    expected, job.IsActive ? (TimeSpan?)null : FinishedRetention, token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException && token.IsCancellationRequested))
+            {
+                throw new UserScopePurgeStateUnavailableException("Could not update the purge's ownership record.", ex);
+            }
+        }
+
         /// <summary>Asks an active purge to stop after the batch it is on. False when it is not active, or does not exist.</summary>
         public async Task<bool> RequestCancelAsync(int id)
         {
@@ -125,12 +188,14 @@ namespace Common.Entities.UserScope.Purge
         }
 
         /// <summary>Whether a stop has been asked for. Read on its own, so a running purge can check cheaply.</summary>
-        public async Task<bool> IsCancelRequestedAsync(int id)
-            => await ReadAsync(CancelKey(id)).ConfigureAwait(false) != null;
+        public Task<bool> IsCancelRequestedAsync(int id) => IsCancelRequestedAsync(id, CancellationToken.None);
 
-        private async Task<int> GetLatestIdAsync()
+        internal async Task<bool> IsCancelRequestedAsync(int id, CancellationToken token)
+            => await ReadAsync(CancelKey(id), token).ConfigureAwait(false) != null;
+
+        private async Task<int> GetLatestIdAsync(CancellationToken token = default)
         {
-            var value = await ReadAsync(LatestKey).ConfigureAwait(false);
+            var value = await ReadAsync(LatestKey, token).ConfigureAwait(false);
             return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0;
         }
 
@@ -139,11 +204,11 @@ namespace Common.Entities.UserScope.Purge
 
         private static string CancelKey(int id) => JobKey(id) + ":Cancel";
 
-        private async Task<string> ReadAsync(string key)
+        private async Task<string> ReadAsync(string key, CancellationToken token)
         {
             try
             {
-                return await _values.GetStringAsync(key).ConfigureAwait(false);
+                return await _values.GetStringAsync(key, token).ConfigureAwait(false);
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {

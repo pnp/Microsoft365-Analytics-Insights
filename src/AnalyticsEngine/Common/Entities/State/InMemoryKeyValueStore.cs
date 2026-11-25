@@ -13,7 +13,7 @@ namespace Common.Entities.State
     /// Values live only as long as this instance, so a caller that needs them to survive across import cycles must
     /// hold ONE instance for the life of the process. Thread-safe: the importers read and write concurrently.
     /// </remarks>
-    public sealed class InMemoryKeyValueStore : IExpiringConditionalKeyValueStore, IBatchKeyValueStore, IVersionedKeyRangeReader
+    public sealed class InMemoryKeyValueStore : IExpiringConditionalKeyValueStore, IBatchKeyValueStore, IVersionedKeyRangeReader, IFencedBatchKeyValueStore
     {
         /// <summary>How many writes happen between sweeps of expired entries, so a TTL'd cache cannot grow without bound.</summary>
         private const int SweepEveryWrites = 1000;
@@ -22,6 +22,7 @@ namespace Common.Entities.State
         private readonly Func<DateTime> _utcNow;
         private int _writesSinceSweep;
         private long _lastVersion;
+        private readonly object _fencedWrites = new object();
 
         public InMemoryKeyValueStore() : this(() => DateTime.UtcNow)
         {
@@ -156,17 +157,34 @@ namespace Common.Entities.State
             if (value == null) throw new ArgumentNullException(nameof(value));
             cancellationToken.ThrowIfCancellationRequested();
 
+            return Task.FromResult(TryReplace(key, value, expectedVersionToken, timeToLive));
+        }
+
+        private bool TryReplace(string key, string value, string expectedVersionToken, TimeSpan? timeToLive)
+        {
             var replacement = new Entry(value, _utcNow() + timeToLive, NextVersion());
             if (expectedVersionToken == null)
             {
-                return Task.FromResult(_entries.TryAdd(key, replacement));
+                return _entries.TryAdd(key, replacement);
             }
 
             // TryUpdate compares the entry by reference, so it succeeds only if nothing replaced it since it was read.
-            return Task.FromResult(
-                _entries.TryGetValue(key, out var current)
+            return _entries.TryGetValue(key, out var current)
                 && string.Equals(current.Version, expectedVersionToken, StringComparison.Ordinal)
-                && _entries.TryUpdate(key, replacement, current));
+                && _entries.TryUpdate(key, replacement, current);
+        }
+
+        Task<bool> IFencedBatchKeyValueStore.TrySetFencedBatchAsync(string fenceKey, string fenceValue, string expectedVersion,
+            IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken token)
+        {
+            if (values.Count >= AzureTableKeyValueStore.MaxTransactionSize) throw new ArgumentOutOfRangeException(nameof(values));
+            lock (_fencedWrites)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!TryReplace(fenceKey, fenceValue, expectedVersion, null)) return Task.FromResult(false);
+                foreach (var pair in values) _entries[pair.Key] = new Entry(pair.Value, null, NextVersion());
+                return Task.FromResult(true);
+            }
         }
 
         public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, CancellationToken cancellationToken = default)

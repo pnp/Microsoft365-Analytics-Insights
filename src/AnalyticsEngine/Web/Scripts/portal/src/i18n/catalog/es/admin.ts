@@ -789,7 +789,9 @@ const admin: Record<keyof typeof en, string> = {
   'admin.userScope.jobError.databaseError':
     'La purga se detuvo porque la base de datos de análisis devolvió un error.',
   'admin.userScope.jobError.stateUnavailable':
-    'La purga se detuvo porque no pudo guardar su progreso en Azure Table Storage. Lo que ya eliminó sigue eliminado; iníciela de nuevo para terminarla.',
+    'La purga se detuvo porque no pudo leer o actualizar su estado en Azure Table Storage. Restablezca el acceso de la aplicación web a la cuenta de Storage del importador y vuelva a iniciar la purga. Los datos ya eliminados no se recuperan.',
+  'admin.userScope.jobError.coverageStorageRequired':
+    'No se eliminaron datos en esta ejecución. Algunos usuarios seleccionados tienen un historial de informes de uso, pero Azure Table Storage no está configurado para registrar qué días se ven afectados. Configure la cadena de conexión Storage de la aplicación web para que use la misma cuenta que el importador y vuelva a iniciar la purga.',
   'admin.userScope.jobError.unexpected': 'La purga se detuvo por un error inesperado.',
   'admin.leadershipCohort.title': 'Grupo directivo',
   'admin.leadershipCohort.description': 'Elija el grupo de Entra ID cuya adopción de Copilot compara el informe de adopción de Copilot con la de todo el inquilino. Solo se cuentan los miembros directos del grupo; no se siguen los grupos anidados ni la jerarquía de dependencia.',

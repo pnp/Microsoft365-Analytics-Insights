@@ -323,7 +323,11 @@ namespace Tests.UnitTests
             var result = await read.SummariseAsync(async source =>
             {
                 var observed = source == "teams" ? new HashSet<DateTime> { Day } : new HashSet<DateTime>();
-                if (++probes == 2) await store.RevokeScopeDaysAsync("teams", new[] { Day }, default);
+                if (++probes == 2)
+                {
+                    await store.StartScopePurgeAsync("synthetic", () => Task.CompletedTask);
+                    await store.RevokeScopeDaysAsync("synthetic", "teams", new[] { Day }, default);
+                }
                 return observed;
             }, default);
             Assert.AreEqual(2, probes);

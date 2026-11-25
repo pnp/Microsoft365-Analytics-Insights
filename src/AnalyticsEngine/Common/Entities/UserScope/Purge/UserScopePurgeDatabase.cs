@@ -69,7 +69,8 @@ namespace Common.Entities.UserScope.Purge
         {
             // Unpooled: closing the connection has to end the session, which is what releases the lock. A pooled
             // connection would go back to the pool still holding it.
-            var unpooled = new SqlConnectionStringBuilder(_connectionString) { Pooling = false }.ConnectionString;
+            // SqlClient must not transparently replace this session and lose its lock and temp tables.
+            var unpooled = new SqlConnectionStringBuilder(_connectionString) { Pooling = false, ConnectRetryCount = 0 }.ConnectionString;
             var connection = await OpenAsync(unpooled, cancellationToken).ConfigureAwait(false);
             try
             {
@@ -169,6 +170,24 @@ SELECT @result;";
 
         /// <summary>How long re-opening waits for SQL Server to let go of a broken session's lock.</summary>
         internal TimeSpan ReopenWait { get; set; } = TimeSpan.FromSeconds(60);
+
+        /// <summary>Checks this run still owns the active job under the newly acquired lock. False means stop requested.</summary>
+        internal Func<CancellationToken, Task<bool>> CheckReconnectedOwnerAsync { private get; set; }
+        internal bool StopRequestedOnReconnect { get; private set; }
+        internal string CoverageFence { get; set; }
+
+        /// <summary>Probe the actual SQL session before writing state elsewhere; State can still say Open after a disconnect.</summary>
+        internal async Task<bool> CheckLockAsync(CancellationToken token)
+        {
+            if (Connection.State != ConnectionState.Open) throw new UserScopePurgeLockLostException();
+            using (var command = new SqlCommand("SELECT APPLOCK_MODE('public', @resource, 'Session');", Connection))
+            {
+                command.Parameters.Add("@resource", SqlDbType.NVarChar, 255).Value = UserScopePurgeDatabase.LockResource;
+                if (!Equals(await command.ExecuteScalarAsync(token).ConfigureAwait(false), "Exclusive"))
+                    throw new UserScopePurgeLockLostException();
+                return true;
+            }
+        }
 
         /// <summary>
         /// Makes <paramref name="userIds"/> the session's <c>#purge_candidates</c>, and their Microsoft Entra object ids plus
@@ -277,8 +296,8 @@ WHERE u.object_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM #purge_objects o WHE
         private bool _discarded;
 
         /// <summary>
-        /// Re-opens the session when its connection has broken: takes the purge lock again and reloads the candidates.
-        /// Throws <see cref="UserScopePurgeLockLostException"/> if another session took the lock meanwhile.
+        /// Re-opens a broken session, proves it still owns the active job under the reacquired lock, then reloads
+        /// its candidates unless a stop was requested. Lock availability alone does not prove ownership.
         /// </summary>
         internal async Task EnsureOpenAsync(CancellationToken cancellationToken = default)
         {
@@ -307,7 +326,9 @@ WHERE u.object_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM #purge_objects o WHE
 
             // Healthy again only once the candidates are back: if reloading them fails, the next attempt opens the session
             // afresh rather than carrying on with a partial list.
-            await FillCandidatesAsync(cancellationToken).ConfigureAwait(false);
+            if (CheckReconnectedOwnerAsync == null) throw new UserScopePurgeLockLostException();
+            StopRequestedOnReconnect = !await CheckReconnectedOwnerAsync(cancellationToken).ConfigureAwait(false);
+            if (!StopRequestedOnReconnect) await FillCandidatesAsync(cancellationToken).ConfigureAwait(false);
             _discarded = false;
         }
 
@@ -344,13 +365,13 @@ WHERE u.object_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM #purge_objects o WHE
     }
 
     /// <summary>
-    /// The session running a purge broke, and another session took the purge lock before this one could open a new one.
-    /// That session now runs the purge.
+    /// The worker cannot prove it still owns this active run. The replacement might already have stopped and released
+    /// the SQL lock; do not reload candidates, update job state or change coverage.
     /// </summary>
     public sealed class UserScopePurgeLockLostException : Exception
     {
         public UserScopePurgeLockLostException()
-            : base("Another session took the user scope purge lock while this one was reconnecting.")
+            : base("This worker can no longer prove it owns the active user scope purge.")
         {
         }
     }

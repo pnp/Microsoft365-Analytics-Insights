@@ -1,4 +1,5 @@
 using Common.Entities.Config;
+using Common.Entities.UserScope.Purge;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System;
@@ -177,21 +178,44 @@ namespace Common.Entities.State
             }
         }
 
-        internal Task StartScopePurgeAsync(string runToken, CancellationToken token = default) =>
-            _store.SetStringAsync(ScopePurgeKey, "active:" + runToken, cancellationToken: token);
+        internal const int MaxPurgeDaysPerTransaction = AzureTableKeyValueStore.MaxTransactionSize - 1;
+        private IFencedBatchKeyValueStore PurgeWrites => (IFencedBatchKeyValueStore)_store;
+
+        internal async Task StartScopePurgeAsync(string runToken, Func<Task> checkOwnership, CancellationToken token = default)
+        {
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var fence = await Conditional.GetVersionedAsync(ScopePurgeKey, token).ConfigureAwait(false);
+                await checkOwnership().ConfigureAwait(false);
+                if (await PurgeWrites.TrySetFencedBatchAsync(ScopePurgeKey, "active:" + runToken, fence.VersionToken,
+                    Array.Empty<KeyValuePair<string, string>>(), token).ConfigureAwait(false)) return;
+                // The previous worker's last revocation may just have committed. Only the SQL owner may retry.
+            }
+            throw new UserScopePurgeLockLostException();
+        }
+
+        internal async Task<bool> IsActivePurgeAsync(string runToken, CancellationToken token) =>
+            await _store.GetStringAsync(ScopePurgeKey, token).ConfigureAwait(false) == "active:" + runToken;
 
         internal async Task EndScopePurgeAsync(string runToken, DateTime endedUtc)
         {
-            var conditional = (IConditionalKeyValueStore)_store;
-            var fence = await conditional.GetVersionedAsync(ScopePurgeKey).ConfigureAwait(false);
-            if (fence.Value == "active:" + runToken)
-                await conditional.TrySetStringAsync(ScopePurgeKey, endedUtc.Ticks.ToString(CultureInfo.InvariantCulture),
-                    fence.VersionToken).ConfigureAwait(false);
+            var fence = await Conditional.GetVersionedAsync(ScopePurgeKey).ConfigureAwait(false);
+            if (fence.Value != "active:" + runToken || !await PurgeWrites.TrySetFencedBatchAsync(ScopePurgeKey,
+                endedUtc.Ticks.ToString(CultureInfo.InvariantCulture), fence.VersionToken,
+                Array.Empty<KeyValuePair<string, string>>(), CancellationToken.None).ConfigureAwait(false))
+                throw new UserScopePurgeLockLostException();
         }
 
-        internal Task RevokeScopeDaysAsync(string source, IEnumerable<DateTime> days, CancellationToken token) =>
-            ((IBatchKeyValueStore)_store).SetManyAsync(days.Select(day =>
-                new KeyValuePair<string, string>(Key(source, day), WithBarrier(ScopeUnverified, PendingPurge))).ToList(), token);
+        internal async Task RevokeScopeDaysAsync(string runToken, string source, IReadOnlyList<DateTime> days, CancellationToken token)
+        {
+            if (days.Count > MaxPurgeDaysPerTransaction) throw new ArgumentOutOfRangeException(nameof(days));
+            var fence = await Conditional.GetVersionedAsync(ScopePurgeKey, token).ConfigureAwait(false);
+            var values = days.Select(day => new KeyValuePair<string, string>(Key(source, day), WithBarrier(ScopeUnverified, PendingPurge))).ToList();
+            // A delayed Table request must not revoke a newer run's freshly imported days after SQL ownership changed.
+            if (fence.Value != "active:" + runToken || !await PurgeWrites.TrySetFencedBatchAsync(ScopePurgeKey, fence.Value,
+                fence.VersionToken, values, token).ConfigureAwait(false))
+                throw new UserScopePurgeLockLostException();
+        }
 
         /// <summary>
         /// The rows returned by an interrupted download cannot certify the day, even if older rows are retained.
