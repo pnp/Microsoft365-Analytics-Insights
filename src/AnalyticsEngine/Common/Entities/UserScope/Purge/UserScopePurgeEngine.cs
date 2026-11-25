@@ -117,6 +117,9 @@ namespace Common.Entities.UserScope.Purge
         /// <summary>Test hook: overrides the pause between retries of a transient database error.</summary>
         internal TimeSpan? RetryDelayOverride { get; set; }
 
+        internal TimeSpan CoverageWriteTimeout { get; set; } = TimeSpan.FromSeconds(5);
+        internal Action<SqlTransaction> CommitUsageTransaction { get; set; } = transaction => transaction.Commit();
+
         /// <summary>How often, at most, progress is saved and a stop request looked for inside a step. Always between steps.</summary>
         internal TimeSpan StateCheckInterval { get; set; } = TimeSpan.FromSeconds(2);
 
@@ -715,25 +718,41 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
             var affected = 0;
             if (take > 0)
             {
-                var days = batch.Days.GetRange(batch.NextDay, take).Where(day => !batch.Revoked.Contains(day)).ToList();
-                if (days.Count != 0)
-                {
-                    await CoverageWriteAsync(() => _coverage.RevokeScopeDaysAsync(session.CoverageFence, source, days, token), token).ConfigureAwait(false);
-                    if (batch.Revoked.Count + days.Count > UsageReportCoverageStore.MaximumDays) batch.Revoked.Clear();
-                    batch.Revoked.UnionWith(days);
-                }
                 var range = batch.Days.Count == take ? "" : " AND b.report_day BETWEEN @from AND @through";
+                var days = new List<DateTime>(take);
+                // The delete is provisional until its exact dates have been revoked. A rejected
+                // statement (or a staged row that no longer matches) never invalidates intact history.
+                using (var transaction = connection.BeginTransaction())
                 using (var delete = new SqlCommand($@"
-DELETE t FROM #purge_usage_batch b INNER LOOP JOIN {step.QualifiedTable} t ON t.id = b.id
-WHERE CONVERT(date, t.[date]) = b.report_day AND ({step.Match}){range}; SELECT @@ROWCOUNT;", connection) { CommandTimeout = 600 })
+DECLARE @removed TABLE (report_day date NOT NULL);
+DELETE t OUTPUT CONVERT(date, deleted.[date]) INTO @removed
+FROM #purge_usage_batch b INNER LOOP JOIN {step.QualifiedTable} t ON t.id = b.id
+WHERE CONVERT(date, t.[date]) = b.report_day AND ({step.Match}){range};
+SELECT report_day, COUNT(*) FROM @removed GROUP BY report_day;", connection, transaction) { CommandTimeout = 600 })
                 {
                     if (range.Length != 0)
                     {
                         delete.Parameters.Add("@from", SqlDbType.Date).Value = batch.Days[batch.NextDay];
                         delete.Parameters.Add("@through", SqlDbType.Date).Value = batch.Days[next - 1];
                     }
-                    affected = (int)await delete.ExecuteScalarAsync(token).ConfigureAwait(false);
+                    using (var reader = await delete.ExecuteReaderAsync(token).ConfigureAwait(false))
+                    {
+                        while (await reader.ReadAsync(token).ConfigureAwait(false))
+                        {
+                            var day = reader.GetDateTime(0);
+                            affected += reader.GetInt32(1);
+                            if (!batch.Revoked.Contains(day)) days.Add(day);
+                        }
+                    }
+                    if (days.Count != 0)
+                        await CoverageWriteAsync(() => RevokeBeforeCommitAsync(session.CoverageFence, source, days, token), token).ConfigureAwait(false);
+                    // No retry or certificate restoration on a lost COMMIT response. Previously
+                    // acknowledged units retain their counts; this unit's dates stay unverified.
+                    try { CommitUsageTransaction(transaction); }
+                    catch (Exception ex) { throw new InvalidOperationException("The usage purge commit was not acknowledged.", ex); }
                 }
+                if (batch.Revoked.Count + days.Count > UsageReportCoverageStore.MaximumDays) batch.Revoked.Clear();
+                batch.Revoked.UnionWith(days);
             }
             batch.Deleted += affected;
             batch.NextDay = next;
@@ -744,6 +763,30 @@ WHERE CONVERT(date, t.[date]) = b.report_day AND ({step.Match}){range}; SELECT @
                 Affected = affected,
                 NextAfter = done && batch.Selected < BatchSize && batch.Deleted == batch.Selected ? KeyToString(batch.End) : after,
             };
+        }
+
+        private async Task RevokeBeforeCommitAsync(string fence, string source, IReadOnlyList<DateTime> days, CancellationToken token)
+        {
+            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                deadline.CancelAfter(CoverageWriteTimeout);
+                var expired = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (deadline.Token.Register(() => expired.TrySetResult(true)))
+                {
+                    var write = _coverage.RevokeScopeDaysAsync(fence, source, days, deadline.Token);
+                    if (await Task.WhenAny(write, expired.Task).ConfigureAwait(false) != write)
+                    {
+                        // Do not hold SQL locks for a transport which ignored cancellation. A request
+                        // already sent still carries the old fence ETag; it cannot change a later run.
+                        _ = write.ContinueWith(t => { _ = t.Exception; }, CancellationToken.None,
+                            TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+                        token.ThrowIfCancellationRequested();
+                        throw new TimeoutException("Usage coverage revocation exceeded the SQL transaction's wait budget.");
+                    }
+                    await write.ConfigureAwait(false);
+                    deadline.Token.ThrowIfCancellationRequested();
+                }
+            }
         }
 
         private async Task<bool> StageUsageWindowAsync(SqlConnection connection, UserScopePurgeStep step, string after,

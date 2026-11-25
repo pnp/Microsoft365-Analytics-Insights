@@ -342,21 +342,47 @@ OPTION (MAXRECURSION 0);");
             Assert.AreEqual(1, _db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE id = {_outside}"));
         }
 
-        [TestMethod]
-        public async Task UnacknowledgedSqlDeleteKeepsItsDayUnverified()
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task CoverageChangesOnlyAfterSqlAcceptsTheDeleteEvenIfTheCommitReplyIsLost(bool loseCommitReply)
         {
             SeedTeamsDays(_db, 1, $"u.user_name IN ('{InsideUpn}', '{OutsideUpn}')");
             var coverage = new UsageReportCoverageStore(_ledger, true);
             await coverage.CompleteDayAsync("teams", FirstDay, true, true, false, FirstDay.AddDays(4), 3);
-            // RAISERROR (unlike THROW) does not honour XACT_ABORT. The statement commits but SqlClient
-            // sees an error rather than a successful row count. Read back the facts to prove which happened.
-            _db.Execute(@"CREATE TRIGGER dbo.contoso_delete_ack ON dbo.teams_user_activity_log AFTER DELETE AS
-                IF EXISTS (SELECT 1 FROM deleted) RAISERROR ('Synthetic missing success acknowledgement', 16, 1);");
+            await coverage.CompleteDayAsync("outlook", FirstDay, true, true, true, FirstDay.AddDays(4), 3);
+            var before = await _ledger.GetVersionedAsync("v1:teams:20200101");
             var members = Members(InsideUpn);
             var job = await QueueAsync(members);
-            Assert.AreEqual(UserScopePurgeRunOutcome.Failed, await Engine(true).RunAsync(job.Id, Provider(members)));
-            Assert.AreEqual(1, _db.Scalar("SELECT COUNT(*) FROM dbo.teams_user_activity_log"));
-            Assert.IsFalse(await coverage.IsDayVerifiedAsync("teams", FirstDay));
+            var engine = Engine(true);
+            using (var session = await _database.TryOpenPurgeSessionAsync(TimeSpan.Zero))
+            {
+                if (loseCommitReply)
+                    engine.CommitUsageTransaction = tx => { tx.Commit(); throw new TimeoutException("Synthetic lost commit reply."); };
+                else
+                {
+                    _db.Execute(@"CREATE USER ContosoPurgeWriter WITHOUT LOGIN;
+                        ALTER ROLE db_datareader ADD MEMBER ContosoPurgeWriter;
+                        ALTER ROLE db_datawriter ADD MEMBER ContosoPurgeWriter;
+                        DENY DELETE ON dbo.teams_user_activity_log TO ContosoPurgeWriter;");
+                    using (var asWriter = session.Connection.CreateCommand())
+                    {
+                        asWriter.CommandText = "EXECUTE AS USER = 'ContosoPurgeWriter'";
+                        await asWriter.ExecuteNonQueryAsync();
+                    }
+                }
+                Assert.AreEqual(UserScopePurgeRunOutcome.Failed, await engine.RunAsync(job.Id, Provider(members), lockedSession: session));
+            }
+            var stopped = await _state.GetAsync(job.Id);
+            Assert.IsFalse(stopped.RowsAffected.ContainsKey("teams_user_activity_log"), "No unacknowledged count is published.");
+            Assert.AreEqual(loseCommitReply ? 1 : 2, _db.Scalar("SELECT COUNT(*) FROM dbo.teams_user_activity_log"));
+            Assert.AreEqual(!loseCommitReply, await coverage.IsDayVerifiedAsync("teams", FirstDay));
+            if (!loseCommitReply)
+            {
+                StringAssert.Contains(stopped.ErrorDetail, "SQL error 229");
+                Assert.AreEqual(before.VersionToken, (await _ledger.GetVersionedAsync("v1:teams:20200101")).VersionToken);
+            }
+            Assert.IsTrue(await coverage.IsDayVerifiedAsync("outlook", FirstDay));
         }
     }
 }

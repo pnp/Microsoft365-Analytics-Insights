@@ -498,6 +498,35 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ScopePurge_SlowRevocationReleasesSqlLocksWithoutWaitingForTheTransport()
+        {
+            var table = _table ?? Skip();
+            var sending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var delayed = new InterceptTransactions(table.Name, async _ => { sending.TrySetResult(true); await release.Task; });
+            var coverage = new UsageReportCoverageStore(new AzureTableKeyValueStore(delayed, "Purge" + Guid.NewGuid().ToString("N")), true);
+            using (var db = UserScopePurgeSafetyTests.CreateMigratedDatabase())
+            {
+                db.Execute("INSERT dbo.users(user_name) VALUES ('outside@contoso.example')");
+                var outside = (int)db.Scalar("SELECT id FROM dbo.users WHERE user_name='outside@contoso.example'");
+                UserScopePurgeSafetyTests.SeedTeamsDays(db, 1, $"u.id = {outside}");
+                var state = new UserScopePurgeStateStore(NewStore(), true);
+                var job = await state.CreateAsync("admin@contoso.example", null, 1, 1);
+                var engine = new UserScopePurgeEngine(new UserScopePurgeDatabase(db.ConnectionString), state, null, coverage)
+                    { CandidatesOverride = new[] { outside }, CoverageWriteTimeout = TimeSpan.FromMilliseconds(250) };
+                var run = engine.RunAsync(job.Id, null);
+                try
+                {
+                    Assert.AreSame(sending.Task, await Task.WhenAny(sending.Task, run, Task.Delay(TimeSpan.FromSeconds(30))));
+                    Assert.AreSame(run, await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(5))), "The transport is still blocked.");
+                    Assert.AreEqual(UserScopePurgeRunOutcome.Failed, await run);
+                    Assert.AreEqual(1, db.Scalar($"SET LOCK_TIMEOUT 1000; SELECT COUNT(*) FROM dbo.teams_user_activity_log WITH (READCOMMITTEDLOCK) WHERE user_id = {outside}"));
+                }
+                finally { release.TrySetResult(true); await run; }
+            }
+        }
+
+        [TestMethod]
         public async Task ScopePurge_AlreadySentStaleRevocationCannotUndoAReplacementAndAFreshImport()
         {
             var table = _table ?? Skip();

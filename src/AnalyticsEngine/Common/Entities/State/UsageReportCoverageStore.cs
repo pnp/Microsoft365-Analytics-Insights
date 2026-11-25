@@ -210,6 +210,7 @@ namespace Common.Entities.State
         {
             if (days.Count > MaxPurgeDaysPerTransaction) throw new ArgumentOutOfRangeException(nameof(days));
             var fence = await Conditional.GetVersionedAsync(ScopePurgeKey, token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
             var values = days.Select(day => new KeyValuePair<string, string>(Key(source, day), WithBarrier(ScopeUnverified, PendingPurge))).ToList();
             // A delayed Table request must not revoke a newer run's freshly imported days after SQL ownership changed.
             if (fence.Value != "active:" + runToken || !await PurgeWrites.TrySetFencedBatchAsync(ScopePurgeKey, fence.Value,
