@@ -89,6 +89,14 @@ INSERT dbo.searches(session_id,search_term_id,date_time) VALUES
             Assert.AreEqual(1, _database.Scalar(@"SELECT COUNT(*) FROM dbo.searches WHERE session_id=(SELECT MAX(s.id) FROM dbo.sessions s
 JOIN dbo.users u ON u.id=s.user_id WHERE s.ai_session_id='Pair' AND u.user_name='reader@contoso.com')"),
                 "Reporting must not move the old search off its physical session.");
+            _database.Execute(@"DECLARE @canonical int=(SELECT MIN(s.id) FROM dbo.sessions s JOIN dbo.users u ON u.id=s.user_id
+WHERE ai_session_id='Pair' AND u.user_name='reader@contoso.com'), @url int, @web int;
+SELECT TOP (1) @url=url_id,@web=web_id FROM dbo.hits WHERE session_id=@canonical AND web_id IS NOT NULL;
+INSERT dbo.hits(url_id,web_id,session_id,page_request_id,hit_timestamp) VALUES
+(@url,@web,@canonical,NEWID(),'20000101 10:00:30'),(@url,NULL,@canonical,NEWID(),'20000101 10:00:30');");
+            var tied = await store.GetSearchAsync(query);
+            Assert.IsTrue(tied.Queries.All(q => q.Error == null));
+            Assert.AreEqual(0, tied.BySite.Count, "The highest hit id at the same timestamp has no web; it must not inherit the earlier site.");
         }
 
         [TestMethod]
@@ -157,6 +165,11 @@ JOIN dbo.users u ON u.id=s.user_id WHERE s.ai_session_id='Pair' AND u.user_name=
                 Assert.AreEqual(1, (await Save()).Skipped, "A historical hit with no stored site cannot prove an exact-site rule.");
                 _database.Execute("UPDATE dbo.org_urls SET exact_match=0 WHERE exact_match=1;");
                 Assert.AreEqual(1, (await Save()).FactsInserted, "A literal page URL prefix can still verify a web-less historical hit.");
+                search.CustomProperties.PageRequestId = Guid.NewGuid();
+                search.SearchIngestionHourUtc = DateTime.SpecifyKind(Start, DateTimeKind.Unspecified);
+                var pending = (await Save()).UnmatchedByHour.Single();
+                Assert.AreEqual((Start, DateTimeKind.Utc, 1), (pending.Key, pending.Key.Kind, pending.Value),
+                    "A restricted request awaiting its page must produce the same UTC marker as a SQL visit miss.");
                 search.CustomProperties.PageRequestId = null;
                 search.CustomProperties.SearchText = "Legacy";
                 Assert.AreEqual(1, (await Save()).Skipped);

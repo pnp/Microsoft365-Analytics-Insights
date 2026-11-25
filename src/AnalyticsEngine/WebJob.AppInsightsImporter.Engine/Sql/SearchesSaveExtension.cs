@@ -68,6 +68,14 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
                 var missingIngestionTime = 0;
                 var excluded = 0;
                 var staged = 0;
+                void AddUnmatched(DateTime? ingestionHour, int count)
+                {
+                    if (!ingestionHour.HasValue) { missingIngestionTime += count; return; }
+                    // Both the KQL projection and the SQL datetime represent UTC wall-clock hours.
+                    var hour = DateTime.SpecifyKind(ingestionHour.Value, DateTimeKind.Utc);
+                    unmatched.TryGetValue(hour, out var existing);
+                    unmatched[hour] = existing + count;
+                }
                 using (var cmd = con.CreateCommand())
                 {
                     cmd.CommandText = FixSearchScript(Resources.Create_Searches_Import_Temp_Table);
@@ -93,12 +101,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
                             if (!userId.HasValue)
                             {
                                 if (!pending) excluded++;
-                                else if (customEvent.SearchIngestionHourUtc is DateTime hour)
-                                {
-                                    unmatched.TryGetValue(hour, out var count);
-                                    unmatched[hour] = count + 1;
-                                }
-                                else missingIngestionTime++;
+                                else AddUnmatched(customEvent.SearchIngestionHourUtc, 1);
                                 continue;
                             }
                         }
@@ -138,13 +141,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
                         await reader.NextResultAsync(cancellationToken);
                         while (await reader.ReadAsync(cancellationToken))
                         {
-                            if (reader.IsDBNull(0)) missingIngestionTime += reader.GetInt32(1);
-                            else
-                            {
-                                var hour = DateTime.SpecifyKind(reader.GetDateTime(0), DateTimeKind.Utc);
-                                unmatched.TryGetValue(hour, out var count);
-                                unmatched[hour] = count + reader.GetInt32(1);
-                            }
+                            AddUnmatched(reader.IsDBNull(0) ? (DateTime?)null : reader.GetDateTime(0), reader.GetInt32(1));
                         }
                     }
                     cancellationToken.ThrowIfCancellationRequested();
