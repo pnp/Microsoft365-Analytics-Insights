@@ -170,16 +170,21 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         /// <summary>A bounded search-only pass. No new ingestion, page views, ordinary events or cursor writes.</summary>
+        public Task<AppInsightsImportCycleResult> RecoverPendingSearchesAsync(DateTime normalThroughUtc, DateTime nextNormalUtc,
+            CancellationToken cancellationToken) =>
+            RecoverPendingSearchesAsync(normalThroughUtc, nextNormalUtc, cancellationToken, _ => Task.FromResult(_userScope));
+
         public async Task<AppInsightsImportCycleResult> RecoverPendingSearchesAsync(DateTime normalThroughUtc, DateTime nextNormalUtc,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, Func<CancellationToken, Task<UserImportScope>> resolveScope)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (resolveScope == null) throw new ArgumentNullException(nameof(resolveScope));
             var result = new AppInsightsImportCycleResult { Mode = AppInsightsReadMode.SearchRecovery };
             var budget = nextNormalUtc - _clock.UtcNow;
             if (budget <= TimeSpan.Zero) { result.Degrade("SearchRecoveryYielded"); return result; }
 
-            // Even a blocked source/SQL call must give the next normal import its turn. A deadline is not a Kudu
-            // stop or a terminal attempt: anything left uncheckpointed is safe to replay from the durable markers.
+            // A blocked scope refresh, source or SQL call must yield to normal ingestion. A deadline is not
+            // a Kudu stop or a terminal attempt: uncheckpointed work is safe to replay from the durable markers.
             using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
                 deadline.CancelAfter(budget);
@@ -206,9 +211,12 @@ namespace WebJob.AppInsightsImporter.Engine
                     }
                     if (retries.HasDue(normalThroughUtc))
                     {
+                        var scope = await resolveScope(token);
+                        token.ThrowIfCancellationRequested();
+                        if (scope == null) throw new InvalidOperationException("No user scope was supplied for search recovery.");
                         await WithSourceAsync(source => WithDatabasePortsAsync(async (sites, hits, persistence) =>
                         {
-                            await ReconcileSearchHoursAsync(source, persistence, retries, normalThroughUtc, result, token, nextNormalUtc);
+                            await ReconcileSearchHoursAsync(source, persistence, retries, normalThroughUtc, result, scope, token, nextNormalUtc);
                             return result;
                         }, token));
                     }
@@ -400,7 +408,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
                 // A later day's page view may create an earlier day's missing visit. Reconcile only after normal imports.
                 if (finished)
-                    await ReconcileSearchHoursAsync(source, persistence, searchRetries, nowUtc, result, cancellationToken);
+                    await ReconcileSearchHoursAsync(source, persistence, searchRetries, nowUtc, result, _userScope, cancellationToken);
                 return finished;
             }
 
@@ -771,14 +779,16 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         private async Task ReconcileSearchHoursAsync(IAppInsightsSourceLoader source, IAppInsightsDayPersistenceManager persistence,
-            AppInsightsSearchRetries retries, DateTime coveredThroughUtc, AppInsightsImportCycleResult result, CancellationToken cancellationToken,
-            DateTime? yieldAtUtc = null)
+            AppInsightsSearchRetries retries, DateTime coveredThroughUtc, AppInsightsImportCycleResult result, UserImportScope userScope,
+            CancellationToken cancellationToken, DateTime? yieldAtUtc = null)
         {
+            var attemptedAtUtc = _clock.UtcNow;
+            ReportExpiredSearches(retries.RemoveOutsideRetention(attemptedAtUtc), result);
             var due = retries.Due(coveredThroughUtc);
             if (due.Count == 0) return;
             try
             {
-                await retries.RememberBeforeReconciliationAsync(due, _clock.UtcNow, cancellationToken);
+                await retries.RememberBeforeReconciliationAsync(due, attemptedAtUtc, cancellationToken);
             }
             catch (Exception ex) when (CanRecover(ex, cancellationToken))
             {
@@ -816,7 +826,7 @@ namespace WebJob.AppInsightsImporter.Engine
                         var events = await source.GetCustomEventsAsync(window, false, cancellationToken);
                         cancellationToken.ThrowIfCancellationRequested();
                         read += events.Rows.Count;
-                        filtered += AppInsightsUserScopeRules.Apply(null, events, _userScope).EventsRemoved;
+                        filtered += AppInsightsUserScopeRules.Apply(null, events, userScope).EventsRemoved;
                         if (events.Rows.Count == 0) continue;
                         cancellationToken.ThrowIfCancellationRequested();
                         var saved = await persistence.SaveSearchesAsync(events, cancellationToken);

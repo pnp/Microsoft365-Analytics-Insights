@@ -164,7 +164,9 @@ namespace WebJob.AppInsightsImporter
                         Exception cycleException = null;
                         try
                         {
-                            var userScope = userScopeProvider.GetScopeForCycleAsync(HostRuntime.ShutdownToken).GetAwaiter().GetResult();
+                            // A supplemental refresh belongs to its bounded pass, not to the next normal poll.
+                            var userScope = normalThroughUtc.HasValue ? null :
+                                userScopeProvider.GetScopeForCycleAsync(HostRuntime.ShutdownToken).GetAwaiter().GetResult();
                             HostRuntime.ThrowIfShutdownRequested();
                             var importer = new Engine.AppInsightsImporter(config, logger, userScope: userScope, scanWatermark: scanWatermark,
                                 dayFailureTracker: dayFailures, cursorStore: cursorStore);
@@ -173,7 +175,8 @@ namespace WebJob.AppInsightsImporter
                             try
                             {
                                 cycleResult = normalThroughUtc.HasValue
-                                    ? importer.RecoverPendingSearchesAsync(normalThroughUtc.Value, nextNormalUtc.Value, HostRuntime.ShutdownToken).GetAwaiter().GetResult()
+                                    ? importer.RecoverPendingSearchesAsync(normalThroughUtc.Value, nextNormalUtc.Value,
+                                        HostRuntime.ShutdownToken, userScopeProvider.GetScopeForCycleAsync).GetAwaiter().GetResult()
                                     : importer.ImportAndSave(saveRestResponses, readDaysBefore, HostRuntime.ShutdownToken).GetAwaiter().GetResult();
                                 HostRuntime.ThrowIfShutdownRequested();
                                 if (cycleResult.Outcome == Engine.AppInsightsCycleOutcome.Failed)

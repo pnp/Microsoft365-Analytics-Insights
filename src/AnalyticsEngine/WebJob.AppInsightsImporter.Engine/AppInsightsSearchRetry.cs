@@ -78,10 +78,15 @@ namespace WebJob.AppInsightsImporter.Engine
 
         private async Task LoadReplayHoursAsync(DateTime now, CancellationToken token)
         {
-            if (_replayHours != null) return;
-            var saved = await _store.ReadSearchReplayHoursAsync(token);
-            token.ThrowIfCancellationRequested();
-            _replayHours = new HashSet<DateTime>(saved.Where(h => h.AddHours(1) > now - AppInsightsIngestionCursorPolicy.MaxLookback));
+            if (_replayHours == null)
+            {
+                var saved = await _store.ReadSearchReplayHoursAsync(token);
+                token.ThrowIfCancellationRequested();
+                _replayHours = new HashSet<DateTime>(saved);
+            }
+            // On a restore this set may have been read before a long normal import crossed the retention edge.
+            var cutoff = now - AppInsightsIngestionCursorPolicy.MaxLookback;
+            _replayHours.RemoveWhere(h => h.AddHours(1) <= cutoff);
         }
 
         internal async Task ReopenAfterRestoreAsync(DateTime now, CancellationToken token)

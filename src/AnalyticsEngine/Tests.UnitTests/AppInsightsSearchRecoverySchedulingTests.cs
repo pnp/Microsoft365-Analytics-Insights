@@ -1,11 +1,16 @@
 using Common.Entities.Config;
 using Common.Entities.State;
+using Common.Entities.UserScope;
 using DataUtils;
+using DataUtils.Http;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
@@ -26,7 +31,7 @@ namespace Tests.UnitTests
         // is in memory here so we can run months of hourly arrivals without thousands of SQL round trips.
         private sealed class Visits : IAppInsightsDayPersistenceManager, IHitWatermarkStore
         {
-            private readonly HashSet<string> _visits = new HashSet<string>();
+            private readonly HashSet<(string Session, Guid? Request)> _visits = new HashSet<(string, Guid?)>();
             internal readonly HashSet<DateTime> Facts = new HashSet<DateTime>();
             private DateTime? _newest;
             internal DateTime? UnavailableHour;
@@ -39,7 +44,7 @@ namespace Tests.UnitTests
             {
                 foreach (var view in views.Rows)
                 {
-                    _visits.Add(view.CustomProperties.SessionId);
+                    _visits.Add((view.CustomProperties.SessionId, view.CustomProperties.PageRequestId));
                     if (!_newest.HasValue || view.Timestamp > _newest) _newest = view.Timestamp;
                 }
                 return Task.CompletedTask;
@@ -65,7 +70,7 @@ namespace Tests.UnitTests
                 foreach (var search in events.Rows.Cast<SearchEventAppInsightsQueryResult>())
                 {
                     var hour = search.SearchIngestionHourUtc.Value;
-                    if (_visits.Contains(search.CustomProperties.SessionId))
+                    if (_visits.Contains((search.CustomProperties.SessionId, search.CustomProperties.PageRequestId)))
                     {
                         if (Facts.Add(search.Timestamp)) inserted++;
                     }
@@ -81,17 +86,19 @@ namespace Tests.UnitTests
 
         private sealed class DailyImporter
         {
+            private static Guid RequestFor(DateTime t) => new Guid((int)(t - Start).TotalSeconds, 0, 1, new byte[8]);
+
             internal readonly FixedClock Clock = new FixedClock(Start);
             internal readonly Visits Sql = new Visits();
             internal readonly FakeAppInsightsSourceLoader Source = new FakeAppInsightsSourceLoader
             {
                 PageViewAt = t => new PageViewAppInsightsQueryResult
                 {
-                    AppInsightsTimestamp = t, Username = "reader@contoso.com", CustomProperties = new PageViewCustomProps { SessionId = t.Ticks.ToString() }
+                    AppInsightsTimestamp = t, Username = "reader@contoso.com", CustomProperties = new PageViewCustomProps { SessionId = t.Ticks.ToString(), PageRequestId = RequestFor(t) }
                 },
                 EventAt = t => new SearchEventAppInsightsQueryResult
                 {
-                    AppInsightsTimestamp = t, Username = "reader@contoso.com", CustomProperties = new SearchCustomProps { SessionId = t.Ticks.ToString(), SearchText = "Example" }
+                    AppInsightsTimestamp = t, Username = "reader@contoso.com", CustomProperties = new SearchCustomProps { SessionId = t.Ticks.ToString(), PageRequestId = RequestFor(t), SearchText = "Example" }
                 }
             };
             internal readonly InMemoryKeyValueStore State;
@@ -293,6 +300,97 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, job.Source.CountRangesRequested.Count);
             Assert.AreEqual(Start, await job.Cursor.ReadAsync());
             Assert.AreEqual(hour, (await job.Cursor.ReadSearchRetriesAsync()).Single().HourUtc);
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task SlowNormalImport_DoesNotWriteRestoreEvidenceForAnHourThatExpiredWhileSavingViews(bool restoring)
+        {
+            var job = new DailyImporter();
+            await job.Importer.ImportAndSave(false, null);
+            var edge = Start - AppInsightsIngestionCursorPolicy.MaxLookback;
+            var retained = Start.AddDays(-5);
+            if (restoring)
+            {
+                await job.Cursor.WriteAsync(Start, Start); // The newest actual SQL visit is an hour earlier.
+                await job.Cursor.WriteSearchReplayHoursAsync(new[] { edge }, default);
+            }
+            await job.Cursor.WriteSearchRetriesAsync(new[] { new AppInsightsSearchRetry(restoring ? retained : edge, Start) });
+            var view = Start.AddMinutes(1);
+            job.Source.ExtraPageViews.Add((view, view));
+            var makePage = job.Source.PageViewAt;
+            job.Source.PageViewAt = t => { if (t == view) job.Clock.Advance(TimeSpan.FromMinutes(2)); return makePage(t); };
+            job.Clock.Advance(TimeSpan.FromMinutes(59));
+            job.Source.CountRangesRequested.Clear();
+            var normal = await job.Importer.ImportAndSave(false, null);
+            Assert.AreEqual(Start.AddMinutes(59), normal.CursorAdvancedToUtc);
+            CollectionAssert.Contains(normal.Reasons, "SearchRetriesStopped");
+            Assert.AreEqual(0, normal.PendingSearchHours);
+            var actuallyDue = restoring ? new[] { retained } : Array.Empty<DateTime>();
+            CollectionAssert.AreEqual(actuallyDue, job.Source.CountRangesRequested.Where(w => w.SearchesOnly).Select(w => w.IngestedFromUtc.Value).ToArray());
+            CollectionAssert.AreEqual(actuallyDue, (await job.Cursor.ReadSearchReplayHoursAsync(default)).ToArray(),
+                "Do not write obsolete source hours, even when the restore had loaded them before saving visits.");
+        }
+
+        private sealed class HeldDirectory : HttpMessageHandler
+        {
+            internal const string Group = "00000000-0000-0000-0000-000000000001";
+            internal readonly TaskCompletionSource<CancellationToken> Entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+            internal readonly TaskCompletionSource<bool> Release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+            {
+                Entered.TrySetResult(token);
+                var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (token.Register(() => cancelled.TrySetResult(true)))
+                    await Task.WhenAny(Release.Task, cancelled.Task);
+                token.ThrowIfCancellationRequested();
+                var json = request.RequestUri.AbsolutePath.EndsWith(Group, StringComparison.OrdinalIgnoreCase)
+                    ? "{\"id\":\"" + Group + "\",\"displayName\":\"Contoso pilot\"}"
+                    : "{\"value\":[{\"userPrincipalName\":\"reader@contoso.com\",\"accountEnabled\":true}]}";
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) };
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task AdditionalPass_InterruptsDirectoryRefreshForNormalDeadlineOrHostStopWithoutUsingAStaleScope(bool hostStop)
+        {
+            var job = new DailyImporter();
+            var hour = Start.AddDays(-5);
+            job.Source.ExtraPageViews.Add((hour, hour));
+            await job.Importer.ImportAndSave(false, null);
+            job.Source.ExtraCustomEvents.Add((hour, hour));
+            using (var directory = new HeldDirectory())
+            using (var http = new AutoThrottleHttpClient(directory, NullLogger.Instance))
+            using (var stop = new CancellationTokenSource())
+            {
+                var groups = new GroupMembershipResolver(new GraphGroupDirectoryReader(http, NullLogger.Instance), NullLogger.Instance, job.Clock);
+                var scopes = new UserImportScopeProvider(new UserGroupsFilterModel(HeldDirectory.Group), groups, NullLogger.Instance, job.Clock);
+                await job.Importer.RecoverPendingSearchesAsync(Start, Start.AddDays(1), default,
+                    _ => throw new InvalidOperationException("No due hours: do not refresh the directory."));
+                await job.Cursor.WriteSearchRetriesAsync(new[] { new AppInsightsSearchRetry(hour, Start) });
+                job.Source.CountRangesRequested.Clear();
+                var pass = job.Importer.RecoverPendingSearchesAsync(Start, Start.AddSeconds(hostStop ? 60 : 3), stop.Token, scopes.GetScopeForCycleAsync);
+                try
+                {
+                    Assert.AreSame(directory.Entered.Task, await Task.WhenAny(directory.Entered.Task, pass, Task.Delay(TimeSpan.FromSeconds(5))));
+                    if (hostStop) stop.Cancel();
+                    Assert.AreSame(pass, await Task.WhenAny(pass, Task.Delay(TimeSpan.FromSeconds(8))), "The refresh must release the normal poll.");
+                    Assert.IsTrue((await directory.Entered.Task).IsCancellationRequested, "Cancel the actual Graph request, not just its waiter.");
+                    if (hostStop) await Assert.ThrowsAsync<OperationCanceledException>(() => pass);
+                    else CollectionAssert.Contains((await pass).Reasons, "SearchRecoveryYielded");
+                }
+                finally { directory.Release.TrySetResult(true); }
+                Assert.AreEqual(0, job.Source.CountRangesRequested.Count, "An unfinished scope never falls back to unfiltered searches.");
+                Assert.AreEqual(Start, await job.Cursor.ReadAsync());
+                Assert.AreEqual(hour, (await job.Cursor.ReadSearchRetriesAsync()).Single().HourUtc);
+                var recovered = await job.Importer.RecoverPendingSearchesAsync(Start, Start.AddDays(1), default, scopes.GetScopeForCycleAsync);
+                Assert.AreEqual(1, recovered.ReconciledSearches, "A new caller can resolve a complete scope and recover the pending hour.");
+                Assert.AreEqual(0, recovered.PendingSearchHours);
+            }
         }
     }
 }

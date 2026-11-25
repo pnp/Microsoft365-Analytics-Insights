@@ -9,11 +9,19 @@ using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using UnitTests.FakeLoaderClasses;
 using WebJob.AppInsightsImporter.Engine;
+using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 
 namespace Tests.UnitTests
 {
     public partial class AppInsightsSearchReconciliationTests
     {
+        private static SearchEventAppInsightsQueryResult SearchOnRecordedPage(DateTime searchTime, DateTime pageTime, string session)
+        {
+            var search = Search(searchTime, session, "Example", Reader);
+            search.CustomProperties.PageRequestId = Page(pageTime, session).CustomProperties.PageRequestId;
+            return search;
+        }
+
         [DataTestMethod]
         [DataRow("clean")]
         [DataRow("marker-write")]
@@ -32,7 +40,7 @@ namespace Tests.UnitTests
             var source = new FakeAppInsightsSourceLoader
             {
                 PageViewAt = t => Page(t, t == visit ? "delayed" : "other"),
-                EventAt = t => Search(t, "delayed", "Example", Reader),
+                EventAt = t => SearchOnRecordedPage(t, visit, "delayed"),
             };
             source.ExtraPageViews.Add((seed, seed));
             source.ExtraCustomEvents.Add((search, search));
@@ -110,7 +118,7 @@ namespace Tests.UnitTests
             var visit = Start.Date.AddDays(2).AddMinutes(1);
             var source = new FakeAppInsightsSourceLoader
             {
-                EventAt = t => Search(t, "delayed", "Example", Reader),
+                EventAt = t => SearchOnRecordedPage(t, visit, "delayed"),
                 PageViewAt = t => Page(t, t == visit ? "delayed" : "other"),
             };
             source.ExtraCustomEvents.Add((search, search));
@@ -234,7 +242,7 @@ namespace Tests.UnitTests
             var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
             var oldCursor = Start.AddDays(6);
             await cursor.WriteAsync(oldCursor, Start.AddDays(5));
-            var source = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "delayed"), EventAt = t => Search(t, "delayed", "Example", Reader) };
+            var source = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "delayed"), EventAt = t => SearchOnRecordedPage(t, Start, "delayed") };
             state.AtBoundary = (op, _) => { if (op == "cursor-write") throw new IOException("synthetic checkpoint outage"); };
             var failed = await RunCycle(clock, source, state);
             CollectionAssert.Contains(failed.Reasons, "CursorWriteFailed");
@@ -255,7 +263,7 @@ namespace Tests.UnitTests
             var clock = new FixedClock(Start);
             var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
             var hour = Start.AddDays(-4);
-            var source = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "eligible"), EventAt = t => Search(t, "eligible", "Example", Reader) };
+            var source = new FakeAppInsightsSourceLoader { PageViewAt = t => Page(t, "eligible"), EventAt = t => SearchOnRecordedPage(t, hour, "eligible") };
             source.ExtraPageViews.Add((hour, hour));
             await RunCycle(clock, source, state);
             source.ExtraCustomEvents.Add((hour, hour));

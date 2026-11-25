@@ -17,28 +17,38 @@ namespace Tests.UnitTests
     public partial class AppInsightsSearchReconciliationTests
     {
         [TestMethod]
-        public async Task SupplementalPass_UsesCurrentUserScopeAndOnlyMarkedHoursWithoutAdvancingTheNormalWatermark()
+        public async Task SupplementalPass_RechecksCurrentUserAndSiteScopeForOnlyMarkedHoursWithoutAdvancingTheNormalWatermark()
         {
             var clock = new FixedClock(Start);
             var state = new InMemoryKeyValueStore(() => clock.UtcNow);
             var cursor = new KeyValueIngestionCursorStore(state, "contoso-test");
             var hours = Enumerable.Range(0, 13).Select(i => Start.AddDays(-2).AddHours(i)).ToArray();
             const string revoked = "outside@contoso.com";
+            const string retiredSite = "https://contoso.sharepoint.com/sites/retired";
             string Session(DateTime t) => "visit-" + Array.IndexOf(hours, t);
             string Viewer(DateTime t) => t == hours[9] ? revoked : Reader;
             var source = new FakeAppInsightsSourceLoader
             {
                 PageViewAt = t =>
                 {
-                    var view = Page(t, Session(t)); view.Username = Viewer(t); return view;
+                    var view = Page(t, Session(t));
+                    view.Username = Viewer(t);
+                    if (t == hours[10])
+                    {
+                        view.CustomProperties.SiteUrl = view.CustomProperties.WebUrl = retiredSite;
+                        view.Url = retiredSite + "/SitePages/Home.aspx";
+                    }
+                    return view;
                 },
                 EventAt = t =>
                 {
-                    var search = Search(t, Session(t), Viewer(t) == revoked ? "Excluded" : "Example", Viewer(t));
+                    var term = Viewer(t) == revoked ? "Excluded" : t == hours[10] ? "Retired site" : "Example";
+                    var search = Search(t, Session(t), term, Viewer(t));
                     search.CustomProperties.PageRequestId = Page(t, Session(t)).CustomProperties.PageRequestId;
                     return search;
                 },
             };
+            _database.Execute("INSERT dbo.org_urls(url_base) VALUES (N'https://contoso.sharepoint.com/');");
             foreach (var t in hours) source.ExtraPageViews.Add((t, t));
             await RunCycle(clock, source, state);
             foreach (var t in hours) source.ExtraCustomEvents.Add((t, t));
@@ -50,14 +60,15 @@ namespace Tests.UnitTests
             var members = new UserScopeMembers();
             members.Add(null, Reader, null);
             var freshScope = UserImportScope.ForMembers(members, "Contoso pilot");
+            _database.Execute("UPDATE dbo.org_urls SET url_base=N'https://contoso.sharepoint.com/sites/example/', exact_match=1;");
             source.CountRangesRequested.Clear();
             clock.Advance(TimeSpan.FromMinutes(1));
             var pass = await new AppInsightsImporter(new AppConfig { CognitiveEndpoint = null }, AnalyticsLogger.ConsoleOnlyTracer(),
-                clock, source, contextFactory: _factory, userScope: freshScope, cursorStore: cursor)
-                .RecoverPendingSearchesAsync(normal.CursorAdvancedToUtc.Value, clock.UtcNow.AddDays(1), default);
-            Assert.AreEqual(3, pass.ReconciledSearches, "The user removed since the normal cycle must not get a fact.");
-            Assert.AreEqual((11L, 11L), SearchKpis());
-            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms WHERE search_term=N'Excluded'"));
+                clock, source, contextFactory: _factory, cursorStore: cursor)
+                .RecoverPendingSearchesAsync(normal.CursorAdvancedToUtc.Value, clock.UtcNow.AddDays(1), default, _ => Task.FromResult(freshScope));
+            Assert.AreEqual(2, pass.ReconciledSearches, "The removed user and the removed site must not get facts.");
+            Assert.AreEqual((10L, 10L), SearchKpis());
+            Assert.AreEqual(0, _database.Scalar("SELECT COUNT(*) FROM dbo.search_terms WHERE search_term IN (N'Excluded', N'Retired site')"));
             Assert.AreEqual(0, pass.PendingSearchHours);
             Assert.IsFalse(pass.HasDueSearchRetries);
             Assert.IsNull(pass.CursorAdvancedToUtc);
@@ -79,7 +90,7 @@ namespace Tests.UnitTests
             var source = new FakeAppInsightsSourceLoader
             {
                 PageViewAt = t => Page(t, "eligible"),
-                EventAt = t => Search(t, "eligible", "Example", Reader)
+                EventAt = t => SearchOnRecordedPage(t, hour, "eligible")
             };
             source.ExtraPageViews.Add((hour, hour));
             await RunCycle(clock, source, state);
