@@ -348,5 +348,20 @@ describe('PageViewTracker', () => {
             for (const key of ['pageTitle', 'webTitle', 'webUrl']) expect(view.properties).not.toHaveProperty(key);
             expect(spy).not.toHaveBeenCalled();
         });
+
+        test('a positional sibling web cannot veto the registered collection or identify page metadata', () => {
+            const site = context.siteAbsoluteUrl;
+            const url = site + '/second/SitePages/News.aspx';
+            Object.defineProperty(document, 'URL', { value: url, configurable: true });
+            window._o365AnalyticsInfo = { siteUrls: [site] };
+            const lookup = jest.spyOn(pagePropManager, 'handleNewPage');
+            expect(tracker.handleModernPageNav(site + '/first', 'Earlier', site, url + '?old')).toBe(false);
+            expect(tracker.handleModernPageNav(site + '/first', 'Earlier', 'https://contoso.sharepoint.com', url)).toBe(false);
+            expect(tracker.handleModernPageNav(site + '/first', 'Earlier', site, url, 'Earlier pages', 10)).toBe(true);
+            expect(pageViews()).toHaveLength(1);
+            expect(pageViews()[0].properties.siteUrl).toBe(site);
+            for (const key of ['pageTitle', 'webTitle', 'webUrl']) expect(pageViews()[0].properties).not.toHaveProperty(key);
+            expect(lookup).not.toHaveBeenCalled();
+        });
     });
 });

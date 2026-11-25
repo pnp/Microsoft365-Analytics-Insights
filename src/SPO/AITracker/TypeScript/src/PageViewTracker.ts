@@ -103,7 +103,7 @@ export class PageViewTracker {
         if (reportedSite || !sites) return { siteUrl: sites ? registeredSiteFor(url, sites) : reportedSite };
     }
 
-    handleModernPageNav(webUrl: string, _webTitle: string, siteUrl: string, url: string, _listTitle?: string, _listItemId?: number): boolean {
+    handleModernPageNav(_webUrl: string, _webTitle: string, siteUrl: string, url: string, _listTitle?: string, _listItemId?: number): boolean {
         // SharePoint may already be on an unregistered site, or on another instance's site.
         if (!this.observeCurrentPage()) {
             debug("Not tracking a navigation outside an active tracked visit");
@@ -111,7 +111,7 @@ export class PageViewTracker {
         }
         const sites = window._o365AnalyticsInfo;
         if (!isSamePage(url, document.URL) || !siteUrl || !isOnTrackedSite(url, sites, siteUrl) ||
-            (!sites?.visits?.currentPageContext && !this.contextIsOnPage(url, siteUrl, webUrl))) {
+            (!sites && !this.contextIsOnPage(url, siteUrl, _webUrl))) {
             debug("Not tracking a navigation reported for another site: SharePoint has moved on since");
             return false;
         }
