@@ -54,16 +54,21 @@ window._spPageContextInfo = window._spPageContextInfo ||
 // Page functions ------->
 
 function initPageControls() {
-    TimeMe.initialize();
+    // TimeMe starts an interval even in an already hidden tab. Install its activity/visibility
+    // listeners on the first visible visit instead; initialize takes seconds, not milliseconds.
+    const startWhenVisible = () => {
+        if (document.hidden) return;
+        document.removeEventListener('visibilitychange', startWhenVisible);
+        TimeMe.initialize({ idleTimeoutInSeconds: 30 });
+    };
+    if (document.hidden) document.addEventListener('visibilitychange', startWhenVisible);
+    else startWhenVisible();
 
     // On modern pages capture before the link's own handler can change document.URL or replace the link.
     const modern = !!window._o365AnalyticsInfo;
     document.addEventListener('mousedown', interceptClickEvent, modern);    // Mousedown for links that use stopPropagation etc
     document.addEventListener('click', interceptClickEvent, modern);        // Click for links that only raise click (megamenu links)
 
-    // Save time on page for the next page load to send. Not window.onbeforeunload: SharePoint assigns that too, so
-    // whichever was set last silently replaced the other - losing either this or SharePoint's own handler.
-    window.addEventListener('pagehide', e => pageTracker?.savePageExitToCookie(e.persisted));
     window.addEventListener('pageshow', e => { if (e.persisted) pageTracker?.resumeFromCache(); });
     // On a back traversal Edge makes the document visible before notifying pageshow listeners.
     // Resume before an earlier site listener can synchronously report a navigation or click.
@@ -140,7 +145,8 @@ function startAppInsights(): boolean {
 
     let appInsights: TrackerTelemetry;
     try {
-        appInsights = createTrackerTelemetry(atob(window.appInsightsConnectionStringHash!), window._spPageContextInfo.userLoginName);
+        appInsights = createTrackerTelemetry(atob(window.appInsightsConnectionStringHash!), window._spPageContextInfo.userLoginName,
+            persisted => pageTracker?.savePageExitToCookie(persisted));
     } catch (e) {
         error("Couldn't start Application Insights with the connection string this site is configured with, so this page isn't tracked. Re-run the installer for this site.");
         error(e);

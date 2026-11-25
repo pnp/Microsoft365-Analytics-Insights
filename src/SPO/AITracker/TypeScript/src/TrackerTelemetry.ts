@@ -6,7 +6,7 @@ import { PropertiesPlugin } from '@microsoft/applicationinsights-properties-js';
 
 export type TrackerTelemetry = Pick<AnalyticsPlugin, 'trackPageView' | 'trackEvent'>;
 
-export function createTrackerTelemetry(connectionString: string, userLoginName: string): TrackerTelemetry {
+export function createTrackerTelemetry(connectionString: string, userLoginName: string, beforePageHideFlush?: (persisted: boolean) => void): TrackerTelemetry {
     const { ingestionendpoint, instrumentationkey } = parseConnectionString(connectionString);
     if (!instrumentationkey || !ingestionendpoint) throw new Error('Missing Application Insights instrumentation key or ingestion endpoint.');
 
@@ -47,9 +47,15 @@ export function createTrackerTelemetry(connectionString: string, userLoginName: 
     properties.context.user.setAuthenticatedUserContext(userLoginName);
 
     // The full web SDK wires these itself. Keep short visits and clicks that navigate off the page.
-    const flush = () => {
-        sender.onunloadFlush();
-        properties.context.sessionManager.backup();
+    const flush = (event: Event) => {
+        try {
+            // Replacing the shared exit cookie can enqueue another hit. A tab closed while
+            // already hidden has no later visibilitychange: drain the sender after the handoff.
+            if (event.type === 'pagehide') beforePageHideFlush?.((event as PageTransitionEvent).persisted);
+        } finally {
+            sender.onunloadFlush();
+            properties.context.sessionManager.backup();
+        }
     };
     addPageHideEventListener(flush);
     addPageUnloadEventListener(flush);

@@ -12,17 +12,19 @@ import { AI_TRACKER_VER } from '../src/AiTrackerConstants';
 const mockAiInstances: any[] = [];
 let mockSecondsOnPage = 12;         // TimeMe's running total of active seconds on page
 let mockActiveClock: (() => number) | undefined;
+let mockUseRealTimeMe = false;
 
 jest.mock('../src/TrackerTelemetry', () => ({
-    createTrackerTelemetry: jest.fn((connectionString: string) => {
+    createTrackerTelemetry: jest.fn((connectionString: string, _user: string, beforePageHideFlush: (persisted: boolean) => void) => {
         const instance = { trackPageView: jest.fn(), trackEvent: jest.fn() };
         mockAiInstances.push(instance);
         if (!connectionString.includes('InstrumentationKey=')) throw new Error('Missing instrumentation key');
+        window.addEventListener('pagehide', e => beforePageHideFlush(e.persisted));
         return instance;
     }),
 }));
 
-jest.mock('timeme.js', () => ({
+jest.mock('timeme.js', () => mockUseRealTimeMe ? jest.requireActual('timeme.js') : ({
     __esModule: true,
     default: {
         initialize: jest.fn(),
@@ -452,6 +454,73 @@ describe('AITracker page bootstrap', () => {
         });
     });
 
+    describe('active time using the installed TimeMe library', () => {
+        const snapshot = () => {
+            window.dispatchEvent(new PageTransitionEvent('pagehide'));
+            const value = Cookies.get('SPOInsightsLastPageStats');
+            return value ? JSON.parse(value) : undefined;
+        };
+
+        beforeEach(() => {
+            mockUseRealTimeMe = true;
+            jest.useFakeTimers({ doNotFake: ['performance'] });
+        });
+        afterEach(() => { mockUseRealTimeMe = false; jest.useRealTimers(); });
+
+        test('an already hidden page starts at its first visible interval and keeps its baseline across BFCache and a detour', () => {
+            const hidden = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+            const visibility = (value: boolean) => {
+                hidden.mockReturnValue(value);
+                document.dispatchEvent(new Event('visibilitychange'));
+            };
+            sitesTrackedInPage(SITE_URL);
+            historyChanges = new EventTarget();
+            loadTrackerCopy();
+            jest.advanceTimersByTime(180000);
+            expect(snapshot()).toBeUndefined();
+
+            visibility(false);
+            jest.advanceTimersByTime(2000);
+            visibility(true);
+            window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+            const id = pageRequestIdOf(mockAiInstances[0], 0);
+            expect(snapshot()).toMatchObject({ pageRequestId: id, secondsOnPage: 2 });
+            Cookies.remove('SPOInsightsLastPageStats'); // Consumed by the intervening document.
+            jest.advanceTimersByTime(180000);
+            visibility(false);
+            window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+            jest.advanceTimersByTime(1000);
+            navigateToUntrackedSite();
+            historyChanges.dispatchEvent(new Event('currententrychange'));
+            jest.advanceTimersByTime(8000);
+            sitesTrackedInPage(SITE_URL);
+            setUrl(PAGE_URL);
+            historyChanges.dispatchEvent(new Event('currententrychange'));
+            jest.advanceTimersByTime(3000);
+            expect(snapshot()).toMatchObject({ pageRequestId: id, secondsOnPage: 6 });
+            expect(mockAiInstances[0].trackPageView).toHaveBeenCalledTimes(1);
+        });
+
+        test('a visible page stops after 30 s without activity, ignores a further 180 s and resumes on input', () => {
+            loadTrackerCopy();
+            jest.advanceTimersByTime(4000);
+            document.dispatchEvent(new MouseEvent('mousemove'));
+            jest.advanceTimersByTime(29500);
+            expect(snapshot().secondsOnPage).toBe(33.5);
+
+            jest.advanceTimersByTime(3000);
+            const stopped = snapshot().secondsOnPage;
+            // TimeMe checks every 250 ms. It stops the open interval; it does not deduct the idle threshold.
+            expect(stopped).toBeGreaterThanOrEqual(34);
+            expect(stopped).toBeLessThanOrEqual(34.5);
+            jest.advanceTimersByTime(180000);
+            expect(snapshot().secondsOnPage).toBe(stopped);
+            document.dispatchEvent(new KeyboardEvent('keyup'));
+            jest.advanceTimersByTime(2000);
+            expect(snapshot().secondsOnPage).toBe(stopped + 2);
+        });
+    });
+
     test('loaded after the page has loaded: tracks the page straight away and can track clicks', async () => {
         const errorSpy = jest.spyOn(console, 'error').mockImplementation();
         loadTrackerCopy();
@@ -473,7 +542,7 @@ describe('AITracker page bootstrap', () => {
         loadTrackerCopy();
         await settle();
 
-        expect(mockAiInstances[0].trackPageView.mock.calls[0][0].properties.pageLoad).toBe(0);
+        expect(mockAiInstances[0].trackPageView.mock.calls[0][0].properties).toMatchObject({ pageLoad: 0, duration: 0 });
     });
 
     test('a second copy loaded into the same page, from another tracked site, leaves tracking to the first', async () => {

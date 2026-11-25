@@ -8,6 +8,20 @@ import { isSamePage, uuidv4 } from "./DataFunctions";
 
 const MAX_PENDING_CLICKS = 20;
 
+function measuredDocumentLoadMs(): number | undefined {
+    const perf = window.performance;
+    const nav = perf?.getEntriesByType?.('navigation')[0] as PerformanceNavigationTiming | undefined;
+    if (nav && nav.startTime >= 0) {
+        const duration = nav.loadEventEnd - nav.startTime;
+        if (Number.isFinite(duration) && duration > 0) return duration;
+    }
+    const timing = perf?.timing;
+    if (timing && timing.navigationStart > 0) {
+        const duration = timing.loadEventEnd - timing.navigationStart;
+        if (Number.isFinite(duration) && duration > 0) return duration;
+    }
+}
+
 export class AppInsightsWrapper {
 
     _ai: TrackerTelemetry;
@@ -64,45 +78,14 @@ export class AppInsightsWrapper {
             name: pageTitle || new URL(pageUrl).pathname,
             properties: appInsightsPageViewData
         };
-        if (pageLoadDuration !== undefined) {
-            appInsightsPageViewData['pageLoad'] = pageLoadDuration;
-            // The SDK reads "duration", not our importer-specific "pageLoad". A soft navigation
-            // has no new document timings; never borrow those of the document the tab first loaded.
-            if (pageLoadDuration === 0) appInsightsPageViewData['duration'] = 0;
-
-            this._ai.trackPageView(pv);
-            log('Uploaded page-view data with pageLoad override ' + pageLoadDuration + ' for pageRequestId: ' + this._pageRequestId + ', url: ' + pageUrl + '. Page name: ' + pv.name);
-            debugObj('Page view telemetry:', pv);
-        }
-        else {
-
-            // https://stackoverflow.com/questions/14341156/calculating-page-load-time-in-javascript
-            // Use Navigation Timing Level 2 API if available, fall back to deprecated timing API
-            let pageLoadTime = 0;
-            if (window.performance.getEntriesByType) {
-                const navEntries = window.performance.getEntriesByType('navigation') as PerformanceNavigationTiming[];
-                if (navEntries.length > 0 && navEntries[0].loadEventEnd > 0) {
-                    pageLoadTime = navEntries[0].loadEventEnd - navEntries[0].startTime;
-                }
-            }
-            if (pageLoadTime <= 0 && window.performance.timing) {
-                const perfData = window.performance.timing;
-                pageLoadTime = perfData.loadEventEnd - perfData.navigationStart;
-            }
-
-            if (pageLoadTime > 0) {
-                debug('Page load time is ' + pageLoadTime + ' milliseconds.');
-            } else {
-                debug('Page load time not yet available.');
-            }
-
-            // Set page-load with metadata as AppInsights doesn't report on this exactly any more
-            appInsightsPageViewData['pageLoad'] = pageLoadTime > 0 ? pageLoadTime : 0;
-
-            this._ai.trackPageView(pv);
-            log('Uploaded page-view data for pageRequestId: ' + this._pageRequestId + ', url: ' + document.URL + '. Page title: ' + document.title);
-            debugObj('Page view telemetry:', pv);
-        }
+        const duration = pageLoadDuration ?? measuredDocumentLoadMs();
+        // Without an SDK duration, analytics holds the view for a later performance tick while
+        // its clicks are already in the sender. Only an explicit soft navigation has duration 0.
+        if (duration !== undefined && Number.isFinite(duration) && duration >= 0) appInsightsPageViewData.duration = duration;
+        appInsightsPageViewData.pageLoad = appInsightsPageViewData.duration ?? 0; // Importer's existing field.
+        this._ai.trackPageView(pv);
+        log('Tracked page view for pageRequestId: ' + this._pageRequestId + ', url: ' + pageUrl + '. Page name: ' + pv.name);
+        debugObj('Page view telemetry:', pv);
 
         pending?.clicks.forEach(c => this.sendClick(c.data, appInsightsPageViewData.pageRequestId, c.timeStamp));
 

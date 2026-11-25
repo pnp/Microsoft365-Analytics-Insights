@@ -13,6 +13,8 @@ interface PageViewDataProperties extends BaseCustomProps {
     webTitle?: string,
     aiTrackerVersion: string,
     pageTitle?: string,
+    pageLoad?: number,
+    duration?: number,
     spRequestDuration?: number,
 }
 interface SearchEventProperties extends BaseCustomProps {

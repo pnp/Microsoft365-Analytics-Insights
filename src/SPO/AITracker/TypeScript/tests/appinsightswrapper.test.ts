@@ -40,6 +40,7 @@ describe('AppInsightsWrapper', () => {
             expect(callArg.uri).toBe('https://contoso.sharepoint.com/sites/test');
             expect(callArg.name).toBe('Test Page');
             expect(callArg.properties!['pageLoad']).toBe(150);
+            expect(callArg.properties!.duration).toBe(150);
             expect(callArg.properties!.webUrl).toBe('https://web');
             expect(callArg.properties!.siteUrl).toBe('https://site');
             expect(callArg.properties!.sessionId).toBe(sessionId);
@@ -93,13 +94,23 @@ describe('AppInsightsWrapper', () => {
             expect(firstPageReqId).not.toBe(secondPageReqId);
         });
 
-        test('uses performance API when no pageLoadDuration given', () => {
-            wrapper.trackCurrentPageView(undefined, null, 'https://web', 'https://site', 'Web');
-            expect(mockAI.trackPageView).toHaveBeenCalledTimes(1);
-
-            const callArg = (mockAI.trackPageView as jest.Mock).mock.calls[0][0] as IPageViewTelemetry;
-            expect(callArg.properties!['pageLoad']).toBeDefined();
-            expect(typeof callArg.properties!['pageLoad']).toBe('number');
+        test.each([
+            ['legacy measurement', 1000, 1250, 250],
+            ['incomplete navigation', 1000, 0, undefined],
+            ['missing navigation start', 0, 1250, undefined],
+            ['non-finite reading', 1000, Infinity, undefined],
+        ])('an unknown hard load is not an explicit zero-duration soft view: %s', (_, navigationStart, loadEventEnd, expected) => {
+            const original = Object.getOwnPropertyDescriptor(performance, 'timing');
+            Object.defineProperty(performance, 'timing', { configurable: true, value: { navigationStart, loadEventEnd } });
+            try {
+                wrapper.trackCurrentPageView(undefined, null, 'https://web', 'https://site', 'Web');
+                const { properties } = (mockAI.trackPageView as jest.Mock).mock.calls[0][0];
+                expect(properties.pageLoad).toBe(expected ?? 0);
+                expect(properties.duration).toBe(expected);
+            } finally {
+                if (original) Object.defineProperty(performance, 'timing', original);
+                else Reflect.deleteProperty(performance, 'timing');
+            }
         });
     });
 

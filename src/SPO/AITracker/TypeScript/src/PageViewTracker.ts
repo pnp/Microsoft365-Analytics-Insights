@@ -145,7 +145,7 @@ export class PageViewTracker {
 
         const visit = this.visibleVisit;
         if (!visit && !tracked) return false;
-        const now = TimeMe.getTimeOnCurrentPageInMilliseconds();
+        const now = TimeMe.getTimeOnCurrentPageInMilliseconds() ?? 0; // Not started until the tab is visible.
         // With an actual URL-change notification we know when the previous page ended. If a
         // poll/click merely discovers an unregistered site, stop at the last confirmed sample.
         if (visit && (tracked || (boundary === 'navigation' && !isSamePage(visit.url, url)) ||
