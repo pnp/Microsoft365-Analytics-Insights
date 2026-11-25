@@ -1,9 +1,11 @@
 using Common.Entities.Calls;
+using Common.Entities.State;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Kiota.Abstractions;
 using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -26,6 +28,7 @@ namespace Tests.UnitTests
         private static readonly CallWebhookClientState ClientState = CallWebhookClientState.For("synthetic", Guid.Empty.ToString(), Guid.Empty.ToString());
 
         private const string DuplicateMessage = "Subscription Id owned already exists for the requested combination.";
+        private const string AppId = "00000000-0000-0000-0000-000000000000";
         private static HttpResponseMessage Json(int status, string body) =>
             TeamsCrawlTests.StubGraphHandler.Response((HttpStatusCode)status, body);
 
@@ -407,7 +410,7 @@ namespace Tests.UnitTests
             var posts = 0;
             var transport = SubscriptionTransport(1, operations, () => ++posts == 1
                 ? Json(409, JsonConvert.SerializeObject(new { error = new { code, message } }))
-                : Json(201, "{\"id\":\"replacement\"}"), () => throw new AssertFailedException(),
+                : Json(201, Replacement().ToString()), () => throw new AssertFailedException(),
                 () => alreadyGone ? Json(404, TeamsCrawlTests.StubGraphHandler.Error("ResourceNotFound")) : new HttpResponseMessage(HttpStatusCode.NoContent));
             using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
             {
@@ -436,6 +439,99 @@ namespace Tests.UnitTests
                 StringAssert.Contains(refusal.Message, "not followed");
             }
             CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions" }, operations);
+        }
+
+        // Shape of the created subscription: https://learn.microsoft.com/graph/api/subscription-post-subscriptions
+        // A subsequent GET can omit clientState. The importer never needs to store an echoed value.
+        private static JObject Replacement() => JObject.FromObject(new
+        {
+            id = "replacement", resource = CallSubscriptionRules.CallRecordsResource,
+            notificationUrl = CallSubscriptionRules.CurrentNotificationUrl(WebhookUrl).ToString(),
+            changeType = "created", expirationDateTime = Clock.UtcNow.AddDays(2), applicationId = AppId
+        });
+
+        [DataTestMethod]
+        [DataRow("resource", "/users")]
+        [DataRow("notificationUrl", "https://contoso-analytics.example/api/CallRecordWebhook")]
+        [DataRow("changeType", "updated")]
+        [DataRow("applicationId", "00000000-0000-0000-0000-000000000001")]
+        [DataRow("id", "owned")]
+        [DataRow("expirationDateTime", "2019-12-31T12:00:00Z")]
+        public async Task Webhook_UnusableReplacementNeitherChangesOwnershipNorCleansUpCurrentOrLegacy(string field, string value)
+        {
+            var operations = new List<string>();
+            var result = Replacement();
+            result[field] = value;
+            var transport = SubscriptionTransport(1, operations, () => Json(201, result.ToString()), () => throw new AssertFailedException(), legacy: true);
+            var records = new CallSubscriptionRecordStore(null, new InMemoryKeyValueStore());
+            var url = CallSubscriptionRules.CurrentNotificationUrl(WebhookUrl);
+            await records.SetLegacySeenAsync(url, Clock.UtcNow - CallWebhook.LegacyGracePeriod);
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph, CancellationToken.None, AppId), records, NullLogger.Instance, Clock);
+                await Assert.ThrowsAsync<InvalidOperationException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
+                Assert.IsNull(await records.GetAsync(url));
+            }
+            CollectionAssert.AreEqual(new[] { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions" }, operations);
+        }
+
+        [DataTestMethod]
+        [DataRow("direct", true)]
+        [DataRow("confirmed", true)]
+        [DataRow("missing", false)]
+        [DataRow("different-id", false)]
+        [DataRow("conflict-on-read", false)]
+        [DataRow("redirect-on-read", false)]
+        public async Task Webhook_CleanupWaitsForDirectMatchingCreateOrReadback(string evidence, bool confirmed)
+        {
+            var operations = new List<string>();
+            var readback = Replacement();
+            if (evidence == "missing") readback.Remove("notificationUrl");
+            if (evidence == "different-id") readback["id"] = "another";
+            var transport = SubscriptionTransport(1, operations,
+                () => Json(201, evidence == "direct" ? Replacement().ToString() : "{\"id\":\"replacement\"}"),
+                () => throw new AssertFailedException(), () => new HttpResponseMessage(HttpStatusCode.NoContent),
+                read: () => evidence == "conflict-on-read"
+                    ? Json(409, JsonConvert.SerializeObject(new { error = new { code = "Conflict", message = DuplicateMessage } }))
+                    : evidence == "redirect-on-read" ? Redirect() : Json(200, readback.ToString()));
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var webhook = new CallWebhook(new GraphCallRecordSubscriptionManager(graph, CancellationToken.None, AppId), NullLogger.Instance, Clock);
+                if (confirmed)
+                    Assert.AreEqual(CallWebhookChange.Replaced, (await webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState)).Change);
+                else if (evidence == "redirect-on-read")
+                    await Assert.ThrowsAsync<GraphDecisionRedirectException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
+                else
+                    await Assert.ThrowsAsync<InvalidOperationException>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
+            }
+            var expected = new List<string> { "GET /v1.0/subscriptions", "POST /v1.0/subscriptions" };
+            if (evidence != "direct") expected.Add("GET /v1.0/subscriptions/replacement");
+            if (confirmed) expected.Add("DELETE /v1.0/subscriptions/owned");
+            CollectionAssert.AreEqual(expected, operations);
+        }
+
+        [DataTestMethod]
+        [DataRow("missing")]
+        [DataRow("other-app")]
+        [DataRow("ours")]
+        public async Task SubscriptionInventory_AnOmittedOwnerIsConfirmedBeforeUse(string owner)
+        {
+            var listed = Replacement();
+            listed.Remove("applicationId");
+            var detail = (JObject)listed.DeepClone();
+            if (owner != "missing") detail["applicationId"] = owner == "ours" ? AppId : "00000000-0000-0000-0000-000000000001";
+            var transport = new TeamsCrawlTests.StubGraphHandler()
+                .Json("/subscriptions", new JObject { ["value"] = new JArray(listed) }.ToString())
+                .Json("/subscriptions/replacement", detail.ToString());
+            using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
+            {
+                var manager = new GraphCallRecordSubscriptionManager(graph, CancellationToken.None, AppId);
+                if (owner == "missing")
+                    await Assert.ThrowsAsync<InvalidOperationException>(() => manager.FindCallRecordSubscriptions(WebhookUrl));
+                else
+                    Assert.AreEqual(owner == "ours" ? 1 : 0, (await manager.FindCallRecordSubscriptions(WebhookUrl)).Count);
+            }
+            Assert.AreEqual(2, transport.Requests.Count);
         }
 
         [TestMethod]
@@ -748,7 +844,8 @@ namespace Tests.UnitTests
         }
 
         private static TeamsCrawlTests.StubGraphHandler SubscriptionTransport(int? ownedHoursLeft, List<string> operations,
-            Func<HttpResponseMessage> create, Func<HttpResponseMessage> renew, Func<HttpResponseMessage> delete = null)
+            Func<HttpResponseMessage> create, Func<HttpResponseMessage> renew, Func<HttpResponseMessage> delete = null,
+            Func<HttpResponseMessage> read = null, bool legacy = false)
         {
             var currentUrl = CallSubscriptionRules.CurrentNotificationUrl(WebhookUrl).AbsoluteUri;
             var subs = new List<object>
@@ -757,8 +854,10 @@ namespace Tests.UnitTests
                 new { id = "other-resource", resource = "/users", notificationUrl = currentUrl }
             };
             if (ownedHoursLeft.HasValue)
-                subs.Add(new { id = "owned", resource = CallSubscriptionRules.CallRecordsResource, notificationUrl = currentUrl,
+                subs.Add(new { id = "owned", resource = CallSubscriptionRules.CallRecordsResource, notificationUrl = currentUrl, applicationId = AppId,
                     expirationDateTime = Clock.UtcNow.AddHours(ownedHoursLeft.Value) });
+            if (legacy)
+                subs.Add(new { id = "legacy", resource = CallSubscriptionRules.CallRecordsResource, notificationUrl = WebhookUrl.ToString(), applicationId = AppId });
 
             return new TeamsCrawlTests.StubGraphHandler().Route("", request =>
             {
@@ -769,6 +868,7 @@ namespace Tests.UnitTests
                     case "GET /v1.0/subscriptions":
                         return TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, JsonConvert.SerializeObject(new { value = subs }));
                     case "POST /v1.0/subscriptions": return create();
+                    case "GET /v1.0/subscriptions/replacement": return read();
                     case "PATCH /v1.0/subscriptions/owned": return renew();
                     case "DELETE /v1.0/subscriptions/owned":
                         return delete == null ? Json(404, TeamsCrawlTests.StubGraphHandler.Error("ResourceNotFound")) : delete();

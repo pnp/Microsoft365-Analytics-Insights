@@ -72,7 +72,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (string.IsNullOrEmpty(settings.ClientSecret)) throw new InvalidOperationException(NO_CLIENT_SECRET_MESSAGE);
 
             return new GraphCallRecordSubscriptionManager(GraphServiceClientFactory.CreateWithTimeout(
-                new ClientSecretCredential(settings.TenantGUID.ToString(), settings.ClientID, settings.ClientSecret), GraphServiceClientFactory.DefaultGraphSdkTimeout), stopping);
+                new ClientSecretCredential(settings.TenantGUID.ToString(), settings.ClientID, settings.ClientSecret), GraphServiceClientFactory.DefaultGraphSdkTimeout), stopping, settings.ClientID);
         }
 
         // Graph Application permission required to subscribe to /communications/callRecords. Surfaced in error
@@ -149,7 +149,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 CallRecordSubscription result;
                 try
                 {
-                    result = await _subscriptions.CreateSubscription(currentUrl, clientState.Value, action.ExpiryUtc);
+                    result = await CreateConfirmedAsync(currentUrl, clientState, action.ExpiryUtc, matchingSubs);
                 }
                 catch (ApiException ex)
                 {
@@ -353,12 +353,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             CallRecordSubscription created;
             try
             {
-                created = await _subscriptions.CreateSubscription(currentUrl, clientState.Value, expiryUtc);
+                created = await CreateConfirmedAsync(currentUrl, clientState, expiryUtc, allOurs);
             }
             catch (ODataError ex) when (DuplicateSubscriptionId(ex) is string duplicateId
                 && allOurs.Any(s => s.Id == duplicateId))
             {
-                created = await ReplaceAfterConflictAsync(currentUrl, duplicateId, clientState, expiryUtc, deleted);
+                created = await ReplaceAfterConflictAsync(currentUrl, duplicateId, clientState, expiryUtc, deleted, allOurs);
                 await RecordAsync(currentUrl, created, clientState, ExpiryOf(created, expiryUtc));
                 return created;
             }
@@ -381,6 +381,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             Telemetry.LogInformation($"{LOG_TAG} Created subscription id '{created.Id}' for webhook at '{currentUrl}' in {timer.ElapsedMilliseconds} ms, " +
                 $"replacing '{existingIds}'; expires {ExpiryOf(created, expiryUtc):u}.");
             await RecordAsync(currentUrl, created, clientState, ExpiryOf(created, expiryUtc));
+            return created;
+        }
+
+        private async Task<CallRecordSubscription> CreateConfirmedAsync(Uri url, CallWebhookClientState state, DateTime expiryUtc,
+            IReadOnlyList<CallRecordSubscription> existing)
+        {
+            var created = await _subscriptions.CreateSubscription(url, state.Value, expiryUtc);
+            if (string.IsNullOrWhiteSpace(created?.Id) || created.Resource != CallSubscriptionRules.CallRecordsResource
+                || created.NotificationUrl != url.ToString() || !(created.ExpirationDateTime?.UtcDateTime > _clock.UtcNow)
+                || existing.Any(s => string.Equals(s.Id, created.Id, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Graph did not confirm a new, active subscription for this call webhook; cleanup is deferred.");
             return created;
         }
 
@@ -418,7 +429,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         /// subscription, and create straight after. If the create fails, delivery is at risk until the timer retries.
         /// </summary>
         private async Task<CallRecordSubscription> ReplaceAfterConflictAsync(Uri currentUrl, string duplicateId,
-            CallWebhookClientState clientState, DateTime expiryUtc, ISet<string> deleted)
+            CallWebhookClientState clientState, DateTime expiryUtc, ISet<string> deleted, IReadOnlyList<CallRecordSubscription> existing)
         {
             Telemetry.LogWarning($"{LOG_TAG} Graph refused a second call-records subscription (409 Conflict). " +
                 $"Deleting this webhook's conflicting subscription '{duplicateId}' first, then creating the replacement; " +
@@ -438,7 +449,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             CallRecordSubscription created;
             try
             {
-                created = await _subscriptions.CreateSubscription(currentUrl, clientState.Value, expiryUtc);
+                created = await CreateConfirmedAsync(currentUrl, clientState, expiryUtc, existing);
             }
             catch (ApiException ex)
             {
