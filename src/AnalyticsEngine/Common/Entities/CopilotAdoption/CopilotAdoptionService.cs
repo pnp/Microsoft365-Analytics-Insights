@@ -476,6 +476,9 @@ namespace Common.Entities.CopilotAdoption
                     CopilotAdoptionSteps.UnlicensedPopulation, CopilotAdoptionSteps.ResourceTypes,
                     CopilotAdoptionSteps.AgentEstate,
                 } : null);
+            var coverageRead = await UsageReportCoverageStore.BeginPublicationAsync(UsageReportCoverageStore.Sources,
+                windowStart.Date, settled, () => _usageReportCoverage ?? UsageReportCoverageStore.Open(new Config.AppConfig()),
+                cancellationToken).ConfigureAwait(false);
             await RunStepsAsync(analysis, steps, _maxConcurrentSteps, cancellationToken);
 
             var scoringOperation = _telemetry.StepStarted(CopilotAdoptionSteps.Scoring);
@@ -485,9 +488,7 @@ namespace Common.Entities.CopilotAdoption
             CopilotAdoptionFailure scoringFailure = null;
             try
             {
-                // A scope purge revokes the affected days BEFORE deleting. Read the certificates after
-                // the workload queries, not before them, so reduced counts cannot inherit earlier proof.
-                await ApplyWorkloadCoverageAsync(analysis, windowStart.Date, settled, cancellationToken).ConfigureAwait(false);
+                await ApplyWorkloadCoverageAsync(analysis, coverageRead, windowStart.Date, settled, cancellationToken).ConfigureAwait(false);
                 FinaliseSummary(analysis);
             }
             catch (Exception ex)
@@ -3849,27 +3850,13 @@ namespace Common.Entities.CopilotAdoption
 
         #region Query plumbing
 
-        private async Task ApplyWorkloadCoverageAsync(CopilotAdoptionAnalysis analysis, DateTime from, DateTime through, CancellationToken token)
+        private async Task ApplyWorkloadCoverageAsync(CopilotAdoptionAnalysis analysis, UsageReportCoverageStore.PublicationRead coverageRead,
+            DateTime from, DateTime through, CancellationToken token)
         {
             var summary = analysis.Summary;
-            try
-            {
-                var store = _usageReportCoverage ?? UsageReportCoverageStore.Open(new Config.AppConfig());
-                summary.DataSources.WorkloadCoverage = await store.ReadAsync(from, through, token, async source =>
-                    new HashSet<DateTime>(await QueryAsync<DateTime>(CopilotAdoptionSql.UsageDaysWithStoredRowsSql(source), token,
-                        new SqlParameter("@from", from), new SqlParameter("@through", through)).ConfigureAwait(false))).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-            catch (Exception)
-            {
-                // Client construction can fail before the bounded reader is reached. That cannot certify
-                // a workload or prevent independent audit-based analysis.
-                summary.DataSources.WorkloadCoverage = UsageReportCoverageStore.Sources.Select(source => new UsageReportCoverage
-                {
-                    Source = source, FromUtc = from, ThroughUtc = through,
-                    ExpectedDays = Math.Max(0, (through - from).Days + 1), Reason = "durableStateUnavailable",
-                }).ToList();
-            }
+            summary.DataSources.WorkloadCoverage = await coverageRead.SummariseAsync(async source =>
+                new HashSet<DateTime>(await QueryAsync<DateTime>(CopilotAdoptionSql.UsageDaysWithStoredRowsSql(source), token,
+                    new SqlParameter("@from", from), new SqlParameter("@through", through)).ConfigureAwait(false)), token).ConfigureAwait(false);
             var coverage = summary.DataSources.WorkloadCoverage;
             summary.DataSources.M365UsageReportsAvailable = CopilotAdoptionWorkloadEvidence.Complete(coverage);
             if (!summary.DataSources.M365UsageReportsAvailable)

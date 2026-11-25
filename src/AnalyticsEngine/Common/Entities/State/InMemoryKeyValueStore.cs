@@ -13,7 +13,7 @@ namespace Common.Entities.State
     /// Values live only as long as this instance, so a caller that needs them to survive across import cycles must
     /// hold ONE instance for the life of the process. Thread-safe: the importers read and write concurrently.
     /// </remarks>
-    public sealed class InMemoryKeyValueStore : IExpiringConditionalKeyValueStore, IBatchKeyValueStore
+    public sealed class InMemoryKeyValueStore : IExpiringConditionalKeyValueStore, IBatchKeyValueStore, IVersionedKeyRangeReader
     {
         /// <summary>How many writes happen between sweeps of expired entries, so a TTL'd cache cannot grow without bound.</summary>
         private const int SweepEveryWrites = 1000;
@@ -129,6 +129,21 @@ namespace Common.Entities.State
 
             // As in Azure Tables, an expired entry reads as missing but keeps its version, so a conditional write can replace it.
             return Task.FromResult(new VersionedValue(entry.IsExpired(_utcNow()) ? null : entry.Value, entry.Version));
+        }
+
+        public Task<Dictionary<string, VersionedValue>> ReadVersionedRangeAsync(string firstKey, string lastKey,
+            int maxRows, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var now = _utcNow();
+            var rows = new Dictionary<string, VersionedValue>(StringComparer.Ordinal);
+            foreach (var pair in _entries)
+            {
+                if (string.CompareOrdinal(pair.Key, firstKey) < 0 || string.CompareOrdinal(pair.Key, lastKey) > 0) continue;
+                if (rows.Count == maxRows) throw new InvalidOperationException("The state range exceeded its read limit.");
+                rows.Add(pair.Key, new VersionedValue(pair.Value.IsExpired(now) ? null : pair.Value.Value, pair.Value.Version));
+            }
+            return Task.FromResult(rows);
         }
 
         public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)

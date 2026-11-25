@@ -378,6 +378,30 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task PublicationRangesDistinguishChangedETagsExpiryAndStableMisses()
+        {
+            var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+            var day = now.UtcDateTime.Date;
+            var values = new AzureTableKeyValueStore(_table ?? Skip(), "Publication" + Guid.NewGuid().ToString("N"), () => now);
+            var store = new UsageReportCoverageStore(values, true);
+            await values.SetStringAsync("v1:teams:20260514", "complete");
+            await values.SetStringAsync("v1:outlook:20260514", "empty", TimeSpan.FromHours(1));
+            await values.SetStringAsync("v1:sharepoint:20260514", "empty");
+            await values.SetStringAsync("v1:onedrive:20260513", "partial");
+            await values.SetStringAsync("v1:onedrive:20260515", "partial");
+            var read = await UsageReportCoverageStore.BeginPublicationAsync(UsageReportCoverageStore.Sources, day, day, () => store);
+
+            await values.SetStringAsync("v1:teams:20260514", "partial");
+            await values.SetStringAsync("v1:teams:20260514", "complete");
+            now = now.AddHours(2);
+            var outcomes = await read.ReadStableOutcomesAsync(UsageReportCoverageStore.Sources);
+            Assert.AreEqual("partial", outcomes["teams"][day], "The same text under another ETag is not the same certificate.");
+            Assert.AreEqual("partial", outcomes["outlook"][day], "Expiry changes the value even though the row's ETag did not change.");
+            Assert.AreEqual("empty", outcomes["sharepoint"][day]);
+            Assert.IsNull(outcomes["onedrive"][day], "Adjacent dates are outside this inclusive one-day key range.");
+        }
+
+        [TestMethod]
         public async Task UsagePurgeFencesOnlyAffectedDaysAndOnlyAFreshWholeReportCanVerifyThemAgain()
         {
             var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);

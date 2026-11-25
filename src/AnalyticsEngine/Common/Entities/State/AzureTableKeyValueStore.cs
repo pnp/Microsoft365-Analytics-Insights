@@ -34,7 +34,7 @@ namespace Common.Entities.State
     /// the ones nobody reads again.</description></item>
     /// </list>
     /// </remarks>
-    public sealed class AzureTableKeyValueStore : IExpiringConditionalKeyValueStore, IBatchKeyValueStore
+    public sealed class AzureTableKeyValueStore : IExpiringConditionalKeyValueStore, IBatchKeyValueStore, IVersionedKeyRangeReader
     {
         internal const string KeyProperty = "Key";
         internal const string ValueProperty = "Value";
@@ -275,8 +275,42 @@ namespace Common.Entities.State
                 var entity = response.Value;
                 // An expired row reads as missing but keeps its ETag, so a conditional write replaces it rather than
                 // failing because a row (nobody can see) is in the way.
-                return new VersionedValue(IsExpired(entity) ? null : DecodeValue(entity, key), entity.ETag.ToString());
+                return Versioned(entity, key);
             }, cancellationToken).ConfigureAwait(false);
+        }
+
+        private VersionedValue Versioned(TableEntity entity, string key) =>
+            new VersionedValue(IsExpired(entity) ? null : DecodeValue(entity, key), entity.ETag.ToString());
+
+        public Task<Dictionary<string, VersionedValue>> ReadVersionedRangeAsync(string firstKey, string lastKey,
+            int maxRows, CancellationToken cancellationToken)
+        {
+            if (ToRowKey(firstKey) != firstKey || ToRowKey(lastKey) != lastKey || string.CompareOrdinal(firstKey, lastKey) > 0)
+                throw new ArgumentException("A range requires ordered literal row keys.");
+            if (maxRows < 1 || maxRows > 1000) throw new ArgumentOutOfRangeException(nameof(maxRows));
+
+            return RunAsync(async table =>
+            {
+                var filter = TableClient.CreateQueryFilter($"PartitionKey eq {_partitionKey} and RowKey ge {firstKey} and RowKey le {lastKey}");
+                var rows = new Dictionary<string, VersionedValue>(StringComparer.Ordinal);
+                var pages = table.QueryAsync<TableEntity>(filter, maxPerPage: 1000, cancellationToken: cancellationToken)
+                    .AsPages().GetAsyncEnumerator(cancellationToken);
+                try
+                {
+                    var pageCount = 0;
+                    while (await pages.MoveNextAsync().ConfigureAwait(false))
+                    {
+                        var page = pages.Current;
+                        // A short date range normally fits one page. Never report truncated pages as confirmed misses.
+                        if (rows.Count + page.Values.Count > maxRows || (++pageCount >= 4 && page.ContinuationToken != null))
+                            throw new InvalidOperationException("The state range exceeded its read limit.");
+                        foreach (var entity in page.Values)
+                            rows.Add(entity.RowKey, Versioned(entity, entity.RowKey));
+                    }
+                }
+                finally { await pages.DisposeAsync().ConfigureAwait(false); }
+                return rows;
+            }, cancellationToken);
         }
 
         public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)

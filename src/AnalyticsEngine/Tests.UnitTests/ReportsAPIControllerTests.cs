@@ -5,6 +5,9 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Common.Entities.State;
 using ReportAreaData = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportAreaData;
 using ReportCategory = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportCategory;
 using ReportChart = AnalyticsWeb::Web.AnalyticsWeb.Models.ReportChart;
@@ -18,6 +21,25 @@ namespace Tests.UnitTests
     [TestClass]
     public class ReportsAPIControllerTests
     {
+        [TestMethod]
+        public async Task WeeklyCancellationDuringFactsStopsTheRemainingQueriesAndDoesNotPublish()
+        {
+            using (var cancellation = new CancellationTokenSource())
+            {
+                var store = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+                var week = new DateTime(2024, 1, 1);
+                var queries = 0;
+                var chart = ReportsAPIController.UsageCharts(week, new List<DateTime> { week }, store, _ =>
+                {
+                    queries++;
+                    cancellation.Cancel();
+                    return Task.FromCanceled<List<ReportsAPIController.UsageWeekRow>>(cancellation.Token);
+                }, cancellation.Token).Single();
+                await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => chart);
+                Assert.AreEqual(1, queries);
+            }
+        }
+
         [TestMethod]
         public void FirstWorkloadTimeout_DoesNotAbandonTheRemainingWorkloads()
         {
@@ -101,11 +123,14 @@ namespace Tests.UnitTests
             Assert.AreEqual(1, partial.WeeklyRows.Count, "Existing rows remain charted as a lower-bound value.");
             CollectionAssert.AreEqual(new[] { week }, partial.IncompleteWeeks);
 
-            outcomes.Remove(week.AddDays(3));
+            outcomes[week.AddDays(3)] = null;
             var historic = ReportsAPIController.AggregateUsageWeekRows(dailyRows, outcomes);
             Assert.AreEqual(0, historic.IncompleteWeeks.Count,
                 "A day predating the ledger retains the old row-presence completeness rule.");
 
+            outcomes.Remove(week.AddDays(3));
+            CollectionAssert.AreEqual(new[] { week }, ReportsAPIController.AggregateUsageWeekRows(dailyRows, outcomes).IncompleteWeeks,
+                "An unread date cannot use the historical fallback.");
             var unavailable = ReportsAPIController.AggregateUsageWeekRows(dailyRows, new Dictionary<DateTime, string>());
             Assert.AreEqual(4d, unavailable.WeeklyRows.Single().Value);
             CollectionAssert.AreEqual(new[] { week }, unavailable.IncompleteWeeks,

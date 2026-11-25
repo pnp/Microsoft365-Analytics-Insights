@@ -295,6 +295,119 @@ namespace Tests.UnitTests
                 "A row at noon on the last settled date is inside the report window.");
         }
 
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task WeeklyPublicationDoesNotCertifyAnEarlierSqlBatch(bool completeBefore)
+        {
+            var week = new DateTime(2024, 1, completeBefore ? 1 : 8);
+            var store = await PreparePublicationWeek(week, completeBefore);
+            var factory = new ConnectionStringAnalyticsDbContextFactory(_connectionString);
+            var refreshing = true;
+            async Task<List<ReportsAPIController.UsageWeekRow>> Query(string sql)
+            {
+                if (!refreshing || sql != ReportsAPIController.UsageWeeklyActiveUsersQuery("dbo.teams_user_activity_log"))
+                    return await ReportsAPIController.QueryUsageWeeksAsync(sql, week, week, week.AddDays(6), factory);
+                await SaveFirstBatch(store, week);
+                var rows = await ReportsAPIController.QueryUsageWeeksAsync(sql, week, week, week.AddDays(6), factory);
+                await SaveLastBatch(store, week);
+                refreshing = false;
+                return rows;
+            }
+            var weeks = new List<DateTime> { week };
+            var racing = await ReportsAPIController.UsageCharts(week, weeks, store, Query).Single();
+            var teams = racing.Series.Single(s => s.Name == "Teams").Points.Single();
+            Assert.AreEqual(1000d, teams.Value);
+            Assert.IsTrue(teams.Incomplete, "The final certificate belongs to all 1,001 users, not the first SQL batch.");
+            var outlook = racing.Series.Single(s => s.Name == "Outlook").Points.Single();
+            Assert.AreEqual(0d, outlook.Value);
+            Assert.IsFalse(outlook.Incomplete, "A different, stably empty source remains a verified zero.");
+            var fresh = await ReportsAPIController.UsageCharts(week, weeks, store, Query).Single();
+            var settled = fresh.Series.Single(s => s.Name == "Teams").Points.Single();
+            Assert.AreEqual(1001d, settled.Value);
+            Assert.IsFalse(settled.Incomplete);
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task AdoptionPublicationWithholdsScoresAndWorkbookProofForAnEarlierSqlBatch(bool completeBefore)
+        {
+            var week = new DateTime(2024, 1, completeBefore ? 15 : 22);
+            var store = await PreparePublicationWeek(week, completeBefore);
+            var options = CopilotAdoptionOptions.Default;
+            options.UsesExplicitDates = true;
+            options.FromUtc = week;
+            options.ToUtc = week.AddDays(6);
+            options.ToExclusiveUtc = week.AddDays(7);
+            var service = new InterleaveOpportunityRead(options, store, () => SaveFirstBatch(store, week), () => SaveLastBatch(store, week));
+            var analysis = await service.AnalyseAsync();
+            Assert.AreEqual(1000, analysis.Opportunities.Count);
+            Assert.IsFalse(analysis.Summary.DataSources.M365UsageReportsAvailable,
+                "Even complete → partial → complete is an intervening write, not proof of the original rows.");
+            var sources = analysis.Summary.DataSources.WorkloadCoverage;
+            Assert.AreEqual(6, sources.Single(c => c.Source == "teams").VerifiedDays);
+            Assert.IsTrue(sources.Where(c => c.Source != "teams").All(c => c.Status == "empty"));
+            Assert.IsTrue(analysis.Opportunities.All(r => r.TeamsMessages > 0 && r.EmailsSent == 0 && r.OpportunityScore == null));
+            var book = CopilotAdoptionWorkbookText.Of(CopilotAdoptionWorkbook.Build(analysis, includeIndividualData: false));
+            StringAssert.Contains(book, "6 of 7 days verified; 6 successfully empty days");
+            var fresh = await new CopilotAdoptionService(options, new ConnectionStringAnalyticsDbContextFactory(_connectionString),
+                usageReportCoverage: store).AnalyseAsync();
+            Assert.AreEqual(1001, fresh.Opportunities.Count);
+            Assert.IsTrue(fresh.Summary.DataSources.M365UsageReportsAvailable);
+            Assert.IsTrue(fresh.Opportunities.All(r => r.OpportunityScore.HasValue));
+        }
+
+        private static readonly Lazy<int[]> PublicationUsers = new Lazy<int[]>(() =>
+        {
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                var users = Enumerable.Range(1, 1000).Select(i => new User
+                    { UserPrincipalName = $"publication{i}@contoso.example", AccountEnabled = true }).ToList();
+                db.users.AddRange(users);
+                db.SaveChanges();
+                return users.Select(u => u.ID).ToArray();
+            }
+        });
+
+        private static async Task<UsageReportCoverageStore> PreparePublicationWeek(DateTime week, bool completeBefore)
+        {
+            var store = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                Active(db, db.users.Find(_mondayOnly), week);
+                db.SaveChanges();
+            }
+            foreach (var source in UsageReportCoverageStore.Sources)
+                for (var day = week; day < week.AddDays(7); day = day.AddDays(1))
+                    await store.CompleteDayAsync(source, day, true, true, source != "teams" || day != week, day.AddDays(4), 3);
+            if (!completeBefore) await store.BeginDayAsync("teams", week);
+            return store;
+        }
+
+        private static async Task SaveFirstBatch(UsageReportCoverageStore store, DateTime week)
+        {
+            await store.BeginDayAsync("teams", week);
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                db.TeamUserActivityLogs.Single(r => r.Date == week && r.UserID == _mondayOnly).PrivateChatMessageCount = 2;
+                db.TeamUserActivityLogs.AddRange(PublicationUsers.Value.Take(999).Select(id => new GlobalTeamsUserUsageLog
+                    { UserID = id, Date = week, LastActivityDate = week, PrivateChatMessageCount = 1 }));
+                db.SaveChanges();
+            }
+        }
+
+        private static async Task SaveLastBatch(UsageReportCoverageStore store, DateTime week)
+        {
+            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            {
+                db.TeamUserActivityLogs.Add(new GlobalTeamsUserUsageLog
+                    { UserID = PublicationUsers.Value.Last(), Date = week, LastActivityDate = week, PrivateChatMessageCount = 1 });
+                db.SaveChanges();
+            }
+            await store.CompleteDayAsync("teams", week, true, true, false, week.AddDays(4), 3);
+        }
+
         [TestMethod]
         public async Task HistoricalAdoptionChecksCertificatesAgainstTenantRowsAtBothWindowEdges()
         {
@@ -417,7 +530,7 @@ namespace Tests.UnitTests
             options.FromUtc = first;
             options.ToUtc = never.AddDays(-1);
             options.ToExclusiveUtc = never;
-            var report = await new PurgeBeforeOpportunityRead(options, store, async () =>
+            var report = await new InterleaveOpportunityRead(options, store, async () =>
                 Assert.AreEqual(UserScopePurgeRunOutcome.Completed, await purge.RunAsync(job.Id, null))).AnalyseAsync();
             Assert.AreEqual(2, report.Summary.DataSources.WorkloadCoverage.Single(c => c.Source == "teams").ScopeUnverifiedDays,
                 "A purge during an analysis cannot combine the reduced observations with pre-purge coverage.");
@@ -437,24 +550,33 @@ namespace Tests.UnitTests
             Assert.IsTrue(viva.Incomplete, "Legacy Viva Engage data must not certify the reduced count either.");
         }
 
-        private sealed class PurgeBeforeOpportunityRead : CopilotAdoptionService
+        private sealed class InterleaveOpportunityRead : CopilotAdoptionService
         {
-            private readonly Func<Task> _run;
-            public PurgeBeforeOpportunityRead(CopilotAdoptionOptions options, UsageReportCoverageStore store, Func<Task> run)
-                : base(options, new ConnectionStringAnalyticsDbContextFactory(_connectionString), usageReportCoverage: store) => _run = run;
+            private readonly Func<Task> _before, _after;
+            public InterleaveOpportunityRead(CopilotAdoptionOptions options, UsageReportCoverageStore store, Func<Task> before, Func<Task> after = null)
+                : base(options, new ConnectionStringAnalyticsDbContextFactory(_connectionString), usageReportCoverage: store)
+            {
+                _before = before;
+                _after = after;
+            }
 
             protected override async Task<List<T>> QueryAsync<T>(string sql, CancellationToken token, params SqlParameter[] parameters)
             {
-                if (typeof(T) == typeof(UnlicensedUserSignalRow)) await _run();
-                return await base.QueryAsync<T>(sql, token, parameters);
+                if (typeof(T) != typeof(UnlicensedUserSignalRow)) return await base.QueryAsync<T>(sql, token, parameters);
+                await _before();
+                var rows = await base.QueryAsync<T>(sql, token, parameters);
+                if (_after != null) await _after();
+                return rows;
             }
         }
 
-        private sealed class FirstRevocationFails : IExpiringConditionalKeyValueStore, IBatchKeyValueStore
+        private sealed class FirstRevocationFails : IExpiringConditionalKeyValueStore, IBatchKeyValueStore, IVersionedKeyRangeReader
         {
             private readonly InMemoryKeyValueStore _inner = new InMemoryKeyValueStore();
             private bool _fail = true;
             public string Description => _inner.Description;
+            public Task<Dictionary<string, VersionedValue>> ReadVersionedRangeAsync(string first, string last, int max, CancellationToken token) =>
+                _inner.ReadVersionedRangeAsync(first, last, max, token);
             public Task SetManyAsync(IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken token)
             {
                 if (!_fail) return _inner.SetManyAsync(values, token);
@@ -536,7 +658,8 @@ namespace Tests.UnitTests
                 }
             }
 
-            var aggregation = ReportsAPIController.AggregateUsageWeekRows(dailyRows, outcomes);
+            var aggregation = ReportsAPIController.AggregateUsageWeekRows(dailyRows,
+                outcomes ?? dailyRows.ToDictionary(row => row.CoverageDate, _ => (string)null));
             var weeks = aggregation.WeeklyRows.ToDictionary(
                 row => row.WeekStart.Date,
                 row =>

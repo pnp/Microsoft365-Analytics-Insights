@@ -22,10 +22,10 @@ namespace Common.Entities.State
     /// This records importer commits, not SQL recovery: clear this partition after restoring/replacing
     /// the usage dataset. Daily row presence can detect a contradiction, not every out-of-band change.
     /// </summary>
-    public sealed class UsageReportCoverageStore
+    public sealed partial class UsageReportCoverageStore
     {
         public const int MaximumDays = 366;
-        public const int ReadConcurrency = 8;
+        public const int ReadConcurrency = 5;
         public static readonly string[] Sources = { "teams", "outlook", "sharepoint", "onedrive" };
         // Viva Engage user activity is certified for the weekly chart, not used in Copilot Adoption.
         public static IReadOnlyList<string> WeeklySources { get; } = Array.AsReadOnly(Sources.Concat(new[] { "yammer" }).ToArray());
@@ -236,76 +236,15 @@ namespace Common.Entities.State
             }
         }
 
-        /// <summary>Summarises ledger outcomes alone. Publication also checks the dates against tenant-wide SQL.</summary>
+        /// <summary>Summarises the ledger alone. A report publishing SQL observations must bracket them with BeginPublicationAsync.</summary>
         public Task<List<UsageReportCoverage>> ReadAsync(DateTime from, DateTime through, CancellationToken cancellationToken = default) =>
             ReadAsync(from, through, cancellationToken, null);
 
-        /// <summary>
-        /// At most 4 x 366 point reads, eight in flight, once per analysis (not per user or nested scope).
-        /// The analysis/result cache carries this snapshot into API pages and exports. A source outage stops
-        /// further reads for that source and cannot fall back to process-local successes. Report publication
-        /// supplies <paramref name="daysWithStoredRows"/> to check positive and empty certificates. A
-        /// failed population-wide SQL probe cannot verify that source; other sources are independent.
-        /// </summary>
         internal async Task<List<UsageReportCoverage>> ReadAsync(DateTime from, DateTime through,
             CancellationToken cancellationToken, Func<string, Task<HashSet<DateTime>>> daysWithStoredRows)
         {
-            var count = (through.Date - from.Date).Days + 1;
-            var results = Sources.Select(source => new UsageReportCoverage
-            {
-                Source = source, FromUtc = from.Date, ThroughUtc = through.Date,
-                ExpectedDays = Math.Max(0, count),
-                Reason = !_durable ? "durableStateMissing"
-                    : count <= 0 || count > MaximumDays ? "windowUnsupported" : "outcomesMissing",
-            }).ToList();
-            if (!_durable || count <= 0 || count > MaximumDays) return results;
-
-            var daily = await ReadDailyOutcomesAsync(from, through, cancellationToken).ConfigureAwait(false);
-            foreach (var result in results)
-            {
-                var outcomes = daily[result.Source];
-                if (outcomes.Count != count)
-                {
-                    result.Reason = "durableStateUnavailable";
-                    continue;
-                }
-                HashSet<DateTime> stored = null;
-                if (daysWithStoredRows != null && outcomes.Values.Any(value => value == Complete || value == Empty))
-                {
-                    try
-                    {
-                        stored = await daysWithStoredRows(result.Source).ConfigureAwait(false);
-                    }
-                    catch (Exception)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                    }
-                    if (stored == null)
-                    {
-                        result.Reason = "storedRowsUnavailable";
-                        continue;
-                    }
-                }
-                var contradiction = false;
-                foreach (var day in outcomes)
-                {
-                    var outcome = stored == null ? day.Value : ReconcileWithStoredRows(day.Value, stored.Contains(day.Key));
-                    if (outcome != day.Value) contradiction = true;
-                    if (outcome == Complete || outcome == Empty) result.VerifiedDays++;
-                    if (outcome == Empty) result.EmptyDays++;
-                    if (outcome == Partial) result.PartialDays++;
-                    if (outcome == Incomplete) result.IncompleteDays++;
-                    if (outcome == ScopeUnverified) result.ScopeUnverifiedDays++;
-                }
-                result.Status = result.VerifiedDays == count
-                    ? result.EmptyDays == count ? "empty" : "complete"
-                    : result.VerifiedDays + result.PartialDays + result.IncompleteDays > 0 ? "partial" : "unverified";
-                result.Reason = result.IsComplete ? null
-                    : result.ScopeUnverifiedDays > 0 ? ScopeUnverified
-                    : contradiction ? "storedRowsMismatch"
-                    : result.IncompleteDays > 0 ? Incomplete : "outcomesMissing";
-            }
-            return results;
+            var read = await PublicationRead.CaptureAsync(this, Sources, from, through, daysWithStoredRows != null, cancellationToken).ConfigureAwait(false);
+            return await read.SummariseAsync(daysWithStoredRows, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -324,47 +263,8 @@ namespace Common.Entities.State
         private async Task<Dictionary<string, Dictionary<DateTime, string>>> ReadDailyOutcomesAsync(
             IReadOnlyList<string> sources, DateTime from, DateTime through, CancellationToken cancellationToken)
         {
-            var results = sources.ToDictionary(
-                source => source,
-                _ => new Dictionary<DateTime, string>(),
-                StringComparer.Ordinal);
-            var count = (through.Date - from.Date).Days + 1;
-            if (!_durable || count <= 0 || count > MaximumDays) return results;
-
-            using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-            using (var gate = new SemaphoreSlim(ReadConcurrency))
-            {
-                deadline.CancelAfter(_readTimeout);
-                await Task.WhenAll(sources.Select(async source =>
-                {
-                    try
-                    {
-                        for (var offset = 0; offset < count; offset += ReadConcurrency)
-                        {
-                            var days = Enumerable.Range(offset, Math.Min(ReadConcurrency, count - offset));
-                            var outcomes = await Task.WhenAll(days.Select(async day =>
-                            {
-                                await gate.WaitAsync(deadline.Token).ConfigureAwait(false);
-                                try
-                                {
-                                    var outcome = await _store.GetStringAsync(
-                                        Key(source, from.Date.AddDays(day)), deadline.Token).ConfigureAwait(false);
-                                    return Outcome(outcome);
-                                }
-                                finally { gate.Release(); }
-                            })).ConfigureAwait(false);
-                            foreach (var day in days)
-                                results[source][from.Date.AddDays(day)] = outcomes[day - offset];
-                        }
-                    }
-                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-                    catch (Exception)
-                    {
-                        results[source].Clear();
-                    }
-                })).ConfigureAwait(false);
-            }
-            return results;
+            var read = await PublicationRead.CaptureAsync(this, sources, from, through, false, cancellationToken).ConfigureAwait(false);
+            return read.InitialOutcomes();
         }
     }
 

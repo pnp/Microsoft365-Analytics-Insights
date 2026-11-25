@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -21,6 +22,16 @@ namespace Common.Entities.State
         /// conditional write can replace it.
         /// </summary>
         public string VersionToken { get; }
+    }
+
+    /// <summary>
+    /// Reads an inclusive range of literal (unescaped) row keys in one partition, including each row's
+    /// version. Only a successful, fully enumerated range proves that an omitted key is missing.
+    /// </summary>
+    public interface IVersionedKeyRangeReader
+    {
+        Task<Dictionary<string, VersionedValue>> ReadVersionedRangeAsync(string firstKey, string lastKey,
+            int maxRows, CancellationToken cancellationToken);
     }
 
     /// <summary>
