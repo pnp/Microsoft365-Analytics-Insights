@@ -63,6 +63,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         internal TimeSpan StallTimeout { get; set; } = PackageDownloadStallTimeout;
         internal TimeSpan MetadataTimeout { get; set; } = ReleaseMetadataTimeout;
+        // Create once per transfer: tests can drive the same arm/pause/reset calls without also arming a wall-clock timer.
+        internal Func<string, CancellationTokenSource, Action<TimeSpan>> CreateStallTimer { get; set; } =
+            (_, source) => source.CancelAfter;
 
         internal static HttpClient CreateHttpClient(HttpMessageHandler handler)
         {
@@ -292,10 +295,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             var filePath = Path.Combine(baseDir, fileName);
             long received = 0;
-            using (var stall = new CancellationTokenSource(StallTimeout))
+            using (var stall = new CancellationTokenSource())
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, stall.Token))
             using (var sha256 = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
             {
+                var setStallTimer = CreateStallTimer(fileName, stall);
+                setStallTimer(StallTimeout);
                 try
                 {
                     using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, linked.Token))
@@ -317,11 +322,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
                             {
                                 // The stall limit is for the network, so its clock stops while a chunk is written: a disk slowed
                                 // by, say, an antivirus scan must not be reported as a connection that went quiet.
-                                stall.CancelAfter(Timeout.InfiniteTimeSpan);
+                                setStallTimer(Timeout.InfiniteTimeSpan);
                                 sha256.AppendData(buffer, 0, read);
                                 await target.WriteAsync(buffer, 0, read, linked.Token);
                                 received += read;
-                                stall.CancelAfter(StallTimeout);
+                                setStallTimer(StallTimeout);
                             }
                         }
                     }
