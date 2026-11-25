@@ -9,6 +9,7 @@ using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Storage;
 using CloudInstallEngine.Azure;
+using CloudInstallEngine.Azure.InstallTasks;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using Common.Entities;
@@ -374,8 +375,8 @@ namespace App.ControlPanel.Engine
             {
                 // Check the plan the install will really use: an existing web app keeps the plan it runs on, whatever the
                 // configured plan name (earlier installers named that plan after the web app).
-                var plan = await CloudInstallEngine.Azure.InstallTasks.AppServicePlanTask.FindHostingPlanAsync(testRg, Config.AppServiceWebAppName)
-                    ?? testRg.GetAppServicePlans().AsEnumerable().Where(p => p.Data.Name == planName).SingleOrDefault();
+                var plan = await AppServicePlanTask.FindHostingPlanAsync(testRg, Config.AppServiceWebAppName)
+                    ?? AppServicePlanTask.FindConfiguredPlan(testRg, planName);
                 if (plan == null)
                 {
                     _logger.LogInformation($"App Service plan '{planName}' not found yet; skipping capability check (it will be created during install).");

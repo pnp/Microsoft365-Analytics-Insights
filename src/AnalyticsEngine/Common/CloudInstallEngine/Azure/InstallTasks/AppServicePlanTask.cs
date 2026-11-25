@@ -72,7 +72,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
 
             // Get/create plan
-            var plan = Container.GetAppServicePlans().GetAll(cancellationToken: CancellationToken).Where(p => p.Data.Name == _config.ResourceName).SingleOrDefault();
+            var plan = FindConfiguredPlan(Container, _config.ResourceName, CancellationToken);
 
             if (plan == null)
             {
@@ -102,7 +102,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
             else
             {
-                _logger.LogInformation($"Using existing App Service plan '{_config.ResourceName}'.");
+                _logger.LogInformation($"Using existing App Service plan '{plan.Data.Name}'.");
                 await UseExistingPlan(plan);
             }
 
@@ -132,6 +132,12 @@ namespace CloudInstallEngine.Azure.InstallTasks
             return string.Equals(id.SubscriptionId, group.SubscriptionId, System.StringComparison.OrdinalIgnoreCase)
                 && string.Equals(id.ResourceGroupName, group.ResourceGroupName, System.StringComparison.OrdinalIgnoreCase);
         }
+
+        // A casing difference is not a new ARM resource: a create-or-update would resize the existing plan.
+        public static AppServicePlanResource FindConfiguredPlan(ResourceGroupResource resourceGroup, string planName,
+            CancellationToken cancellationToken = default(CancellationToken)) =>
+            resourceGroup.GetAppServicePlans().GetAll(cancellationToken: cancellationToken)
+                .SingleOrDefault(p => string.Equals(p.Data.Name, planName, System.StringComparison.OrdinalIgnoreCase));
 
         /// <summary>
         /// The plan <paramref name="webAppName"/> is hosted on, or null when the web app does not exist yet (or no name

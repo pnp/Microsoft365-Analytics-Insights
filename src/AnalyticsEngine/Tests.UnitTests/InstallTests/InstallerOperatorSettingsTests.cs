@@ -245,22 +245,26 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [DataTestMethod]
-        [DataRow(false, false)]
-        [DataRow(false, true)]
-        [DataRow(true, false)]
-        public async Task FullInstall_UsesTheRegisteredWebsiteTaskAndOneSnapshotForTheFinalReplacements(bool newSite, bool planConflict)
+        [DataRow(false, false, "contoso-web")]
+        [DataRow(false, true, "contoso-web")]
+        [DataRow(true, false, "Contoso-Premium")]
+        [DataRow(true, false, "cOnToSo-PrEmIuM")]
+        public async Task FullInstall_UsesTheRegisteredWebsiteTaskAndOneSnapshotForTheFinalReplacements(bool newSite, bool planConflict, string configuredPlanName)
         {
             using (var arm = new FakeArm())
             {
                 const string siteCollection = Rg + "/providers/Microsoft.Web/sites";
-                arm.AddPlan("contoso-web");
+                const string premiumPlan = Rg + "/providers/Microsoft.Web/serverfarms/Contoso-Premium";
                 if (newSite)
                 {
+                    arm.AddPlan("Contoso-Premium");
+                    arm.Resource(premiumPlan)["sku"] = new JObject { ["name"] = "P1v3", ["tier"] = "PremiumV3", ["family"] = "Pv3" };
                     arm.KnownLists.Add(siteCollection);
                     arm.OverrideResponse = (method, path) =>
                     {
                         if (method != "PUT" || path != Site) return null;
                         arm.AddSite("1.2"); // ARM supplies the host name and config resources on creation.
+                        arm.Resource(Site)["properties"]["serverFarmId"] = arm.Requests.Last().Body.SelectToken("properties.serverFarmId");
                         return FakeArm.Json(HttpStatusCode.OK, arm.Resource(Site));
                     };
                 }
@@ -279,7 +283,7 @@ namespace Tests.UnitTests.InstallTests
                     }
                 }
                 // Azure site names are case-insensitive. A fresh-site PUT must not bypass the existing-site preflight.
-                var config = BackendConfig(newSite ? "contoso-web" : "CONTOSO-WEB", "contoso-web");
+                var config = BackendConfig(newSite ? "contoso-web" : "CONTOSO-WEB", configuredPlanName);
                 var installer = new FixtureSolutionInstaller(config, NullLogger.Instance, arm.Subscription);
                 var steps = installer.CreateAzureInstallSteps(NullLogger.Instance, arm.Subscription, CancellationToken.None);
                 steps.Backend.PlanTask.Container = steps.Backend.WebsiteTask.Container = arm.Group;
@@ -287,6 +291,16 @@ namespace Tests.UnitTests.InstallTests
                 var site = await steps.Backend.WebsiteTask.ExecuteTaskReturnResult(plan);
                 await steps.PostCreate.ConfigureWebApp(site, plan, "Contoso SQL", "Contoso storage",
                     null, null, null, null, new Uri("https://contoso-vault.vault.azure.net/"));
+
+                if (newSite)
+                {
+                    var writes = arm.Mutations.Where(r => r.Path.Equals(premiumPlan, StringComparison.OrdinalIgnoreCase)).ToList();
+                    Assert.AreEqual(0, writes.Count, "An existing plan must not be resized: " +
+                        string.Join(", ", writes.Select(r => r.Method + " " + r.Body?.SelectToken("sku.name"))));
+                    Assert.AreEqual("P1v3", plan.Data.Sku.Name);
+                    Assert.AreEqual(premiumPlan, plan.Id.ToString());
+                    Assert.AreEqual(premiumPlan, (string)arm.Requests.Single(r => r.Method == "PUT" && r.Path == Site).Body.SelectToken("properties.serverFarmId"));
+                }
 
                 var acquireSite = (newSite ? "PUT " : "PATCH ") + Site;
                 var expected = new List<string> { "POST " + AppSettings + "/list", "POST " + ConnectionStrings + "/list" };
@@ -797,7 +811,7 @@ namespace Tests.UnitTests.InstallTests
             using (var arm = new FakeArm())
             {
                 arm.KnownLists.Add(Rg + "/providers/Microsoft.Web/sites");
-                arm.KnownLists.Add(Rg + "/providers/Microsoft.Web/serverfarms");
+                arm.AddPlan("contoso-unrelated");
                 var task = PlanTaskFromTheInstallJob(arm, webAppName: "contoso-web", planName: "contoso-plan");
 
                 var plan = await task.ExecuteTaskReturnResult(null);
@@ -807,6 +821,7 @@ namespace Tests.UnitTests.InstallTests
                 Assert.AreEqual(Rg + "/providers/Microsoft.Web/serverfarms/contoso-plan", write.Path, true,
                     "The plan used to be created under the web app's name, whatever the configuration said.");
                 Assert.AreEqual("contoso-plan", plan.Data.Name);
+                Assert.AreEqual("B1", (string)write.Body.SelectToken("sku.name"));
             }
         }
 
