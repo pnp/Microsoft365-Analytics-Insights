@@ -357,14 +357,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 await RecordAsync(currentUrl, created, clientState, ExpiryOf(created, expiryUtc));
                 return created;
             }
-            catch (ODataError ex)
+            catch (ApiException ex) when (ex is ODataError || (ex.ResponseStatusCode >= 400 && ex.ResponseStatusCode < 600))
             {
                 LogSubscriptionFailure(ex, currentUrl, isUpdate: false, replacingSubId: existing[0].Id);
 
                 // Keep the old subscription from lapsing while the replacement is retried.
                 if (CallSubscriptionRules.NeedsRenewal(existing[0].ExpirationDateTime, _clock.UtcNow))
                 {
-                    await RenewAsync(existing[0].Id, expiryUtc, existingUrl);
+                    try
+                    {
+                        await RenewAsync(existing[0].Id, expiryUtc, existingUrl);
+                    }
+                    catch (Exception renewalFailure) when (!(renewalFailure is OperationCanceledException))
+                    {
+                        // The maintainer retries the replacement, not this best-effort renewal.
+                        Telemetry.LogWarning(renewalFailure, $"{LOG_TAG} The fallback renewal of '{existing[0].Id}' also failed; reporting the original replacement failure.");
+                    }
                 }
                 throw;
             }

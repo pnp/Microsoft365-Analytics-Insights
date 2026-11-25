@@ -1,14 +1,19 @@
 ﻿using Common.Entities;
 using DataUtils;
 using Microsoft.Graph.Models;
+using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading.Tasks;
 using Tests.UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Graph;
+using StubGraphHandler = Tests.UnitTests.TeamsCrawlTests.StubGraphHandler;
 
 namespace Tests.UnitTests
 {
@@ -168,8 +173,13 @@ WHERE users.user_name LIKE @p0 AND history.valid_to_utc IS NULL", token + "%").S
             }
         }
 
-        [TestMethod]
-        public async Task PerUserFallback_NullLicenceDetails_SkipsThatUserAndKeepsTheirLicences()
+        [DataTestMethod]
+        [DataRow(403, true)]
+        [DataRow(403, false)]
+        [DataRow(404, true)]
+        [DataRow(404, false)]
+        [DataRow(204, false)]
+        public async Task PerUserFallback_UnreadableLicenceDetails_KeepsAssignmentAndProcessesNextUser(int status, bool hasErrorBody)
         {
             var token = "lhnull" + Guid.NewGuid().ToString("N").Substring(0, 10);
             var userAadA = Guid.NewGuid().ToString();
@@ -179,9 +189,8 @@ WHERE users.user_name LIKE @p0 AND history.valid_to_utc IS NULL", token + "%").S
             {
                 using (var db = new AnalyticsEntitiesContext())
                 {
-                    await db.Database.ExecuteSqlCommandAsync("DELETE FROM dbo.license_seat_count_history; DELETE FROM dbo.license_refresh_runs;");
-                    var userA = new Common.Entities.User { UserPrincipalName = token + "-a@contoso.local", AzureAdId = userAadA };
-                    var userB = new Common.Entities.User { UserPrincipalName = token + "-b@contoso.local", AzureAdId = userAadB };
+                    var userA = new Common.Entities.User { UserPrincipalName = token + "-a@contoso.local", AzureAdId = userAadA, AccountEnabled = true };
+                    var userB = new Common.Entities.User { UserPrincipalName = token + "-b@contoso.local", AzureAdId = userAadB, AccountEnabled = true };
                     var licence = new LicenseType { Name = token + " licence", SKUID = skuPart };
                     db.users.AddRange(new[] { userA, userB });
                     db.LicenseTypes.Add(licence);
@@ -193,31 +202,41 @@ INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, 
 (@p1, @p2, '2026-09-01', NULL, 1);",
                         userA.ID, userB.ID, licence.ID);
 
-                    var details = new Dictionary<string, List<LicenseDetails>>
+                    var lookup = db.UserLicenseTypeLookups.Where(l => l.UserId == userA.ID && l.LicenseTypeId == licence.ID).Select(l => l.ID);
+                    var originalLookupId = await lookup.SingleAsync();
+                    var deltaPage = new JObject
                     {
-                        [userB.UserPrincipalName] = new List<LicenseDetails>(),
+                        ["@odata.deltaLink"] = "https://graph.contoso.invalid/v1.0/users/delta?$deltatoken=new-checkpoint",
+                        ["value"] = JArray.FromObject(new[] { userA, userB }.Select(u => new
+                        {
+                            id = u.AzureAdId, userPrincipalName = u.UserPrincipalName, accountEnabled = true
+                        }))
                     };
-                    var loader = new FakeUserMetadataLoader(fakeLicenseDetails: details);
-                    var processor = new UserLicenseProcessor(AnalyticsLogger.ConsoleOnlyTracer(), loader, new UserMetadataCache(db), new FixedLicenseNameResolver(token + " licence"), null);
-                    var desired = new HashSet<UserLicenseAssignment>();
-                    var userIds = new HashSet<int>();
-
-                    var userADesired = await processor.BuildDesiredAssignmentsForUser(db, new GraphUser { Id = userA.UserPrincipalName, UserPrincipalName = userA.UserPrincipalName }, userA);
-                    Assert.IsNull(userADesired, "A null licence-details read means 'could not read'; the user must be skipped, not reconciled to empty.");
-
-                    var userBDesired = await processor.BuildDesiredAssignmentsForUser(db, new GraphUser { Id = userB.UserPrincipalName, UserPrincipalName = userB.UserPrincipalName }, userB);
-                    userIds.Add(userB.ID);
-                    foreach (var assignment in userBDesired)
+                    var delta = new StubGraphHandler().Json("/users/delta", deltaPage.ToString());
+                    var sdk = new StubGraphHandler()
+                        .Route("/subscribedSkus", _ => new HttpResponseMessage(HttpStatusCode.Forbidden))
+                        .Route("/users/" + userAadA + "/licenseDetails", _ => hasErrorBody
+                            ? StubGraphHandler.Response((HttpStatusCode)status,
+                                StubGraphHandler.Error(status == 403 ? "Authorization_RequestDenied" : "Request_ResourceNotFound"))
+                            : new HttpResponseMessage((HttpStatusCode)status))
+                        .Json("/users/" + userAadB + "/licenseDetails", "{\"value\":[]}");
+                    var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                    var checkpoint = new FakeDeltaValueProvider();
+                    await checkpoint.SetDeltaToken("previous-checkpoint");
+                    using (var client = new ManualGraphCallClient(delta, logger))
+                    using (var http = new HttpClient(sdk))
+                    using (var graph = new Microsoft.Graph.GraphServiceClient(http, new AnonymousAuthenticationProvider(), "https://graph.contoso.invalid/v1.0"))
                     {
-                        desired.Add(assignment);
+                        var loader = new GraphUserLoader(client, checkpoint, logger, graph);
+                        Assert.IsTrue(await new UserMetadataUpdater(logger, null, loader).InsertAndUpdateDatabaseFromExternalUsers());
                     }
-                    await processor.ReconcileCollectedUserLicenses(db, userIds, desired);
+                    CollectionAssert.AreEqual(new[] { "/v1.0/subscribedSkus", "/v1.0/users/" + userAadA + "/licenseDetails",
+                        "/v1.0/users/" + userAadB + "/licenseDetails" }, sdk.Requests.Select(uri => uri.AbsolutePath).ToArray());
+                    Assert.AreEqual("new-checkpoint", await checkpoint.GetDeltaToken());
 
+                    Assert.AreEqual(originalLookupId, await lookup.SingleAsync(), "The skipped user's current lookup must remain untouched.");
                     Assert.AreEqual(1, await db.Database.SqlQuery<int>(
-                        "SELECT COUNT(*) FROM dbo.user_license_type_lookups WHERE user_id = @p0", userA.ID).SingleAsync(),
-                        "The skipped user's current lookup must be retained.");
-                    Assert.AreEqual(1, await db.Database.SqlQuery<int>(
-                        "SELECT COUNT(*) FROM dbo.user_license_history WHERE user_id = @p0 AND valid_to_utc IS NULL", userA.ID).SingleAsync(),
+                        "SELECT COUNT(*) FROM dbo.user_license_history WHERE user_id = @p0 AND license_type_id = @p1 AND valid_from_utc = '2026-09-01' AND valid_to_utc IS NULL", userA.ID, licence.ID).SingleAsync(),
                         "The skipped user's open history must be retained.");
                     Assert.AreEqual(0, await db.Database.SqlQuery<int>(
                         "SELECT COUNT(*) FROM dbo.user_license_type_lookups WHERE user_id = @p0", userB.ID).SingleAsync(),
@@ -225,7 +244,6 @@ INSERT INTO dbo.user_license_history (user_id, license_type_id, valid_from_utc, 
                     Assert.AreEqual(1, await db.Database.SqlQuery<int>(
                         "SELECT COUNT(*) FROM dbo.user_license_history WHERE user_id = @p0 AND valid_to_utc IS NOT NULL", userB.ID).SingleAsync(),
                         "The reconciled user's removed licence should be closed.");
-                    Assert.AreEqual(1, await db.Database.SqlQuery<int>("SELECT COUNT(*) FROM dbo.license_refresh_runs").SingleAsync());
                 }
             }
             finally

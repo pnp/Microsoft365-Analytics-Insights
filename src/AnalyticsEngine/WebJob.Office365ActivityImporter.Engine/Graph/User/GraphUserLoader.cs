@@ -692,24 +692,19 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 if (page?.Value == null)
                 {
-                    // Same trap as the tenant SKU list, one user at a time: ProcessUserLicenses
-                    // deletes this user's existing lookups and re-adds from whatever comes back, so
-                    // treating a missing 'value' collection as "this user holds no licences" quietly
-                    // deletes their licences. Returning null is the established "couldn't read it"
-                    // signal that ProcessUserLicenses already skips on, so their existing licences
-                    // are retained. Note this does NOT force a re-read: the import still commits the
-                    // /users/delta token, so a user whose licence call failed keeps their previous
-                    // (now possibly stale) licences until they next appear in a delta or the delta
-                    // token is cleared. Stale beats deleted - that is the whole point of #392 - but
-                    // it is not self-correcting on the next cycle.
+                    // Only an explicit empty collection means this user holds no licences. Null excludes
+                    // the user from reconciliation. The checkpoint can still advance, so their existing
+                    // assignments may be stale until their next delta or a full re-read (#392).
                     _logger.LogError($"User import - the licence-details response for user ID '{userId}' contained no 'value' collection. Keeping that user's existing licences rather than treating it as 'no licences'; they will not be re-read until the user next changes in Graph.");
                     return null;
                 }
 
                 return page.Value;
             }
-            catch (ODataError ex)
+            catch (ApiException ex) when (ex is ODataError || ex.ResponseStatusCode == 403 || ex.ResponseStatusCode == 404)
             {
+                // Keep the existing per-user OData fallback even when a refusal or not-found response
+                // has no error body. Other status-only failures (including 429/5xx) still fail the cycle.
                 _logger.LogError(ex, $"User import - couldn't load service-plans for user ID '{userId}' - {ex.Message}");
                 return null;
             }
