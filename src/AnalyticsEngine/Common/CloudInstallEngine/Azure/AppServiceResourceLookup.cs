@@ -90,7 +90,7 @@ namespace CloudInstallEngine.Azure
                     throw new InvalidDataException();
                 return plan;
             }
-            catch (RequestFailedException ex) when (allowMissing && IsResourceNotFound(ex))
+            catch (RequestFailedException ex) when (allowMissing && IsResourceNotFound(ex, allowEmptyBody: group.HasData))
             {
                 token.ThrowIfCancellationRequested();
                 return null;
@@ -103,10 +103,24 @@ namespace CloudInstallEngine.Azure
             }
         }
 
-        // A missing parent can contradict the group we just read. Only the named resource's absence counts here.
-        private static bool IsResourceNotFound(RequestFailedException error) => error.Status == 404 &&
-            (string.Equals(error.ErrorCode, "ResourceNotFound", StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(error.ErrorCode, "NotFound", StringComparison.OrdinalIgnoreCase));
+        // Both exact GETs document a bodyless 404. Accept it only after a list miss in a verified group.
+        private static bool IsResourceNotFound(RequestFailedException error, bool allowEmptyBody)
+        {
+            if (error.Status != 404) return false;
+            bool MissingCode(string code) => string.Equals(code, "ResourceNotFound", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(code, "NotFound", StringComparison.OrdinalIgnoreCase);
+            var response = error.GetRawResponse();
+            if (response == null || (response.Headers.TryGetValue("x-ms-error-code", out var header) && !MissingCode(header)))
+                return false;
+            var content = response.Content.ToMemory();
+            if (content.IsEmpty) return allowEmptyBody && (string.IsNullOrEmpty(error.ErrorCode) || MissingCode(error.ErrorCode));
+            if (!MissingCode(error.ErrorCode)) return false;
+            using (var body = JsonDocument.Parse(content))
+            {
+                var root = body.RootElement;
+                return root.TryGetProperty("error", out var details) && details.TryGetProperty("code", out var code) && MissingCode(code.GetString());
+            }
+        }
 
         private static void RequireIdentity(ResourceData data, ResourceIdentifier expected)
         {
@@ -160,7 +174,7 @@ namespace CloudInstallEngine.Azure
         {
             var listed = FindByName(group.GetWebSites().GetAll(cancellationToken: token), s => s.Data,
                 WebSiteResource.CreateResourceIdentifier(group.Id.SubscriptionId, group.Id.Name, name), "App Services", token);
-            var site = await ReadSiteAsync(group, listed?.Data.Name ?? name, token, allowMissing: listed == null);
+            var site = await ReadSiteAsync(group, listed?.Data.Name ?? name, token, allowMissing: listed == null, allowEmptyNotFound: group.HasData);
             if (site == null) return null;
             if (listed == null || (listed.Data.AppServicePlanId != null && !listed.Data.AppServicePlanId.Equals(site.Data.AppServicePlanId)))
                 throw new InstallException("The App Service list and the site read disagree about the existing site or its hosting plan. " +
@@ -185,7 +199,15 @@ namespace CloudInstallEngine.Azure
             identity?.ManagedServiceIdentityType == ManagedServiceIdentityType.UserAssigned ||
             identity?.ManagedServiceIdentityType == ManagedServiceIdentityType.SystemAssignedUserAssigned;
 
-        internal static async Task<WebSiteResource> ReadSiteAsync(ResourceGroupResource group, string name, CancellationToken token, bool allowMissing = false)
+        /// <summary>Rechecks the exact site previously confirmed absent by hosting discovery before network cleanup.</summary>
+        public static async Task ConfirmSiteStillMissingAsync(ResourceGroupResource group, string name, CancellationToken token)
+        {
+            if (await ReadSiteAsync(group, name, token, allowMissing: true, allowEmptyNotFound: group.HasData) != null)
+                throw new InstallException("The App Service now exists after hosting discovery reported it missing. Verify its settings and retry.");
+        }
+
+        internal static async Task<WebSiteResource> ReadSiteAsync(ResourceGroupResource group, string name, CancellationToken token,
+            bool allowMissing = false, bool allowEmptyNotFound = false)
         {
             token.ThrowIfCancellationRequested();
             try
@@ -205,7 +227,7 @@ namespace CloudInstallEngine.Azure
                 }
                 return site;
             }
-            catch (RequestFailedException ex) when (allowMissing && IsResourceNotFound(ex))
+            catch (RequestFailedException ex) when (allowMissing && IsResourceNotFound(ex, allowEmptyNotFound))
             {
                 token.ThrowIfCancellationRequested();
                 return null;
@@ -220,7 +242,19 @@ namespace CloudInstallEngine.Azure
         public static Task<SiteConfigData> ReadSiteConfigAsync(WebSiteResource site, CancellationToken token)
         {
             var config = site.GetWebSiteConfig();
-            return ReadChildAsync(config, config.GetAsync, (resource, _) => resource.Data, "App Service site configuration (config/web)", token);
+            return ReadChildAsync(config, config.GetAsync, (resource, _) =>
+            {
+                var data = resource.Data;
+                var tls = data.MinTlsVersion?.ToString();
+                // SiteConfig properties are optional. An empty projection is not evidence of an unset TLS minimum.
+                if (string.IsNullOrWhiteSpace(tls) && string.IsNullOrWhiteSpace(data.FtpsState?.ToString()) &&
+                    !data.IsAlwaysOn.HasValue && !data.IsVnetRouteAllEnabled.HasValue)
+                    throw new InvalidDataException();
+                var siteTls = site.HasData ? site.Data.SiteConfig?.MinTlsVersion?.ToString() : null;
+                if (!string.IsNullOrWhiteSpace(siteTls) && !string.Equals(siteTls, tls, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException();
+                return data;
+            }, "App Service site configuration (config/web)", token);
         }
 
         internal static Task<bool> ReadFtpAllowedAsync(WebSiteResource site, CancellationToken token)
@@ -239,7 +273,14 @@ namespace CloudInstallEngine.Azure
                 var response = await get(token);
                 token.ThrowIfCancellationRequested();
                 using (var body = JsonDocument.Parse(response.GetRawResponse().Content.ToMemory()))
-                    return select(response.Value, RequireProperties(body.RootElement, expected.Id));
+                {
+                    // GetFtpAllowed can omit both labels. When supplied, neither may contradict the exact child ID.
+                    var root = body.RootElement;
+                    if ((root.TryGetProperty("type", out var type) && !string.Equals(type.GetString(), expected.Id.ResourceType.ToString(), StringComparison.OrdinalIgnoreCase)) ||
+                        (root.TryGetProperty("name", out var name) && !string.Equals(name.GetString(), expected.Id.Name, StringComparison.OrdinalIgnoreCase)))
+                        throw new InvalidDataException();
+                    return select(response.Value, RequireProperties(root, expected.Id));
+                }
             }
             catch (Exception ex)
             {

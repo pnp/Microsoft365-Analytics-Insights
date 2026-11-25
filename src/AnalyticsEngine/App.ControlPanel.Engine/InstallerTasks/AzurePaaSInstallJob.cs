@@ -478,6 +478,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
                         string.IsNullOrWhiteSpace(_config.NetworkConfig?.VNetName) ? null :
                             _networking.Manifest.ResourceGroupId + "/providers/Microsoft.Network/virtualNetworks/" + _config.NetworkConfig.VNetName)
                     {
+                        ConfirmedMissingSiteId = hosting.Site == null && !string.IsNullOrWhiteSpace(_config.AppServiceWebAppName)
+                            ? WebSiteResource.CreateResourceIdentifier(group.Id.SubscriptionId, group.Id.Name, _config.AppServiceWebAppName) : null,
                         SiteNetworkChangeVerified = hosting.ObserveSiteAfterTeardown
                     };
                     await new PrivateNetworkTeardown(_networking, cleanup, Logger).Run(false, CancellationToken);

@@ -375,6 +375,9 @@ namespace App.ControlPanel.Engine
 
             try
             {
+                var expectedGroup = ResourceGroupResource.CreateResourceIdentifier(Config.Subscription.SubId, Config.ResourceGroupName);
+                if (!testRg.HasData || !expectedGroup.Equals(testRg.Id))
+                    throw new InvalidOperationException("Azure did not return the configured resource group. Verify the subscription and resource group, then retry.");
                 // Check the plan the install will really use: an existing web app keeps the plan it runs on, whatever the
                 // configured plan name (earlier installers named that plan after the web app).
                 var hosting = await AppServiceResourceLookup.DiscoverHostingAsync(testRg, Config.AppServiceWebAppName, planName, CancellationToken);
