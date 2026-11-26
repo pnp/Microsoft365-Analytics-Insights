@@ -66,7 +66,7 @@ jobs:
       # upload URL and secret). Keep them out of every other step, including npm's lifecycle scripts.
       - name: Configure packages
         if: matrix.project.package == 'Office365ActivityImporter'
-        uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
+        uses: devops-actions/variable-substitution@2344e258b5e8b1bd83b53f14271a410f7a4f5a44 # v3.1.0
         with:
           files: src/AnalyticsEngine/WebJob.Office365ActivityImporter/App.Release.config
         env:
