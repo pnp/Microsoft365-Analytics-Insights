@@ -453,14 +453,10 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     "are not registered. Follow the registration guidance above, then retry.");
 
             var vnetEnabled = _config.NetworkConfig?.Enabled == true;
-            ResourceGroupResource group = null;
-            try
-            {
-                group = (await Subscription.GetResourceGroupAsync(_config.ResourceGroupName, CancellationToken)).Value;
-                if (group?.HasData != true || !string.Equals(group.Id?.ToString(), _networking.Manifest.ResourceGroupId, StringComparison.OrdinalIgnoreCase))
-                    throw new InstallException("Azure did not return the requested resource group. Verify the resource group and retry.");
-            }
-            catch (RequestFailedException ex) when (PrivateNetworkProvenance.IsMissing(ex)) { }
+            _rgCreateTask.CancellationToken = CancellationToken;
+            var group = await _rgCreateTask.GetOrCreateResourceGroup(createIfNotExists: false, verboseLogging: false);
+            if (group != null && !string.Equals(group.Id.ToString(), _networking.Manifest.ResourceGroupId, StringComparison.OrdinalIgnoreCase))
+                throw new InstallException("Azure did not return the requested resource group. Verify the resource group and retry.");
 
             // Discover before touching the networking journal, even when the only owned target is SQL or Key Vault.
             // A shared hosting plan is a required read, not a reason to fall back to creating a different plan.

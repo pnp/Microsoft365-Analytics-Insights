@@ -1423,6 +1423,36 @@ namespace Tests.UnitTests.InstallTests
         }
 
         [DataTestMethod]
+        [DataRow(false, null)]
+        [DataRow(false, "NotFound")]
+        [DataRow(false, "ParentResourceNotFound")]
+        [DataRow(true, null)]
+        [DataRow(true, "SubscriptionNotFound")]
+        public async Task Backend_AnUnconfirmedResourceGroup404CannotAuthorizeCreation(bool recheck, string errorCode)
+        {
+            using (var arm = new FakeArm())
+            {
+                var config = BackendConfig("contoso-web", "contoso-plan");
+                arm.AddBackendInventory(config, existingGroup: false);
+                int groupReads = 0;
+                arm.OverrideResponse = (method, path) =>
+                {
+                    if (method != "GET" || !path.Equals(Rg, StringComparison.OrdinalIgnoreCase)) return null;
+                    if (++groupReads == 1 && recheck) return null; // The preflight confirmed absence; the create task still rechecks.
+                    return errorCode == null
+                        ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                        : FakeArm.Json(HttpStatusCode.NotFound, new JObject { ["error"] = new JObject { ["code"] = errorCode } });
+                };
+
+                var job = new AzurePaaSInstallJob(NullLogger.Instance, config, arm.Subscription);
+
+                Assert.AreEqual(404, (await Assert.ThrowsAsync<Azure.RequestFailedException>(() => job.Install())).Status);
+                Assert.AreEqual(recheck ? 2 : 1, groupReads);
+                Assert.AreEqual(0, arm.Mutations.Count);
+            }
+        }
+
+        [DataTestMethod]
         [DataRow(true, true, false)]
         [DataRow(true, false, false)]
         [DataRow(false, false, false)]
@@ -2192,7 +2222,8 @@ namespace Tests.UnitTests.InstallTests
                     }
                     if (_resources.TryGetValue(path, out var resource)) return Json(HttpStatusCode.OK, resource);
                     if (KnownLists.Contains(path)) return Json(HttpStatusCode.OK, new JObject { ["value"] = new JArray(Children(path)) });
-                    return Json(HttpStatusCode.NotFound, new JObject { ["error"] = new JObject { ["code"] = "ResourceNotFound", ["message"] = "Synthetic: not found" } });
+                    var missingCode = path.Equals(Rg, StringComparison.OrdinalIgnoreCase) ? "ResourceGroupNotFound" : "ResourceNotFound";
+                    return Json(HttpStatusCode.NotFound, new JObject { ["error"] = new JObject { ["code"] = missingCode, ["message"] = "Synthetic: not found" } });
                 }
 
                 if (request.Method.Method == "POST")
