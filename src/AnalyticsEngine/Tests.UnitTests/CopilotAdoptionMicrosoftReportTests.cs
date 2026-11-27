@@ -506,19 +506,8 @@ namespace Tests.UnitTests
         #region Workbook reading
 
         /// <summary>Snapshot facts as key to value text, read back out of a real workbook.</summary>
-        private static Dictionary<string, string> SnapshotFacts(CopilotAdoptionAnalysis analysis)
-        {
-            var rows = SheetRows(CopilotAdoptionWorkbook.Build(analysis), "Snapshot facts");
-            var facts = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var row in rows)
-            {
-                string key;
-                if (!row.TryGetValue("A", out key) || string.IsNullOrEmpty(key)) continue;
-                string value;
-                facts[key] = row.TryGetValue("B", out value) ? value : null;
-            }
-            return facts;
-        }
+        private static Dictionary<string, string> SnapshotFacts(CopilotAdoptionAnalysis analysis) =>
+            CopilotAdoptionWorkbookTests.SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
 
         private static void AssertFollowedBy(List<string> cells, string value, string expectedNext)
         {
@@ -534,29 +523,9 @@ namespace Tests.UnitTests
             return SheetCellElements(bytes, sheetName).Select(CellText).ToList();
         }
 
-        /// <summary>Each row of a sheet as column letter to decoded cell text.</summary>
-        private static List<Dictionary<string, string>> SheetRows(byte[] bytes, string sheetName)
-        {
-            return SheetCellElements(bytes, sheetName)
-                .GroupBy(c => RowNumber((string)c.Attribute("r")))
-                .OrderBy(g => g.Key)
-                .Select(g => g.ToDictionary(c => ColumnLetters((string)c.Attribute("r")), CellText, StringComparer.Ordinal))
-                .ToList();
-        }
-
         private static string CellText(XElement cell)
         {
             return string.Concat(cell.Descendants().Where(d => !d.HasElements).Select(d => d.Value));
-        }
-
-        private static string ColumnLetters(string reference)
-        {
-            return new string((reference ?? string.Empty).TakeWhile(char.IsLetter).ToArray());
-        }
-
-        private static int RowNumber(string reference)
-        {
-            return int.Parse(new string((reference ?? string.Empty).SkipWhile(char.IsLetter).ToArray()), CultureInfo.InvariantCulture);
         }
 
         private static List<XElement> SheetCellElements(byte[] bytes, string sheetName)
