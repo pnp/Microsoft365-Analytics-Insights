@@ -1,6 +1,5 @@
 ﻿using App.ControlPanel.Engine.Entities;
 using CloudInstallEngine;
-using DataUtils;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System;
@@ -48,22 +47,25 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
         private static readonly HttpClient _sharedHttpClient = CreateHttpClient(new HttpClientHandler());
         private readonly HttpClient _httpClient;
+        private readonly InstallPackageWorkspace _workspace;
 
-        public LatestStableSoftwarePackageDownloadTask(TaskConfig config, ILogger logger) : this(config, logger, _sharedHttpClient)
+        public LatestStableSoftwarePackageDownloadTask(TaskConfig config, ILogger logger, InstallPackageWorkspace workspace)
+            : this(config, logger, workspace, _sharedHttpClient)
         {
         }
 
         /// <summary>Test seam: downloads through <paramref name="httpClient"/>, normally one over a fake handler.</summary>
-        internal LatestStableSoftwarePackageDownloadTask(TaskConfig config, ILogger logger, HttpClient httpClient) : base(config, logger)
+        internal LatestStableSoftwarePackageDownloadTask(TaskConfig config, ILogger logger, InstallPackageWorkspace workspace, HttpClient httpClient) : base(config, logger)
         {
+            _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         }
 
         internal TimeSpan StallTimeout { get; set; } = PackageDownloadStallTimeout;
         internal TimeSpan MetadataTimeout { get; set; } = ReleaseMetadataTimeout;
-
-        /// <summary>Where the packages are written. Null is the installer's temporary folder.</summary>
-        internal string DownloadDirectory { get; set; }
+        // Create once per transfer: tests can drive the same arm/pause/reset calls without also arming a wall-clock timer.
+        internal Func<string, CancellationTokenSource, Action<TimeSpan>> CreateStallTimer { get; set; } =
+            (_, source) => source.CancelAfter;
 
         internal static HttpClient CreateHttpClient(HttpMessageHandler handler)
         {
@@ -216,8 +218,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _logger.LogInformation("Downloading latest stable release...");
 
             var locallyDownloadedRelease = new LocalStorageInstallSourceInfo();
-            var tempDir = DownloadDirectory ?? StringUtils.TempDirPath;
-            Directory.CreateDirectory(tempDir);
+            var tempDir = _workspace.CreateDirectory();
 
             // Download each asset, two at a time
             var downloadTasks = new Dictionary<SoftwareComponent, Task<string>>();
@@ -294,10 +295,12 @@ namespace App.ControlPanel.Engine.InstallerTasks
 
             var filePath = Path.Combine(baseDir, fileName);
             long received = 0;
-            using (var stall = new CancellationTokenSource(StallTimeout))
+            using (var stall = new CancellationTokenSource())
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken, stall.Token))
             using (var sha256 = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
             {
+                var setStallTimer = CreateStallTimer(fileName, stall);
+                setStallTimer(StallTimeout);
                 try
                 {
                     using (var response = await _httpClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, linked.Token))
@@ -319,11 +322,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
                             {
                                 // The stall limit is for the network, so its clock stops while a chunk is written: a disk slowed
                                 // by, say, an antivirus scan must not be reported as a connection that went quiet.
-                                stall.CancelAfter(Timeout.InfiniteTimeSpan);
+                                setStallTimer(Timeout.InfiniteTimeSpan);
                                 sha256.AppendData(buffer, 0, read);
                                 await target.WriteAsync(buffer, 0, read, linked.Token);
                                 received += read;
-                                stall.CancelAfter(StallTimeout);
+                                setStallTimer(StallTimeout);
                             }
                         }
                     }

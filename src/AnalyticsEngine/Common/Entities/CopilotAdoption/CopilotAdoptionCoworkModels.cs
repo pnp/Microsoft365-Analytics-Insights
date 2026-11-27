@@ -530,6 +530,9 @@ namespace Common.Entities.CopilotAdoption
     /// </remarks>
     public class CoworkValueEstimate
     {
+        // The legacy API uses the same empty object for a withheld forecast and an assessed empty cohort.
+        internal bool WorkloadAssessed { get; set; }
+
         /// <summary>Always true. Present so serialised consumers carry the caveat with the payload.</summary>
         [JsonProperty("isModelled")]
         public bool IsModelled { get; set; } = true;

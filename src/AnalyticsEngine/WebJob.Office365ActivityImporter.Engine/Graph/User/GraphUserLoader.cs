@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using GraphUserDeltaQuery = Common.Entities.State.GraphUserDeltaQuery;
 
@@ -24,6 +25,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private readonly IDeltaValueProvider _deltaValueProvider;
         private readonly ILogger _logger;
         private readonly GraphServiceClient _graphServiceClient;
+        private readonly CancellationToken _shutdownToken;
 
         // Buffer the delta token returned by Graph during the most recent
         // LoadAllActiveUsers call. We do NOT persist it to the underlying
@@ -53,11 +55,17 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         private bool _orgSelectionRejected;
 
         public GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger logger, GraphServiceClient graphServiceClient)
+            : this(httpClient, deltaValueProvider, logger, graphServiceClient, CancellationToken.None)
+        {
+        }
+
+        internal GraphUserLoader(ManualGraphCallClient httpClient, IDeltaValueProvider deltaValueProvider, ILogger logger, GraphServiceClient graphServiceClient, CancellationToken shutdownToken)
         {
             this._httpClient = httpClient;
             _deltaValueProvider = deltaValueProvider;
             this._logger = logger;
             this._graphServiceClient = graphServiceClient;
+            _shutdownToken = shutdownToken;
         }
 
         public IDeltaValueProvider DeltaValueProvider => _deltaValueProvider;
@@ -202,8 +210,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         /// <summary>
         /// Only used for conflicting identities, never for the directory's general population. All requests use this
-        /// loader's tenant/app credentials. A successful bounded directory query is required even after a 404:
-        /// a 404 alone cannot distinguish absence from an unreadable object. Do not request eventual consistency.
+        /// loader's tenant/app credentials and refuse redirects. A previous-object 404 must carry a Graph
+        /// resource-not-found code; even then require the independent directory query. Do not request eventual consistency.
         /// </summary>
         public async Task<bool> VerifyReusedUpnAsync(GraphUser currentOwner, string previousObjectId)
         {
@@ -214,7 +222,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             try
             {
                 var current = await _graphServiceClient.Users[currentId.ToString()].GetAsync(rc =>
-                    rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" });
+                {
+                    rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" };
+                    rc.Options.Add(GraphResponseEvidence.RequireDirect);
+                }, _shutdownToken);
                 if (current?.AccountEnabled != true
                     || !string.Equals(current.Id, currentOwner.Id, StringComparison.OrdinalIgnoreCase)
                     || !string.Equals(current.UserPrincipalName, currentOwner.UserPrincipalName, StringComparison.OrdinalIgnoreCase))
@@ -223,10 +234,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 try
                 {
                     await _graphServiceClient.Users[previousId.ToString()].GetAsync(rc =>
-                        rc.QueryParameters.Select = new[] { "id" });
+                    {
+                        rc.QueryParameters.Select = new[] { "id" };
+                        rc.Options.Add(GraphResponseEvidence.RequireDirect);
+                    }, _shutdownToken);
                     return DeclineReusedUpn("previous object still exists (disabled is not deleted)");
                 }
-                catch (ODataError ex) when (ex.ResponseStatusCode == 404)
+                catch (ODataError ex) when (GraphResponseEvidence.ConfirmsNotFound(ex))
                 {
                     // Even a prior deletion can be stale after a restore, and /users can lag. Always require this
                     // fresh object-ID 404, corroborated by the successful directory query below, never on its own.
@@ -240,15 +254,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 {
                     rc.QueryParameters.Select = new[] { "id", "userPrincipalName", "accountEnabled" };
                     rc.QueryParameters.Filter = $"id eq '{currentId}' or id eq '{previousId}' or userPrincipalName eq '{name}'";
-                });
+                    rc.Options.Add(GraphResponseEvidence.RequireCollection);
+                }, _shutdownToken);
                 var only = page?.Value?.Count == 1 ? page.Value[0] : null;
-                var confirmed = string.IsNullOrEmpty(page?.OdataNextLink) && only?.AccountEnabled == true
+                var confirmed = page?.OdataNextLink == null && only?.AccountEnabled == true
                     && string.Equals(only.Id, currentOwner.Id, StringComparison.OrdinalIgnoreCase)
                     && string.Equals(only.UserPrincipalName, currentOwner.UserPrincipalName, StringComparison.OrdinalIgnoreCase);
+                _shutdownToken.ThrowIfCancellationRequested();
                 return confirmed || DeclineReusedUpn("directory response is partial, ambiguous or does not corroborate previous-object absence");
             }
-            catch (Exception ex)
+            catch (GraphDecisionRedirectException)
             {
+                return DeclineReusedUpn("Graph returned a redirect instead of answering the directory lookup");
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException && _shutdownToken.IsCancellationRequested))
+            {
+                _shutdownToken.ThrowIfCancellationRequested();
                 _logger.LogWarning("User import - reused UPN verification unavailable ({ExceptionType}); retaining identity quarantine.", ex.GetType().Name);
                 return false;
             }
@@ -256,6 +277,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         private bool DeclineReusedUpn(string reason)
         {
+            _shutdownToken.ThrowIfCancellationRequested();
             _logger.LogInformation("User import - reused UPN verification declined: {Reason}; retaining identity quarantine.", reason);
             return false;
         }
@@ -552,19 +574,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         {
             try
             {
-                var page = await _graphServiceClient.SubscribedSkus.GetAsync();
+                var page = await _graphServiceClient.SubscribedSkus.GetAsync(rc => rc.Options.Add(GraphResponseEvidence.RequireCollection), _shutdownToken);
 
                 if (page?.Value == null)
                 {
                     // A 200 with no `value` collection is NOT the same answer as "this tenant has no
                     // SKUs". The licence refresh treats the SKU list as the authority on who holds
                     // what, so a spuriously empty list would have it remove every licence in the
-                    // tenant. Throw rather than returning null: null is the signal for the *403
-                    // permissions* case below, which routes into the per-user fallback - and that
-                    // fallback loads every user's licence lookups and makes one Graph call per user,
-                    // which at 200k users is both enormously slow and documented as OOM-prone. A
-                    // missing `value` on a 200 is transient, so failing the cycle and retrying is
-                    // both cheaper and safer. See issue #392.
+                    // tenant. Null is reserved for a 403. A malformed success fails the cycle rather
+                    // than being mistaken for a permission problem or an empty inventory (#392).
                     throw new InvalidOperationException(
                         "User import - the tenant SKU response contained no 'value' collection. Aborting rather than treating it as 'this tenant has no SKUs', which would delete every licence assignment in the database.");
                 }
@@ -579,9 +597,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         allSkus.Add(sku);
                         return true;
+                    }, next =>
+                    {
+                        next.AddRequestOptions(new[] { GraphResponseEvidence.RequireCollection });
+                        return next;
                     });
 
-                await iterator.IterateAsync();
+                await iterator.IterateAsync(_shutdownToken);
+                // PageIterator can return normally when cancelled between pages. Never reconcile a partial inventory.
+                _shutdownToken.ThrowIfCancellationRequested();
 
                 if (iterator.State != PagingState.Complete)
                 {
@@ -591,27 +615,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 return allSkus;
             }
-            catch (ODataError ex)
+            catch (ApiException ex)
             {
                 if (ex.ResponseStatusCode != (int)System.Net.HttpStatusCode.Forbidden)
                 {
-                    // Only a 403 justifies the per-user fallback: that is a persistent consent
-                    // problem ('Organization.Read.All' not granted) where per-user licence calls are
-                    // the only way to make progress. Anything else - 429 throttling, 500, 503 - is
-                    // transient, and falling back would turn one cheap failed request into one Graph
-                    // call per user (200k on a large tenant, while we are already being throttled),
-                    // down a path whose own comment warns it can run out of memory. Fail the cycle
-                    // and retry instead; the delta token is not committed, so nothing is lost. This
-                    // also keeps first-page failures consistent with page 2+, which throw
-                    // ServiceException from the PageIterator and already abort. See issue #392.
-                    _logger.LogError(ex, $"User import - couldn't load SKUs for org - {ex.Message}");
+                    // Only a forbidden inventory takes the metadata-only or supported per-user path.
+                    // All other failures still withhold the checkpoint; never reconcile a partial inventory.
+                    if (ex is GraphDecisionRedirectException)
+                        _logger.LogError("User import - couldn't load SKUs for org: {Reason}", ex.Message);
+                    else
+                        _logger.LogError("User import - couldn't load SKUs for org (HTTP {Status}).", ex.ResponseStatusCode);
                     throw;
                 }
 
-                _logger.LogError($"User import - couldn't load SKUs for org - {ex.Message}. Ensure 'Organization.Read.All' in granted.");
-
-                // If we can't get tenant SKUs to find all users by, we can get SKUs per user instead, but this can be very slow.
-                _logger.LogWarning($"User import - will load SKUs directly from each user instead. This will be slow.");
+                _logger.LogWarning("User import - tenant subscribedSkus request returned HTTP 403; tenant licence inventory is unavailable.");
                 return null;
             }
         }
@@ -629,23 +646,25 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // to see and will fail the import rather than silently filling memory forever.
             const int MAX_USERS_PER_SKU = 1_000_000;
             var allUsersWithSku = new List<Microsoft.Graph.Models.User>();
+            var holderFilter = $"assignedLicenses/any(u:u/skuId eq {skuId})";
 
             var firstPage = await _graphServiceClient.Users.GetAsync(rc =>
             {
                 rc.QueryParameters.Select = new[] { "userPrincipalName" };
-                rc.QueryParameters.Filter = $"assignedLicenses/any(u:u/skuId eq {skuId})";
+                rc.QueryParameters.Filter = holderFilter;
 
                 // Without $top Graph pages /users 100 at a time, so a SKU with N holders costs N / 100
                 // sequential requests, every cycle. Graph keeps the page size in each @odata.nextLink,
                 // which the iterator below follows unchanged. Issue #707.
                 rc.QueryParameters.Top = UsersBySkuPageSize;
-            });
+                rc.Options.Add(GraphResponseEvidence.RequireCollection);
+            }, _shutdownToken);
 
             // The licence refresh removes any assignment this list does not report, so an
             // incomplete answer must NEVER be passed off as a complete one - it would delete
             // licences that users still hold. Fail the import instead: the delta token is only
             // committed on success, so the next cycle retries with nothing destroyed. Issue #392.
-            if (firstPage == null)
+            if (firstPage?.Value == null)
             {
                 throw new InvalidOperationException(
                     $"User import - Graph returned no response listing users for SKU {skuId}. Aborting rather than treating it as 'nobody holds this SKU', which would delete every assignment for it.");
@@ -662,12 +681,20 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         return false;
                     }
+                    if (string.IsNullOrWhiteSpace(user?.UserPrincipalName))
+                        throw new GraphCollectionEnvelopeException();
                     allUsersWithSku.Add(user);
                     loaded++;
                     return true;
+                }, next =>
+                {
+                    GraphResponseEvidence.CheckSkuHolderContinuation(next.URI, holderFilter, UsersBySkuPageSize);
+                    next.AddRequestOptions(new[] { GraphResponseEvidence.RequireCollection });
+                    return next;
                 });
 
-            await iterator.IterateAsync();
+            await iterator.IterateAsync(_shutdownToken);
+            _shutdownToken.ThrowIfCancellationRequested();
 
             if (iterator.State == PagingState.Paused)
             {
@@ -687,29 +714,41 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var page = await _graphServiceClient.Users[userId].LicenseDetails.GetAsync(rc =>
                 {
                     rc.QueryParameters.Select = new[] { "skuPartNumber", "skuId" };
-                });
+                    rc.Options.Add(GraphResponseEvidence.RequireCollection);
+                }, _shutdownToken);
 
                 if (page?.Value == null)
                 {
-                    // Same trap as the tenant SKU list, one user at a time: ProcessUserLicenses
-                    // deletes this user's existing lookups and re-adds from whatever comes back, so
-                    // treating a missing 'value' collection as "this user holds no licences" quietly
-                    // deletes their licences. Returning null is the established "couldn't read it"
-                    // signal that ProcessUserLicenses already skips on, so their existing licences
-                    // are retained. Note this does NOT force a re-read: the import still commits the
-                    // /users/delta token, so a user whose licence call failed keeps their previous
-                    // (now possibly stale) licences until they next appear in a delta or the delta
-                    // token is cleared. Stale beats deleted - that is the whole point of #392 - but
-                    // it is not self-correcting on the next cycle.
+                    // Only an explicit empty collection means this user holds no licences. Null excludes
+                    // the user from reconciliation. The checkpoint can still advance, so their existing
+                    // assignments may be stale until their next delta or a full re-read (#392).
                     _logger.LogError($"User import - the licence-details response for user ID '{userId}' contained no 'value' collection. Keeping that user's existing licences rather than treating it as 'no licences'; they will not be re-read until the user next changes in Graph.");
                     return null;
                 }
 
-                return page.Value;
+                var details = new List<LicenseDetails>();
+                var iterator = PageIterator<LicenseDetails, LicenseDetailsCollectionResponse>.CreatePageIterator(
+                    _graphServiceClient, page, detail => { details.Add(detail); return true; }, next =>
+                    {
+                        next.AddRequestOptions(new[] { GraphResponseEvidence.RequireCollection });
+                        return next;
+                    });
+                await iterator.IterateAsync(_shutdownToken);
+                _shutdownToken.ThrowIfCancellationRequested();
+                return details;
             }
-            catch (ODataError ex)
+            catch (GraphCollectionEnvelopeException)
             {
-                _logger.LogError(ex, $"User import - couldn't load service-plans for user ID '{userId}' - {ex.Message}");
+                _shutdownToken.ThrowIfCancellationRequested();
+                _logger.LogWarning("User import - incomplete licence details for user ID '{UserId}'; keeping existing licences.", userId);
+                return null;
+            }
+            catch (ApiException ex) when (ex is ODataError || ex.ResponseStatusCode == 403 || ex.ResponseStatusCode == 404)
+            {
+                // Keep the existing per-user OData fallback even when a refusal or not-found response
+                // has no error body. Other status-only failures (including 429/5xx) still fail the cycle.
+                _logger.LogError("User import - couldn't load service-plans for user ID '{UserId}' (HTTP {Status}); keeping existing licences.",
+                    userId, ex.ResponseStatusCode);
                 return null;
             }
         }

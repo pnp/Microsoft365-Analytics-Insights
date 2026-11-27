@@ -31,6 +31,7 @@ namespace Tests.UnitTests
         public AnalyticsLogger Logger { get; }
 
         public List<TraceTelemetry> Traces => _channel.Sent.OfType<TraceTelemetry>().ToList();
+        public List<EventTelemetry> Events => _channel.Sent.OfType<EventTelemetry>().ToList();
 
         public List<string> Messages(SeverityLevel? severity = null)
             => Traces.Where(t => severity == null || t.SeverityLevel == severity).Select(t => t.Message).ToList();

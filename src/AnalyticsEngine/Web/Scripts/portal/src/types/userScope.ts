@@ -68,6 +68,7 @@ export type UserScopePurgePhase =
 export interface UserScopePurgeTableCount {
   table: string;
   rows: number;
+  isLowerBound?: boolean;
 }
 
 export interface UserScopePurgeJob {
@@ -92,9 +93,12 @@ export interface UserScopePurgeJob {
     | 'filterChanged'
     | 'filterChangedWhileRunning'
     | 'purgeExceedsConfirmed'
+    | 'userDeleteOutcomeUnknown'
+    | 'usageDeleteOutcomeUnknown'
     | 'scopeMembershipChanged'
     | 'databaseError'
     | 'stateUnavailable'
+    | 'coverageStorageRequired'
     | 'unexpected'
     | null;
 }

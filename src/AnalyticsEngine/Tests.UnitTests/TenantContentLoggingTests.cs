@@ -4,6 +4,7 @@ using Azure.Core;
 using DataUtils;
 using DataUtils.Sql;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -44,6 +45,32 @@ namespace Tests.UnitTests
             Assert.IsTrue(errors.Any(m => m.Contains("document b") && m.Contains("language detection returned error UnsupportedLanguageCode")), everything);
         }
 
+        [DataTestMethod]
+        [DataRow("language")]
+        [DataRow("sentiment")]
+        public async Task PageCommentEnrichment_InterruptsTheActiveRequestWithoutReportingAnOutage(string stage)
+        {
+            using (var stop = new CancellationTokenSource())
+            {
+                var logger = new CapturingLogger();
+                var observed = CancellationToken.None;
+                var client = new CognitiveServicesClient(new RejectingTextAnalyticsClient
+                {
+                    OnRequest = (kind, token) =>
+                    {
+                        if (kind != stage) return;
+                        observed = token;
+                        stop.Cancel();
+                        token.ThrowIfCancellationRequested();
+                    }
+                });
+                var samples = new[] { new TextAnalysisSample<object> { Id = "example", Text = "Example comment", Parent = new object() } };
+                await Assert.ThrowsAsync<OperationCanceledException>(() => samples.GetCognitiveDataStats(client, logger, stop.Token));
+                Assert.AreEqual(stop.Token, observed);
+                Assert.IsFalse(logger.Lines.Any(l => l.Level >= Microsoft.Extensions.Logging.LogLevel.Warning));
+            }
+        }
+
         private const string Value = "Contoso Tower 47";
 
         [DataTestMethod]
@@ -74,9 +101,12 @@ namespace Tests.UnitTests
         /// <summary>Detects English for every document except "b", and rejects document "a" in sentiment analysis.</summary>
         private sealed class RejectingTextAnalyticsClient : TextAnalyticsClient
         {
+            public Action<string, CancellationToken> OnRequest { get; set; }
+
             public override Task<Response<DetectLanguageResultCollection>> DetectLanguageBatchAsync(
                 IEnumerable<DetectLanguageInput> documents, TextAnalyticsRequestOptions options = null, CancellationToken cancellationToken = default)
             {
+                OnRequest?.Invoke("language", cancellationToken);
                 var results = documents.Select(d => d.Id == "b"
                     ? TextAnalyticsModelFactory.DetectLanguageResult(d.Id, Error("UnsupportedLanguageCode"))
                     : TextAnalyticsModelFactory.DetectLanguageResult(d.Id, TextAnalyticsModelFactory.TextDocumentStatistics(d.Text.Length, 1),
@@ -87,14 +117,15 @@ namespace Tests.UnitTests
 
             public override Task<Response<AnalyzeSentimentResultCollection>> AnalyzeSentimentBatchAsync(
                 IEnumerable<TextDocumentInput> documents, AnalyzeSentimentOptions options = null, CancellationToken cancellationToken = default) =>
-                Sentiment(documents);
+                Sentiment(documents, cancellationToken);
 
             public override Task<Response<AnalyzeSentimentResultCollection>> AnalyzeSentimentBatchAsync(
                 IEnumerable<TextDocumentInput> documents, TextAnalyticsRequestOptions options, CancellationToken cancellationToken = default) =>
-                Sentiment(documents);
+                Sentiment(documents, cancellationToken);
 
-            private static Task<Response<AnalyzeSentimentResultCollection>> Sentiment(IEnumerable<TextDocumentInput> documents)
+            private Task<Response<AnalyzeSentimentResultCollection>> Sentiment(IEnumerable<TextDocumentInput> documents, CancellationToken cancellationToken)
             {
+                OnRequest?.Invoke("sentiment", cancellationToken);
                 var results = documents.Select(d => d.Id == "a"
                     ? TextAnalyticsModelFactory.AnalyzeSentimentResult(d.Id, Error("InvalidDocument"))
                     : TextAnalyticsModelFactory.AnalyzeSentimentResult(d.Id, TextAnalyticsModelFactory.TextDocumentStatistics(d.Text.Length, 1),

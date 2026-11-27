@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Reflection;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
 
@@ -15,6 +16,9 @@ namespace WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents
 
         [AppInsightsQueryResultProperty("name")]
         public string Name { get; set; }
+
+        [AppInsightsQueryResultProperty("searchIngestionHour")]
+        public DateTime? SearchIngestionHourUtc { get; set; }
 
         public abstract bool IsValid { get; }
 

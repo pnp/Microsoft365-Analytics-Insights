@@ -14,21 +14,19 @@ using Microsoft.Extensions.Logging;
 using System;
 using System.Configuration;
 using System.Diagnostics;
-using System.Threading.Tasks;
 
 namespace WebJob.AppInsightsImporter
 {
     class Program
     {
         /// <summary>
-        /// Whether a failed import cycle is logged and followed by the next one. DEBUG lets it escape instead, to the
-        /// catch around the loop that rethrows it, so it stops in the debugger as it always has.
+        /// DEBUG runs once and lets a cycle exception reach the debugger rather than reporting a failed outcome.
         /// </summary>
-        private static readonly bool ContinueAfterFailedCycle =
+        private static readonly bool DebugBuild =
 #if DEBUG
-            false;
-#else
             true;
+#else
+            false;
 #endif
 
         /// <summary>
@@ -67,7 +65,7 @@ namespace WebJob.AppInsightsImporter
             }
             if (daysBeforeReadOverride > 0) Console.WriteLine($"DEBUG: Will request App Insights data from '{daysBeforeReadOverride}' days before today...");
 
-            var exitCode = HostRuntime.RunGuarded("AppInsightsImporter.Main", () => Task.FromResult(Run(saveRestResponses, debugSwitchDetected, daysBeforeReadOverride)));
+            var exitCode = HostRuntime.RunGuarded("AppInsightsImporter.Main", () => Run(saveRestResponses, debugSwitchDetected, daysBeforeReadOverride));
             AnalyticsLogger.DrainSharedTelemetry();
             return exitCode;
         }
@@ -76,9 +74,6 @@ namespace WebJob.AppInsightsImporter
         {
             // Enabled CTRL+C
             Console.CancelKeyPress += delegate (object sender, ConsoleCancelEventArgs e) { BombOut(); };
-
-            // Check configuration
-            bool runAgain = true;
 
             var importJobSettingsString = ConfigurationManager.AppSettings.Get("ImportJobSettings");
             var importJobSettings = new ImportTaskSettings(importJobSettingsString);
@@ -90,6 +85,17 @@ namespace WebJob.AppInsightsImporter
             // From here every telemetry item carries the build label, job name and run id, and an unhandled exception or a Kudu stop
             // request is reported through this logger.
             HostRuntime.Attach(logger, ImporterHeartbeat.WebTrafficJob, config.BuildLabel);
+
+            bool oneShot = debugSwitchDetected || DebugBuild;
+            if (!importJobSettings.WebTraffic)
+            {
+                logger.LogWarning("WARNING: Web-traffic import is disabled in app configuration. Stopping here until the app is restarted.");
+                // Keep the continuous job idle until Kudu asks it to stop. An explicit one-shot has no work to do.
+                while (!oneShot && !HostRuntime.Wait(TimeSpan.FromHours(1)))
+                {
+                }
+                return 0;
+            }
 
             // Apply the SQL-commit concurrency cap (aggressiveness preset) process-wide BEFORE any hit
             // commit runs - the hits merge is the heaviest SQL importer, so cap its staging fan-out to
@@ -104,34 +110,20 @@ namespace WebJob.AppInsightsImporter
                 Console.WriteLine($"Using ReadHitsDaysBeforeToday='{daysBeforeReadOverride}' from app configuration.");
             }
 
-            bool validConfig = ValidateAndPrintConfig(config, logger);
-            if (validConfig)
+            if (!ValidateAndPrintConfig(config, logger, oneShot))
             {
-                Console.WriteLine();
-                logger.LogInformation("Starting Application Insights import.");
-            }
-            else if (HostRuntime.ShutdownRequested)
-            {
-                logger.LogInformation("Shutdown requested by host before the import started; exiting.");
-                runAgain = false;
-            }
-            else
-            {
-                logger.LogCritical("Check settings & restart app. The Application Insights import is not running.");
-                runAgain = false;
-            }
-
-            // Should we even be running?
-            if (!importJobSettings.WebTraffic)
-            {
-                logger.LogWarning("WARNING: Web-traffic import is disabled in app configuration. Stopping here until the app is restarted.");
-                // Idle, but wake for a Kudu stop request so the process ends cleanly instead of being killed.
-                while (!HostRuntime.Wait(TimeSpan.FromHours(1)))
+                if (HostRuntime.ShutdownRequested)
                 {
+                    logger.LogInformation("Shutdown requested by host before the import started; exiting.");
+                    return 0;
                 }
-                return 0;
+                logger.LogCritical("Check settings & restart app. The Application Insights import is not running.");
+                return HostRuntime.FatalExitCode;
             }
+            Console.WriteLine();
+            logger.LogInformation("Starting Application Insights import.");
 
+            int exitCode;
             var stages = StageTracker.Process;
             using (var heartbeat = new DataUtils.Health.ImporterHeartbeat(logger, DataUtils.Health.ImporterHeartbeat.WebTrafficJob))
             using (var health = Common.Entities.Health.DefaultRuntimeHealth.Start(config, logger, ImporterHeartbeat.WebTrafficJob))
@@ -139,7 +131,7 @@ namespace WebJob.AppInsightsImporter
             {
                 // Heartbeat during the initial stagger too: a planned wait is not a dead process.
 #if !DEBUG
-                if (runAgain && config.ImportStartStaggerMinutes > 0)
+                if (config.ImportStartStaggerMinutes > 0)
                 {
                     logger.LogInformation($"Staggering start by {config.ImportStartStaggerMinutes} min(s) to avoid simultaneous CPU peaks with the activity importer...");
                     HostRuntime.Wait(TimeSpan.FromMinutes(config.ImportStartStaggerMinutes));
@@ -158,7 +150,7 @@ namespace WebJob.AppInsightsImporter
                 logger.LogInformation($"App Insights ingestion cursor: {cursorStore.Description}" +
                     (StateStore.IsConfigured(config) ? "." : ". No Storage connection string, so after a restart the import starts again from the newest stored hit."));
 
-                while (runAgain && !HostRuntime.ShutdownRequested)
+                Engine.AppInsightsImportCycleResult RunCycle(DateTime? normalThroughUtc = null, DateTime? nextNormalUtc = null)
                 {
                     // One operation id per cycle, so every trace, exception and event of a cycle can be pulled out together.
                     using (logger.BeginOperationScope(Guid.NewGuid().ToString("N")))
@@ -166,21 +158,27 @@ namespace WebJob.AppInsightsImporter
                         var importCycleTimer = new JobTimer(logger, Process.GetCurrentProcess().ProcessName);
                         importCycleTimer.Start();
 
-                        // One failed cycle - e.g. a transient SQL error loading the URL filters or the newest hit - must
-                        // not end the process: the web-job would restart, losing the state above and adding downtime.
-                        // Log it and try again after the normal pause. DEBUG still stops on it, in the catch below.
+                        // A transient failure must not restart the continuous web-job and lose the state above.
+                        // In Release report the failed cycle; DEBUG still stops on the exception in the catch below.
                         Engine.AppInsightsImportCycleResult cycleResult = null;
                         Exception cycleException = null;
                         try
                         {
-                            var userScope = userScopeProvider.GetScopeForCycleAsync().GetAwaiter().GetResult();
+                            // A supplemental refresh belongs to its bounded pass, not to the next normal poll.
+                            var userScope = normalThroughUtc.HasValue ? null :
+                                userScopeProvider.GetScopeForCycleAsync(HostRuntime.ShutdownToken).GetAwaiter().GetResult();
+                            HostRuntime.ThrowIfShutdownRequested();
                             var importer = new Engine.AppInsightsImporter(config, logger, userScope: userScope, scanWatermark: scanWatermark,
                                 dayFailureTracker: dayFailures, cursorStore: cursorStore);
                             int? readDaysBefore = daysBeforeReadOverride > 0 ? daysBeforeReadOverride : (int?)null;
-                            var stage = stages.Begin(logger, "AppInsightsImport");
+                            var stage = stages.Begin(logger, normalThroughUtc.HasValue ? "AppInsightsSearchRecovery" : "AppInsightsImport");
                             try
                             {
-                                cycleResult = importer.ImportAndSave(saveRestResponses, readDaysBefore).GetAwaiter().GetResult();
+                                cycleResult = normalThroughUtc.HasValue
+                                    ? importer.RecoverPendingSearchesAsync(normalThroughUtc.Value, nextNormalUtc.Value,
+                                        HostRuntime.ShutdownToken, userScopeProvider.GetScopeForCycleAsync).GetAwaiter().GetResult()
+                                    : importer.ImportAndSave(saveRestResponses, readDaysBefore, HostRuntime.ShutdownToken).GetAwaiter().GetResult();
+                                HostRuntime.ThrowIfShutdownRequested();
                                 if (cycleResult.Outcome == Engine.AppInsightsCycleOutcome.Failed)
                                 {
                                     stage.Failed(reason: string.Join(",", cycleResult.Reasons));
@@ -190,47 +188,49 @@ namespace WebJob.AppInsightsImporter
                                     stage.Succeeded();
                                 }
                             }
+                            catch (OperationCanceledException) when (HostRuntime.ShutdownRequested)
+                            {
+                                stage.Skipped("HostShutdown");
+                                throw new ShutdownRequestedException();
+                            }
                             catch (Exception ex)
                             {
                                 stage.Failed(ex);
                                 throw;
                             }
                         }
-                        catch (Exception ex) when (ContinueAfterFailedCycle)
+                        catch (Exception ex) when (!DebugBuild && !(ex is ShutdownRequestedException))
                         {
                             // One telemetry owner: the exception is tracked here, once, with its chain in the message and its stack on stderr.
+                            cycleResult = null;
                             cycleException = ex;
-                            logger.LogError($"Import cycle failed: {CommonExceptionHandler.GetErrorText(ex)}. Trying again after the normal pause.", ex);
+                            var retry = oneShot ? string.Empty : " Trying again after the normal pause.";
+                            logger.LogError($"Import cycle failed: {CommonExceptionHandler.GetErrorText(ex)}.{retry}", ex);
                         }
 
-#if DEBUG
-                        runAgain = false; // Debug only runs once; release runs forever.
-#else
-                        runAgain = !debugSwitchDetected;
-#endif
-
-                        // Every cycle reports its outcome. Only one that got to the end - Succeeded or Degraded - counts as a
-                        // completed cycle for liveness: a cycle that stopped at a failed day, or threw, is not reported as one.
+                        // A search-only pass reports its own outcome, but cannot certify normal ingestion for liveness.
                         var outcome = Engine.AppInsightsImportTelemetry.TrackCycle(logger, cycleResult, importCycleTimer.Elapsed, cycleException);
-                        if (outcome != Engine.AppInsightsCycleOutcome.Failed)
+                        if (!normalThroughUtc.HasValue && outcome != Engine.AppInsightsCycleOutcome.Failed)
                         {
                             heartbeat.CycleCompleted(importCycleTimer.Elapsed);
                             importCycleTimer.TrackFinishedEventAndStopTimer(AnalyticsLogger.AnalyticsEvent.FinishedImportCycle);
                         }
-                    }
-
-                    if (runAgain)
-                    {
-                        ConsoleApp.WebjobWait(logger, config.ImportCyclePauseMinutes);
+                        return cycleResult;
                     }
                 }
 
+                exitCode = Engine.AppInsightsImportLoop.Run(oneShot, () => RunCycle(), (through, deadline) => RunCycle(through, deadline),
+                    config.ImportCyclePauseMinutes, delay =>
+                    {
+                        logger.LogInformation($"Waiting {delay.TotalMinutes:0.##} min(s)...");
+                        HostRuntime.Wait(delay);
+                    }, () => HostRuntime.ShutdownRequested, SystemClock.Instance);
                 if (HostRuntime.ShutdownRequested)
                 {
                     logger.LogInformation("Shutdown requested by host: the import loop has stopped; flushing telemetry and exiting.");
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!(ex is ShutdownRequestedException))
             {
                 // The exception is normally unwrapped from the AggregateException of a blocking wait; the message carries the
                 // whole inner-exception chain and the console gets the full stack, as well as the 'exceptions' table.
@@ -252,7 +252,7 @@ namespace WebJob.AppInsightsImporter
             Console.WriteLine("DEBUG MODE: All done. Press any key to continue.");
             Console.ReadKey();
 #endif
-            return 0;
+            return exitCode;
         }
 
 
@@ -268,11 +268,10 @@ namespace WebJob.AppInsightsImporter
         }
 
         /// <summary>
-        /// Output the config and check it's good. The SQL check retries with a back-off rather than letting the
-        /// import start against a database it cannot reach.
+        /// Only a continuous WebJob waits for SQL to recover. An explicit one-shot must report failure to its caller.
         /// </summary>
         /// <returns>If the config is valid</returns>
-        private static bool ValidateAndPrintConfig(AppConfig settings, AnalyticsLogger logger)
+        private static bool ValidateAndPrintConfig(AppConfig settings, AnalyticsLogger logger, bool oneShot)
         {
             ConsoleApp.PrintStartupAndLoggingConfig(settings.ConnectionStrings.DatabaseConnectionString, settings.BuildLabel, settings.UserGroupsFilter, logger);
 
@@ -282,8 +281,12 @@ namespace WebJob.AppInsightsImporter
                 return false;
             }
 
-            // Have config object test: a failure is Critical, then retried until SQL answers (or Kudu asks the job to stop).
-            if (!StartupSqlCheck.WaitUntilReachable(() => settings.ConnectionStrings.TestSQLSettings(logger), logger, ImporterHeartbeat.WebTrafficJob))
+            if (HostRuntime.ShutdownRequested) return false;
+            var reachable = oneShot
+                ? settings.ConnectionStrings.TestWebTrafficSqlOnceAsync(logger, HostRuntime.ShutdownToken).GetAwaiter().GetResult()
+                : StartupSqlCheck.WaitUntilReachable(ct => settings.ConnectionStrings.TestWebTrafficSqlOnceAsync(logger, ct), logger,
+                    ImporterHeartbeat.WebTrafficJob, HostRuntime.ShutdownToken);
+            if (!reachable)
             {
                 return false;
             }

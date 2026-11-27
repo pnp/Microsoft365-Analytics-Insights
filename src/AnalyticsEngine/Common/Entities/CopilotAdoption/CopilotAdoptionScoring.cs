@@ -1744,7 +1744,7 @@ namespace Common.Entities.CopilotAdoption
         {
             var o = options ?? CopilotAdoptionOptions.Default;
 
-            if (cohort == null || cohort.Count == 0 || cohort.Any(row => row.WorkloadUnavailableReason != null))
+            if (cohort == null || cohort.Any(row => row.WorkloadUnavailableReason != null))
             {
                 return new CoworkValueEstimate();
             }
@@ -1784,7 +1784,7 @@ namespace Common.Entities.CopilotAdoption
             IReadOnlyCollection<LicenceOpportunityRow> candidates,
             CopilotAdoptionOptions options = null)
         {
-            if (candidates == null || candidates.Count == 0 || candidates.Any(row => row.WorkloadUnavailableReason != null))
+            if (candidates == null || candidates.Any(row => row.WorkloadUnavailableReason != null))
             {
                 return new CoworkValueEstimate();
             }
@@ -1835,7 +1835,7 @@ namespace Common.Entities.CopilotAdoption
             CoworkEstimateCohort who = CoworkEstimateCohort.SeatHolders)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
-            var estimate = new CoworkValueEstimate();
+            var estimate = new CoworkValueEstimate { WorkloadAssessed = true };
 
             if (cohortUsers <= 0)
             {
@@ -2167,7 +2167,7 @@ namespace Common.Entities.CopilotAdoption
         {
             var o = options ?? CopilotAdoptionOptions.Default;
 
-            if (candidates == null || candidates.Count == 0 || candidates.Any(row => row.WorkloadUnavailableReason != null
+            if (candidates == null || candidates.Any(row => row.WorkloadUnavailableReason != null
                 || !row.TeamsMeetings.HasValue || !row.EmailsSent.HasValue || !row.EmailsRead.HasValue || !row.FilesViewedOrEdited.HasValue))
             {
                 return new LicenceValueEstimate { CandidatesCapped = candidatesCapped };
@@ -2222,7 +2222,7 @@ namespace Common.Entities.CopilotAdoption
             LicenceEstimateCohort cohort = LicenceEstimateCohort.Recommended)
         {
             var o = options ?? CopilotAdoptionOptions.Default;
-            var licenceEstimate = new LicenceValueEstimate { CandidatesCapped = candidatesCapped };
+            var licenceEstimate = new LicenceValueEstimate { CandidatesCapped = candidatesCapped, WorkloadAssessed = true };
 
             if (cohortUsers <= 0)
             {

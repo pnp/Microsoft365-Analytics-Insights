@@ -1,5 +1,6 @@
 using Common.Entities;
 using Microsoft.Extensions.Logging;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 using WebJob.AppInsightsImporter.Engine.Properties;
@@ -13,9 +14,13 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         /// <summary>
         /// Save hits to staging table & then import all to real hits + lookups
         /// </summary>
-        public static async Task<int> SaveClicksToSQL(this CustomEventsResultCollection events, ILogger logger, AnalyticsEntitiesContext database)
+        public static Task<int> SaveClicksToSQL(this CustomEventsResultCollection events, ILogger logger, AnalyticsEntitiesContext database)
+            => events.SaveClicksToSQL(logger, database, CancellationToken.None);
+
+        internal static async Task<int> SaveClicksToSQL(this CustomEventsResultCollection events, ILogger logger,
+            AnalyticsEntitiesContext database, CancellationToken cancellationToken)
         {
-            var logsToInsert = new EFInsertBatch<ClickTempEntity>(database, logger);
+            var logsToInsert = new EFInsertBatch<ClickTempEntity>(database, logger, cancellationToken);
 
             // Pure decision logic - which clicks can be staged. See issue #369.
             var plan = ClickEventRules.Plan(events.Rows);

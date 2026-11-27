@@ -17,8 +17,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules
         }
 
         /// <summary>
-        /// False when nothing may be skipped at all - no usage-report phase has ever completed, so any
-        /// stored row could be from an interrupted import and must be re-downloaded.
+        /// False when there is no completion or no date in the configured window could have matured by then.
         /// </summary>
         public bool CanSkipAnyDate { get; }
 
@@ -79,8 +78,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules
         /// <item><b>Graph must be done changing it.</b> Usage reports have a ~2-3 day latency and are
         /// stable once finalized, so anything newer than
         /// <paramref name="refreshableRecentDays"/> can still move and is never skipped.</item>
-        /// <item><b>A full import phase must have covered it.</b> Rows newer than the last completed
-        /// phase may be from an interrupted save, so they are retried. With no completed phase at all
+        /// <item><b>The previous successful report must have seen it mature.</b> Even the last date of that
+        /// run cannot have been requested after its completion. If it was still too young then, fetch it
+        /// again even if the importer missed days and it has left today's refresh window. With no completion
         /// (<paramref name="lastSuccessfulImport"/> is null) nothing is proven complete and
         /// <see cref="UsageReportSkipWindow.CanSkipAnyDate"/> is false.</item>
         /// </list>
@@ -91,19 +91,24 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.UsageReports.Rules
             daysBackMax = ClampDaysBack(daysBackMax);
             var today = nowUtc.Date;
             var windowStart = today.AddDays(-daysBackMax);
+            var completedDay = lastSuccessfulImport?.ToUniversalTime().Date;
 
-            if (!lastSuccessfulImport.HasValue)
+            if (!completedDay.HasValue || completedDay.Value <= windowStart)
             {
                 // Existing rows could be from an interrupted import. Until a full usage-report
                 // phase completes, no stored date is proven complete enough to skip safely.
                 return new UsageReportSkipWindow(false, windowStart, windowStart, daysBackMax);
             }
 
-            var mutableCutoff = today.AddDays(-refreshableRecentDays);   // dates >= this can still change; never skip them
-            var completedCutoff = lastSuccessfulImport.Value.ToUniversalTime().Date;
+            var recentDays = Math.Min(daysBackMax, Math.Max(0, refreshableRecentDays));
+            var mutableCutoff = today.AddDays(-recentDays);
+            // Exclusive: a mature D+3 request can settle D, but a D+2 one cannot, even after a gap.
+            var completedCutoff = completedDay.Value.AddDays(1 - Math.Max(1, recentDays));
             var safeCutoff = completedCutoff < mutableCutoff ? completedCutoff : mutableCutoff;
 
-            return new UsageReportSkipWindow(true, windowStart, safeCutoff, daysBackMax);
+            return safeCutoff > windowStart
+                ? new UsageReportSkipWindow(true, windowStart, safeCutoff, daysBackMax)
+                : new UsageReportSkipWindow(false, windowStart, windowStart, daysBackMax);
         }
 
         /// <summary>

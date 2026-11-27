@@ -30,21 +30,24 @@ namespace Tests.UnitTests
     {
         private static readonly Guid SkuId = Guid.Empty;
 
-        private const string NextLink =
-            "https://graph.microsoft.com/v1.0/users?$filter=assignedLicenses%2Fany(u%3Au%2FskuId+eq+00000000-0000-0000-0000-000000000000)" +
-            "&$select=userPrincipalName&$top=999&$skiptoken=synthetic-page-2";
+        private const string SkuFilter = "assignedLicenses%2Fany(u%3Au%2FskuId+eq+00000000-0000-0000-0000-000000000000)";
+        private const string UsersUrl = "https://graph.microsoft.com/v1.0/users?";
+        internal const string SkuNextLink = UsersUrl + "$filter=" + SkuFilter +
+            "&$select=userPrincipalName&$top=999&$skiptoken=synthetic%2Bpage%2F2%3D";
 
         private const string CurrentId = "00000000-0000-0000-0000-000000000001";
         private const string PreviousId = "00000000-0000-0000-0000-000000000002";
         private const string CurrentJson = "{\"id\":\"" + CurrentId + "\",\"userPrincipalName\":\"reused@contoso.com\",\"accountEnabled\":true}";
         private const string NotFoundJson = "{\"error\":{\"code\":\"Request_ResourceNotFound\",\"message\":\"synthetic missing object\"}}";
 
-        [TestMethod]
-        public async Task ReusedUpn_FreshOwnerAndCorroboratedAbsence_UsesOnlyTheConflictingPair()
+        [DataTestMethod]
+        [DataRow("Request_ResourceNotFound")]
+        [DataRow("ResourceNotFound")]
+        public async Task ReusedUpn_FreshOwnerAndCorroboratedAbsence_UsesOnlyTheConflictingPair(string code)
         {
             var handler = new ScriptedGraphHandler()
                 .Then(HttpStatusCode.OK, CurrentJson)
-                .Then(HttpStatusCode.NotFound, NotFoundJson)
+                .Then(HttpStatusCode.NotFound, TeamsCrawlTests.StubGraphHandler.Error(code))
                 .Then(HttpStatusCode.OK, "{\"value\":[" + CurrentJson + "]}");
             Assert.IsTrue(await NewLoader(handler).VerifyReusedUpnAsync(CurrentOwner(), PreviousId));
             Assert.AreEqual(3, handler.Requests.Count);
@@ -189,7 +192,7 @@ namespace Tests.UnitTests
         public async Task LoadUsersBySku_RequestsTheMaximumPageSize_AndFollowsNextLinkToTheEnd()
         {
             var handler = new ScriptedGraphHandler()
-                .Then(HttpStatusCode.OK, Page(NextLink, "alice@contoso.com", "bob@contoso.com"))
+                .Then(HttpStatusCode.OK, Page(SkuNextLink, "alice@contoso.com", "bob@contoso.com"))
                 .Then(HttpStatusCode.OK, Page(null, "carol@contoso.com"));
 
             var users = await NewLoader(handler).LoadUsersBySku(SkuId);
@@ -206,8 +209,39 @@ namespace Tests.UnitTests
             StringAssert.Contains(firstQuery, "$select=userPrincipalName");
             StringAssert.Contains(firstQuery, $"$filter=assignedLicenses/any(u:u/skuId eq {SkuId})");
 
-            Assert.AreEqual(Uri.UnescapeDataString(new Uri(NextLink).AbsoluteUri), Uri.UnescapeDataString(handler.Requests[1].AbsoluteUri),
+            Assert.AreEqual(new Uri(SkuNextLink).AbsoluteUri, handler.Requests[1].AbsoluteUri,
                 "Page 2 must be Graph's nextLink, followed as-is.");
+        }
+
+        [DataTestMethod]
+        [DataRow("$top=999")]
+        [DataRow("$skiptoken=synthetic")]
+        [DataRow("$filter=assignedLicenses%2Fany(u%3Au%2FskuId+eq+00000000-0000-0000-0000-000000000001)&$skiptoken=synthetic")]
+        [DataRow("$filter=" + SkuFilter)]
+        [DataRow("$filter=" + SkuFilter + "&$skiptoken=")]
+        [DataRow("$filter=" + SkuFilter + "&%24filter=accountEnabled+eq+true&$skiptoken=synthetic")]
+        [DataRow("$filter=" + SkuFilter + "&$search=synthetic&$skiptoken=synthetic")]
+        [DataRow("$filter=" + SkuFilter + "&$select=displayName&$skiptoken=synthetic")]
+        public async Task LoadUsersBySku_InvalidLaterContinuation_NeverRequestsItOrReturnsPartialHolders(string query)
+        {
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, Page(SkuNextLink, "alice@contoso.com"))
+                .Then(HttpStatusCode.OK, Page(UsersUrl + query, "bob@contoso.com"))
+                .Then(HttpStatusCode.OK, Page(null, "carol@contoso.com"));
+
+            await Assert.ThrowsExactlyAsync<GraphCollectionEnvelopeException>(() => NewLoader(handler).LoadUsersBySku(SkuId));
+
+            Assert.AreEqual(2, handler.Requests.Count, "A valid opaque continuation is sent; the invalid one is not.");
+        }
+
+        [TestMethod]
+        public async Task LoadUsersBySku_AHolderWithoutAnUpn_CannotBeReconciledAsAnOmission()
+        {
+            var handler = new ScriptedGraphHandler()
+                .Then(HttpStatusCode.OK, Page(SkuNextLink, "alice@contoso.com"))
+                .Then(HttpStatusCode.OK, "{\"value\":[{}]}");
+
+            await Assert.ThrowsExactlyAsync<GraphCollectionEnvelopeException>(() => NewLoader(handler).LoadUsersBySku(SkuId));
         }
 
         [TestMethod]
@@ -238,7 +272,7 @@ namespace Tests.UnitTests
         public async Task LoadUsersBySku_AFailedPageTwo_Throws_InsteadOfReturningTheFirstPage()
         {
             var handler = new ScriptedGraphHandler()
-                .Then(HttpStatusCode.OK, Page(NextLink, "alice@contoso.com"))
+                .Then(HttpStatusCode.OK, Page(SkuNextLink, "alice@contoso.com"))
                 .Then(HttpStatusCode.InternalServerError, "{\"error\":{\"code\":\"generalException\",\"message\":\"synthetic\"}}");
 
             Exception thrown = null;
@@ -307,7 +341,7 @@ namespace Tests.UnitTests
                 var response = new HttpResponseMessage(next.Item1)
                 {
                     RequestMessage = request,
-                    Content = new StringContent(next.Item2 ?? string.Empty, Encoding.UTF8, "application/json"),
+                    Content = next.Item2 == null ? null : new StringContent(next.Item2, Encoding.UTF8, "application/json"),
                 };
                 return Task.FromResult(response);
             }

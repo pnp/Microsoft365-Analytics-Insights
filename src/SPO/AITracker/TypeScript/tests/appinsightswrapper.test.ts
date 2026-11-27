@@ -3,23 +3,22 @@
  */
 
 import { AppInsightsWrapper } from '../src/AppInsightsWrapper';
-import { ApplicationInsights, IEventTelemetry, IPageViewTelemetry } from '@microsoft/applicationinsights-web';
+import type { IEventTelemetry, IPageViewTelemetry } from '@microsoft/applicationinsights-core-js';
+import type { TrackerTelemetry } from '../src/TrackerTelemetry';
 import { ClickData } from '../src/Definitions';
 import { PageProps } from '../src/PageProps/Models/PageProps';
 
 // Mock ApplicationInsights
-function createMockAI() {
+function createMockAI(): TrackerTelemetry {
     return {
         trackPageView: jest.fn(),
         trackEvent: jest.fn(),
-        setAuthenticatedUserContext: jest.fn(),
-        loadAppInsights: jest.fn(),
-    } as unknown as ApplicationInsights;
+    };
 }
 
 describe('AppInsightsWrapper', () => {
 
-    let mockAI: ApplicationInsights;
+    let mockAI: TrackerTelemetry;
     let wrapper: AppInsightsWrapper;
     const sessionId = 'test-session-id';
 
@@ -41,6 +40,7 @@ describe('AppInsightsWrapper', () => {
             expect(callArg.uri).toBe('https://contoso.sharepoint.com/sites/test');
             expect(callArg.name).toBe('Test Page');
             expect(callArg.properties!['pageLoad']).toBe(150);
+            expect(callArg.properties!.duration).toBe(150);
             expect(callArg.properties!.webUrl).toBe('https://web');
             expect(callArg.properties!.siteUrl).toBe('https://site');
             expect(callArg.properties!.sessionId).toBe(sessionId);
@@ -94,13 +94,23 @@ describe('AppInsightsWrapper', () => {
             expect(firstPageReqId).not.toBe(secondPageReqId);
         });
 
-        test('uses performance API when no pageLoadDuration given', () => {
-            wrapper.trackCurrentPageView(undefined, null, 'https://web', 'https://site', 'Web');
-            expect(mockAI.trackPageView).toHaveBeenCalledTimes(1);
-
-            const callArg = (mockAI.trackPageView as jest.Mock).mock.calls[0][0] as IPageViewTelemetry;
-            expect(callArg.properties!['pageLoad']).toBeDefined();
-            expect(typeof callArg.properties!['pageLoad']).toBe('number');
+        test.each([
+            ['legacy measurement', 1000, 1250, 250],
+            ['incomplete navigation', 1000, 0, undefined],
+            ['missing navigation start', 0, 1250, undefined],
+            ['non-finite reading', 1000, Infinity, undefined],
+        ])('an unknown hard load is not an explicit zero-duration soft view: %s', (_, navigationStart, loadEventEnd, expected) => {
+            const original = Object.getOwnPropertyDescriptor(performance, 'timing');
+            Object.defineProperty(performance, 'timing', { configurable: true, value: { navigationStart, loadEventEnd } });
+            try {
+                wrapper.trackCurrentPageView(undefined, null, 'https://web', 'https://site', 'Web');
+                const { properties } = (mockAI.trackPageView as jest.Mock).mock.calls[0][0];
+                expect(properties.pageLoad).toBe(expected ?? 0);
+                expect(properties.duration).toBe(expected);
+            } finally {
+                if (original) Object.defineProperty(performance, 'timing', original);
+                else Reflect.deleteProperty(performance, 'timing');
+            }
         });
     });
 
@@ -209,31 +219,41 @@ describe('AppInsightsWrapper', () => {
             const errorSpy = jest.spyOn(console, 'error').mockImplementation();
             const clickData: ClickData = { linkText: 'Early link', altText: '', classNames: null, href: 'https://target.com' };
 
-            wrapper.trackClick(clickData);
-            const heldTimeStamp = wrapper._clicksBeforeFirstPageView[0].timeStamp;
-            expect(mockAI.trackEvent).not.toHaveBeenCalled();
-            expect(errorSpy).not.toHaveBeenCalled();
+            jest.useFakeTimers();
+            try {
+                const clickedAt = new Date().toISOString();
+                wrapper.trackClick(clickData);
+                expect(mockAI.trackEvent).not.toHaveBeenCalled();
+                expect(errorSpy).not.toHaveBeenCalled();
 
-            wrapper.trackCurrentPageView(100, null, 'https://web', 'https://site', 'Web');
-
-            const clicks = (mockAI.trackEvent as jest.Mock).mock.calls.map(c => c[0] as IEventTelemetry).filter(e => e.name === 'LinkClick');
-            expect(clicks.length).toBe(1);
-            expect(clicks[0].properties!.pageRequestId).toBe(wrapper._pageRequestId);
-            expect(clicks[0].properties!.timeStamp).toBe(heldTimeStamp);
-            expect(wrapper._clicksBeforeFirstPageView.length).toBe(0);
-            errorSpy.mockRestore();
+                jest.advanceTimersByTime(2000);
+                wrapper.trackCurrentPageView(100, null, 'https://web', 'https://site', 'Web');
+                const clicks = (mockAI.trackEvent as jest.Mock).mock.calls.map(c => c[0] as IEventTelemetry).filter(e => e.name === 'LinkClick');
+                expect(clicks.length).toBe(1);
+                expect(clicks[0].properties!.pageRequestId).toBe(wrapper._pageRequestId);
+                expect(clicks[0].properties!.timeStamp).toBe(clickedAt);
+            } finally {
+                jest.useRealTimers();
+                errorSpy.mockRestore();
+            }
         });
 
-        test('holds a bounded number of clicks before the first page view', () => {
+        test.each(['first view', 'next view'])('holds only the first 20 clicks while waiting for the %s', view => {
             const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+            if (view === 'next view') {
+                wrapper.trackCurrentPageView(100, null, 'https://web', 'https://site', 'Web');
+                Object.defineProperty(document, 'URL', { value: document.URL + '?q=next', configurable: true });
+            }
             for (let i = 0; i < 25; i++) {
                 wrapper.trackClick({ linkText: `Link ${i}`, altText: '', classNames: null, href: '' });
             }
-            expect(wrapper._clicksBeforeFirstPageView.length).toBe(20);
+            expect(mockAI.trackEvent).not.toHaveBeenCalled();
             expect(warnSpy).toHaveBeenCalledTimes(5);
 
             wrapper.trackCurrentPageView(100, null, 'https://web', 'https://site', 'Web');
-            expect((mockAI.trackEvent as jest.Mock).mock.calls.filter(c => c[0].name === 'LinkClick').length).toBe(20);
+            const clicks = (mockAI.trackEvent as jest.Mock).mock.calls.map(c => c[0]).filter(e => e.name === 'LinkClick');
+            expect(clicks.map(c => c.properties.linkText)).toEqual(Array.from({ length: 20 }, (_, i) => `Link ${i}`));
+            expect(clicks.every(c => c.properties.pageRequestId === wrapper._pageRequestId)).toBe(true);
             warnSpy.mockRestore();
         });
 
@@ -244,7 +264,6 @@ describe('AppInsightsWrapper', () => {
             wrapper.trackCurrentPageView(0, null, 'https://web', 'https://site', 'Web');
 
             expect((mockAI.trackEvent as jest.Mock).mock.calls.filter(c => c[0].name === 'LinkClick').length).toBe(0);
-            expect(wrapper._clicksBeforeFirstPageView.length).toBe(0);
         });
 
         test('a held click is still sent if only the #fragment of the page changed: an in-page link', () => {

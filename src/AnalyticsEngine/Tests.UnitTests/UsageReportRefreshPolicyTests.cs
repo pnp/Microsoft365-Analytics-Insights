@@ -41,8 +41,7 @@ namespace Tests.UnitTests
         [TestMethod]
         public void UsageReports_DateOlderThanRefreshWindow_IsASkipCandidate()
         {
-            // A completed phase well in the past: the Graph mutability window (3 days) is then the binding
-            // cutoff, so everything from the window start up to now-3d is skippable.
+            // Yesterday's D+3 request could settle the day that is D+4 today.
             var window = Window(28, NowUtc.AddDays(-1));
 
             Assert.IsTrue(window.CanSkipAnyDate);
@@ -85,14 +84,14 @@ namespace Tests.UnitTests
         [TestMethod]
         public void UsageReports_CompletedPhaseOlderThanTheMutabilityWindow_BecomesTheBindingCutoff()
         {
-            // The earlier of the two cutoffs wins. With the last completed phase 10 days ago, dates between
-            // then and the 3-day mutability edge are NOT skippable - they may be from an interrupted save.
+            // Even at the END of the previous run these dates were too young for a final fetch.
             var window = Window(28, NowUtc.AddDays(-10));
 
-            Assert.AreEqual(NowUtc.Date.AddDays(-10), window.SafeCutoffUtc);
+            Assert.AreEqual(NowUtc.Date.AddDays(-12), window.SafeCutoffUtc);
             var candidates = UsageReportRefreshPolicy.EnumerateSkipCandidates(window).ToList();
             CollectionAssert.DoesNotContain(candidates, NowUtc.Date.AddDays(-5));
-            CollectionAssert.Contains(candidates, NowUtc.Date.AddDays(-11));
+            CollectionAssert.DoesNotContain(candidates, NowUtc.Date.AddDays(-12));
+            CollectionAssert.Contains(candidates, NowUtc.Date.AddDays(-13));
         }
 
         [TestMethod]

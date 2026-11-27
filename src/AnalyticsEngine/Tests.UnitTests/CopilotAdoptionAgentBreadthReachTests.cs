@@ -721,14 +721,12 @@ namespace Tests.UnitTests
                 StringAssert.Contains(method, expected);
             }
 
-            var facts = WorkbookCells(bytes, "Snapshot facts");
-            var builders = facts.IndexOf("agentBuilders");
-            Assert.AreNotEqual(-1, builders, "Tenant-level figures reach Snapshot facts as their own keys.");
-            Assert.AreEqual(string.Empty, facts[builders + 1],
-                "Not measured, so the value is written blank - never as a zero.");
-            var reach = facts.IndexOf("agentsInThreeOrMoreDepartments");
-            Assert.AreEqual("1", facts[reach + 1]);
-            Assert.IsFalse(facts.Any(f => f == "Finance" || f == "Legal"), "Department names are tenant data and never a fact key.");
+            Assert.IsNull(CopilotAdoptionWorkbookTests.SnapshotValueCell(bytes, "agentBuilders"),
+                "An unmeasured figure keeps its key but has no value cell, not even an empty string.");
+            var facts = CopilotAdoptionWorkbookTests.SnapshotFactValues(bytes);
+            Assert.AreEqual("1", facts["agentsInThreeOrMoreDepartments"]);
+            Assert.IsFalse(facts.Keys.Any(key => key.Contains("Finance") || key.Contains("Legal")),
+                "Department names are tenant data and never a fact key.");
         }
 
         private static List<string> WorkbookCells(byte[] bytes, string sheetName)

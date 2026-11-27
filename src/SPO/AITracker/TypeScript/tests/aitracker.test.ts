@@ -11,27 +11,26 @@ import { AI_TRACKER_VER } from '../src/AiTrackerConstants';
 
 const mockAiInstances: any[] = [];
 let mockSecondsOnPage = 12;         // TimeMe's running total of active seconds on page
+let mockActiveClock: (() => number) | undefined;
+let mockUseRealTimeMe = false;
 
-jest.mock('@microsoft/applicationinsights-web', () => ({
-    ApplicationInsights: jest.fn().mockImplementation((settings: any) => {
-        const instance = {
-            config: settings.config,
-            // As the SDK does for a connection string without an instrumentation key
-            loadAppInsights: jest.fn(() => {
-                if (settings.config.connectionString.indexOf('InstrumentationKey=') === -1) throw new Error('Please provide instrumentation key');
-            }),
-            setAuthenticatedUserContext: jest.fn(),
-            trackPageView: jest.fn(),
-            trackEvent: jest.fn(),
-        };
+jest.mock('../src/TrackerTelemetry', () => ({
+    createTrackerTelemetry: jest.fn((connectionString: string, _user: string, beforePageHideFlush: (persisted: boolean) => void) => {
+        const instance = { trackPageView: jest.fn(), trackEvent: jest.fn() };
         mockAiInstances.push(instance);
+        if (!connectionString.includes('InstrumentationKey=')) throw new Error('Missing instrumentation key');
+        window.addEventListener('pagehide', e => beforePageHideFlush(e.persisted));
         return instance;
     }),
 }));
 
-jest.mock('timeme.js', () => ({
+jest.mock('timeme.js', () => mockUseRealTimeMe ? jest.requireActual('timeme.js') : ({
     __esModule: true,
-    default: { initialize: jest.fn(), getTimeOnCurrentPageInSeconds: jest.fn(() => mockSecondsOnPage) },
+    default: {
+        initialize: jest.fn(),
+        getTimeOnCurrentPageInSeconds: () => mockActiveClock ? mockActiveClock() / 1000 : mockSecondsOnPage,
+        getTimeOnCurrentPageInMilliseconds: () => mockActiveClock ? mockActiveClock() : mockSecondsOnPage * 1000,
+    },
 }));
 
 jest.mock('../src/Config/ConfigHandler', () => ({
@@ -52,10 +51,12 @@ const UNTRACKED_PAGE_URL = UNTRACKED_SITE_URL + '/SitePages/Private.aspx';
 
 let readyState: DocumentReadyState = 'complete';
 let navigationEntries: any[] = [];
-let listeners: { target: EventTarget, type: string, listener: any }[] = [];
+let historyChanges: EventTarget | undefined;
+let listeners: { target: EventTarget, type: string, listener: any, options?: AddEventListenerOptions | boolean }[] = [];
 let intervals: Function[] = [];
 
 Object.defineProperty(document, 'readyState', { configurable: true, get: () => readyState });
+Object.defineProperty(window, 'navigation', { configurable: true, get: () => historyChanges });
 Object.defineProperty(window.performance, 'getEntriesByType', {
     configurable: true,
     value: (type: string) => type === 'navigation' ? navigationEntries : [],
@@ -107,7 +108,7 @@ describe('AITracker page bootstrap', () => {
         for (const target of [document, window] as EventTarget[]) {
             const original = target.addEventListener;
             jest.spyOn(target, 'addEventListener').mockImplementation(function (type: string, listener: any, options?: any) {
-                listeners.push({ target, type, listener });
+                listeners.push({ target, type, listener, options });
                 return original.call(target, type, listener, options);
             } as any);
         }
@@ -130,8 +131,10 @@ describe('AITracker page bootstrap', () => {
 
         mockAiInstances.length = 0;
         mockSecondsOnPage = 12;
+        historyChanges = undefined;
         Object.keys(Cookies.get()).forEach(name => Cookies.remove(name));
         document.body.innerHTML = '';
+        document.title = '';
         readyState = 'complete';
         setUrl(PAGE_URL);
         navigationEntries = [{ name: PAGE_URL, startTime: 0, loadEventEnd: 1500 }];
@@ -139,7 +142,7 @@ describe('AITracker page bootstrap', () => {
 
     afterEach(async () => {
         await settle();     // Let a copy's pending setTimeout finish here, not in the next test
-        listeners.forEach(l => l.target.removeEventListener(l.type, l.listener));
+        listeners.forEach(l => l.target.removeEventListener(l.type, l.listener, l.options));
         listeners = [];
         jest.restoreAllMocks();
     });
@@ -199,6 +202,47 @@ describe('AITracker page bootstrap', () => {
         expect(eventsNamed(ai, 'LinkClick').length).toBe(0);
     });
 
+    test('returning to the document URL before the first view does not revive the original load or an intervening title', async () => {
+        readyState = 'interactive';
+        historyChanges = new EventTarget();
+        sitesTrackedInPage(SITE_URL);
+        loadTrackerCopy();
+        setUrl(PAGE_URL + '?q=intervening');
+        historyChanges.dispatchEvent(new Event('currententrychange'));
+        document.title = 'Intervening title';
+        setUrl(PAGE_URL);
+        historyChanges.dispatchEvent(new Event('currententrychange'));
+        readyState = 'complete';
+        window.dispatchEvent(new Event('load'));
+        await settle();
+        const ai = mockAiInstances[0];
+        expect(ai.trackPageView).not.toHaveBeenCalled();
+        expect(window.modernPageNav(SITE_URL, 'Test', SITE_URL)).toBe(true);
+        const view = ai.trackPageView.mock.calls[0][0];
+        expect(view).toMatchObject({ uri: PAGE_URL, name: new URL(PAGE_URL).pathname, properties: { pageLoad: 0 } });
+        expect(view.properties).not.toHaveProperty('pageTitle');
+    });
+
+    test('a departure observed before this script downloaded rules out the original document timing and title', async () => {
+        document.title = 'Intervening title';
+        document.body.innerHTML = '<script>var x = {"perf":{"spRequestDuration":500,"IsSPO":true},"y":2};</script>';
+        const visits: NonNullable<NonNullable<Window['_o365AnalyticsInfo']>['visits']> = {
+            isOriginalDocumentVisit: () => false, currentPageContext: () => undefined
+        };
+        window._o365AnalyticsInfo = { siteUrls: [SITE_URL], visits };
+        loadTrackerCopy();
+        await settle();
+        const ai = mockAiInstances[0];
+        expect(ai.trackPageView).not.toHaveBeenCalled();
+        expect(window.modernPageNav(SITE_URL, 'Earlier', SITE_URL)).toBe(false);
+        visits.currentPageContext = () => ({ url: PAGE_URL, siteUrl: SITE_URL, binding: 'request', webUrl: SITE_URL, webTitle: 'Returned web' });
+        expect(window.modernPageNav(SITE_URL, 'Earlier', SITE_URL)).toBe(true);
+        const view = ai.trackPageView.mock.calls[0][0];
+        expect(view).toMatchObject({ uri: PAGE_URL, name: new URL(PAGE_URL).pathname,
+            properties: { pageLoad: 0, duration: 0, webTitle: 'Returned web' } });
+        for (const key of ['pageTitle', 'spRequestDuration']) expect(view.properties).not.toHaveProperty(key);
+    });
+
     test('a copy whose App Insights can\'t start leaves the page to a correctly configured copy', async () => {
         const errorSpy = jest.spyOn(console, 'error').mockImplementation();
         (window as any).appInsightsConnectionStringHash = btoa('IngestionEndpoint=https://example.invalid/');
@@ -230,6 +274,273 @@ describe('AITracker page bootstrap', () => {
         expect(mockAiInstances[0].trackPageView).toHaveBeenCalledTimes(1);
     });
 
+    describe('active time across visits', () => {
+        const destination = PAGE_URL + '?q=next';
+        const saved = () => JSON.parse(Cookies.get('SPOInsightsLastPageStats')!);
+        const report = () => window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+        const navigate = (url: string) => {
+            setUrl(url);
+            historyChanges?.dispatchEvent(new Event('currententrychange'));
+        };
+        let inactiveMs: number;
+        beforeEach(() => {
+            jest.useFakeTimers({ doNotFake: ['performance'] });
+            const start = Date.now();
+            inactiveMs = 0;
+            mockActiveClock = () => Date.now() - start - inactiveMs;
+        });
+        afterEach(() => { mockActiveClock = undefined; jest.useRealTimers(); });
+        function startModern(notifications = true) {
+            if (notifications) historyChanges = new EventTarget();
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            jest.advanceTimersByTime(0);
+            return mockAiInstances[0];
+        }
+
+        test.each([
+            ['currententrychange', 1000, 2.5, 2.2], ['popstate', 1000, 2.5, 2.2],
+            ['poll', 1000, 3, 1.7], ['click before poll', 100, 2.6, 2.1],
+        ] as const)('times both views from the first observation, not the delayed SPFx report (%s)', (signal, clickDelay, sourceTime, destinationTime) => {
+            const ai = startModern(signal === 'currententrychange');
+            jest.advanceTimersByTime(2500);
+            mousedownOnLink('Source', destination);
+            navigate(destination);
+            if (signal === 'popstate') window.dispatchEvent(new PopStateEvent('popstate'));
+            setTimeout(report, 2000);
+            jest.advanceTimersByTime(clickDelay); // With no notification, the first poll on B is at 3 s.
+            mousedownOnLink('Gap');
+            jest.advanceTimersByTime(2000 - clickDelay);
+            mousedownOnLink('After report', PAGE_URL);
+            jest.advanceTimersByTime(200);
+            window.dispatchEvent(new Event('pagehide'));
+
+            const a = pageRequestIdOf(ai, 0), b = pageRequestIdOf(ai, 1);
+            expect(ai.trackPageView.mock.calls.map(c => c[0].properties.pageLoad)).toEqual([1500, 0]);
+            expect(eventsNamed(ai, 'LinkClick').map(e => e.properties.pageRequestId)).toEqual([a, b, b]);
+            expect([...eventsNamed(ai, 'PAGE_EXIT').map(e => [e.properties.pageRequestId, e.properties.activeTime]),
+                [saved().pageRequestId, saved().secondsOnPage]])
+                .toEqual([[a, sourceTime], [b, destinationTime]]);
+        });
+
+        test('a persisted pagehide before the report cannot replace the accepted exit with a short delta on restore', () => {
+            window.addEventListener('pageshow', e => {
+                if (e.persisted) mousedownOnLink('Restored click', PAGE_URL);
+            }, { once: true });
+            const ai = startModern();
+            jest.advanceTimersByTime(120000);
+            navigate(destination);
+            setTimeout(report, 2000);
+            jest.advanceTimersByTime(1250);
+            mousedownOnLink('Abandoned click');
+            window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+            const handoff = saved();
+            Cookies.remove('SPOInsightsLastPageStats'); // The intervening document sent this snapshot.
+
+            jest.setSystemTime(Date.now() + 60000); // Suspended JS: the callback still has 750 ms to go.
+            inactiveMs += 60000;                    // TimeMe stopped while away.
+            document.dispatchEvent(new Event('visibilitychange')); // Edge makes the restored document visible before pageshow.
+            window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+            jest.advanceTimersByTime(750);
+            const a = pageRequestIdOf(ai, 0), b = pageRequestIdOf(ai, 1);
+            const snapshots = [[handoff.pageRequestId, handoff.secondsOnPage],
+                ...eventsNamed(ai, 'PAGE_EXIT').map(e => [e.properties.pageRequestId, e.properties.activeTime])];
+            expect(snapshots.length).toBeLessThanOrEqual(2);
+            expect(snapshots).toEqual(snapshots.map(() => [a, 120]));
+            expect(eventsNamed(ai, 'LinkClick').map(e => [e.properties.linkText, e.properties.pageRequestId])).toEqual([['Restored click', b]]);
+            jest.advanceTimersByTime(1000);
+            window.dispatchEvent(new Event('pagehide'));
+            expect([saved().pageRequestId, saved().secondsOnPage]).toEqual([b, 1.75]);
+        });
+
+        test('a cross-collection destination earns time from registration, not the next poll or its report', () => {
+            const ai = startModern();
+            const sites = window._o365AnalyticsInfo!;
+            jest.advanceTimersByTime(2500);
+            navigate(OTHER_PAGE_URL); // The browser moved before the new customizer started.
+            jest.advanceTimersByTime(100);
+            sites.siteUrls.push(OTHER_SITE_URL);
+            sites.siteRegistrationChanged!(OTHER_SITE_URL);
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+            jest.advanceTimersByTime(2000);
+            window.modernPageNav(OTHER_SITE_URL, 'Other', OTHER_SITE_URL);
+            jest.advanceTimersByTime(200);
+            window.dispatchEvent(new Event('pagehide'));
+            expect(eventsNamed(ai, 'PAGE_EXIT').map(e => e.properties.activeTime)).toEqual([2.5]);
+            expect([saved().pageRequestId, saved().secondsOnPage]).toEqual([pageRequestIdOf(ai, 1), 2.2]);
+        });
+
+        test('a still-registered root stops earning time when the browser enters an unregistered collection', () => {
+            const root = new URL(SITE_URL).origin, home = root + '/SitePages/Home.aspx';
+            setUrl(home);
+            navigationEntries[0].name = home;
+            historyChanges = new EventTarget();
+            sitesTrackedInPage(root);
+            Object.assign(window._spPageContextInfo, { webAbsoluteUrl: root, siteAbsoluteUrl: root });
+            loadTrackerCopy();
+            jest.advanceTimersByTime(0);
+            const ai = mockAiInstances[0];
+            jest.advanceTimersByTime(2500);
+            navigate(root + '/Teams/Unregistered/Pages/Home.aspx?q=unregistered');
+            mousedownOnLink('Unregistered link');
+            jest.advanceTimersByTime(5000);
+            expect(window.modernPageNav(root, 'Root', root)).toBe(false);
+            window.dispatchEvent(new Event('pagehide'));
+            expect(ai.trackPageView.mock.calls.map(c => c[0].uri)).toEqual([home]);
+            expect(ai.trackEvent).not.toHaveBeenCalled();
+            expect([decodeURI(saved().url), saved().pageRequestId, saved().secondsOnPage]).toEqual([home, pageRequestIdOf(ai, 0), 2.5]);
+        });
+
+        test('an unrelated registration does not reset a same-site visit; removing its own site stops its clock immediately', () => {
+            const ai = startModern();
+            const sites = window._o365AnalyticsInfo!;
+            jest.advanceTimersByTime(2500);
+            navigate(destination);
+            jest.advanceTimersByTime(250);
+            sites.siteUrls.push(OTHER_SITE_URL);
+            sites.siteRegistrationChanged!(OTHER_SITE_URL);
+            jest.advanceTimersByTime(1750);
+            report();
+            jest.advanceTimersByTime(200);
+            sites.siteUrls.splice(sites.siteUrls.indexOf(SITE_URL), 1);
+            sites.siteRegistrationChanged!(SITE_URL);
+            jest.advanceTimersByTime(5000);
+            mousedownOnLink('Outside registration');
+            window.dispatchEvent(new Event('pagehide'));
+            expect(eventsNamed(ai, 'LinkClick')).toEqual([]);
+            expect(eventsNamed(ai, 'PAGE_EXIT').map(e => e.properties.activeTime)).toEqual([2.5]);
+            expect([saved().pageRequestId, saved().secondsOnPage]).toEqual([pageRequestIdOf(ai, 1), 2.2]);
+        });
+
+        test('repeated classic pagehide snapshots include each active interval once under the original ID', () => {
+            loadTrackerCopy();
+            jest.advanceTimersByTime(0);
+            const ai = mockAiInstances[0], id = pageRequestIdOf(ai, 0);
+            for (const [seconds, total] of [[3, 3], [5, 8], [4, 12]]) {
+                jest.advanceTimersByTime(seconds * 1000);
+                window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+                expect([saved().pageRequestId, saved().secondsOnPage]).toEqual([id, total]);
+                Cookies.remove('SPOInsightsLastPageStats');
+                const handoff = () => Cookies.set('SPOInsightsLastPageStats', JSON.stringify({ pageRequestId: 'intervening-' + total,
+                    secondsOnPage: seconds, url: encodeURI(OTHER_PAGE_URL) }));
+                if (total !== 8) handoff();
+                jest.setSystemTime(Date.now() + 60000); // No wall-clock gap may count, even if TimeMe was not paused.
+                window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+                if (total === 8) handoff(); // Another renderer can finish its pagehide after our pageshow.
+            }
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+            expect(eventsNamed(ai, 'PAGE_EXIT').map(e => [e.properties.pageRequestId, e.properties.activeTime, e.properties.url]))
+                .toEqual([['intervening-3', 3, OTHER_PAGE_URL], ['intervening-8', 5, OTHER_PAGE_URL], ['intervening-12', 4, OTHER_PAGE_URL]]);
+        });
+
+        test('return to the last accepted page resumes its ID without counting an intervening unaccepted visit', () => {
+            const ai = startModern();
+            jest.advanceTimersByTime(2500);
+            navigate(destination);
+            mousedownOnLink('Abandoned');
+            jest.advanceTimersByTime(400);
+            navigate(PAGE_URL + '#back');
+            jest.advanceTimersByTime(2000);
+            report();
+            window.dispatchEvent(new Event('pagehide'));
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+            expect(eventsNamed(ai, 'LinkClick')).toHaveLength(0);
+            expect([saved().pageRequestId, saved().secondsOnPage]).toEqual([pageRequestIdOf(ai, 0), 4.5]);
+        });
+
+        test('only the final registered visit transfers its time; superseded queries, detours and registration gaps do not', () => {
+            const ai = startModern();
+            jest.advanceTimersByTime(2500);
+            navigate(destination);
+            jest.advanceTimersByTime(300);
+            navigate(destination + '2');
+            jest.advanceTimersByTime(300);
+            navigate(destination);
+            jest.advanceTimersByTime(300);
+            sitesTrackedInPage(); // Still the same URL, but the extension unregistered its site.
+            mousedownOnLink('Outside tracking');
+            jest.advanceTimersByTime(4000);
+            sitesTrackedInPage(SITE_URL);
+            mousedownOnLink('Registered again');
+            jest.advanceTimersByTime(800);
+            navigate(destination + '#results');
+            jest.advanceTimersByTime(700);
+            report();
+            jest.advanceTimersByTime(200);
+            window.dispatchEvent(new Event('pagehide'));
+            expect(eventsNamed(ai, 'PAGE_EXIT').map(e => e.properties.activeTime)).toEqual([2.5]);
+            expect(saved().secondsOnPage).toBe(1.7);
+            expect(eventsNamed(ai, 'LinkClick').map(e => e.properties.linkText)).toEqual(['Registered again']);
+        });
+    });
+
+    describe('active time using the installed TimeMe library', () => {
+        const snapshot = () => {
+            window.dispatchEvent(new PageTransitionEvent('pagehide'));
+            const value = Cookies.get('SPOInsightsLastPageStats');
+            return value ? JSON.parse(value) : undefined;
+        };
+
+        beforeEach(() => {
+            mockUseRealTimeMe = true;
+            jest.useFakeTimers({ doNotFake: ['performance'] });
+        });
+        afterEach(() => { mockUseRealTimeMe = false; jest.useRealTimers(); });
+
+        test('an already hidden page starts at its first visible interval and keeps its baseline across BFCache and a detour', () => {
+            const hidden = jest.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+            const visibility = (value: boolean) => {
+                hidden.mockReturnValue(value);
+                document.dispatchEvent(new Event('visibilitychange'));
+            };
+            sitesTrackedInPage(SITE_URL);
+            historyChanges = new EventTarget();
+            loadTrackerCopy();
+            jest.advanceTimersByTime(180000);
+            expect(snapshot()).toBeUndefined();
+
+            visibility(false);
+            jest.advanceTimersByTime(2000);
+            visibility(true);
+            window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+            const id = pageRequestIdOf(mockAiInstances[0], 0);
+            expect(snapshot()).toMatchObject({ pageRequestId: id, secondsOnPage: 2 });
+            Cookies.remove('SPOInsightsLastPageStats'); // Consumed by the intervening document.
+            jest.advanceTimersByTime(180000);
+            visibility(false);
+            window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+            jest.advanceTimersByTime(1000);
+            navigateToUntrackedSite();
+            historyChanges.dispatchEvent(new Event('currententrychange'));
+            jest.advanceTimersByTime(8000);
+            sitesTrackedInPage(SITE_URL);
+            setUrl(PAGE_URL);
+            historyChanges.dispatchEvent(new Event('currententrychange'));
+            jest.advanceTimersByTime(3000);
+            expect(snapshot()).toMatchObject({ pageRequestId: id, secondsOnPage: 6 });
+            expect(mockAiInstances[0].trackPageView).toHaveBeenCalledTimes(1);
+        });
+
+        test('a visible page stops after 30 s without activity, ignores a further 180 s and resumes on input', () => {
+            loadTrackerCopy();
+            jest.advanceTimersByTime(4000);
+            document.dispatchEvent(new MouseEvent('mousemove'));
+            jest.advanceTimersByTime(29500);
+            expect(snapshot().secondsOnPage).toBe(33.5);
+
+            jest.advanceTimersByTime(3000);
+            const stopped = snapshot().secondsOnPage;
+            // TimeMe checks every 250 ms. It stops the open interval; it does not deduct the idle threshold.
+            expect(stopped).toBeGreaterThanOrEqual(34);
+            expect(stopped).toBeLessThanOrEqual(34.5);
+            jest.advanceTimersByTime(180000);
+            expect(snapshot().secondsOnPage).toBe(stopped);
+            document.dispatchEvent(new KeyboardEvent('keyup'));
+            jest.advanceTimersByTime(2000);
+            expect(snapshot().secondsOnPage).toBe(stopped + 2);
+        });
+    });
+
     test('loaded after the page has loaded: tracks the page straight away and can track clicks', async () => {
         const errorSpy = jest.spyOn(console, 'error').mockImplementation();
         loadTrackerCopy();
@@ -251,7 +562,7 @@ describe('AITracker page bootstrap', () => {
         loadTrackerCopy();
         await settle();
 
-        expect(mockAiInstances[0].trackPageView.mock.calls[0][0].properties.pageLoad).toBe(0);
+        expect(mockAiInstances[0].trackPageView.mock.calls[0][0].properties).toMatchObject({ pageLoad: 0, duration: 0 });
     });
 
     test('a second copy loaded into the same page, from another tracked site, leaves tracking to the first', async () => {
@@ -267,8 +578,9 @@ describe('AITracker page bootstrap', () => {
         expect(mockAiInstances.length).toBe(1);
         expect(listeners.length).toBe(listenersAddedByFirstCopy);
 
+        window.modernPageNav(OTHER_SITE_URL, 'Other', OTHER_SITE_URL);
         mousedownOnLink('Link');
-        expect(eventsNamed(mockAiInstances[0], 'LinkClick').length).toBe(1);
+        expect(eventsNamed(mockAiInstances[0], 'LinkClick').map(c => c.properties.pageRequestId)).toEqual([pageRequestIdOf(mockAiInstances[0], 1)]);
         expect(noPageRequestIdErrors(errorSpy)).toEqual([]);
     });
 
@@ -354,15 +666,6 @@ describe('AITracker page bootstrap', () => {
         expect(eventsNamed(mockAiInstances[0], 'UserSearch').map((e: any) => e.properties.userSearch)).toEqual(['contoso']);
     });
 
-    test('does not send SharePoint\'s own requests to App Insights', () => {
-        loadTrackerCopy();
-
-        const config = mockAiInstances[0].config;
-        expect(config.disableAjaxTracking).toBe(true);
-        expect(config.disableFetchTracking).toBe(true);
-        expect(config.enableDebug).toBeFalsy();
-    });
-
     test('without a connection string, does not start - so a configured copy still can', async () => {
         const errorSpy = jest.spyOn(console, 'error').mockImplementation();
         delete (window as any).appInsightsConnectionStringHash;
@@ -384,6 +687,137 @@ describe('AITracker page bootstrap', () => {
 
         const sentAnything = (ai: any) => JSON.stringify([ai.trackPageView.mock.calls, ai.trackEvent.mock.calls]);
         const savedExit = () => JSON.parse(Cookies.get('SPOInsightsLastPageStats')!);
+
+        test('root-only registration cannot bootstrap, queue clicks or accept a report in a managed-path collection', async () => {
+            const root = new URL(SITE_URL).origin;
+            sitesTrackedInPage(root);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+            mousedownOnLink('Off-site click');
+            checkSite();
+            expect(window.modernPageNav(root, 'Root', root)).toBe(false);
+            expect(window.modernPageNav(SITE_URL, 'Unregistered', SITE_URL)).toBe(false);
+            window.dispatchEvent(new Event('pagehide'));
+            expect(ai.trackPageView).not.toHaveBeenCalled();
+            expect(ai.trackEvent).not.toHaveBeenCalled();
+            expect(Cookies.get('SPOInsightsLastPageStats')).toBeUndefined();
+
+            // The older extension has only siteUrls and a positional navigation report.
+            window._o365AnalyticsInfo!.siteUrls.push(SITE_URL);
+            expect(window.modernPageNav(root, 'Root', root)).toBe(false);
+            mousedownOnLink('Registered click');
+            expect(window.modernPageNav(SITE_URL, 'Test', SITE_URL)).toBe(true);
+            expect(ai.trackPageView.mock.calls.map(c => c[0].uri)).toEqual([PAGE_URL]);
+            expect(eventsNamed(ai, 'LinkClick').map(c => c.properties.linkText)).toEqual(['Registered click']);
+        });
+
+        test('a direct registered document still reports its title and load time if the legacy context belongs to another web', async () => {
+            sitesTrackedInPage(SITE_URL);
+            document.title = 'Loaded page';
+            Object.assign(window._spPageContextInfo, { siteAbsoluteUrl: OTHER_SITE_URL, webAbsoluteUrl: OTHER_SITE_URL,
+                webTitle: 'Earlier web', listTitle: 'Earlier list', pageItemId: 10 });
+            loadTrackerCopy();
+            await settle();
+            const view = mockAiInstances[0].trackPageView.mock.calls[0][0];
+            expect(view).toMatchObject({ name: 'Loaded page', uri: PAGE_URL,
+                properties: { pageTitle: 'Loaded page', siteUrl: SITE_URL, pageLoad: 1500 } });
+            expect(view.properties).not.toHaveProperty('webUrl');
+            expect(view.properties).not.toHaveProperty('webTitle');
+        });
+
+        test.each(['mousedown and click', 'click only'])('source and destination clicks keep their own page IDs across the SPFx reporting gap: %s', async input => {
+            const search = SITE_URL + '/_layouts/15/search.aspx/siteall?q=';
+            setUrl(search + 'first');
+            navigationEntries[0].name = document.URL;
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+            const sourceId = pageRequestIdOf(ai, 0);
+
+            setUrl(search + 'first#top');
+            document.body.innerHTML = '<a>Next search</a><a>Open result</a>';
+            const [go, result] = Array.from(document.querySelectorAll('a'));
+            go.href = search + 'second';
+            go.addEventListener('click', e => { e.preventDefault(); setUrl(go.href); });
+            if (input === 'mousedown and click') go.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            go.click(); // The router changes document.URL before the click bubbles to document.
+
+            result.href = SITE_URL + '/Shared Documents/Result.pdf';
+            result.addEventListener('click', e => e.preventDefault());
+            const beforeClick = Date.now();
+            result.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+            result.click();
+            const afterClick = Date.now();
+
+            window.modernPageNav(OTHER_SITE_URL, 'Other', OTHER_SITE_URL); // Stale callback cannot accept this view.
+            expect(ai.trackPageView).toHaveBeenCalledTimes(1);
+            expect(eventsNamed(ai, 'LinkClick').map(c => [c.properties.linkText, c.properties.pageRequestId]))
+                .toEqual([['Next search', sourceId]]);
+
+            await settle();
+            setUrl(search + 'second#results');
+            window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+            window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+            const destinationId = pageRequestIdOf(ai, 1);
+            expect(destinationId).not.toBe(sourceId);
+            const clicks = eventsNamed(ai, 'LinkClick');
+            expect(clicks.map(c => [c.properties.linkText, c.properties.pageRequestId]))
+                .toEqual([['Next search', sourceId], ['Open result', destinationId]]);
+            expect(Date.parse(clicks[1].properties.timeStamp)).toBeGreaterThanOrEqual(beforeClick);
+            expect(Date.parse(clicks[1].properties.timeStamp)).toBeLessThanOrEqual(afterClick);
+            expect(eventsNamed(ai, 'PAGE_EXIT').map(e => e.properties.pageRequestId)).toEqual([sourceId]);
+        });
+
+        test.each(['different query', 'untracked site', 'already tracked page', 'history change between polls'])('does not replay an abandoned destination click on a later visit (%s)', async via => {
+            if (via === 'history change between polls') historyChanges = new EventTarget();
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+            const destination = PAGE_URL + '?q=one';
+            setUrl(destination);
+            mousedownOnLink('Abandoned visit');
+
+            if (via === 'untracked site') {
+                navigateToUntrackedSite();
+                mousedownOnLink('Not tracked');
+            } else if (via === 'already tracked page') {
+                setUrl(PAGE_URL);
+                window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+            } else {
+                setUrl(PAGE_URL + '?q=two');
+                if (historyChanges) historyChanges.dispatchEvent(new Event('currententrychange'));
+                else checkSite();
+            }
+
+            setUrl(destination);
+            sitesTrackedInPage(SITE_URL);
+            mousedownOnLink('Current visit');
+            window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+            expect(eventsNamed(ai, 'LinkClick').map(c => [c.properties.linkText, c.properties.pageRequestId]))
+                .toEqual([['Current visit', pageRequestIdOf(ai, 1)]]);
+        });
+
+        test('leaving before SPFx reports the destination saves the accepted exit and never replays the abandoned click', async () => {
+            sitesTrackedInPage(SITE_URL);
+            loadTrackerCopy();
+            await settle();
+            const ai = mockAiInstances[0];
+            setUrl(PAGE_URL + '?q=next');
+            mousedownOnLink('No destination view');
+            window.dispatchEvent(new Event('pagehide'));
+            expect(decodeURI(savedExit().url)).toBe(PAGE_URL);
+            expect(savedExit().pageRequestId).toBe(pageRequestIdOf(ai, 0));
+            expect(eventsNamed(ai, 'LinkClick')).toHaveLength(0);
+
+            // A browser can restore this document from its back/forward cache, including its JS heap and delayed callbacks.
+            mousedownOnLink('After restore');
+            window.modernPageNav(SITE_URL, 'Test', SITE_URL);
+            expect(eventsNamed(ai, 'LinkClick').map(c => [c.properties.linkText, c.properties.pageRequestId]))
+                .toEqual([['After restore', pageRequestIdOf(ai, 1)]]);
+        });
 
         test('tracked site, then one that isn\'t: its clicks aren\'t sent, and the time saved as the browser leaves is the tracked page\'s', async () => {
             sitesTrackedInPage(SITE_URL);
@@ -492,6 +926,8 @@ describe('AITracker page bootstrap', () => {
 
             setUrl(OTHER_PAGE_URL);
             sitesTrackedInPage(OTHER_SITE_URL);
+            window._o365AnalyticsInfo!.visits = { currentPageContext: () => ({ url: OTHER_PAGE_URL, siteUrl: OTHER_SITE_URL,
+                webUrl: OTHER_SITE_URL, webTitle: 'Other', binding: 'request' }) };
             (window as any).modernPageNav(SITE_URL, 'Test', SITE_URL);
             expect(ai.trackPageView).toHaveBeenCalledTimes(1);
 
@@ -559,7 +995,8 @@ describe('AITracker page bootstrap', () => {
             expect(listeners.length).toBe(listenersAddedByFirstCopy);
             expect(intervals.length).toBe(1);
             mousedownOnLink('Link', OTHER_SITE_URL + '/SitePages/Events.aspx');
-            expect(eventsNamed(mockAiInstances[0], 'LinkClick').length).toBe(1);
+            window.modernPageNav(OTHER_SITE_URL, 'Other', OTHER_SITE_URL);
+            expect(eventsNamed(mockAiInstances[0], 'LinkClick').map(c => c.properties.pageRequestId)).toEqual([pageRequestIdOf(mockAiInstances[0], 1)]);
         });
     });
 });

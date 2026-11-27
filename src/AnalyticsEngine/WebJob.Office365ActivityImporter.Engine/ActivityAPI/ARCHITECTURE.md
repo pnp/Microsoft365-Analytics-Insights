@@ -121,6 +121,21 @@ mapped audit events, never as a whole day in memory; if the cycle budget expires
 restarts from page one, which is safe because the SQL merge is idempotent and the backfill filters
 already-complete Copilot metadata before each commit.
 
+If all Activity API workloads have been switched off, the importer skips the live stage but still checks
+the published job in durable state. On its next cycle it records an outstanding cancellation as `cancelled`
+(healthy), or closes an uncancelled active job as `failed` with `copilotImportOff`. This is not a missing
+Graph permission: the check neither opens an Audit Search client nor reads or writes audit data in SQL.
+It does nothing to a finished job, and without shared Storage there is no portal request to check.
+
+Cancelling writes only `Job:<id>:Cancel` for the published job, never a portal copy of its checkpoint.
+The importer records the terminal `cancelled` state when it observes the request; work already in flight
+can finish first. Each checkpoint renews the job row's 180-day lifetime, so the request has no independent
+timeout. If the importer stays offline until the job itself expires, there is nothing to resume. Once
+`LatestJob` moves to a new ID, the previous ID's marker is given the normal retention period so a worker
+already holding that job can still see it. Table storage reclaims an expired marker on read or purge.
+If retirement is interrupted, a leftover marker cannot cancel the new job. A cancellation already saved
+in an older job checkpoint is also honoured; a request whose only evidence has expired cannot be recovered.
+
 The submission budget is deliberately lower than Graph's tenant limit. Microsoft documents a baseline of
 200 Audit Search query submissions per rolling 24 hours per tenant (shared with Purview, SIEM and other
 clients). This importer uses `DailySubmissionBudget` = 100 submissions per rolling 24 hours, leaving half

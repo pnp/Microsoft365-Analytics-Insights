@@ -46,7 +46,7 @@ namespace Tests.UnitTests
             return new ODataError
             {
                 ResponseStatusCode = statusCode,
-                Error = new MainError { Message = message }
+                Error = new MainError { Code = statusCode == 403 ? "Authorization_RequestDenied" : ((HttpStatusCode)statusCode).ToString(), Message = message }
             };
         }
 
@@ -164,7 +164,8 @@ namespace Tests.UnitTests
             await Assert.ThrowsExceptionAsync<ODataError>(() => webhook.CreateOrUpdateWebhook(WebhookUrl, ClientState));
 
             var critical = logger.Entries.Where(e => e.Level == LogLevel.Critical).Single();
-            StringAssert.Contains(critical.Message, "Too many requests. Please retry later.");
+            StringAssert.Contains(critical.Message, "429");
+            StringAssert.Contains(critical.Message, "throttled");
             Assert.IsFalse(critical.Message.Contains("CallRecords.Read.All"),
                 "Only a 403 should point the admin at the Graph permission; saying so for every failure sends them down the wrong path.");
             Assert.IsFalse(critical.Message.Contains("called BACK"),
@@ -563,7 +564,7 @@ namespace Tests.UnitTests
             CollectionAssert.AreEqual(new[] { "renew:legacy-sub-id" }, subscriptions.Operations);
             var critical = logger.Entries.Single(e => e.Level == LogLevel.Critical).Message;
             StringAssert.Contains(critical, "replace 'legacy-sub-id'");
-            StringAssert.Contains(critical, "kept alive meanwhile");
+            StringAssert.Contains(critical, "renewal is attempted if due");
         }
 
         /// <summary>
@@ -831,6 +832,32 @@ namespace Tests.UnitTests
             Assert.AreEqual(4, logger.Entries.Count(e => e.Level == LogLevel.Critical && e.Message.Contains("CallRecords.Read.All")),
                 "From the third attempt on, the permission diagnosis is Critical.");
             Assert.AreEqual(4, logger.Entries.Count(e => e.Level == LogLevel.Error && e.Message.Contains("Retry pending")));
+        }
+
+        [DataTestMethod]
+        [DataRow(503)]
+        [DataRow(400)]
+        [DataRow(403)]
+        [DataRow(409)]
+        public async Task SubscriptionTimer_LogsStatusesNotRefusalBodies_EvenWhenEscalated(int status)
+        {
+            const string payload = "synthetic response body";
+            var logger = new CapturingLogger();
+            Exception failure = status == 503
+                ? (Exception)new AggregateException(new Microsoft.Kiota.Abstractions.ApiException(payload) { ResponseStatusCode = status })
+                : GraphError(status, payload);
+            var subscriptions = new FakeCallRecordSubscriptionManager().WithCurrentSubscription("owned", Now.AddHours(1)).FailingCreateWith(failure);
+            var clock = new FixedClock(Now);
+            using (var timer = new CallSubscriptionMaintainer(new CallWebhook(subscriptions, logger, clock), WebhookUrl, ClientState, null, logger, clock))
+            {
+                for (int i = 0; i < CallSubscriptionMaintainer.EscalateAtAttempt; i++)
+                {
+                    await timer.RunOnceAsync();
+                    clock.Advance(timer.NextRunUtc - clock.UtcNow);
+                }
+            }
+            Assert.IsTrue(logger.Entries.Any(e => e.Level == LogLevel.Error && e.Message.Contains("HTTP " + status)));
+            Assert.IsFalse(logger.Entries.Any(e => e.Message.Contains(payload) || e.Exception?.ToString().Contains(payload) == true));
         }
 
         /// <summary>The hourly summary names the subscription and its expiry, so a log export shows the webhook's state at any hour.</summary>
@@ -2281,6 +2308,7 @@ namespace Tests.UnitTests
             {
                 public LogLevel Level { get; set; }
                 public string Message { get; set; }
+                public Exception Exception { get; set; }
             }
 
             public List<Entry> Entries { get; } = new List<Entry>();
@@ -2291,7 +2319,7 @@ namespace Tests.UnitTests
 
             public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
             {
-                Entries.Add(new Entry { Level = logLevel, Message = formatter(state, exception) });
+                Entries.Add(new Entry { Level = logLevel, Message = formatter(state, exception), Exception = exception });
             }
 
             private class NoopScope : IDisposable

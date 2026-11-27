@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine;
@@ -270,7 +271,7 @@ namespace Tests.UnitTests
         public async Task GraphImporter_SectionThrows_UnwindsAndSkipsTheSectionsAfterIt()
         {
             // Documents CURRENT behaviour rather than the behaviour #376 proposed. GraphImporter has never
-            // isolated a throwing section - ProgramTasks.GetGraphTeamsAndUserData catches only ODataError -
+            // isolated a throwing section - ProgramTasks treats only an HTTP 403 as a refused pass -
             // and adding isolation here would quietly downgrade a hard failure to a logged warning. That is a
             // behavioural change and belongs in its own issue; this test pins today's contract so the change
             // cannot happen by accident.
@@ -298,6 +299,32 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, store.Writes.Count, "A section that threw must not be recorded as having run.");
             Assert.IsFalse(console.ToString().Contains("New event '" + nameof(AnalyticsLogger.AnalyticsEvent.FinishedSectionImport) + "'"),
                 "A section that threw must not report itself as successfully finished.");
+        }
+
+        [DataTestMethod]
+        [DataRow(true, false)]
+        [DataRow(true, true)]
+        [DataRow(false, false)]
+        public async Task GraphImporter_InterruptedUserSection_NeverStampsOrStartsTheNextSection(bool hostStopped, bool returnedNormally)
+        {
+            using (var stop = new CancellationTokenSource())
+            {
+                var user = FakeGraphImportSection.Gated("User metadata refresh", FirstSectionCadence, 24);
+                user.OnRun = () => { if (hostStopped) stop.Cancel(); };
+                if (!returnedNormally) user.FailWith = new OperationCanceledException();
+                var later = FakeGraphImportSection.Ungated("Later section");
+                var store = new RecordingImportLastRunStore();
+                var settings = GatingSettings();
+                var importer = new GraphImporter(AnalyticsLogger.ConsoleOnlyTracer(), settings,
+                    new FakeGraphImportSectionFactory(user, later), store, new FixedClock(Now), stop.Token);
+                var output = await CaptureConsole(() => Assert.ThrowsAsync<OperationCanceledException>(
+                    () => importer.GetAndSaveNonDeferredGraphData(settings)));
+                StringAssert.Contains(output, hostStopped ? "Outcome=Skipped;Reason=HostShutdown" : "Outcome=Failed");
+                if (hostStopped) Assert.IsFalse(output.Contains("Outcome=Failed"));
+                Assert.IsFalse(output.Contains("New event 'FinishedSectionImport'"));
+                Assert.AreEqual(0, store.Writes.Count);
+                Assert.AreEqual(0, later.RunCount);
+            }
         }
 
         [TestMethod]

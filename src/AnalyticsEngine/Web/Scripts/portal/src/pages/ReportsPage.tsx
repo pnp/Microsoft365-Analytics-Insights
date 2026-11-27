@@ -711,7 +711,7 @@ function ReportAreaView({
                         {t(withheldEmptyKey, { count: formatNumber(chart.minimumGroupSize) })}
                       </Text>
                     ) : chart.type === 'timeseries' && series ? (
-                      <TimeSeriesChart series={series} valueLabel={valueLabel} />
+                      <TimeSeriesChart series={series} valueLabel={valueLabel} showWeeklyValues={chart.key === 'usage-active-users'} />
                     ) : chart.type === 'bar' && categories ? (
                       <CategoryBarChart
                         categories={categories}

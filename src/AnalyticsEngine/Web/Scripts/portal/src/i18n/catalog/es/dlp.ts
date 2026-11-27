@@ -86,6 +86,7 @@ const dlp: Record<keyof typeof en, string> = {
   'dlp.governance.agents.hint': 'Agentes distintos que una directiva DLP bloqueó en este periodo. Los más bloqueados:',
   'dlp.governance.agents.blocked': 'Bloqueos: {count}',
   'dlp.governance.agents.none': 'No se bloqueó ningún agente en este periodo.',
+  'dlp.governance.agents.notListed': 'Se registraron bloqueos, pero en esta vista no se muestran los nombres de los agentes.',
   'dlp.governance.agents.pointer': 'Si un agente sigue mereciendo la pena se muestra en {link}, donde cada agente tiene un veredicto como Retirar o Revisar.',
   'dlp.governance.agents.pointerLink': 'Adopción de Copilot > Agentes',
   'dlp.governance.models.title': 'Modelos de IA',

@@ -21,13 +21,13 @@ namespace Tests.UnitTests
         private const string AccountKey = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
         private const int ColdSamples = 5;
         private const int WarmSamples = 7;
-        private const int SeedDays = 180;
+        private const int SeedDays = UsageReportCoverageStore.MaximumDays;
         private const int SeedEntities = SeedDays * 4;
 
         public TestContext TestContext { get; set; }
 
         [TestMethod]
-        public async Task ReadAsync_UsesBoundedAzuritePointReads_For28And180Days()
+        public async Task Publication_UsesTwoAzuriteRangeReadsPerSource_For28To366Days()
         {
             if (!string.Equals(Environment.GetEnvironmentVariable("RUN_USAGE_REPORT_COVERAGE_BENCHMARK"),
                 "true", StringComparison.OrdinalIgnoreCase))
@@ -69,14 +69,14 @@ namespace Tests.UnitTests
 
                 var actualEntities = setupTable.Query<TableEntity>(
                     TableClient.CreateQueryFilter($"PartitionKey eq {partition}")).Count();
-                Assert.AreEqual(SeedEntities, actualEntities, "Only the synthetic 4-source × 180-day ledger is seeded.");
+                Assert.AreEqual(SeedEntities, actualEntities, "Only the synthetic four-source ledger is seeded.");
 
                 TestContext.WriteLine("Service: task-local Azurite Table emulator; endpoint is loopback only.");
                 TestContext.WriteLine($"Seed: {actualEntities} synthetic ledger entities; no people or fact rows.");
-                foreach (var days in new[] { 28, 180 })
+                foreach (var days in new[] { 28, 180, SeedDays })
                 {
-                    await MeasureWindowAsync(connectionString, tableName, partition, start, days)
-                        .ConfigureAwait(false);
+                    foreach (var weekly in new[] { false, true })
+                        await MeasureWindowAsync(connectionString, tableName, partition, start, days, weekly).ConfigureAwait(false);
                 }
             }
             finally
@@ -91,26 +91,26 @@ namespace Tests.UnitTests
         }
 
         private async Task MeasureWindowAsync(string connectionString, string tableName, string partition,
-            DateTime start, int days)
+            DateTime start, int days, bool weekly)
         {
             var through = start.AddDays(days - 1);
-            var expectedReads = UsageReportCoverageStore.Sources.Length * days;
+            var expectedReads = (weekly ? UsageReportCoverageStore.WeeklySources.Count : UsageReportCoverageStore.Sources.Length) * 2;
             var cold = new List<Sample>();
             for (var i = 0; i < ColdSamples; i++)
             {
                 using (var client = new ObservedClient(connectionString, tableName, partition))
                 {
-                    cold.Add(await MeasureAsync(client, start, through, days, expectedReads).ConfigureAwait(false));
+                    cold.Add(await MeasureAsync(client, start, through, days, expectedReads, weekly).ConfigureAwait(false));
                 }
             }
 
             var warm = new List<Sample>();
             using (var client = new ObservedClient(connectionString, tableName, partition))
             {
-                await client.Coverage.ReadAsync(start, through).ConfigureAwait(false);
+                await MeasureAsync(client, start, through, days, expectedReads, weekly).ConfigureAwait(false);
                 for (var i = 0; i < WarmSamples; i++)
                 {
-                    warm.Add(await MeasureAsync(client, start, through, days, expectedReads).ConfigureAwait(false));
+                    warm.Add(await MeasureAsync(client, start, through, days, expectedReads, weekly).ConfigureAwait(false));
                 }
             }
 
@@ -124,19 +124,30 @@ namespace Tests.UnitTests
         }
 
         private static async Task<Sample> MeasureAsync(ObservedClient client, DateTime start, DateTime through,
-            int expectedDays, int expectedReads)
+            int expectedDays, int expectedReads, bool weekly)
         {
             client.Reset();
             var timer = Stopwatch.StartNew();
-            var result = await client.Coverage.ReadAsync(start, through).ConfigureAwait(false);
-            timer.Stop();
-
-            Assert.AreEqual(UsageReportCoverageStore.Sources.Length, result.Count);
-            Assert.IsTrue(result.All(coverage => coverage.IsComplete && coverage.ExpectedDays == expectedDays),
-                "Every source should read only the pre-seeded, successfully empty days.");
+            if (weekly)
+            {
+                var sources = UsageReportCoverageStore.WeeklySources;
+                var read = await UsageReportCoverageStore.BeginPublicationAsync(sources, start, through, () => client.Coverage).ConfigureAwait(false);
+                var result = await read.ReadStableOutcomesAsync(sources).ConfigureAwait(false);
+                timer.Stop();
+                Assert.IsTrue(sources.All(source => result[source].Count == expectedDays &&
+                    result[source].Values.All(value => value == (source == "yammer" ? null : UsageReportCoverageStore.Empty))));
+            }
+            else
+            {
+                var result = await client.Coverage.ReadAsync(start, through, default, NoFacts).ConfigureAwait(false);
+                timer.Stop();
+                Assert.AreEqual(UsageReportCoverageStore.Sources.Length, result.Count);
+                Assert.IsTrue(result.All(coverage => coverage.IsComplete && coverage.ExpectedDays == expectedDays),
+                    "Every source should read only the pre-seeded, successfully empty days.");
+            }
             Assert.AreEqual(expectedReads, client.Store.ReadCount, "IKeyValueStore calls are counted at the production store boundary.");
             Assert.AreEqual(expectedReads, client.Http.GetRequests,
-                "Every successful AzureTableKeyValueStore GetStringAsync maps to one Table-service point-read GET.");
+                "Each source's two indexed date ranges should each fit in one service response.");
             Assert.IsTrue(client.Store.PeakReads <= UsageReportCoverageStore.ReadConcurrency);
             Assert.IsTrue(client.Http.PeakRequests <= UsageReportCoverageStore.ReadConcurrency);
 
@@ -146,6 +157,8 @@ namespace Tests.UnitTests
                 PeakHttpRequests = client.Http.PeakRequests,
             };
         }
+
+        private static Task<HashSet<DateTime>> NoFacts(string _) => Task.FromResult(new HashSet<DateTime>());
 
         private static double Median(IEnumerable<Sample> samples)
         {
@@ -243,7 +256,7 @@ namespace Tests.UnitTests
             }
         }
 
-        private sealed class ReadCountingStore : IKeyValueStore
+        private sealed class ReadCountingStore : IKeyValueStore, IVersionedKeyRangeReader
         {
             private readonly IKeyValueStore _inner;
             private int _readCount;
@@ -263,14 +276,18 @@ namespace Tests.UnitTests
                 Interlocked.Exchange(ref _peakReads, 0);
             }
 
-            public async Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default)
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default) =>
+                throw new InvalidOperationException("Report publication must not issue point reads.");
+
+            public async Task<Dictionary<string, VersionedValue>> ReadVersionedRangeAsync(string first, string last, int max,
+                CancellationToken cancellationToken)
             {
                 Interlocked.Increment(ref _readCount);
                 var active = Interlocked.Increment(ref _activeReads);
                 UpdatePeak(active);
                 try
                 {
-                    return await _inner.GetStringAsync(key, cancellationToken).ConfigureAwait(false);
+                    return await ((IVersionedKeyRangeReader)_inner).ReadVersionedRangeAsync(first, last, max, cancellationToken).ConfigureAwait(false);
                 }
                 finally
                 {

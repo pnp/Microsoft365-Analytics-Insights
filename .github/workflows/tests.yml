@@ -123,7 +123,7 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
       # Only synthetic configuration enters the downloadable binary artifact.
       - name: Configure credential-free test binaries
-        uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
+        uses: devops-actions/variable-substitution@2344e258b5e8b1bd83b53f14271a410f7a4f5a44 # v3.1.0
         with:
           files: src/AnalyticsEngine/Tests.UnitTests/App.Release.config
         env:
@@ -172,7 +172,7 @@ jobs:
           node-version-file: .nvmrc
       - uses: ./.github/actions/test-runtime
       - name: Configure this runner only
-        uses: devops-actions/variable-substitution@452ffbbfb1c26fd5d9aaf24faffb59c5084257e9 # v2.0.0
+        uses: devops-actions/variable-substitution@2344e258b5e8b1bd83b53f14271a410f7a4f5a44 # v3.1.0
         with:
           files: src/AnalyticsEngine/Tests.UnitTests/bin/Release/Tests.UnitTests.dll.config
         # Dependabot and fork PRs cannot read Actions secrets. Keep their synthetic identity

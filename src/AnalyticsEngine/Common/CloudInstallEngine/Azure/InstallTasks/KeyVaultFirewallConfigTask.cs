@@ -1,12 +1,12 @@
 using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.KeyVault.Models;
-using Azure.ResourceManager.AppService;
 using Azure.Core;
 using CloudInstallEngine.Models;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace CloudInstallEngine.Azure.InstallTasks
@@ -49,6 +49,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
         public override bool IsCritical => Networking != null &&
             _config.ContainsKey(CONFIG_KEY_VNET_SUBNET_ID) && !string.IsNullOrWhiteSpace(_config[CONFIG_KEY_VNET_SUBNET_ID]);
         public PrivateNetworkProvenance Networking { get; set; }
+        internal Func<string, ILogger, CancellationToken, Task<string>> ResolveInstallerIpAsync { get; set; } = PublicIpResolver.TryGetPublicIPv4Async;
 
         public override async Task<KeyVaultResource> ExecuteTaskReturnResult(object contextArg)
         {
@@ -59,7 +60,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var allowIps = new List<string>();
 
             // 1. Installer machine public IP - needed for the runtime secret upload (data-plane).
-            var installerIp = await PublicIpResolver.TryGetPublicIPv4Async(vault.Data.Name, _logger, cancellationToken: CancellationToken);
+            var installerIp = await ResolveInstallerIpAsync(vault.Data.Name, _logger, CancellationToken);
             if (!string.IsNullOrEmpty(installerIp))
             {
                 allowIps.Add(installerIp);
@@ -71,7 +72,7 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
 
             // 2. App Service outbound IPs - needed so the web app / WebJobs can read secrets.
-            var appIps = GetAppServiceOutboundIps(appServiceName);
+            var appIps = await GetAppServiceOutboundIpsAsync(appServiceName);
             if (appIps.Count > 0)
             {
                 allowIps.AddRange(appIps);
@@ -135,9 +136,9 @@ namespace CloudInstallEngine.Azure.InstallTasks
             }
         }
 
-        List<string> GetAppServiceOutboundIps(string appServiceName)
+        async Task<List<string>> GetAppServiceOutboundIpsAsync(string appServiceName)
         {
-            var site = Container.GetWebSites().GetAll(cancellationToken: CancellationToken).Where(s => s.Data.Name == appServiceName).SingleOrDefault();
+            var site = await AppServiceResourceLookup.FindSiteForDeploymentAsync(Container, appServiceName, CancellationToken);
             if (site == null)
             {
                 _logger.LogWarning($"App Service '{appServiceName}' not found in the resource group; cannot allow its outbound IPs on the Key Vault firewall.");

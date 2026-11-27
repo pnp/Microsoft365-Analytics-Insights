@@ -1,9 +1,9 @@
 ﻿import TimeMe from 'timeme.js'
-import { ApplicationInsights } from '@microsoft/applicationinsights-web'
+import { createTrackerTelemetry, TrackerTelemetry } from './TrackerTelemetry';
 
 import { AppInsightsWrapper } from './AppInsightsWrapper';
 import { debug, error, log, warn } from './Logger';
-import { linkLabel, uuidv4 } from './DataFunctions';
+import { isSamePage, linkLabel, uuidv4 } from './DataFunctions';
 import { CleanCookies, GetSessionCookieVal, RemoveRetiredCookies, SetSessionCookieVal } from './Cookies';
 import { PageViewTracker } from './PageViewTracker';
 import { SpoPagePropertyManager } from './PageProps/SpoImplementation/SpoPagePropertyManager';
@@ -17,7 +17,7 @@ import { AITrackerConfig } from './Models';
 import { LocalStorageUtils } from './LocalStorageUtils';
 import { ConfigHandler } from './Config/ConfigHandler';
 import { ApiConfigLoader } from './Config/ApiConfigLoader';
-import { isOnTrackedSite, isUrlInSite, SitesTrackedByExtension } from './TrackedSites';
+import { isUrlInSite, type SitesTrackedByExtension } from './TrackedSites';
 
 export { };
 
@@ -54,38 +54,37 @@ window._spPageContextInfo = window._spPageContextInfo ||
 // Page functions ------->
 
 function initPageControls() {
-    TimeMe.initialize();
+    // TimeMe starts an interval even in an already hidden tab. Install its activity/visibility
+    // listeners on the first visible visit instead; initialize takes seconds, not milliseconds.
+    const startWhenVisible = () => {
+        if (document.hidden) return;
+        document.removeEventListener('visibilitychange', startWhenVisible);
+        TimeMe.initialize({ idleTimeoutInSeconds: 30 });
+    };
+    if (document.hidden) document.addEventListener('visibilitychange', startWhenVisible);
+    else startWhenVisible();
 
-    // Listen for link click events at the document level
-    document.addEventListener('mousedown', interceptClickEvent);    // Mousedown for links that use stopPropagation etc
-    document.addEventListener('click', interceptClickEvent);        // Click for links that only raise click (megamenu links)
+    // On modern pages capture before the link's own handler can change document.URL or replace the link.
+    const modern = !!window._o365AnalyticsInfo;
+    document.addEventListener('mousedown', interceptClickEvent, modern);    // Mousedown for links that use stopPropagation etc
+    document.addEventListener('click', interceptClickEvent, modern);        // Click for links that only raise click (megamenu links)
 
-    // Save time on page for the next page load to send. Not window.onbeforeunload: SharePoint assigns that too, so
-    // whichever was set last silently replaced the other - losing either this or SharePoint's own handler.
-    window.addEventListener('pagehide', () => {
-        checkStillOnTrackedSite();
-        pageTracker?.savePageExitToCookie();
-    });
+    window.addEventListener('pageshow', e => { if (e.persisted) pageTracker?.resumeFromCache(); });
+    // On a back traversal Edge makes the document visible before notifying pageshow listeners.
+    // Resume before an earlier site listener can synchronously report a navigation or click.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) pageTracker?.resumeFromCache(); });
 
     // SharePoint can navigate to a site collection that isn't tracked without reloading the page, and back. Note when it does, so
     // the time spent there is no tracked page's time on page. Classic pages have no such navigations: every one loads a new page.
-    if (window._o365AnalyticsInfo) {
-        window.setInterval(checkStillOnTrackedSite, TRACKED_SITE_CHECK_MS);
+    if (modern) {
+        window.setInterval(() => pageTracker?.observeCurrentPage(), TRACKED_SITE_CHECK_MS);
+        const navigated = () => pageTracker?.observeCurrentPage('navigation');
+        if (window.navigation?.addEventListener) window.navigation.addEventListener('currententrychange', navigated);
+        else window.addEventListener('popstate', navigated);
+        window._o365AnalyticsInfo!.siteRegistrationChanged = site => {
+            if (isUrlInSite(document.URL, site)) pageTracker?.observeCurrentPage('registration');
+        };
     }
-}
-
-// Whether the browser is on a page of a tracked site, noting when it leaves them and comes back. Nothing is collected on any other
-// page: SharePoint navigates between site collections without reloading the page, so this script keeps running on one the
-// installer didn't set up for tracking.
-function checkStillOnTrackedSite(): boolean {
-    const onTrackedSite = isOnTrackedSite(document.URL, window._o365AnalyticsInfo);
-    if (onTrackedSite) {
-        pageTracker?.seenOnTrackedSite();
-    }
-    else {
-        pageTracker?.seenOffTrackedSites();
-    }
-    return onTrackedSite;
 }
 
 // Handle page click events
@@ -95,7 +94,7 @@ function interceptClickEvent(e: MouseEvent) {
     if (e.button !== 0 && e.button !== 1) {
         return;
     }
-    if (!checkStillOnTrackedSite()) {
+    if (!pageTracker?.observeCurrentPage()) {
         return;
     }
 
@@ -144,23 +143,10 @@ function startAppInsights(): boolean {
         debug("Resuming session '" + GetSessionCookieVal() + "' for '" + window._spPageContextInfo.userLoginName + "'.");
     }
 
-    // Init AppInsights. Reference: https://github.com/Microsoft/ApplicationInsights-JS/blob/master/API-reference.md
-    let appInsights: ApplicationInsights;
+    let appInsights: TrackerTelemetry;
     try {
-        appInsights = new ApplicationInsights({
-            config: {
-                connectionString: atob(window.appInsightsConnectionStringHash!),
-                disableExceptionTracking: true,
-                disableAjaxTracking: true,
-                disableFetchTracking: true,     // Don't send every fetch SharePoint makes as a dependency: it's cost, and nothing reads it
-                isCookieUseDisabled: true,
-                isBeaconApiDisabled: true
-            }
-        });
-        appInsights.loadAppInsights();
-
-        // Set auth context
-        appInsights.setAuthenticatedUserContext(window._spPageContextInfo.userLoginName);
+        appInsights = createTrackerTelemetry(atob(window.appInsightsConnectionStringHash!), window._spPageContextInfo.userLoginName,
+            persisted => pageTracker?.savePageExitToCookie(persisted));
     } catch (e) {
         error("Couldn't start Application Insights with the connection string this site is configured with, so this page isn't tracked. Re-run the installer for this site.");
         error(e);
@@ -209,51 +195,26 @@ function trackPageWhenLoaded(): void {
 function trackLoadedPage(): void {
     if (!pageTracker) return;
 
-    if (checkStillOnTrackedSite()) {
-        // A document loaded for another URL means SharePoint navigated here without loading a page, so the browser's
-        // load timings belong to the earlier page. Report a load time of 0, as for any other page navigation.
-        const pageLoadDuration = documentWasLoadedForCurrentUrl() ? undefined : 0;
-        pageTracker.trackCurrentPageViewAndLastPageExit(document.URL, window._spPageContextInfo.listTitle, window._spPageContextInfo.pageItemId, pageLoadDuration);
-    }
-    else {
-        // SharePoint navigated on, to a site collection that isn't tracked, while this script loaded. The SPFx extension of a
-        // tracked site reports its page when SharePoint shows one again
-        debug("Not tracking this page: it isn't on a tracked site");
-        pageTracker.trackLastPageExit();
-    }
+    // A document loaded for another URL means SharePoint navigated here without loading a page.
+    const pageLoadDuration = documentWasLoadedForCurrentUrl() ? undefined : 0;
+    pageTracker.trackCurrentPageViewAndLastPageExit(document.URL, undefined, undefined, pageLoadDuration);
 
-    // Only now: the SPFx extension's calls are page navigations, which need the current page to have been tracked first
+    // A hard load has been tracked. A first soft view without bound context still needs a destination report.
     window.modernPageNav = modernPageNav;
 }
 
 function documentWasLoadedForCurrentUrl(): boolean {
+    // The configured extension may have seen the document visit end before this script downloaded.
+    if (window._o365AnalyticsInfo?.visits?.isOriginalDocumentVisit?.() === false) return false;
     const navEntries = window.performance && window.performance.getEntriesByType ?
         window.performance.getEntriesByType('navigation') : [];
-    if (navEntries.length === 0) return true;
-
-    const withoutHash = (url: string) => url.split('#')[0];
-    return withoutHash(navEntries[0].name) === withoutHash(document.URL);
+    if (!navEntries[0]?.name) return !window._o365AnalyticsInfo; // Classic pages only navigate by loading a document.
+    return isSamePage(navEntries[0].name, document.URL);
 }
 
 // Called by the SPFx extension when SharePoint navigates to another page without reloading
-const modernPageNav = function (webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): void {
-
-    if (!pageTracker) return;
-
-    // The extension reports a page a couple of seconds after SharePoint shows it, and SharePoint can have moved on since: to a site
-    // collection that isn't tracked, or to another tracked one, whose own extension reports that page
-    if (!checkStillOnTrackedSite()) {
-        debug("Not tracking a navigation to a page that isn't on a tracked site");
-        return;
-    }
-    if (siteUrl && !isUrlInSite(document.URL, siteUrl)) {
-        debug("Not tracking a navigation reported for another site: SharePoint has moved on since");
-        return;
-    }
-
-    // The extension has already updated window._spPageContextInfo for the new page
-    pageTracker.updatePageContext(window._spPageContextInfo);
-    pageTracker.handleModernPageNav(webUrl, webTitle, siteUrl, document.URL, listTitle, listItemId);
+const modernPageNav = function (webUrl: string, webTitle: string, siteUrl: string, listTitle?: string, listItemId?: number): boolean {
+    return pageTracker?.handleModernPageNav(webUrl, webTitle, siteUrl, document.URL, listTitle, listItemId) ?? false;
 }
 
 // Used to see if this is a new browsing session, with our own cookie

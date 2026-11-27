@@ -6,8 +6,8 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -35,13 +35,19 @@ namespace Tests.UnitTests.InstallTests
         };
 
         string _directory;
+        InstallPackageWorkspace _workspace;
 
         [TestInitialize]
-        public void CreateDirectory() => _directory = Path.Combine(Path.GetTempPath(), "contoso-release-" + Guid.NewGuid().ToString("N"));
+        public void CreateDirectory()
+        {
+            _directory = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+            _workspace = new InstallPackageWorkspace(new CapturingLogger(), _directory);
+        }
 
         [TestCleanup]
         public void DeleteDirectory()
         {
+            _workspace.Dispose();
             if (Directory.Exists(_directory)) Directory.Delete(_directory, true);
         }
 
@@ -54,30 +60,132 @@ namespace Tests.UnitTests.InstallTests
             var result = await NewTask(github, new CapturingLogger()).ExecuteTaskReturnResult(null);
 
             Assert.IsTrue(result.IsValid);
+            foreach (var component in result.Components.Values)
+            {
+                var package = Path.GetFileName(component.FileLocation);
+                CollectionAssert.AreEqual(FakeGitHub.Content(package), File.ReadAllBytes(component.FileLocation), package);
+            }
+        }
+
+        [TestMethod]
+        public async Task OverlappingInstalls_KeepTheirOwnVerifiedZipsExtractedFilesAndUpload()
+        {
+            var first = await NewTask(ReleaseWithZips("contoso-a"), new CapturingLogger()).ExecuteTaskReturnResult(null);
+            var firstControl = first.GetSolutionComponentLocation(SoftwareComponent.ControlPanel);
+            var firstExtraction = _workspace.Unzip(firstControl, CancellationToken.None);
+            var firstUpload = InstallAppServiceContentsTask.BuildDeploymentPackage(first, _workspace);
+            var scripts = await new ProfilingScriptsLocateTask(TaskConfig.NoConfig, new CapturingLogger(),
+                Azure.Core.AzureLocation.WestEurope, new Dictionary<string, string>(), _workspace).ExecuteTaskReturnResult(first);
+
+            string secondRoot;
+            using (var secondWorkspace = new InstallPackageWorkspace(new CapturingLogger(), _directory))
+            {
+                secondRoot = secondWorkspace.RootPath;
+                var second = await NewTask(ReleaseWithZips("contoso-b"), new CapturingLogger(), secondWorkspace).ExecuteTaskReturnResult(null);
+                var secondControl = second.GetSolutionComponentLocation(SoftwareComponent.ControlPanel);
+                var secondExtraction = secondWorkspace.Unzip(secondControl, CancellationToken.None);
+                var secondUpload = InstallAppServiceContentsTask.BuildDeploymentPackage(second, secondWorkspace);
+
+                // Kudu opens the file by path after assembly (and reopens it if authentication falls back).
+                Assert.AreEqual("contoso-b", ReadEntry(secondUpload.FullName, "release.txt"));
+                Assert.AreEqual("contoso-a", ReadEntry(firstUpload.FullName, "release.txt"));
+                Assert.AreEqual("contoso-a", ReadEntry(firstUpload.FullName, "app_data/jobs/continuous/Office365ActivityImporter/release.txt"));
+                Assert.AreEqual("contoso-a", ReadEntry(firstUpload.FullName, "app_data/jobs/continuous/AppInsightsImporter/release.txt"));
+                Assert.AreEqual("contoso-b", File.ReadAllText(Path.Combine(secondExtraction.FullName, "release.txt")));
+            }
+            Assert.IsFalse(Directory.Exists(secondRoot));
+            Assert.AreEqual("contoso-a", ReadEntry(firstControl.FileLocation, "release.txt"));
+            Assert.AreEqual("contoso-a", File.ReadAllText(Path.Combine(firstExtraction.FullName, "release.txt")));
+            Assert.AreEqual("contoso-a", File.ReadAllText(scripts.WeeklyPS), "The later runbook upload opens the script by path.");
+            Assert.AreEqual("contoso-a", ReadEntry(firstUpload.FullName, "release.txt"));
+        }
+
+        [TestMethod]
+        public async Task FailedLocalOverrideReplayLeavesOriginalsAndEarlierRunUnchanged()
+        {
+            var inputs = new LocalStorageInstallSourceInfo();
+            foreach (var component in new[] { SoftwareComponent.WebSite, SoftwareComponent.WebJobActivity })
+            {
+                // Operators need not use the release's filenames, or a different basename for each ZIP.
+                var dir = Directory.CreateDirectory(Path.Combine(_directory, component.ToString()));
+                var path = Path.Combine(dir.FullName, "override.zip");
+                using (var zip = ZipFile.Open(path, ZipArchiveMode.Create))
+                using (var writer = new StreamWriter(zip.CreateEntry("release.txt").Open()))
+                    writer.Write(component.ToString());
+                inputs.GetSolutionComponentLocation(component).FileLocation = path;
+            }
+            var first = await _workspace.StageLocalPackagesAsync(inputs, CancellationToken.None);
+            var original = inputs.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation;
+            File.WriteAllText(original, "Contoso incomplete ZIP");
+            string failedRoot;
+            using (var secondWorkspace = new InstallPackageWorkspace(new CapturingLogger(), _directory))
+            {
+                failedRoot = secondWorkspace.RootPath;
+                var second = await secondWorkspace.StageLocalPackagesAsync(inputs, CancellationToken.None);
+                Assert.ThrowsException<InvalidDataException>(() =>
+                    secondWorkspace.Unzip(second.GetSolutionComponentLocation(SoftwareComponent.WebSite), CancellationToken.None));
+            }
+            Assert.IsFalse(Directory.Exists(failedRoot));
+            Assert.AreEqual("Contoso incomplete ZIP", File.ReadAllText(original));
+            foreach (var component in inputs.Components.Keys)
+                Assert.AreEqual(component.ToString(), ReadEntry(first.GetSolutionComponentLocation(component).FileLocation, "release.txt"));
+        }
+
+        private static FakeGitHub ReleaseWithZips(string tag)
+        {
+            var github = new FakeGitHub { Tag = tag };
             foreach (var package in Packages)
             {
-                CollectionAssert.AreEqual(FakeGitHub.Content(package), File.ReadAllBytes(Path.Combine(_directory, package)), package);
+                using (var bytes = new MemoryStream())
+                {
+                    using (var zip = new ZipArchive(bytes, ZipArchiveMode.Create, leaveOpen: true))
+                    {
+                        using (var writer = new StreamWriter(zip.CreateEntry(package == "AppInsightsImporter.zip" ? "wrapper/release.txt" : "release.txt").Open()))
+                            writer.Write(tag);
+                        if (package == "Office365ActivityImporter.zip")
+                        {
+                            foreach (var script in new[] { "Weekly.ps1", "Aggregation_Status.ps1", "Database_Maintenance.ps1" })
+                                using (var writer = new StreamWriter(zip.CreateEntry("AutomationPS/ProfilingJobs/" + script).Open()))
+                                    writer.Write(tag);
+                        }
+                    }
+                    var contents = bytes.ToArray();
+                    github.Manifest[package] = FakeGitHub.Sha256(contents);
+                    github.Behaviour[package] = ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(contents) });
+                }
             }
+            return github;
+        }
+
+        private static string ReadEntry(string zipPath, string name)
+        {
+            using (var zip = ZipFile.OpenRead(zipPath))
+            using (var reader = new StreamReader(zip.GetEntry(name).Open()))
+                return reader.ReadToEnd();
         }
 
         [TestMethod]
         [Timeout(120000)]
         public async Task APackageThatNeverAnswers_TimesOut_NamingOnlyThatPackage()
         {
+            const string stalled = "ControlPanelApp.zip";
             var github = new FakeGitHub();
-            github.Behaviour["ControlPanelApp.zip"] = FakeGitHub.Hang;
-            var task = NewTask(github, new CapturingLogger());
-            task.StallTimeout = TimeSpan.FromSeconds(1);
+            var task = NewTimedTask(github);
+            github.Behaviour[stalled] = ct => github.Clocks[stalled].WaitWithoutData<HttpResponseMessage>(task.StallTimeout, ct);
 
             var ex = await Assert.ThrowsExceptionAsync<UnexpectedInstallException>(() => task.ExecuteTaskReturnResult(null));
 
             StringAssert.Contains(ex.Message, "Could not download 1 of 5 packages of GitHub release '1859'");
             StringAssert.Contains(ex.Message, "'ControlPanelApp.zip' timed out: no data arrived for 1 second");
-            foreach (var package in Packages.Where(p => p != "ControlPanelApp.zip"))
+            Assert.AreEqual((TimeSpan?)task.StallTimeout, github.Clocks[stalled].PendingCancelledAt, "The request itself must observe cancellation at its deadline.");
+            CollectionAssert.AreEquivalent(Packages, github.Clocks.Keys.ToArray(), "Every download must have its own timer.");
+            foreach (var package in Packages.Where(p => p != stalled))
             {
                 Assert.IsFalse(ex.Message.Contains(package), package + " downloaded, so it must not be blamed.");
+                var file = Directory.GetFiles(_workspace.RootPath, package, SearchOption.AllDirectories).Single();
+                CollectionAssert.AreEqual(FakeGitHub.Content(package), File.ReadAllBytes(file), package);
             }
-            Assert.IsFalse(File.Exists(Path.Combine(_directory, "ControlPanelApp.zip")));
+            Assert.AreEqual(0, Directory.GetFiles(_workspace.RootPath, stalled, SearchOption.AllDirectories).Length);
         }
 
         /// <summary>
@@ -88,18 +196,19 @@ namespace Tests.UnitTests.InstallTests
         [Timeout(120000)]
         public async Task APackageThatStallsPartWay_IsStreamed_ThenTimesOut_LeavingNoPartialFile()
         {
+            const string stalled = "Website.zip";
             var github = new FakeGitHub();
-            github.Behaviour["Website.zip"] = ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StreamContent(new SlowStream(firstChunk: 100 * 1024, thenEvery: Timeout.InfiniteTimeSpan))
-            });
-            var task = NewTask(github, new CapturingLogger());
-            task.StallTimeout = TimeSpan.FromSeconds(1);
+            var task = NewTimedTask(github);
+            var bytes = FakeGitHub.Content(stalled);
+            github.Behaviour[stalled] = ct => ChunkedResponse(bytes, (sent, token) => sent < bytes.Length
+                ? Task.FromResult(bytes.Length - sent)
+                : github.Clocks[stalled].WaitWithoutData<int>(task.StallTimeout, token));
 
             var ex = await Assert.ThrowsExceptionAsync<UnexpectedInstallException>(() => task.ExecuteTaskReturnResult(null));
 
             StringAssert.Contains(ex.Message, "'Website.zip' timed out: no data arrived for 1 second (0.1 MB received)");
-            Assert.IsFalse(File.Exists(Path.Combine(_directory, "Website.zip")), "A truncated package must not be left behind.");
+            Assert.AreEqual((TimeSpan?)task.StallTimeout, github.Clocks[stalled].PendingCancelledAt, "The pending body read must observe cancellation.");
+            Assert.AreEqual(0, Directory.GetFiles(_workspace.RootPath, "Website.zip", SearchOption.AllDirectories).Length, "A truncated package must not be left behind.");
         }
 
         /// <summary>
@@ -113,27 +222,21 @@ namespace Tests.UnitTests.InstallTests
         {
             const string slowPackage = "Office365ActivityImporter.zip";
             var github = new FakeGitHub();
-            var task = NewTask(github, new CapturingLogger());
-            task.StallTimeout = TimeSpan.FromSeconds(1);
+            var task = NewTimedTask(github);
             var trickleFor = TimeSpan.FromTicks(task.StallTimeout.Ticks * 20);
-            github.Behaviour[slowPackage] = ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            github.Behaviour[slowPackage] = ct => ChunkedResponse(FakeGitHub.Content(slowPackage), (sent, token) =>
             {
-                // A byte every 50 ms: never quiet for anything like the second the no-data limit allows, even on a busy runner
-                // whose thread pool is slow to run the timer.
-                Content = new StreamContent(new HeldStream(FakeGitHub.Content(slowPackage), Task.Delay(trickleFor), () => { },
-                    every: TimeSpan.FromMilliseconds(50)))
+                var clock = github.Clocks[slowPackage];
+                if (clock.Elapsed >= trickleFor) return Task.FromResult(int.MaxValue);
+                clock.Advance(TimeSpan.FromMilliseconds(500));
+                return Task.FromResult(1);
             });
 
-            var timer = Stopwatch.StartNew();
             var result = await task.ExecuteTaskReturnResult(null);
-            timer.Stop();
 
             Assert.IsTrue(result.IsValid);
-            // Task.Delay is timed by the system timer, whose ticks (about 15.6 ms on Windows) are coarser than the Stopwatch's,
-            // so a download held for exactly trickleFor can measure a fraction of a tick less.
-            var timerSlack = TimeSpan.FromMilliseconds(100);
-            Assert.IsTrue(timer.Elapsed >= trickleFor - timerSlack, $"The download took {timer.Elapsed}, so it didn't trickle for {trickleFor}.");
-            CollectionAssert.AreEqual(FakeGitHub.Content(slowPackage), File.ReadAllBytes(Path.Combine(_directory, slowPackage)));
+            Assert.AreEqual(trickleFor, github.Clocks[slowPackage].Elapsed, "The stream must outlast twenty stall intervals.");
+            CollectionAssert.AreEqual(FakeGitHub.Content(slowPackage), File.ReadAllBytes(result.GetSolutionComponentLocation(SoftwareComponent.WebJobActivity).FileLocation));
         }
 
         [TestMethod]
@@ -196,7 +299,10 @@ namespace Tests.UnitTests.InstallTests
         public async Task PackagesWaitingForAConnection_AreNotTimedOutForTheWait()
         {
             var github = new FakeGitHub();
+            var task = NewTimedTask(github, stallSeconds: 2);
             var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var waiting = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var held = 0;
             var inFlight = 0;
             var mostAtOnce = 0;
             foreach (var package in Packages)
@@ -205,23 +311,35 @@ namespace Tests.UnitTests.InstallTests
                 {
                     var now = Interlocked.Increment(ref inFlight);
                     lock (github) mostAtOnce = Math.Max(mostAtOnce, now);
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                    var bytes = FakeGitHub.Content(package);
+                    return ChunkedResponse(bytes, async (sent, token) =>
                     {
-                        Content = new StreamContent(new HeldStream(FakeGitHub.Content(package), release.Task, () => Interlocked.Decrement(ref inFlight)))
+                        if (!release.Task.IsCompleted)
+                        {
+                            var clock = github.Clocks[package];
+                            if (clock.Elapsed < TimeSpan.FromSeconds(4))
+                            {
+                                clock.Advance(TimeSpan.FromSeconds(1));
+                                return 1;
+                            }
+                            if (Interlocked.Increment(ref held) == LatestStableSoftwarePackageDownloadTask.ParallelDownloads)
+                                waiting.SetResult(true);
+                            await release.Task;
+                        }
+                        if (sent == bytes.Length) Interlocked.Decrement(ref inFlight);
+                        return int.MaxValue;
                     });
                 };
             }
-            var task = NewTask(github, new CapturingLogger());
-            task.StallTimeout = TimeSpan.FromSeconds(2);
-
             var run = task.ExecuteTaskReturnResult(null);
-            // The first two keep sending a byte at a time, so they never stall; the rest wait twice the stall limit for a slot.
-            await Task.Delay(TimeSpan.FromSeconds(4));
+            await Task.WhenAny(waiting.Task, run);
+            var timersWhileQueued = github.Clocks.Count;
             release.SetResult(true);
             var result = await run;
 
             Assert.IsTrue(result.IsValid);
             Assert.AreEqual(LatestStableSoftwarePackageDownloadTask.ParallelDownloads, mostAtOnce);
+            Assert.AreEqual(LatestStableSoftwarePackageDownloadTask.ParallelDownloads, timersWhileQueued, "Queued packages must not start their stall timers.");
         }
 
         [TestMethod]
@@ -258,7 +376,7 @@ namespace Tests.UnitTests.InstallTests
             StringAssert.Contains(ex.Message, "'ControlPanelApp.zip' is not the file the release build published");
             StringAssert.Contains(ex.Message, github.Manifest["ControlPanelApp.zip"]);
             Assert.IsFalse(ex.Message.Contains("'Website.zip'"), "The packages that match must not be blamed.");
-            Assert.IsFalse(File.Exists(Path.Combine(_directory, "ControlPanelApp.zip")), "An unverified package must not be left where it could be run.");
+            Assert.AreEqual(0, Directory.GetFiles(_workspace.RootPath, "ControlPanelApp.zip", SearchOption.AllDirectories).Length, "An unverified package must not be left where it could be run.");
         }
 
         [DataTestMethod]
@@ -280,20 +398,33 @@ namespace Tests.UnitTests.InstallTests
             Assert.AreEqual(0, github.PackageRequests, "Nothing that can't be verified should be downloaded.");
         }
 
-        LatestStableSoftwarePackageDownloadTask NewTask(FakeGitHub github, ILogger logger)
+        LatestStableSoftwarePackageDownloadTask NewTask(FakeGitHub github, ILogger logger, InstallPackageWorkspace workspace = null)
         {
             var config = TaskConfig.GetConfigForPropAndVal(LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoOwner, Owner)
                 .AddSetting(LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoName, Repo);
-            return new LatestStableSoftwarePackageDownloadTask(config, logger, LatestStableSoftwarePackageDownloadTask.CreateHttpClient(github))
-            {
-                DownloadDirectory = _directory
-            };
+            return new LatestStableSoftwarePackageDownloadTask(config, logger, workspace ?? _workspace, LatestStableSoftwarePackageDownloadTask.CreateHttpClient(github));
+        }
+
+        LatestStableSoftwarePackageDownloadTask NewTimedTask(FakeGitHub github, int stallSeconds = 1)
+        {
+            var task = NewTask(github, new CapturingLogger());
+            task.StallTimeout = TimeSpan.FromSeconds(stallSeconds);
+            task.CreateStallTimer = github.CreateStallTimer;
+            return task;
         }
 
         /// <summary>GitHub's latest-release API and its asset downloads, each package behaving as a test sets it.</summary>
         sealed class FakeGitHub : HttpMessageHandler
         {
             readonly ConcurrentDictionary<string, bool> _requested = new ConcurrentDictionary<string, bool>();
+            public readonly ConcurrentDictionary<string, DownloadClock> Clocks = new ConcurrentDictionary<string, DownloadClock>();
+
+            public Action<TimeSpan> CreateStallTimer(string package, CancellationTokenSource source)
+            {
+                var clock = new DownloadClock(source);
+                Assert.IsTrue(Clocks.TryAdd(package, clock), "Duplicate stall timer for " + package);
+                return clock.Change;
+            }
 
             public readonly Dictionary<string, Func<CancellationToken, Task<HttpResponseMessage>>> Behaviour =
                 Packages.ToDictionary(p => p, p => Ok(p));
@@ -302,6 +433,7 @@ namespace Tests.UnitTests.InstallTests
             public Dictionary<string, string> Manifest { get; set; } = Packages.ToDictionary(p => p, p => Sha256(Content(p)));
 
             public bool ReleaseHangs { get; set; }
+            public string Tag { get; set; } = "1859";
 
             public int PackageRequests => _requested.Count;
 
@@ -334,8 +466,8 @@ namespace Tests.UnitTests.InstallTests
                     if (ReleaseHangs) return await Hang(cancellationToken);
                     var names = Manifest == null ? Packages : Packages.Concat(new[] { "release-manifest.json" });
                     var assets = string.Join(",", names.Select(p =>
-                        $"{{\"name\":\"{p}\",\"browser_download_url\":\"https://github.com/{Owner}/{Repo}/releases/download/1859/{p}\"}}"));
-                    return Json($"{{\"tag_name\":\"1859\",\"assets\":[{assets}]}}");
+                        $"{{\"name\":\"{p}\",\"browser_download_url\":\"https://github.com/{Owner}/{Repo}/releases/download/{Tag}/{p}\"}}"));
+                    return Json($"{{\"tag_name\":\"{Tag}\",\"assets\":[{assets}]}}");
                 }
 
                 var package = Path.GetFileName(request.RequestUri.AbsolutePath);
@@ -354,66 +486,67 @@ namespace Tests.UnitTests.InstallTests
                 new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
         }
 
-        /// <summary>A response body that sends <c>firstChunk</c> bytes at once, then one byte per <c>thenEvery</c>.</summary>
-        sealed class SlowStream : FakeResponseBody
+        // Only this package's synthetic network waits advance its timer. Scheduling and real disk writes take no virtual time.
+        sealed class DownloadClock
         {
-            readonly TimeSpan _thenEvery;
-            int _firstChunk;
+            readonly CancellationTokenSource _source;
+            TimeSpan? _deadline;
 
-            public SlowStream(int firstChunk, TimeSpan thenEvery)
+            public DownloadClock(CancellationTokenSource source) => _source = source;
+            public TimeSpan Elapsed { get; private set; }
+            public TimeSpan? PendingCancelledAt { get; private set; }
+            public void Change(TimeSpan delay) => _deadline = delay == Timeout.InfiniteTimeSpan ? (TimeSpan?)null : Elapsed + delay;
+
+            public void Advance(TimeSpan by)
             {
-                _firstChunk = firstChunk;
-                _thenEvery = thenEvery;
+                Elapsed += by;
+                if (Elapsed >= _deadline)
+                {
+                    _deadline = null;
+                    _source.Cancel();
+                }
             }
 
-            public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            public async Task<T> WaitWithoutData<T>(TimeSpan interval, CancellationToken token)
             {
-                if (_firstChunk > 0)
+                var pending = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using (token.Register(() =>
                 {
-                    var sent = Math.Min(count, _firstChunk);
-                    _firstChunk -= sent;
-                    return sent;
+                    PendingCancelledAt = Elapsed;
+                    pending.TrySetCanceled();
+                }))
+                {
+                    await Task.Yield();
+                    var tick = TimeSpan.FromTicks(1);
+                    Advance(interval - tick);
+                    Assert.IsFalse(pending.Task.IsCompleted, "The network operation was cancelled before its idle deadline.");
+                    Advance(tick);
+                    Assert.IsTrue(pending.Task.IsCanceled, "The idle timer did not cancel the pending network operation.");
+                    return await pending.Task;
                 }
-                await Task.Delay(_thenEvery, cancellationToken);
-                buffer[offset] = 1;
-                return 1;
             }
         }
 
-        /// <summary>
-        /// A response body that sends <c>content</c> a byte every <c>every</c> (a tenth of a second by default) until
-        /// <c>release</c> completes, then the rest at once: never quiet long enough to stall, and finished only when the test
-        /// says.
-        /// </summary>
-        sealed class HeldStream : FakeResponseBody
+        static Task<HttpResponseMessage> ChunkedResponse(byte[] bytes, Func<int, CancellationToken, Task<int>> nextChunkSize) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new ChunkedStream(bytes, nextChunkSize)) });
+
+        sealed class ChunkedStream : FakeResponseBody
         {
             readonly byte[] _content;
-            readonly Task _release;
-            readonly Action _onEnd;
-            readonly TimeSpan _every;
+            readonly Func<int, CancellationToken, Task<int>> _nextChunkSize;
             int _sent;
 
-            public HeldStream(byte[] content, Task release, Action onEnd, TimeSpan? every = null)
+            public ChunkedStream(byte[] content, Func<int, CancellationToken, Task<int>> nextChunkSize)
             {
                 _content = content;
-                _release = release;
-                _onEnd = onEnd;
-                _every = every ?? TimeSpan.FromMilliseconds(100);
+                _nextChunkSize = nextChunkSize;
             }
 
             public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
             {
-                if (_sent == _content.Length)
-                {
-                    _onEnd();
-                    return 0;
-                }
-                if (!_release.IsCompleted)
-                {
-                    await Task.WhenAny(_release, Task.Delay(_every, cancellationToken));
-                    cancellationToken.ThrowIfCancellationRequested();
-                }
-                var sending = _release.IsCompleted ? Math.Min(count, _content.Length - _sent) : 1;
+                var chunk = await _nextChunkSize(_sent, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                var sending = Math.Min(chunk, Math.Min(count, _content.Length - _sent));
                 Buffer.BlockCopy(_content, _sent, buffer, offset, sending);
                 _sent += sending;
                 return sending;

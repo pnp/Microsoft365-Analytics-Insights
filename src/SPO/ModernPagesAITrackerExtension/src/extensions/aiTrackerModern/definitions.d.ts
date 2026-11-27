@@ -1,14 +1,18 @@
+import type { NavigationVisits } from './NavigationVisits';
 
 export interface SpPageContextInfo {
   userLoginName: string;
-  webAbsoluteUrl: string;
-  siteAbsoluteUrl: string;
-  webTitle: string;
+  webAbsoluteUrl?: string;
+  siteAbsoluteUrl?: string;
+  webTitle?: string;
+  listTitle?: string;
+  pageItemId?: number;
 }
 
 export interface SitesTrackedByExtension {
   siteUrls: string[];
-  lastUrlTracked: string | undefined;
+  siteRegistrationChanged?: (site: string) => void;
+  visits?: NavigationVisits;
 }
 
 export interface IAiTrackerModernApplicationCustomizerProperties {

@@ -646,6 +646,14 @@ namespace Tests.UnitTests
             var skus = new List<SubscribedSku> { new SubscribedSku { SkuId = skuId, SkuPartNumber = "ENTERPRISEPACK" } };
             var fakeLoader = new FakeUserMetadataLoader(new List<GraphUser> { graphUser }, skus, new Dictionary<Guid, List<Microsoft.Graph.Models.User>>());
 
+            // A rebuilt/empty database deliberately discards old checkpoints. Model the prior
+            // successful cycle here instead of depending on another test to have left an active user.
+            using (var db = new AnalyticsEntitiesContext())
+            {
+                db.users.Add(new Common.Entities.User { UserPrincipalName = userUpn, AzureAdId = userId, AccountEnabled = true });
+                await db.SaveChangesAsync();
+            }
+
             // Seed the delta provider with an existing token, then arrange for the
             // import to throw before CommitDeltaTokenAsync would be called.
             const string preExistingDelta = "delta-from-previous-successful-cycle";

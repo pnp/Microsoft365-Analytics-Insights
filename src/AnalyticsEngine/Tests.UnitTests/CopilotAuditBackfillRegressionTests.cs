@@ -176,6 +176,206 @@ namespace Tests.UnitTests
             Assert.AreEqual(0, source.SubmitCount);
         }
 
+        [DataTestMethod]
+        [DataRow(false, AppTokenPermissionAccess.Granted, DisplayName = "Cancelled offline; Copilot import disabled on restart")]
+        [DataRow(true, AppTokenPermissionAccess.NotGranted, DisplayName = "Cancelled while checking a missing grant")]
+        [DataRow(true, AppTokenPermissionAccess.NoIdentityToInspect, DisplayName = "Cancelled while checking an absent identity")]
+        public async Task Importer_AcknowledgedCancelPrecedesPreflightFailure(bool cancelDuringPermissionCheck, AppTokenPermissionAccess access)
+        {
+            var now = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
+            var values = new InMemoryKeyValueStore(() => now);
+            var config = new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true, ActivityLog = true } };
+            var portal = new BackfillStatusService(new CopilotAuditBackfillStateStore(values, true, () => now), config, () => now);
+            var queued = await portal.StartAsync(null, "admin@contoso.com");
+            if (!cancelDuringPermissionCheck)
+            {
+                Assert.IsTrue((await portal.CancelAsync(queued.Id)).CancelRequested);
+                config.ImportJobSettings.Copilot = false;
+            }
+
+            now = now.AddHours(1);
+            var permissionChecked = false;
+            var source = new CallbackSource(_ => throw new AssertFailedException("No records should be fetched before start."))
+            {
+                CheckPermission = async () =>
+                {
+                    Assert.IsTrue(cancelDuringPermissionCheck, "An offline cancellation must not need a permission check.");
+                    permissionChecked = true;
+                    Assert.IsTrue((await portal.CancelAsync(queued.Id)).CancelRequested);
+                    return access;
+                }
+            };
+            using (var captured = new CapturedAnalyticsLogger())
+            {
+                var worker = new CopilotAuditBackfillImporter(new CopilotAuditBackfillStateStore(values, true, () => now),
+                    source, new CountingPersistence(), config, captured.Logger, () => now, existingEvents: new FakeExistingEventFilter());
+                var result = await worker.AdvanceLatestAsync();
+                var visible = (await portal.GetStatusAsync()).LatestJob;
+                var health = captured.Events.Single(e => e.Name == nameof(AnalyticsLogger.AnalyticsEvent.HealthCheck));
+
+                Assert.AreEqual(CopilotAuditBackfillStates.Cancelled, result.State,
+                    $"Portal error: {visible.LastErrorCode}; health: {health.Properties["Status"]}/{health.Properties["ReasonKey"]}.");
+                Assert.IsTrue(result.CancelRequested);
+                Assert.AreEqual(CopilotAuditBackfillStates.Cancelled, visible.State);
+                Assert.AreEqual(queued.Id, visible.Id);
+                Assert.IsTrue(visible.CancelRequested);
+                Assert.AreEqual(config.ImportJobSettings.Copilot, visible.CopilotImportEnabled);
+                Assert.IsNull(visible.LastErrorCode);
+                Assert.IsNull(visible.StartedUtc);
+                Assert.AreEqual(now, visible.CompletedUtc);
+                Assert.AreEqual(queued.PendingSlices, visible.PendingSlices);
+                Assert.AreEqual(0, source.Submits);
+                Assert.AreEqual(cancelDuringPermissionCheck, permissionChecked);
+                Assert.AreEqual("Healthy", health.Properties["Status"]);
+                Assert.AreEqual("copilotAuditBackfill.cancelled", health.Properties["ReasonKey"]);
+            }
+        }
+
+        [DataTestMethod]
+        [DataRow(false, DisplayName = "Queued for 31 days after cancellation")]
+        [DataRow(true, DisplayName = "Last tick of a checkpoint renewed after cancellation")]
+        public async Task Importer_AcknowledgedCancellationSurvivesDowntime(bool lateCheckpoint)
+        {
+            var now = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
+            var values = new InMemoryKeyValueStore(() => now);
+            var state = new CopilotAuditBackfillStateStore(values, true, () => now);
+            var config = new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } };
+            var job = await state.TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin@contoso.com", true);
+            var portal = new BackfillStatusService(state, config, () => now);
+            Assert.IsTrue((await portal.CancelAsync(job.Id)).CancelRequested);
+
+            if (lateCheckpoint)
+            {
+                // A worker that read the job before the request can still save its progress and renew the job's TTL.
+                now = now.AddMinutes(1);
+                job.State = CopilotAuditBackfillStates.Running;
+                job.RecordsImported = 10;
+                await state.SaveAsync(job);
+                now = now.AddDays(180).AddTicks(-1);
+            }
+            else
+            {
+                now = now.AddDays(29);
+                Assert.IsTrue((await portal.GetStatusAsync()).LatestJob.CancelRequested);
+                now = now.AddDays(2);
+            }
+
+            var restarted = new CopilotAuditBackfillStateStore(values, true, () => now);
+            var source = new FakeAuditSearchSource();
+            var worker = new CopilotAuditBackfillImporter(restarted, source, new CountingPersistence(), config,
+                NullLogger.Instance, () => now, existingEvents: new FakeExistingEventFilter());
+            var result = await worker.AdvanceLatestAsync();
+            Assert.AreEqual(0, source.SubmitCount, "No pending slice may be submitted after the acknowledged cancellation.");
+            Assert.AreEqual(CopilotAuditBackfillStates.Cancelled, result.State);
+            Assert.AreEqual(job.RecordsImported, result.RecordsImported);
+            Assert.AreEqual(2, result.PendingSlices.Count);
+            Assert.AreEqual(CopilotAuditBackfillStates.Cancelled, (await restarted.GetLatestAsync()).State);
+
+            var replacement = await restarted.TryCreateWhenIdleAsync(now.Date.AddDays(-1), now.Date, "admin@contoso.com", true);
+            Assert.AreEqual(replacement.Id, (await worker.AdvanceLatestAsync()).Id);
+            Assert.AreEqual(1, source.SubmitCount, "Only the replacement may submit its slice.");
+        }
+
+        [TestMethod]
+        public async Task Importer_HonoursCancellationAlreadyPresentInALegacyCheckpoint()
+        {
+            var state = await NewStateWithJobAsync();
+            var job = await state.GetLatestAsync();
+            job.CancelRequested = true; // Older portals also wrote the flag into the job row.
+            await state.SaveAsync(job);
+            var source = new FakeAuditSearchSource();
+            var result = await NewImporter(state, source, new CountingPersistence()).AdvanceLatestAsync();
+            Assert.AreEqual(CopilotAuditBackfillStates.Cancelled, result.State);
+            Assert.AreEqual(0, source.SubmitCount);
+        }
+
+        [TestMethod]
+        public async Task Cancel_CannotMarkAnUnpublishedJobId()
+        {
+            var now = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
+            var state = new CopilotAuditBackfillStateStore(new InMemoryKeyValueStore(() => now), true, () => now);
+            var current = await state.TryCreateWhenIdleAsync(now.AddDays(-1), now, "admin@contoso.com", true);
+            // A concurrent start can have reserved a row that will never become LatestJob.
+            var reserved = new CopilotAuditBackfillJob { Id = current.Id + 1, State = CopilotAuditBackfillStates.Queued };
+            await state.SaveAsync(reserved);
+            Assert.IsFalse(await state.RequestCancelAsync(reserved.Id));
+            Assert.IsFalse(await state.IsCancelRequestedAsync(reserved.Id));
+            Assert.IsFalse((await state.GetLatestAsync()).CancelRequested);
+        }
+
+        [DataTestMethod]
+        [DataRow(false, DisplayName = "Worker acknowledged the old request")]
+        [DataRow(true, DisplayName = "Old job expired without a worker")]
+        public async Task Cancel_ReplacementRetiresOnlyThePreviousJobsMarker(bool expired)
+        {
+            var now = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
+            var store = new LatestJobReplyStore(() => now);
+            var state = new CopilotAuditBackfillStateStore(store, true, () => now);
+            var first = await state.TryCreateWhenIdleAsync(now.AddDays(-1), now, "admin@contoso.com", true);
+            Assert.IsTrue(await state.RequestCancelAsync(first.Id));
+            if (expired)
+            {
+                now = now.AddDays(180);
+                Assert.IsNull(await state.GetLatestAsync(), "Cancellation must not extend the lifetime of the job.");
+            }
+            else
+            {
+                await NewImporter(state, new FakeAuditSearchSource(), new CountingPersistence()).AdvanceLatestAsync();
+            }
+
+            store.LoseTheReply = true;
+            store.WhileThePointerReplyIsOnItsWay = async () =>
+            {
+                var published = await state.GetLatestAsync();
+                Assert.IsFalse(published.CancelRequested, "A new job must not inherit an older request.");
+                Assert.IsTrue(await state.RequestCancelAsync(published.Id));
+            };
+            var next = await state.TryCreateWhenIdleAsync(now.AddDays(-1), now, "admin@contoso.com", true);
+            Assert.IsTrue(await state.IsCancelRequestedAsync(first.Id), "An already-running worker must still see the retired request.");
+            Assert.IsFalse(await state.RequestCancelAsync(first.Id));
+            if (!expired)
+            {
+                var retired = await state.GetAsync(first.Id);
+                Assert.AreEqual(CopilotAuditBackfillStates.Cancelled, retired.State);
+                Assert.IsTrue(retired.CancelRequested);
+            }
+
+            now = now.AddMinutes(1);
+            await state.SaveAsync(next);
+            now = now.AddDays(180).AddTicks(-1);
+            Assert.IsFalse(await state.IsCancelRequestedAsync(first.Id), "The retired marker must not accumulate indefinitely.");
+            Assert.IsTrue((await state.GetLatestAsync()).CancelRequested, "Retirement must leave the newer request intact.");
+        }
+
+        [DataTestMethod]
+        [DataRow(CopilotAuditBackfillStates.Cancelled)]
+        [DataRow(CopilotAuditBackfillStates.Completed)]
+        public async Task Cancel_DoesNotOverwriteProgressSavedWhileAcknowledgingTheRequest(string terminalState)
+        {
+            var now = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
+            var store = new LatestJobReplyStore();
+            var state = new CopilotAuditBackfillStateStore(store, true, () => now);
+            var workerJob = await state.CreateAsync(now.AddDays(-1), now, "admin@contoso.com");
+            workerJob.State = CopilotAuditBackfillStates.Running;
+            await state.SaveAsync(workerJob);
+            store.AfterCancelMarkerWritten = async () =>
+            {
+                workerJob.State = terminalState;
+                workerJob.CompletedUtc = now;
+                workerJob.RecordsImported = 10;
+                await state.SaveAsync(workerJob);
+            };
+
+            var service = new BackfillStatusService(state, new AppConfig { ImportJobSettings = new ImportTaskSettings { Copilot = true } });
+            var reply = await service.CancelAsync(workerJob.Id);
+            Assert.IsTrue(reply.CancelRequested);
+            Assert.AreEqual(terminalState, reply.State);
+            Assert.AreEqual(10L, reply.RecordsImported);
+            Assert.AreEqual(now, reply.CompletedUtc);
+            Assert.AreEqual(terminalState, (await NewImporter(state, new FakeAuditSearchSource(), new CountingPersistence())
+                .AdvanceLatestAsync()).State, "A late marker must not reclassify a job that already finished.");
+        }
+
         [TestMethod]
         public async Task Importer_PollWithinBudgetStillImportsRecords()
         {
@@ -894,7 +1094,11 @@ namespace Tests.UnitTests
         /// </summary>
         private sealed class LatestJobReplyStore : IConditionalKeyValueStore
         {
-            public InMemoryKeyValueStore Inner { get; } = new InMemoryKeyValueStore();
+            public LatestJobReplyStore(Func<DateTime> utcNow = null)
+            {
+                Inner = new InMemoryKeyValueStore(utcNow ?? (() => DateTime.UtcNow));
+            }
+            public InMemoryKeyValueStore Inner { get; }
             public bool LoseTheReply { get; set; }
             public string AnotherStartLandsFirst { get; set; }
             public bool PointerUnreadableAfterWrite { get; set; }
@@ -912,6 +1116,7 @@ namespace Tests.UnitTests
             /// can do while the reply is on its way.
             /// </summary>
             public Func<Task> WhileThePointerReplyIsOnItsWay { get; set; }
+            public Func<Task> AfterCancelMarkerWritten { get; set; }
             public List<string> JobRowsWritten { get; } = new List<string>();
             private bool _failNextPointerRead;
             public string Description => Inner.Description;
@@ -963,10 +1168,12 @@ namespace Tests.UnitTests
                     "\"StartAttempt\":\"" + new string('f', 32) + "\"");
 
             public Task<string> GetStringAsync(string key, System.Threading.CancellationToken cancellationToken = default) => Inner.GetStringAsync(key, cancellationToken);
-            public Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, System.Threading.CancellationToken cancellationToken = default)
+            public async Task SetStringAsync(string key, string value, TimeSpan? timeToLive = null, System.Threading.CancellationToken cancellationToken = default)
             {
                 Record(key);
-                return Inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+                await Inner.SetStringAsync(key, value, timeToLive, cancellationToken);
+                if (key.EndsWith(":Cancel", StringComparison.Ordinal) && AfterCancelMarkerWritten != null)
+                    await AfterCancelMarkerWritten();
             }
             public Task<bool> DeleteAsync(string key, System.Threading.CancellationToken cancellationToken = default) => Inner.DeleteAsync(key, cancellationToken);
             public Task<bool> TryDeleteAsync(string key, string expectedVersionToken, System.Threading.CancellationToken cancellationToken = default)
@@ -1195,8 +1402,9 @@ namespace Tests.UnitTests
             private readonly Func<string, Task<CopilotAuditSearchRecordPage>> _page;
             public int Submits;
             public Func<Task> OnSubmit;
+            public Func<Task<AppTokenPermissionAccess>> CheckPermission = () => Task.FromResult(AppTokenPermissionAccess.Granted);
             public CallbackSource(Func<string, Task<CopilotAuditSearchRecordPage>> page) { _page = page; }
-            public Task<AppTokenPermissionAccess> GetPermissionAccessAsync() => Task.FromResult(AppTokenPermissionAccess.Granted);
+            public Task<AppTokenPermissionAccess> GetPermissionAccessAsync() => CheckPermission();
             public async Task<CopilotAuditSearchQuery> SubmitQueryAsync(CopilotAuditBackfillSlice slice)
             {
                 Submits++;

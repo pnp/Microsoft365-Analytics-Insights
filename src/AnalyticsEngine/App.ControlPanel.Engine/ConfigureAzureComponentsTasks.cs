@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -49,11 +50,23 @@ namespace App.ControlPanel.Engine
             SqlServerResource sqlServer = null, SqlAuthDecision sqlAuthDecision = null, Guid installerObjectId = default(Guid))
         {
             CancellationToken.ThrowIfCancellationRequested();
-            await ConfigureWebApp(webApp, appServicePlan, dbInfo, storage, cognitiveServicesInfo, foundryPromptInfo, appInsights, serviceBusConnectionString, keyVault);
+            var storageInfo = new AzStorageConnectionInfo(storage);
+            await ConfigureWebApp(webApp, appServicePlan, dbInfo.ConnectionString, storageInfo.StorageConnectionString,
+                cognitiveServicesInfo, foundryPromptInfo, appInsights, serviceBusConnectionString, keyVault.Data.Properties.VaultUri);
 
+            using (var workspace = new InstallPackageWorkspace(_logger))
+            {
+                await InstallReleaseAsync(workspace, webApp, dbInfo, automationAccount, appInsights, subscription, sqlServer, sqlAuthDecision, installerObjectId);
+            }
+        }
+
+        private async Task InstallReleaseAsync(InstallPackageWorkspace workspace, WebSiteResource webApp, DatabasePaaSInfo dbInfo,
+            AutomationAccountResource automationAccount, AppInsightsInfo appInsights, SubscriptionResource subscription,
+            SqlServerResource sqlServer, SqlAuthDecision sqlAuthDecision, Guid installerObjectId)
+        {
             // Download/extract the release while the App Service is still available. Kudu/SCM
             // rejects deployments while the site resource is stopped.
-            var solutionSources = await GetSolutionFromSource(subscription, automationAccount, downloadReleaseOnly: true);
+            var solutionSources = await GetSolutionFromSource(workspace, subscription, automationAccount, downloadReleaseOnly: true);
 
             // Prove SQL is reachable BEFORE taking the site offline, self-healing a stale firewall rule if
             // that is what is blocking us. Previously the site was stopped first and the connectivity test ran
@@ -92,24 +105,19 @@ namespace App.ControlPanel.Engine
             }
 
             // Find downloaded installer app
-            var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel));
+            var installerExeFile = GetInstallerExe(solutionSources.GetSolutionComponentLocation(SoftwareComponent.ControlPanel), workspace);
 
             var sqlInstallerTasks = new SqlInstallerTasks(Config, installerExeFile, dbInfo, _logger, _installedByUsername,
                 async (connectionString) => await VerifySqlWithFirewallSelfHeal(connectionString, repairFirewall));
             sqlInstallerTasks.CancellationToken = CancellationToken;
             await RunUpgradeDeploymentAsync(Config.TasksConfig.InstallLatestSolutionContent, Config.TasksConfig.UpgradeSchema,
-                async () =>
-                {
-                    var settings = (await webApp.GetApplicationSettingsAsync(CancellationToken)).Value;
-                    PauseUpgradeWebJobs(settings.Properties);
-                    await webApp.UpdateApplicationSettingsAsync(settings, CancellationToken);
-                },
+                () => PauseUpgradeWebJobsAsync(webApp, CancellationToken),
                 () => EnsureWebJobsRunningAsync(webApp, _logger),
                 async () => { await webApp.StopAsync(CancellationToken); },
                 // Recovery must finish even when the operation was cancelled after stopping the site.
                 async () => { await webApp.StartAsync(); },
                 () => sqlInstallerTasks.UpdateSqlDatabaseSchemaAndDataFromDownloadedInstaller(installerExeFile, _installLog),
-                () => InstallSolutionContent(solutionSources, subscription, automationAccount), _logger, CancellationToken,
+                () => InstallSolutionContent(solutionSources, workspace, subscription, automationAccount), _logger, CancellationToken,
                 () => sqlInstallerTasks.SchemaUpgradeDeferred,
                 () => sqlInstallerTasks.CheckDownloadedBuildBeforeUpgradeAsync());
 
@@ -123,7 +131,7 @@ namespace App.ControlPanel.Engine
 
                     var spTasks = new SharePointWebComponentsInstallJob(Config, _logger, webApp.Data.DefaultHostName);
                     spTasks.CancellationToken = CancellationToken;
-                    await spTasks.InstallAITracker(this.Config.SharePointConfig, aiTrackerDownload, appInsights.ConnectionString);
+                    await spTasks.InstallAITracker(this.Config.SharePointConfig, aiTrackerDownload, appInsights.ConnectionString, workspace);
                 }
                 else
                 {
@@ -270,10 +278,20 @@ namespace App.ControlPanel.Engine
         }
 
         internal const string UpgradeWebJobsStateSetting = "AnalyticsUpgradeWebJobsPreviousState";
+        private const string WebJobsStoppedSetting = "WEBJOBS_STOPPED";
+
+        internal static async Task PauseUpgradeWebJobsAsync(WebSiteResource webApp, CancellationToken cancellationToken)
+        {
+            var settings = await ReadUpgradeSettingsAsync(webApp, cancellationToken);
+            PauseUpgradeWebJobs(settings.Properties);
+            await WriteApplicationSettingsAsync(webApp, settings, cancellationToken);
+        }
 
         internal static void PauseUpgradeWebJobs(IDictionary<string, string> settings)
         {
-            settings["WEBJOBS_STOPPED"] = "1";
+            foreach (var key in settings.Keys.Where(k => string.Equals(k, WebJobsStoppedSetting, StringComparison.OrdinalIgnoreCase)).ToArray())
+                settings.Remove(key);
+            settings[WebJobsStoppedSetting] = "1";
         }
 
         internal static void ResumeUpgradeWebJobs(IDictionary<string, string> settings)
@@ -283,8 +301,15 @@ namespace App.ControlPanel.Engine
         }
 
         private static bool IsWebJobsPauseSetting(string key) =>
-            string.Equals(key, "WEBJOBS_STOPPED", StringComparison.OrdinalIgnoreCase)
+            string.Equals(key, WebJobsStoppedSetting, StringComparison.OrdinalIgnoreCase)
             || string.Equals(key, UpgradeWebJobsStateSetting, StringComparison.OrdinalIgnoreCase);
+
+        private static async Task<AppServiceConfigurationDictionary> ReadUpgradeSettingsAsync(WebSiteResource webApp, CancellationToken token)
+        {
+            var settings = new AppServiceConfigurationDictionary();
+            await CopyApplicationSettingsAsync(webApp, settings.Properties, token, ConfigurationStep.Read);
+            return settings;
+        }
 
         internal static async Task EnsureWebJobsRunningAsync(WebSiteResource webApp, ILogger logger)
         {
@@ -292,8 +317,8 @@ namespace App.ControlPanel.Engine
             using (var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2)))
             {
                 await EnsureWebJobsRunningAsync(
-                    async ct => (await webApp.GetApplicationSettingsAsync(ct)).Value,
-                    async (settings, ct) => { await webApp.UpdateApplicationSettingsAsync(settings, ct); },
+                    ct => ReadUpgradeSettingsAsync(webApp, ct),
+                    (settings, ct) => WriteApplicationSettingsAsync(webApp, settings, ct),
                     logger, timeout.Token);
             }
         }
@@ -608,7 +633,7 @@ namespace App.ControlPanel.Engine
             };
         }
 
-        FileInfo GetInstallerExe(LocalStorageBlobInfo localStorageBlobInfo)
+        FileInfo GetInstallerExe(LocalStorageBlobInfo localStorageBlobInfo, InstallPackageWorkspace workspace)
         {
             CancellationToken.ThrowIfCancellationRequested();
             // Get control-panel
@@ -616,7 +641,7 @@ namespace App.ControlPanel.Engine
             DirectoryInfo zipContentsDirControlPanel = null;
             try
             {
-                zipContentsDirControlPanel = ZipFileTasks.Unzip(localStorageBlobInfo, _logger, CancellationToken);
+                zipContentsDirControlPanel = workspace.Unzip(localStorageBlobInfo, CancellationToken);
             }
             catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
             {
@@ -639,6 +664,7 @@ namespace App.ControlPanel.Engine
         }
 
         async Task<LocalStorageInstallSourceInfo> GetSolutionFromSource(
+            InstallPackageWorkspace workspace,
             SubscriptionResource subscription,
             AutomationAccountResource automationAccount,
             bool downloadReleaseOnly)
@@ -647,12 +673,13 @@ namespace App.ControlPanel.Engine
             if (this.Config.DownloadLatestStable)
             {
                 // Download webjobs from blob storage. Optionally install.
-                appServiceContentInstallJob = new DownloadLatestAppServiceContentInstallJob(_logger, subscription, _softwareConfig, _proxyConfig, this.Config, downloadReleaseOnly, automationAccount);
+                appServiceContentInstallJob = new DownloadLatestAppServiceContentInstallJob(_logger, subscription, _softwareConfig, _proxyConfig, this.Config, downloadReleaseOnly, automationAccount, workspace);
             }
             else
             {
                 // Use local sources. Optionally install.
-                appServiceContentInstallJob = new UseLocalAppServiceContentInstallJob(_logger, subscription, this.Config.LocalSourceOverride, _proxyConfig, this.Config, downloadReleaseOnly, automationAccount);
+                var staged = await workspace.StageLocalPackagesAsync(this.Config.LocalSourceOverride, CancellationToken);
+                appServiceContentInstallJob = new UseLocalAppServiceContentInstallJob(_logger, subscription, staged, _proxyConfig, this.Config, downloadReleaseOnly, automationAccount, workspace);
             }
 
             appServiceContentInstallJob.CancellationToken = CancellationToken;
@@ -663,6 +690,7 @@ namespace App.ControlPanel.Engine
 
         async Task InstallSolutionContent(
             LocalStorageInstallSourceInfo solutionSources,
+            InstallPackageWorkspace workspace,
             SubscriptionResource subscription,
             AutomationAccountResource automationAccount)
         {
@@ -673,16 +701,15 @@ namespace App.ControlPanel.Engine
                 _proxyConfig,
                 this.Config,
                 downloadReleaseOnly: false,
-                automationAccount: automationAccount);
+                automationAccount: automationAccount,
+                workspace: workspace);
             installJob.CancellationToken = CancellationToken;
             await installJob.Install();
         }
 
-        async Task ConfigureWebApp(WebSiteResource webApp, AppServicePlanResource appServicePlan, DatabasePaaSInfo backendInfo,
-            StorageAccountResource storage,
-            CognitiveServicesInfo cognitiveServicesInfo,
-            FoundryPromptInfo foundryPromptInfo,
-            AppInsightsInfo appInsights, string serviceBusConnectionString, KeyVaultResource keyVault)
+        internal async Task ConfigureWebApp(WebSiteResource webApp, AppServicePlanResource appServicePlan, string sqlConnectionString,
+            string storageConnectionString, CognitiveServicesInfo cognitiveServicesInfo, FoundryPromptInfo foundryPromptInfo,
+            AppInsightsInfo appInsights, string serviceBusConnectionString, Uri keyVaultUri)
         {
             // App settings
             var url = $"https://{webApp.Data.HostNames.First()}/";
@@ -692,7 +719,7 @@ namespace App.ControlPanel.Engine
             appSettings.Properties.Add("ClientID", this.Config.RuntimeAccountOffice365.ClientId);
             appSettings.Properties.Add("ClientSecret", this.Config.RuntimeAccountOffice365.Secret);
             appSettings.Properties.Add("TenantGUID", this.Config.RuntimeAccountOffice365.DirectoryId);
-            appSettings.Properties.Add("KeyVaultURL", keyVault.Data.Properties.VaultUri.ToString());
+            appSettings.Properties.Add("KeyVaultURL", keyVaultUri.ToString());
             appSettings.Properties.Add("WEBSITE_LOAD_USER_PROFILE", "1");       // So certificate loading works - https://learn.microsoft.com/en-us/azure/app-service/reference-app-settings?tabs=kudu%2Cdotnet#build-automation
 
             // App Insights REST calls have sometimes failed. If they did & we have no config, just don't update this bit of the config & they'll have to do it manually
@@ -735,7 +762,7 @@ namespace App.ControlPanel.Engine
             // the VNet so that private DNS zones resolve Azure PaaS hostnames to private endpoint IPs.
             //
             // Both keys are written in BOTH branches, so they are always installer-managed. That matters
-            // because PreserveUnmanagedAppSettingsAsync only fills in keys the installer does not write:
+            // because PreserveUnmanagedAppSettings only fills in keys the installer does not write:
             // if these were written solely in the enabled branch, disabling VNet on a later run would
             // leave the previous values in place instead of clearing them - the merge would preserve
             // exactly the setting the operator had just turned off. Writing empty values keeps
@@ -753,37 +780,162 @@ namespace App.ControlPanel.Engine
             }
 
             // Connection strings
-            var storageInfo = new AzStorageConnectionInfo(storage);
-            var connectionStrings = new ConnectionStringDictionary();
-            connectionStrings.Properties.Add("SPOInsightsEntities", new ConnStringValueTypePair(backendInfo.ConnectionString, ConnectionStringType.SqlAzure));
-            connectionStrings.Properties.Add("AzureWebJobsDashboard", new ConnStringValueTypePair(storageInfo.StorageConnectionString, ConnectionStringType.Custom));
-            connectionStrings.Properties.Add("AzureWebJobsStorage", new ConnStringValueTypePair(storageInfo.StorageConnectionString, ConnectionStringType.Custom));
-            connectionStrings.Properties.Add("Storage", new ConnStringValueTypePair(storageInfo.StorageConnectionString, ConnectionStringType.Custom));
+            if (string.IsNullOrWhiteSpace(serviceBusConnectionString))
+            {
+                _logger.LogInformation("Service Bus is disabled; the App Service will not have a 'ServiceBus' connection string.");
+            }
+
+            // An upgrade captured both collections before the backend changed the existing site. A new site
+            // can only be read after creation. Consume the snapshot once; the writes are separate ARM requests.
+            await PreflightExistingSiteAsync(webApp);
+            var snapshot = _siteConfiguration;
+            _siteConfiguration = null;
+            PreserveUnmanagedAppSettings(snapshot.AppSettings, appSettings);
+            var connectionStrings = snapshot.UnmanagedConnectionStrings;
+            connectionStrings.Properties.Add(SqlConnectionName, new ConnStringValueTypePair(sqlConnectionString, ConnectionStringType.SqlAzure));
+            foreach (var name in StorageConnectionNames)
+                connectionStrings.Properties.Add(name, new ConnStringValueTypePair(storageConnectionString, ConnectionStringType.Custom));
             if (!string.IsNullOrWhiteSpace(serviceBusConnectionString))
-            {
-                connectionStrings.Properties.Add("ServiceBus", new ConnStringValueTypePair(serviceBusConnectionString, ConnectionStringType.Custom));
-            }
-            else
-            {
-                _logger.LogInformation("Service Bus is disabled; skipping 'ServiceBus' connection-string on the App Service.");
-            }
-            var siteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku);
+                connectionStrings.Properties.Add(ServiceBusConnectionName, new ConnStringValueTypePair(serviceBusConnectionString, ConnectionStringType.Custom));
+
+            await RunConfigurationStepAsync("site configuration", token => UpdatePostCreateSiteConfigAsync(webApp, appServicePlan, token), CancellationToken);
+            await WriteApplicationSettingsAsync(webApp, appSettings, CancellationToken);
+            await RunConfigurationStepAsync("connection strings", token => webApp.UpdateConnectionStringsAsync(connectionStrings, token), CancellationToken);
+
+            _logger.LogInformation("App Service connection-strings & app-settings configured");
+        }
+
+        private async Task UpdatePostCreateSiteConfigAsync(WebSiteResource webApp, AppServicePlanResource appServicePlan, CancellationToken token)
+        {
+            var sku = appServicePlan?.Data?.Sku;
             try
             {
-                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = siteConfig }, CancellationToken);
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = BuildPostCreateSiteConfig(sku) }, token);
             }
             catch (RequestFailedException ex) when (AppServicePlanCapabilities.IsPlanCapabilityConflict(ex))
             {
-                _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan?.Data?.Name ?? Config.AppServicePlanName, appServicePlan?.Data?.Sku));
-                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = BuildPostCreateSiteConfig(appServicePlan?.Data?.Sku, includePlanSensitiveSettings: false) }, CancellationToken);
+                token.ThrowIfCancellationRequested();
+                _logger.LogWarning(AppServicePlanCapabilities.BuildAlwaysOnUnsupportedWarning(appServicePlan?.Data?.Name ?? Config.AppServicePlanName, sku));
+                await webApp.UpdateAsync(new SitePatchInfo { SiteConfig = BuildPostCreateSiteConfig(sku, includePlanSensitiveSettings: false) }, token);
             }
-            await PreserveUnmanagedAppSettingsAsync(webApp, appSettings);
-            await webApp.UpdateApplicationSettingsAsync(appSettings, CancellationToken);
-            // The App Service connection string PUT replaces the collection with the dictionary supplied
-            // here. Obsolete installer-managed connection strings are deliberately absent on upgrades.
-            await webApp.UpdateConnectionStringsAsync(connectionStrings, CancellationToken);
+        }
 
-            _logger.LogInformation("App Service connection-strings & app-settings configured");
+        private const string SqlConnectionName = "SPOInsightsEntities";
+        private const string ServiceBusConnectionName = "ServiceBus";
+        private static readonly string[] StorageConnectionNames = { "AzureWebJobsDashboard", "AzureWebJobsStorage", "Storage" };
+        // Redis was retired; ServiceBus is still ours even when disabled.
+        private static readonly HashSet<string> OwnedConnectionNames = new HashSet<string>(StorageConnectionNames, StringComparer.OrdinalIgnoreCase)
+            { SqlConnectionName, ServiceBusConnectionName, "Redis" };
+
+        private sealed class SiteConfigurationSnapshot
+        {
+            public string SiteId { get; }
+            public Dictionary<string, string> AppSettings { get; } = new Dictionary<string, string>();
+            public ConnectionStringDictionary UnmanagedConnectionStrings { get; } = new ConnectionStringDictionary();
+            public SiteConfigurationSnapshot(WebSiteResource site) { SiteId = site.Id.ToString(); }
+        }
+
+        private SiteConfigurationSnapshot _siteConfiguration;
+
+        internal async Task PreflightExistingSiteAsync(WebSiteResource webApp)
+        {
+            CancellationToken.ThrowIfCancellationRequested();
+            if (_siteConfiguration != null)
+            {
+                if (!string.Equals(_siteConfiguration.SiteId, webApp.Id.ToString(), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("The configuration preflight was for a different App Service.");
+                return;
+            }
+
+            var snapshot = new SiteConfigurationSnapshot(webApp);
+            _logger.LogInformation("Reading App Service configuration. Avoid editing application settings or connection strings during deployment; their replacements use the values read here.");
+            await CopyApplicationSettingsAsync(webApp, snapshot.AppSettings, CancellationToken, ConfigurationStep.PreflightRead);
+            await ReadConfigurationPropertiesAsync("connection strings", webApp.GetConnectionStringsAsync, (entry, listed) =>
+            {
+                if (OwnedConnectionNames.Contains(entry.Name)) return;
+                // The SDK defaults a missing type to the first enum value. Do not guess an operator's type or value.
+                if (entry.Value.GetProperty("type").ValueKind != JsonValueKind.String ||
+                    entry.Value.GetProperty("value").ValueKind != JsonValueKind.String)
+                    throw new InvalidDataException();
+                snapshot.UnmanagedConnectionStrings.Properties.Add(entry.Name, listed.Properties[entry.Name]);
+            }, CancellationToken, ConfigurationStep.PreflightRead);
+            CancellationToken.ThrowIfCancellationRequested();
+            _siteConfiguration = snapshot;
+        }
+
+        private enum ConfigurationStep { Update, Read, PreflightRead }
+
+        private static Task CopyApplicationSettingsAsync(WebSiteResource webApp, IDictionary<string, string> destination, CancellationToken token, ConfigurationStep read)
+            => ReadConfigurationPropertiesAsync("application settings", webApp.GetApplicationSettingsAsync, (entry, listed) =>
+            {
+                if (entry.Value.ValueKind != JsonValueKind.String) throw new InvalidDataException();
+                destination.Add(entry.Name, listed.Properties[entry.Name]);
+            }, token, read);
+
+        private static Task WriteApplicationSettingsAsync(WebSiteResource webApp, AppServiceConfigurationDictionary settings, CancellationToken token)
+            => RunConfigurationStepAsync("application settings", ct => webApp.UpdateApplicationSettingsAsync(settings, ct), token);
+
+        private static Task ReadConfigurationPropertiesAsync<T>(string collection, Func<CancellationToken, Task<Response<T>>> list,
+            Action<JsonProperty, T> preserve, CancellationToken cancellationToken, ConfigurationStep read)
+        {
+            return RunConfigurationStepAsync(collection, async token =>
+            {
+                var listed = await list(token);
+                // Both SDK models can turn missing/null properties into an empty dictionary. Only an explicit {} is empty.
+                using (var body = JsonDocument.Parse(listed.GetRawResponse().Content.ToMemory()))
+                {
+                    foreach (var entry in body.RootElement.GetProperty("properties").EnumerateObject())
+                        preserve(entry, listed.Value);
+                }
+            }, cancellationToken, read);
+        }
+
+        private static async Task RunConfigurationStepAsync(string section, Func<CancellationToken, Task> step, CancellationToken token,
+            ConfigurationStep kind = ConfigurationStep.Update)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                await step(token);
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                token.ThrowIfCancellationRequested();
+                if (ex is RequestFailedException response && response.Status >= 100 && response.Status <= 599)
+                    throw ConfigurationHttpException.ForStep(section, kind, response);
+                throw new InvalidOperationException(ConfigurationFailureMessage(section, kind, ex.GetType().Name));
+            }
+        }
+
+        private static string ConfigurationFailureMessage(string section, ConfigurationStep kind, string reason, bool checkAccess = false)
+        {
+            if (kind == ConfigurationStep.Update)
+                return $"Could not update the App Service {section} ({reason}).";
+            var beforeWrites = kind == ConfigurationStep.PreflightRead ? " No replacement was sent." : "";
+            var advice = checkAccess ? "Check the installer's access and retry." : "Verify that Azure can return the complete collection and retry.";
+            return $"Could not read the existing App Service {section} ({reason}).{beforeWrites} {advice}";
+        }
+
+        // Only this exception has a message safe for the final cleanup log. Do not retain the SDK exception:
+        // its message and inner exceptions can contain response bodies and operator settings.
+        private sealed class ConfigurationHttpException : InvalidOperationException
+        {
+            private ConfigurationHttpException(string message) : base(message) { }
+
+            public static ConfigurationHttpException ForStep(string section, ConfigurationStep kind, RequestFailedException response)
+            {
+                var code = response.ErrorCode;
+                var lockOrPolicy = code == "ScopeLocked" || code == "RequestDisallowedByPolicy";
+                var reason = $"HTTP {response.Status}" + (lockOrPolicy ? $", {code}" : "");
+                var checkAccess = !lockOrPolicy && (response.Status == 401 || response.Status == 403);
+                return new ConfigurationHttpException(ConfigurationFailureMessage(section, kind, reason, checkAccess));
+            }
+        }
+
+        internal static string DescribeWebJobsCleanupFailure(Exception error)
+        {
+            const string unconfirmed = "could not confirm WEBJOBS_STOPPED was removed.";
+            return error is ConfigurationHttpException response ? $"{unconfirmed} {response.Message}" : unconfirmed;
         }
 
         internal const string CopilotCostConnectionSetupMessage =
@@ -798,7 +950,7 @@ namespace App.ControlPanel.Engine
         /// </summary>
         /// <remarks>
         /// Every key is written on every run, enabled or not, so turning a toggle off in the installer clears it
-        /// on the next deployment instead of <c>PreserveUnmanagedAppSettingsAsync</c> keeping the old value.
+        /// on the next deployment instead of <c>PreserveUnmanagedAppSettings</c> keeping the old value.
         /// The web app and the importer web-job run in the same App Service, so one set of settings serves both.
         /// </remarks>
         internal static void AddImportSelectionAppSettings(IDictionary<string, string> properties, Common.Entities.ImportTaskSettings settings)
@@ -868,38 +1020,17 @@ namespace App.ControlPanel.Engine
         /// not an error, so a first-time deployment is unaffected.
         /// </para>
         /// </remarks>
-        private async Task PreserveUnmanagedAppSettingsAsync(WebSiteResource webApp, AppServiceConfigurationDictionary appSettings)
+        private void PreserveUnmanagedAppSettings(IReadOnlyDictionary<string, string> existing, AppServiceConfigurationDictionary appSettings)
         {
-            Response<AppServiceConfigurationDictionary> existing;
-            try
-            {
-                existing = await webApp.GetApplicationSettingsAsync(CancellationToken);
-            }
-            catch (Exception ex) when (!CancellationToken.IsCancellationRequested)
-            {
-                throw new InvalidOperationException(
-                    "Could not read the existing App Service application settings, so this deployment was "
-                    + "stopped before it could overwrite them. Updating app settings replaces the whole "
-                    + "collection, so continuing would have deleted every setting the installer does not "
-                    + "manage - including any UserGroupsFilter scope and all import tuning values. Resolve "
-                    + "the access problem and re-run the installer. Reason: " + ex.Message, ex);
-            }
-
-            if (existing?.Value?.Properties == null)
-            {
-                return;
-            }
-
+            // The SDK dictionary distinguishes casing; Windows App Service settings do not. Never send a
+            // stale spelling alongside the canonical managed value. Keep operator-only keys as supplied.
+            var managed = new HashSet<string>(appSettings.Properties.Keys, StringComparer.OrdinalIgnoreCase);
             var preserved = new List<string>();
-            foreach (var setting in existing.Value.Properties)
+            foreach (var entry in existing)
             {
-                if (appSettings.Properties.ContainsKey(setting.Key))
-                {
-                    continue;
-                }
-
-                appSettings.Properties.Add(setting.Key, setting.Value);
-                preserved.Add(setting.Key);
+                if (managed.Contains(entry.Key)) continue;
+                appSettings.Properties.Add(entry.Key, entry.Value);
+                preserved.Add(entry.Key);
             }
 
             if (preserved.Count > 0)

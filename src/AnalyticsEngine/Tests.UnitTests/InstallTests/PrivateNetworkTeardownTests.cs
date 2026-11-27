@@ -334,9 +334,11 @@ namespace Tests.UnitTests.InstallTests
             using (var http = new HttpClient(handler))
             {
                 var adapter = new PrivateNetworkCleanupClient(Group(http), manifest, new[] { target }, new string[0]);
+                if (resourceType == "Microsoft.Web/sites") adapter.ConfirmedMissingSiteId = new ResourceIdentifier(target);
                 await adapter.ValidatePublicTarget(target, CancellationToken.None);
                 await adapter.EnablePublicTarget(target, CancellationToken.None);
                 Assert.AreEqual(0, handler.Mutations, "Genuinely absent resources are not recreated by teardown.");
+                adapter.ConfirmedMissingSiteId = null;
                 handler.ReadErrorCode = null;
                 handler.FailPatchOnce = true;
                 handler.FailureStatus = HttpStatusCode.Forbidden;
@@ -392,8 +394,8 @@ namespace Tests.UnitTests.InstallTests
                 await Assert.ThrowsExceptionAsync<RequestFailedException>(() => adapter.Read(manifest.Artifacts.Single(), CancellationToken.None));
                 handler.ReadErrorCode = "ResourceNotFound";
                 Assert.IsNull(await adapter.Read(manifest.Artifacts.Single(), CancellationToken.None));
-                await adapter.EnablePublicTarget(target, CancellationToken.None);
-                Assert.AreEqual(1, handler.Mutations, "Only an initial genuine absence is an idempotent no-op.");
+                await Assert.ThrowsExceptionAsync<RequestFailedException>(() => adapter.EnablePublicTarget(target, CancellationToken.None));
+                Assert.AreEqual(1, handler.Mutations, "Without prior hosting-discovery evidence, a site GET cannot authorize skipping the public-access gate.");
             }
         }
 

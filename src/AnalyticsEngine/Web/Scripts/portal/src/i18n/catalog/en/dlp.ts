@@ -84,6 +84,7 @@ export const dlp = {
   'dlp.governance.agents.hint': 'Distinct agents a DLP policy blocked in this period. The most blocked:',
   'dlp.governance.agents.blocked': 'Blocked: {count}',
   'dlp.governance.agents.none': 'No agent was blocked in this period.',
+  'dlp.governance.agents.notListed': 'Blocks were recorded, but no agent names are shown in this view.',
   'dlp.governance.agents.pointer': 'Whether an agent is still worth keeping is shown in {link}, where every agent has a verdict such as Retire or Review.',
   'dlp.governance.agents.pointerLink': 'Copilot Adoption > Agents',
   'dlp.governance.models.title': 'AI models',

@@ -2,6 +2,7 @@ using Common.Entities.Config;
 using DataUtils;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
@@ -28,13 +29,38 @@ namespace WebJob.AppInsightsImporter.Engine
         Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses);
     }
 
+    /// <summary>The WebJob source accepts a token for each request. Keep the original source port usable by existing callers.</summary>
+    public interface ICancellableAppInsightsSourceLoader : IAppInsightsSourceLoader
+    {
+        Task<IReadOnlyList<AppInsightsHourlyRowCount>> GetHourlyRowCountsAsync(AppInsightsReadWindow range, CancellationToken cancellationToken);
+        Task<PageViewCollection> GetPageViewsAsync(AppInsightsReadWindow window, bool saveRestResponses, CancellationToken cancellationToken);
+        Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses, CancellationToken cancellationToken);
+    }
+
+    internal static class AppInsightsSourceReads
+    {
+        // Both normal ingestion and reconciliation use these overloads. Legacy injected sources can
+        // finish an in-flight read; callers check for a stop before consuming its result.
+        internal static Task<IReadOnlyList<AppInsightsHourlyRowCount>> GetHourlyRowCountsAsync(this IAppInsightsSourceLoader source,
+            AppInsightsReadWindow range, CancellationToken token) => source is ICancellableAppInsightsSourceLoader cancellable
+                ? cancellable.GetHourlyRowCountsAsync(range, token) : source.GetHourlyRowCountsAsync(range);
+
+        internal static Task<PageViewCollection> GetPageViewsAsync(this IAppInsightsSourceLoader source,
+            AppInsightsReadWindow window, bool dump, CancellationToken token) => source is ICancellableAppInsightsSourceLoader cancellable
+                ? cancellable.GetPageViewsAsync(window, dump, token) : source.GetPageViewsAsync(window, dump);
+
+        internal static Task<CustomEventsResultCollection> GetCustomEventsAsync(this IAppInsightsSourceLoader source,
+            AppInsightsReadWindow window, bool dump, CancellationToken token) => source is ICancellableAppInsightsSourceLoader cancellable
+                ? cancellable.GetCustomEventsAsync(window, dump, token) : source.GetCustomEventsAsync(window, dump);
+    }
+
     /// <summary>
     /// The newest hit already stored. Returns <c>null</c> when nothing has been imported yet. The import resumes from it
     /// only until it has an ingestion cursor (see <see cref="AppInsightsIngestionCursorPolicy"/>).
     /// </summary>
     public interface IHitWatermarkStore
     {
-        Task<DateTime?> GetNewestHitTimestampUtcAsync();
+        Task<DateTime?> GetNewestHitTimestampUtcAsync(CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -42,7 +68,7 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public interface ISiteFilterLoader
     {
-        Task<List<FilterUrlConfig>> LoadAsync();
+        Task<List<FilterUrlConfig>> LoadAsync(CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -51,24 +77,24 @@ namespace WebJob.AppInsightsImporter.Engine
     /// searches, clicks, page-updates, hit-updates); those become collaborators of the SQL adapter rather
     /// than changes to this port. Both saves are idempotent, so a window read again saves nothing twice.
     ///
-    /// Either method throwing means the day did not save completely, and the importer retries it before any
-    /// later day (see <see cref="AppInsightsDayFailureTracker"/>). <see cref="SaveCustomEventsAsync"/> therefore
-    /// throws after the event sections have all been attempted if any of them failed.
+    /// Either normal save throwing means the day did not save completely, and the importer retries it before any
+    /// later day (see <see cref="AppInsightsDayFailureTracker"/>). The separate search-only retry never runs the
+    /// other event sections.
     /// </summary>
     public interface IAppInsightsDayPersistenceManager
     {
-        Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls);
-        Task SaveCustomEventsAsync(CustomEventsResultCollection events);
+        Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default);
+        Task<CustomEventSaveResult> SaveCustomEventsAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default);
+        /// <summary>Reconcile one window of searches after the normal imports have saved their eligible visits.</summary>
+        Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection searches, CancellationToken cancellationToken = default);
     }
 
     /// <summary>
-    /// Writes a batch of page-views. The one write port of the day persistence manager that has anything
-    /// to report back: the staging rules already work out how many rows were dropped and why, and those
-    /// numbers previously reached a log line and nothing else. See issue #369.
+    /// Writes a batch of page-views, reporting how many rows the staging rules dropped and why. See issue #369.
     /// </summary>
     public interface IPageViewsPersistenceManager
     {
-        Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls);
+        Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default);
     }
 
     /// <summary>
@@ -78,34 +104,28 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public interface IHitUpdatePersistenceManager
     {
-        Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events);
+        Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default);
     }
 
     /// <summary>
-    /// Writes the search events in a batch. Returns the merge script's ADO.NET rows-affected total, which
-    /// covers the new <c>search_terms</c> lookup rows as well as the <c>searches</c> rows - "Migrate
-    /// Searches Import.sql" runs both inserts in one batch with no <c>SET NOCOUNT ON</c>, so
-    /// <c>ExecuteNonQuery</c> sums them. It is not a count of searches alone.
+    /// Writes searches with a matching visit. Reports real inserts (terms plus facts), new facts alone,
+    /// and how many inputs had no matching visit per ingestion hour, so they can be reread without storing telemetry.
     /// </summary>
     public interface ISearchesPersistenceManager
     {
-        Task<int> SaveSearchesAsync(CustomEventsResultCollection events);
+        Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default);
     }
 
     /// <summary>
-    /// Writes page metadata / comment / like updates. Returns the number of DISTINCT URLs the page-update
-    /// manager found update work for - not a guarantee that those updates committed. A URL is added to the
-    /// list before the chunk's final <c>SaveChangesAsync</c>, and a <c>SqlException</c> or
-    /// <c>DbUpdateException</c> there is logged and swallowed, so a URL whose only pending changes (a like,
-    /// a simple metadata prop) failed to commit is still counted.
+    /// Writes page metadata / comment / like updates. Returns the number of distinct URLs with saved changes.
     /// </summary>
     public interface IPageUpdatePersistenceManager
     {
-        Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events);
+        Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default);
     }
 
     /// <summary>
-    /// Writes the click events in a batch. Like <see cref="ISearchesPersistenceManager"/> this is the
+    /// Writes the click events in a batch. Like <see cref="SearchSaveResult.RowsAffected"/> this is the
     /// merge script's ADO.NET rows-affected total, not a count of clicks: "Migrate clicks from
     /// staging.sql" inserts into <c>hits_clicked_element_class_names</c>, <c>urls</c> and
     /// <c>hits_clicked_element_titles</c> before <c>hits_clicked_elements</c>, all in one batch with no
@@ -113,6 +133,6 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public interface IClicksPersistenceManager
     {
-        Task<int> SaveClicksAsync(CustomEventsResultCollection events);
+        Task<int> SaveClicksAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default);
     }
 }

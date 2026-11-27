@@ -3,6 +3,7 @@ using DataUtils;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
@@ -54,6 +55,10 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// <summary>Who viewed the page, by (day, row index). Null leaves page views anonymous.</summary>
         public Func<DateTime, int, string> PageViewUsername { get; set; }
 
+        public Func<DateTime, PageViewAppInsightsQueryResult> PageViewAt { get; set; }
+        public Func<DateTime, BaseCustomEventAppInsightsQueryResult> EventAt { get; set; }
+        public Action<AppInsightsReadWindow> OnEventWindow { get; set; }
+
         private IEnumerable<(DateTime Timestamp, DateTime Ingested, string Username)> PageViewRows() =>
             PageViewCountByDay.SelectMany(d => Enumerable.Range(0, d.Value)
                     .Select(i => (Timestamp: d.Key.AddMinutes(i), Ingested: d.Key.AddMinutes(i), Username: PageViewUsername?.Invoke(d.Key, i))))
@@ -77,9 +82,10 @@ namespace Tests.UnitTests.FakeLoaderClasses
             {
                 return Task.FromException<IReadOnlyList<AppInsightsHourlyRowCount>>(CountsFailWith);
             }
-            var counts = PageViewRows().Where(r => InWindow(r.Timestamp, r.Ingested, range))
+            var counts = PageViewRows().Where(r => !range.SearchesOnly && InWindow(r.Timestamp, r.Ingested, range))
                     .GroupBy(r => Hour(r.Timestamp)).Select(g => new AppInsightsHourlyRowCount(AppInsightsTelemetryKind.PageViews, g.Key, g.Count()))
-                .Concat(CustomEventRows().Where(r => InWindow(r.Timestamp, r.Ingested, range))
+                .Concat(CustomEventRows().Where(r => InWindow(r.Timestamp, r.Ingested, range)
+                    && (!range.SearchesOnly || EventAt?.Invoke(r.Timestamp) is SearchEventAppInsightsQueryResult))
                     .GroupBy(r => Hour(r.Timestamp)).Select(g => new AppInsightsHourlyRowCount(AppInsightsTelemetryKind.Events, g.Key, g.Count())))
                 .ToList();
             return Task.FromResult<IReadOnlyList<AppInsightsHourlyRowCount>>(counts);
@@ -100,13 +106,15 @@ namespace Tests.UnitTests.FakeLoaderClasses
             var result = new PageViewCollection();
             foreach (var row in PageViewRows().Where(r => InWindow(r.Timestamp, r.Ingested, window)).OrderBy(r => r.Timestamp))
             {
-                result.Rows.Add(new PageViewAppInsightsQueryResult { AppInsightsTimestamp = row.Timestamp, Username = row.Username });
+                result.Rows.Add(PageViewAt?.Invoke(row.Timestamp)
+                    ?? new PageViewAppInsightsQueryResult { AppInsightsTimestamp = row.Timestamp, Username = row.Username });
             }
             return Task.FromResult(result);
         }
 
         public Task<CustomEventsResultCollection> GetCustomEventsAsync(AppInsightsReadWindow window, bool saveRestResponses)
         {
+            OnEventWindow?.Invoke(window);
             CustomEventDaysRequested.Add(window.FromUtc.Date);
             CustomEventWindowsRequested.Add(window);
             CallLog?.Add($"fetch events {window.FromUtc:yyyy-MM-dd HH:mm}");
@@ -119,7 +127,9 @@ namespace Tests.UnitTests.FakeLoaderClasses
             var result = new CustomEventsResultCollection();
             foreach (var row in CustomEventRows().Where(r => InWindow(r.Timestamp, r.Ingested, window)).OrderBy(r => r.Timestamp))
             {
-                result.Rows.Add(new PageExitEventAppInsightsQueryResult { AppInsightsTimestamp = row.Timestamp });
+                var ev = EventAt?.Invoke(row.Timestamp) ?? new PageExitEventAppInsightsQueryResult { AppInsightsTimestamp = row.Timestamp };
+                if (ev is SearchEventAppInsightsQueryResult) ev.SearchIngestionHourUtc = Hour(row.Ingested);
+                if (!window.SearchesOnly || ev is SearchEventAppInsightsQueryResult) result.Rows.Add(ev);
             }
             return Task.FromResult(result);
         }
@@ -139,17 +149,46 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public int Writes { get; private set; }
         public Exception ReadFailsWith { get; set; }
         public Exception WriteFailsWith { get; set; }
+        public Exception SearchReadFailsWith { get; set; }
+        public Exception SearchWriteFailsWith { get; set; }
 
         public string Description => "fake cursor store";
 
-        public Task<DateTime?> ReadAsync() => ReadFailsWith != null ? Task.FromException<DateTime?>(ReadFailsWith) : Task.FromResult(CursorUtc);
+        public Task<DateTime?> ReadAsync(CancellationToken cancellationToken = default) => ReadFailsWith != null ? Task.FromException<DateTime?>(ReadFailsWith) : Task.FromResult(CursorUtc);
 
         /// <summary>The newest stored hit recorded beside the cursor; null for a cursor written by an older build.</summary>
         public DateTime? NewestStoredHitAtCursorUtc { get; set; }
 
-        public Task<DateTime?> ReadNewestStoredHitAtCursorAsync() => Task.FromResult(NewestStoredHitAtCursorUtc);
+        public Task<DateTime?> ReadNewestStoredHitAtCursorAsync(CancellationToken cancellationToken = default) => Task.FromResult(NewestStoredHitAtCursorUtc);
+        public Task<(DateTime? NewestHitUtc, bool KnownEmpty)> ReadDatabaseWatermarkAsync(DateTime cursorUtc, CancellationToken cancellationToken) =>
+            Task.FromResult((NewestStoredHitAtCursorUtc, Writes > 0 && CursorUtc == cursorUtc && !NewestStoredHitAtCursorUtc.HasValue));
 
-        public Task WriteAsync(DateTime cursorUtc, DateTime? newestStoredHitUtc)
+        private IReadOnlyList<AppInsightsSearchRetry> _searchRetries = Array.Empty<AppInsightsSearchRetry>();
+        private IReadOnlyList<DateTime> _searchReplay = Array.Empty<DateTime>();
+        public Task<IReadOnlyList<DateTime>> ReadSearchReplayHoursAsync(CancellationToken cancellationToken) => Task.FromResult(_searchReplay);
+        public Task WriteSearchReplayHoursAsync(IReadOnlyCollection<DateTime> hours, CancellationToken cancellationToken)
+        {
+            _searchReplay = hours.ToList();
+            return Task.CompletedTask;
+        }
+        private AppInsightsReplayStart _replayStart;
+        public Task<AppInsightsReplayStart> ReadReplayStartAsync(CancellationToken cancellationToken) => Task.FromResult(_replayStart);
+        public Task WriteReplayStartAsync(AppInsightsReplayStart start, CancellationToken cancellationToken)
+        {
+            _replayStart = start;
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<AppInsightsSearchRetry>> ReadSearchRetriesAsync(CancellationToken cancellationToken = default) => SearchReadFailsWith == null
+            ? Task.FromResult(_searchRetries) : Task.FromException<IReadOnlyList<AppInsightsSearchRetry>>(SearchReadFailsWith);
+        public Task WriteSearchRetriesAsync(IReadOnlyCollection<AppInsightsSearchRetry> retries, CancellationToken cancellationToken = default)
+        {
+            if (SearchWriteFailsWith != null) return Task.FromException(SearchWriteFailsWith);
+            _searchRetries = retries.ToList();
+            return Task.CompletedTask;
+        }
+
+        public Task WriteAsync(DateTime cursorUtc, DateTime? newestStoredHitUtc, CancellationToken cancellationToken = default)
         {
             if (WriteFailsWith != null) return Task.FromException(WriteFailsWith);
             Writes++;
@@ -170,7 +209,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public DateTime? NewestHitTimestampUtc { get; set; }
         public int ReadCount { get; private set; }
 
-        public Task<DateTime?> GetNewestHitTimestampUtcAsync()
+        public Task<DateTime?> GetNewestHitTimestampUtcAsync(CancellationToken cancellationToken = default)
         {
             ReadCount++;
             return Task.FromResult(NewestHitTimestampUtc);
@@ -182,7 +221,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         public List<FilterUrlConfig> Filters { get; set; } = new List<FilterUrlConfig>();
 
-        public Task<List<FilterUrlConfig>> LoadAsync() => Task.FromResult(Filters);
+        public Task<List<FilterUrlConfig>> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(Filters);
     }
 
     /// <summary>
@@ -194,6 +233,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         public List<PageViewCollection> SavedPageViews { get; } = new List<PageViewCollection>();
         public List<CustomEventsResultCollection> SavedCustomEvents { get; } = new List<CustomEventsResultCollection>();
         public List<FilterUrlConfig> FiltersSeen { get; private set; }
+        public SearchSaveResult SearchResult { get; set; } = SearchSaveResult.Empty;
 
         /// <summary>When set, every save is recorded here in order - share it with the source fake's.</summary>
         public List<string> CallLog { get; set; }
@@ -207,7 +247,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// </summary>
         public HashSet<DateTime> DaysWhoseEventsFailToSave { get; } = new HashSet<DateTime>();
 
-        public Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls)
+        public Task SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default)
         {
             FiltersSeen = filterUrls;
             CallLog?.Add($"save pageviews {pageViews.Rows.Count}");
@@ -220,17 +260,19 @@ namespace Tests.UnitTests.FakeLoaderClasses
             return Task.CompletedTask;
         }
 
-        public Task SaveCustomEventsAsync(CustomEventsResultCollection events)
+        public Task<CustomEventSaveResult> SaveCustomEventsAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default)
         {
             CallLog?.Add($"save events {events.Rows.Count}");
             var day = events.Rows.Count > 0 ? events.Rows[0].Timestamp.Date : (DateTime?)null;
             if (day.HasValue && DaysWhoseEventsFailToSave.Contains(day.Value))
             {
-                return Task.FromException(new CustomEventSaveIncompleteException(new[] { "Clicks" }));
+                return Task.FromException<CustomEventSaveResult>(new CustomEventSaveIncompleteException(new[] { "Clicks" }));
             }
             SavedCustomEvents.Add(events);
-            return Task.CompletedTask;
+            return Task.FromResult(new CustomEventSaveResult(null, SearchResult));
         }
+
+        public Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection searches, CancellationToken cancellationToken = default) => Task.FromResult(SearchSaveResult.Empty);
     }
 
     /// <summary>
@@ -245,7 +287,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
         /// <summary>What the next save reports back. Defaults to an all-zero result.</summary>
         public PageViewSaveResult NextResult { get; set; } = PageViewSaveResult.Empty;
 
-        public Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls)
+        public Task<PageViewSaveResult> SavePageViewsAsync(PageViewCollection pageViews, List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken = default)
         {
             SavedPageViews.Add(pageViews);
             FiltersSeen = filterUrls;
@@ -310,7 +352,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         public InMemoryHitUpdatePersistenceManager(List<string> callLog = null) : base("Hit updates", callLog) { }
 
-        public Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events) => RecordAndRespond(events);
+        public Task<int> SaveHitUpdatesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default) => RecordAndRespond(events);
     }
 
     /// <summary>In-memory <see cref="ISearchesPersistenceManager"/>.</summary>
@@ -318,7 +360,12 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         public InMemorySearchesPersistenceManager(List<string> callLog = null) : base("Searches", callLog) { }
 
-        public Task<int> SaveSearchesAsync(CustomEventsResultCollection events) => RecordAndRespond(events);
+        public SearchSaveResult SearchResult { get; set; }
+        public async Task<SearchSaveResult> SaveSearchesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default)
+        {
+            var count = await RecordAndRespond(events);
+            return SearchResult ?? new SearchSaveResult(count, count, 0, new Dictionary<DateTime, int>());
+        }
     }
 
     /// <summary>In-memory <see cref="IPageUpdatePersistenceManager"/>.</summary>
@@ -326,7 +373,7 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         public InMemoryPageUpdatePersistenceManager(List<string> callLog = null) : base("Page updates", callLog) { }
 
-        public Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events) => RecordAndRespond(events);
+        public Task<int> SavePageUpdatesAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default) => RecordAndRespond(events);
     }
 
     /// <summary>In-memory <see cref="IClicksPersistenceManager"/>.</summary>
@@ -334,6 +381,6 @@ namespace Tests.UnitTests.FakeLoaderClasses
     {
         public InMemoryClicksPersistenceManager(List<string> callLog = null) : base("Clicks", callLog) { }
 
-        public Task<int> SaveClicksAsync(CustomEventsResultCollection events) => RecordAndRespond(events);
+        public Task<int> SaveClicksAsync(CustomEventsResultCollection events, CancellationToken cancellationToken = default) => RecordAndRespond(events);
     }
 }

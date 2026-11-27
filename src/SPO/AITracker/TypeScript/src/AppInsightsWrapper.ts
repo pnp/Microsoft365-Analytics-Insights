@@ -1,35 +1,54 @@
-import { ApplicationInsights, IEventTelemetry, IPageViewTelemetry } from "@microsoft/applicationinsights-web";
+import type { IEventTelemetry, IPageViewTelemetry } from "@microsoft/applicationinsights-core-js";
+import type { TrackerTelemetry } from "./TrackerTelemetry";
 import { debug, debugObj, error, log, warn } from "./Logger";
 import { PageProps } from "./PageProps/Models/PageProps";
 import { ClickData, ClickEventProps, PageViewDataProperties, SearchEventProperties, TimingEventProperties } from "./Definitions";
 import { AI_TRACKER_VER, EVENT_CLICK, EVENT_METADATA_UPDATE, EVENT_PAGE_EXIT } from "./AiTrackerConstants";
 import { isSamePage, uuidv4 } from "./DataFunctions";
 
-// Clicks made before the page's first page view is tracked are held for it, up to this many
-const MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW = 20;
+const MAX_PENDING_CLICKS = 20;
+
+function measuredDocumentLoadMs(): number | undefined {
+    const perf = window.performance;
+    const nav = perf?.getEntriesByType?.('navigation')[0] as PerformanceNavigationTiming | undefined;
+    if (nav && nav.startTime >= 0) {
+        const duration = nav.loadEventEnd - nav.startTime;
+        if (Number.isFinite(duration) && duration > 0) return duration;
+    }
+    const timing = perf?.timing;
+    if (timing && timing.navigationStart > 0) {
+        const duration = timing.loadEventEnd - timing.navigationStart;
+        if (Number.isFinite(duration) && duration > 0) return duration;
+    }
+}
 
 export class AppInsightsWrapper {
 
-    _ai: ApplicationInsights;
+    _ai: TrackerTelemetry;
     _sessionId: string;
     _pageRequestId: string | null = null;               // Page request GUID to join before & after AI events together on import
     _lastTrackedUrl: string | null = null;
-    _clicksBeforeFirstPageView: { data: ClickData, timeStamp: string, pageUrl: string }[] = [];
+    private pendingClicks: { pageUrl: string, clicks: { data: ClickData, timeStamp: string }[] } | null = null;
 
-    constructor(instance: ApplicationInsights, sessionId: string) {
+    constructor(instance: TrackerTelemetry, sessionId: string) {
         this._ai = instance;
         this._sessionId = sessionId;
     }
 
     // Page views. Returns false if the URL was the page already tracked
-    trackCurrentPageView(pageLoadDuration: number | undefined, spRequestDuration: number | null, webUrl: string, siteUrl: string, webTitle: string): boolean {
+    trackCurrentPageView(pageLoadDuration: number | undefined, spRequestDuration: number | null, webUrl: string | undefined,
+        siteUrl: string | undefined, webTitle: string | undefined, pageTitle: string | null = document.title): boolean {
 
-        if (this._lastTrackedUrl === document.URL) {
+        const pageUrl = document.URL;
+        this.discardPendingClicksUnlessOn(pageUrl);
+        if (this._lastTrackedUrl && isSamePage(this._lastTrackedUrl, pageUrl)) {
             debug("Ignoring duplicate pageview with request Id: " + this._pageRequestId);
             return false;
         }
 
-        this._lastTrackedUrl = document.URL;
+        const pending = this.pendingClicks;
+        this.pendingClicks = null;
+        this._lastTrackedUrl = pageUrl;
 
         // New page req
         this._pageRequestId = uuidv4();
@@ -39,14 +58,14 @@ export class AppInsightsWrapper {
         var appInsightsPageViewData: PageViewDataProperties =
         {
             pageRequestId: this._pageRequestId,
-            webUrl: webUrl,
-            siteUrl: siteUrl,
-            webTitle: webTitle,
             aiTrackerVersion: AI_TRACKER_VER,
             sessionId: this._sessionId,
-            pageTitle: document.title,
             timeStamp: new Date().toISOString()
         };
+        if (webUrl) appInsightsPageViewData.webUrl = webUrl;
+        if (siteUrl) appInsightsPageViewData.siteUrl = siteUrl;
+        if (webTitle) appInsightsPageViewData.webTitle = webTitle;
+        if (pageTitle) appInsightsPageViewData.pageTitle = pageTitle;
 
         // Do we have SPRequestDuration in the page source?
         if (spRequestDuration)
@@ -54,58 +73,21 @@ export class AppInsightsWrapper {
 
         const pv: IPageViewTelemetry =
         {
-            uri: document.URL,
-            name: document.title,
+            uri: pageUrl,
+            // The SDK fills a missing name from document.title. Only the address is known for some soft views.
+            name: pageTitle || new URL(pageUrl).pathname,
             properties: appInsightsPageViewData
         };
-        if (pageLoadDuration !== undefined) {
-            appInsightsPageViewData['pageLoad'] = pageLoadDuration;
+        const duration = pageLoadDuration ?? measuredDocumentLoadMs();
+        // Without an SDK duration, analytics holds the view for a later performance tick while
+        // its clicks are already in the sender. Only an explicit soft navigation has duration 0.
+        if (duration !== undefined && Number.isFinite(duration) && duration >= 0) appInsightsPageViewData.duration = duration;
+        appInsightsPageViewData.pageLoad = appInsightsPageViewData.duration ?? 0; // Importer's existing field.
+        this._ai.trackPageView(pv);
+        log('Tracked page view for pageRequestId: ' + this._pageRequestId + ', url: ' + pageUrl + '. Page name: ' + pv.name);
+        debugObj('Page view telemetry:', pv);
 
-            this._ai.trackPageView(pv);
-            log('Uploaded page-view data with pageLoad override ' + pageLoadDuration + ' for pageRequestId: ' + this._pageRequestId + ', url: ' + document.URL + '. Page title: ' + document.title);
-            debugObj('Page view telemetry:', pv);
-        }
-        else {
-
-            // https://stackoverflow.com/questions/14341156/calculating-page-load-time-in-javascript
-            // Use Navigation Timing Level 2 API if available, fall back to deprecated timing API
-            let pageLoadTime = 0;
-            if (window.performance.getEntriesByType) {
-                const navEntries = window.performance.getEntriesByType('navigation') as PerformanceNavigationTiming[];
-                if (navEntries.length > 0 && navEntries[0].loadEventEnd > 0) {
-                    pageLoadTime = navEntries[0].loadEventEnd - navEntries[0].startTime;
-                }
-            }
-            if (pageLoadTime <= 0 && window.performance.timing) {
-                const perfData = window.performance.timing;
-                pageLoadTime = perfData.loadEventEnd - perfData.navigationStart;
-            }
-
-            if (pageLoadTime > 0) {
-                debug('Page load time is ' + pageLoadTime + ' milliseconds.');
-            } else {
-                debug('Page load time not yet available.');
-            }
-
-            // Set page-load with metadata as AppInsights doesn't report on this exactly any more
-            appInsightsPageViewData['pageLoad'] = pageLoadTime > 0 ? pageLoadTime : 0;
-
-            this._ai.trackPageView(pv);
-            log('Uploaded page-view data for pageRequestId: ' + this._pageRequestId + ', url: ' + document.URL + '. Page title: ' + document.title);
-            debugObj('Page view telemetry:', pv);
-        }
-
-        // Clicks made before this page view was tracked belong to this page - if they were made on it. SharePoint can navigate to
-        // another page before the first has loaded, and so before it was tracked: those clicks have no page view to belong to,
-        // and counting them against this page would put them on the wrong page in the reports.
-        this._clicksBeforeFirstPageView.splice(0).forEach(c => {
-            if (isSamePage(c.pageUrl, document.URL)) {
-                this.sendClick(c.data, this._pageRequestId!, c.timeStamp);
-            }
-            else {
-                debug(`Not sending ${EVENT_CLICK} on "${c.data.linkText}": it was made on ${c.pageUrl}, which was left before it was tracked`);
-            }
-        });
+        pending?.clicks.forEach(c => this.sendClick(c.data, appInsightsPageViewData.pageRequestId, c.timeStamp));
 
         return true;
     }
@@ -167,20 +149,33 @@ export class AppInsightsWrapper {
         }
     }
 
-    // Click event receiver
+    // An unreported visit ends if the browser leaves its page or its site is no longer registered.
+    // A later visit to the same URL must not inherit those clicks.
+    discardPendingClicksUnlessOn(pageUrl: string | null): void {
+        if (this.pendingClicks && (!pageUrl || !isSamePage(this.pendingClicks.pageUrl, pageUrl))) {
+            this.pendingClicks = null;
+        }
+    }
+
     trackClick(d: ClickData) {
 
+        const pageUrl = document.URL;
         const timeStamp = new Date().toISOString();
-        if (this._pageRequestId) {
+        this.discardPendingClicksUnlessOn(pageUrl);
+        if (this._pageRequestId && this._lastTrackedUrl && isSamePage(this._lastTrackedUrl, pageUrl)) {
             this.sendClick(d, this._pageRequestId, timeStamp);
+            return;
         }
-        else if (this._clicksBeforeFirstPageView.length < MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW) {
-            // The page view is tracked once the page has loaded. Hold the click for it rather than drop it
+
+        // The first view can still be loading, or the modern router can already be displaying
+        // the next page while SPFx is waiting to report it. Neither click has an accepted ID yet.
+        const pending = this.pendingClicks ??= { pageUrl, clicks: [] };
+        if (pending.clicks.length < MAX_PENDING_CLICKS) {
             debug(`Holding ${EVENT_CLICK} on "${d.linkText}" until this page's page view is tracked`);
-            this._clicksBeforeFirstPageView.push({ data: d, timeStamp: timeStamp, pageUrl: document.URL });
+            pending.clicks.push({ data: d, timeStamp });
         }
         else {
-            warn(`Can't track ${EVENT_CLICK}: no page request ID yet, and ${MAX_CLICKS_BEFORE_FIRST_PAGE_VIEW} clicks are already waiting for one`);
+            warn(`Can't track ${EVENT_CLICK}: ${MAX_PENDING_CLICKS} clicks are already waiting for this page's request ID`);
         }
     }
 

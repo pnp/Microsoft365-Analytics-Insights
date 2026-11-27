@@ -1,6 +1,6 @@
 using DataUtils;
 using Microsoft.Graph;
-using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -70,7 +70,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                     var user = await graphClient.Users[id].GetAsync(request => request.QueryParameters.Select = new[] { "userPrincipalName" });
                     return user?.UserPrincipalName;
                 }
-                catch (ODataError ex) when (UserLookupCache.IsUserNotFound(ex))
+                catch (ApiException ex) when (UserLookupCache.IsUserNotFound(ex))
                 {
                     return null;
                 }

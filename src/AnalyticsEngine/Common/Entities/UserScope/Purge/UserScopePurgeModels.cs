@@ -1,6 +1,7 @@
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 
 namespace Common.Entities.UserScope.Purge
 {
@@ -74,10 +75,13 @@ namespace Common.Entities.UserScope.Purge
         public const string FilterChangedWhileRunning = "filterChangedWhileRunning";
 
         /// <summary>
-        /// The purge couldn't save its progress to Azure Table storage, where it keeps it. What it removed before stays
-        /// removed, and starting it again finishes it.
+        /// The purge couldn't read or update its progress or its report coverage in Azure Table storage. Once access is
+        /// restored, a new run can finish what was not removed.
         /// </summary>
         public const string StateUnavailable = "stateUnavailable";
+
+        /// <summary>Deleting daily report facts would require durable coverage revocation, but Storage is not configured.</summary>
+        public const string CoverageStorageRequired = "coverageStorageRequired";
 
         /// <summary>
         /// More people are outside the scope than the administrator confirmed when starting the purge - the groups
@@ -85,6 +89,12 @@ namespace Common.Entities.UserScope.Purge
         /// than remove people nobody agreed to. What it had removed before stays removed.
         /// </summary>
         public const string PurgeExceedsConfirmed = "purgeExceedsConfirmed";
+
+        /// <summary>A user deletion may have committed without a matching count. Only a new confirmation can authorise more.</summary>
+        public const string UserDeleteOutcomeUnknown = "userDeleteOutcomeUnknown";
+
+        /// <summary>The count for a usage table is a lower bound because SQL did not acknowledge a commit.</summary>
+        public const string UsageDeleteOutcomeUnknown = "usageDeleteOutcomeUnknown";
 
         /// <summary>
         /// Starting again after a restart, the purge found that the members of the <c>UserGroupsFilter</c> groups are no
@@ -99,6 +109,51 @@ namespace Common.Entities.UserScope.Purge
     /// <summary>One purge's record, kept in <see cref="UserScopePurgeStateStore"/> - never in the analytics database.</summary>
     public sealed class UserScopePurgeJob
     {
+        // A restarted worker claims the same job with a new token. Persisted in Table, not sent to the portal.
+        [JsonProperty]
+        internal string RunToken { get; set; }
+
+        [JsonProperty]
+        internal string FenceFamily { get; set; }
+        [JsonProperty]
+        internal int RunNumber { get; set; }
+
+        internal void ClaimNewRun()
+        {
+            // An older build used its bare run token as the fence. Preserve that exact predecessor
+            // across even repeated unacknowledged handoffs; a different job has a different family.
+            if (FenceFamily == null)
+            {
+                FenceFamily = RunToken ?? Guid.NewGuid().ToString("N");
+                RunNumber = RunToken == null ? 0 : 1;
+            }
+            RunNumber = checked(RunNumber + 1);
+            RunToken = FenceFamily + ":" + RunNumber.ToString(CultureInfo.InvariantCulture) + ":" + Guid.NewGuid().ToString("N");
+        }
+
+        internal bool OwnsEarlierFence(string owner)
+        {
+            if (RunNumber < 2) return false;
+            if (owner == FenceFamily) return true;
+            var parts = owner.Split(':');
+            return parts.Length == 3 && parts[0] == FenceFamily &&
+                int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var number) &&
+                number > 0 && number < RunNumber && Guid.TryParseExact(parts[2], "N", out _);
+        }
+
+        // Written before a user-delete window; cleared only together with its acknowledged count.
+        // Older records have no intent marker and cannot prove an interrupted users phase was checkpointed.
+        [JsonProperty]
+        internal bool? UserDeletePending { get; set; }
+
+        internal bool HasUnaccountedUserDeletes => UserDeletePending ??
+            (StartedUtc.HasValue && (Phase == UserScopePurgePhases.Users || Phase == UserScopePurgePhases.Done));
+
+        // A later owner must not replay an unacknowledged usage commit and mistake the missing rows
+        // for an exact count. RowsAffected contains only this table's last acknowledged subtotal.
+        [JsonProperty]
+        public string UsageCommitPendingTable { get; internal set; }
+
         public int Id { get; set; }
         public string State { get; set; }
         public string Phase { get; set; }

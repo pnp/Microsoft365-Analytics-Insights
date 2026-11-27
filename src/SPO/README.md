@@ -4,4 +4,6 @@ These solutions are the two components used for SharePoint web session tracking.
 
 **ModernPagesAITrackerExtension** – an SPFx application customizer that bootstraps AITracker on modern pages. It loads the site collection's own copy of `AITracker.js` and tracks nothing itself.
 
+On modern navigation, a verified visit can be counted without a list-item lookup. The web's welcome URL does not identify its backing page, and an `ID` parameter on a Site Pages content page can belong to a web part. Only an item form uses that parameter to confirm the list item. When an older extension supplies only positional arguments, the tracker records the registered collection, not the supplied web or list.
+
 *Note*: the extension's `.sppkg` is deployed tenant-wide (`skipFeatureDeployment: true`), but that only makes the extension available. Tracking is enabled per site collection: the installer adds the site custom actions that carry the extension's properties, and uploads a copy of `AITracker.js` to each tracked site collection's `SPOInsights` library. Only the site collections the installer has set up are tracked. See [`.github/copilot-instructions.md`](.github/copilot-instructions.md) for how the two parts work together.

@@ -50,7 +50,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     /// </summary>
     public interface ICallWebhookWarmer
     {
-        /// <summary>Never throws: a failure is reported in the result.</summary>
+        /// <summary>Reports operational failures in the result. Caller cancellation propagates.</summary>
         Task<CallWebhookWarmUpResult> WarmUpAsync(Uri notificationUrl, CancellationToken cancellationToken);
     }
 

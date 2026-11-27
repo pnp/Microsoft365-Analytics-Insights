@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Data.Entity;
 using System.Data.Entity.Infrastructure;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities
@@ -15,9 +16,14 @@ namespace Common.Entities
     public abstract class DBLookupCache<T> : ObjectByIdCache<T> where T : AbstractEFEntity
     {
         public AnalyticsEntitiesContext DB { get; set; }
-        public DBLookupCache(AnalyticsEntitiesContext context)
+        protected CancellationToken OperationToken { get; }
+
+        public DBLookupCache(AnalyticsEntitiesContext context) : this(context, CancellationToken.None) { }
+
+        protected DBLookupCache(AnalyticsEntitiesContext context, CancellationToken cancellationToken)
         {
             this.DB = context;
+            OperationToken = cancellationToken;
         }
 
         public static CACHETYPE Create<CACHETYPE>(AnalyticsEntitiesContext context) where CACHETYPE : DBLookupCache<T>
@@ -43,6 +49,7 @@ namespace Common.Entities
         /// </summary>
         public async virtual Task<T> GetOrCreateNewResource(string key, T newTemplate, bool commitChangeOnSaveNew)
         {
+            OperationToken.ThrowIfCancellationRequested();
             if (string.IsNullOrEmpty(key))
             {
                 throw new ArgumentNullException(nameof(key));
@@ -60,11 +67,11 @@ namespace Common.Entities
                     this.EntityStore.Add(newTemplate);
                     if (commitChangeOnSaveNew)
                     {
-                        await DB.SaveChangesAsync();
+                        await DB.SaveChangesAsync(OperationToken);
                     }
                     return newTemplate;
                 }
-                catch (DbUpdateException ex)
+                catch (DbUpdateException ex) when (!OperationToken.IsCancellationRequested)
                 {
                     // Handle duplicate key constraint violations that can occur in batch processing scenarios
                     // Check if it's a unique constraint/index violation
@@ -126,12 +133,15 @@ namespace Common.Entities
         {
         }
 
+        protected DBLookupCacheForEntityWithName(AnalyticsEntitiesContext context, CancellationToken cancellationToken) : base(context, cancellationToken)
+        {
+        }
 
         public async override Task<T> Load(string searchName)
         {
             // Use FirstOrDefaultAsync instead of SingleOrDefaultAsync to handle existing duplicate records gracefully
             // Order by ID to ensure consistent results if duplicates exist
-            return await EntityStore.Where(t => t.Name == searchName).OrderBy(t => t.ID).FirstOrDefaultAsync();
+            return await EntityStore.Where(t => t.Name == searchName).OrderBy(t => t.ID).FirstOrDefaultAsync(OperationToken);
         }
     }
 }

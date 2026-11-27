@@ -4,26 +4,24 @@
 
 import { PageViewTracker } from '../src/PageViewTracker';
 import { AppInsightsWrapper } from '../src/AppInsightsWrapper';
-import { ApplicationInsights } from '@microsoft/applicationinsights-web';
+import type { TrackerTelemetry } from '../src/TrackerTelemetry';
 import { InMemoryPageStateManager } from '../src/PageProps/PageState';
 import { spPageContextInfo } from '../src/Definitions';
 import { TestPagePropertyManager, TestPageDataService } from './MockLoaders';
 import Cookies from 'js-cookie';
 
-function createMockAI(): ApplicationInsights {
+function createMockAI(): TrackerTelemetry {
     return {
         trackPageView: jest.fn(),
         trackEvent: jest.fn(),
-        setAuthenticatedUserContext: jest.fn(),
-        loadAppInsights: jest.fn(),
-    } as unknown as ApplicationInsights;
+    };
 }
 
 function createContext(): spPageContextInfo {
     return {
         userLoginName: 'user@contoso.com',
         webAbsoluteUrl: 'https://contoso.sharepoint.com/sites/test',
-        siteAbsoluteUrl: 'https://contoso.sharepoint.com',
+        siteAbsoluteUrl: 'https://contoso.sharepoint.com/sites/test',
         webTitle: 'Test Site',
         pageItemId: 1,
         listTitle: 'Site Pages'
@@ -34,13 +32,13 @@ function createContext(): spPageContextInfo {
 jest.mock('timeme.js', () => ({
     __esModule: true,
     default: {
-        getTimeOnCurrentPageInSeconds: jest.fn(() => 10),
+        getTimeOnCurrentPageInMilliseconds: jest.fn(() => 10000),
         initialize: jest.fn(),
     },
 }));
 
 describe('PageViewTracker', () => {
-    let mockAppInsights: ApplicationInsights;
+    let mockAppInsights: TrackerTelemetry;
     let wrapper: AppInsightsWrapper;
     let tracker: PageViewTracker;
     let context: spPageContextInfo;
@@ -56,12 +54,11 @@ describe('PageViewTracker', () => {
         context = createContext();
         stateManager = new InMemoryPageStateManager();
         pagePropManager = new TestPagePropertyManager('testVal', stateManager, new TestPageDataService());
-        tracker = new PageViewTracker(wrapper, context, pagePropManager);
-
         // Setup window._spPageContextInfo
         (window as any)._spPageContextInfo = context;
         Object.defineProperty(document, 'URL', { value: 'https://contoso.sharepoint.com/sites/test/SitePages/Home.aspx', writable: true, configurable: true });
         Object.defineProperty(document, 'title', { value: 'Home', writable: true, configurable: true });
+        tracker = new PageViewTracker(wrapper, context, pagePropManager);
     });
 
     describe('trackCurrentPageViewAndLastPageExit', () => {
@@ -134,7 +131,7 @@ describe('PageViewTracker', () => {
             tracker.handleModernPageNav(
                 'https://contoso.sharepoint.com/sites/test',
                 'Test Site',
-                'https://contoso.sharepoint.com',
+                context.siteAbsoluteUrl,
                 'https://contoso.sharepoint.com/sites/test/SitePages/About.aspx',
                 'Site Pages', 2
             );
@@ -156,24 +153,13 @@ describe('PageViewTracker', () => {
             tracker.handleModernPageNav(
                 'https://contoso.sharepoint.com/sites/test',
                 'Test Site',
-                'https://contoso.sharepoint.com',
+                context.siteAbsoluteUrl,
                 'https://contoso.sharepoint.com/sites/test/SitePages/New.aspx'
             );
 
             expect(mockAppInsights.trackPageView).toHaveBeenCalledTimes(1);
             const callArg = (mockAppInsights.trackPageView as jest.Mock).mock.calls[0][0];
             expect(callArg.properties['pageLoad']).toBe(0);
-        });
-    });
-
-    describe('getTimeOnPageAndResetLastTotalTime', () => {
-        test('returns time on page, accounting for previous subtraction', () => {
-            const time = tracker.getTimeOnPageAndResetLastTotalTime();
-            expect(time).toBe(10); // mocked timeme returns 10
-
-            // Second call should return 0 since the mock still returns 10
-            const time2 = tracker.getTimeOnPageAndResetLastTotalTime();
-            expect(time2).toBe(0);
         });
     });
 
@@ -247,11 +233,12 @@ describe('PageViewTracker', () => {
             (mockAppInsights.trackEvent as jest.Mock).mockClear();
             (mockAppInsights.trackPageView as jest.Mock).mockClear();
 
-            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/test', 'Test Site', 'https://contoso.sharepoint.com', homeUrl, 'Site Pages', 1);
+            tracker.handleModernPageNav(context.webAbsoluteUrl, 'Test Site', context.siteAbsoluteUrl, homeUrl, 'Site Pages', 1);
 
             expect(mockAppInsights.trackEvent).not.toHaveBeenCalled();
             expect(mockAppInsights.trackPageView).not.toHaveBeenCalled();
-            expect(tracker._lastTimeTotalOnPages).toBe(0);      // Time on page keeps counting
+            tracker.savePageExitToCookie();
+            expect(JSON.parse(Cookies.get('SPOInsightsLastPageStats')!).secondsOnPage).toBe(10);
         });
 
         test('a page navigation ends the previous page, from this page\'s own record rather than a cookie other tabs write', () => {
@@ -261,7 +248,7 @@ describe('PageViewTracker', () => {
             (mockAppInsights.trackEvent as jest.Mock).mockClear();
 
             Object.defineProperty(document, 'URL', { value: aboutUrl, writable: true, configurable: true });
-            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/test', 'Test Site', 'https://contoso.sharepoint.com', aboutUrl, 'Site Pages', 2);
+            tracker.handleModernPageNav(context.webAbsoluteUrl, 'Test Site', context.siteAbsoluteUrl, aboutUrl, 'Site Pages', 2);
 
             const exits = events().filter(e => e.name === 'PAGE_EXIT');
             expect(exits.length).toBe(1);
@@ -277,6 +264,7 @@ describe('PageViewTracker', () => {
 
         afterEach(() => {
             document.body.innerHTML = '';
+            window._o365AnalyticsInfo = undefined;
         });
 
         test('spRequestDuration is only sent for the page the browser loaded', () => {
@@ -340,19 +328,40 @@ describe('PageViewTracker', () => {
             Object.defineProperty(document, 'URL', { value: url, writable: true, configurable: true });
 
             tracker.trackCurrentPageViewAndLastPageExit(url, '', undefined);
-            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/test', 'Test Site', 'https://contoso.sharepoint.com', url);
+            tracker.handleModernPageNav(context.webAbsoluteUrl, 'Test Site', context.siteAbsoluteUrl, url);
 
             expect(searches().length).toBe(1);
         });
 
-        test('reads page metadata from the web of the page navigated to', () => {
+        test.each(['positional', 'older snapshot'])('omits unverified metadata when a %s report reaches a later visit', mode => {
             const spy = jest.spyOn(pagePropManager, 'handleNewPage');
+            tracker.trackCurrentPageViewAndLastPageExit(document.URL);
+            spy.mockClear();
             const url = 'https://contoso.sharepoint.com/sites/other/SitePages/News.aspx';
             Object.defineProperty(document, 'URL', { value: url, writable: true, configurable: true });
+            const site = 'https://contoso.sharepoint.com/sites/other';
+            const unbound = { url, siteUrl: site, webUrl: site, webTitle: 'Earlier', listTitle: 'Earlier pages', listItemId: 10 };
+            window._o365AnalyticsInfo = { siteUrls: [site], visits: mode === 'positional' ? undefined : { currentPageContext: () => unbound } };
+            expect(tracker.handleModernPageNav(site, unbound.webTitle, site, url, unbound.listTitle, 10)).toBe(true);
+            const view = pageViews()[1];
+            expect(view).toMatchObject({ name: new URL(url).pathname, properties: { siteUrl: site, pageLoad: 0 } });
+            for (const key of ['pageTitle', 'webTitle', 'webUrl']) expect(view.properties).not.toHaveProperty(key);
+            expect(spy).not.toHaveBeenCalled();
+        });
 
-            tracker.handleModernPageNav('https://contoso.sharepoint.com/sites/other', 'Other', 'https://contoso.sharepoint.com/sites/other', url, 'Site Pages', 3);
-
-            expect(spy).toHaveBeenCalledWith('https://contoso.sharepoint.com/sites/other', 3, url, 'Site Pages');
+        test('a positional sibling web cannot veto the registered collection or identify page metadata', () => {
+            const site = context.siteAbsoluteUrl;
+            const url = site + '/second/SitePages/News.aspx';
+            Object.defineProperty(document, 'URL', { value: url, configurable: true });
+            window._o365AnalyticsInfo = { siteUrls: [site] };
+            const lookup = jest.spyOn(pagePropManager, 'handleNewPage');
+            expect(tracker.handleModernPageNav(site + '/first', 'Earlier', site, url + '?old')).toBe(false);
+            expect(tracker.handleModernPageNav(site + '/first', 'Earlier', 'https://contoso.sharepoint.com', url)).toBe(false);
+            expect(tracker.handleModernPageNav(site + '/first', 'Earlier', site, url, 'Earlier pages', 10)).toBe(true);
+            expect(pageViews()).toHaveLength(1);
+            expect(pageViews()[0].properties.siteUrl).toBe(site);
+            for (const key of ['pageTitle', 'webTitle', 'webUrl']) expect(pageViews()[0].properties).not.toHaveProperty(key);
+            expect(lookup).not.toHaveBeenCalled();
         });
     });
 });

@@ -8,11 +8,13 @@ interface BaseCustomProps {
     timeStamp: string
 }
 interface PageViewDataProperties extends BaseCustomProps {
-    webUrl: string,
-    siteUrl: string,
-    webTitle: string,
+    webUrl?: string,
+    siteUrl?: string,
+    webTitle?: string,
     aiTrackerVersion: string,
-    pageTitle: string,
+    pageTitle?: string,
+    pageLoad?: number,
+    duration?: number,
     spRequestDuration?: number,
 }
 interface SearchEventProperties extends BaseCustomProps {

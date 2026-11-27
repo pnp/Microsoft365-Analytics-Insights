@@ -109,6 +109,7 @@ namespace Tests.UnitTests.InstallTests
             using (var cancellation = new CancellationTokenSource())
             using (var handler = new WaitingHandler())
             using (var http = new HttpClient(handler))
+            using (var workspace = new InstallPackageWorkspace(NullLogger.Instance))
             {
                 Func<Task> run;
                 if (kind == "azure")
@@ -138,7 +139,7 @@ namespace Tests.UnitTests.InstallTests
                 else
                 {
                     var task = new InstallAppServiceContentsTask(new App.ControlPanel.Engine.Entities.InstallerProxyConfig(),
-                        TaskConfig.NoConfig, NullLogger.Instance, new AzureLocation("westeurope"), new Dictionary<string, string>(), null)
+                        TaskConfig.NoConfig, NullLogger.Instance, new AzureLocation("westeurope"), new Dictionary<string, string>(), null, workspace)
                     { CancellationToken = cancellation.Token };
                     run = () => (Task)typeof(InstallAppServiceContentsTask)
                         .GetMethod("WaitForDeploymentAsync", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -181,11 +182,12 @@ namespace Tests.UnitTests.InstallTests
         [DataTestMethod]
         [DataRow(false)]
         [DataRow(true)]
-        public void ReleaseExtraction_PreservesUnicodeAndDoesNotTouchFilesWhenAlreadyCancelled(bool cancel)
+        public async Task ReleaseExtraction_PreservesUnicodeAndOperatorInputsOnCompletionOrCancellation(bool cancel)
         {
             var name = "ContosoRelease-" + Guid.NewGuid().ToString("N");
-            var zipPath = Path.Combine(Path.GetTempPath(), name + ".zip");
-            var extractionPath = Path.Combine(DataUtils.StringUtils.TempDirPath, name);
+            var parent = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), name)).FullName;
+            var zipPath = Path.Combine(parent, "override.zip");
+            var sentinel = Path.Combine(Directory.CreateDirectory(Path.Combine(parent, "override")).FullName, "previous.txt");
             using (var cancellation = new CancellationTokenSource())
             {
                 try
@@ -197,29 +199,40 @@ namespace Tests.UnitTests.InstallTests
                         using (var writer = new StreamWriter(zip.CreateEntry("content/Καλημέρα κόσμε.txt").Open()))
                             writer.Write("Καλημέρα κόσμε");
                     }
-                    Directory.CreateDirectory(extractionPath);
-                    var sentinel = Path.Combine(extractionPath, "previous.txt");
                     File.WriteAllText(sentinel, "previous release");
-                    var source = new LocalStorageBlobInfo { FileLocation = zipPath };
-                    if (cancel)
+                    File.SetAttributes(zipPath, FileAttributes.ReadOnly);
+                    var inputs = new LocalStorageInstallSourceInfo();
+                    inputs.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation = zipPath;
+                    string workspacePath;
+                    using (var workspace = new InstallPackageWorkspace(NullLogger.Instance, parent))
                     {
-                        cancellation.Cancel();
-                        Assert.ThrowsException<OperationCanceledException>(() =>
-                            ZipFileTasks.Unzip(source, NullLogger.Instance, cancellation.Token));
-                        Assert.AreEqual("previous release", File.ReadAllText(sentinel));
+                        workspacePath = workspace.RootPath;
+                        var staged = await workspace.StageLocalPackagesAsync(inputs, cancellation.Token);
+                        var copy = staged.GetSolutionComponentLocation(SoftwareComponent.WebSite);
+                        Assert.AreNotEqual(zipPath, copy.FileLocation, "Later stages must not reopen the operator's original.");
+                        if (cancel)
+                        {
+                            var before = Directory.GetFileSystemEntries(workspacePath);
+                            cancellation.Cancel();
+                            Assert.ThrowsException<OperationCanceledException>(() => workspace.Unzip(copy, cancellation.Token));
+                            CollectionAssert.AreEquivalent(before, Directory.GetFileSystemEntries(workspacePath));
+                        }
+                        else
+                        {
+                            var result = workspace.Unzip(copy, cancellation.Token);
+                            Assert.AreEqual("Καλημέρα κόσμε", File.ReadAllText(Path.Combine(result.FullName, "Καλημέρα κόσμε.txt")));
+                            Assert.IsTrue(Directory.Exists(Path.Combine(result.FullName, "empty")));
+                        }
                     }
-                    else
-                    {
-                        var result = ZipFileTasks.Unzip(source, NullLogger.Instance, cancellation.Token);
-                        Assert.AreEqual("Καλημέρα κόσμε", File.ReadAllText(Path.Combine(result.FullName, "Καλημέρα κόσμε.txt")));
-                        Assert.IsTrue(Directory.Exists(Path.Combine(result.FullName, "empty")));
-                        Assert.IsFalse(File.Exists(sentinel));
-                    }
+                    Assert.IsFalse(Directory.Exists(workspacePath));
+                    Assert.IsTrue(File.Exists(zipPath));
+                    Assert.AreEqual(FileAttributes.ReadOnly, File.GetAttributes(zipPath) & FileAttributes.ReadOnly);
+                    Assert.AreEqual("previous release", File.ReadAllText(sentinel));
                 }
                 finally
                 {
-                    File.Delete(zipPath);
-                    if (Directory.Exists(extractionPath)) Directory.Delete(extractionPath, true);
+                    if (File.Exists(zipPath)) File.SetAttributes(zipPath, FileAttributes.Normal);
+                    Directory.Delete(parent, true);
                 }
             }
         }

@@ -1,40 +1,60 @@
+using DataUtils.Sql;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Configuration;
 using System.Diagnostics;
-using System.Globalization;
-using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Common.Entities.Config
 {
 
     public class AppConnectionStrings
     {
-        /// <summary>
-        /// A bounded connectivity and schema probe for the web-traffic importer: reads at most one row of <c>hits</c>
-        /// (a row count would scan a table that is hundreds of millions of rows on a large tenant, on every start).
-        /// </summary>
-        public bool TestSQLSettings(ILogger logger) => Probe(logger, "hits", db => db.hits.Take(1).Count());
+        public bool TestSQLSettings(ILogger logger) => TestWebTrafficSqlOnceAsync(logger).GetAwaiter().GetResult();
+        public bool TestAuditSQLSettings(ILogger logger) => TestAuditSqlOnceAsync(logger).GetAwaiter().GetResult();
 
-        /// <summary>The same probe for the audit importer: at most one row of <c>audit_events</c>.</summary>
-        public bool TestAuditSQLSettings(ILogger logger) => Probe(logger, "audit_events", db => db.AuditEventsCommon.Take(1).Count());
+        public Task<bool> TestWebTrafficSqlOnceAsync(ILogger logger, CancellationToken shutdownToken = default) =>
+            ProbeAsync(logger, audit: false, shutdownToken: shutdownToken);
 
-        private static bool Probe(ILogger logger, string table, Func<AnalyticsEntitiesContext, int> query)
+        public Task<bool> TestAuditSqlOnceAsync(ILogger logger, CancellationToken shutdownToken = default) =>
+            ProbeAsync(logger, audit: true, shutdownToken: shutdownToken);
+
+        /// <summary>One read-only attempt, without EF's initializer or unlimited command timeout. One deadline
+        /// covers token acquisition, opening the connection and reading at most one row, even on an empty table.</summary>
+        internal async Task<bool> ProbeAsync(ILogger logger, bool audit, CancellationToken shutdownToken, int timeoutSeconds = 30)
         {
+            var table = audit ? "audit_events" : "hits";
             var clock = Stopwatch.StartNew();
             try
             {
-                using (var db = new AnalyticsEntitiesContext())
+                var builder = new SqlConnectionStringBuilder(DatabaseConnectionString);
+                if (builder.ConnectTimeout == 0 || builder.ConnectTimeout > timeoutSeconds)
+                    builder.ConnectTimeout = timeoutSeconds;
+                using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(shutdownToken))
                 {
-                    query(db);
+                    deadline.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+                    using (var connection = AzureSqlTokenAuth.CreateConnection(builder.ConnectionString, deadline.Token))
+                    {
+                        await connection.OpenAsync(deadline.Token).ConfigureAwait(false);
+                        using (var command = connection.CreateCommand())
+                        {
+                            command.CommandText = $"SELECT TOP (1) 1 FROM dbo.{table};";
+                            command.CommandTimeout = timeoutSeconds;
+                            await command.ExecuteScalarAsync(deadline.Token).ConfigureAwait(false);
+                        }
+                    }
                 }
-                logger.LogInformation($"SQL startup probe passed: table={table}; ElapsedMs={clock.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)}.");
+                if (shutdownToken.IsCancellationRequested) return false;
+                logger.LogInformation("SQL startup probe passed: table={Table}; ElapsedMs={ElapsedMs}.", table, clock.ElapsedMilliseconds);
                 return true;
             }
             catch (Exception ex) when (!(ex is OutOfMemoryException))
             {
-                // EF6 wraps a login or open failure in an EntityException; the chain carries the SQL error number.
-                // Passed as template arguments, not interpolated: an exception message may contain braces.
+                // SqlClient can report a cancelled query as a SqlException. Only the host token, not
+                // the per-attempt deadline, makes this a requested shutdown rather than an outage.
+                if (shutdownToken.IsCancellationRequested) return false;
                 logger.LogError(ex, "SQL startup probe failed: table={Table}; ElapsedMs={ElapsedMs}; {Chain}. Check the SQL connection string and firewall/identity access, and that the database has been upgraded.",
                     table, clock.ElapsedMilliseconds, DataUtils.ExceptionDescriber.Chain(ex));
                 return false;

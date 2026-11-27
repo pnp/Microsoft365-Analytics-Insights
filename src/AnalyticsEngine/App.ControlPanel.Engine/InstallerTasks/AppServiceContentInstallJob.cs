@@ -16,8 +16,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
     {
         public DownloadLatestAppServiceContentInstallJob(ILogger logger, SubscriptionResource subscription, SoftwareReleaseConfig softwareReleaseConfig,
             InstallerProxyConfig proxyConfig, SolutionInstallConfig config, bool downloadReleaseOnly,
-            AutomationAccountResource automationAccount)
-            : base(logger, subscription, null, softwareReleaseConfig, config, proxyConfig, downloadReleaseOnly, automationAccount)
+            AutomationAccountResource automationAccount, InstallPackageWorkspace workspace)
+            : base(logger, subscription, null, softwareReleaseConfig, config, proxyConfig, downloadReleaseOnly, automationAccount, workspace)
         {
         }
     }
@@ -26,8 +26,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
     {
         public UseLocalAppServiceContentInstallJob(ILogger logger, SubscriptionResource subscription, LocalStorageInstallSourceInfo localOverrideSources,
             InstallerProxyConfig proxyConfig, SolutionInstallConfig config, bool downloadReleaseOnly,
-            AutomationAccountResource automationAccount)
-            : base(logger, subscription, localOverrideSources, null, config, proxyConfig, downloadReleaseOnly, automationAccount)
+            AutomationAccountResource automationAccount, InstallPackageWorkspace workspace)
+            : base(logger, subscription, localOverrideSources, null, config, proxyConfig, downloadReleaseOnly, automationAccount, workspace)
         {
         }
     }
@@ -40,7 +40,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
         BaseInstallTask _sourceGetTask = null;
         public AppServiceContentInstallJob(ILogger logger, SubscriptionResource subscription, LocalStorageInstallSourceInfo localOverrideSources,
             SoftwareReleaseConfig softwareReleaseConfig, SolutionInstallConfig config, InstallerProxyConfig proxyConfig, bool downloadReleaseOnly,
-            AutomationAccountResource automationAccount)
+            AutomationAccountResource automationAccount, InstallPackageWorkspace workspace)
             : base(logger, config, subscription)
         {
             // If we have no local source or stable release info, we can't do much
@@ -52,7 +52,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 var downloadLatestStableCfg = TaskConfig.GetConfigForPropAndVal(LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoOwner, SoftwareReleaseConfig.GITHUB_REPO_OWNER)
                             .AddSetting(LatestStableSoftwarePackageDownloadTask.CFG_KEY_RepoName, SoftwareReleaseConfig.GITHUB_REPO_NAME);
 
-                _sourceGetTask = new LatestStableSoftwarePackageDownloadTask(downloadLatestStableCfg, logger);
+                _sourceGetTask = new LatestStableSoftwarePackageDownloadTask(downloadLatestStableCfg, logger, workspace);
             }
             else
                 _sourceGetTask = new UseLocalOverrideDownloadTask(localOverrideSources, TaskConfig.NoConfig, logger);
@@ -62,7 +62,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             if (!downloadReleaseOnly)
             {
                 installTasks.Add(new InstallAppServiceContentsTask(proxyConfig, TaskConfig.GetConfigForName(config.AppServiceWebAppName), logger, config.AzureLocation, config.Tags.ToDictionary(), config.NetworkConfig,
-                    InstallerCredential(config)));
+                    workspace, InstallerCredential(config)));
             }
             else
             {
@@ -75,7 +75,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 // Add to install tasks
                 if (automationAccount != null)
                 {
-                    installTasks.Add(new RunChildJobTask(new RunbooksInstallJob(logger, config, subscription, automationAccount), logger));
+                    installTasks.Add(new RunChildJobTask(new RunbooksInstallJob(logger, config, subscription, automationAccount, workspace), logger));
                 }
                 else
                 {

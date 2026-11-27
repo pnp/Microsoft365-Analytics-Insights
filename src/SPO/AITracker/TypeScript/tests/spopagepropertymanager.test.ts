@@ -2,7 +2,7 @@ import { SpoPagePropertyManager } from '../src/PageProps/SpoImplementation/SpoPa
 import { InMemoryPageStateManager } from '../src/PageProps/PageState';
 import { WebPageDataService } from '../src/PageProps/SpoImplementation/WebPageDataService';
 import { AppInsightsWrapper } from '../src/AppInsightsWrapper';
-import { ApplicationInsights } from '@microsoft/applicationinsights-web';
+import type { TrackerTelemetry } from '../src/TrackerTelemetry';
 import { PageProps } from '../src/PageProps/Models/PageProps';
 
 // Mock Api module
@@ -13,13 +13,11 @@ jest.mock('../src/Api', () => ({
 import { getApiReturnJson } from '../src/Api';
 const mockGetApiReturnJson = getApiReturnJson as jest.MockedFunction<typeof getApiReturnJson>;
 
-function createMockAI(): ApplicationInsights {
+function createMockAI(): TrackerTelemetry {
     return {
         trackPageView: jest.fn(),
         trackEvent: jest.fn(),
-        setAuthenticatedUserContext: jest.fn(),
-        loadAppInsights: jest.fn(),
-    } as unknown as ApplicationInsights;
+    };
 }
 
 describe('SpoPagePropertyManager', () => {

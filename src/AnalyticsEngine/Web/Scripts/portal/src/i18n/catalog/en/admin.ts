@@ -737,6 +737,7 @@ export const admin = {
   'admin.userScope.progress.rowsAffected': 'Rows affected by table or column',
   'admin.userScope.progress.table': 'Table or column',
   'admin.userScope.progress.rows': 'Rows',
+  'admin.userScope.progress.rowsLowerBound': 'At least {count}',
   'admin.userScope.progress.rowsHelp':
     'A table name counts rows deleted. A table.column name counts rows kept but changed in place: the person is replaced by the anonymous Unknown User, or the link to them is cleared.',
   'admin.userScope.progress.stopHelp':
@@ -774,12 +775,18 @@ export const admin = {
     'The purge stopped because UserGroupsFilter changed while it was running. What it had already removed stays removed, and nobody else was removed. Check the filter and start the purge again to see who is outside it now.',
   'admin.userScope.jobError.purgeExceedsConfirmed':
     'The purge stopped because more people are outside the scope than the number confirmed when it started: the groups lost members, or new users arrived. Anything it had already removed stays removed, and nobody else was removed. Check the groups, then start the purge again to confirm the new number.',
+  'admin.userScope.jobError.userDeleteOutcomeUnknown':
+    'The purge stopped because it could not confirm how many people its last batch removed. The count shown includes only acknowledged deletions. Check who is outside the scope and confirm a new purge before removing anyone else.',
+  'admin.userScope.jobError.usageDeleteOutcomeUnknown':
+    'The purge stopped because SQL did not confirm whether its last batch deleted usage report rows. The count marked below includes only confirmed deletions. Check who is outside the scope before starting a new purge.',
   'admin.userScope.jobError.scopeMembershipChanged':
     'The purge stopped when it started again after a restart, because the members of the UserGroupsFilter groups had changed since it was confirmed. Anything it had already removed stays removed, and nobody else was removed. Start the purge again to confirm who is outside the scope now.',
   'admin.userScope.jobError.databaseError':
     'The purge stopped because the analytics database returned an error.',
   'admin.userScope.jobError.stateUnavailable':
-    "The purge stopped because it couldn't save its progress to Azure Table storage. What it removed stays removed; start it again to finish it.",
+    "The purge stopped because it couldn't read or update its state in Azure Table storage. Restore the web app's access to the importer's Storage account, then start the purge again. Data already removed stays removed.",
+  'admin.userScope.jobError.coverageStorageRequired':
+    "This run removed no data. Some selected users have usage-report history, but Azure Table storage is not configured to record which report days change. Set the web app's Storage connection string to the account the importer uses, then start the purge again.",
   'admin.userScope.jobError.unexpected': 'The purge stopped because of an unexpected error.',
   'admin.leadershipCohort.title': 'Leadership group',
   'admin.leadershipCohort.description': "Choose the Entra ID group whose Copilot adoption the Copilot Adoption report compares with the whole tenant. Only the group's direct members are counted; nested groups and the reporting hierarchy are not followed.",

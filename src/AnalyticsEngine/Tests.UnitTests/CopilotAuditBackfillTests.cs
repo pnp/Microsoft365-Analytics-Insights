@@ -45,10 +45,12 @@ namespace Tests.UnitTests
             }).Count);
         }
 
-        [TestMethod]
-        public async Task Importer_MissingPermissionFailsOnceBeforeSubmittingQuery()
+        [DataTestMethod]
+        [DataRow(AppTokenPermissionAccess.NotGranted, CopilotAuditBackfillPermissionStates.Missing)]
+        [DataRow(AppTokenPermissionAccess.NoIdentityToInspect, CopilotAuditBackfillPermissionStates.NoIdentity)]
+        public async Task Importer_MissingPermissionFailsOnceBeforeSubmittingQuery(AppTokenPermissionAccess access, string permissionStatus)
         {
-            var source = new FakeAuditSearchSource { Access = AppTokenPermissionAccess.NotGranted };
+            var source = new FakeAuditSearchSource { Access = access };
             var state = await NewStateWithJobAsync();
             var importer = NewImporter(state, source, new CountingPersistence());
 
@@ -56,6 +58,7 @@ namespace Tests.UnitTests
 
             Assert.AreEqual(CopilotAuditBackfillStates.Failed, job.State);
             Assert.AreEqual(CopilotAuditBackfillErrorCodes.MissingPermission, job.LastErrorCode);
+            Assert.AreEqual(permissionStatus, job.PermissionStatus);
             Assert.AreEqual(0, source.SubmitCount);
         }
 

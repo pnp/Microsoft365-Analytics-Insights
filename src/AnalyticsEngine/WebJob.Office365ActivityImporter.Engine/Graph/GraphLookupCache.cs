@@ -2,6 +2,7 @@
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
+using Microsoft.Kiota.Abstractions;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -80,9 +81,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var user = await graphClient.Users[id].GetAsync();
                 return user;
             }
-            catch (ODataError ex) when (IsUserNotFound(ex))
+            catch (ApiException ex) when (IsUserNotFound(ex))
             {
-                Console.WriteLine($"Got {ex.Error?.Code ?? ex.ResponseStatusCode.ToString()} finding user by ID '{id}'");
+                Console.WriteLine($"Got {(ex as ODataError)?.Error?.Code ?? ex.ResponseStatusCode.ToString()} finding user by ID '{id}'");
                 return null;
             }
             catch (ODataError ex)
@@ -116,11 +117,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Graph's answer for a directory object that doesn't exist: HTTP 404, normally with code
         /// <c>Request_ResourceNotFound</c>.
         /// </summary>
-        internal static bool IsUserNotFound(ODataError ex)
+        internal static bool IsUserNotFound(ApiException ex)
         {
             return ex.ResponseStatusCode == (int)HttpStatusCode.NotFound
-                || string.Equals(ex.Error?.Code, "Request_ResourceNotFound", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(ex.Error?.Code, "ResourceNotFound", StringComparison.OrdinalIgnoreCase);
+                || GraphResponseEvidence.HasResourceNotFoundCode(ex);
         }
     }
 }

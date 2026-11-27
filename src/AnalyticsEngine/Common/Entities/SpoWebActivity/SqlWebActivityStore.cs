@@ -326,7 +326,8 @@ namespace Common.Entities.SpoWebActivity
                 // matches what that minority reports.
                 P95LoadSeconds = PercentileSeconds(histogramTask.Result.Rows),
 
-                SessionsWithSearch = search.SessionsWithSearch,
+                SessionsWithSearch = search.HitVisitsWithSearch,
+                SearchRelianceVisits = search.Visits,
                 TopDecilePagePct = TopDecilePageShare(distributionTask.Result.Rows),
                 MobilePageViewPct = mobilePct,
             });
@@ -640,25 +641,23 @@ namespace Common.Entities.SpoWebActivity
             var window = WebActivityWindow.From(query);
 
             var kpiTask = RunAsync<SearchKpiRow>("search-kpis", WebActivitySql.SearchKpis, query);
-            var visitTask = RunAsync<VisitKpiRow>("search-visits", WebActivitySql.VisitKpis, query);
             var termTask = RunAsync<SearchTermRow>("search-terms", WebActivitySql.SearchTerms, query);
             var deadEndTask = RunAsync<SearchTermRow>("search-dead-ends", WebActivitySql.DeadEndTerms, query);
             var trendTask = RunAsync<TrendRow>("search-trend", WebActivitySql.OverviewTrend, query);
             var dayHourTask = RunAsync<DayHourRow>("search-day-hour", WebActivitySql.SearchesByDayHour, query);
             var siteTask = RunAsync<NamedCountRow>("search-sites", WebActivitySql.SearchesBySite, query);
 
-            await Task.WhenAll(kpiTask, visitTask, termTask, deadEndTask, trendTask, dayHourTask, siteTask)
+            await Task.WhenAll(kpiTask, termTask, deadEndTask, trendTask, dayHourTask, siteTask)
                 .ConfigureAwait(false);
 
             var model = new WebActivitySearch { Window = window };
             model.Queries.AddRange(new[]
             {
-                kpiTask.Result.Info, visitTask.Result.Info, termTask.Result.Info, deadEndTask.Result.Info,
+                kpiTask.Result.Info, termTask.Result.Info, deadEndTask.Result.Info,
                 trendTask.Result.Info, dayHourTask.Result.Info, siteTask.Result.Info,
             });
 
             var kpi = kpiTask.Result.Rows.FirstOrDefault() ?? new SearchKpiRow();
-            var visits = visitTask.Result.Rows.FirstOrDefault()?.Visits ?? 0;
 
             model.Kpis = new WebActivitySearchKpis
             {
@@ -666,7 +665,7 @@ namespace Common.Entities.SpoWebActivity
                 Terms = kpi.Terms,
                 Searchers = kpi.Searchers,
                 SessionsWithSearch = kpi.SessionsWithSearch,
-                SearchReliancePct = WebActivityScoring.Percentage(kpi.SessionsWithSearch, visits),
+                SearchReliancePct = WebActivityScoring.Percentage(kpi.HitVisitsWithSearch, kpi.Visits),
                 SearchesPerSearchingVisit = kpi.SessionsWithSearch > 0
                     ? (double)kpi.Searches / kpi.SessionsWithSearch
                     : 0,

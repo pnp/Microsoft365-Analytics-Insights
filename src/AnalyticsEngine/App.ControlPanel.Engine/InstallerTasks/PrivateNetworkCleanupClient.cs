@@ -35,6 +35,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private readonly HashSet<string> _targets;
         private readonly HashSet<string> _endpointNames;
         private readonly string _previousVnetId;
+        internal Action<WebSiteResource> SiteNetworkChangeVerified { get; set; }
+        internal ResourceIdentifier ConfirmedMissingSiteId { get; set; }
 
         public PrivateNetworkCleanupClient(ResourceGroupResource group, PrivateNetworkManifest manifest,
             IEnumerable<string> targets, IEnumerable<string> endpointNames, string previousVnetId = null)
@@ -251,7 +253,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 }
                 if (artifact.Kind == PrivateNetworkProvenance.Integration)
                 {
-                    var site = (await _group.GetWebSiteAsync(id.Name, ct)).Value;
+                    var site = await ReadSiteForCleanup(id, ct);
+                    if (site == null) return null;
                     return new PrivateNetworkSnapshot
                     {
                         Artifact = new PrivateNetworkArtifact
@@ -424,7 +427,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 }
                 else if (artifact.Kind == PrivateNetworkProvenance.Integration)
                 {
-                    var site = (await _group.GetWebSiteAsync(id.Name, ct)).Value;
+                    var site = await ReadSiteForCleanup(id, ct);
+                    if (site == null) return;
                     if (site.Data.VirtualNetworkSubnetId != null)
                     {
                         if (!PrivateNetworkProvenance.Same(site.Data.VirtualNetworkSubnetId.ToString(), artifact.SubnetId))
@@ -436,9 +440,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     {
                         SiteConfig = new SiteConfigProperties { IsVnetRouteAllEnabled = artifact.PreviousRouteAllEnabled }
                     }, ct);
-                    if ((await site.GetAsync(ct)).Value.Data.VirtualNetworkSubnetId != null ||
-                        ((await site.GetWebSiteConfig().GetAsync(ct)).Value.Data.IsVnetRouteAllEnabled == true) != artifact.PreviousRouteAllEnabled)
+                    var updated = (await site.GetAsync(ct)).Value;
+                    if (updated.Data.VirtualNetworkSubnetId != null ||
+                        ((await AppServiceResourceLookup.ReadSiteConfigAsync(site, ct)).IsVnetRouteAllEnabled == true) != artifact.PreviousRouteAllEnabled)
                         throw PrivateNetworkProvenance.Blocked(artifact.Id, "Azure did not confirm App Service integration reset");
+                    SiteNetworkChangeVerified?.Invoke(updated);
                 }
                 else if (artifact.Kind == PrivateNetworkProvenance.VirtualNetworkRule)
                 {
@@ -507,7 +513,8 @@ namespace App.ControlPanel.Engine.InstallerTasks
                         }
                         break;
                     case "microsoft.web/sites":
-                        var site = (await _group.GetWebSiteAsync(id.Name, ct)).Value;
+                        var site = await ReadSiteForCleanup(id, ct);
+                        if (site == null) return;
                         readSucceeded = true;
                         if (apply) await site.UpdateAsync(new SitePatchInfo { PublicNetworkAccess = "Enabled" }, ct);
                         break;
@@ -530,11 +537,19 @@ namespace App.ControlPanel.Engine.InstallerTasks
                 }
                 if (apply) await VerifyPublicTarget(id, ct);
             }
-            catch (RequestFailedException ex) when (!readSucceeded && PrivateNetworkProvenance.IsMissing(ex))
+            catch (RequestFailedException ex) when (id.ResourceType != WebSiteResource.ResourceType &&
+                !readSucceeded && PrivateNetworkProvenance.IsMissing(ex))
             {
-                // A deleted target has no public access setting to change; the ordinary install task
-                // will recreate configured resources publicly after owned stale networking is gone.
+                // A site may skip the public-access gate only through the corroborated hosting-discovery recheck.
+                // For other deleted targets, the ordinary install task recreates configured resources publicly.
             }
+        }
+
+        private async Task<WebSiteResource> ReadSiteForCleanup(ResourceIdentifier id, CancellationToken ct)
+        {
+            if (!id.Equals(ConfirmedMissingSiteId)) return (await _group.GetWebSiteAsync(id.Name, ct)).Value;
+            await AppServiceResourceLookup.ConfirmSiteStillMissingAsync(_group, id.Name, ct);
+            return null;
         }
 
         private async Task VerifyPublicTarget(ResourceIdentifier id, CancellationToken ct)
@@ -555,7 +570,9 @@ namespace App.ControlPanel.Engine.InstallerTasks
                     enabled = (await _group.GetServiceBusNamespaceAsync(id.Name, ct)).Value.Data.PublicNetworkAccess == ServiceBusPublicNetworkAccess.Enabled;
                     break;
                 case "microsoft.web/sites":
-                    enabled = PrivateNetworkProvenance.Same((await _group.GetWebSiteAsync(id.Name, ct)).Value.Data.PublicNetworkAccess, "Enabled");
+                    var site = (await _group.GetWebSiteAsync(id.Name, ct)).Value;
+                    enabled = PrivateNetworkProvenance.Same(site.Data.PublicNetworkAccess, "Enabled");
+                    if (enabled) SiteNetworkChangeVerified?.Invoke(site);
                     break;
                 case "microsoft.cognitiveservices/accounts":
                     enabled = (await _group.GetCognitiveServicesAccountAsync(id.Name, ct)).Value.Data.Properties.PublicNetworkAccess == ServiceAccountPublicNetworkAccess.Enabled;

@@ -28,6 +28,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
     public class InstallAppServiceContentsTask : InstallTaskInAzResourceGroup<LocalStorageInstallSourceInfo>
     {
         private readonly InstallerProxyConfig _proxyConfig;
+        private readonly InstallPackageWorkspace _workspace;
         private readonly VNetConfig _networkConfig;
         private readonly TokenCredential _kuduCredential;
 
@@ -42,10 +43,11 @@ namespace App.ControlPanel.Engine.InstallerTasks
         /// site's basic publishing credentials, which only works while SCM basic authentication is turned on.
         /// </param>
         public InstallAppServiceContentsTask(InstallerProxyConfig proxyConfig, TaskConfig config, ILogger logger, AzureLocation azureLocation, Dictionary<string, string> tags, VNetConfig networkConfig,
-            TokenCredential kuduCredential = null)
+            InstallPackageWorkspace workspace, TokenCredential kuduCredential = null)
             : base(config, logger, azureLocation, tags)
         {
             _proxyConfig = proxyConfig ?? throw new ArgumentNullException(nameof(proxyConfig));
+            _workspace = workspace ?? throw new ArgumentNullException(nameof(workspace));
             _networkConfig = networkConfig;
             _kuduCredential = kuduCredential;
         }
@@ -66,7 +68,7 @@ namespace App.ControlPanel.Engine.InstallerTasks
             _logger.LogInformation("- " + localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite).FileLocation);
 
             _logger.LogInformation("Building App Service deployment package...");
-            var deploymentPackage = BuildDeploymentPackage(localSources, _logger, CancellationToken);
+            var deploymentPackage = BuildDeploymentPackage(localSources, _workspace, CancellationToken);
             _logger.LogInformation("Deploying web-jobs and website to App Service over HTTPS...");
             await PublishZipAsync(webApp.Value, deploymentPackage, _proxyConfig);
 
@@ -100,23 +102,22 @@ namespace App.ControlPanel.Engine.InstallerTasks
             return localSources;
         }
 
-        internal static FileInfo BuildDeploymentPackage(LocalStorageInstallSourceInfo localSources, ILogger logger,
+        internal static FileInfo BuildDeploymentPackage(LocalStorageInstallSourceInfo localSources, InstallPackageWorkspace workspace,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var deploymentRootPath = Path.Combine(DataUtils.StringUtils.TempDirPath, "AppServiceDeployment");
-            ResetDirectory(deploymentRootPath);
+            var buildDirectory = workspace.CreateDirectory();
+            var deploymentRootPath = Path.Combine(buildDirectory, "site");
 
-            var websiteContents = ZipFileTasks.Unzip(
-                localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite), logger, cancellationToken);
+            var websiteContents = workspace.Unzip(localSources.GetSolutionComponentLocation(SoftwareComponent.WebSite), cancellationToken);
             CopyDirectory(websiteContents.FullName, deploymentRootPath, cancellationToken);
 
-            AddWebJobToPackage(localSources, SoftwareComponent.WebJobActivity, deploymentRootPath, logger, cancellationToken);
-            AddWebJobToPackage(localSources, SoftwareComponent.WebJobAppInsights, deploymentRootPath, logger, cancellationToken);
+            AddWebJobToPackage(localSources, SoftwareComponent.WebJobActivity, AppServiceWebJobHealthVerifier.ActivityImporterName,
+                deploymentRootPath, workspace, cancellationToken);
+            AddWebJobToPackage(localSources, SoftwareComponent.WebJobAppInsights, AppServiceWebJobHealthVerifier.AppInsightsImporterName,
+                deploymentRootPath, workspace, cancellationToken);
 
-            var packagePath = Path.Combine(DataUtils.StringUtils.TempDirPath, "AppServiceDeployment.zip");
-            if (File.Exists(packagePath))
-                File.Delete(packagePath);
+            var packagePath = Path.Combine(buildDirectory, "AppServiceDeployment.zip");
 
             using (var archive = ZipFile.Open(packagePath, ZipArchiveMode.Create))
             {
@@ -139,16 +140,18 @@ namespace App.ControlPanel.Engine.InstallerTasks
         private static void AddWebJobToPackage(
             LocalStorageInstallSourceInfo localSources,
             SoftwareComponent component,
+            string jobName,
             string deploymentRootPath,
-            ILogger logger, CancellationToken cancellationToken)
+            InstallPackageWorkspace workspace, CancellationToken cancellationToken)
         {
-            var webJobContents = ZipFileTasks.Unzip(localSources.GetSolutionComponentLocation(component), logger, cancellationToken);
+            var webJobContents = workspace.Unzip(localSources.GetSolutionComponentLocation(component), cancellationToken);
+            // Kudu takes the job name from this directory, not from the ZIP's filename or its wrapper.
             var webJobPath = Path.Combine(
                 deploymentRootPath,
                 "app_data",
                 "jobs",
                 "continuous",
-                webJobContents.Name);
+                jobName);
             CopyDirectory(webJobContents.FullName, webJobPath, cancellationToken);
         }
 
@@ -384,13 +387,6 @@ namespace App.ControlPanel.Engine.InstallerTasks
             // package cannot be published synchronously. Kudu accepts the upload and reports progress
             // separately - see WaitForDeploymentAsync.
             return new Uri(profileUri.GetLeftPart(UriPartial.Authority) + "/api/publish?type=zip&async=true");
-        }
-
-        private static void ResetDirectory(string path)
-        {
-            if (Directory.Exists(path))
-                Directory.Delete(path, true);
-            Directory.CreateDirectory(path);
         }
 
         private static void CopyDirectory(string sourcePath, string destinationPath, CancellationToken cancellationToken)
