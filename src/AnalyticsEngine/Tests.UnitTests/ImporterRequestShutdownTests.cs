@@ -52,11 +52,13 @@ namespace Tests.UnitTests
             {
                 var calls = 0;
                 var endpoint = holders ? "users" : "subscribedSkus";
+                var nextLink = holders ? GraphUserLoaderSkuPagingTests.SkuNextLink
+                    : "https://graph.microsoft.com/v1.0/subscribedSkus?$skiptoken=synthetic";
                 var handler = new Transport(async (request, token) =>
                 {
                     Assert.AreEqual("/v1.0/" + endpoint, request.RequestUri.AbsolutePath);
                     if (++calls == 1 && secondPage)
-                        return Json(request, "{\"value\":[{}],\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/" + endpoint + "?page=2\"}");
+                        return Json(request, "{\"value\":[],\"@odata.nextLink\":\"" + nextLink + "\"}");
                     await gate.WaitAsync(token);
                     return Json(request, "{\"value\":[]}");
                 });

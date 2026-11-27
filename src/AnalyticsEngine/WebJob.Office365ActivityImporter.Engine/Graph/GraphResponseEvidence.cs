@@ -3,12 +3,15 @@ using Microsoft.Kiota.Abstractions;
 using Microsoft.Kiota.Abstractions.Serialization;
 using Microsoft.Kiota.Http.HttpClientLibrary.Extensions;
 using System;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
 {
@@ -52,6 +55,26 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
             }
             finally { stream.Position = 0; } // Kiota still decodes the original body and all its fields.
+        }
+
+        internal static void CheckSkuHolderContinuation(Uri uri, string filter, int pageSize)
+        {
+            // Graph's /users nextLink carries the original query and an opaque $skiptoken.
+            // Verify the scope, then let Kiota send the original URL without rebuilding it.
+            var query = HttpUtility.ParseQueryString(uri.Query);
+            var token = query.GetValues("$skiptoken");
+            if (token?.Length != 1 || string.IsNullOrWhiteSpace(token[0])
+                || !Matches("$filter", filter, required: true)
+                || !Matches("$select", "userPrincipalName", required: false)
+                || !Matches("$top", pageSize.ToString(CultureInfo.InvariantCulture), required: false)
+                || query.AllKeys.Any(key => key != "$skiptoken" && key != "$filter" && key != "$select" && key != "$top"))
+                throw new GraphCollectionEnvelopeException();
+
+            bool Matches(string key, string expected, bool required)
+            {
+                var values = query.GetValues(key);
+                return values == null ? !required : values.Length == 1 && values[0] == expected;
+            }
         }
 
         // Leave authentication challenges intact for the SDK/transport. The HTTP retry middleware

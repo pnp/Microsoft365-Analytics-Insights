@@ -73,11 +73,13 @@ namespace Tests.UnitTests
         public async Task Inventory_NonArrayIsNeverReturnedAsACompleteInventory(string path, bool followingPage)
         {
             var calls = 0;
+            var nextLink = path == "users" ? GraphUserLoaderSkuPagingTests.SkuNextLink
+                : "https://graph.microsoft.com/v1.0/" + path + "?$skiptoken=synthetic";
             var transport = new TeamsCrawlTests.StubGraphHandler().Route("/" + path, request =>
             {
                 Assert.AreEqual(HttpMethod.Get, request.Method, "Unknown inventory must not authorize any subscription write.");
                 return ++calls == 1 && followingPage
-                    ? Json(200, "{\"value\":[],\"@odata.nextLink\":\"https://graph.microsoft.com/v1.0/" + path + "?$skiptoken=synthetic\"}")
+                    ? Json(200, "{\"value\":[],\"@odata.nextLink\":\"" + nextLink + "\"}")
                     : Json(200, "{\"value\":{}}");
             });
             using (var graph = GraphServiceClientFactory.CreateWithTimeout(new AnonymousAuthenticationProvider(), TimeSpan.FromSeconds(5), transport))
@@ -442,7 +444,7 @@ namespace Tests.UnitTests
         }
 
         // Shape of the created subscription: https://learn.microsoft.com/graph/api/subscription-post-subscriptions
-        // A subsequent GET can omit clientState. The importer never needs to store an echoed value.
+        // A 201 confirms the submitted state even if Graph omits the echo. An inconclusive POST needs proof.
         private static JObject Replacement() => JObject.FromObject(new
         {
             id = "replacement", resource = CallSubscriptionRules.CallRecordsResource,
@@ -479,6 +481,7 @@ namespace Tests.UnitTests
         [DataRow("direct", true)]
         [DataRow("confirmed", true)]
         [DataRow("accepted-then-ok", true)]
+        [DataRow("accepted-without-state", false)]
         [DataRow("ok-then-accepted", false)]
         [DataRow("accepted-read", false)]
         [DataRow("missing", false)]
@@ -491,8 +494,9 @@ namespace Tests.UnitTests
             var readback = Replacement();
             if (evidence == "missing") readback.Remove("notificationUrl");
             if (evidence == "different-id") readback["id"] = "another";
+            if (evidence == "accepted-then-ok") readback["clientState"] = ClientState.Value;
             var transport = SubscriptionTransport(1, operations,
-                () => evidence == "accepted-then-ok" ? Json(202, Replacement().ToString())
+                () => evidence == "accepted-then-ok" || evidence == "accepted-without-state" ? Json(202, Replacement().ToString())
                     : evidence == "ok-then-accepted" ? Json(200, Replacement().ToString())
                     : Json(201, evidence == "direct" ? Replacement().ToString() : "{\"id\":\"replacement\"}"),
                 () => throw new AssertFailedException(), () => new HttpResponseMessage(HttpStatusCode.NoContent),

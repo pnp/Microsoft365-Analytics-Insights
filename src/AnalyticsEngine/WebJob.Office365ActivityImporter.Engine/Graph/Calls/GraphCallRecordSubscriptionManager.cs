@@ -105,7 +105,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (status != HttpStatusCode.Created || !HasCreateFields(result))
             {
                 result = await ReadBackAsync(id);
-                if (result?.Id != id || !HasCreateFields(result))
+                // Without a 201, readback must also prove the subscription uses the requested callback state.
+                if (result?.Id != id || !HasCreateFields(result)
+                    || (status != HttpStatusCode.Created && result.ClientState != clientState))
                     throw new InvalidOperationException("Graph did not confirm the created call subscription; cleanup is deferred.");
                 CheckCreateFields(result, notificationUrl, clientState);
             }

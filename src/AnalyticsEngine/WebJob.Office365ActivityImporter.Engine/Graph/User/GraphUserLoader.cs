@@ -646,11 +646,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // to see and will fail the import rather than silently filling memory forever.
             const int MAX_USERS_PER_SKU = 1_000_000;
             var allUsersWithSku = new List<Microsoft.Graph.Models.User>();
+            var holderFilter = $"assignedLicenses/any(u:u/skuId eq {skuId})";
 
             var firstPage = await _graphServiceClient.Users.GetAsync(rc =>
             {
                 rc.QueryParameters.Select = new[] { "userPrincipalName" };
-                rc.QueryParameters.Filter = $"assignedLicenses/any(u:u/skuId eq {skuId})";
+                rc.QueryParameters.Filter = holderFilter;
 
                 // Without $top Graph pages /users 100 at a time, so a SKU with N holders costs N / 100
                 // sequential requests, every cycle. Graph keeps the page size in each @odata.nextLink,
@@ -663,7 +664,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // incomplete answer must NEVER be passed off as a complete one - it would delete
             // licences that users still hold. Fail the import instead: the delta token is only
             // committed on success, so the next cycle retries with nothing destroyed. Issue #392.
-            if (firstPage == null)
+            if (firstPage?.Value == null)
             {
                 throw new InvalidOperationException(
                     $"User import - Graph returned no response listing users for SKU {skuId}. Aborting rather than treating it as 'nobody holds this SKU', which would delete every assignment for it.");
@@ -680,11 +681,14 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     {
                         return false;
                     }
+                    if (string.IsNullOrWhiteSpace(user?.UserPrincipalName))
+                        throw new GraphCollectionEnvelopeException();
                     allUsersWithSku.Add(user);
                     loaded++;
                     return true;
                 }, next =>
                 {
+                    GraphResponseEvidence.CheckSkuHolderContinuation(next.URI, holderFilter, UsersBySkuPageSize);
                     next.AddRequestOptions(new[] { GraphResponseEvidence.RequireCollection });
                     return next;
                 });
