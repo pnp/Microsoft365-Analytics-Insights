@@ -159,9 +159,8 @@ namespace Web.AnalyticsWeb.Models
         public double? Value { get; set; }
 
         /// <summary>
-        /// True when the week's source is missing part of the week - a Microsoft 365 usage week with at least one
-        /// day's report not imported. <see cref="Value"/> then counts only the days that were imported, so it is a
-        /// floor rather than the week's figure. Sent only when true.
+        /// True when at least one day's report is missing, partial or unverified. <see cref="Value"/>
+        /// counts the observed activity, a lower bound rather than a verified weekly total. Sent only when true.
         /// </summary>
         [JsonProperty("incomplete", DefaultValueHandling = DefaultValueHandling.Ignore)]
         public bool Incomplete { get; set; }

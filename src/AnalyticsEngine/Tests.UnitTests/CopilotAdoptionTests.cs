@@ -2424,7 +2424,7 @@ namespace Tests.UnitTests
             // The league table's rows are the departments with the LOWEST habit rate; the candidate chart keeps
             // the departments with the MOST candidates. Joined, a low-habit department outside that chart read as
             // having no candidates at all. Each row now carries its own count, over every candidate.
-            var analysis = new CopilotAdoptionAnalysis();
+            var analysis = new CopilotAdoptionAnalysis { OpportunitiesCapped = false };
             analysis.LicensedUsers.AddRange(
                 Enumerable.Range(0, 5).Select(i => Departmental($"support{i}@contoso.com", "Support", 10)));
             analysis.LicensedUsers.AddRange(

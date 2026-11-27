@@ -166,6 +166,7 @@
       <Project>{974b3b6c-b89a-45e6-a5a3-a0292beb1ba4}</Project>
       <Name>WebJob.AppInsightsImporter.Engine</Name>
     </ProjectReference>
+    <ProjectReference Include="..\WebJob.Office365ActivityImporter\WebJob.Office365ActivityImporter.csproj" />
     <ProjectReference Include="..\WebJob.Office365ActivityImporter.Engine\WebJob.Office365ActivityImporter.Engine.csproj">
       <Project>{1919bde6-c311-426d-adb3-a1487133e397}</Project>
       <Name>WebJob.Office365ActivityImporter.Engine</Name>

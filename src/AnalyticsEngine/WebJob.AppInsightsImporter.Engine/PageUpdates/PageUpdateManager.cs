@@ -14,6 +14,7 @@ using System.Data.Entity.Infrastructure;
 using System.Data.Entity.Validation;
 using Microsoft.Data.SqlClient;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 using WebJob.AppInsightsImporter.Engine.PageUpdates;
@@ -78,8 +79,12 @@ namespace WebJob.AppInsightsImporter.Engine
         /// A transient SQL failure (see <see cref="TransientSqlRetry.IsTransient"/>) is not skipped: it is thrown, so
         /// the page-update section fails and the day is retried.
         /// </remarks>
-        public async Task<List<string>> SaveAll(IEnumerable<PageUpdateEventAppInsightsQueryResult> pageUpdateEvents)
+        public Task<List<string>> SaveAll(IEnumerable<PageUpdateEventAppInsightsQueryResult> pageUpdateEvents)
+            => SaveAll(pageUpdateEvents, CancellationToken.None);
+
+        internal async Task<List<string>> SaveAll(IEnumerable<PageUpdateEventAppInsightsQueryResult> pageUpdateEvents, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var updatedUrls = new List<string>();
             var failedUrlIds = new List<int>();
 
@@ -89,7 +94,7 @@ namespace WebJob.AppInsightsImporter.Engine
             // say "all in parallel", which was never true. Corrected while adding the context factory
             // below, because SqlPageUpdatePersistenceManager's doc had inherited the same wrong claim.
             var listProc = new ListBatchProcessor<PageUpdateEventAppInsightsQueryResult>(_chunkSize,
-                async chunk => await SaveChunk(chunk, updatedUrls, failedUrlIds));
+                chunk => SaveChunk(chunk, updatedUrls, failedUrlIds, cancellationToken));
 
             await listProc.AddRange(pageUpdateEvents);
             await listProc.Flush();
@@ -112,17 +117,18 @@ namespace WebJob.AppInsightsImporter.Engine
                         var batch = uniqueUpdatedUrls.GetRange(i, take);
                         var urls = await db.urls
                             .Where(u => batch.Contains(u.FullUrl))
-                            .ToListAsync();
+                            .ToListAsync(cancellationToken);
                         foreach (var u in urls)
                         {
                             u.MetadataLastRefreshed = now;
                         }
                     }
                     db.ChangeTracker.DetectChanges();
-                    await db.SaveChangesAsync();
+                    await db.SaveChangesAsync(cancellationToken);
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             _logger.LogInformation($"Updated {uniqueUpdatedUrls.Count} URLs from {pageUpdateEvents.Count()} page-update events");
             if (failedUrlIds.Count > 0)
             {
@@ -143,8 +149,9 @@ namespace WebJob.AppInsightsImporter.Engine
         /// again. The whole chunk used to share one final save whose failure was logged and swallowed, after every page
         /// had already been listed as updated - so those pages were marked as refreshed with nothing saved.
         /// </remarks>
-        async Task SaveChunk(List<PageUpdateEventAppInsightsQueryResult> chunk, List<string> updatedUrls, List<int> failedUrlIds)
+        async Task SaveChunk(List<PageUpdateEventAppInsightsQueryResult> chunk, List<string> updatedUrls, List<int> failedUrlIds, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
 #if DEBUG
             _logger.LogInformation($"DEBUG: Updating {chunk.Count} URLs on new thread");
 #endif
@@ -154,10 +161,10 @@ namespace WebJob.AppInsightsImporter.Engine
                 // which with automatic detection re-scans everything the context tracks.
                 context.Configuration.AutoDetectChangesEnabled = false;
 
-                var urlMetadataFieldNameCache = new UrlMetadataFieldNameCache(context);
+                var urlMetadataFieldNameCache = new UrlMetadataFieldNameCache(context, cancellationToken);
 
-                var userCache = new UserCache(context);
-                var langCache = new LanguageCache(context);
+                var userCache = new UserCache(context, cancellationToken);
+                var langCache = new LanguageCache(context, cancellationToken);
 
                 // Pre-bucket the chunk by URL ONCE so the inner update loop is an O(1) dictionary
                 // lookup rather than an O(chunk) scan-with-GetUrlBaseAddressIfValidUrl-per-item.
@@ -173,14 +180,15 @@ namespace WebJob.AppInsightsImporter.Engine
                 var matchingUrlsNotUpdatedRecently = await context.urls
                     .AsNoTracking()
                     .Where(u => urlsForPageUpdateChunk.Contains(u.FullUrl) && (u.MetadataLastRefreshed == null || u.MetadataLastRefreshed < staleBeforeUtc))
-                    .ToListAsync();
+                    .ToListAsync(cancellationToken);
 
                 // What these pages already have stored, read for the whole chunk rather than with one query per
                 // property of every page, and two more per page for its comments and likes
-                var stored = await StoredPageData.LoadAsync(context, matchingUrlsNotUpdatedRecently.Select(u => u.ID).ToList());
+                var stored = await StoredPageData.LoadAsync(context, matchingUrlsNotUpdatedRecently.Select(u => u.ID).ToList(), cancellationToken);
 
                 foreach (var urlToUpdate in matchingUrlsNotUpdatedRecently)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (!chunkByUrl.TryGetValue(urlToUpdate.FullUrl, out var correspondingPageUpdates))
                         continue;
 
@@ -199,18 +207,18 @@ namespace WebJob.AppInsightsImporter.Engine
                         }
 
                         var urlMetadataUpdated = await UpdateUrlMetadataWith(urlToUpdate, compiledUpdate, context, urlMetadataFieldNameCache,
-                            stored.ValuesFor(urlToUpdate.ID), pageEntities);
+                            stored.ValuesFor(urlToUpdate.ID), pageEntities, cancellationToken);
 
                         var commentsOrLikesUpdated = await UpdateCommentsOrLikes(urlToUpdate, compiledUpdate, context, userCache, langCache,
-                            stored.CommentsFor(urlToUpdate.ID), stored.LikesFor(urlToUpdate.ID), pageEntities);
+                            stored.CommentsFor(urlToUpdate.ID), stored.LikesFor(urlToUpdate.ID), pageEntities, cancellationToken);
 
-                        await SaveDetectingChangesAsync(context);
+                        await SaveDetectingChangesAsync(context, cancellationToken);
 
                         lock (updatedUrls)
                             if (urlMetadataUpdated || commentsOrLikesUpdated)
                                 updatedUrls.Add(urlToUpdate.FullUrl);
                     }
-                    catch (Exception ex) when (!TransientSqlRetry.IsTransient(ex))
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested && !TransientSqlRetry.IsTransient(ex))
                     {
                         // Don't let one bad page-update abort the whole chunk (up to 1000 URLs). The most
                         // likely culprit is an uncaught DbUpdateException from a comment/like whose user or
@@ -242,10 +250,10 @@ namespace WebJob.AppInsightsImporter.Engine
         /// value changed in place would silently not be saved. Every save in this class goes through here, including
         /// the ones that store a new user, language or field name before the page's own save.
         /// </summary>
-        static async Task SaveDetectingChangesAsync(DbContext db)
+        static async Task SaveDetectingChangesAsync(DbContext db, CancellationToken cancellationToken)
         {
             db.ChangeTracker.DetectChanges();
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(cancellationToken);
         }
 
         /// <summary>
@@ -302,7 +310,7 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         async Task<bool> UpdateCommentsOrLikes(Url url, PageUpdateEventAppInsightsQueryResult correspondingPageUpdate, AnalyticsEntitiesContext db, UserCache userCache, LanguageCache languageCache,
-            List<PageComment> urlExistingComments, List<PageLike> urlExistingLikes, List<object> pageEntities)
+            List<PageComment> urlExistingComments, List<PageLike> urlExistingLikes, List<object> pageEntities, CancellationToken cancellationToken)
         {
             if (url is null) throw new ArgumentNullException(nameof(url));
             if (!url.IsSavedToDB) throw new ArgumentOutOfRangeException(nameof(url), "Cannot save metadata for unsaved URLs");
@@ -320,7 +328,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 if (!user.IsSavedToDB)
                 {
                     db.users.Add(user);
-                    await SaveDetectingChangesAsync(db);
+                    await SaveDetectingChangesAsync(db, cancellationToken);
                 }
                 newComments.Add(commentEvent, new PageCommentTemp
                     (commentEvent.Comment, commentEvent.Created ?? _clock.UtcNow, user.ID, commentEvent.SharePointId.Value, url.ID, commentEvent.ParentSharePointId));
@@ -331,7 +339,7 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 var cognitiveResults = await newComments.Keys
                     .ToTextAnalysisSampleList()
-                    .GetCognitiveDataStats(_cognitiveClient, _logger);
+                    .GetCognitiveDataStats(_cognitiveClient, _logger, cancellationToken);
 
                 if (cognitiveResults != null)
                 {
@@ -344,7 +352,7 @@ namespace WebJob.AppInsightsImporter.Engine
                         if (!lang.IsSavedToDB)
                         {
                             db.Languages.Add(lang);
-                            await SaveDetectingChangesAsync(db);
+                            await SaveDetectingChangesAsync(db, cancellationToken);
                         }
                         dbTempOjb.LanguageID = lang.ID;
                         dbTempOjb.SentimentScore = item.CognitiveStat.SentimentScore;
@@ -353,7 +361,7 @@ namespace WebJob.AppInsightsImporter.Engine
             }
 
             // Save new comments via staging table
-            await newComments.Values.ToList().Save(db, _logger);
+            await newComments.Values.ToList().Save(db, _logger, cancellationToken);
 
             // Page likes
             var pageLikeUpdatesMade = await ProcessCustomAppInsightsEvents(correspondingPageUpdate.CustomProperties.Likes, urlExistingLikes, async (UserBasedCustomAIEvent like, string email) =>
@@ -406,7 +414,7 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         async Task<bool> UpdateUrlMetadataWith(Url url, PageUpdateEventAppInsightsQueryResult correspondingPageUpdate, AnalyticsEntitiesContext db, UrlMetadataFieldNameCache urlMetadataFieldNameCache,
-            Dictionary<int, FileMetadataPropertyValue> storedValuesByFieldId, List<object> pageEntities)
+            Dictionary<int, FileMetadataPropertyValue> storedValuesByFieldId, List<object> pageEntities, CancellationToken cancellationToken)
         {
             if (url is null) throw new ArgumentNullException(nameof(url));
             if (!url.IsSavedToDB) throw new ArgumentOutOfRangeException(nameof(url), "Cannot save metadata for unsaved URLs");
@@ -429,7 +437,7 @@ namespace WebJob.AppInsightsImporter.Engine
             {
                 if (!fields.ContainsKey(name))
                 {
-                    fields.Add(name, await GetOrCreateFieldAsync(name, db, urlMetadataFieldNameCache));
+                    fields.Add(name, await GetOrCreateFieldAsync(name, db, urlMetadataFieldNameCache, cancellationToken));
                 }
             }
 
@@ -497,13 +505,14 @@ namespace WebJob.AppInsightsImporter.Engine
         }
 
         /// <summary>The field's definition, saved first if it is new so values can refer to it by id.</summary>
-        static async Task<FileMetadataFieldName> GetOrCreateFieldAsync(string name, AnalyticsEntitiesContext db, UrlMetadataFieldNameCache urlMetadataFieldNameCache)
+        static async Task<FileMetadataFieldName> GetOrCreateFieldAsync(string name, AnalyticsEntitiesContext db, UrlMetadataFieldNameCache urlMetadataFieldNameCache,
+            CancellationToken cancellationToken)
         {
             var field = await urlMetadataFieldNameCache.GetResource(name, () => Task.FromResult(new FileMetadataFieldName() { Name = name }));
             if (!field.IsSavedToDB)
             {
                 db.FileMetadataFields.Add(field);
-                await SaveDetectingChangesAsync(db);
+                await SaveDetectingChangesAsync(db, cancellationToken);
             }
             return field;
         }
@@ -532,7 +541,7 @@ namespace WebJob.AppInsightsImporter.Engine
                 _likesByUrlId = likes.ToLookup(l => l.UrlID);
             }
 
-            public static async Task<StoredPageData> LoadAsync(AnalyticsEntitiesContext db, List<int> urlIds)
+            public static async Task<StoredPageData> LoadAsync(AnalyticsEntitiesContext db, List<int> urlIds, CancellationToken cancellationToken)
             {
                 var values = new List<FileMetadataPropertyValue>();
                 var comments = new List<PageComment>();
@@ -540,9 +549,9 @@ namespace WebJob.AppInsightsImporter.Engine
                 for (var i = 0; i < urlIds.Count; i += MaxUrlIdsPerRead)
                 {
                     var batch = urlIds.GetRange(i, Math.Min(MaxUrlIdsPerRead, urlIds.Count - i));
-                    values.AddRange(await db.FileMetadataPropertyValues.AsNoTracking().Where(v => batch.Contains(v.UrlId)).ToListAsync());
-                    comments.AddRange(await db.UrlComments.AsNoTracking().Where(c => batch.Contains(c.UrlID)).ToListAsync());
-                    likes.AddRange(await db.UrlLikes.AsNoTracking().Where(l => batch.Contains(l.UrlID)).ToListAsync());
+                    values.AddRange(await db.FileMetadataPropertyValues.AsNoTracking().Where(v => batch.Contains(v.UrlId)).ToListAsync(cancellationToken));
+                    comments.AddRange(await db.UrlComments.AsNoTracking().Where(c => batch.Contains(c.UrlID)).ToListAsync(cancellationToken));
+                    likes.AddRange(await db.UrlLikes.AsNoTracking().Where(l => batch.Contains(l.UrlID)).ToListAsync(cancellationToken));
                 }
                 return new StoredPageData(values, comments, likes);
             }

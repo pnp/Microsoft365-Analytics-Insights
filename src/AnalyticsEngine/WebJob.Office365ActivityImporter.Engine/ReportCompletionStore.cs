@@ -1,8 +1,10 @@
 using Common.Entities.Config;
 using Common.Entities.State;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine
@@ -46,17 +48,46 @@ namespace WebJob.Office365ActivityImporter.Engine
         Task ClearNextAttemptUtcAsync(string reportKey);
     }
 
+    // The public completion timestamp is also read by the portal. Keep it a timestamp of completion;
+    // it cannot say which dates were actually available and mature when Graph was asked (before a long save).
+    internal interface IDailyReportWindowStore : IReportCompletionStore
+    {
+        Task<DailyReportWindow> ReadWindowAsync(string reportKey);
+        Task SaveWindowAsync(string reportKey, DailyReportWindow window);
+    }
+
+    internal sealed class DailyReportWindow
+    {
+        public DateTime CompletedUtc { get; set; }
+
+        // At most 28 dates; true = SQL rows, false = Graph successfully returned empty and SQL was empty.
+        // No entry means the date was not proven final, including an unavailable first page.
+        public Dictionary<DateTime, bool> HasRows { get; set; } = new Dictionary<DateTime, bool>();
+    }
+
     /// <summary>
     /// In-memory fallback used when no Storage connection string is configured; lives only for the life of the WebJob
     /// process. Must be constructed ONCE outside the per-cycle loop, exactly like <see cref="InMemorySingleDateStore"/>.
     /// </summary>
-    public class InMemoryReportCompletionStore : IReportCompletionStore, IReportAttemptScheduleStore
+    public class InMemoryReportCompletionStore : IReportCompletionStore, IReportAttemptScheduleStore, IDailyReportWindowStore
     {
         // Reports run concurrently under Task.WhenAll, so this must be thread-safe.
         private readonly ConcurrentDictionary<string, DateTime> _lastSuccess =
             new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, DateTime> _nextAttemptUtc =
             new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, DailyReportWindow> _windows =
+            new ConcurrentDictionary<string, DailyReportWindow>(StringComparer.OrdinalIgnoreCase);
+
+        Task<DailyReportWindow> IDailyReportWindowStore.ReadWindowAsync(string key) =>
+            Task.FromResult(_windows.TryGetValue(key, out var window) ? window : null);
+
+        Task IDailyReportWindowStore.SaveWindowAsync(string key, DailyReportWindow window)
+        {
+            _windows[key] = window;
+            _lastSuccess[key] = window.CompletedUtc;
+            return Task.CompletedTask;
+        }
 
         public Task<DateTime?> GetLastSuccessAsync(string reportKey)
         {
@@ -72,6 +103,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         public Task ClearAsync(string reportKey)
         {
             _lastSuccess.TryRemove(reportKey, out _);
+            _windows.TryRemove(reportKey, out _);
             return Task.CompletedTask;
         }
 
@@ -100,7 +132,7 @@ namespace WebJob.Office365ActivityImporter.Engine
     /// so per-report completion survives a WebJob restart (which is the whole point - an in-memory stamp would be lost on
     /// every restart and the skip list would be empty again).
     /// </summary>
-    public class PersistedReportCompletionStore : IReportCompletionStore, IReportAttemptScheduleStore
+    public class PersistedReportCompletionStore : IReportCompletionStore, IReportAttemptScheduleStore, IDailyReportWindowStore
     {
         /// <summary>
         /// Prefix for the per-report keys. Deliberately distinct from the phase-level
@@ -108,6 +140,7 @@ namespace WebJob.Office365ActivityImporter.Engine
         /// </summary>
         internal const string KeyPrefix = Common.Entities.State.ImportScheduleKeys.UsageReportPrefix;
         internal const string NextAttemptKeyPrefix = "UserActivityReportNextAttemptUtc:";
+        private const string WindowKeyPrefix = "UserActivityReportWindow:v1:";
 
         private readonly IKeyValueStore _store;
 
@@ -132,6 +165,20 @@ namespace WebJob.Office365ActivityImporter.Engine
             => NextAttemptLoaderFor(reportKey).SaveDT(nextAttemptUtc.Kind == DateTimeKind.Utc ? nextAttemptUtc : nextAttemptUtc.ToUniversalTime());
 
         public Task ClearNextAttemptUtcAsync(string reportKey) => NextAttemptLoaderFor(reportKey).DeleteDt();
+
+        async Task<DailyReportWindow> IDailyReportWindowStore.ReadWindowAsync(string key)
+        {
+            var json = await _store.GetStringAsync(WindowKeyPrefix + key);
+            return string.IsNullOrEmpty(json) ? null : JsonConvert.DeserializeObject<DailyReportWindow>(json);
+        }
+
+        async Task IDailyReportWindowStore.SaveWindowAsync(string key, DailyReportWindow window)
+        {
+            // Publish the completion stamp LAST. An interrupted write, an operator clearing the stamp or a
+            // downgrade writing just a legacy stamp must not authorize a window belonging to a different run.
+            await _store.SetStringAsync(WindowKeyPrefix + key, JsonConvert.SerializeObject(window));
+            await LoaderFor(key).SaveDT(window.CompletedUtc);
+        }
     }
 
     /// <summary>

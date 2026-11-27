@@ -23,9 +23,26 @@ describe('isUrlInSite', () => {
         expect(isUrlInSite('https://contoso.sharepoint.com/sites/test', undefined as unknown as string)).toBe(false);
     });
 
-    test('the root site collection is the site of every page on its host', () => {
-        expect(isUrlInSite('https://contoso.sharepoint.com/SitePages/Home.aspx', 'https://contoso.sharepoint.com')).toBe(true);
-        expect(isUrlInSite('https://contoso.sharepoint.com/SitePages/Home.aspx', 'https://contoso.sharepoint.com/')).toBe(true);
+    test('the root collection contains its pages and subwebs, not collections on managed paths', () => {
+        const root = 'https://contoso.example';
+        for (const path of ['/', '/SitePages/Home.aspx', '/news/SitePages/Home.aspx', '/sites-archive/page']) {
+            expect(isUrlInSite(root + path, root + '/')).toBe(true);
+        }
+        for (const path of ['/sites/one', '/TEAMS/Two/page', '/s%69tes/One/page', '/teams%2FTwo/page']) {
+            expect(isUrlInSite(root + path, root)).toBe(false);
+            expect(isOnTrackedSite(root + path, { siteUrls: [root] })).toBe(false);
+        }
+    });
+
+    test('only the most specific registered owner can report its page', () => {
+        const root = 'https://contoso.example', site = root + '/sites/Café', web = site + '/News';
+        const page = root + '/SITES/Caf%C3%A9/news/Home.aspx';
+        const sites = { siteUrls: [root, site, web] };
+        expect(isOnTrackedSite(page, sites)).toBe(true);
+        expect(isOnTrackedSite(page, sites, root)).toBe(false);
+        expect(isOnTrackedSite(page, sites, site)).toBe(false);
+        expect(isOnTrackedSite(page, sites, web.toUpperCase() + '/')).toBe(true);
+        expect(isOnTrackedSite(root + '/sites/Caf%C3%A9-other/Home.aspx', sites)).toBe(false);
     });
 });
 

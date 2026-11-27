@@ -89,6 +89,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                         }
                         return response;
                     }
+                    catch (GraphDecisionRedirectException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw new OperationCanceledException(cancellationToken);
+                    }
                     catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && requestDeadline.IsCancellationRequested)
                     {
                         lastTimeout = ex;

@@ -137,6 +137,59 @@ namespace Tests.UnitTests
             StringAssert.Contains(FactLine(Compare(Path.Combine(_folder, "before.xlsx"), Path.Combine(_folder, "after.xlsx"), "-IncludeUnchanged"), "licensedUsers"), "0");
         }
 
+        [TestMethod]
+        public void AForecastTheScorerWithheld_DoesNotCompareAsADecline()
+        {
+            var analysis = Earlier();
+            var before = Save("before.xlsx", analysis);
+            // Only the workload-only candidate lost a required volume. The Chat subset is still modelled.
+            analysis.Opportunities.Single(c => c.UnlicensedCopilotInteractions == 0).EmailsRead = null;
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            var result = Compare(before, Save("after.xlsx", analysis));
+            Assert.AreEqual(0, result.ExitCode, result.ToString());
+            StringAssert.Contains(FactLine(result, "licenceOpportunityEstimate.hoursPerMonthHigh"),
+                "blank in the later file - unknown now, so no change is calculated");
+            Assert.IsFalse(result.Lines.Any(l => l.StartsWith("licenceChatUsersEstimate.hoursPerMonthHigh ", StringComparison.Ordinal)),
+                "The unchanged Chat cohort is not listed as a change.");
+        }
+
+        [TestMethod]
+        [TestCategory("SqlIntegration")]
+        public async System.Threading.Tasks.Task CandidateQueryFailureIsNotAnEmptyForecastInEitherScope()
+        {
+            var reports = await CopilotAdoptionSqlIntegrationTests.ReadCandidateForecastFixturesAsync();
+            Assert.IsTrue(reports.Failed.Summary.IncompleteReasons.Contains("licence opportunities"));
+            Assert.AreEqual(1, reports.Failed.Summary.UnlicensedActiveUsers, "Independent audit evidence survives.");
+            var service = new CopilotAdoptionService(reports.Positive.Summary.Options);
+            foreach (var scope in new[] { CopilotAdoptionScope.WholeTenant, CopilotAdoptionScope.ForEmailDomain("contoso.com") })
+            {
+                byte[] Export(CopilotAdoptionAnalysis analysis)
+                {
+                    Assert.IsTrue(analysis.Summary.DataSources.M365UsageReportsAvailable, "All workload dates are certified.");
+                    return CopilotAdoptionWorkbook.Build(CopilotAdoptionScopeFilter.Apply(analysis, scope, service.FinaliseSummary));
+                }
+                var positive = Export(reports.Positive);
+                var empty = Export(reports.Empty);
+                var failed = Export(reports.Failed);
+                var facts = CopilotAdoptionWorkbookTests.SnapshotFactValues(failed);
+                foreach (var prefix in new[] { "licenceOpportunityEstimate", "licenceChatUsersEstimate",
+                    "licenceAllCandidatesEstimate", "coworkWithoutLicenceEstimate" })
+                {
+                    var key = prefix + ".hoursPerMonthHigh";
+                    Assert.IsTrue(double.Parse(CopilotAdoptionWorkbookTests.SnapshotValueCell(positive, key).Value,
+                        CultureInfo.InvariantCulture) > 0, key);
+                    var zero = CopilotAdoptionWorkbookTests.SnapshotValueCell(empty, key);
+                    Assert.AreEqual("0", (string)zero.Element(Main + "v"), key);
+                    foreach (var fact in facts.Where(f => f.Key.StartsWith(prefix + ".", StringComparison.Ordinal)))
+                        Assert.AreEqual(string.Empty, fact.Value, fact.Key);
+                }
+                var comparison = Compare(Save("positive.xlsx", positive), Save("failed.xlsx", failed));
+                Assert.AreEqual(0, comparison.ExitCode, comparison.ToString());
+                StringAssert.Contains(FactLine(comparison, "licenceOpportunityEstimate.hoursPerMonthHigh"),
+                    "blank in the later file - unknown now, so no change is calculated");
+            }
+        }
+
         /// <summary>
         /// A key a later build added is reported, not treated as a failure: it has no value in the earlier
         /// export. A key the later build removed is reported the same way.

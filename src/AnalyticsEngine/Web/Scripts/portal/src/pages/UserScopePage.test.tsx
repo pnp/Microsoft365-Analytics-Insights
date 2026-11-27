@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithProvider } from '../test/renderWithProvider';
+import { loadCatalog } from '../i18n';
 import UserScopePage from './UserScopePage';
 import type { UserScopePurgeJob, UserScopeStatus } from '../types/userScope';
 
@@ -307,7 +308,17 @@ describe('UserScopePage', () => {
 
     renderWithProvider(<UserScopePage />);
 
-    expect(await screen.findByText(/couldn't save its progress to Azure Table storage/)).toBeInTheDocument();
+    expect(await screen.findByText(/couldn't read or update its state in Azure Table storage/)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['en', /Set the web app's Storage connection string to the account the importer uses/],
+    ['es', /Configure la cadena de conexión Storage de la aplicación web para que use la misma cuenta que el importador/],
+  ] as const)('explains how to protect report history before retrying the purge (%s)', async (language, recovery) => {
+    await loadCatalog(language);
+    mockFetchStatus.mockResolvedValue(status({ latestJob: runningJob({ state: 'failed', errorCode: 'coverageStorageRequired' }) }));
+    renderWithProvider(<UserScopePage />, { language });
+    expect(await screen.findByText(recovery)).toBeInTheDocument();
   });
 
   it('explains when the purge removed nobody because the filter changed', async () => {
@@ -348,6 +359,7 @@ describe('UserScopePage', () => {
 
   it.each([
     ['purgeExceedsConfirmed', /more people are outside the scope than the number confirmed when it started/],
+    ['userDeleteOutcomeUnknown', /only acknowledged deletions.*confirm a new purge/i],
     ['scopeMembershipChanged', /the members of the UserGroupsFilter groups had changed since it was confirmed/],
   ] as const)("explains a purge that stopped with '%s' rather than remove people nobody confirmed", async (errorCode, expected) => {
     mockFetchStatus.mockResolvedValue(
@@ -360,6 +372,30 @@ describe('UserScopePage', () => {
     renderWithProvider(<UserScopePage />);
 
     expect(await screen.findByText(expected)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['en', 'failed', /SQL did not confirm/, 'At least 12,345'],
+    ['es', 'cancelled', /SQL no confirmó/, 'Al menos 12.345'],
+  ] as const)('shows the acknowledged usage-table subtotal as a lower bound in %s', async (language, state, warning, lowerBound) => {
+    await loadCatalog(language);
+    mockFetchStatus.mockResolvedValue(status({
+      latestJob: runningJob({
+        state,
+        errorCode: 'usageDeleteOutcomeUnknown',
+        completedUtc: '2026-09-01T09:05:00Z',
+        rowsAffected: [
+          { table: 'audit_events', rows: 2 },
+          { table: 'teams_user_activity_log', rows: 12345, isLowerBound: true },
+        ],
+      }),
+    }));
+
+    renderWithProvider(<UserScopePage />, { language });
+
+    expect(await screen.findByText(warning)).toBeInTheDocument();
+    expect(within(screen.getByText('teams_user_activity_log').closest('tr')!).getByText(lowerBound)).toBeInTheDocument();
+    expect(within(screen.getByText('audit_events').closest('tr')!).getByText('2')).toBeInTheDocument();
   });
 
   it('says a restart stops a purge when its progress is kept in memory, and that it starts again when it is not', async () => {

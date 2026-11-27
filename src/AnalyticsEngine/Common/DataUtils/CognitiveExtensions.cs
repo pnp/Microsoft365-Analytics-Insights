@@ -6,6 +6,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace DataUtils
@@ -206,15 +207,18 @@ namespace DataUtils
         /// credentials are available, the inner client is swapped for an RBAC one and the
         /// call is retried once.
         /// </summary>
-        public async Task<T> ExecuteAsync<T>(Func<TextAnalyticsClient, Task<T>> action)
+        public Task<T> ExecuteAsync<T>(Func<TextAnalyticsClient, Task<T>> action) => ExecuteAsync(action, CancellationToken.None);
+
+        internal async Task<T> ExecuteAsync<T>(Func<TextAnalyticsClient, Task<T>> action, CancellationToken cancellationToken)
         {
             if (action == null) throw new ArgumentNullException(nameof(action));
 
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 return await action(_inner).ConfigureAwait(false);
             }
-            catch (RequestFailedException ex) when (ShouldFallbackToRbac(ex))
+            catch (RequestFailedException ex) when (!cancellationToken.IsCancellationRequested && ShouldFallbackToRbac(ex))
             {
                 _logger?.LogWarning(
                     "Cognitive call failed with HTTP {Status} (ErrorCode '{Code}') - key auth appears to be disabled on the resource. " +
@@ -274,8 +278,13 @@ namespace DataUtils
         /// Loads Azure Cognitive data for a message. Routes calls through
         /// <see cref="CognitiveServicesClient"/> so key-auth failures auto-retry with RBAC.
         /// </summary>
-        public static async Task<List<TextAnalysisResult<T>>> GetCognitiveDataStats<T>(this IEnumerable<TextAnalysisSample<T>> inputData, CognitiveServicesClient client, ILogger logger) where T : class
+        public static Task<List<TextAnalysisResult<T>>> GetCognitiveDataStats<T>(this IEnumerable<TextAnalysisSample<T>> inputData, CognitiveServicesClient client, ILogger logger) where T : class
+            => inputData.GetCognitiveDataStats(client, logger, CancellationToken.None);
+
+        public static async Task<List<TextAnalysisResult<T>>> GetCognitiveDataStats<T>(this IEnumerable<TextAnalysisSample<T>> inputData,
+            CognitiveServicesClient client, ILogger logger, CancellationToken cancellationToken) where T : class
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (inputData == null || inputData.Count() == 0) return null;
             if (client == null) return null;
 
@@ -306,10 +315,10 @@ namespace DataUtils
                     {
                         try
                         {
-                            var result = await client.ExecuteAsync(c => c.DetectLanguageBatchAsync(languageBatchInput));
+                            var result = await client.ExecuteAsync(c => c.DetectLanguageBatchAsync(languageBatchInput, cancellationToken: cancellationToken), cancellationToken);
                             return result.Value.ToList();
                         }
-                        catch (RequestFailedException ex)
+                        catch (RequestFailedException ex) when (!cancellationToken.IsCancellationRequested)
                         {
                             logger.LogError(ex, $"Couldn't detect languages: cognitive services error - {ex.Message}");
                             return new List<DetectLanguageResult>();
@@ -323,7 +332,7 @@ namespace DataUtils
 
                 success = true;
             }
-            catch (RequestFailedException ex)
+            catch (RequestFailedException ex) when (!cancellationToken.IsCancellationRequested)
             {
                 logger.LogError(ex, $"Couldn't detect languages: cognitive services error - {ex.Message}");
                 return null;
@@ -377,13 +386,13 @@ namespace DataUtils
                     // Break down API calls into chunks of 10 max and compile results
                     allAnalyzeSentimentResults = await listProcessorSentiment.CallAndCompileToSingleList(sentimentBatchInput, async (chunk) =>
                     {
-                        var result = await client.ExecuteAsync(c => c.AnalyzeSentimentBatchAsync(chunk));
+                        var result = await client.ExecuteAsync(c => c.AnalyzeSentimentBatchAsync(chunk, cancellationToken: cancellationToken), cancellationToken);
                         return result.Value.ToList();
                     }, API_MAX_BATCH_SIZE);
 
                     sentimentSuccess = true;
                 }
-                catch (RequestFailedException ex)
+                catch (RequestFailedException ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     logger.LogError(ex, $"Cognitive services error {ex.Message}");
                     return null;

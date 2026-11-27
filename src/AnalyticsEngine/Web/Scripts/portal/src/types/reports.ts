@@ -19,8 +19,8 @@ export interface ReportAreas {
 
 /** One point of a weekly series: the (Monday) week start (ISO date) and its value. A null value
  * means the week's figure is unknown (e.g. its usage report never arrived) rather than zero, and is
- * drawn as a gap in the line. `incomplete` (sent only when true) marks a week whose source is missing
- * part of the week - a usage week with a day's report not imported - so its value is a floor. */
+ * drawn as a gap in the line. `incomplete` (sent only when true) means at least one daily report
+ * is missing, partial or unverified, so the observed value is a lower bound. */
 export interface ReportTimePoint {
   weekStart: string;
   value: number | null;
@@ -114,7 +114,7 @@ export interface ReportChart {
   warning: string | null;
   /**
    * Which sentence a `seriesWarnings`-based warning is: `seriesUnavailable`, `incompleteWeeks` (every
-   * series is charted, some weeks are missing a day of reports) or `seriesUnavailableAndIncompleteWeeks`.
+   * series is charted, some weeks have incomplete or unverified reports) or `seriesUnavailableAndIncompleteWeeks`.
    */
   warningKey?: string | null;
   seriesWarnings?: ReportSeriesWarning[] | null;

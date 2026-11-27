@@ -14,9 +14,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
             var status = (int)response.StatusCode;
             var mediaType = response.Content?.Headers.ContentType?.MediaType;
-            var json = string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase)
-                || (mediaType?.EndsWith("+json", StringComparison.OrdinalIgnoreCase) ?? false);
-            if ((status == 429 || status >= 500 && status <= 599) && !json)
+            if ((status == 429 || status >= 500 && status <= 599) && !IsJson(mediaType))
             {
                 // Kiota cannot parse an HTML proxy failure as OData and otherwise throws InvalidOperationException,
                 // discarding the HTTP status that determines whether enrichment must be durably retried.
@@ -30,5 +28,8 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             }
             return response;
         }
+
+        internal static bool IsJson(string mediaType) => string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase)
+            || (mediaType?.EndsWith("+json", StringComparison.OrdinalIgnoreCase) ?? false);
     }
 }

@@ -81,7 +81,7 @@ test.each([true, false])('the first view reports only its own document timing (s
     jest.useFakeTimers({ doNotFake: ['performance'] });
     const descriptors = Object.getOwnPropertyDescriptors(performance);
     const origin = Date.UTC(2000, 0, 1);
-    const nav = { startTime: 0, connectEnd: 5, requestStart: 10, responseStart: 20, responseEnd: 30,
+    const nav = { name: softNavigation ? document.referrer : document.URL, startTime: 0, connectEnd: 5, requestStart: 10, responseStart: 20, responseEnd: 30,
         loadEventStart: 90, loadEventEnd: 100, duration: 100 };
     const timing = { navigationStart: origin, domainLookupStart: origin + 1, domLoading: origin + 40,
         connectEnd: origin + 5, requestStart: origin + 10, responseStart: origin + 20, responseEnd: origin + 30, loadEventEnd: origin + 100 };
@@ -94,12 +94,18 @@ test.each([true, false])('the first view reports only its own document timing (s
     });
     try {
         const telemetry = createTrackerTelemetry(connectionString, 'reader@contoso.example');
-        new AppInsightsWrapper(telemetry, 'synthetic-session').trackCurrentPageView(softNavigation ? 0 : undefined,
-            null, location.origin + '/sites/tracked', location.origin + '/sites/tracked', 'Home');
-        jest.advanceTimersByTime(200); // The SDK waits for the browser's performance entry before emitting.
+        const wrapper = new AppInsightsWrapper(telemetry, 'synthetic-session');
+        wrapper.trackClick({ linkText: 'Early link', altText: '', classNames: null, href: '#link' });
+        wrapper.trackCurrentPageView(softNavigation ? 0 : undefined, null, location.origin + '/sites/tracked', location.origin + '/sites/tracked', 'Home');
+        jest.advanceTimersByTime(50); // A visit can end before the SDK's first 100 ms performance check.
+        expect(mockItems.map(i => i.baseType)).toEqual([PageViewDataType, EventDataType]);
         const view = envelope(PageViewDataType);
         expect(view.time).toBe((softNavigation ? viewed : new Date(origin + nav.loadEventStart)).toISOString());
         expect(view.data.baseData.duration).toBe(softNavigation ? '00:00:00.000' : '00:00:00.100');
+        expect(Number(view.data.baseData.properties.pageLoad)).toBe(softNavigation ? 0 : 100);
+        expect(envelope(EventDataType).data.baseData.properties.pageRequestId).toBe(view.data.baseData.properties.pageRequestId);
+        jest.advanceTimersByTime(200);
+        expect(mockItems.filter(i => i.baseType === PageViewDataType)).toHaveLength(1);
         expect(mockItems.filter(i => i.baseType === PageViewPerformanceDataType)).toHaveLength(softNavigation ? 0 : 1);
     } finally {
         for (const key of ['timeOrigin', 'getEntriesByType', 'timing'] as const) {
@@ -138,5 +144,25 @@ test('refuses an endpoint without a key before installing any page handlers', ()
         expect(listener).not.toHaveBeenCalled();
     } finally {
         listener.mockRestore();
+    }
+});
+
+test('a hidden tab hands off its cookie on pagehide, not beforeunload or visibilitychange, before the final flush', () => {
+    const handoff = jest.fn((_persisted: boolean) => telemetry.trackEvent({ name: 'PAGE_EXIT', properties: { pageRequestId: 'previous' } }));
+    const telemetry = createTrackerTelemetry(connectionString, 'reader@contoso.example', handoff);
+    const flushed: ITelemetryItem[] = [];
+    mockCurrentFlush.mockImplementation(() => flushed.push(...mockItems.splice(0)));
+    const hidden = jest.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    try {
+        document.dispatchEvent(new Event('visibilitychange'));
+        window.dispatchEvent(new Event('beforeunload'));
+        expect(handoff).not.toHaveBeenCalled();
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+        expect(handoff.mock.calls).toEqual([[true]]);
+        expect(flushed.map(i => i.baseData?.properties.pageRequestId)).toEqual(['previous']);
+    } finally {
+        handoff.mockReset();
+        mockCurrentFlush.mockReset();
+        hidden.mockRestore();
     }
 });

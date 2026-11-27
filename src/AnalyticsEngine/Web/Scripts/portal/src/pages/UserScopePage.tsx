@@ -103,9 +103,12 @@ const JOB_ERROR_KEYS: Record<NonNullable<UserScopePurgeJob['errorCode']>, Transl
   filterChanged: 'admin.userScope.jobError.filterChanged',
   filterChangedWhileRunning: 'admin.userScope.jobError.filterChangedWhileRunning',
   purgeExceedsConfirmed: 'admin.userScope.jobError.purgeExceedsConfirmed',
+  userDeleteOutcomeUnknown: 'admin.userScope.jobError.userDeleteOutcomeUnknown',
+  usageDeleteOutcomeUnknown: 'admin.userScope.jobError.usageDeleteOutcomeUnknown',
   scopeMembershipChanged: 'admin.userScope.jobError.scopeMembershipChanged',
   databaseError: 'admin.userScope.jobError.databaseError',
   stateUnavailable: 'admin.userScope.jobError.stateUnavailable',
+  coverageStorageRequired: 'admin.userScope.jobError.coverageStorageRequired',
   unexpected: 'admin.userScope.jobError.unexpected',
 };
 
@@ -487,7 +490,11 @@ function ProgressCard({
                     <TableCell>
                       <code className={styles.key}>{row.table}</code>
                     </TableCell>
-                    <TableCell>{formatNumber(row.rows)}</TableCell>
+                    <TableCell>
+                      {row.isLowerBound
+                        ? t('admin.userScope.progress.rowsLowerBound', { count: formatNumber(row.rows) })
+                        : formatNumber(row.rows)}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

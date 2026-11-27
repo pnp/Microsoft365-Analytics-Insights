@@ -11,11 +11,12 @@ export function SetSessionCookieVal(sessionId: string)
     Cookies.set("SPOInsightsSessionID", sessionId);
 }
 
-export function GetLastPageStatsVal() : PageStats | null
+export function GetLastPageStatsVal(consume = false) : PageStats | null
 {
     const s = Cookies.get("SPOInsightsLastPageStats");
     if (s)
     {
+        if (consume) ClearLastPageStatsVal();
         // Convert string to JSON
         try {
             const lastPageStats: PageStats = JSON.parse(s);

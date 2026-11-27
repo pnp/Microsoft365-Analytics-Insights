@@ -22,7 +22,7 @@ namespace Common.Entities.CopilotAdoption
         /// <summary>
         /// True when the licence-opportunity query returned
         /// <see cref="CopilotAdoptionOptions.MaxOpportunityCandidates"/> rows, so candidates beyond the cap
-        /// were never scored.
+        /// were never scored. Null when the query did not complete: neither the population nor its cap is known.
         /// </summary>
         /// <remarks>
         /// Held here rather than derived from <see cref="Opportunities"/> because the cap is applied
@@ -30,7 +30,7 @@ namespace Common.Entities.CopilotAdoption
         /// domain's weaker candidates may still have been cut. The licence estimate reads it to say its
         /// figure may be a floor.
         /// </remarks>
-        public bool OpportunitiesCapped { get; set; }
+        public bool? OpportunitiesCapped { get; set; }
 
         /// <summary>Every Copilot agent seen in the history window, with its health verdict.</summary>
         public List<AgentUsageRow> Agents { get; set; } = new List<AgentUsageRow>();

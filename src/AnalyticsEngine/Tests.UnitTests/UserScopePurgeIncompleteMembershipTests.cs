@@ -152,7 +152,8 @@ INSERT INTO dbo.users (user_name, mail, azure_ad_id) VALUES
                 var state = new UserScopePurgeStateStore(new InMemoryKeyValueStore(), isDurable: false);
                 var job = await state.CreateAsync("admin@contoso.local", Filter.Fingerprint, firstPageOnly.Count, 2, firstPageOnly.MembershipFingerprint);
 
-                var outcome = await new UserScopePurgeEngine(new UserScopePurgeDatabase(database.ConnectionString), state, NullLogger.Instance)
+                var outcome = await new UserScopePurgeEngine(new UserScopePurgeDatabase(database.ConnectionString), state, NullLogger.Instance,
+                    new UsageReportCoverageStore(new InMemoryKeyValueStore(), false))
                     .RunAsync(job.Id, Provider(http));
 
                 Assert.AreEqual(UserScopePurgeRunOutcome.Failed, outcome);

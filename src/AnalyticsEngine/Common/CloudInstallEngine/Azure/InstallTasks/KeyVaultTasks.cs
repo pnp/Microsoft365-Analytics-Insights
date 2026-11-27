@@ -1,7 +1,6 @@
 ﻿using Azure;
 using Azure.Core;
 using Azure.Identity;
-using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Authorization;
 using Azure.ResourceManager.Authorization.Models;
 using Azure.ResourceManager.KeyVault;
@@ -413,11 +412,17 @@ namespace CloudInstallEngine.Azure.InstallTasks
             var webAppName = _config.GetConfigValue(CONFIG_KEY_WEB_APP_NAME);
             var tenantId = TenantGuidFromConfig();
 
-            var webAppWithManagedIdentity = Container.GetWebSites().GetAll(cancellationToken: CancellationToken).Where(s => s.Data.Name == webAppName).SingleOrDefault();
+            // Read the current site, not the list projection or a response from before identity provisioning.
+            var webAppWithManagedIdentity = await AppServiceResourceLookup.ReadSiteAsync(Container, webAppName, CancellationToken, allowMissing: true);
             if (webAppWithManagedIdentity == null)
                 throw new InstallException($"Can't find web-app with name '{webAppName}'");
 
-            await AddPolicyForConfiguredAccount(vaultResource, tenantId, webAppWithManagedIdentity.Data.Identity.PrincipalId.ToString(), secretPerms, certPerms);
+            var principal = ManagedIdentityPlanner.GetSystemAssignedPrincipal(webAppWithManagedIdentity.Data.Identity);
+            if (!principal.HasValue)
+                throw new InstallException($"App Service '{webAppName}' has no usable system-assigned principal ID. " +
+                    "Verify the site's system-assigned managed identity and retry; no Key Vault permission was granted for the site.");
+            CancellationToken.ThrowIfCancellationRequested();
+            await AddPolicyForConfiguredAccount(vaultResource, tenantId, principal.Value.ToString(), secretPerms, certPerms);
             _logger.LogInformation($"Granted web-app '{webAppName}' access to key vault {vaultResource.Data.Name} for {DescribePermissions(secretPerms, certPerms)}");
         }
 

@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import { makeStyles, mergeClasses, tokens, Text } from '@fluentui/react-components';
 import type { ReportSeries, ReportTimePoint } from '../../types/reports';
-import { useT } from '../../i18n';
+import { useT, type TFunction } from '../../i18n';
 import { serverPlaceholderText } from '../shared/serverPlaceholder';
 import {
   formatCompact,
@@ -94,6 +94,20 @@ const useStyles = makeStyles({
     padding: '24px 0',
     textAlign: 'center',
   },
+  values: {
+    marginTop: '8px',
+    '& summary': { cursor: 'pointer', paddingBlock: '12px' },
+  },
+  tableWrap: { overflowX: 'auto' },
+  table: {
+    borderCollapse: 'collapse',
+    '& :is(td,th)': {
+      padding: '4px 8px',
+      textAlign: 'end',
+      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    },
+    '& th:first-child': { textAlign: 'start' },
+  },
 });
 
 type TimeSeriesChartProps = {
@@ -103,6 +117,8 @@ type TimeSeriesChartProps = {
   height?: number;
   /** Optional legend caveat shown when null points should be explained in-place. */
   gapNote?: string;
+  /** Always offer the weekly workload table and identify each workload, even if just one survived. */
+  showWeeklyValues?: boolean;
   /** Labels are tenant-authored or already localised, not server placeholder wording. */
   literalLabels?: boolean;
 };
@@ -117,6 +133,12 @@ function isIsolatedPoint(points: ReportTimePoint[], i: number): boolean {
   const before = i > 0 ? points[i - 1].value : null;
   const after = i < points.length - 1 ? points[i + 1].value : null;
   return before === null && after === null;
+}
+
+function pointReadout(t: TFunction, point: ReportTimePoint | undefined): string {
+  if (point?.value == null) return t('charts.timeSeries.noData');
+  const value = formatValue(point.value);
+  return point.incomplete ? t('charts.timeSeries.atLeast', { value }) : value;
 }
 
 /**
@@ -145,7 +167,7 @@ function SeriesSwatch({ index, className }: { index: number; className: string }
  * its container, with a "nice" y-axis, thinned week labels, and an interactive hover tooltip that
  * reads out every series' value for the hovered week.
  */
-export default function TimeSeriesChart({ series, valueLabel, height = 300, gapNote, literalLabels }: TimeSeriesChartProps) {
+export default function TimeSeriesChart({ series, valueLabel, height = 300, gapNote, showWeeklyValues, literalLabels }: TimeSeriesChartProps) {
   const t = useT();
   const styles = useStyles();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -200,7 +222,9 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
   const clearHover = (): void => setHover(null);
 
   const hasGaps = series.some((s) => s.points.some((p) => p.value === null));
-  const showLegend = series.length > 1 || (hasGaps && !!gapNote);
+  const hasLowerBounds = series.some((s) => s.points.some((p) => p.incomplete && p.value !== null));
+  const showLegend = series.length > 1 || (hasGaps && !!gapNote) || hasLowerBounds;
+  const seriesLabel = (s: ReportSeries) => literalLabels ? s.name : serverPlaceholderText(t, s.name);
   const tooltipLeft = hover ? Math.max(70, Math.min((rootRef.current?.clientWidth ?? W) - 70, hover.xPx)) : 0;
 
   // With many series the readout is laid out in columns and kept to one side of the cursor, so it
@@ -304,7 +328,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
                 strokeLinecap={dash ? 'butt' : 'round'}
               />
               {s.points.map((p, i) =>
-                p.value === null ? null : hover?.index === i ? (
+                p.value === null || p.incomplete ? null : hover?.index === i ? (
                   <circle key={`pt-${s.name}-${i}`} cx={x(i)} cy={y(p.value)} r={5} fill={color} stroke={tokens.colorNeutralBackground1} strokeWidth={2} />
                 ) : n <= 16 || isIsolatedPoint(s.points, i) ? (
                   <circle key={`pt-${s.name}-${i}`} cx={x(i)} cy={y(p.value)} r={2.5} fill={color} />
@@ -313,6 +337,13 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
             </g>
           );
         })}
+
+        {/* Draw last so another series at the same height cannot hide an incomplete week. */}
+        {hasLowerBounds && series.map((s, si) => s.points.map((p, i) => p.incomplete && p.value !== null ? (
+          <rect key={`bound-${s.name}-${i}`} x={-3.5} y={-3.5} width={7} height={7}
+            transform={`translate(${x(i)} ${y(p.value)}) rotate(45)`}
+            fill={tokens.colorNeutralBackground1} stroke={lineSeriesStyle(si).color} strokeWidth={hover?.index === i ? 3 : 2} />
+        ) : null))}
 
         {/* Transparent overlay to capture hover across the whole plot */}
         <rect
@@ -327,7 +358,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
       </svg>
 
       {hover && (
-        <div className={mergeClasses(styles.tooltip, manySeries && styles.tooltipBeside)} style={tooltipPosition}>
+        <div role="tooltip" className={mergeClasses(styles.tooltip, manySeries && styles.tooltipBeside)} style={tooltipPosition}>
           <Text size={200} weight="semibold" block style={{ marginBottom: 4 }}>
             {formatWeekLong(weeks[hover.index])}
           </Text>
@@ -339,12 +370,10 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
               <div key={s.name} className={styles.tooltipRow}>
                 <span className={styles.tooltipLabel}>
                   <SeriesSwatch index={si} className={styles.swatch} />
-                  <Text size={200}>{series.length > 1 ? (literalLabels ? s.name : serverPlaceholderText(t, s.name)) : valueLabel}</Text>
+                  <Text size={200}>{series.length > 1 ? seriesLabel(s) : valueLabel}</Text>
                 </span>
                 <Text size={200} weight="semibold">
-                  {s.points[hover.index]?.value == null
-                    ? t('charts.timeSeries.noData')
-                    : formatValue(s.points[hover.index].value as number)}
+                  {pointReadout(t, s.points[hover.index])}
                 </Text>
               </div>
             ))}
@@ -357,7 +386,7 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
           {series.map((s, si) => (
             <span key={s.name} className={styles.legendItem}>
               <SeriesSwatch index={si} className={styles.swatch} />
-              <Text size={200}>{literalLabels ? s.name : serverPlaceholderText(t, s.name)}</Text>
+              <Text size={200}>{seriesLabel(s)}</Text>
             </span>
           ))}
           {hasGaps && gapNote && (
@@ -365,7 +394,27 @@ export default function TimeSeriesChart({ series, valueLabel, height = 300, gapN
               {gapNote}
             </Text>
           )}
+          {hasLowerBounds && <Text size={200} className={styles.legendNote}>{t('charts.timeSeries.lowerBoundNote')}</Text>}
         </div>
+      )}
+      {(hasLowerBounds || showWeeklyValues) && (
+        <details className={styles.values}>
+          <summary>{t('charts.timeSeries.weeklyValues')}</summary>
+          <div className={styles.tableWrap}>
+            <table className={styles.table} aria-label={t('charts.timeSeries.ariaLabel', { valueLabel })}>
+              <thead><tr>
+                <th scope="col">{t('charts.timeSeries.week')}</th>
+                {series.map(s => <th key={s.name} scope="col">{showWeeklyValues || series.length > 1 ? seriesLabel(s) : valueLabel}</th>)}
+              </tr></thead>
+              <tbody>
+                {weeks.map((wk, i) => <tr key={wk}>
+                  <th scope="row">{formatWeekLong(wk)}</th>
+                  {series.map(s => <td key={s.name}>{pointReadout(t, s.points[i])}</td>)}
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+        </details>
       )}
     </div>
   );

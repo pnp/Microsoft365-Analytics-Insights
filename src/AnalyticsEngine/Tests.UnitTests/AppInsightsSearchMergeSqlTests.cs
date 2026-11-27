@@ -1,5 +1,6 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using WebJob.AppInsightsImporter.Engine.Sql;
 using SearchSql = WebJob.AppInsightsImporter.Engine.Properties.Resources;
 
 namespace Tests.UnitTests
@@ -23,7 +24,7 @@ INSERT dbo.sessions VALUES (1, 'session-a', 1), (2, 'session-b', 1), (3, 'sessio
                 const string token = "${STAGING_TABLE_SEARCHES}";
                 const string staging = "staged_searches";
                 db.Execute(SearchSql.Create_Searches_Import_Temp_Table.Replace(token, staging));
-                var merge = SearchSql.Migrate_Searches_Import.Replace(token, staging);
+                var merge = SearchesSaveExtension.BuildSearchMergeSql(staging, false);
 
                 db.Execute(@"INSERT dbo.staged_searches (ai_session_id, user_name, search_term, date_time)
 VALUES ('session-a', 'reader@contoso.com', N'Καλημέρα', '2000-01-01T09:00:00');");
@@ -33,7 +34,9 @@ VALUES ('session-a', 'reader@contoso.com', N'Καλημέρα', '2000-01-01T09:0
                     connection.Open();
                     Assert.AreEqual(2, command.ExecuteNonQuery(), "Only the new term and search count as inserted rows.");
                     Assert.AreEqual(0, command.ExecuteNonQuery(), "Replaying on the same connection must report no inserts.");
-                    command.CommandText = "SET NOCOUNT ON;\n" + merge + "\nSELECT @@OPTIONS & 512;";
+                    command.CommandText = "SET NOCOUNT ON;\n" + merge;
+                    command.ExecuteNonQuery();
+                    command.CommandText = "SELECT @@OPTIONS & 512;";
                     Assert.AreEqual(512, command.ExecuteScalar(), "A caller that disabled row counts must keep its setting.");
                 }
                 Assert.AreEqual(1, db.Scalar("SELECT COUNT(*) FROM dbo.searches"), "Replaying a saved search must not add a row.");
@@ -59,6 +62,71 @@ JOIN dbo.search_terms t ON t.id = s.search_term_id WHERE ";
                 db.Execute(merge);
                 Assert.AreEqual(1, db.Scalar(count + "s.session_id = 2 AND t.search_term = N'Καλημέρα' AND s.date_time IS NULL"),
                     "The batch's date bounds must not exclude an undated replay.");
+
+                // An old importer wrote to a higher physical session id. The next hit in that logical visit
+                // uses the lowest id, but replaying the old search must not create a second searching visit.
+                db.Execute(@"INSERT dbo.sessions VALUES (4, 'session-b', 1), (5, 'SESSION-B', 1);
+UPDATE dbo.searches SET session_id = 4 WHERE session_id = 2;
+TRUNCATE TABLE dbo.staged_searches;
+INSERT dbo.staged_searches (ai_session_id, user_name, search_term, date_time) VALUES
+('session-b', 'reader@contoso.com', N'Καλημέρα', NULL),
+('session-b', 'reader@contoso.com', N'Καλημέρα', '2000-01-01T09:00:00');");
+                using (var connection = new SqlConnection(db.ConnectionString))
+                using (var command = new SqlCommand(merge, connection))
+                {
+                    connection.Open();
+                    Assert.AreEqual(0, command.ExecuteNonQuery(), "Both the dated and undated historical facts already exist.");
+                    Assert.AreEqual(0, db.Scalar("SELECT COUNT(*) FROM dbo.searches WHERE session_id = 2"));
+                    db.Execute(@"INSERT dbo.staged_searches (ai_session_id, user_name, search_term, date_time) VALUES
+('session-b', 'reader@contoso.com', N'Καλημέρα', '2000-01-01T09:00:00.003'),
+('session-b', 'other@contoso.com',  N'Καλημέρα', '2000-01-01T09:00:00'),
+('SESSION-B', 'reader@contoso.com', N'Καλημέρα', '2000-01-01T09:00:00');");
+                    Assert.AreEqual(3, command.ExecuteNonQuery());
+                    Assert.AreEqual(0, command.ExecuteNonQuery());
+                }
+                Assert.AreEqual(1, db.Scalar(count + "s.session_id = 2 AND s.date_time = '2000-01-01T09:00:00.003'"),
+                    "A genuinely new fact uses the lowest session id, just as the hit import does.");
+                Assert.AreEqual(1, db.Scalar(count + "s.session_id = 3"), "The same tracker id for a different user is another visit.");
+                Assert.AreEqual(1, db.Scalar(count + "s.session_id = 5"), "Tracker ids differing only by case are different visits.");
+
+                db.Execute(@"TRUNCATE TABLE dbo.staged_searches;
+INSERT dbo.staged_searches (ai_session_id, user_name, search_term, date_time, ingestion_hour) VALUES
+('session-a', 'reader@contoso.com', N'New', '2000-01-01T09:02:00', '2000-01-01T10:00:00'),
+('SESSION-A', 'reader@contoso.com', N'Not in SQL', NULL, '2000-01-01T10:00:00'),
+('session-a', 'other@contoso.com', N'Not in SQL', NULL, '2000-01-01T10:00:00'),
+('session-missing', 'reader@contoso.com', N'Not in SQL', NULL, NULL);");
+                using (var connection = new SqlConnection(db.ConnectionString))
+                using (var command = new SqlCommand("SET NOCOUNT ON;\n" + merge, connection))
+                {
+                    connection.Open();
+                    using (var reader = command.ExecuteReader())
+                    {
+                        Assert.IsTrue(reader.Read());
+                        Assert.AreEqual(1, reader.GetInt32(0), "A new search fact.");
+                        Assert.AreEqual(2, reader.GetInt32(1), "The lookup and fact count, even if DONE row counts are disabled.");
+                        Assert.IsTrue(reader.NextResult());
+                        var missing = 0;
+                        while (reader.Read())
+                        {
+                            Assert.AreEqual(reader.IsDBNull(0) ? 1 : 2, reader.GetInt32(1));
+                            missing += reader.GetInt32(1);
+                        }
+                        Assert.AreEqual(3, missing, "A case-different tracker id or the same id for the wrong user cannot resolve a search.");
+                    }
+                }
+                Assert.AreEqual(0, db.Scalar("SELECT COUNT(*) FROM dbo.search_terms WHERE search_term=N'Not in SQL'"));
+
+                // SQL string equality ignores trailing spaces. An admitted request identifies the
+                // exact owner and ordinal tracker, even if a lower physical id compares SQL-equal.
+                db.Execute(@"TRUNCATE TABLE dbo.staged_searches;
+INSERT dbo.users VALUES (3, 'reader@contoso.com ');
+INSERT dbo.sessions VALUES (9, 'tracker ', 1), (10, 'tracker', 3), (11, 'tracker', 1);
+INSERT dbo.staged_searches(ai_session_id,user_name,search_term,date_time,verified_user_id) VALUES
+('tracker','reader@contoso.com',N'Allowed','20000101',1), ('tracker','reader@contoso.com',N'Missing owner','20000101',NULL);");
+                db.Execute(SearchesSaveExtension.BuildSearchMergeSql(staging, true));
+                Assert.AreEqual(1, db.Scalar(count + "s.session_id=11 AND t.search_term=N'Allowed'"));
+                Assert.AreEqual(1, db.Scalar("SELECT COUNT(*) FROM dbo.searches s JOIN dbo.search_terms t ON t.id=s.search_term_id WHERE t.search_term=N'Allowed'"));
+                Assert.AreEqual(0, db.Scalar("SELECT COUNT(*) FROM dbo.search_terms WHERE search_term=N'Missing owner'"));
             }
         }
     }

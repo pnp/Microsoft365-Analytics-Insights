@@ -388,11 +388,11 @@ VisitWeeks AS (
     INNER JOIN dbo.sessions AS s ON s.id = v.session_id
     GROUP BY " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, v.FirstHit) % 7), CAST(v.FirstHit AS date))" + @"
 ),
+" + SearchWindowCtes + @",
 SearchWeeks AS (
     SELECT " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, se.date_time) % 7), CAST(se.date_time AS date))" + @" AS WeekStart,
            COUNT_BIG(*) AS Searches
-    FROM dbo.searches AS se
-    WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
+    FROM S AS se
     GROUP BY " + "DATEADD(DAY, -(DATEDIFF(DAY, 0, se.date_time) % 7), CAST(se.date_time AS date))" + @"
 )
 SELECT weeks.WeekStart,
@@ -1319,6 +1319,49 @@ OPTION (RECOMPILE);";
 
         #region Search
 
+        // A tagged key, not a hash: an ordinal tracker id after a fixed-width user id, or the
+        // physical session alone when either identity component is missing. A NULL session stays
+        // NULL and cannot acquire hits. This key exists only in these windowed reports.
+        private const string MissingSearchVisitIdentity = "v.user_id IS NULL OR NULLIF(v.ai_session_id, '') IS NULL";
+        private const string SearchVisitKey = @"CASE WHEN " + MissingSearchVisitIdentity + @"
+            THEN 0x00 + CONVERT(binary(4), a.session_id)
+            ELSE 0x01 + CONVERT(binary(4), v.user_id) + CONVERT(varbinary(50), v.ai_session_id) END";
+
+        // Earlier imports could save one search on several physical rows for the same visit.
+        // Keep the full stored timestamp, and never deduplicate facts with incomplete identities.
+        private const string SearchWindowCtes = @"SearchWindow AS (
+    SELECT se.id, se.session_id, se.search_term_id, se.date_time
+    FROM dbo.searches AS se
+    WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
+),
+SearchIdentity AS (
+    SELECT a.*, v.user_id, v.ai_session_id, " + SearchVisitKey + @" AS visit_key,
+           CASE WHEN " + MissingSearchVisitIdentity + @" THEN a.session_id END AS physical_fallback,
+           CASE WHEN " + MissingSearchVisitIdentity + @" THEN a.id END AS uncomparable_id
+    FROM SearchWindow AS a LEFT JOIN dbo.sessions AS v ON v.id = a.session_id
+),
+S AS (
+    SELECT MIN(id) AS id, visit_key, MAX(user_id) AS user_id, MAX(ai_session_id) AS ai_session_id,
+           MAX(physical_fallback) AS physical_fallback, search_term_id, date_time
+    FROM SearchIdentity GROUP BY visit_key, search_term_id, date_time, uncomparable_id
+)";
+
+        // The latest in-window hit is enough to decide every search in a visit. Aggregate hits
+        // before resolving the session identity, and never multiply a search by the number of hits.
+        private const string SearchHitCtes = @"HitTimes AS (
+    SELECT h.session_id, MAX(h.hit_timestamp) AS last_hit
+    FROM dbo.hits AS h
+    WHERE h.hit_timestamp >= @from AND h.hit_timestamp < @to AND h.session_id IS NOT NULL" + HitScope + @"
+    GROUP BY h.session_id
+),
+HitVisits AS (
+    SELECT " + SearchVisitKey + @" AS visit_key, MAX(a.last_hit) AS last_hit
+    FROM HitTimes AS a LEFT JOIN dbo.sessions AS v ON v.id = a.session_id
+    GROUP BY " + SearchVisitKey + @"
+)";
+        private const string DeadEndCount =
+            "COUNT_BIG(CASE WHEN last_hit IS NULL OR last_hit <= DATEADD(SECOND, @searchGrace, date_time) THEN 1 END)";
+
         /// <summary>
         /// Search totals, including the two measures that make this tab worth reading: how many visits
         /// relied on search at all, and how many searches were followed by nothing.
@@ -1347,108 +1390,67 @@ OPTION (RECOMPILE);";
         /// therefore invisible to every window. That is correct - an undated search cannot honestly be
         /// attributed to a period.
         /// </para>
+        /// <para>Materialize the bounded logical hit visits once. Their inserted row count supplies
+        /// the reliance denominator without repeating the hit aggregation for the dead-end join.</para>
+        /// <para>Roll up visits by searcher before the final aggregate. Counting distinct users beside
+        /// the other visit totals caused an eager spool of searcher totals in the annual plan.</para>
         /// </remarks>
         public const string SearchKpis = @"
-WITH S AS (
-    SELECT se.id, se.session_id, se.search_term_id, se.date_time
-    FROM dbo.searches AS se
-    WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
-),
-DeadEnds AS (
-    SELECT s.id
-    FROM S AS s
-    WHERE NOT EXISTS (
-        SELECT 1 FROM dbo.hits AS h
-        WHERE h.session_id = s.session_id
-              AND h.hit_timestamp > DATEADD(SECOND, @searchGrace, s.date_time))
-),
-PerVisit AS (
-    SELECT s.session_id, COUNT_BIG(*) AS Searches
-    FROM S AS s
-    WHERE s.session_id IS NOT NULL
-    GROUP BY s.session_id
-)
-SELECT
-    (SELECT COUNT_BIG(*) FROM S)                                  AS Searches,
-    (SELECT COUNT(DISTINCT s.search_term_id) FROM S AS s)         AS Terms,
-    (SELECT COUNT(DISTINCT se.user_id)
-       FROM S AS s INNER JOIN dbo.sessions AS se ON se.id = s.session_id) AS Searchers,
-    (SELECT COUNT_BIG(*) FROM PerVisit)                           AS SessionsWithSearch,
-    (SELECT CAST(ISNULL(SUM(CASE WHEN p.Searches >= @strugglingSearches THEN 1 ELSE 0 END), 0) AS bigint)
-       FROM PerVisit AS p)                                        AS StrugglingVisits,
-    (SELECT COUNT_BIG(*) FROM DeadEnds)                           AS DeadEndSearches
-OPTION (RECOMPILE);";
+SET NOCOUNT ON;
+WITH " + SearchHitCtes + @"
+SELECT visit_key, last_hit INTO #search_hit_visits FROM HitVisits OPTION (RECOMPILE);
+DECLARE @logical_visits bigint = ROWCOUNT_BIG();
 
-        /// <summary>Search terms with their searcher counts and how often they led nowhere.</summary>
-        public const string SearchTerms = @"
-WITH S AS (
-    SELECT se.id, se.session_id, se.search_term_id, se.date_time
-    FROM dbo.searches AS se
-    WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
+WITH " + SearchWindowCtes + @",
+PerVisit AS (
+    SELECT s.visit_key, s.user_id, COUNT_BIG(*) AS searches, MAX(h.last_hit) AS last_hit,
+           " + DeadEndCount + @" AS dead_ends
+    FROM S AS s LEFT JOIN #search_hit_visits AS h ON h.visit_key = s.visit_key
+    GROUP BY s.visit_key, s.user_id
 ),
+PerSearcher AS (
+    SELECT user_id, SUM(searches) AS searches, COUNT_BIG(visit_key) AS searched_visits,
+           COUNT_BIG(last_hit) AS hit_visits_with_search,
+           COUNT_BIG(CASE WHEN visit_key IS NOT NULL AND searches >= @strugglingSearches THEN 1 END) AS struggling_visits,
+           SUM(dead_ends) AS dead_ends
+    FROM PerVisit
+    GROUP BY user_id
+)
+SELECT ISNULL(SUM(searches),0) AS Searches, (SELECT COUNT(DISTINCT search_term_id) FROM SearchWindow) AS Terms,
+       COUNT(user_id) AS Searchers, ISNULL(SUM(searched_visits),0) AS SessionsWithSearch,
+       ISNULL(SUM(hit_visits_with_search),0) AS HitVisitsWithSearch, @logical_visits AS Visits,
+       ISNULL(SUM(struggling_visits),0) AS StrugglingVisits,
+       ISNULL(SUM(dead_ends),0) AS DeadEndSearches
+FROM PerSearcher
+OPTION (RECOMPILE);
+DROP TABLE #search_hit_visits;";
+
+        private const string SearchTermGroups = @"
+WITH " + SearchWindowCtes + @",
+" + SearchHitCtes + @",
 Scored AS (
-    SELECT s.search_term_id,
-           s.session_id,
-           CASE WHEN NOT EXISTS (
-                SELECT 1 FROM dbo.hits AS h
-                WHERE h.session_id = s.session_id
-              AND h.hit_timestamp > DATEADD(SECOND, @searchGrace, s.date_time))
-                THEN 1 ELSE 0 END AS DeadEnd
-    FROM S AS s
+    SELECT s.*, h.last_hit FROM S AS s LEFT JOIN HitVisits AS h ON h.visit_key = s.visit_key
 ),
 Grouped AS (
-    SELECT sc.search_term_id,
-           COUNT_BIG(*)                                          AS Searches,
-           CAST(SUM(sc.DeadEnd) AS bigint)                       AS DeadEnds
+    SELECT sc.search_term_id, COUNT_BIG(*) AS Searches, COUNT(DISTINCT sc.user_id) AS Searchers,
+           " + DeadEndCount + @" AS DeadEnds
     FROM Scored AS sc
     GROUP BY sc.search_term_id
-),
-Searchers AS (
-    -- Reads S, not Scored: counting distinct users does not need the dead-end check, and
-    -- selecting from Scored makes the optimiser evaluate that correlated NOT EXISTS against
-    -- dbo.hits a second time for every search in the window.
-    SELECT s.search_term_id, COUNT(DISTINCT se.user_id) AS Searchers
-    FROM S AS s
-    INNER JOIN dbo.sessions AS se ON se.id = s.session_id
-    GROUP BY s.search_term_id
-)
+)";
+
+        /// <summary>Search terms with their searcher counts and how often they led nowhere.</summary>
+        public const string SearchTerms = SearchTermGroups + @"
 SELECT TOP (@top)
-       CAST(t.search_term AS nvarchar(250)) AS Term,
-       g.Searches,
-       ISNULL(sr.Searchers, 0)              AS Searchers,
-       g.DeadEnds
+       CAST(t.search_term AS nvarchar(250)) AS Term, g.Searches, g.Searchers, g.DeadEnds
 FROM Grouped AS g
 INNER JOIN dbo.search_terms AS t ON t.id = g.search_term_id
-LEFT JOIN Searchers AS sr ON sr.search_term_id = g.search_term_id
 ORDER BY g.Searches DESC, g.search_term_id ASC
 OPTION (RECOMPILE);";
 
         /// <summary>
         /// Terms most often followed by nothing, among terms searched often enough to be credible.
         /// </summary>
-        public const string DeadEndTerms = @"
-WITH S AS (
-    SELECT se.id, se.session_id, se.search_term_id, se.date_time
-    FROM dbo.searches AS se
-    WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
-),
-Scored AS (
-    SELECT s.search_term_id,
-           s.session_id,
-           CASE WHEN NOT EXISTS (
-                SELECT 1 FROM dbo.hits AS h
-                WHERE h.session_id = s.session_id
-              AND h.hit_timestamp > DATEADD(SECOND, @searchGrace, s.date_time))
-                THEN 1 ELSE 0 END AS DeadEnd
-    FROM S AS s
-),
-Grouped AS (
-    SELECT sc.search_term_id,
-           COUNT_BIG(*)                    AS Searches,
-           CAST(SUM(sc.DeadEnd) AS bigint) AS DeadEnds
-    FROM Scored AS sc
-    GROUP BY sc.search_term_id
-)
+        public const string DeadEndTerms = SearchTermGroups + @"
 SELECT TOP (@top)
        CAST(t.search_term AS nvarchar(250)) AS Term,
        g.Searches,
@@ -1462,11 +1464,11 @@ OPTION (RECOMPILE);";
 
         /// <summary>Searches by day of week and hour of day, in UTC.</summary>
         public const string SearchesByDayHour = @"
+WITH " + SearchWindowCtes + @"
 SELECT " + "(DATEDIFF(DAY, 0, se.date_time) % 7)" + @" AS [Day],
        DATEPART(HOUR, se.date_time)                    AS [Hour],
        COUNT_BIG(*)                                    AS Count
-FROM dbo.searches AS se
-WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
+FROM S AS se
 GROUP BY " + "(DATEDIFF(DAY, 0, se.date_time) % 7)" + @", DATEPART(HOUR, se.date_time)
 ORDER BY [Day], [Hour]
 OPTION (RECOMPILE);";
@@ -1476,24 +1478,39 @@ OPTION (RECOMPILE);";
         /// </summary>
         /// <remarks>
         /// The import does not record where a search was launched from, so this is reconstructed. The
-        /// seek is on <c>IX_FK_hits_sessions</c> once per search, which is affordable because searches
-        /// are a small fraction of hits - but it IS per-row, so it has its own section and timeout.
+        /// latest in-window page across equivalent session rows supplies the context. At a tied
+        /// timestamp the highest hit id wins; a hit without a web does not inherit the previous site.
         /// </remarks>
         public const string SearchesBySite = @"
-WITH S AS (
-    SELECT se.id, se.session_id, se.date_time
-    FROM dbo.searches AS se
-    WHERE se.date_time >= @from AND se.date_time < @to" + SearchScope + @"
+WITH " + SearchWindowCtes + @",
+Wanted AS (
+    SELECT visit_key, user_id, ai_session_id, physical_fallback, MAX(date_time) AS last_search FROM S
+    WHERE visit_key IS NOT NULL
+    GROUP BY visit_key, user_id, ai_session_id, physical_fallback
+),
+PageSessions AS (
+    SELECT w.visit_key, v.id AS session_id, w.last_search FROM Wanted AS w
+    INNER JOIN dbo.sessions AS v ON v.user_id = w.user_id AND v.ai_session_id = w.ai_session_id
+        AND CONVERT(varbinary(50), v.ai_session_id) = CONVERT(varbinary(50), w.ai_session_id)
+    WHERE w.physical_fallback IS NULL
+    UNION ALL
+    SELECT visit_key, physical_fallback, last_search FROM Wanted WHERE physical_fallback IS NOT NULL
+),
+Identified AS (
+    SELECT id, date_time AS event_time, 1 AS is_search, CAST(NULL AS int) AS web_id, visit_key FROM S WHERE visit_key IS NOT NULL
+    UNION ALL
+    SELECT h.id, h.hit_timestamp, 0, h.web_id, m.visit_key
+    FROM dbo.hits AS h INNER JOIN PageSessions AS m ON m.session_id = h.session_id AND h.hit_timestamp <= m.last_search
+    WHERE h.hit_timestamp >= @from AND h.hit_timestamp < @to" + HitScope + @"
 ),
 Context AS (
-    SELECT s.id, ctx.web_id
-    FROM S AS s
-    OUTER APPLY (
-        SELECT TOP (1) h.web_id
-        FROM dbo.hits AS h
-        WHERE h.session_id = s.session_id AND h.hit_timestamp <= s.date_time
-        ORDER BY h.hit_timestamp DESC, h.id DESC
-    ) AS ctx
+    SELECT *, COUNT_BIG(CASE WHEN is_search=0 THEN 1 END) OVER (PARTITION BY visit_key
+        ORDER BY event_time, is_search, id ROWS UNBOUNDED PRECEDING) AS page_number
+    FROM Identified
+),
+Pages AS (
+    SELECT MAX(web_id) AS web_id, COUNT_BIG(CASE WHEN is_search=1 THEN 1 END) AS searches
+    FROM Context GROUP BY visit_key, page_number
 )
 SELECT TOP (@top)
        CAST(CASE
@@ -1503,10 +1520,10 @@ SELECT TOP (@top)
        END AS nvarchar(300)) AS Name,
        Cnt AS Count
 FROM (
-    SELECT c.web_id, COUNT_BIG(*) AS Cnt
-    FROM Context AS c
-    WHERE c.web_id IS NOT NULL
-    GROUP BY c.web_id
+    SELECT web_id, SUM(searches) AS Cnt
+    FROM Pages
+    WHERE web_id IS NOT NULL AND searches > 0
+    GROUP BY web_id
 ) AS g
 INNER JOIN dbo.webs AS w ON w.id = g.web_id
 ORDER BY Cnt DESC, g.web_id ASC

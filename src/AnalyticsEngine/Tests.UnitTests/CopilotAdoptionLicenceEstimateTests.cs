@@ -74,7 +74,7 @@ namespace Tests.UnitTests
 
         private static CopilotAdoptionAnalysis AnalysisWith(params LicenceOpportunityRow[] opportunities)
         {
-            var analysis = new CopilotAdoptionAnalysis { Opportunities = opportunities.ToList() };
+            var analysis = new CopilotAdoptionAnalysis { Opportunities = opportunities.ToList(), OpportunitiesCapped = false };
             analysis.Summary.DataSources.M365UsageReportsAvailable = true;
             return analysis;
         }

@@ -2,6 +2,7 @@ using Common.Entities.State;
 using Newtonsoft.Json;
 using System;
 using System.Globalization;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities.CopilotAuditBackfill
@@ -10,6 +11,7 @@ namespace Common.Entities.CopilotAuditBackfill
     {
         private const string LatestKey = "LatestJob";
         private const string SubmissionLedgerKey = "SubmissionLedger";
+        private static readonly TimeSpan JobRetention = TimeSpan.FromDays(180);
         private static readonly DateTime IdEpoch = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         private readonly IKeyValueStore _values;
         private readonly Func<DateTime> _utcNow;
@@ -32,6 +34,7 @@ namespace Common.Entities.CopilotAuditBackfill
             var job = NewJob(NextId(latestId, now), now, startUtc, endUtc, requestedBy, previous);
             await SaveAsync(job).ConfigureAwait(false);
             await WriteAsync(LatestKey, job.Id.ToString(CultureInfo.InvariantCulture), null).ConfigureAwait(false);
+            await RetireCancelMarkerIfSupersededAsync(latestId, job.Id).ConfigureAwait(false);
             return job;
         }
 
@@ -88,13 +91,14 @@ namespace Common.Entities.CopilotAuditBackfill
 
             // Rewritten with its time-to-live before it becomes the latest job, so a row left behind by a lost race
             // below still expires. Until the pointer names it, nothing but this call writes the row; once it does, the
-            // importer, a cancel and the job's own progress do. So the version it holds now - before it is published -
-            // is the proof, below, of whether it ever was.
+            // importer owns the row. So the version it holds before publication is the proof, below, of whether
+            // this start ever published it.
             await SaveAsync(job).ConfigureAwait(false);
             var reserved = await StoreAsync(key, "read", () => conditional.GetVersionedAsync(key)).ConfigureAwait(false);
             var id = job.Id.ToString(CultureInfo.InvariantCulture);
             if (await StoreAsync(LatestKey, "save", () => conditional.TrySetStringAsync(LatestKey, id, latest.VersionToken)).ConfigureAwait(false))
             {
+                await RetireCancelMarkerIfSupersededAsync(latestId, job.Id).ConfigureAwait(false);
                 return job;
             }
 
@@ -105,6 +109,7 @@ namespace Common.Entities.CopilotAuditBackfill
             // pointer cannot be re-read, the outcome is unknown: the row is left (it expires with the job
             // time-to-live if nothing names it) and the caller gets "state unavailable", not "a job is active".
             var pointer = await StoreAsync(LatestKey, "read", () => conditional.GetVersionedAsync(LatestKey)).ConfigureAwait(false);
+            await RetireCancelMarkerIfSupersededAsync(latestId, ParseId(pointer.Value)).ConfigureAwait(false);
             if (string.Equals(pointer.Value, id, StringComparison.Ordinal))
             {
                 return job;
@@ -172,9 +177,11 @@ namespace Common.Entities.CopilotAuditBackfill
             return job;
         }
 
-        public async Task<CopilotAuditBackfillJob> GetAsync(int id)
+        public Task<CopilotAuditBackfillJob> GetAsync(int id) => GetAsync(id, CancellationToken.None);
+
+        private async Task<CopilotAuditBackfillJob> GetAsync(int id, CancellationToken cancellationToken)
         {
-            var json = await ReadAsync(JobKey(id)).ConfigureAwait(false);
+            var json = await ReadAsync(JobKey(id), cancellationToken).ConfigureAwait(false);
             if (json == null) return null;
             var job = JsonConvert.DeserializeObject<CopilotAuditBackfillJob>(json);
             if (job == null) return null;
@@ -189,33 +196,65 @@ namespace Common.Entities.CopilotAuditBackfill
             job.Gaps = job.Gaps ?? new System.Collections.Generic.List<CopilotAuditBackfillGap>();
             job.SubmissionTimestampsUtc = job.SubmissionTimestampsUtc ?? new System.Collections.Generic.List<DateTime>();
             job.MappingFailureCounts = job.MappingFailureCounts ?? new System.Collections.Generic.Dictionary<string, long>(StringComparer.Ordinal);
-            job.CancelRequested = await IsCancelRequestedAsync(id).ConfigureAwait(false);
+            job.CancelRequested = job.CancelRequested || job.State == CopilotAuditBackfillStates.Cancelled
+                || await IsCancelRequestedAsync(id, cancellationToken).ConfigureAwait(false);
             return job;
         }
 
-        public async Task<CopilotAuditBackfillJob> GetLatestAsync()
+        public Task<CopilotAuditBackfillJob> GetLatestAsync() => GetLatestAsync(CancellationToken.None);
+
+        public async Task<CopilotAuditBackfillJob> GetLatestAsync(CancellationToken cancellationToken)
         {
-            var id = await GetLatestIdAsync().ConfigureAwait(false);
-            return id > 0 ? await GetAsync(id).ConfigureAwait(false) : null;
+            var id = await GetLatestIdAsync(cancellationToken).ConfigureAwait(false);
+            return id > 0 ? await GetAsync(id, cancellationToken).ConfigureAwait(false) : null;
         }
 
-        public Task SaveAsync(CopilotAuditBackfillJob job)
+        public Task SaveAsync(CopilotAuditBackfillJob job) => SaveAsync(job, CancellationToken.None);
+
+        public Task SaveAsync(CopilotAuditBackfillJob job, CancellationToken cancellationToken)
         {
             if (job == null) throw new ArgumentNullException(nameof(job));
             job.UpdatedUtc = _utcNow();
-            return WriteAsync(JobKey(job.Id), JsonConvert.SerializeObject(job), TimeSpan.FromDays(180));
+            return WriteAsync(JobKey(job.Id), JsonConvert.SerializeObject(job), JobRetention, cancellationToken);
         }
 
         public async Task<bool> RequestCancelAsync(int id)
         {
+            if (id <= 0 || await GetLatestIdAsync().ConfigureAwait(false) != id) return false;
             var job = await GetAsync(id).ConfigureAwait(false);
             if (job == null || !job.IsActive) return false;
-            // The importer owns the job row and may have advanced it since this read. GetAsync reads the marker separately.
-            await WriteAsync(CancelKey(id), "1", TimeSpan.FromDays(30)).ConfigureAwait(false);
+            // An in-flight checkpoint can renew the job's TTL after this write. No independent TTL on the
+            // request is safe; the importer owns the job row and acknowledges cancellation there.
+            await WriteAsync(CancelKey(id), "1", null).ConfigureAwait(false);
+            // A slow request can land after the next start has already retired this id.
+            await RetireCancelMarkerIfSupersededAsync(id).ConfigureAwait(false);
             return true;
         }
 
-        public async Task<bool> IsCancelRequestedAsync(int id) => await ReadAsync(CancelKey(id)).ConfigureAwait(false) != null;
+        private async Task RetireCancelMarkerIfSupersededAsync(int id, int? publishedId = null)
+        {
+            if (id <= 0) return;
+            try
+            {
+                if ((publishedId ?? await GetLatestIdAsync().ConfigureAwait(false)) <= id) return;
+                // Recovery no longer selects this id. Keep its request visible to a worker that already
+                // holds the old job, then let it expire like a job checkpoint.
+                var key = CancelKey(id);
+                if (await ReadAsync(key).ConfigureAwait(false) != null)
+                {
+                    await WriteAsync(key, "1", JobRetention).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex) when (ex is CopilotAuditBackfillStateUnavailableException || ex is OperationCanceledException)
+            {
+                // Cleanup must not turn a successful start/cancel into a failure. Each marker names only its job.
+            }
+        }
+
+        public Task<bool> IsCancelRequestedAsync(int id) => IsCancelRequestedAsync(id, CancellationToken.None);
+
+        public async Task<bool> IsCancelRequestedAsync(int id, CancellationToken cancellationToken)
+            => await ReadAsync(CancelKey(id), cancellationToken).ConfigureAwait(false) != null;
 
         public async Task<CopilotAuditBackfillSubmissionLedger> GetSubmissionLedgerAsync()
         {
@@ -234,7 +273,8 @@ namespace Common.Entities.CopilotAuditBackfill
             return WriteAsync(SubmissionLedgerKey, JsonConvert.SerializeObject(ledger), TimeSpan.FromDays(2));
         }
 
-        private async Task<int> GetLatestIdAsync() => ParseId(await ReadAsync(LatestKey).ConfigureAwait(false));
+        private async Task<int> GetLatestIdAsync(CancellationToken cancellationToken = default)
+            => ParseId(await ReadAsync(LatestKey, cancellationToken).ConfigureAwait(false));
 
         private static int ParseId(string value)
             => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : 0;
@@ -242,15 +282,15 @@ namespace Common.Entities.CopilotAuditBackfill
         private static string JobKey(int id) => "Job:" + id.ToString(CultureInfo.InvariantCulture);
         private static string CancelKey(int id) => JobKey(id) + ":Cancel";
 
-        private async Task<string> ReadAsync(string key)
+        private async Task<string> ReadAsync(string key, CancellationToken cancellationToken = default)
         {
-            try { return await _values.GetStringAsync(key).ConfigureAwait(false); }
+            try { return await _values.GetStringAsync(key, cancellationToken).ConfigureAwait(false); }
             catch (Exception ex) when (!(ex is OperationCanceledException)) { throw new CopilotAuditBackfillStateUnavailableException($"Couldn't read '{key}' from {_values.Description}: {ex.Message}", ex); }
         }
 
-        private async Task WriteAsync(string key, string value, TimeSpan? ttl)
+        private async Task WriteAsync(string key, string value, TimeSpan? ttl, CancellationToken cancellationToken = default)
         {
-            try { await _values.SetStringAsync(key, value, ttl).ConfigureAwait(false); }
+            try { await _values.SetStringAsync(key, value, ttl, cancellationToken).ConfigureAwait(false); }
             catch (Exception ex) when (!(ex is OperationCanceledException)) { throw new CopilotAuditBackfillStateUnavailableException($"Couldn't save '{key}' to {_values.Description}: {ex.Message}", ex); }
         }
 

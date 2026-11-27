@@ -451,6 +451,41 @@ namespace Tests.UnitTests
             }
         }
 
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task ReusedUpn_StalledPreviousObject404IsNotAbsence_AndCallerCancellationStillPropagates(bool stop)
+        {
+            var current = new GraphUser { Id = Guid.Empty.ToString(), UserPrincipalName = "person@contoso.example", AccountEnabled = true };
+            const string previous = "00000000-0000-0000-0000-000000000001";
+            var currentJson = "{\"id\":\"" + current.Id + "\",\"userPrincipalName\":\"" + current.UserPrincipalName + "\",\"accountEnabled\":true}";
+            using (var body = new GatedJsonContent())
+            using (var caller = new CancellationTokenSource())
+            {
+                var terminal = new SequenceHttpHandler(
+                    ct => Task.FromResult(TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, currentJson)),
+                    ct => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound) { Content = body }),
+                    ct => Task.FromResult(TeamsCrawlTests.StubGraphHandler.Response(HttpStatusCode.OK, "{\"value\":[" + currentJson + "]}")));
+                using (var graph = GraphServiceClientFactory.CreateForGraphImport(new SyntheticTokenCredential(), TestBudget(stop ? 30000 : 250, 1, 60000), null, terminal))
+                {
+                    var loader = new GraphUserLoader(null, null, AnalyticsLogger.ConsoleOnlyTracer(), graph, caller.Token);
+                    var request = loader.VerifyReusedUpnAsync(current, previous);
+                    await WithinWatchdog(body.Started.Task);
+                    if (stop)
+                    {
+                        caller.Cancel();
+                        await Assert.ThrowsAsync<OperationCanceledException>(() => WithinWatchdog(request));
+                    }
+                    else
+                    {
+                        Assert.IsFalse(await WithinWatchdog(request));
+                    }
+                    Assert.AreEqual(2, terminal.Attempts, "An unreadable previous-object response does not permit the directory release check.");
+                    Assert.IsTrue(body.Disposed);
+                }
+            }
+        }
+
         [TestMethod]
         public async Task GraphUserLoader_CancelledSubscribedSkus_DoesNotUsePermissionFallback()
         {
@@ -806,13 +841,13 @@ namespace Tests.UnitTests
             return GraphServiceClientFactory.CreateHttpClient(authProvider, TestBudget(perRequestMs, timeoutRetryCount, totalBudgetMs, sdkRetryCount), AnalyticsLogger.ConsoleOnlyTracer(), terminal);
         }
 
-        private static async Task<T> WithinWatchdog<T>(Task<T> task)
+        internal static async Task<T> WithinWatchdog<T>(Task<T> task)
         {
             Assert.AreSame(task, await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(5))), "The SDK remained blocked reading the body.");
             return await task;
         }
 
-        private sealed class GatedJsonContent : HttpContent
+        internal sealed class GatedJsonContent : HttpContent
         {
             private readonly bool _stopsOnDispose;
             private readonly TaskCompletionSource<bool> _release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -848,7 +883,7 @@ namespace Tests.UnitTests
             }
         }
 
-        private sealed class SyntheticTokenCredential : Azure.Core.TokenCredential
+        internal sealed class SyntheticTokenCredential : Azure.Core.TokenCredential
         {
             public int Requests { get; private set; }
 

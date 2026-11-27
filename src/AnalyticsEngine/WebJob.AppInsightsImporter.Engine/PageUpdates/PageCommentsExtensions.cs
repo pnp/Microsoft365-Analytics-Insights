@@ -3,6 +3,7 @@ using DataUtils.Sql;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.Properties;
 
@@ -10,9 +11,12 @@ namespace WebJob.AppInsightsImporter.Engine.PageUpdates
 {
     public static class PageCommentsExtensions
     {
-        public static async Task Save(this List<PageCommentTemp> comments, AnalyticsEntitiesContext db, ILogger logger)
+        public static Task Save(this List<PageCommentTemp> comments, AnalyticsEntitiesContext db, ILogger logger)
+            => comments.Save(db, logger, CancellationToken.None);
+
+        internal static async Task Save(this List<PageCommentTemp> comments, AnalyticsEntitiesContext db, ILogger logger, CancellationToken cancellationToken)
         {
-            var commentsToInsert = new EFInsertBatch<PageCommentTemp>(db, logger);
+            var commentsToInsert = new EFInsertBatch<PageCommentTemp>(db, logger, cancellationToken);
             commentsToInsert.Rows.AddRange(comments);
 
             var mergeSql = Resources.Migrate_New_Comments.Replace("${STAGING_TABLE_COMMENTS}", PageCommentTemp.STAGING_TABLENAME);

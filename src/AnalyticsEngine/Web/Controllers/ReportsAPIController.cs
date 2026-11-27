@@ -174,7 +174,8 @@ namespace Web.AnalyticsWeb.Controllers
         // GET: api/Reports/usage?months=3
         [HttpGet]
         [Route("usage")]
-        public Task<IHttpActionResult> Usage(int months = DefaultMonths) => AreaAsync("usage", months);
+        public Task<IHttpActionResult> Usage(int months = DefaultMonths, CancellationToken cancellationToken = default) =>
+            AreaAsync("usage", months, cancellationToken: cancellationToken);
 
         // GET: api/Reports/spo-audit?months=3
         [HttpGet]
@@ -208,7 +209,8 @@ namespace Web.AnalyticsWeb.Controllers
             string area,
             int months,
             int topAgents = 8,
-            string agentName = null)
+            string agentName = null,
+            CancellationToken cancellationToken = default)
         {
             if (months < 1) months = DefaultMonths;
             if (months > MaxMonths) months = MaxMonths;
@@ -229,7 +231,7 @@ namespace Web.AnalyticsWeb.Controllers
 
             // The administrator's global filter, resolved for this reader and enforced here whatever the page
             // sends. Part of the cache key, so two readers it treats differently never share an area.
-            var scope = await _scopes.ResolveAsync(Request, User, null, CancellationToken.None);
+            var scope = await _scopes.ResolveAsync(Request, User, null, cancellationToken);
             var userScope = scope.IsRestricted ? scope.Sql : ReportUserScope.Everyone;
 
             // The scope is always in the key, and comes before the only free text in it - the agent name - so
@@ -282,7 +284,7 @@ namespace Web.AnalyticsWeb.Controllers
                     chartTasks = CopilotAgentCharts(firstMonday, weekSpine, topAgents, normalizedAgentName);
                     break;
                 case "usage":
-                    chartTasks = UsageCharts(firstMonday, weekSpine);
+                    chartTasks = UsageCharts(firstMonday, weekSpine, cancellationToken: cancellationToken);
                     break;
                 case "spo-audit":
                     chartTasks = SpoAuditCharts(firstMonday, weekSpine);
@@ -655,17 +657,19 @@ namespace Web.AnalyticsWeb.Controllers
         // a week charted from its Sunday - so every imported day of the week is read.
         //
         // A day with no rows is a hole unless the importer's durable provenance ledger records a
-        // successfully empty report. Older days without a ledger outcome keep the historical
-        // row-presence rule; known partial, incomplete or scoped outcomes are not treated as complete.
-        private static List<Task<ReportChart>> UsageCharts(DateTime from, List<DateTime> weekSpine)
+        // successfully empty report AND SQL agrees. A confirmed key miss keeps the historical
+        // row-presence rule; contradictory facts, scoped/partial saves and unavailable state cannot verify a week.
+        internal static List<Task<ReportChart>> UsageCharts(DateTime from, List<DateTime> weekSpine,
+            UsageReportCoverageStore coverage = null, Func<string, Task<List<UsageWeekRow>>> queryWeeks = null,
+            CancellationToken cancellationToken = default)
         {
             var workloads = new[]
             {
-                new { Table = "dbo.teams_user_activity_log", Name = "Teams", CoverageSource = (string)"teams" },
-                new { Table = "dbo.outlook_user_activity_log", Name = "Outlook", CoverageSource = (string)"outlook" },
-                new { Table = "dbo.onedrive_user_activity_log", Name = "OneDrive", CoverageSource = (string)"onedrive" },
-                new { Table = "dbo.sharepoint_user_activity_log", Name = "SharePoint", CoverageSource = (string)"sharepoint" },
-                new { Table = "dbo.yammer_user_activity_log", Name = "Viva Engage", CoverageSource = (string)null },
+                new { Table = "dbo.teams_user_activity_log", Name = "Teams", CoverageSource = "teams" },
+                new { Table = "dbo.outlook_user_activity_log", Name = "Outlook", CoverageSource = "outlook" },
+                new { Table = "dbo.onedrive_user_activity_log", Name = "OneDrive", CoverageSource = "onedrive" },
+                new { Table = "dbo.sharepoint_user_activity_log", Name = "SharePoint", CoverageSource = "sharepoint" },
+                new { Table = "dbo.yammer_user_activity_log", Name = "Viva Engage", CoverageSource = "yammer" },
             };
 
             var series = workloads.Select(w => new SeriesQuery
@@ -684,7 +688,7 @@ namespace Web.AnalyticsWeb.Controllers
             {
                 RunMultiTimeSeriesAsync("usage-active-users", "Weekly active users by workload",
                     "Distinct users active in each completed week. Weeks with no usage report yet are left blank rather than shown as zero.",
-                    "Active users", series, from, settledWeeks, settled),
+                    "Active users", series, from, settledWeeks, settled, coverage, queryWeeks, cancellationToken),
             };
         }
 
@@ -729,7 +733,7 @@ namespace Web.AnalyticsWeb.Controllers
                 $"        FROM {table} AS available\r\n" +
                 "        WHERE available.[date] >= DATEADD(DAY, week_days.n, weeks.WeekStart)\r\n" +
                 "          AND available.[date] < DATEADD(DAY, week_days.n + 1, weeks.WeekStart)\r\n" +
-                "          AND available.[date] <= @settled\r\n" +
+                "          AND available.[date] < DATEADD(DAY, 1, @settled)\r\n" +
                 "    ) AS present\r\n" +
                 "),\r\n" +
                 "-- Everyone active on any day of the week, once per week.\r\n" +
@@ -738,7 +742,7 @@ namespace Web.AnalyticsWeb.Controllers
                 $"    FROM {table} AS activity\r\n" +
                 "    WHERE activity.[date] >= @from\r\n" +
                 "      AND activity.[date] < DATEADD(DAY, 7, @through)\r\n" +
-                "      AND activity.[date] <= @settled\r\n" +
+                "      AND activity.[date] < DATEADD(DAY, 1, @settled)\r\n" +
                 $"      AND activity.last_activity_date >= {rowWeek}\r\n" +
                 $"      AND activity.last_activity_date < DATEADD(DAY, 7, {rowWeek})" + UsageActivityScope + "\r\n" +
                 $"    GROUP BY {rowWeek}, activity.user_id\r\n" +
@@ -903,7 +907,8 @@ namespace Web.AnalyticsWeb.Controllers
 
         /// <summary>Runs one weekly query per series and combines them into a single multi-line chart.</summary>
         private static async Task<ReportChart> RunMultiTimeSeriesAsync(string key, string title, string description,
-            string valueLabel, List<SeriesQuery> series, DateTime from, List<DateTime> weekSpine, DateTime settled)
+            string valueLabel, List<SeriesQuery> series, DateTime from, List<DateTime> weekSpine, DateTime settled,
+            UsageReportCoverageStore coverage, Func<string, Task<List<UsageWeekRow>>> queryWeeks, CancellationToken cancellationToken)
         {
             var chart = new ReportChart
             {
@@ -921,6 +926,7 @@ namespace Web.AnalyticsWeb.Controllers
             }
 
             var lastWeek = weekSpine[weekSpine.Count - 1];
+            queryWeeks = queryWeeks ?? (sql => QueryUsageWeeksAsync(sql, from, lastWeek, settled, cancellationToken: cancellationToken));
 
             // Show one representative query; each series uses the same shape against its own table.
             chart.Sql = "-- One query per workload (below is representative); the chart runs one per series.\r\n" +
@@ -930,7 +936,26 @@ namespace Web.AnalyticsWeb.Controllers
             var incompleteWeeksBySeries = new Dictionary<string, List<DateTime>>(StringComparer.Ordinal);
             var warnings = new List<string>();
             var warningFacts = new List<ReportSeriesWarning>();
-            var outcomesBySource = await ReadDailyUsageOutcomesAsync(from, lastWeek.AddDays(6));
+            var fetched = new List<(SeriesQuery Query, List<UsageWeekRow> Rows)>();
+            var coverageRead = await UsageReportCoverageStore.BeginPublicationAsync(UsageReportCoverageStore.WeeklySources,
+                from, lastWeek.AddDays(6), () => coverage ?? UsageReportCoverageStore.Open(new AppConfig(), readTimeout: TimeSpan.FromSeconds(3)),
+                cancellationToken);
+            async Task ProjectFetchedAsync(int sourcesStillToQuery = 0)
+            {
+                if (fetched.Count == 0) return;
+                // Each successful source has one closing range read after its facts. A timeout may
+                // require an early projection to decide whether we have enough to draw; never reread it.
+                var outcomesBySource = await coverageRead.ReadStableOutcomesAsync(
+                    fetched.Select(item => item.Query.CoverageSource).ToArray(), sourcesStillToQuery, cancellationToken);
+                foreach (var item in fetched)
+                {
+                    var outcomes = outcomesBySource[item.Query.CoverageSource];
+                    var aggregated = AggregateUsageWeekRows(item.Rows, outcomes);
+                    rowsBySeries.Add(new KeyValuePair<string, List<WeekValueRow>>(item.Query.Name, aggregated.WeeklyRows));
+                    incompleteWeeksBySeries[item.Query.Name] = aggregated.IncompleteWeeks;
+                }
+                fetched.Clear();
+            }
 
             // Sequentially per series keeps a bounded number of concurrent contexts (the area itself
             // already runs in parallel with other areas' charts); each is one index-only range seek
@@ -940,20 +965,12 @@ namespace Web.AnalyticsWeb.Controllers
                 var sq = series[i];
                 try
                 {
-                    var dailyRows = await QueryUsageWeeksAsync(sq.Body, from, lastWeek, settled);
-                    var outcomes = sq.CoverageSource != null
-                        && outcomesBySource.TryGetValue(sq.CoverageSource, out var sourceOutcomes)
-                            ? sourceOutcomes
-                            : null;
-                    var aggregated = AggregateUsageWeekRows(dailyRows, outcomes);
-                    rowsBySeries.Add(new KeyValuePair<string, List<WeekValueRow>>(
-                        sq.Name,
-                        aggregated.WeeklyRows));
-                    incompleteWeeksBySeries[sq.Name] = aggregated.IncompleteWeeks;
+                    fetched.Add((sq, await queryWeeks(sq.Body)));
                 }
                 catch (Exception ex)
                 {
                     // Every reader sees this: the reason and an error reference, never SqlClient's text.
+                    cancellationToken.ThrowIfCancellationRequested();
                     var failure = ReportQueryFailure.From(ex);
                     LogQueryFailure(failure, key + "/" + sq.Name);
                     warnings.Add($"{sq.Name}: {failure.EnglishText}");
@@ -972,7 +989,14 @@ namespace Web.AnalyticsWeb.Controllers
                     // in a fixed order and the first one is not special. Once at least one series has
                     // data we stop, so a struggling database costs one extra timeout, not one per
                     // remaining workload.
-                    if (ShouldStopAfterSeriesFailure(ex, rowsBySeries))
+                    if (IsQueryTimeout(ex))
+                    {
+                        // HasRows describes the tenant, not the reader's scope. Only a positive scoped
+                        // count can justify stopping without verification; reserve time for later sources otherwise.
+                        var hasScopedActivity = fetched.Any(item => item.Rows.Any(day => day.Value > 0));
+                        await ProjectFetchedAsync(hasScopedActivity ? 0 : series.Count - i - 1);
+                    }
+                    if (ShouldStopAfterSeriesFailure(ex, rowsBySeries, incompleteWeeksBySeries))
                     {
                         warnings.Add("Remaining workloads were not attempted after the database timeout");
                         warningFacts.AddRange(series
@@ -987,22 +1011,8 @@ namespace Web.AnalyticsWeb.Controllers
                 }
             }
 
+            await ProjectFetchedAsync();
             return CompleteMultiTimeSeries(chart, rowsBySeries, warnings, weekSpine, warningFacts, incompleteWeeksBySeries);
-        }
-
-        private static async Task<Dictionary<string, Dictionary<DateTime, string>>> ReadDailyUsageOutcomesAsync(
-            DateTime from, DateTime through)
-        {
-            try
-            {
-                return await UsageReportCoverageStore.Open(
-                    new AppConfig(), readTimeout: TimeSpan.FromSeconds(3))
-                    .ReadDailyOutcomesAsync(from, through).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                return new Dictionary<string, Dictionary<DateTime, string>>(StringComparer.Ordinal);
-            }
         }
 
         internal static UsageWeekAggregation AggregateUsageWeekRows(
@@ -1033,11 +1043,10 @@ namespace Web.AnalyticsWeb.Controllers
 
         private static bool IsUsageDayCovered(UsageWeekRow day, IDictionary<DateTime, string> outcomes)
         {
-            if (outcomes != null && outcomes.TryGetValue(day.CoverageDate.Date, out var outcome) && outcome != null)
-            {
-                return outcome == UsageReportCoverageStore.Complete || outcome == UsageReportCoverageStore.Empty;
-            }
-            return day.HasRows;
+            if (outcomes == null || !outcomes.TryGetValue(day.CoverageDate.Date, out var outcome)) return false;
+            if (outcome == null) return day.HasRows; // A confirmed miss at both ends of this read.
+            outcome = UsageReportCoverageStore.ReconcileWithStoredRows(outcome, day.HasRows);
+            return outcome == UsageReportCoverageStore.Complete || outcome == UsageReportCoverageStore.Empty;
         }
 
         /// <summary>
@@ -1051,17 +1060,19 @@ namespace Web.AnalyticsWeb.Controllers
         /// </summary>
         internal static bool ShouldStopAfterSeriesFailure(
             Exception ex,
-            List<KeyValuePair<string, List<WeekValueRow>>> rowsSoFar)
+            List<KeyValuePair<string, List<WeekValueRow>>> rowsSoFar,
+            IDictionary<string, List<DateTime>> incompleteWeeksBySeries = null)
         {
             return IsQueryTimeout(ex)
                 && rowsSoFar != null
-                && rowsSoFar.Any(s => s.Value != null && s.Value.Count > 0);
+                && rowsSoFar.Any(s => s.Value != null && s.Value.Any(row => row.Value > 0
+                    || incompleteWeeksBySeries == null || !incompleteWeeksBySeries.TryGetValue(s.Key, out var incomplete)
+                    || !incomplete.Contains(row.WeekStart)));
         }
 
         /// <param name="incompleteWeeksBySeries">
-        /// Per series, the weeks whose usage reports are missing at least one day. Those weeks are still drawn,
-        /// from the days that were imported, but flagged <see cref="ReportTimePoint.Incomplete"/> and reported as
-        /// an <c>incompleteWeeks</c> warning, so a missed import never reads as a fall in activity.
+        /// Per series, the weeks with some observed activity but incomplete or unverified daily reports.
+        /// Draw the retained lower bound with <see cref="ReportTimePoint.Incomplete"/> and an <c>incompleteWeeks</c> warning.
         /// </param>
         internal static ReportChart CompleteMultiTimeSeries(
             ReportChart chart,
@@ -1169,8 +1180,8 @@ namespace Web.AnalyticsWeb.Controllers
                 foreach (var point in flagged) point.Incomplete = true;
 
                 var latest = flagged.Max(point => point.WeekStart);
-                incompleteWeekWarnings.Add($"{series.Name}: {flagged.Count} of the charted weeks are missing at least one day of usage reports " +
-                             $"(most recently the week of {latest:yyyy-MM-dd}), so those weeks count only the days that were imported");
+                incompleteWeekWarnings.Add($"{series.Name}: {flagged.Count} of the charted weeks have incomplete or unverified usage reports " +
+                             $"(most recently the week of {latest:yyyy-MM-dd}). Counts for those weeks may be too low");
                 warningFacts.Add(new ReportSeriesWarning
                 {
                     Series = series.Name,
@@ -1397,13 +1408,13 @@ namespace Web.AnalyticsWeb.Controllers
         }
 
         /// <summary>Executes one workload's weekly active-user query (<see cref="UsageWeeklyActiveUsersQuery"/>).</summary>
-        private static async Task<List<UsageWeekRow>> QueryUsageWeeksAsync(
+        internal static async Task<List<UsageWeekRow>> QueryUsageWeeksAsync(
             string body,
             DateTime from,
             DateTime through,
-            DateTime settled)
+            DateTime settled, IAnalyticsDbContextFactory contextFactory = null, CancellationToken cancellationToken = default)
         {
-            using (var db = new AnalyticsEntitiesContext())
+            using (var db = (contextFactory ?? DefaultAnalyticsDbContextFactory.Instance).Create())
             {
                 db.Database.CommandTimeout = QueryTimeoutSecs;
                 return await db.Database
@@ -1413,7 +1424,7 @@ namespace Web.AnalyticsWeb.Controllers
                             DateParameter("@from", from),
                             DateParameter("@through", through),
                             DateParameter("@settled", settled)))
-                    .ToListAsync();
+                    .ToListAsync(cancellationToken);
             }
         }
 

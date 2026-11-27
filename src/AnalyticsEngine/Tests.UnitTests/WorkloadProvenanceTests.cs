@@ -1,3 +1,5 @@
+extern alias AnalyticsWeb;
+
 using Common.Entities.CopilotAdoption;
 using Common.Entities.State;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -8,6 +10,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using ReportsAPIController = AnalyticsWeb::Web.AnalyticsWeb.Controllers.ReportsAPIController;
 
 namespace Tests.UnitTests
 {
@@ -283,13 +286,56 @@ namespace Tests.UnitTests
             await store.CompleteDayAsync("sharepoint", Day, true, true, false, Day.AddDays(1), 3);
             await state.SetStringAsync("usage-report:onedrive", Day.AddDays(4).ToString("O"));
             await state.SetStringAsync("v1:onedrive:20260510", "unknownFutureOutcome");
+            await state.SetStringAsync("v1:outlook:20260511", "empty|unrecognised");
             var coverage = await store.ReadAsync(Day, Day.AddDays(1));
             Assert.AreEqual("partial", coverage.Single(c => c.Source == "teams").Status);
             Assert.AreEqual("scopeUnverified", coverage.Single(c => c.Source == "outlook").Reason);
+            Assert.AreEqual(0, coverage.Single(c => c.Source == "outlook").VerifiedDays, "An unknown suffix cannot certify an empty date.");
             Assert.AreEqual(1, coverage.Single(c => c.Source == "sharepoint").PartialDays);
             Assert.AreEqual("unverified", coverage.Single(c => c.Source == "onedrive").Status);
             Assert.IsFalse(CopilotAdoptionWorkloadEvidence.Complete(coverage));
             Assert.IsTrue((await store.ReadAsync(Day.AddDays(10), Day.AddDays(11))).All(c => !c.IsComplete));
+        }
+
+        [TestMethod]
+        public async Task UnavailableSqlPresenceCannotVerifyASourceOrHideIndependentEvidence()
+        {
+            var store = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            await store.CompleteDayAsync("teams", Day, true, true, false, Day.AddDays(4), 3);
+            await store.CompleteDayAsync("outlook", Day, true, true, true, Day.AddDays(4), 3);
+            var probed = new List<string>();
+            var result = await store.ReadAsync(Day, Day, default, source =>
+            {
+                probed.Add(source);
+                return source == "teams" ? Task.FromException<HashSet<DateTime>>(new TimeoutException())
+                    : Task.FromResult(new HashSet<DateTime>());
+            });
+            Assert.AreEqual("storedRowsUnavailable", result.Single(c => c.Source == "teams").Reason);
+            Assert.AreEqual("empty", result.Single(c => c.Source == "outlook").Status);
+            CollectionAssert.AreEquivalent(new[] { "teams", "outlook" }, probed);
+        }
+
+        [TestMethod]
+        public async Task RevocationDuringTheFinalSqlPresenceProbeStillInvalidatesTheEarlierFacts()
+        {
+            var store = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            await store.CompleteDayAsync("teams", Day, true, true, false, Day.AddDays(4), 3);
+            await store.CompleteDayAsync("outlook", Day, true, true, true, Day.AddDays(4), 3);
+            var read = await UsageReportCoverageStore.BeginPublicationAsync(UsageReportCoverageStore.Sources, Day, Day, () => store);
+            var probes = 0;
+            var result = await read.SummariseAsync(async source =>
+            {
+                var observed = source == "teams" ? new HashSet<DateTime> { Day } : new HashSet<DateTime>();
+                if (++probes == 2)
+                {
+                    await store.StartScopePurgeAsync("synthetic", () => Task.CompletedTask);
+                    await store.RevokeScopeDaysAsync("synthetic", "teams", new[] { Day }, default);
+                }
+                return observed;
+            }, default);
+            Assert.AreEqual(2, probes);
+            Assert.AreEqual(1, result.Single(c => c.Source == "teams").ScopeUnverifiedDays);
+            Assert.AreEqual("empty", result.Single(c => c.Source == "outlook").Status);
         }
 
         [TestMethod]
@@ -313,11 +359,31 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task MissingSqlRows_OnlyADurableEmptyOutcomeCanSkipARefetch()
+        {
+            var values = new InMemoryKeyValueStore();
+            var store = new UsageReportCoverageStore(values, true);
+            foreach (var outcome in new[] { null, UsageReportCoverageStore.Partial, UsageReportCoverageStore.Incomplete,
+                UsageReportCoverageStore.ScopeUnverified, UsageReportCoverageStore.Empty, UsageReportCoverageStore.Complete })
+            {
+                await values.SetStringAsync("v1:teams:20260510", outcome);
+                Assert.AreEqual(outcome != UsageReportCoverageStore.Empty,
+                    await store.NeedsReimportAsync("teams", Day, true, hasStoredRows: false));
+                Assert.AreEqual(outcome != UsageReportCoverageStore.Complete && outcome != UsageReportCoverageStore.Incomplete,
+                    await store.NeedsReimportAsync("teams", Day, true, hasStoredRows: true));
+            }
+            await values.SetStringAsync("v1:teams:20260510", UsageReportCoverageStore.Empty);
+            Assert.IsTrue(await new UsageReportCoverageStore(values, false)
+                .NeedsReimportAsync("teams", Day, true, hasStoredRows: false));
+        }
+
+        [TestMethod]
         public async Task MissingOrUnreachableDurableState_NeverUsesProcessSuccess_AndCancellationPropagates()
         {
             var state = new ProbeStore();
             var processOnly = new UsageReportCoverageStore(state, false);
             await processOnly.CompleteDayAsync("teams", Day, true, true, false, Day.AddDays(3), 3);
+            Assert.IsFalse(await processOnly.IsDayVerifiedAsync("teams", Day));
             Assert.IsTrue((await processOnly.ReadAsync(Day, Day)).All(c => c.Reason == "durableStateMissing"));
             Assert.AreEqual(0, state.Reads);
             state.Fail = true;
@@ -327,7 +393,7 @@ namespace Tests.UnitTests
             using (var cancellation = new CancellationTokenSource())
             {
                 cancellation.Cancel();
-                await Assert.ThrowsExceptionAsync<TaskCanceledException>(
+                await Assert.ThrowsExceptionAsync<OperationCanceledException>(
                     () => durable.ReadAsync(Day, Day, cancellation.Token));
             }
         }
@@ -335,24 +401,167 @@ namespace Tests.UnitTests
         [TestMethod]
         public async Task SlowDurableState_HasAnOverallDeadline_AndCannotCertifyCoverage()
         {
-            var state = new ProbeStore { DelayReads = true };
+            var state = new ProbeStore { BeforeRange = (_, token) => Task.Delay(Timeout.Infinite, token) };
             var store = new UsageReportCoverageStore(state, true, TimeSpan.FromMilliseconds(1));
             var coverage = await store.ReadAsync(Day, Day.AddDays(365));
             Assert.IsTrue(coverage.All(c => c.Status == "unverified" && c.Reason == "durableStateUnavailable"));
-            Assert.IsTrue(state.Reads < 4 * 366, "A timeout stops bounded workers rather than starting the remaining reads.");
+            Assert.AreEqual(4, state.Reads, "A timeout stops the four range reads without falling back to point reads.");
         }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        [Timeout(10000)]
+        public async Task UnavailablePublicationRangeCannotBecomeALegacyMissOrSuppressHealthySources(bool closingPass)
+        {
+            var state = new ProbeStore();
+            var store = new UsageReportCoverageStore(state, true, TimeSpan.FromMilliseconds(100));
+            await state.SetStringAsync("v1:teams:20260510", UsageReportCoverageStore.Complete);
+            await state.SetStringAsync("v1:outlook:20260510", UsageReportCoverageStore.Empty);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var closing = false;
+            state.BeforeRange = (key, _) =>
+            {
+                if (closing == closingPass && key.StartsWith("v1:teams:")) return release.Task; // Ignores cancellation.
+                if (closing == closingPass && key.StartsWith("v1:onedrive:")) throw new InvalidOperationException("Synthetic read failure.");
+                return Task.CompletedTask;
+            };
+            try
+            {
+                var window = await UsageReportCoverageStore.BeginPublicationAsync(UsageReportCoverageStore.WeeklySources,
+                    Day, Day, () => store);
+                closing = true;
+                var outcomes = await window.ReadStableOutcomesAsync(UsageReportCoverageStore.WeeklySources);
+                Assert.AreEqual(0, outcomes["teams"].Count, "Timed-out input is not a confirmed miss.");
+                Assert.AreEqual(0, outcomes["onedrive"].Count, "Failed input must not verify SQL rows.");
+                Assert.AreEqual(UsageReportCoverageStore.Empty, outcomes["outlook"][Day]);
+                Assert.IsNull(outcomes["yammer"][Day], "A successful empty range still confirms a legacy miss.");
+            }
+            finally { release.TrySetResult(true); }
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        [Timeout(10000)]
+        public async Task WeeklyTimeout_StalledEarlyClosingReadLeavesTimeToVerifyLaterWorkloads(bool tenantHasTeamsRows)
+        {
+            var week = Day.AddDays(1); // Monday
+            var state = new ProbeStore();
+            var budget = TimeSpan.FromSeconds(3);
+            var store = new UsageReportCoverageStore(state, true, budget);
+            for (var i = 0; i < 7; i++)
+                foreach (var source in UsageReportCoverageStore.WeeklySources)
+                    await state.SetStringAsync($"v1:{source}:{week.AddDays(i):yyyyMMdd}", source == "teams" && !tenantHasTeamsRows || source == "sharepoint"
+                        ? UsageReportCoverageStore.Empty : UsageReportCoverageStore.Complete);
+
+            var queried = new List<string>();
+            var closing = new List<string>();
+            var elapsed = new Stopwatch();
+            var stalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            state.BeforeRange = (first, _) =>
+            {
+                var source = first.Split(':')[1];
+                if (queried.Contains(source))
+                {
+                    closing.Add(source);
+                    if (source == "teams" || source == "yammer")
+                    {
+                        elapsed.Start();
+                        return stalled.Task; // Non-cooperative on both the early and final closing pass.
+                    }
+                }
+                return Task.CompletedTask;
+            };
+            try
+            {
+                var chart = await ReportsAPIController.UsageCharts(week, new List<DateTime> { week }, store, sql =>
+                {
+                    var source = WeeklySource(sql);
+                    queried.Add(source);
+                    if (source == "outlook") throw new TimeoutException();
+                    if (source == "teams" && tenantHasTeamsRows)
+                        return Task.FromResult(WeekRows(week, hasRows: true, value: 0));
+                    return Task.FromResult(WeekRows(week, source == "onedrive" || source == "yammer"));
+                }).Single();
+                elapsed.Stop();
+                Assert.IsNull(chart.Error);
+                var points = chart.Series.ToDictionary(s => s.Name, s => s.Points.Single());
+                if (tenantHasTeamsRows)
+                {
+                    Assert.AreEqual(0d, points["Teams"].Value);
+                    Assert.IsTrue(points["Teams"].Incomplete, "Nobody in scope was observed; this is not a verified zero.");
+                }
+                else Assert.IsFalse(points.ContainsKey("Teams"), "An opening empty certificate alone cannot draw a zero.");
+                Assert.AreEqual(5d, points["OneDrive"].Value);
+                Assert.IsFalse(points["OneDrive"].Incomplete);
+                Assert.AreEqual(0d, points["SharePoint"].Value);
+                Assert.IsFalse(points["SharePoint"].Incomplete, "The later source's confirmed empty week is a real zero.");
+                Assert.AreEqual(5d, points["Viva Engage"].Value);
+                Assert.IsTrue(points["Viva Engage"].Incomplete, "Rows with no closing certificate are only a lower bound.");
+                CollectionAssert.AreEqual(new[] { "teams", "outlook", "onedrive", "sharepoint", "yammer" }, queried);
+                CollectionAssert.AreEquivalent(new[] { "teams", "onedrive", "sharepoint", "yammer" }, closing);
+                Assert.AreEqual(9, state.Reads, "One opening range per workload and one closing range per successful SQL query.");
+                Assert.IsTrue(elapsed.Elapsed < budget + TimeSpan.FromMilliseconds(500),
+                    $"Early and final closing reads must share the storage budget; elapsed {elapsed.Elapsed}.");
+            }
+            finally { stalled.TrySetResult(true); }
+        }
+
+        [DataTestMethod]
+        [DataRow(true, true, true, 0)]
+        [DataRow(false, true, true, 5)]
+        [DataRow(true, false, true, 0)]
+        [DataRow(false, true, true, 0)]
+        [DataRow(false, true, false, 5)]
+        public async Task WeeklyFailure_StopsOnlyOnTimeoutWithDrawableData(bool empty, bool timeout, bool verified, int value)
+        {
+            var week = Day.AddDays(1);
+            var store = new UsageReportCoverageStore(new InMemoryKeyValueStore(), true);
+            for (var i = 0; i < 7; i++)
+                await store.CompleteDayAsync("teams", week.AddDays(i), true, verified, empty, week.AddDays(12), 3);
+
+            var queried = new List<string>();
+            var chart = await ReportsAPIController.UsageCharts(week, new List<DateTime> { week }, store, sql =>
+            {
+                var source = WeeklySource(sql);
+                queried.Add(source);
+                if (source == "outlook")
+                {
+                    if (timeout) throw new TimeoutException();
+                    throw new InvalidOperationException("Synthetic query failure.");
+                }
+                return Task.FromResult(WeekRows(week, !empty, value));
+            }).Single();
+            Assert.IsNull(chart.Error);
+            var teams = chart.Series.Single(s => s.Name == "Teams").Points.Single();
+            Assert.AreEqual(empty ? 0d : value, teams.Value);
+            Assert.AreEqual(!verified, teams.Incomplete);
+            Assert.AreEqual(timeout ? 2 : 5, queried.Count);
+            Assert.AreEqual(timeout ? 3 : 0, chart.SeriesWarnings.Count(w => w.Reason == "notAttempted"));
+        }
+
+        private static string WeeklySource(string sql) => UsageReportCoverageStore.WeeklySources
+            .Single(source => sql.Contains("dbo." + source + "_user_activity_log"));
+
+        private static List<ReportsAPIController.UsageWeekRow> WeekRows(DateTime week, bool hasRows, double value = 5) =>
+            Enumerable.Range(0, 7).Select(day => new ReportsAPIController.UsageWeekRow
+            {
+                WeekStart = week, CoverageDate = week.AddDays(day), HasRows = hasRows, Value = hasRows ? value : 0,
+            }).ToList();
 
         [TestMethod]
         public async Task Synthetic200kUsers_ProvenanceReadsAreBoundedAndIndependentOfPeopleCount()
         {
-            var state = new ProbeStore { DelayReads = true };
+            var state = new ProbeStore { BeforeRange = (_, token) => Task.Delay(1, token) };
             var store = new UsageReportCoverageStore(state, true);
             var timer = Stopwatch.StartNew();
-            var shortWindow = await store.ReadAsync(Day, Day.AddDays(27));
+            Task<HashSet<DateTime>> NoFacts(string _) => Task.FromResult(new HashSet<DateTime>());
+            var shortWindow = await store.ReadAsync(Day, Day.AddDays(27), default, NoFacts);
             var shortMs = timer.ElapsedMilliseconds;
-            var wideWindow = await store.ReadAsync(Day, Day.AddDays(365));
+            var wideWindow = await store.ReadAsync(Day, Day.AddDays(365), default, NoFacts);
             var reads = state.Reads;
-            Assert.AreEqual(4 * (28 + 366), reads);
+            Assert.AreEqual(2 * 4 * 2, reads, "Two captures of four sources per analysis, for either date window.");
             Assert.IsTrue(state.Peak <= UsageReportCoverageStore.ReadConcurrency);
             Assert.IsFalse((await store.ReadAsync(Day, Day.AddDays(366))).Any(c => c.IsComplete));
             Assert.AreEqual(reads, state.Reads, "Unsupported windows do not perform unbounded reads.");
@@ -371,16 +580,19 @@ namespace Tests.UnitTests
                 $"28-day state read {shortMs}ms; {reads} total reads for 28+366 days, peak concurrency {state.Peak}. No SQL or HTTP.");
         }
 
-        private sealed class ProbeStore : IKeyValueStore
+        private sealed class ProbeStore : IKeyValueStore, IVersionedKeyRangeReader
         {
             private readonly InMemoryKeyValueStore _inner = new InMemoryKeyValueStore();
             private int _active;
             public int Reads;
             public int Peak;
             public bool Fail;
-            public bool DelayReads;
+            public Func<string, CancellationToken, Task> BeforeRange;
             public string Description => "Synthetic bounded state";
-            public async Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default)
+            public Task<string> GetStringAsync(string key, CancellationToken cancellationToken = default) =>
+                throw new InvalidOperationException("Report publication must not issue point reads.");
+            public async Task<Dictionary<string, VersionedValue>> ReadVersionedRangeAsync(string first, string last, int max,
+                CancellationToken cancellationToken)
             {
                 Interlocked.Increment(ref Reads);
                 var active = Interlocked.Increment(ref _active);
@@ -389,8 +601,8 @@ namespace Tests.UnitTests
                 try
                 {
                     if (Fail) throw new InvalidOperationException("Synthetic state outage");
-                    if (DelayReads) await Task.Delay(1, cancellationToken);
-                    return await _inner.GetStringAsync(key, cancellationToken);
+                    if (BeforeRange != null) await BeforeRange(first, cancellationToken);
+                    return await _inner.ReadVersionedRangeAsync(first, last, max, cancellationToken);
                 }
                 finally { Interlocked.Decrement(ref _active); }
             }

@@ -1291,38 +1291,6 @@ namespace Tests.UnitTests
             }
         }
 
-        /// <summary>
-        /// Tracker session ids are case-sensitive (dbo.sessions.ai_session_id has a CS collation). The search merge
-        /// used to join on LOWER() of both sides, which linked a search to every session differing only by case.
-        /// </summary>
-        [TestMethod]
-        public async Task Searches_AreLinkedOnlyToTheSessionWithExactlyTheSameTrackerId()
-        {
-            using (var db = new AnalyticsEntitiesContext())
-            {
-                var token = Guid.NewGuid().ToString("N");
-                var user = new User { UserPrincipalName = $"searcher-{token}@contoso.com" };
-                db.users.Add(user);
-                var trackerSessionId = "session-" + token;
-                var exactSession = new UserSession { ai_session_id = trackerSessionId, user = user };
-                db.sessions.Add(exactSession);
-                db.sessions.Add(new UserSession { ai_session_id = trackerSessionId.ToUpperInvariant(), user = user });
-                await db.SaveChangesAsync();
-
-                var searchTerm = "Καλημέρα κόσμε " + token;
-                var searches = new CustomEventsResultCollection();
-                var search = new SearchEventAppInsightsQueryResult { AppInsightsTimestamp = DateTime.UtcNow, Username = user.UserPrincipalName };
-                search.CustomProperties.SearchText = searchTerm;
-                search.CustomProperties.SessionId = trackerSessionId;
-                searches.Rows.Add(search);
-
-                await searches.SaveSearchesToSQL(AnalyticsLogger.ConsoleOnlyTracer(), db);
-
-                var saved = await db.searches.Where(s => s.search_term.search_term == searchTerm).Select(s => s.session.ID).ToListAsync();
-                CollectionAssert.AreEqual(new[] { exactSession.ID }, saved);
-            }
-        }
-
         private static async Task<Hit> CreateTestHitAsync(AnalyticsEntitiesContext db)
         {
             var token = Guid.NewGuid().ToString("N");
@@ -1423,54 +1391,6 @@ namespace Tests.UnitTests
                 .ToListAsync();
 
             Assert.IsTrue(clicksInserted.Count == expectedClicks);
-        }
-
-        [TestMethod]
-        public async Task SearchGreekLetterTests()
-        {
-            using (var db = new AnalyticsEntitiesContext())
-            {
-                // Insert pre-req data
-                var testUser = new User()
-                {
-                    UserPrincipalName = "Test user " + DateTime.Now.Ticks
-                };
-                db.users.Add(testUser);
-
-                var session = new UserSession() { ai_session_id = Guid.NewGuid().ToString(), user = testUser };
-
-                db.sessions.Add(session);
-                await db.SaveChangesAsync();
-
-                var searches = new CustomEventsResultCollection();
-
-                var search = new SearchEventAppInsightsQueryResult();
-                search.AppInsightsTimestamp = DateTime.Now;
-
-                // Greek letters
-                string SEARCH_TEXT = "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠ " + DateTime.Now.Ticks;
-
-                search.CustomProperties.SearchText = SEARCH_TEXT;
-                search.CustomProperties.SessionId = session.ai_session_id;
-                search.Username = testUser.UserPrincipalName;
-                searches.Rows.Add(search);
-
-                var preSaveSearchesCount = await db.searches.CountAsync();
-                var preSaveSearchTermsCount = await db.search_terms.CountAsync();
-
-                await searches.SaveSearchesToSQL(AnalyticsLogger.ConsoleOnlyTracer(), db);
-
-
-                var postSaveSearchesCount = await db.searches.CountAsync();
-                var postSaveSearchTermsCount = await db.search_terms.CountAsync();
-
-                Assert.IsTrue(postSaveSearchesCount == preSaveSearchesCount + 1);
-                Assert.IsTrue(postSaveSearchTermsCount == preSaveSearchTermsCount + 1);
-
-                // Make sure search term is saved exactly as expected, greek chars and all
-                var lastSearch = await db.searches.Include(s => s.search_term).OrderByDescending(s => s.ID).FirstOrDefaultAsync();
-                Assert.IsTrue(lastSearch.search_term.search_term == SEARCH_TEXT);
-            }
         }
     }
 }

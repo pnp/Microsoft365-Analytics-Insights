@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.ApiImporter;
 using WebJob.AppInsightsImporter.Engine.Properties;
@@ -18,7 +19,11 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         /// <summary>
         /// Save hits to staging table & then import all to real hits + lookups
         /// </summary>
-        public static async Task<PageViewSaveResult> SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger logger, List<FilterUrlConfig> filterUrls)
+        public static Task<PageViewSaveResult> SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger logger, List<FilterUrlConfig> filterUrls)
+            => pageViews.SaveToSQL(database, logger, filterUrls, CancellationToken.None);
+
+        internal static async Task<PageViewSaveResult> SaveToSQL(this PageViewCollection pageViews, AnalyticsEntitiesContext database, ILogger logger,
+            List<FilterUrlConfig> filterUrls, CancellationToken cancellationToken)
         {
             var sw = Stopwatch.StartNew();
 
@@ -28,7 +33,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             // Which rows to stage, and why the rest were dropped. Pure decision logic - see issue #369.
             var plan = PageViewStagingRules.Plan(pageViews, filterUrls);
 
-            var logsToInsert = new EFInsertBatch<HitTempEntity>(database, logger);
+            var logsToInsert = new EFInsertBatch<HitTempEntity>(database, logger, cancellationToken);
             logsToInsert.Rows.AddRange(plan.RowsToStage);
 
             if (plan.OutOfScopeUrls > 0)

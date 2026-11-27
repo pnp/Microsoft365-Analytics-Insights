@@ -9,6 +9,7 @@ using Microsoft.Graph;
 using System;
 using System.Collections.Generic;
 using System.Data.Entity;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.Office365ActivityImporter.Engine.Graph.Copilot.InteractionHistory;
 using WebJob.Office365ActivityImporter.Engine.Graph.Agent365;
@@ -62,6 +63,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
         private readonly IImportLastRunStore _lastRunStore;
         private readonly ActivityReportsImport _activityReportsImport;
         private readonly IUserImportScopeProvider _userScopeProvider;
+        private readonly CancellationToken _shutdownToken;
 
         // Sent-email state when no Storage connection string is configured. Static, so created ONCE per process rather than once per
         // import cycle (sections are rebuilt every cycle): a per-cycle store forgot every mailbox's checkpoint each time, so with the
@@ -101,6 +103,15 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
             IClock clock,
             IImportLastRunStore lastRunStore = null,
             IUserImportScopeProvider userScopeProvider = null)
+            : this(logger, settings, graphAppIndentityOAuthContext, graphClient, sentEmailMailboxSkipList, activityReportsImport,
+                dbContextFactory, clock, lastRunStore, userScopeProvider, CancellationToken.None)
+        {
+        }
+
+        internal ProductionGraphImportSectionFactory(AnalyticsLogger logger, AppConfig settings, GraphAppIndentityOAuthContext graphAppIndentityOAuthContext,
+            GraphServiceClient graphClient, ISentEmailMailboxSkipList sentEmailMailboxSkipList, ActivityReportsImport activityReportsImport,
+            IAnalyticsDbContextFactory dbContextFactory, IClock clock, IImportLastRunStore lastRunStore, IUserImportScopeProvider userScopeProvider,
+            CancellationToken shutdownToken)
         {
             // Deliberately no null guards on logger/settings: GraphImporter's own constructor never had them,
             // and adding them here would move the failure from an NRE inside the import to an
@@ -120,6 +131,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
             // Unfiltered when none is supplied, which is what every caller that predates UserGroupsFilter being
             // applied everywhere expects. Production passes the web job's process-lifetime provider.
             _userScopeProvider = userScopeProvider ?? UserImportScopeProvider.Unfiltered();
+            _shutdownToken = shutdownToken;
         }
 
         /// <summary>
@@ -153,12 +165,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Sections
                     {
                         // Update Graph users first. Only people in the UserGroupsFilter scope are written.
                         var userUpdater = new UserMetadataUpdater(_logger, _settings, _graphAppIndentityOAuthContext.Creds, httpClient,
-                            clock: _clock, userScopeProvider: _userScopeProvider, lastRunStore: _lastRunStore);
+                            clock: _clock, userScopeProvider: _userScopeProvider, lastRunStore: _lastRunStore, shutdownToken: _shutdownToken);
 
-                        // False when the /users/delta read did not complete (#664). The cadence gate is then not
-                        // stamped and no "finished section" event is sent, so the import is retried next cycle
-                        // rather than a failed read passing for a tenant in which nothing changed. Returning
-                        // instead of throwing also lets the sections after this one run.
+                        // An incomplete metadata read or unavailable app-only licence inventory leaves the
+                        // section unstamped and due next cycle, without stopping the following sections.
                         return await userUpdater.InsertAndUpdateDatabaseFromExternalUsers();
                     }),
 

@@ -62,6 +62,10 @@ export const charts = {
   // Time series chart
   'charts.timeSeries.ariaLabel': '{valueLabel} per week',
   'charts.timeSeries.noData': 'No data',
+  'charts.timeSeries.atLeast': 'at least {value}',
+  'charts.timeSeries.lowerBoundNote': 'Hollow diamonds mark incomplete weeks. The value shown is a lower bound.',
+  'charts.timeSeries.weeklyValues': 'Weekly values',
+  'charts.timeSeries.week': 'Week',
 
   // Treemap chart
   'charts.treemap.ariaLabel': '{valueLabel} by category',

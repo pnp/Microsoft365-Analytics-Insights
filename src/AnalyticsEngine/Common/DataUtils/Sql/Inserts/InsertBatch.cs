@@ -20,15 +20,21 @@ namespace DataUtils.Sql.Inserts
 
         private readonly string _connectionString;
         private readonly ILogger _logger;
+        private readonly CancellationToken _cancellationToken;
         private InsertBatchTypeFieldCache<T> _batchTypeFieldCache = null;
 
         // Count of rows dropped during the current save because a value was wider than its staging
         // column. Written from parallel insert threads via Interlocked, reset per SaveToStagingTable.
         private int _rowsSkippedTooWide = 0;
-        public InsertBatch(string connectionString, ILogger logger)
+        public InsertBatch(string connectionString, ILogger logger) : this(connectionString, logger, CancellationToken.None)
+        {
+        }
+
+        protected InsertBatch(string connectionString, ILogger logger, CancellationToken cancellationToken)
         {
             _connectionString = connectionString;
             _logger = logger;
+            _cancellationToken = cancellationToken;
             _batchTypeFieldCache = new InsertBatchTypeFieldCache<T>();
         }
 
@@ -50,6 +56,7 @@ namespace DataUtils.Sql.Inserts
         /// </summary>
         public async Task<int> SaveToStagingTable(int insertsPerThread, string mergeSql, string tableNameOverride = null, SemaphoreSlim mergeLock = null)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             if (Rows.Count == 0) return 0;
 
             // This instance can be reused for several saves (e.g. the Copilot manager keeps one
@@ -80,9 +87,9 @@ namespace DataUtils.Sql.Inserts
             }
 
             // Do database things
-            using (var opGlobalConnection = AzureSqlTokenAuth.CreateConnection(_connectionString))
+            using (var opGlobalConnection = AzureSqlTokenAuth.CreateConnection(_connectionString, _cancellationToken))
             {
-                await opGlobalConnection.OpenAsync();
+                await opGlobalConnection.OpenAsync(_cancellationToken);
 
                 // Prepare table
                 await DropAndCreateStagingTable(opGlobalConnection, tempTableName, _batchTypeFieldCache.PropertyMappingInfo.Select(d => d.SqlInfo).ToList());
@@ -109,7 +116,7 @@ namespace DataUtils.Sql.Inserts
                 // staging table survives until the merge reads it.
                 if (!string.IsNullOrEmpty(mergeSql))
                 {
-                    if (mergeLock != null) await mergeLock.WaitAsync();
+                    if (mergeLock != null) await mergeLock.WaitAsync(_cancellationToken);
                     try
                     {
                         var cmd = opGlobalConnection.CreateCommand();
@@ -117,10 +124,11 @@ namespace DataUtils.Sql.Inserts
                         cmd.CommandTimeout = 0;
                         try
                         {
-                            return await cmd.ExecuteNonQueryAsync();
+                            return await cmd.ExecuteNonQueryAsync(_cancellationToken);
                         }
                         catch (SqlException ex)
                         {
+                            _cancellationToken.ThrowIfCancellationRequested();
                             // Without the value SQL Server quoted (a duplicate key, a truncated or unconvertible value): this
                             // message is logged and persisted. The SqlException stays inner, for TransientSqlRetry.
                             throw new BatchSaveException($"Couldn't merge batch insert using given SQL: {SqlErrorMessages.WithoutValues(ex.Message)}", ex);
@@ -138,11 +146,11 @@ namespace DataUtils.Sql.Inserts
             }
         }
 
-        private async Task ProcessChunkAsync(string tempTableName, ILogger logger, List<T> threadListChunk, int chunkIdx)
+        internal async Task ProcessChunkAsync(string tempTableName, ILogger logger, List<T> threadListChunk, int chunkIdx)
         {
-            using (var chunkSqlConnection = AzureSqlTokenAuth.CreateConnection(_connectionString))
+            using (var chunkSqlConnection = AzureSqlTokenAuth.CreateConnection(_connectionString, _cancellationToken))
             {
-                await chunkSqlConnection.OpenAsync();
+                await chunkSqlConnection.OpenAsync(_cancellationToken);
 
                 // Build SQL statement
                 string fieldNamesSnippet = string.Empty, fieldVarsSnippet = string.Empty;
@@ -165,6 +173,7 @@ namespace DataUtils.Sql.Inserts
                 // Add data
                 foreach (var insertObj in threadListChunk)
                 {
+                    _cancellationToken.ThrowIfCancellationRequested();
                     cmd.Parameters.Clear();
                     int fieldIdx = 0;
                     var rowExceedsColumnWidth = false;
@@ -206,10 +215,11 @@ namespace DataUtils.Sql.Inserts
 
                     try
                     {
-                        await cmd.ExecuteNonQueryAsync();
+                        await cmd.ExecuteNonQueryAsync(_cancellationToken);
                     }
                     catch (SqlException ex) when (IsColumnTruncationError(ex))
                     {
+                        _cancellationToken.ThrowIfCancellationRequested();
                         // Backstop: a value was wider than its column but the in-memory check above
                         // didn't predict it (e.g. a column whose declared width we couldn't parse).
                         // Skip just this row so one bad value can't poison the whole batch.
@@ -219,6 +229,7 @@ namespace DataUtils.Sql.Inserts
                     }
                     catch (SqlException ex)
                     {
+                        _cancellationToken.ThrowIfCancellationRequested();
                         _logger.LogCritical($"Failed to insert record into {tempTableName} - {sqlInsert} | row: {BuildRowDiagnostic(insertObj)} | SQL error {ex.Number}: {SqlErrorMessages.WithoutValues(ex.Message)}");
                         throw;
                     }
@@ -296,7 +307,7 @@ namespace DataUtils.Sql.Inserts
 
             createTableCmd.CommandText = sql;
 
-            await createTableCmd.ExecuteNonQueryAsync();
+            await createTableCmd.ExecuteNonQueryAsync(_cancellationToken);
         }
 
     }

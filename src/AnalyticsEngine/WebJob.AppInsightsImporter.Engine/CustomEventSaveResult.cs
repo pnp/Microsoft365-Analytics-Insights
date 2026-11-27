@@ -16,11 +16,17 @@ namespace WebJob.AppInsightsImporter.Engine
     /// </summary>
     public sealed class CustomEventSaveResult
     {
-        public CustomEventSaveResult(IEnumerable<string> failedSections)
+        public CustomEventSaveResult(IEnumerable<string> failedSections) : this(failedSections, SearchSaveResult.Empty)
         {
-            FailedSections = (failedSections ?? Enumerable.Empty<string>()).ToList();
         }
 
+        public CustomEventSaveResult(IEnumerable<string> failedSections, SearchSaveResult searches)
+        {
+            FailedSections = (failedSections ?? Enumerable.Empty<string>()).ToList();
+            Searches = searches;
+        }
+
+        public SearchSaveResult Searches { get; }
         /// <summary>The sections that failed, by the name they are logged under.</summary>
         public IReadOnlyList<string> FailedSections { get; }
 
@@ -31,7 +37,7 @@ namespace WebJob.AppInsightsImporter.Engine
         {
             if (!IsComplete)
             {
-                throw new CustomEventSaveIncompleteException(FailedSections);
+                throw new CustomEventSaveIncompleteException(FailedSections, Searches);
             }
         }
     }
@@ -39,12 +45,18 @@ namespace WebJob.AppInsightsImporter.Engine
     /// <summary>One or more custom-event sections failed; the others were saved. See <see cref="CustomEventSaveResult"/>.</summary>
     public sealed class CustomEventSaveIncompleteException : Exception
     {
-        public CustomEventSaveIncompleteException(IReadOnlyList<string> failedSections)
+        public CustomEventSaveIncompleteException(IReadOnlyList<string> failedSections) : this(failedSections, SearchSaveResult.Empty)
+        {
+        }
+
+        internal CustomEventSaveIncompleteException(IReadOnlyList<string> failedSections, SearchSaveResult searches)
             : base($"Saving custom events failed in: {string.Join(", ", failedSections)} (logged above). The other sections were saved.")
         {
             FailedSections = failedSections;
+            Searches = searches;
         }
 
         public IReadOnlyList<string> FailedSections { get; }
+        internal SearchSaveResult Searches { get; }
     }
 }

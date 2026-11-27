@@ -1,4 +1,5 @@
 using Azure.ResourceManager.Models;
+using System;
 
 namespace CloudInstallEngine.Azure
 {
@@ -31,6 +32,12 @@ namespace CloudInstallEngine.Azure
         {
             return existing == null || existing.PrincipalId == null;
         }
+
+        internal static Guid? GetSystemAssignedPrincipal(ManagedServiceIdentity identity) =>
+            !NeedsSystemAssignedIdentity(identity) && identity.PrincipalId != Guid.Empty &&
+            (identity.ManagedServiceIdentityType == ManagedServiceIdentityType.SystemAssigned ||
+             identity.ManagedServiceIdentityType == ManagedServiceIdentityType.SystemAssignedUserAssigned)
+                ? identity.PrincipalId : null;
 
         /// <summary>
         /// Builds the identity to send so the resource ends up with a system-assigned identity while

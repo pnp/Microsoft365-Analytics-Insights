@@ -64,6 +64,10 @@ const charts: Record<keyof typeof en, string> = {
   // Time series chart
   'charts.timeSeries.ariaLabel': '{valueLabel} por semana',
   'charts.timeSeries.noData': 'Sin datos',
+  'charts.timeSeries.atLeast': 'al menos {value}',
+  'charts.timeSeries.lowerBoundNote': 'Los rombos huecos indican semanas incompletas. El valor mostrado es un mínimo.',
+  'charts.timeSeries.weeklyValues': 'Valores semanales',
+  'charts.timeSeries.week': 'Semana',
 
   // Treemap chart
   'charts.treemap.ariaLabel': '{valueLabel} por categoría',

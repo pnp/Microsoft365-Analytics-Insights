@@ -1,27 +1,33 @@
 import { AppInsightsWrapper } from "./AppInsightsWrapper";
-import { ClearLastPageStatsVal, GetLastPageStatsVal, SetLastPageStatsVal } from "./Cookies";
-import { getSPRequestDurationFromScripts } from "./DataFunctions";
+import { GetLastPageStatsVal, SetLastPageStatsVal } from "./Cookies";
+import { getSPRequestDurationFromScripts, isSamePage } from "./DataFunctions";
 import { debug, error, log, warn } from "./Logger";
 import TimeMe from 'timeme.js'
 import { PagePropertyManager } from "./PageProps/PagePropertyManager";
 import { spPageContextInfo } from "./Definitions";
+import { isOnTrackedSite, isUrlInSite, registeredSiteFor, type ModernPageContext } from "./TrackedSites";
+
+type TimedVisit = { url: string, activeMs: number, atStartup?: boolean };
 
 export class PageViewTracker {
 
     _ai: AppInsightsWrapper;
-    _lastTimeTotalOnPages: number = 0;
     _context: spPageContextInfo;
     _pagePropLoader: PagePropertyManager;
 
-    // TimeMe's running total of seconds on page when the browser was last seen on a tracked site, and when it left the tracked
-    // sites if it's away from them now. Time spent away from them is no page's time on page.
-    _lastSeenOnTrackedSite: number = 0;
-    _leftTrackedSitesAt: number | null = null;
+    // Usually these are the same visit. While SPFx is waiting to report a destination, only the
+    // visible visit gains time; only the accepted visit has a request ID and can be reported.
+    private visibleVisit: TimedVisit | null;
+    private acceptedVisit: TimedVisit | null = null;
+    private lastActiveMs = 0;
+    private suspended = false;
 
     constructor(ai: AppInsightsWrapper, context: spPageContextInfo, pagePropLoader: PagePropertyManager) {
         this._ai = ai;
         this._context = context;
         this._pagePropLoader = pagePropLoader;
+        const url = document.URL;
+        this.visibleVisit = isOnTrackedSite(url, window._o365AnalyticsInfo) ? { url, activeMs: 0, atStartup: true } : null;
     }
 
     updatePageContext(context: spPageContextInfo) {
@@ -30,121 +36,146 @@ export class PageViewTracker {
 
     // Track the page the browser loaded, then the time spent on the page before it (saved to a cookie as the browser left it).
     // A pageLoadDuration of 0 means SharePoint navigated here without the browser loading a page.
-    trackCurrentPageViewAndLastPageExit(url: string, listTitle: string, listItemId?: number, pageLoadDuration?: number): void {
+    trackCurrentPageViewAndLastPageExit(url: string, listTitle?: string, listItemId?: number, pageLoadDuration?: number): void {
 
-        if (typeof window._spPageContextInfo === 'undefined') {
-            error(`Didn't find legacy _spPageContextInfo on page.`);
-            return;
+        if (!this.observeCurrentPage()) {
+            debug("Not tracking this page: it isn't on a tracked site");
+        } else if (pageLoadDuration === 0 || (window._o365AnalyticsInfo && !this.visibleVisit?.atStartup)) {
+            const destination = this.softViewContext(url);
+            if (destination) this.trackCurrentPageView(url, 0, destination, null);
+        } else {
+            const context = window._spPageContextInfo;
+            const sites = window._o365AnalyticsInfo;
+            if (sites?.visits?.currentPageContext) {
+                // A real document owns its title/timings, even when its page metadata cannot be verified.
+                this.trackCurrentPageView(url, pageLoadDuration, this.boundPageContext(url) ?? { siteUrl: registeredSiteFor(url, sites) });
+            } else if (!context) {
+                error(`Didn't find legacy _spPageContextInfo on page.`);
+            } else if (!window._o365AnalyticsInfo || this.contextIsOnPage(url, context.siteAbsoluteUrl, context.webAbsoluteUrl)) {
+                this.trackCurrentPageView(url, pageLoadDuration, { webUrl: context.webAbsoluteUrl, siteUrl: context.siteAbsoluteUrl,
+                    webTitle: context.webTitle, listTitle: listTitle ?? context.listTitle, listItemId: listItemId ?? context.pageItemId });
+            } else {
+                // The browser loaded this registered page; its title and timings are still its own.
+                this.trackCurrentPageView(url, pageLoadDuration, { siteUrl: registeredSiteFor(url, window._o365AnalyticsInfo) });
+            }
         }
-
-        // Track new page view
-        this.trackCurrentPageView(pageLoadDuration, window._spPageContextInfo.webAbsoluteUrl,
-            window._spPageContextInfo.siteAbsoluteUrl, window._spPageContextInfo.webTitle, url, listTitle, listItemId);
 
         this.trackLastPageExit();
     }
 
-    // Send the time on the page before the browser loaded this one, which was saved to a cookie as the browser left it
-    trackLastPageExit(): void {
-
-        // Track page event from last hit
-        const lastPageStats = GetLastPageStatsVal();
-
-        // Was there a last page to track? Do we have all the right properties?
-        if (lastPageStats !== null && lastPageStats.secondsOnPage && lastPageStats.pageRequestId && lastPageStats.url) {
-            var pageUrl = decodeURI(lastPageStats.url);
-
-            // The time belongs to the page request it was saved for, not the one just tracked: the importer applies it to that hit
-            this._ai.trackTimingEvent(pageUrl, lastPageStats.secondsOnPage, lastPageStats.pageRequestId);
-        } else if (lastPageStats !== null) {
+    private trackLastPageExit(replacingFor?: string): void {
+        // On load/restore consume the cookie. On hide its replacement is the write that clears it.
+        const saved = GetLastPageStatsVal(!replacingFor);
+        if (!saved || (replacingFor && saved.pageRequestId === replacingFor)) return;
+        if (!saved.secondsOnPage || !saved.pageRequestId || !saved.url) {
             warn("Last page stats cookie found but missing required properties (secondsOnPage, pageRequestId, or url)");
-        } else {
-            debug("No previous page stats to track");
+            return;
         }
-
-        // Clear cookie
-        ClearLastPageStatsVal();
+        let url: string;
+        try { url = decodeURI(saved.url); }
+        catch { warn("Invalid URL in last page stats cookie"); return; }
+        this._ai.trackTimingEvent(url, saved.secondsOnPage, saved.pageRequestId);
     }
 
     setPageUpdateIntervalMinutes(interval: number) {
         this._pagePropLoader.setPageUpdateIntervalMinutes(interval);
     }
 
-    // Save last page stats to cookie, then track page view same as classic page
-    handleModernPageNav(webUrl: string, webTitle: string, siteUrl: string, url: string, listTitle?: string, listItemId?: number) {
+    private contextIsOnPage(url: string, siteUrl: string, webUrl: string): boolean {
+        return !!siteUrl && isOnTrackedSite(url, window._o365AnalyticsInfo, siteUrl) &&
+            isUrlInSite(webUrl, siteUrl) && isUrlInSite(url, webUrl);
+    }
+
+    private boundPageContext(url: string): Partial<ModernPageContext> | undefined {
+        const sites = window._o365AnalyticsInfo;
+        const page = sites?.visits?.currentPageContext?.();
+        if (!page || !page.siteUrl || !isSamePage(page.url, url) || !isOnTrackedSite(url, sites, page.siteUrl)) return;
+        if (page.webUrl && !this.contextIsOnPage(url, page.siteUrl, page.webUrl)) return;
+        // Only a request-bound .68+ snapshot proves where the web/list fields came from.
+        if (page.binding === 'request') return page.webUrl ? page : undefined;
+        return { siteUrl: page.siteUrl };
+    }
+
+    private softViewContext(url: string, reportedSite?: string): Partial<ModernPageContext> | undefined {
+        const sites = window._o365AnalyticsInfo;
+        if (sites?.visits?.currentPageContext) return this.boundPageContext(url);
+        // A positional callback establishes the collection, not the originating visit of its other fields.
+        if (reportedSite || !sites) return { siteUrl: sites ? registeredSiteFor(url, sites) : reportedSite };
+    }
+
+    handleModernPageNav(_webUrl: string, _webTitle: string, siteUrl: string, url: string, _listTitle?: string, _listItemId?: number): boolean {
+        // SharePoint may already be on an unregistered site, or on another instance's site.
+        if (!this.observeCurrentPage()) {
+            debug("Not tracking a navigation outside an active tracked visit");
+            return false;
+        }
+        const sites = window._o365AnalyticsInfo;
+        if (!isSamePage(url, document.URL) || !siteUrl || !isOnTrackedSite(url, sites, siteUrl) ||
+            (!sites && !this.contextIsOnPage(url, siteUrl, _webUrl))) {
+            debug("Not tracking a navigation reported for another site: SharePoint has moved on since");
+            return false;
+        }
+        const destination = this.softViewContext(url, siteUrl);
+        if (!destination) return false; // No exit or new request ID until a current report arrives.
 
         // The SPFx extension also reports the page that was tracked when it loaded. That isn't a navigation: don't end
         // the page's time-on-page after a couple of seconds and restart it, which would undercount it.
         const lastUrl = this._ai._lastTrackedUrl;
-        if (url === lastUrl) {
+        if (lastUrl && isSamePage(lastUrl, url)) {
             debug(`Ignoring navigation to the page already tracked: ${url}`);
-            return;
+            return true;
         }
         log('Modern page navigation called from SPFx component. New URL: ' + url);
 
-        // As HandleModernUIPageNav can be called a lot in a single load, subtract the time of the last "page exits"
-        var timeOnPage = this.getTimeOnPageAndResetLastTotalTime();
-
-        // Track "page exit" of previous URL. Before tracking the new page, so it goes to the previous page's request ID.
-        // This page's own last URL, rather than a cookie that every open tab writes to.
-        if (lastUrl) {
-            this._ai.trackTimingEvent(lastUrl, timeOnPage);
+        if (lastUrl && this.acceptedVisit) {
+            this._ai.trackTimingEvent(lastUrl, this.acceptedVisit.activeMs / 1000);
         }
 
-        // Track page with "load-time" of 0 as we didn't actually load a page. 
-        // If we don't supply 0, AppInsights will use the last page-load time instead, which would be invalid.
-        this.trackCurrentPageView(0, webUrl, siteUrl, webTitle, url, listTitle, listItemId);
+        this.trackCurrentPageView(url, 0, destination, null);
+        return true;
     }
 
-    // The browser is on a page of a tracked site
-    seenOnTrackedSite(): void {
-        const now = TimeMe.getTimeOnCurrentPageInSeconds();
-        if (this._leftTrackedSitesAt !== null) {
-            // Back from sites that aren't tracked. The time spent on them doesn't count for the page tracked last
-            this._lastTimeTotalOnPages += now - this._leftTrackedSitesAt;
-            this._leftTrackedSitesAt = null;
-            log("On a tracked site again");
+    observeCurrentPage(boundary?: 'navigation' | 'registration'): boolean {
+        if (this.suspended) return false;
+        const url = document.URL;
+        const tracked = isOnTrackedSite(url, window._o365AnalyticsInfo);
+        this._ai.discardPendingClicksUnlessOn(tracked ? url : null);
+
+        const visit = this.visibleVisit;
+        if (!visit && !tracked) return false;
+        const now = TimeMe.getTimeOnCurrentPageInMilliseconds() ?? 0; // Not started until the tab is visible.
+        // With an actual URL-change notification we know when the previous page ended. If a
+        // poll/click merely discovers an unregistered site, stop at the last confirmed sample.
+        if (visit && (tracked || (boundary === 'navigation' && !isSamePage(visit.url, url)) ||
+            (boundary === 'registration' && isSamePage(visit.url, url)))) {
+            visit.activeMs += now - this.lastActiveMs;
         }
-        this._lastSeenOnTrackedSite = now;
-    }
-
-    // The browser is on a page that isn't on a tracked site: SharePoint navigated to one without reloading the page. Time on the
-    // page tracked last stops where the browser was last seen on a tracked site, as close to leaving it as this script can tell.
-    seenOffTrackedSites(): void {
-        if (this._leftTrackedSitesAt === null) {
-            this._leftTrackedSitesAt = Math.max(this._lastSeenOnTrackedSite, this._lastTimeTotalOnPages);
+        this.lastActiveMs = now;
+        if (!tracked) {
+            this.visibleVisit = null;
             log("Not on a tracked site, so nothing is tracked until SharePoint shows a page of one");
+        } else if (!visit || !isSamePage(visit.url, url)) {
+            this.visibleVisit = this.acceptedVisit && isSamePage(this.acceptedVisit.url, url)
+                ? this.acceptedVisit : { url, activeMs: 0 };
         }
+        return tracked;
     }
 
-    getTimeOnPageAndResetLastTotalTime(): number {
-        // How long was the user on this page? Away from the tracked sites, only until the browser left them
-        const currentSecondsOnPage = this._leftTrackedSitesAt ?? TimeMe.getTimeOnCurrentPageInSeconds();
-
-        // As this method can be called a lot, subtract the time of the last "page exit"
-        const timeOnPage = currentSecondsOnPage - this._lastTimeTotalOnPages;
-        debug("Time on page for this URL: " + timeOnPage);
-
-        // Remember what we've spent for the next page nav (timer won't really reset until we properly navigate away)
-        this._lastTimeTotalOnPages = currentSecondsOnPage;
-
-        return timeOnPage;
-    }
-
-    trackCurrentPageView(pageLoadDuration: number | undefined,
-        webUrl: string, siteUrl: string, webTitle: string, url: string, listTitle?: string, listItemId?: number): void {
+    private trackCurrentPageView(url: string, pageLoadDuration: number | undefined,
+        { webUrl, siteUrl, webTitle, listTitle, listItemId }: Partial<ModernPageContext>, pageTitle: string | null = document.title): void {
 
         debug(`Tracking page view for URL: ${url}, listTitle: ${listTitle || 'none'}, listItemId: ${listItemId ?? 'none'}`);
 
         // SPRequestDuration is in the HTML SharePoint served for the document, so it only describes a page the browser loaded:
         // after a page navigation it's the duration of the first page's request. Not an officially supported API either.
         const spRequestDuration = pageLoadDuration === 0 ? null : getSPRequestDurationFromScripts(document.body);
-        if (!this._ai.trackCurrentPageView(pageLoadDuration, spRequestDuration, webUrl, siteUrl, webTitle)) {
+        if (!this._ai.trackCurrentPageView(pageLoadDuration, spRequestDuration, webUrl, siteUrl, webTitle, pageTitle)) {
             return;     // Same page as last time
         }
+        this.acceptedVisit = this.visibleVisit;
 
         // If needed, log page metadata. Read from this page's own web: it's not the one the script loaded in after a navigation
-        this._pagePropLoader.handleNewPage(webUrl, listItemId ?? -1, url, listTitle);
+        if (webUrl) this._pagePropLoader.handleNewPage(webUrl, listItemId ?? -1, url, listTitle);
 
         this.trackSearchInUrl(url);
     }
@@ -164,30 +195,33 @@ export class PageViewTracker {
         }
     }
 
-    // Track the page exit with an event. Run on page "unload" only
-    savePageExitToCookie() {
-
-        if (this._ai._pageRequestId) {
-            // Get time on page
-            var secondsOnPage = this.getTimeOnPageAndResetLastTotalTime();
-            if (!secondsOnPage) {
-                warn("Invalid time on page - skipping cookie save");
-                return;
-            }
-
-            // The page the time was spent on. Away from the tracked sites that's the page tracked last, not the one the browser is on,
-            // which isn't tracked
-            const url = this._leftTrackedSitesAt !== null && this._ai._lastTrackedUrl ? this._ai._lastTrackedUrl : document.URL;
-            debug('Saving page exit stats with ' + secondsOnPage + ' seconds spent on ' + url + ' to cookie SPOInsightsLastPageStats.');
-
-            // Set cookie for next "page load" to pick-up & send, for 7 days. Can't send stats onpageunload due to time it would take to send.
-            SetLastPageStatsVal({
-                'pageRequestId': this._ai._pageRequestId, 'secondsOnPage': secondsOnPage, 'url': encodeURI(url)
-            });
+    savePageExitToCookie(persisted = false): void {
+        if (this.suspended) return;
+        this.observeCurrentPage();
+        this._ai.discardPendingClicksUnlessOn(null);
+        const accepted = this.acceptedVisit;
+        if (accepted && accepted.activeMs > 0 && this._ai._pageRequestId) {
+            // A back traversal can show this document before the departing renderer writes its
+            // cookie. Deliver any other request still in the shared slot before replacing it.
+            this.trackLastPageExit(this._ai._pageRequestId);
+            const url = this.visibleVisit === accepted ? document.URL : this._ai._lastTrackedUrl!;
+            const secondsOnPage = accepted.activeMs / 1000;
+            debug(`Saving page exit stats with ${secondsOnPage} seconds spent on ${url} to cookie SPOInsightsLastPageStats.`);
+            SetLastPageStatsVal({ pageRequestId: this._ai._pageRequestId, secondsOnPage, url: encodeURI(url) });
         }
-        else if (this._leftTrackedSitesAt !== null)
-            debug("No page-exit to save: no page of a tracked site was tracked");
-        else
-            error("Can't save page-exit cookie: have no page-request ID");
+        if (persisted) {
+            // The document may resume with the same request ID. Keep its cumulative time, not
+            // a delta since this cookie. An unaccepted destination and its clicks end here.
+            this.visibleVisit = null;
+            this.suspended = true;
+        }
+    }
+
+    resumeFromCache(): void {
+        if (!this.suspended) return;
+        this.suspended = false;
+        this.observeCurrentPage();
+        // A real document can have saved its own exit before the browser restored this one.
+        this.trackLastPageExit();
     }
 }
