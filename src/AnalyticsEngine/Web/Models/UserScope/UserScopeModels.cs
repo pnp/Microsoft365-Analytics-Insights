@@ -169,7 +169,8 @@ namespace Web.AnalyticsWeb.Models.UserScope
 
         /// <summary>
         /// Why it failed: <c>scopeUnavailable</c>, <c>scopeEmpty</c>, <c>filterChanged</c>, <c>filterChangedWhileRunning</c>,
-        /// <c>purgeExceedsConfirmed</c>, <c>userDeleteOutcomeUnknown</c>, <c>scopeMembershipChanged</c>, <c>databaseError</c>, <c>stateUnavailable</c> or
+        /// <c>purgeExceedsConfirmed</c>, <c>userDeleteOutcomeUnknown</c>, <c>usageDeleteOutcomeUnknown</c>,
+        /// <c>scopeMembershipChanged</c>, <c>databaseError</c>, <c>stateUnavailable</c> or
         /// <c>unexpected</c>.
         /// </summary>
         [JsonProperty("errorCode")]
@@ -183,6 +184,10 @@ namespace Web.AnalyticsWeb.Models.UserScope
 
         [JsonProperty("rows")]
         public long Rows { get; set; }
+
+        /// <summary>Only acknowledged deletions are counted; a commit for this table is not confirmed.</summary>
+        [JsonProperty("isLowerBound", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool IsLowerBound { get; set; }
     }
 
     /// <summary>Body of <c>POST api/UserScope/purge</c>.</summary>

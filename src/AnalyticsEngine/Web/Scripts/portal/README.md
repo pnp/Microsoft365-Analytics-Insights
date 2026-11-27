@@ -501,6 +501,31 @@ survives; the SPA reads that, and `DEV_BUILD`, as an unstamped build and prints
 `(development build)`. It prints neither a fake version nor - as it once did - nothing at all, which
 made a report run off a developer's machine indistinguishable on paper from one off a release.
 
+### Recover a user-scope purge blocked by an orphaned coverage fence
+
+A restart normally hands off a usage-report coverage fence to a later run of the **same** purge.
+If the durable job history cannot identify the owner of an old active fence, the portal refuses to
+replace it. Waiting does not make an unproven fence safe to remove.
+
+1. Plan a maintenance window. Stop and drain **all** portal instances and Microsoft 365 activity
+   importers or slots that share this SQL database and coverage ledger. Confirm no purge still holds
+   the SQL application lock `AnalyticsInsights.UserScopePurge`. Do not proceed if an old host can
+   still run a purge, import, or publish reports.
+2. Upgrade the stopped hosts to a build that supports `UsageReportCoverageGeneration`. Set that
+   App Setting to the **same fresh nonzero GUID in N format** (32 hexadecimal digits, no hyphens) on
+   every portal and Office 365 activity importer using the ledger. Leave the existing Storage
+   connection, purge jobs and old ledger rows intact.
+3. Restart only after the settings match. The portal can retry or honour the existing job's stop
+   request. It uses the new coverage namespace without touching the unproven fence. Unseen dates
+   in the new namespace are unverified, even if SQL still has rows for them. Fresh, settled,
+   whole-tenant imports can rebuild coverage only for dates the source can still provide.
+
+Keep this setting across future restarts and deployments. Do not remove it, reuse an older
+generation, or run a build that ignores it against the same database: its coverage cannot reflect
+deletions made under a different generation. This recovery does not grant new purge consent.
+If SQL did not acknowledge a usage-table commit, the affected table shows **At least** the
+acknowledged count, not a claim that no other rows were removed.
+
 ## Printing
 
 Every page prints without the app shell. The report keeps the whole sheet, each numbered section of

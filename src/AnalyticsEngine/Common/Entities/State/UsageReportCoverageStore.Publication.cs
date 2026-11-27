@@ -12,7 +12,7 @@ namespace Common.Entities.State
         /// <summary>
         /// Capture daily ledger versions BEFORE starting the report's SQL queries. Read the same ranges
         /// after materialisation: even complete → partial → complete is a different certificate. A
-        /// successful range with no entity is a confirmed legacy miss; a failed range proves nothing.
+        /// successful range with no entity is a legacy miss only in the default namespace; a failed range proves nothing.
         /// At most two indexed ranges per source: eight for Adoption or ten for the weekly chart,
         /// each spanning at most 366 dates, regardless of the number of people. The configured
         /// storage time budget covers both passes; it does not include the SQL queries between them.
@@ -30,6 +30,7 @@ namespace Common.Entities.State
         public sealed class PublicationRead
         {
             private readonly IVersionedKeyRangeReader _reader;
+            private readonly UsageReportCoverageStore _store;
             private readonly string[] _sources;
             private readonly DateTime _from, _through;
             private readonly int _days;
@@ -45,6 +46,7 @@ namespace Common.Entities.State
                 _days = (through - from).Days + 1;
                 _sources = sources.Distinct(StringComparer.Ordinal).ToArray();
                 if (_sources.Except(WeeklySources).Any()) throw new ArgumentException("Unknown usage-report source.", nameof(sources));
+                _store = store;
                 _reader = store?._store as IVersionedKeyRangeReader;
                 _timeout = store?._readTimeout ?? TimeSpan.Zero;
                 _unavailableReason = store != null && !store.IsDurable ? "durableStateMissing"
@@ -94,12 +96,12 @@ namespace Common.Entities.State
             {
                 try
                 {
-                    var rows = await _reader.ReadVersionedRangeAsync(Key(source, _from), Key(source, _through), _days, token)
+                    var rows = await _reader.ReadVersionedRangeAsync(_store.Key(source, _from), _store.Key(source, _through), _days, token)
                         .ConfigureAwait(false);
                     token.ThrowIfCancellationRequested();
                     var days = new VersionedValue[_days];
                     for (var i = 0; i < days.Length; i++)
-                        if (rows.TryGetValue(Key(source, _from.AddDays(i)), out days[i]) &&
+                        if (rows.TryGetValue(_store.Key(source, _from.AddDays(i)), out days[i]) &&
                             (string.IsNullOrEmpty(days[i]?.VersionToken) || days[i].VersionToken == "*"))
                             return null;
                     return days;
@@ -135,7 +137,9 @@ namespace Common.Entities.State
                     var prior = _before[source];
                     for (var i = 0; i < days.Length; i++)
                     {
-                        var outcome = Outcome(days[i]?.Value);
+                        // A recovery namespace deliberately discarded the old certificates.
+                        // Missing and expired rows here are not evidence of intact legacy history.
+                        var outcome = Outcome(days[i]?.Value) ?? (_store._hasLegacyHistory ? null : Partial);
                         // Expiry can change the logical value without changing the physical ETag. Preserve
                         // explicit negative outcomes (notably a purge); never promote a changed miss to legacy proof.
                         if ((prior[i]?.VersionToken != days[i]?.VersionToken || prior[i]?.Value != days[i]?.Value) &&

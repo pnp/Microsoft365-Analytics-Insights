@@ -13,9 +13,9 @@ namespace Common.Entities.State
 {
     /// <summary>
     /// Exact outcomes of daily user-detail imports, independent of fact-row presence and cadence stamps.
-    /// Keys are v1:{source}:yyyyMMdd, in UsageReportCoverage; no user identifiers are stored.
-    /// v1:scopePurge holds the active purge run token or its UTC end ticks. A scope purge revokes affected days
-    /// before committing their SQL deletion; downloads overlapping it cannot certify the affected days.
+    /// Keys are v1:{source}:yyyyMMdd by default, in UsageReportCoverage; no user identifiers are stored.
+    /// The scopePurge key in the same namespace holds the active purge run token or its UTC end ticks.
+    /// A scope purge revokes affected days before committing their SQL deletion; overlapping downloads cannot certify those days.
     /// Revoked dates retain their outcome with a |purge or |endTicks suffix rather than expiring into a legacy miss.
     /// Only a whole, identifiable, tenant-wide report saved after the settlement delay certifies a day.
     /// Day outcomes: partial (in progress / unsettled), incomplete, scopeUnverified, complete, empty.
@@ -30,34 +30,45 @@ namespace Common.Entities.State
         public static readonly string[] Sources = { "teams", "outlook", "sharepoint", "onedrive" };
         // Viva Engage user activity is certified for the weekly chart, not used in Copilot Adoption.
         public static IReadOnlyList<string> WeeklySources { get; } = Array.AsReadOnly(Sources.Concat(new[] { "yammer" }).ToArray());
-        private const string ScopePurgeKey = "v1:scopePurge";
         private const string PendingPurge = "purge";
         private static readonly TimeSpan Retention = TimeSpan.FromDays(400);
         private static readonly InMemoryKeyValueStore ProcessFallback = new InMemoryKeyValueStore();
         private readonly IKeyValueStore _store;
         private readonly bool _durable;
         private readonly TimeSpan _readTimeout;
+        private readonly string _keyPrefix;
+        private readonly bool _hasLegacyHistory;
 
         public UsageReportCoverageStore(IKeyValueStore store, bool durable, TimeSpan? readTimeout = null)
+            : this(store, durable, readTimeout, null) { }
+
+        internal UsageReportCoverageStore(IKeyValueStore store, bool durable, TimeSpan? readTimeout, string generation)
         {
             _store = store ?? throw new ArgumentNullException(nameof(store));
             _durable = durable;
             _readTimeout = readTimeout ?? TimeSpan.FromSeconds(30);
+            _hasLegacyHistory = generation == null;
+            if (_hasLegacyHistory) _keyPrefix = "v1:";
+            else if (durable && Guid.TryParseExact(generation, "N", out var id) && id != Guid.Empty)
+                _keyPrefix = "v2:" + id.ToString("N") + ":";
+            else throw new InvalidOperationException("UsageReportCoverageGeneration requires durable Storage and a nonzero GUID in N format.");
         }
 
         public static UsageReportCoverageStore Open(AppConfig config, ILogger logger = null, TimeSpan? readTimeout = null)
         {
             var store = StateStore.TryOpen(config, StatePartitions.UsageReportCoverage, logger);
-            return new UsageReportCoverageStore(store ?? ProcessFallback, store != null, readTimeout);
+            return new UsageReportCoverageStore(store ?? ProcessFallback, store != null, readTimeout, config?.UsageReportCoverageGeneration);
         }
 
         /// <summary>False for the process-local fallback, whose outcomes never certify a workload.</summary>
         public bool IsDurable => _durable;
 
-        private static string Key(string source, DateTime day)
+        private string ScopePurgeKey => _keyPrefix + "scopePurge";
+
+        private string Key(string source, DateTime day)
         {
             if (!WeeklySources.Contains(source)) throw new ArgumentException("Unknown usage-report source.", nameof(source));
-            return "v1:" + source + ":" + day.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+            return _keyPrefix + source + ":" + day.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         }
 
         /// <summary>In progress, or saved before the day settled: not final, so the importer downloads it again.</summary>
@@ -278,8 +289,8 @@ namespace Common.Entities.State
 
         /// <summary>
         /// Reads the exact daily outcomes for report consumers that need to distinguish a verified empty
-        /// day from an older day with no ledger record. A confirmed key miss is a null value for its date;
-        /// an unavailable source has no date entries at all.
+        /// day from an older day with no ledger record. A confirmed key miss in the default namespace is null;
+        /// in a recovery namespace it is unverified. An unavailable source has no date entries at all.
         /// </summary>
         public Task<Dictionary<string, Dictionary<DateTime, string>>> ReadDailyOutcomesAsync(
             DateTime from, DateTime through, CancellationToken cancellationToken = default) =>

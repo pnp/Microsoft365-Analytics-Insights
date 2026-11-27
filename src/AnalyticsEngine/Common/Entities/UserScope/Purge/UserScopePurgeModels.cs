@@ -93,6 +93,9 @@ namespace Common.Entities.UserScope.Purge
         /// <summary>A user deletion may have committed without a matching count. Only a new confirmation can authorise more.</summary>
         public const string UserDeleteOutcomeUnknown = "userDeleteOutcomeUnknown";
 
+        /// <summary>The count for a usage table is a lower bound because SQL did not acknowledge a commit.</summary>
+        public const string UsageDeleteOutcomeUnknown = "usageDeleteOutcomeUnknown";
+
         /// <summary>
         /// Starting again after a restart, the purge found that the members of the <c>UserGroupsFilter</c> groups are no
         /// longer the ones it was confirmed against, so it stopped rather than remove people chosen under a scope nobody
@@ -145,6 +148,11 @@ namespace Common.Entities.UserScope.Purge
 
         internal bool HasUnaccountedUserDeletes => UserDeletePending ??
             (StartedUtc.HasValue && (Phase == UserScopePurgePhases.Users || Phase == UserScopePurgePhases.Done));
+
+        // A later owner must not replay an unacknowledged usage commit and mistake the missing rows
+        // for an exact count. RowsAffected contains only this table's last acknowledged subtotal.
+        [JsonProperty]
+        public string UsageCommitPendingTable { get; internal set; }
 
         public int Id { get; set; }
         public string State { get; set; }

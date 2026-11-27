@@ -521,9 +521,17 @@ namespace Web.AnalyticsWeb.Models.UserScope
             CandidateCount = job.CandidateCount,
             UsersDeleted = job.UsersDeleted,
             UsersSkipped = job.UsersSkipped,
-            RowsAffected = job.RowsAffected
-                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                .Select(pair => new UserScopePurgeTableCountModel { Table = pair.Key, Rows = pair.Value })
+            RowsAffected = job.RowsAffected.Keys
+                .Concat(job.UsageCommitPendingTable != null
+                    ? new[] { job.UsageCommitPendingTable } : Array.Empty<string>())
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(table => table, StringComparer.Ordinal)
+                .Select(table => new UserScopePurgeTableCountModel
+                {
+                    Table = table,
+                    Rows = job.RowsAffected.TryGetValue(table, out var rows) ? rows : 0,
+                    IsLowerBound = table == job.UsageCommitPendingTable,
+                })
                 .ToList(),
             CancelRequested = job.CancelRequested,
             RequestedBy = job.RequestedBy,

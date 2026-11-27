@@ -604,6 +604,44 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public async Task ScopePurge_RecoveryNamespaceIsolatedFromLegacyFenceAndCertificates()
+        {
+            var ledger = NewStore();
+            var legacy = new UsageReportCoverageStore(ledger, true);
+            var day = new DateTime(2020, 1, 1);
+            var legacyToken = Guid.NewGuid().ToString("N");
+            Task Check() => Task.CompletedTask;
+            await legacy.CompleteDayAsync("outlook", day, true, true, true, day.AddDays(5), 3);
+            await legacy.StartScopePurgeAsync(legacyToken, Check);
+            var fenceBefore = await ledger.GetVersionedAsync("v1:scopePurge");
+            var generation = Guid.NewGuid().ToString("N");
+            var recovered = new UsageReportCoverageStore(ledger, true, null, generation);
+            var reopened = new UsageReportCoverageStore(ledger, true, null, generation);
+            var publication = await UsageReportCoverageStore.BeginPublicationAsync(
+                new[] { "outlook" }, day, day, () => reopened);
+            var outcomes = await publication.ReadStableOutcomesAsync(new[] { "outlook" });
+            Assert.AreEqual(UsageReportCoverageStore.Partial, outcomes["outlook"][day], "Missing coverage is not a legacy fallback.");
+
+            await recovered.StartScopePurgeAsync("replacement", Check);
+            await reopened.RevokeScopeDaysAsync("replacement", "teams", new[] { day }, CancellationToken.None);
+            await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() => reopened.StartScopePurgeAsync("unrelated", Check));
+            var ended = DateTime.UtcNow;
+            await recovered.EndScopePurgeAsync("replacement", ended);
+            await reopened.CompleteDayAsync("teams", day, true, true, false, ended, 3);
+            Assert.IsFalse(await reopened.IsDayVerifiedAsync("teams", day));
+            await reopened.CompleteDayAsync("teams", day, true, true, false, ended.AddSeconds(1), 3);
+            Assert.IsTrue(await recovered.IsDayVerifiedAsync("teams", day));
+            Assert.AreEqual(fenceBefore.VersionToken, (await ledger.GetVersionedAsync("v1:scopePurge")).VersionToken);
+
+            // Even a request still addressed to the old namespace cannot change the replacement's days.
+            await legacy.RevokeScopeDaysAsync(legacyToken, "teams", new[] { day }, CancellationToken.None);
+            Assert.IsTrue(await recovered.IsDayVerifiedAsync("teams", day));
+            Assert.AreEqual(fenceBefore.Value, (await ledger.GetVersionedAsync("v1:scopePurge")).Value);
+            Assert.IsTrue(await legacy.IsDayVerifiedAsync("outlook", day));
+            Assert.IsFalse(await recovered.IsDayVerifiedAsync("outlook", day));
+        }
+
+        [TestMethod]
         public async Task ScopePurge_StaleTerminalWriteCannotReplaceAnotherOwnersState()
         {
             var table = _table ?? Skip();

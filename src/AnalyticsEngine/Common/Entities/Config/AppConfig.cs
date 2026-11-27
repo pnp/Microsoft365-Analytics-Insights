@@ -60,6 +60,7 @@ namespace Common.Entities.Config
             // audit (Management Activity API) window: Graph keeps about 28 days of usage-report detail, and a day that
             // falls out of a 6-day window before its import succeeds can never be fetched again.
             this.UsageReportsDaysBack = ParseUsageReportsDaysBack(ConfigurationManager.AppSettings.Get("UsageReportsDaysBack"));
+            this.UsageReportCoverageGeneration = ReadRuntimeSetting(nameof(UsageReportCoverageGeneration));
 
             // Resolve Copilot file/meeting metadata from Graph. Default true so behaviour is unchanged unless
             // a tenant opts out. (The Power Platform workload is toggled separately on ImportJobSettings.)
@@ -101,16 +102,16 @@ namespace Common.Entities.Config
 
             this.CognitiveEndpoint = ConfigurationManager.AppSettings.Get("CognitiveEndpoint");
             this.CognitiveKey = ConfigurationManager.AppSettings.Get("CognitiveKey");
-            FoundryPromptCategorisationEndpoint = ReadFoundryRuntimeSetting(nameof(FoundryPromptCategorisationEndpoint));
-            FoundryPromptCategorisationDeployment = ReadFoundryRuntimeSetting(nameof(FoundryPromptCategorisationDeployment));
-            FoundryPromptCategorisationKey = ReadFoundryRuntimeSetting(nameof(FoundryPromptCategorisationKey));
+            FoundryPromptCategorisationEndpoint = ReadRuntimeSetting(nameof(FoundryPromptCategorisationEndpoint));
+            FoundryPromptCategorisationDeployment = ReadRuntimeSetting(nameof(FoundryPromptCategorisationDeployment));
+            FoundryPromptCategorisationKey = ReadRuntimeSetting(nameof(FoundryPromptCategorisationKey));
             // Migrate the namespace as a set; never pair a new deployment with an old endpoint or key.
             if (FoundryPromptCategorisationEndpoint == null && FoundryPromptCategorisationDeployment == null &&
                 FoundryPromptCategorisationKey == null)
             {
-                FoundryPromptCategorisationEndpoint = ReadFoundryRuntimeSetting("FoundryPromptEndpoint");
-                FoundryPromptCategorisationDeployment = ReadFoundryRuntimeSetting("FoundryPromptDeployment");
-                FoundryPromptCategorisationKey = ReadFoundryRuntimeSetting("FoundryPromptKey");
+                FoundryPromptCategorisationEndpoint = ReadRuntimeSetting("FoundryPromptEndpoint");
+                FoundryPromptCategorisationDeployment = ReadRuntimeSetting("FoundryPromptDeployment");
+                FoundryPromptCategorisationKey = ReadRuntimeSetting("FoundryPromptKey");
             }
 
 
@@ -448,6 +449,9 @@ namespace Common.Entities.Config
         /// </summary>
         public int UsageReportsDaysBack { get; set; } = DefaultUsageReportsDaysBack;
 
+        /// <summary>Optional recovery namespace for the coverage ledger. Set the same new GUID on all hosts while offline.</summary>
+        public string UsageReportCoverageGeneration { get; set; }
+
         private static int ParseUsageReportsDaysBack(string raw)
         {
             if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var days) || days <= 0)
@@ -674,12 +678,12 @@ namespace Common.Entities.Config
         /// </summary>
         public int ImportStartStaggerMinutes { get; set; } = 0;
 
-        #region Copilot AI interaction history
-
         // Console WebJobs do not have ASP.NET's App Service appSettings override.
-        private static string ReadFoundryRuntimeSetting(string name) =>
+        private static string ReadRuntimeSetting(string name) =>
             Environment.GetEnvironmentVariable("APPSETTING_" + name) ??
             Environment.GetEnvironmentVariable(name) ?? ConfigurationManager.AppSettings.Get(name);
+
+        #region Copilot AI interaction history
 
         public string FoundryPromptCategorisationEndpoint { get; set; }
         public string FoundryPromptCategorisationDeployment { get; set; }

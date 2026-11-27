@@ -116,6 +116,9 @@ namespace Common.Entities.UserScope.Purge
         /// </summary>
         internal Func<int, Task> BeforeOneByOneDelete { get; set; }
 
+        /// <summary>Test hook: runs after saving a user-delete intent but before sending SQL.</summary>
+        internal Action BeforeUserDeleteDispatch { get; set; }
+
         /// <summary>Test hook: overrides the pause between retries of a transient database error.</summary>
         internal TimeSpan? RetryDelayOverride { get; set; }
 
@@ -207,13 +210,13 @@ namespace Common.Entities.UserScope.Purge
                     _logger.LogWarning($"User scope purge {job.Id}: durable report coverage is missing on takeover. Leaving the job active until its fence can be checked.");
                     return UserScopePurgeRunOutcome.Paused;
                 }
+                var unacknowledged = UnacknowledgedDeleteCode(job);
                 if (job.CancelRequested || session.StopRequestedOnReconnect)
                 {
-                    return await EndAsync(job, session, UserScopePurgeStates.Cancelled,
-                        job.HasUnaccountedUserDeletes ? UserScopePurgeErrorCodes.UserDeleteOutcomeUnknown : null, null).ConfigureAwait(false);
+                    return await EndAsync(job, session, UserScopePurgeStates.Cancelled, unacknowledged, null).ConfigureAwait(false);
                 }
-                if (job.HasUnaccountedUserDeletes)
-                    return await EndAsync(job, session, UserScopePurgeStates.Failed, UserScopePurgeErrorCodes.UserDeleteOutcomeUnknown, null).ConfigureAwait(false);
+                if (unacknowledged != null)
+                    return await EndAsync(job, session, UserScopePurgeStates.Failed, unacknowledged, null).ConfigureAwait(false);
 
                 var snapshot = await SnapshotAsync(job, session, scopeProvider, preResolved, stopToken).ConfigureAwait(false);
                 if (snapshot != null)
@@ -269,10 +272,9 @@ namespace Common.Entities.UserScope.Purge
                 }
                 var sql = ex as SqlException ?? ex.InnerException as SqlException;
                 var stateLost = ex is UserScopePurgeStateUnavailableException;
-                var code = job.HasUnaccountedUserDeletes ? UserScopePurgeErrorCodes.UserDeleteOutcomeUnknown
-                    : sql != null ? UserScopePurgeErrorCodes.DatabaseError
+                var code = UnacknowledgedDeleteCode(job) ?? (sql != null ? UserScopePurgeErrorCodes.DatabaseError
                     : stateLost ? UserScopePurgeErrorCodes.StateUnavailable
-                    : UserScopePurgeErrorCodes.Unexpected;
+                    : UserScopePurgeErrorCodes.Unexpected);
                 var detail = sql != null ? $"{ex.GetType().Name}: SQL error {sql.Number}"
                     : stateLost ? $"{ex.GetType().Name}: {ex.InnerException?.GetType().Name}"
                     : ex.GetType().Name;
@@ -294,6 +296,11 @@ namespace Common.Entities.UserScope.Purge
                 return UserScopePurgeRunOutcome.Paused;
             }
         }
+
+        private static string UnacknowledgedDeleteCode(UserScopePurgeJob job) =>
+            job.HasUnaccountedUserDeletes ? UserScopePurgeErrorCodes.UserDeleteOutcomeUnknown
+            : job.UsageCommitPendingTable != null ? UserScopePurgeErrorCodes.UsageDeleteOutcomeUnknown
+            : null;
 
         /// <summary>
         /// Saves the purge's progress and says whether a stop has been asked for: at most every
@@ -628,6 +635,8 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
 
             var window = WindowOverride ?? step.Window;
             var usageBatch = coverageSource == null ? null : new UsageBatch();
+            var userDeletes = step.Kind == UserScopePurgeStepKind.Users ? new UserDeleteCheckpoint(job,
+                () => SaveAndCheckForStopAsync(job, session, true, stopToken), stopToken, BeforeUserDeleteDispatch) : null;
             var windowNumber = 0;
             long stepRows = 0;
             while (true)
@@ -636,26 +645,24 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
                 windowNumber++;
 
                 WindowResult result;
-                if (step.Kind == UserScopePurgeStepKind.Users)
+                if (userDeletes != null)
                 {
-                    // The owner-checked intent must survive a disconnect between the SQL commit and
-                    // the next progress write. Never replay an unacknowledged delete (including a
-                    // partially executed one-at-a-time fallback) as though it removed zero people.
-                    job.UserDeletePending = true;
-                    if (await SaveAndCheckForStopAsync(job, session, true, stopToken).ConfigureAwait(false))
+                    try
                     {
-                        job.UserDeletePending = false;
-                        throw new PurgeStopRequestedException();
+                        result = await userDeletes.ExecuteAsync(dispatch => RunWindowAsync(session.Connection, step, keyType,
+                            job.StepAfter, window, unknownUserId, lateUsageGuard, dispatch), r => r.Affected).ConfigureAwait(false);
                     }
-                    result = await RunWindowAsync(session.Connection, step, keyType, job.StepAfter, window, unknownUserId, lateUsageGuard).ConfigureAwait(false);
+                    catch (SqlException ex) when (ex.Number == 547)
+                    {
+                        result = await DeleteUsersOneByOneAsync(session, keyType, job.StepAfter, window, lateUsageGuard, userDeletes).ConfigureAwait(false);
+                    }
                 }
                 else result = await WithRetriesAsync(session, () => coverageSource == null
                         ? RunWindowAsync(session.Connection, step, keyType, job.StepAfter, window, unknownUserId, lateUsageGuard)
-                        : DeleteUsageWindowAsync(session, step, job.StepAfter, window, coverageSource, usageBatch, stopToken),
+                        : DeleteUsageWindowAsync(job, session, step, window, coverageSource, usageBatch, stopToken),
                     stopToken).ConfigureAwait(false);
                 if (result.Done)
                 {
-                    if (step.Kind == UserScopePurgeStepKind.Users) job.UserDeletePending = false;
                     break;
                 }
 
@@ -667,16 +674,11 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
                         Add(job, count.Key, count.Value);
                     }
                 }
-                else if (result.Affected > 0)
+                else if (result.Affected > 0 && userDeletes == null && usageBatch == null)
                 {
                     Add(job, step.CountKey, result.Affected);
-                    if (step.Kind == UserScopePurgeStepKind.Users)
-                    {
-                        job.UsersDeleted += result.Affected;
-                    }
                 }
                 job.StepAfter = result.NextAfter;
-                if (step.Kind == UserScopePurgeStepKind.Users) job.UserDeletePending = false;
 
                 if (await SaveAndCheckForStopAsync(job, session, false, stopToken).ConfigureAwait(false))
                 {
@@ -723,14 +725,59 @@ WHERE NOT EXISTS (SELECT 1 FROM dbo.users u WHERE u.azure_ad_id = CONVERT(nvarch
             public int End, Selected, Deleted, NextDay;
         }
 
-        private async Task<WindowResult> DeleteUsageWindowAsync(UserScopePurgeSession session, UserScopePurgeStep step,
-            string after, int window, string source, UsageBatch batch, CancellationToken token)
+        private async Task<WindowResult> DeleteUsageWindowAsync(UserScopePurgeJob job, UserScopePurgeSession session,
+            UserScopePurgeStep step, int window, string source, UsageBatch batch, CancellationToken token)
+        {
+            var after = job.StepAfter;
+            if (batch.Connection != session.Connection &&
+                !await StageUsageWindowAsync(session.Connection, step, after, window, batch, token).ConfigureAwait(false))
+                return new WindowResult { Done = true };
+            if (batch.Days.Count == 0)
+            {
+                batch.Connection = null;
+                return new WindowResult { NextAfter = KeyToString(batch.End) };
+            }
+
+            var dispatched = false;
+            job.UsageCommitPendingTable = step.CountKey;
+            try
+            {
+                // Write before opening the transaction, under the verified SQL lock. It also
+                // checkpoints every earlier acknowledged subtotal even if this owner now disappears.
+                if (await SaveAndCheckForStopAsync(job, session, true, token).ConfigureAwait(false))
+                    throw new PurgeStopRequestedException();
+                // A reconnect during the save reloaded the candidates but not this staging batch.
+                // The next window restages it under the new connection before deleting anything.
+                if (batch.Connection != session.Connection)
+                {
+                    job.UsageCommitPendingTable = null;
+                    return new WindowResult { NextAfter = after };
+                }
+                var result = await DeleteUsageBatchAsync(session, step, after, source, batch, (transaction, count) =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    dispatched = true;
+                    // Do not retry or restore certificates on a lost COMMIT response.
+                    try { CommitUsageTransaction(transaction); }
+                    catch (Exception ex) { throw new InvalidOperationException("The usage purge commit was not acknowledged.", ex); }
+                    Add(job, step.CountKey, count);
+                    job.UsageCommitPendingTable = null;
+                }, token).ConfigureAwait(false);
+                job.UsageCommitPendingTable = null;
+                return result;
+            }
+            catch when (!dispatched)
+            {
+                // A rejected provisional delete or a stop before COMMIT cannot have removed rows.
+                job.UsageCommitPendingTable = null;
+                throw;
+            }
+        }
+
+        private async Task<WindowResult> DeleteUsageBatchAsync(UserScopePurgeSession session, UserScopePurgeStep step,
+            string after, string source, UsageBatch batch, Action<SqlTransaction, int> commit, CancellationToken token)
         {
             var connection = session.Connection;
-            if (batch.Connection != connection &&
-                !await StageUsageWindowAsync(connection, step, after, window, batch, token).ConfigureAwait(false))
-                return new WindowResult { Done = true };
-
             var take = Math.Min(UsageReportCoverageStore.MaxPurgeDaysPerTransaction, batch.Days.Count - batch.NextDay);
             var next = batch.NextDay + take;
             var affected = 0;
@@ -764,10 +811,7 @@ SELECT report_day, COUNT(*) FROM @removed GROUP BY report_day;", connection, tra
                     }
                     if (days.Count != 0)
                         await CoverageWriteAsync(() => RevokeBeforeCommitAsync(session.CoverageFence, source, days, token), token).ConfigureAwait(false);
-                    // No retry or certificate restoration on a lost COMMIT response. Previously
-                    // acknowledged units retain their counts; this unit's dates stay unverified.
-                    try { CommitUsageTransaction(transaction); }
-                    catch (Exception ex) { throw new InvalidOperationException("The usage purge commit was not acknowledged.", ex); }
+                    if (affected != 0) commit(transaction, affected);
                 }
                 if (batch.Revoked.Count + days.Count > UsageReportCoverageStore.MaximumDays) batch.Revoked.Clear();
                 batch.Revoked.UnionWith(days);
@@ -851,26 +895,70 @@ SELECT DISTINCT report_day FROM #purge_usage_batch ORDER BY report_day;";
             }
         }
 
-        private async Task<WindowResult> RunWindowAsync(SqlConnection connection, UserScopePurgeStep step, string keyType, string after, int window, int? unknownUserId, string lateUsageGuard)
+        // A fallback DELETE is an independent autocommit. Save each acknowledged subtotal before
+        // moving to the next row, and also include it in the next intent.
+        internal sealed class UserDeleteCheckpoint
+        {
+            private readonly UserScopePurgeJob _job;
+            private readonly Func<Task<bool>> _saveAndCheckStop;
+            private readonly CancellationToken _stop;
+            private readonly Action _beforeDispatch;
+
+            internal UserDeleteCheckpoint(UserScopePurgeJob job, Func<Task<bool>> saveAndCheckStop, CancellationToken stop,
+                Action beforeDispatch = null)
+            {
+                _job = job;
+                _saveAndCheckStop = saveAndCheckStop;
+                _stop = stop;
+                _beforeDispatch = beforeDispatch;
+            }
+
+            internal async Task<T> ExecuteAsync<T>(Func<Action, Task<T>> execute, Func<T, int> count, bool saveAcknowledgement = false)
+            {
+                var dispatched = false;
+                _job.UserDeletePending = true;
+                T result;
+                try
+                {
+                    if (await _saveAndCheckStop().ConfigureAwait(false)) throw new PurgeStopRequestedException();
+                    result = await execute(() =>
+                    {
+                        _beforeDispatch?.Invoke();
+                        _stop.ThrowIfCancellationRequested();
+                        dispatched = true;
+                    }).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (!dispatched || (ex is SqlException sql && sql.Number == 547))
+                {
+                    // Only in memory. Pause/failure may publish this correction only as the owner;
+                    // if it cannot, takeover still sees the conservative durable intent.
+                    _job.UserDeletePending = false;
+                    throw;
+                }
+                var rows = count(result);
+                if (rows > 0)
+                {
+                    Add(_job, "users", rows);
+                    _job.UsersDeleted += rows;
+                }
+                _job.UserDeletePending = false;
+                if (saveAcknowledgement && rows > 0 && await _saveAndCheckStop().ConfigureAwait(false))
+                    throw new PurgeStopRequestedException();
+                return result;
+            }
+        }
+
+        private Task<WindowResult> RunWindowAsync(SqlConnection connection, UserScopePurgeStep step, string keyType, string after, int window, int? unknownUserId, string lateUsageGuard, Action dispatch = null)
         {
             var sql = step.Kind == UserScopePurgeStepKind.Calls ? BuildCallsWindowSql(keyType, after != null)
                 : IsWalkOfTheCandidates(step) ? BuildCandidateWindowSql(step, after != null)
                 : BuildWindowSql(step, keyType, after != null, lateUsageGuard);
 
-            try
-            {
-                return await ExecuteWindowAsync(connection, sql, keyType, after, window, unknownUserId).ConfigureAwait(false);
-            }
-            catch (SqlException ex) when (ex.Number == 547 && step.Kind == UserScopePurgeStepKind.Users)
-            {
-                // Something new points at one of these users - the importers added data about them while the purge
-                // ran. Remove the ones that are free, one at a time, and leave the rest for the next purge.
-                return await DeleteUsersOneByOneAsync(connection, keyType, after, window, lateUsageGuard).ConfigureAwait(false);
-            }
+            return ExecuteWindowAsync(connection, sql, keyType, after, window, unknownUserId, dispatch);
         }
 
         private async Task<WindowResult> ExecuteWindowAsync(SqlConnection connection, string sql, string keyType, string after,
-            int window, int? unknownUserId)
+            int window, int? unknownUserId, Action dispatch)
         {
             using (var command = new SqlCommand(sql, connection))
             {
@@ -883,6 +971,7 @@ SELECT DISTINCT report_day FROM #purge_usage_batch ORDER BY report_day;";
                     AddKeyParameter(command, "@after", keyType, after);
                 }
 
+                dispatch?.Invoke();
                 using (var reader = await command.ExecuteReaderAsync().ConfigureAwait(false))
                 {
                     if (!await reader.ReadAsync().ConfigureAwait(false))
@@ -910,7 +999,7 @@ SELECT DISTINCT report_day FROM #purge_usage_batch ORDER BY report_day;";
             }
         }
 
-        private async Task<WindowResult> DeleteUsersOneByOneAsync(SqlConnection connection, string keyType, string after, int window, string lateUsageGuard)
+        private async Task<WindowResult> DeleteUsersOneByOneAsync(UserScopePurgeSession session, string keyType, string after, int window, string lateUsageGuard, UserDeleteCheckpoint userDeletes)
         {
             var afterFilter = after == null ? "" : "WHERE t.[id] > @after ";
             var select = $@"
@@ -923,7 +1012,7 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
 
             var ids = new List<int>();
             object end = null;
-            using (var command = new SqlCommand(select, connection))
+            using (var command = new SqlCommand(select, session.Connection))
             {
                 command.CommandTimeout = 600;
                 command.Parameters.Add("@window", SqlDbType.Int).Value = window;
@@ -950,12 +1039,16 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
                 {
                     // The audit-event check again, in the delete itself: audit_events.user_id has no foreign key, so an event
                     // that arrived since the select above would otherwise be orphaned rather than keep its user.
-                    using (var delete = new SqlCommand(
-                        $"DELETE t FROM dbo.users t WHERE t.id = @id AND NOT EXISTS (SELECT 1 FROM dbo.audit_events e WHERE e.user_id = @id){lateUsageGuard}; SELECT @@ROWCOUNT;", connection))
+                    deleted += await userDeletes.ExecuteAsync(async dispatch =>
                     {
-                        delete.Parameters.Add("@id", SqlDbType.Int).Value = id;
-                        deleted += (int)await delete.ExecuteScalarAsync().ConfigureAwait(false);
-                    }
+                        using (var delete = new SqlCommand(
+                            $"DELETE t FROM dbo.users t WHERE t.id = @id AND NOT EXISTS (SELECT 1 FROM dbo.audit_events e WHERE e.user_id = @id){lateUsageGuard}; SELECT @@ROWCOUNT;", session.Connection))
+                        {
+                            delete.Parameters.Add("@id", SqlDbType.Int).Value = id;
+                            dispatch();
+                            return (int)await delete.ExecuteScalarAsync().ConfigureAwait(false);
+                        }
+                    }, rows => rows, saveAcknowledgement: true).ConfigureAwait(false);
                 }
                 catch (SqlException ex) when (ex.Number == 547)
                 {
@@ -968,7 +1061,7 @@ WHERE t.[id] <= @end{(after == null ? "" : " AND t.[id] > @after")}
             {
                 // No candidate left in the window - find the window's end on its own to move past it.
                 using (var command = new SqlCommand(
-                    $"SELECT TOP (1) w.k FROM (SELECT TOP (@window) t.[id] AS k FROM dbo.[users] t {afterFilter}ORDER BY t.[id]) w ORDER BY w.k DESC;", connection))
+                    $"SELECT TOP (1) w.k FROM (SELECT TOP (@window) t.[id] AS k FROM dbo.[users] t {afterFilter}ORDER BY t.[id]) w ORDER BY w.k DESC;", session.Connection))
                 {
                     command.Parameters.Add("@window", SqlDbType.Int).Value = window;
                     if (after != null) AddKeyParameter(command, "@after", keyType, after);

@@ -737,6 +737,7 @@ export const admin = {
   'admin.userScope.progress.rowsAffected': 'Rows affected by table or column',
   'admin.userScope.progress.table': 'Table or column',
   'admin.userScope.progress.rows': 'Rows',
+  'admin.userScope.progress.rowsLowerBound': 'At least {count}',
   'admin.userScope.progress.rowsHelp':
     'A table name counts rows deleted. A table.column name counts rows kept but changed in place: the person is replaced by the anonymous Unknown User, or the link to them is cleared.',
   'admin.userScope.progress.stopHelp':
@@ -776,6 +777,8 @@ export const admin = {
     'The purge stopped because more people are outside the scope than the number confirmed when it started: the groups lost members, or new users arrived. Anything it had already removed stays removed, and nobody else was removed. Check the groups, then start the purge again to confirm the new number.',
   'admin.userScope.jobError.userDeleteOutcomeUnknown':
     'The purge stopped because it could not confirm how many people its last batch removed. The count shown includes only acknowledged deletions. Check who is outside the scope and confirm a new purge before removing anyone else.',
+  'admin.userScope.jobError.usageDeleteOutcomeUnknown':
+    'The purge stopped because SQL did not confirm whether its last batch deleted usage report rows. The count marked below includes only confirmed deletions. Check who is outside the scope before starting a new purge.',
   'admin.userScope.jobError.scopeMembershipChanged':
     'The purge stopped when it started again after a restart, because the members of the UserGroupsFilter groups had changed since it was confirmed. Anything it had already removed stays removed, and nobody else was removed. Start the purge again to confirm who is outside the scope now.',
   'admin.userScope.jobError.databaseError':

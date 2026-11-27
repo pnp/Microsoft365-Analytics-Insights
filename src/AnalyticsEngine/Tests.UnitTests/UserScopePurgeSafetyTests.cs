@@ -1,3 +1,6 @@
+extern alias AnalyticsWeb;
+
+using AnalyticsWeb::Web.AnalyticsWeb.Models.UserScope;
 using Common.Entities.State;
 using Common.Entities.UserScope;
 using Common.Entities.UserScope.Purge;
@@ -11,6 +14,75 @@ using Tests.UnitTests.FakeLoaderClasses;
 
 namespace Tests.UnitTests
 {
+    [TestClass]
+    public class UserDeleteCheckpointTests
+    {
+        [DataTestMethod]
+        [DataRow(true, false)]
+        [DataRow(false, false)]
+        [DataRow(true, true)]
+        public async Task BeforeDispatchOnlyTheCurrentOwnerCanCorrectTheIntent(bool hostStops, bool replaced)
+        {
+            var state = new UserScopePurgeStateStore(new InMemoryKeyValueStore(), true);
+            var queued = await state.CreateAsync(null, null, 1, 1);
+            var job = await state.TryClaimAsync(queued.Id, () => Task.CompletedTask, CancellationToken.None);
+            using (var stopping = new CancellationTokenSource())
+            {
+                var checkpoint = new UserScopePurgeEngine.UserDeleteCheckpoint(job, async () =>
+                {
+                    await state.SaveOwnedAsync(job, CancellationToken.None);
+                    if (!hostStops) throw new TimeoutException("Synthetic stop check failure.");
+                    stopping.Cancel();
+                    return false;
+                }, stopping.Token);
+                var sent = false;
+                Task<int> Attempt() => checkpoint.ExecuteAsync(dispatch =>
+                {
+                    dispatch();
+                    sent = true;
+                    return Task.FromResult(1);
+                }, count => count);
+                if (hostStops) await Assert.ThrowsExceptionAsync<OperationCanceledException>(() => Attempt());
+                else await Assert.ThrowsExceptionAsync<TimeoutException>(() => Attempt());
+                Assert.IsFalse(sent);
+                Assert.IsFalse(job.HasUnaccountedUserDeletes);
+                Assert.IsTrue((await state.GetAsync(job.Id)).HasUnaccountedUserDeletes);
+                if (replaced)
+                {
+                    await state.TryClaimAsync(job.Id, () => Task.CompletedTask, CancellationToken.None);
+                    await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() => state.SaveOwnedAsync(job, CancellationToken.None));
+                }
+                else await state.SaveOwnedAsync(job, CancellationToken.None);
+                Assert.AreEqual(replaced, (await state.GetAsync(job.Id)).HasUnaccountedUserDeletes);
+            }
+        }
+
+        [TestMethod]
+        public async Task LostSingleDeleteReplyRetainsOnlyEarlierAcknowledgementsAcrossTakeover()
+        {
+            var state = new UserScopePurgeStateStore(new InMemoryKeyValueStore(), true);
+            var queued = await state.CreateAsync(null, null, 1, 3);
+            var job = await state.TryClaimAsync(queued.Id, () => Task.CompletedTask, CancellationToken.None);
+            var checkpoint = new UserScopePurgeEngine.UserDeleteCheckpoint(job, async () =>
+            {
+                await state.SaveOwnedAsync(job, CancellationToken.None);
+                return false;
+            }, CancellationToken.None);
+            foreach (var rows in new[] { 1, 0, 1 })
+                await checkpoint.ExecuteAsync(dispatch => { dispatch(); return Task.FromResult(rows); }, count => count);
+            await Assert.ThrowsExceptionAsync<TimeoutException>(() => checkpoint.ExecuteAsync<int>(dispatch =>
+            {
+                dispatch();
+                throw new TimeoutException("Synthetic lost SQL acknowledgement.");
+            }, count => count));
+            Assert.IsTrue(job.HasUnaccountedUserDeletes);
+            var replacement = await state.TryClaimAsync(job.Id, () => Task.CompletedTask, CancellationToken.None);
+            Assert.IsTrue(replacement.HasUnaccountedUserDeletes);
+            Assert.AreEqual(2, replacement.UsersDeleted);
+            Assert.AreEqual(2L, replacement.RowsAffected["users"]);
+        }
+    }
+
     [TestClass]
     [TestCategory("SqlIntegration")]
     [DoNotParallelize]
@@ -58,6 +130,7 @@ namespace Tests.UnitTests
             _ledger = new InMemoryKeyValueStore();
             // Only this class's throwaway migrated database. Use real scope resolution rather than a candidate override.
             _db.Execute($@"
+DROP TABLE IF EXISTS dbo.contoso_keep_user;
 DROP TRIGGER IF EXISTS dbo.contoso_delete_ack;
 DELETE FROM dbo.copilot_studio_credit_user_daily;
 DELETE FROM dbo.audit_events;
@@ -100,6 +173,92 @@ OPTION (MAXRECURSION 0);");
                 StateCheckInterval = TimeSpan.Zero,
                 BatchSizeOverride = 1,
             };
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task UnprovenLegacyFenceIsUntouchedWhenAnExplicitGenerationAllowsRecovery(bool cancel)
+        {
+            var legacyToken = Guid.NewGuid().ToString("N");
+            var legacy = new UsageReportCoverageStore(_ledger, true);
+            await legacy.StartScopePurgeAsync(legacyToken, () => Task.CompletedTask);
+            var members = Members(InsideUpn);
+            var queued = await QueueAsync(members);
+
+            Assert.AreEqual(UserScopePurgeRunOutcome.LockLost, await Engine(true).RunAsync(queued.Id, Provider(members)));
+            Assert.IsTrue(await legacy.IsActivePurgeAsync(legacyToken, CancellationToken.None));
+            Assert.AreEqual(1, _db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE id = {_outside}"));
+            if (cancel) Assert.IsTrue(await _state.RequestCancelAsync(queued.Id));
+
+            var recovered = new UsageReportCoverageStore(_ledger, true, null, Guid.NewGuid().ToString("N"));
+            var engine = new UserScopePurgeEngine(_database, _state, null, recovered);
+            Assert.AreEqual(cancel ? UserScopePurgeRunOutcome.Cancelled : UserScopePurgeRunOutcome.Completed,
+                await engine.RunAsync(queued.Id, Provider(members)));
+            Assert.AreEqual(cancel ? 1 : 0, _db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE id = {_outside}"));
+            Assert.IsTrue(await legacy.IsActivePurgeAsync(legacyToken, CancellationToken.None), "Recovery must not update or clear an unproven fence.");
+        }
+
+        [TestMethod]
+        public async Task GracefulStopAfterSavingIntentButBeforeUserSqlPreservesConsent()
+        {
+            var members = Members(InsideUpn);
+            var queued = await QueueAsync(members);
+            var first = Engine(true);
+            using (var stopping = new CancellationTokenSource())
+            {
+                first.BeforeUserDeleteDispatch = stopping.Cancel;
+                Assert.AreEqual(UserScopePurgeRunOutcome.Paused, await first.RunAsync(queued.Id, Provider(members), stopToken: stopping.Token));
+            }
+            var paused = await _state.GetAsync(queued.Id);
+            Assert.IsFalse(paused.HasUnaccountedUserDeletes);
+            Assert.AreEqual(0, paused.UsersDeleted);
+            Assert.AreEqual(1, _db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE id = {_outside}"));
+
+            Assert.AreEqual(UserScopePurgeRunOutcome.Completed, await Engine(true).RunAsync(queued.Id, Provider(members)));
+            Assert.AreEqual(1, (await _state.GetAsync(queued.Id)).UsersDeleted);
+            Assert.AreEqual(0, _db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE id = {_outside}"));
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task AcknowledgedFallbackDeleteSurvivesLaterFailureOrHandoff(bool handoff)
+        {
+            _db.Execute($@"INSERT dbo.users(user_name) VALUES ('{LaterUpn}');
+CREATE TABLE dbo.contoso_keep_user (id int NOT NULL REFERENCES dbo.users(id));
+INSERT dbo.contoso_keep_user SELECT id FROM dbo.users WHERE user_name = '{LaterUpn}';");
+            var members = Members(InsideUpn);
+            var queued = await _state.CreateAsync(null, null, 1, 2, members.Members.MembershipFingerprint);
+            var first = Engine(true);
+            first.BatchSizeOverride = 20; // Both candidates share a DELETE, so the FK forces the fallback.
+            using (var session = await _database.TryOpenPurgeSessionAsync(TimeSpan.Zero))
+            {
+                first.BeforeOneByOneDelete = async id =>
+                {
+                    if (id == _outside) return;
+                    var checkpoint = await _state.GetAsync(queued.Id);
+                    Assert.AreEqual(1, checkpoint.UsersDeleted);
+                    Assert.AreEqual(1L, checkpoint.RowsAffected["users"]);
+                    Assert.IsFalse(checkpoint.HasUnaccountedUserDeletes);
+                    if (handoff)
+                    {
+                        session.Connection.Close();
+                        Assert.IsTrue(await _state.RequestCancelAsync(queued.Id));
+                        Assert.AreEqual(UserScopePurgeRunOutcome.Cancelled, await Engine(true).RunAsync(queued.Id, Provider(members)));
+                    }
+                    throw new InvalidOperationException("Synthetic failure before the next fallback delete.");
+                };
+                Assert.AreEqual(handoff ? UserScopePurgeRunOutcome.LockLost : UserScopePurgeRunOutcome.Failed,
+                    await first.RunAsync(queued.Id, Provider(members), lockedSession: session));
+            }
+            var final = await _state.GetAsync(queued.Id);
+            Assert.AreEqual(handoff ? UserScopePurgeStates.Cancelled : UserScopePurgeStates.Failed, final.State);
+            Assert.AreEqual(handoff ? null : UserScopePurgeErrorCodes.Unexpected, final.ErrorCode);
+            Assert.AreEqual(1, final.UsersDeleted);
+            Assert.AreEqual(1L, final.RowsAffected["users"]);
+            Assert.AreEqual(0, _db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE id = {_outside}"));
+            Assert.AreEqual(1, _db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE user_name = '{LaterUpn}'"));
+        }
 
         [TestMethod]
         public async Task MissingCoverageStorageRefusesBeforeDeletingAuditCreditsOrMixedUsage()
@@ -404,13 +563,21 @@ OPTION (MAXRECURSION 0);");
         }
 
         [DataTestMethod]
-        [DataRow(false)]
-        [DataRow(true)]
-        public async Task CoverageChangesOnlyAfterSqlAcceptsTheDeleteEvenIfTheCommitReplyIsLost(bool loseCommitReply)
+        [DataRow("rejected")]
+        [DataRow("committed")]
+        [DataRow("rolledBack")]
+        [DataRow("handoff")]
+        [DataRow("handoffCancel")]
+        public async Task CoverageChangesOnlyAfterSqlAcceptsTheDeleteEvenIfTheCommitReplyIsLost(string outcome)
         {
-            SeedTeamsDays(_db, 1, $"u.user_name IN ('{InsideUpn}', '{OutsideUpn}')");
+            var loseCommitReply = outcome != "rejected";
+            var cancel = outcome == "handoffCancel";
+            var handoff = cancel || outcome == "handoff";
+            var commitHappened = outcome != "rolledBack";
+            SeedTeamsDays(_db, 2, $"u.user_name IN ('{InsideUpn}', '{OutsideUpn}')");
             var coverage = new UsageReportCoverageStore(_ledger, true);
-            await coverage.CompleteDayAsync("teams", FirstDay, true, true, false, FirstDay.AddDays(4), 3);
+            foreach (var day in new[] { FirstDay, FirstDay.AddDays(1) })
+                await coverage.CompleteDayAsync("teams", day, true, true, false, FirstDay.AddDays(5), 3);
             await coverage.CompleteDayAsync("outlook", FirstDay, true, true, true, FirstDay.AddDays(4), 3);
             var before = await _ledger.GetVersionedAsync("v1:teams:20200101");
             var members = Members(InsideUpn);
@@ -419,7 +586,25 @@ OPTION (MAXRECURSION 0);");
             using (var session = await _database.TryOpenPurgeSessionAsync(TimeSpan.Zero))
             {
                 if (loseCommitReply)
-                    engine.CommitUsageTransaction = tx => { tx.Commit(); throw new TimeoutException("Synthetic lost commit reply."); };
+                {
+                    var attempts = 0;
+                    engine.CommitUsageTransaction = tx =>
+                    {
+                        if (++attempts == 1) { tx.Commit(); return; }
+                        if (commitHappened) tx.Commit();
+                        else tx.Rollback();
+                        if (handoff)
+                        {
+                            // Only the durable pre-COMMIT marker and previous acknowledgement
+                            // survive the old worker losing SQL ownership before reporting the failure.
+                            session.Connection.Close();
+                            if (cancel) Assert.IsTrue(_state.RequestCancelAsync(job.Id).GetAwaiter().GetResult());
+                            Assert.AreEqual(cancel ? UserScopePurgeRunOutcome.Cancelled : UserScopePurgeRunOutcome.Failed,
+                                Engine(true).RunAsync(job.Id, Provider(members)).GetAwaiter().GetResult());
+                        }
+                        throw new TimeoutException("Synthetic lost commit reply.");
+                    };
+                }
                 else
                 {
                     _db.Execute(@"CREATE USER ContosoPurgeWriter WITHOUT LOGIN;
@@ -432,12 +617,31 @@ OPTION (MAXRECURSION 0);");
                         await asWriter.ExecuteNonQueryAsync();
                     }
                 }
-                Assert.AreEqual(UserScopePurgeRunOutcome.Failed, await engine.RunAsync(job.Id, Provider(members), lockedSession: session));
+                Assert.AreEqual(handoff ? UserScopePurgeRunOutcome.LockLost : UserScopePurgeRunOutcome.Failed,
+                    await engine.RunAsync(job.Id, Provider(members), lockedSession: session));
             }
             var stopped = await _state.GetAsync(job.Id);
-            Assert.IsFalse(stopped.RowsAffected.ContainsKey("teams_user_activity_log"), "No unacknowledged count is published.");
-            Assert.AreEqual(loseCommitReply ? 1 : 2, _db.Scalar("SELECT COUNT(*) FROM dbo.teams_user_activity_log"));
+            Assert.AreEqual(cancel ? UserScopePurgeStates.Cancelled : UserScopePurgeStates.Failed, stopped.State);
+            const string table = "teams_user_activity_log";
+            if (loseCommitReply)
+            {
+                Assert.AreEqual(UserScopePurgeErrorCodes.UsageDeleteOutcomeUnknown, stopped.ErrorCode);
+                Assert.AreEqual(table, stopped.UsageCommitPendingTable);
+                Assert.AreEqual(1L, stopped.RowsAffected[table], "Only the first, acknowledged commit counts.");
+                var row = UserScopeService.ToModel(stopped).RowsAffected.Find(r => r.Table == table);
+                Assert.AreEqual(1L, row.Rows);
+                Assert.IsTrue(row.IsLowerBound);
+            }
+            else
+            {
+                Assert.IsNull(stopped.UsageCommitPendingTable);
+                Assert.IsFalse(stopped.RowsAffected.ContainsKey(table));
+                Assert.AreEqual(UserScopePurgeErrorCodes.DatabaseError, stopped.ErrorCode);
+            }
+            Assert.AreEqual(loseCommitReply ? (commitHappened ? 2 : 3) : 4, _db.Scalar($"SELECT COUNT(*) FROM dbo.{table}"));
+            Assert.AreEqual(1, _db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE id = {_outside}"));
             Assert.AreEqual(!loseCommitReply, await coverage.IsDayVerifiedAsync("teams", FirstDay));
+            Assert.AreEqual(!loseCommitReply, await coverage.IsDayVerifiedAsync("teams", FirstDay.AddDays(1)));
             if (!loseCommitReply)
             {
                 StringAssert.Contains(stopped.ErrorDetail, "SQL error 229");

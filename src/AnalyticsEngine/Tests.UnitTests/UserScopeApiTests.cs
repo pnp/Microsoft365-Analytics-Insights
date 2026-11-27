@@ -187,6 +187,27 @@ namespace Tests.UnitTests
 
         private static List<string> Names(JObject json) => json.Properties().Select(p => p.Name).ToList();
 
+        [DataTestMethod]
+        [DataRow(UserScopePurgeStates.Running, null)]
+        [DataRow(UserScopePurgeStates.Failed, UserScopePurgeErrorCodes.UsageDeleteOutcomeUnknown)]
+        public void Status_UnconfirmedFirstUsageCommitExposesZeroAsALowerBoundForOnlyThatTable(string state, string errorCode)
+        {
+            var job = new UserScopePurgeJob
+            {
+                State = state,
+                ErrorCode = errorCode,
+                UsageCommitPendingTable = "teams_user_activity_log",
+                RowsAffected = { ["audit_events"] = 3 },
+            };
+            var json = JObject.FromObject(UserScopeService.ToModel(job));
+
+            Assert.AreEqual(errorCode, (string)json["errorCode"]);
+            Assert.IsNull(json["rowsAffected"][0]["isLowerBound"]);
+            Assert.AreEqual("teams_user_activity_log", (string)json["rowsAffected"][1]["table"]);
+            Assert.AreEqual(0L, (long)json["rowsAffected"][1]["rows"]);
+            Assert.IsTrue((bool)json["rowsAffected"][1]["isLowerBound"]);
+        }
+
         [TestMethod]
         public void Codes_AreTheOnesThePortalTurnsIntoSentences()
         {
@@ -195,7 +216,7 @@ namespace Tests.UnitTests
                 ConstantValues(typeof(UserScopeErrorCodes)));
             CollectionAssert.AreEquivalent(new[] { "notFiltered", "scopeUnavailable", "scopeEmpty", "nothingToPurge", "jobActive", "storageUnavailable" },
                 ConstantValues(typeof(UserScopePurgeUnavailableReasons)));
-            CollectionAssert.AreEquivalent(new[] { "scopeUnavailable", "scopeEmpty", "databaseError", "filterChanged", "filterChangedWhileRunning", "stateUnavailable", "coverageStorageRequired", "purgeExceedsConfirmed", "userDeleteOutcomeUnknown", "scopeMembershipChanged", "unexpected" },
+            CollectionAssert.AreEquivalent(new[] { "scopeUnavailable", "scopeEmpty", "databaseError", "filterChanged", "filterChangedWhileRunning", "stateUnavailable", "coverageStorageRequired", "purgeExceedsConfirmed", "userDeleteOutcomeUnknown", "usageDeleteOutcomeUnknown", "scopeMembershipChanged", "unexpected" },
                 ConstantValues(typeof(UserScopePurgeErrorCodes)));
             CollectionAssert.AreEquivalent(new[] { "queued", "running", "completed", "failed", "cancelled" }, ConstantValues(typeof(UserScopePurgeStates)));
             CollectionAssert.AreEquivalent(new[]

@@ -374,6 +374,30 @@ describe('UserScopePage', () => {
     expect(await screen.findByText(expected)).toBeInTheDocument();
   });
 
+  it.each([
+    ['en', 'failed', /SQL did not confirm/, 'At least 12,345'],
+    ['es', 'cancelled', /SQL no confirmó/, 'Al menos 12.345'],
+  ] as const)('shows the acknowledged usage-table subtotal as a lower bound in %s', async (language, state, warning, lowerBound) => {
+    await loadCatalog(language);
+    mockFetchStatus.mockResolvedValue(status({
+      latestJob: runningJob({
+        state,
+        errorCode: 'usageDeleteOutcomeUnknown',
+        completedUtc: '2026-09-01T09:05:00Z',
+        rowsAffected: [
+          { table: 'audit_events', rows: 2 },
+          { table: 'teams_user_activity_log', rows: 12345, isLowerBound: true },
+        ],
+      }),
+    }));
+
+    renderWithProvider(<UserScopePage />, { language });
+
+    expect(await screen.findByText(warning)).toBeInTheDocument();
+    expect(within(screen.getByText('teams_user_activity_log').closest('tr')!).getByText(lowerBound)).toBeInTheDocument();
+    expect(within(screen.getByText('audit_events').closest('tr')!).getByText('2')).toBeInTheDocument();
+  });
+
   it('says a restart stops a purge when its progress is kept in memory, and that it starts again when it is not', async () => {
     const { unmount } = renderWithProvider(<UserScopePage />);
 
