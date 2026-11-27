@@ -1392,6 +1392,8 @@ HitVisits AS (
         /// </para>
         /// <para>Materialize the bounded logical hit visits once. Their inserted row count supplies
         /// the reliance denominator without repeating the hit aggregation for the dead-end join.</para>
+        /// <para>Roll up visits by searcher before the final aggregate. Counting distinct users beside
+        /// the other visit totals caused an eager spool of searcher totals in the annual plan.</para>
         /// </remarks>
         public const string SearchKpis = @"
 SET NOCOUNT ON;
@@ -1405,13 +1407,21 @@ PerVisit AS (
            " + DeadEndCount + @" AS dead_ends
     FROM S AS s LEFT JOIN #search_hit_visits AS h ON h.visit_key = s.visit_key
     GROUP BY s.visit_key, s.user_id
+),
+PerSearcher AS (
+    SELECT user_id, SUM(searches) AS searches, COUNT_BIG(visit_key) AS searched_visits,
+           COUNT_BIG(last_hit) AS hit_visits_with_search,
+           COUNT_BIG(CASE WHEN visit_key IS NOT NULL AND searches >= @strugglingSearches THEN 1 END) AS struggling_visits,
+           SUM(dead_ends) AS dead_ends
+    FROM PerVisit
+    GROUP BY user_id
 )
 SELECT ISNULL(SUM(searches),0) AS Searches, (SELECT COUNT(DISTINCT search_term_id) FROM SearchWindow) AS Terms,
-       COUNT(DISTINCT user_id) AS Searchers, COUNT_BIG(visit_key) AS SessionsWithSearch,
-       COUNT_BIG(last_hit) AS HitVisitsWithSearch, @logical_visits AS Visits,
-       COUNT_BIG(CASE WHEN visit_key IS NOT NULL AND searches >= @strugglingSearches THEN 1 END) AS StrugglingVisits,
+       COUNT(user_id) AS Searchers, ISNULL(SUM(searched_visits),0) AS SessionsWithSearch,
+       ISNULL(SUM(hit_visits_with_search),0) AS HitVisitsWithSearch, @logical_visits AS Visits,
+       ISNULL(SUM(struggling_visits),0) AS StrugglingVisits,
        ISNULL(SUM(dead_ends),0) AS DeadEndSearches
-FROM PerVisit
+FROM PerSearcher
 OPTION (RECOMPILE);
 DROP TABLE #search_hit_visits;";
 

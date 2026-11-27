@@ -101,3 +101,18 @@ For this comparison the baseline is `079bc162`, **not** the original baseline ab
 | Weekly overview/search trend | 4,584 / 241 → 6,264 / 355 | 123,976 / 274 → 48,325 / 201 |
 
 This is a correctness change, not a speedup. In particular, the annual KPI did over ten times as many total reads, although both plans still sought the timestamp index and recorded 5,452 reads against hits. The annual site report still scanned hits and sessions; the annual day/hour report now also scans sessions to identify duplicate facts. No schema or index change was tested or introduced.
+
+## Annual KPI: remove the distinct-searcher spool
+
+A new disposable SQL Server 2025 LocalDB run compared the actual `WebActivitySql.SearchKpis` batches from `ffc585ec` and the per-searcher rollup. The report-column replica used the existing covering timestamp and session indexes, 2 million hits over 365 days, 200,000 synthetic users with 202,000 physical sessions, 200,000 searches from 50,000 users, and 8,000 copies on equivalent sessions. Each window used a discarded warm-up, five measured runs per version with alternating order, and separate actual plans. Values are median **total logical reads / SQL elapsed ms**, not portal latency.
+
+| Window | Before rollup | After rollup |
+|---|---:|---:|
+| 1 hour | 2,284 / 32 | 2,284 / 30 |
+| 28 days | 5,481 / 283 | 5,481 / 293 |
+| 28 days, 2,000-user scope | 24,455 / 154 | 23,559 / 93 |
+| 365 days | 117,839 / 2,907 | 10,911 / 1,922 |
+
+In the annual plan, combining `COUNT(DISTINCT user_id)` with the other visit totals introduced a `Table Spool (Eager Spool)` with 106,415 logical reads. Grouping the visit totals by user first replaced the spool with a sort and stream aggregates, and eliminated the 106,928 worktable reads in that batch. Both plans retained the `IX_hits_hit_timestamp` range seek (5,452 reads) and hash join to the logical hit visits. The hourly plans retained their timestamp and session seeks and neither used a spool. The unscoped 28-day case did the same reads and was slightly slower in this run. The pre-correctness query (`079bc162`) read 12,196 pages on this same annual fixture but returned different counts; it is not the equality baseline.
+
+All eight KPI columns matched `ffc585ec` in every measured window. A separate control expected 9 searches, 3 terms, 3 searchers, 6 searching visits, 4 hit visits that searched, 5 hit visits, 1 struggling visit and 4 dead ends. It exercised a historical duplicate, a genuine repeat 3 ms later, different tracker case and owner, incomplete identities, the grace cutoff, search-only and browse-only visits, and an anonymous hit. An empty window returned eight zeroes. No permanent index, migration or history rewrite is required.
