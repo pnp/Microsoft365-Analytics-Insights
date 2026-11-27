@@ -10,6 +10,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Data.Entity;
 using System.Data.Entity.Infrastructure;
 using System.Data.Entity.Migrations;
 using System.Diagnostics;
@@ -146,6 +147,98 @@ INSERT dbo.searches(session_id,search_term_id,date_time) VALUES
             Assert.AreEqual((count, count, count), (report.ByDay.Sum(d => d.Count),
                 report.ByPeriodOfDay.Sum(p => p.Count), report.Trend.Sum(w => w.Searches)));
             Assert.AreEqual(5, _database.Scalar("SELECT COUNT(*) FROM dbo.searches"));
+        }
+
+        [TestMethod]
+        public async Task Searches_AreLinkedOnlyToTheSessionWithExactlyTheSameTrackerId()
+        {
+            // Only a confirmed empty configuration permits legacy searches without request IDs.
+            const string tracker = "tracker";
+            using (var db = _factory.Create())
+            {
+                var user = new User { UserPrincipalName = $"tracker-{Guid.NewGuid():N}@contoso.com" };
+                var otherCase = new UserSession { ai_session_id = "TRACKER", user = user };
+                db.sessions.Add(otherCase);
+                await db.SaveChangesAsync();
+                var exact = new UserSession { ai_session_id = tracker, user = user };
+                db.sessions.Add(exact);
+                await db.SaveChangesAsync();
+
+                var search = Search(Start, tracker, "Guide", user.UserPrincipalName);
+                search.CustomProperties.PageRequestId = null;
+                var batch = new CustomEventsResultCollection();
+                batch.Rows.Add(search);
+
+                await batch.SaveSearchesToSQL(AnalyticsLogger.ConsoleOnlyTracer(), db);
+
+                CollectionAssert.AreEqual(new[] { exact.ID }, await db.searches.Select(s => s.session.ID).ToListAsync());
+            }
+        }
+
+        [TestMethod]
+        public async Task SearchGreekLetterTests()
+        {
+            const string site = "https://contoso.sharepoint.com/sites/δοκιμή";
+            const string term = "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠ Καλημέρα κόσμε 🙂";
+            _database.Execute($"INSERT dbo.org_urls(url_base, exact_match) VALUES (N'{site}/', 1);");
+            var source = new FakeAppInsightsSourceLoader
+            {
+                PageViewAt = t =>
+                {
+                    var page = Page(t, "greek");
+                    page.CustomProperties.SiteUrl = page.CustomProperties.WebUrl = site;
+                    page.Url = site + "/Καλημέρα.aspx";
+                    return page;
+                },
+                EventAt = t => Search(t, "greek", term, Reader)
+            };
+            source.ExtraPageViews.Add((Start, Start));
+            source.ExtraCustomEvents.Add((Start, Start));
+
+            var result = await RunCycle(new FixedClock(Start.AddMinutes(1)), source, new InMemoryKeyValueStore());
+            Assert.AreEqual(1, result.Events);
+            using (var db = _factory.Create())
+            {
+                Assert.AreEqual(term, await db.searches.Select(s => s.search_term.search_term).SingleAsync());
+                Assert.AreEqual(term, await db.search_terms.Select(t => t.search_term).SingleAsync());
+            }
+        }
+
+        [TestMethod]
+        public async Task SecondPersonOnAnExistingTrackerSession_KeepsTheirHitsAndSearches()
+        {
+            const string tracker = "shared-browser";
+            var token = Guid.NewGuid().ToString("N");
+            var firstPerson = $"first-{token}@contoso.com";
+            var secondPerson = $"second-{token}@contoso.com";
+            _database.Execute("INSERT dbo.org_urls(url_base, exact_match) VALUES (N'https://contoso.sharepoint.com/sites/example/', 1);");
+            using (var db = _factory.Create())
+            {
+                var first = new User { UserPrincipalName = firstPerson };
+                db.sessions.Add(new UserSession { ai_session_id = tracker, user = first });
+                await db.SaveChangesAsync();
+
+                var page = Page(Start, tracker);
+                page.Username = secondPerson;
+                var pageViews = new PageViewCollection();
+                pageViews.Rows.Add(page);
+                var filters = await SiteFilterLoader.Load(db);
+                var logger = AnalyticsLogger.ConsoleOnlyTracer();
+                await pageViews.SaveToSQL(db, logger, filters);
+
+                var searches = new CustomEventsResultCollection();
+                searches.Rows.Add(Search(Start, tracker, "Καλημέρα κόσμε", secondPerson));
+                searches.Rows.Add(Search(Start, tracker, "Wrong owner", firstPerson));
+                var saved = await searches.SaveSearchBatchAsync(logger, db);
+                Assert.AreEqual((1, 1), (saved.FactsInserted, saved.Skipped),
+                    "Sharing a cookie doesn't let the first person borrow the second person's request.");
+                Assert.AreEqual(secondPerson, await db.searches.Select(s => s.session.user.UserPrincipalName).SingleAsync());
+
+                await pageViews.SaveToSQL(db, logger, filters);
+                Assert.AreEqual(2, await db.sessions.CountAsync(s => s.ai_session_id == tracker));
+                Assert.AreEqual(secondPerson, await db.hits.Where(h => h.page_request_id == page.CustomProperties.PageRequestId)
+                    .Select(h => h.session.user.UserPrincipalName).SingleAsync());
+            }
         }
 
         [TestMethod]
