@@ -3,6 +3,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace DataUtils
 {
@@ -28,15 +30,30 @@ namespace DataUtils
         /// <returns>True when the probe passed; false when the host was asked to stop first.</returns>
         public static bool WaitUntilReachable(Func<bool> probe, ILogger logger, string jobName,
             Func<TimeSpan, bool> wait = null, IReadOnlyList<TimeSpan> backoff = null)
+            => WaitUntilReachable(probe, logger, jobName, wait ?? HostRuntime.Wait, backoff, CancellationToken.None);
+
+        /// <summary>The host token interrupts both the current SQL attempt and the back-off before the next.</summary>
+        public static bool WaitUntilReachable(Func<CancellationToken, Task<bool>> probe, ILogger logger, string jobName, CancellationToken shutdownToken)
         {
             if (probe == null) throw new ArgumentNullException(nameof(probe));
-            wait = wait ?? HostRuntime.Wait;
+            return WaitUntilReachable(() => probe(shutdownToken).GetAwaiter().GetResult(), logger, jobName,
+                delay => shutdownToken.WaitHandle.WaitOne(delay), DefaultBackoff, shutdownToken);
+        }
+
+        private static bool WaitUntilReachable(Func<bool> probe, ILogger logger, string jobName, Func<TimeSpan, bool> wait,
+            IReadOnlyList<TimeSpan> backoff, CancellationToken shutdownToken)
+        {
+            if (probe == null) throw new ArgumentNullException(nameof(probe));
             var delays = backoff ?? DefaultBackoff;
             var clock = Stopwatch.StartNew();
 
-            for (var attempt = 1; ; attempt++)
+            for (var attempt = 1; !shutdownToken.IsCancellationRequested; attempt++)
             {
-                if (probe())
+                bool reachable;
+                try { reachable = probe(); }
+                catch (OperationCanceledException) when (shutdownToken.IsCancellationRequested) { break; }
+                if (shutdownToken.IsCancellationRequested) break;
+                if (reachable)
                 {
                     if (attempt > 1)
                     {
@@ -51,12 +68,10 @@ namespace DataUtils
                     $"the importer is not running until SQL is reachable and upgraded; retrying in {delay.TotalSeconds.ToString("0", CultureInfo.InvariantCulture)} s " +
                     $"(waitedMs={clock.ElapsedMilliseconds.ToString(CultureInfo.InvariantCulture)}).");
 
-                if (wait(delay))
-                {
-                    logger.LogWarning($"STARTUP-SQL-CHECK Abandoned: job={jobName}; shutdown requested by host while waiting for SQL.");
-                    return false;
-                }
+                if (wait(delay)) break;
             }
+            logger.LogWarning($"STARTUP-SQL-CHECK Abandoned: job={jobName}; shutdown requested by host while waiting for SQL.");
+            return false;
         }
     }
 }

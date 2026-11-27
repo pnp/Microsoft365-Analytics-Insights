@@ -644,6 +644,75 @@ namespace Tests.UnitTests
             Assert.AreEqual("0", SnapshotFactValues(CopilotAdoptionWorkbook.Build(measured))["agents.customAgents"]);
         }
 
+        [TestMethod]
+        public void SnapshotFacts_WithheldWorkloadForecastsAreBlankButTheCandidateCapAndObservedUseRemain()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.OpportunitiesCapped = true;
+            analysis.Opportunities[0].EmailsSentPerActiveDay = 10;
+            analysis.SeatHolderTimeSavedAssessed = true;
+            analysis.SeatHolderTimeSavedRows.Add(new SeatHolderTimeSavedUserRow { UserId = 1, OutlookActions = 200 });
+            var service = new CopilotAdoptionService(analysis.Summary.Options);
+            service.FinaliseSummary(analysis);
+            var healthy = SnapshotFactValues(CopilotAdoptionWorkbook.Build(analysis));
+
+            var coverage = analysis.Summary.DataSources.WorkloadCoverage;
+            coverage.Single(c => c.Source == "outlook").Status = "unverified";
+            analysis.Summary.DataSources.M365UsageReportsAvailable = CopilotAdoptionWorkloadEvidence.Complete(coverage);
+            foreach (var row in analysis.Opportunities) CopilotAdoptionWorkloadEvidence.Apply(row, coverage);
+            service.FinaliseSummary(analysis);
+            var book = CopilotAdoptionWorkbook.Build(analysis);
+            var withheld = SnapshotFactValues(book);
+            var cell = SnapshotValueCell(book, "licenceOpportunityEstimate.hoursPerMonthHigh");
+            Assert.IsTrue(cell == null || !cell.HasElements, "A withheld value must be blank to Excel, not an empty string.");
+
+            foreach (var prefix in new[] { "licenceOpportunityEstimate", "licenceChatUsersEstimate", "licenceAllCandidatesEstimate",
+                "coworkValueEstimate", "coworkFullRolloutEstimate", "coworkWithoutLicenceEstimate",
+                "coworkNewAdoptionEstimate", "coworkNonUserCeilingEstimate" })
+            {
+                Assert.IsTrue(double.Parse(healthy[prefix + ".hoursPerMonthHigh"], CultureInfo.InvariantCulture) > 0, prefix);
+                foreach (var key in healthy.Keys.Where(k => k.StartsWith(prefix + ".", StringComparison.Ordinal)))
+                {
+                    Assert.AreEqual(key.EndsWith(".candidatesCapped", StringComparison.Ordinal) ? "Yes" : string.Empty,
+                        withheld[key], key);
+                }
+            }
+            foreach (var independent in new[] { "coworkObservedUsage.interactions", "seatHolderTimeSavedEstimate.hoursPerMonthHigh" })
+            {
+                Assert.IsTrue(double.Parse(healthy[independent], CultureInfo.InvariantCulture) > 0, independent);
+                Assert.AreEqual(healthy[independent], withheld[independent], independent);
+            }
+        }
+
+        [TestMethod]
+        public void SnapshotFacts_VerifiedEmptyCohortsAndModelledZeroHoursStayNumeric()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Opportunities.Clear();
+            analysis.Opportunities.Add(CopilotAdoptionScoring.ScoreOpportunity(new UnlicensedUserSignalRow
+            {
+                UserPrincipalName = "candidate@contoso.com",
+                UnlicensedCopilotInteractions = 60, UnlicensedCopilotActiveDays = 12,
+            }));
+            analysis.CoworkSignals.Clear();
+            analysis.CoworkReadiness.Clear();
+            analysis.CoworkAssessedForWholePopulation = true;
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            var book = CopilotAdoptionWorkbook.Build(analysis);
+            var facts = SnapshotFactValues(book);
+            Assert.AreEqual("1", facts["licenceOpportunityEstimate.cohortUsers"], "An assessed candidate with no workload volume.");
+            Assert.AreEqual("0", facts["licenceOpportunityEstimate.addressableMeetings"]);
+            var zero = SnapshotValueCell(book, "licenceOpportunityEstimate.hoursPerMonthHigh");
+            Assert.IsNotNull(zero);
+            Assert.AreEqual("0", (string)zero.Element(zero.Name.Namespace + "v"));
+            Assert.AreEqual("n", (string)zero.Attribute("t") ?? "n", "Excel must be able to subtract this zero.");
+            foreach (var prefix in new[] { "coworkValueEstimate", "coworkFullRolloutEstimate", "coworkNewAdoptionEstimate", "coworkNonUserCeilingEstimate" })
+            {
+                Assert.AreEqual("0", facts[prefix + ".cohortUsers"], prefix);
+                Assert.AreEqual("0", facts[prefix + ".hoursPerMonthHigh"], prefix);
+            }
+        }
+
         /// <summary>
         /// #640: the figures inside nested sections reach the sheet with their values, under dotted keys
         /// made of the serialised names - the agent baselines the 2026 Work Trend Index asks a tenant to
@@ -1899,6 +1968,32 @@ namespace Tests.UnitTests
         }
 
         [TestMethod]
+        public void Workbook_OnlyChatCohortHasAnEstimate_LeavesOtherColumnsBlank()
+        {
+            var analysis = SyntheticAnalysis();
+            analysis.Opportunities.Single(c => c.UnlicensedCopilotInteractions == 0).EmailsRead = null;
+            new CopilotAdoptionService(analysis.Summary.Options).FinaliseSummary(analysis);
+            var book = CopilotAdoptionWorkbook.Build(analysis, new TimeSavedOverrides { MinutesSavedPerMeeting = 0 });
+            CollectionAssert.Contains(WorkbookSheetNames(book), "Licence estimate (modelled)");
+            var cells = SheetCellElements(book, "Licence estimate (modelled)");
+            foreach (var label in new[] { "People covered", "Meetings a month (observed)", "Minutes saved per meeting (assumption)",
+                "Lower bound (share of every assumption)", "Hours a month - meetings", "Modelled hours a month (high)" })
+            {
+                var row = cells.Single(c => c.Value == label).Parent;
+                XElement Column(string column) => row.Elements().SingleOrDefault(c => ((string)c.Attribute("r"))?.StartsWith(column) == true);
+                foreach (var missing in new[] { "B", "D" })
+                    Assert.IsFalse(Column(missing)?.HasElements == true, label + " " + missing);
+                var chat = Column("C");
+                var value = (string)chat?.Element(chat.Name.Namespace + "v");
+                Assert.IsNotNull(value, label);
+                if (label == "People covered") Assert.AreEqual("1", value);
+                if (label == "Minutes saved per meeting (assumption)" || label == "Hours a month - meetings")
+                    Assert.AreEqual("0", value, label);
+            }
+            Assert.IsTrue(cells.Any(c => c.Value.StartsWith("Assumes Microsoft 365 Copilot saves 0 minutes per meeting")));
+        }
+
+        [TestMethod]
         public void Workbook_WritesNoLicenceEstimate_WhenThereAreNoCandidates()
         {
             var analysis = SyntheticAnalysis();
@@ -2572,11 +2667,19 @@ namespace Tests.UnitTests
             return SheetKeyColumn(bytes).SkipWhile(k => k != "Key").Skip(1).ToList();
         }
 
+        internal static XElement SnapshotValueCell(byte[] bytes, string key)
+        {
+            var keyCell = SheetCellElements(bytes, "Snapshot facts").Single(c => c.Value == key
+                && ((string)c.Attribute("r")).StartsWith("A", StringComparison.Ordinal));
+            return keyCell.Parent.Elements(keyCell.Name).SingleOrDefault(c =>
+                ((string)c.Attribute("r")).StartsWith("B", StringComparison.Ordinal));
+        }
+
         /// <summary>
         /// Each Snapshot fact's value as written - column B of the key's own row, empty when blank - keyed
         /// by the fact's key. Read by row number, so a blank value can never be mistaken for the next row.
         /// </summary>
-        private static Dictionary<string, string> SnapshotFactValues(byte[] bytes)
+        internal static Dictionary<string, string> SnapshotFactValues(byte[] bytes)
         {
             var rows = new Dictionary<int, Dictionary<string, string>>();
             foreach (var cell in SheetCellElements(bytes, "Snapshot facts"))
@@ -2703,7 +2806,7 @@ namespace Tests.UnitTests
         internal static CopilotAdoptionAnalysis SyntheticAnalysis()
         {
             var options = CopilotAdoptionOptions.Default;
-            var analysis = new CopilotAdoptionAnalysis();
+            var analysis = new CopilotAdoptionAnalysis { OpportunitiesCapped = false };
             var summary = analysis.Summary;
 
             summary.GeneratedUtc = Now;

@@ -756,17 +756,16 @@ export interface CopilotAdoptionSummary extends Partial<ManagerModellingFigures>
   /**
    * The modelled licence estimate: the time Microsoft 365 Copilot could give back to every person
    * recommended for a licence. Empty (no cohort) when nobody is recommended or the Microsoft 365 usage
-   * reports are unavailable. Optional only so older fixtures still type-check.
+   * reports are unavailable. Null when the licence-candidate query did not complete.
    */
-  licenceOpportunityEstimate?: LicenceValueEstimate;
+  licenceOpportunityEstimate?: LicenceValueEstimate | null;
   /** The same model over the recommended candidates already using Copilot Chat without a licence. */
-  licenceChatUsersEstimate?: LicenceValueEstimate;
+  licenceChatUsersEstimate?: LicenceValueEstimate | null;
   /**
    * The same model over every licence candidate, recommended or not - the headline's "all candidates"
-   * option, and the only figure there is when nobody is recommended. Optional only so older fixtures
-   * still type-check; the server always sends it.
+   * option, and the only figure there is when nobody is recommended. Null when the candidates could not be read.
    */
-  licenceAllCandidatesEstimate?: LicenceValueEstimate;
+  licenceAllCandidatesEstimate?: LicenceValueEstimate | null;
   seatHolderTimeSavedEstimate?: SeatHolderTimeSavedEstimate;
 
   funnel: ReportCategory[];

@@ -1167,7 +1167,7 @@ namespace Common.Entities.CopilotAdoption
         /// Microsoft 365 usage reports, for the same reason as its siblings.
         /// </remarks>
         [JsonProperty("coworkWithoutLicenceEstimate")]
-        public CoworkValueEstimate CoworkWithoutLicenceEstimate { get; set; } = new CoworkValueEstimate();
+        public CoworkValueEstimate CoworkWithoutLicenceEstimate { get; set; }
 
         #endregion
 
@@ -1189,7 +1189,7 @@ namespace Common.Entities.CopilotAdoption
         /// modelled zero.
         /// </summary>
         [JsonProperty("licenceOpportunityEstimate")]
-        public LicenceValueEstimate LicenceOpportunityEstimate { get; set; } = new LicenceValueEstimate();
+        public LicenceValueEstimate LicenceOpportunityEstimate { get; set; }
 
         /// <summary>
         /// The same model over the recommended candidates already using Copilot Chat without a licence -
@@ -1198,7 +1198,7 @@ namespace Common.Entities.CopilotAdoption
         /// rather than inferred. Some of it may already be realised through Copilot Chat.
         /// </summary>
         [JsonProperty("licenceChatUsersEstimate")]
-        public LicenceValueEstimate LicenceChatUsersEstimate { get; set; } = new LicenceValueEstimate();
+        public LicenceValueEstimate LicenceChatUsersEstimate { get; set; }
 
         /// <summary>
         /// The same model over EVERY licence candidate, recommended or not: everyone the candidate list
@@ -1216,7 +1216,7 @@ namespace Common.Entities.CopilotAdoption
         /// candidate list is, or the Microsoft 365 usage reports are unavailable.
         /// </remarks>
         [JsonProperty("licenceAllCandidatesEstimate")]
-        public LicenceValueEstimate LicenceAllCandidatesEstimate { get; set; } = new LicenceValueEstimate();
+        public LicenceValueEstimate LicenceAllCandidatesEstimate { get; set; }
 
         /// <summary>
         /// Modelled hours Microsoft 365 Copilot has already given back to people who hold a Copilot seat.

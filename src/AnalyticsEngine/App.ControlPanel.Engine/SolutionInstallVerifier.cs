@@ -9,6 +9,7 @@ using Azure.ResourceManager.KeyVault;
 using Azure.ResourceManager.AppService;
 using Azure.ResourceManager.Storage;
 using CloudInstallEngine.Azure;
+using CloudInstallEngine.Azure.InstallTasks;
 using Azure.ResourceManager.Resources;
 using Azure.ResourceManager.Sql;
 using Common.Entities;
@@ -353,10 +354,12 @@ namespace App.ControlPanel.Engine
 
         /// <summary>
         /// Warn when an existing App Service plan cannot run Always On / 64-bit workers so Test Configuration
-        /// catches under-provisioned plans before the install writes App Service settings. Logs only; never throws.
+        /// catches under-provisioned plans before the install writes App Service settings. Unverifiable reads warn;
+        /// caller cancellation still stops the check.
         /// </summary>
-        async Task VerifyAppServicePlanCapabilities(ResourceGroupResource testRg)
+        internal async Task VerifyAppServicePlanCapabilities(ResourceGroupResource testRg)
         {
+            CancellationToken.ThrowIfCancellationRequested();
             if (testRg == null)
             {
                 _logger.LogInformation("Skipping App Service plan capability check - resource group is not available.");
@@ -372,13 +375,16 @@ namespace App.ControlPanel.Engine
 
             try
             {
+                var expectedGroup = ResourceGroupResource.CreateResourceIdentifier(Config.Subscription.SubId, Config.ResourceGroupName);
+                if (!testRg.HasData || !expectedGroup.Equals(testRg.Id))
+                    throw new InvalidOperationException("Azure did not return the configured resource group. Verify the subscription and resource group, then retry.");
                 // Check the plan the install will really use: an existing web app keeps the plan it runs on, whatever the
                 // configured plan name (earlier installers named that plan after the web app).
-                var plan = await CloudInstallEngine.Azure.InstallTasks.AppServicePlanTask.FindHostingPlanAsync(testRg, Config.AppServiceWebAppName)
-                    ?? testRg.GetAppServicePlans().AsEnumerable().Where(p => p.Data.Name == planName).SingleOrDefault();
+                var hosting = await AppServiceResourceLookup.DiscoverHostingAsync(testRg, Config.AppServiceWebAppName, planName, CancellationToken);
+                var plan = hosting.Plan;
                 if (plan == null)
                 {
-                    _logger.LogInformation($"App Service plan '{planName}' not found yet; skipping capability check (it will be created during install).");
+                    _logger.LogInformation($"App Service plan '{planName}' not found yet; the installer will request a new plan. There is no existing tier to check.");
                     return;
                 }
                 if (!string.Equals(plan.Data.Name, planName, StringComparison.OrdinalIgnoreCase))
@@ -398,6 +404,7 @@ namespace App.ControlPanel.Engine
             }
             catch (Exception ex)
             {
+                CancellationToken.ThrowIfCancellationRequested();
                 _logger.LogWarning($"Could not check App Service plan '{planName}' capabilities: {ex.Message}");
             }
         }

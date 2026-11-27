@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Common.Entities.UserScope
@@ -134,12 +135,21 @@ namespace Common.Entities.UserScope
 
         private readonly AutoThrottleHttpClient _httpClient;
         private readonly ILogger _logger;
+        private readonly CancellationToken _cancellationToken;
 
-        public GraphGroupDirectoryReader(AutoThrottleHttpClient httpClient, ILogger logger)
+        public GraphGroupDirectoryReader(AutoThrottleHttpClient httpClient, ILogger logger) : this(httpClient, logger, CancellationToken.None) { }
+
+        private GraphGroupDirectoryReader(AutoThrottleHttpClient httpClient, ILogger logger, CancellationToken cancellationToken)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _logger = logger ?? NullLogger.Instance;
+            _cancellationToken = cancellationToken;
         }
+
+        // Bind the token to this resolution, not the shared HTTP client: other refreshes inherit a retry
+        // deadline, never another caller's stop token.
+        internal GraphGroupDirectoryReader ForResolution(CancellationToken token) =>
+            token == _cancellationToken ? this : new GraphGroupDirectoryReader(_httpClient, _logger, token);
 
         public async Task<DirectoryGroup> GetGroupByIdAsync(Guid groupId)
         {
@@ -261,8 +271,9 @@ namespace Common.Entities.UserScope
         /// <summary>The body of a success response, or null for a 404 when <paramref name="notFoundIsNull"/>.</summary>
         private async Task<string> GetBodyAsync(string url, bool notFoundIsNull)
         {
-            using (var response = await _httpClient.GetAsyncWithThrottleRetries(url, _logger))
+            using (var response = await _httpClient.GetAsyncWithThrottleRetries(url, _logger, _cancellationToken))
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 if (response.StatusCode == HttpStatusCode.NotFound && notFoundIsNull)
                 {
                     return null;

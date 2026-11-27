@@ -6,6 +6,14 @@ This SharePoint Framework (SPFx 1.22.2) application customizer loads the SharePo
 - loads the site collection's own copy, `<site collection>/SPOInsights/AITracker.js?ver=<cacheToken>`, unless a tracker is already running in the page;
 - passes SharePoint's in-page navigations to the running tracker.
 
+The established two-second delay belongs to a visit, not to whatever URL is visible when the timer fires. Only the configured instance for the visible site can forward it, once; disposal, a different URL (including a different query), or a superseding visit makes the old report ineligible. A `#fragment` stays on the same page. The extension observes `currententrychange` or, where unavailable, `popstate`, as well as its own callbacks. Once it has observed a departure, returning to the original document URL cannot restore that visit's title or timing. The running `AITracker.js` still decides whether to record a view.
+
+SPFx 1.22.2 can replay the last [`navigatedEvent`](https://learn.microsoft.com/en-us/javascript/api/sp-application-base/applicationaccessor) synchronously inside `add`. Version 1.0.1.68 treats this like `onInit`, not like a fresh destination event. Both need independently matching [`SPSite.serverRequestPath`](https://learn.microsoft.com/en-us/javascript/api/sp-page-context/spsite) and query evidence. A path-only request can identify an item-only query when the supplied list/item identifiers match. On a genuine new event, a matching path can omit the query, but explicitly contradictory path, query or item evidence never qualifies. Without a request path, only a fresh event can establish a collection-only visit. An invalid observation cannot forward an earlier list or consume the next correct callback; an older standalone's `void` return still acknowledges a valid forwarded report.
+
+The tracker uses the same snapshot for the first and subsequent soft views. Web/list fields belong to the verified request, not the DOM; elapsed time alone does not establish a page title. Classic documents do not need this protocol.
+
+The optional `siteRegistrationChanged` callback is separate: it lets the standalone sample the clock when a collection becomes or ceases to be eligible, without reporting a page view.
+
 Read the [SharePoint instructions](../.github/copilot-instructions.md) before changing either part. They explain how the two parts work together, how the package is deployed, the rules the tracker must keep, and how to validate a change on a development tenant.
 
 ## How it's deployed

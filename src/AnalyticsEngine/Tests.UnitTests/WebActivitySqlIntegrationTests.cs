@@ -42,11 +42,8 @@ namespace Tests.UnitTests
     [TestCategory("SqlIntegration")]
     public class WebActivitySqlIntegrationTests
     {
-        private static string _database;
-        private static string _connectionString;
-
-        private const string MasterConnection =
-            @"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog=master;Integrated Security=true;TrustServerCertificate=True";
+        private static ScratchDatabase _database;
+        private static string ConnectionString => _database.ConnectionString;
 
         /// <summary>
         /// "Καλημέρα κόσμε" on a genuinely Unicode column.
@@ -107,18 +104,14 @@ namespace Tests.UnitTests
         [ClassInitialize]
         public static void CreateMigratedDatabase(TestContext context)
         {
-            _database = "WebActivityIntegration_" + Guid.NewGuid().ToString("N").Substring(0, 12);
-            _connectionString =
-                $@"Data Source=(localdb)\MSSQLLocalDB;Initial Catalog={_database};Integrated Security=true;MultipleActiveResultSets=True;TrustServerCertificate=True";
-
-            Execute(MasterConnection, ScratchDatabase.CreateDatabaseSql(_database));
+            _database = ScratchDatabase.Create("WebActivityIntegration");
 
             // The full migration chain, so the queries run against the schema customers actually get
             // rather than a hand-built subset that could omit the very column a query needs.
             var migrationConfig = new Configuration
             {
                 TargetDatabase = new System.Data.Entity.Infrastructure.DbConnectionInfo(
-                    _connectionString, "Microsoft.Data.SqlClient"),
+                    ConnectionString, "Microsoft.Data.SqlClient"),
             };
             new DbMigrator(migrationConfig).Update();
 
@@ -128,31 +121,15 @@ namespace Tests.UnitTests
         [ClassCleanup]
         public static void DropDatabase()
         {
-            if (_database == null) return;
-            SqlConnection.ClearAllPools();
-            Execute(MasterConnection,
-                $"IF DB_ID('{_database}') IS NOT NULL BEGIN " +
-                $"ALTER DATABASE [{_database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_database}]; END");
-        }
-
-        private static void Execute(string connectionString, string sql)
-        {
-            using (var connection = new SqlConnection(connectionString))
-            using (var command = connection.CreateCommand())
-            {
-                connection.Open();
-                command.CommandText = sql;
-                command.CommandTimeout = 0;
-                command.ExecuteNonQuery();
-            }
+            _database?.Dispose();
         }
 
         private static SqlWebActivityStore NewStore() =>
-            new SqlWebActivityStore(new ConnectionStringAnalyticsDbContextFactory(_connectionString));
+            new SqlWebActivityStore(new ConnectionStringAnalyticsDbContextFactory(ConnectionString));
 
         private static object Scalar(string sql)
         {
-            using (var connection = new SqlConnection(_connectionString))
+            using (var connection = new SqlConnection(ConnectionString))
             using (var command = connection.CreateCommand())
             {
                 connection.Open();
@@ -183,7 +160,7 @@ namespace Tests.UnitTests
         /// </remarks>
         private static void Seed()
         {
-            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            using (var db = new AnalyticsEntitiesContext(ConnectionString, true, false))
             {
                 // UPNs are ASCII by Entra policy - the Unicode samples are on the page title and URL.
                 var ada = new User { UserPrincipalName = "ada@contoso.com", AccountEnabled = true };
@@ -555,7 +532,7 @@ namespace Tests.UnitTests
             var measuredDay = new DateTime(2020, 3, 10, 9, 0, 0, DateTimeKind.Utc);
             var unmeasuredDay = new DateTime(2020, 4, 7, 9, 0, 0, DateTimeKind.Utc);
 
-            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            using (var db = new AnalyticsEntitiesContext(ConnectionString, true, false))
             {
                 var ada = db.users.Single(u => u.UserPrincipalName == "ada@contoso.com");
                 var home = db.urls.Single(u => u.ID == _homeUrlId);
@@ -620,7 +597,7 @@ namespace Tests.UnitTests
         public async Task EveryPageAndPathList_CountsEachPersonOnce_AndAPageViewWithNoVisitAddsNoOne()
         {
             var day = new DateTime(2020, 6, 9, 9, 0, 0, DateTimeKind.Utc);
-            using (var db = new AnalyticsEntitiesContext(_connectionString, true, false))
+            using (var db = new AnalyticsEntitiesContext(ConnectionString, true, false))
             {
                 var people = db.users.Where(u => new[] { "ada@contoso.com", "grace@contoso.com", "alan@contoso.com" }.Contains(u.UserPrincipalName))
                     .ToDictionary(u => u.UserPrincipalName);

@@ -6,10 +6,13 @@ using Common.Entities.CopilotAuditBackfill;
 using Common.Entities.UserScope.Purge;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using WebJob.Office365ActivityImporter.Engine;
 
 namespace Tests.UnitTests
 {
@@ -72,6 +75,28 @@ namespace Tests.UnitTests
             Assert.IsTrue(await store.ExistsAsync("GraphUsersMetadataLastImported"));
             Assert.IsTrue(await store.DeleteAsync("GraphUsersMetadataLastImported"));
             Assert.IsNull(await store.GetStringAsync("GraphUsersMetadataLastImported"));
+        }
+
+        [TestMethod]
+        public async Task ConcurrentDailyPhaseCompletionsPublishOnlyTheirOwnRetainedDataEvidence()
+        {
+            var partition = "Phase" + Guid.NewGuid().ToString("N");
+            var table = _table ?? Skip();
+            PersistedActivityReportsPhaseStore Reopen() => new PersistedActivityReportsPhaseStore(new AzureTableKeyValueStore(table, partition));
+            var start = new DateTime(2026, 6, 20, 23, 59, 59, DateTimeKind.Utc);
+            DailyPhaseFacts Facts(int index) => index % 2 == 0 ? DailyPhaseFacts.RowsPresent : DailyPhaseFacts.ExpectedEmpty;
+            await Task.WhenAll(Enumerable.Range(0, 10).Select(i => Reopen().SavePhaseAsync(start.AddTicks(i), Facts(i))));
+            var reader = Reopen();
+            var winner = (await reader.GetLastDT()).Value;
+            Assert.AreEqual(Facts((int)(winner - start).Ticks), await reader.ReadFactsAsync(winner),
+                "The last timestamp and last receipt must be from the same transaction.");
+            Assert.IsNull(await reader.ReadFactsAsync(start.AddHours(-1)));
+
+            // Clock resolution or a clock correction can put consecutive successes on exactly the same tick.
+            await Reopen().SavePhaseAsync(winner, DailyPhaseFacts.ExpectedEmpty);
+            Assert.AreEqual(DailyPhaseFacts.ExpectedEmpty, await reader.ReadFactsAsync(winner));
+            await Reopen().SavePhaseAsync(winner, DailyPhaseFacts.RowsPresent);
+            Assert.AreEqual(DailyPhaseFacts.RowsPresent, await reader.ReadFactsAsync(winner));
         }
 
         [TestMethod]
@@ -354,6 +379,391 @@ namespace Tests.UnitTests
             Assert.AreEqual(large, (await store.GetVersionedAsync("large")).Value);
         }
 
+        [TestMethod]
+        public async Task PublicationRangesDistinguishChangedETagsExpiryAndStableMisses()
+        {
+            var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+            var day = now.UtcDateTime.Date;
+            var values = new AzureTableKeyValueStore(_table ?? Skip(), "Publication" + Guid.NewGuid().ToString("N"), () => now);
+            var store = new UsageReportCoverageStore(values, true);
+            await values.SetStringAsync("v1:teams:20260514", "complete");
+            await values.SetStringAsync("v1:outlook:20260514", "empty", TimeSpan.FromHours(1));
+            await values.SetStringAsync("v1:sharepoint:20260514", "empty");
+            await values.SetStringAsync("v1:onedrive:20260513", "partial");
+            await values.SetStringAsync("v1:onedrive:20260515", "partial");
+            var read = await UsageReportCoverageStore.BeginPublicationAsync(UsageReportCoverageStore.Sources, day, day, () => store);
+
+            await values.SetStringAsync("v1:teams:20260514", "partial");
+            await values.SetStringAsync("v1:teams:20260514", "complete");
+            now = now.AddHours(2);
+            var outcomes = await read.ReadStableOutcomesAsync(UsageReportCoverageStore.Sources);
+            Assert.AreEqual("partial", outcomes["teams"][day], "The same text under another ETag is not the same certificate.");
+            Assert.AreEqual("partial", outcomes["outlook"][day], "Expiry changes the value even though the row's ETag did not change.");
+            Assert.AreEqual("empty", outcomes["sharepoint"][day]);
+            Assert.IsNull(outcomes["onedrive"][day], "Adjacent dates are outside this inclusive one-day key range.");
+        }
+
+        [TestMethod]
+        public async Task UsagePurgeFencesOnlyAffectedDaysAndOnlyAFreshWholeReportCanVerifyThemAgain()
+        {
+            var now = new DateTimeOffset(2026, 5, 14, 12, 0, 0, TimeSpan.Zero);
+            var values = new AzureTableKeyValueStore(_table ?? Skip(), "Usage" + Guid.NewGuid().ToString("N"), () => now);
+            var store = new UsageReportCoverageStore(values, true);
+            var day = now.UtcDateTime.Date.AddDays(-4);
+            var request = now.UtcDateTime;
+            await store.CompleteDayAsync("teams", day, true, true, false, request, 3);
+            await store.StartScopePurgeAsync("first", () => Task.CompletedTask);
+            await store.RevokeScopeDaysAsync("first", "teams", new[] { day }, CancellationToken.None);
+            await store.BeginDayAsync("teams", day);
+            await store.CompleteDayAsync("teams", day, true, true, false, request, 3);
+            Assert.IsFalse(await store.IsDayVerifiedAsync("teams", day));
+            await store.CompleteDayAsync("outlook", day, true, true, true, request, 3);
+            Assert.IsTrue(await store.IsDayVerifiedAsync("outlook", day), "An unrelated settled empty remains valid during the purge.");
+
+            await store.EndScopePurgeAsync("first", request);
+            await store.CompleteDayAsync("teams", day, true, true, false, request, 3);
+            Assert.IsFalse(await store.IsDayVerifiedAsync("teams", day), "A fetch that overlaps the purge cannot certify.");
+            await store.CompleteDayAsync("teams", day, true, true, false, request.AddSeconds(1), 3);
+            Assert.IsTrue(await store.IsDayVerifiedAsync("teams", day), "A later complete tenant-wide download can certify.");
+            await store.StartScopePurgeAsync("second", () => Task.CompletedTask);
+            await store.CompleteDayAsync("teams", day, true, true, false, request.AddSeconds(1), 3);
+            Assert.IsTrue(await store.IsDayVerifiedAsync("teams", day), "A later purge has not touched this date.");
+            await store.CompleteDayAsync("teams", day, true, true, true, request.AddSeconds(-1), 3);
+            Assert.IsFalse(await store.IsDayVerifiedAsync("teams", day), "An older download finishing last cannot restore its certificate.");
+
+            now = now.AddDays(401);
+            var outcomes = await store.ReadDailyOutcomesAsync(day, day);
+            Assert.IsNull(outcomes["outlook"][day], "Ordinary conditional writes keep their normal expiry.");
+            Assert.AreEqual(UsageReportCoverageStore.ScopeUnverified, outcomes["teams"][day],
+                "A purged day never becomes a legacy key miss that would trust surviving SQL rows.");
+        }
+
+        [DataTestMethod]
+        [DataRow(false)]
+        [DataRow(true)]
+        public async Task ScopePurge_SecondTableTransactionFailure_RevokesOnlyDeletedOrUnacknowledgedDays(bool loseResponse)
+        {
+            const int days = 205;
+            var first = new DateTime(2020, 1, 1);
+            var table = _table ?? Skip();
+            var partition = "Purge" + Guid.NewGuid().ToString("N");
+            var values = new AzureTableKeyValueStore(table, partition);
+            string DayKey(DateTime d) => "v1:teams:" + d.ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+            await values.SetManyAsync(Enumerable.Range(0, days).Select(i =>
+                new KeyValuePair<string, string>(DayKey(first.AddDays(i)), UsageReportCoverageStore.Complete)).ToList());
+
+            using (var db = UserScopePurgeSafetyTests.CreateMigratedDatabase())
+            {
+                db.Execute("INSERT dbo.users(user_name) VALUES ('outside@contoso.example'), ('inside@contoso.example')");
+                var outside = (int)db.Scalar("SELECT id FROM dbo.users WHERE user_name = 'outside@contoso.example'");
+                UserScopePurgeSafetyTests.SeedTeamsDays(db, days, "u.user_name IN ('outside@contoso.example', 'inside@contoso.example')");
+                var unacknowledged = new HashSet<string>();
+                var rejecting = new InterceptTransactions(table.Name, n => n == 2 && !loseResponse
+                    ? throw new RequestFailedException(503, "Synthetic rejection before sending the second transaction.") : Task.CompletedTask,
+                    (n, actions) =>
+                    {
+                        if (n != 2 || !loseResponse) return;
+                        foreach (var action in actions.Where(a => a.ActionType == TableTransactionActionType.UpsertReplace))
+                            unacknowledged.Add(action.Entity.RowKey);
+                        throw new RequestFailedException(503, "Synthetic lost acknowledgement after the second transaction committed.");
+                    });
+                var coverage = new UsageReportCoverageStore(new AzureTableKeyValueStore(rejecting, partition), true);
+                var state = new UserScopePurgeStateStore(NewStore(), true);
+                var job = await state.CreateAsync("admin@contoso.example", null, 1, 1);
+                var engine = new UserScopePurgeEngine(new UserScopePurgeDatabase(db.ConnectionString), state, null, coverage)
+                    { CandidatesOverride = new[] { outside } };
+
+                Assert.AreEqual(UserScopePurgeRunOutcome.Failed, await engine.RunAsync(job.Id, null));
+                Assert.AreEqual(UserScopePurgeErrorCodes.StateUnavailable, (await state.GetAsync(job.Id)).ErrorCode);
+                Assert.AreEqual(2, rejecting.Transactions);
+                var remaining = Convert.ToString(db.Scalar($"SELECT STRING_AGG(CONVERT(char(8), [date], 112), ',') FROM dbo.teams_user_activity_log WHERE user_id = {outside}"))
+                    .Split(',').ToHashSet();
+                var deleted = days - remaining.Count;
+                Assert.IsTrue(deleted > 0 && deleted <= 100, $"The first acknowledged Table unit had a matching SQL delete, not {deleted} rows deleted.");
+                Assert.AreEqual((long)deleted, engine.Job.RowsAffected["teams_user_activity_log"]);
+                for (var i = 0; i < days; i++)
+                {
+                    var day = first.AddDays(i);
+                    Assert.AreEqual(remaining.Contains(day.ToString("yyyyMMdd", CultureInfo.InvariantCulture)) && !unacknowledged.Contains(DayKey(day)),
+                        await coverage.IsDayVerifiedAsync("teams", day), "Coverage must match the actual retained rows for " + DayKey(day));
+                }
+                Assert.AreEqual(loseResponse, unacknowledged.Count > 0);
+                Assert.IsTrue(unacknowledged.Count < remaining.Count, "Dates beyond the failed unit are still untouched.");
+                Assert.AreEqual(days, db.Scalar($"SELECT COUNT(*) FROM dbo.teams_user_activity_log WHERE user_id <> {outside}"));
+
+                var again = await state.CreateAsync("admin@contoso.example", null, 1, 1);
+                Assert.AreEqual(UserScopePurgeRunOutcome.Completed, await engine.RunAsync(again.Id, null));
+                Assert.AreEqual(0, db.Scalar($"SELECT COUNT(*) FROM dbo.teams_user_activity_log WHERE user_id = {outside}"));
+            }
+        }
+
+        [TestMethod]
+        public async Task ScopePurge_SlowRevocationReleasesSqlLocksWithoutWaitingForTheTransport()
+        {
+            var table = _table ?? Skip();
+            var sending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var delayed = new InterceptTransactions(table.Name, async _ => { sending.TrySetResult(true); await release.Task; });
+            var coverage = new UsageReportCoverageStore(new AzureTableKeyValueStore(delayed, "Purge" + Guid.NewGuid().ToString("N")), true);
+            using (var db = UserScopePurgeSafetyTests.CreateMigratedDatabase())
+            {
+                db.Execute("INSERT dbo.users(user_name) VALUES ('outside@contoso.example')");
+                var outside = (int)db.Scalar("SELECT id FROM dbo.users WHERE user_name='outside@contoso.example'");
+                UserScopePurgeSafetyTests.SeedTeamsDays(db, 1, $"u.id = {outside}");
+                var state = new UserScopePurgeStateStore(NewStore(), true);
+                var job = await state.CreateAsync("admin@contoso.example", null, 1, 1);
+                var engine = new UserScopePurgeEngine(new UserScopePurgeDatabase(db.ConnectionString), state, null, coverage)
+                    { CandidatesOverride = new[] { outside }, CoverageWriteTimeout = TimeSpan.FromMilliseconds(250) };
+                var run = engine.RunAsync(job.Id, null);
+                try
+                {
+                    Assert.AreSame(sending.Task, await Task.WhenAny(sending.Task, run, Task.Delay(TimeSpan.FromSeconds(30))));
+                    Assert.AreSame(run, await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(5))), "The transport is still blocked.");
+                    Assert.AreEqual(UserScopePurgeRunOutcome.Failed, await run);
+                    Assert.AreEqual(1, db.Scalar($"SET LOCK_TIMEOUT 1000; SELECT COUNT(*) FROM dbo.teams_user_activity_log WITH (READCOMMITTEDLOCK) WHERE user_id = {outside}"));
+                }
+                finally { release.TrySetResult(true); await run; }
+            }
+        }
+
+        [TestMethod]
+        public async Task ScopePurge_AlreadySentStaleRevocationCannotUndoAReplacementAndAFreshImport()
+        {
+            var table = _table ?? Skip();
+            var partition = "Purge" + Guid.NewGuid().ToString("N");
+            var other = new UsageReportCoverageStore(new AzureTableKeyValueStore(table, partition), true);
+            var day = new DateTime(2020, 1, 1);
+            var ended = DateTime.UtcNow;
+            await other.StartScopePurgeAsync("original", () => Task.CompletedTask);
+            await other.RevokeScopeDaysAsync("original", "teams", new[] { day }, CancellationToken.None);
+            var delayed = new InterceptTransactions(table.Name, async _ =>
+            {
+                // The old worker already read its fence ETag. Change the actual Table rows before the
+                // pending transaction reaches the service; a read/check followed by an ordinary upsert loses here.
+                var proofs = 0;
+                await other.StartScopePurgeAsync("replacement", async () =>
+                {
+                    // Another old request lands after the replacement read the ETag. The replacement may
+                    // still claim, but only after proving SQL ownership again on the new ETag.
+                    if (++proofs == 1) await other.RevokeScopeDaysAsync("original", "teams", new[] { day }, CancellationToken.None);
+                }, ownsEarlierFence: owner => owner == "original");
+                Assert.AreEqual(2, proofs);
+                await other.EndScopePurgeAsync("replacement", ended);
+                await other.CompleteDayAsync("teams", day, true, true, false, ended.AddSeconds(1), 3);
+                Assert.IsTrue(await other.IsDayVerifiedAsync("teams", day));
+            });
+            var original = new UsageReportCoverageStore(new AzureTableKeyValueStore(delayed, partition), true);
+            await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() =>
+                original.RevokeScopeDaysAsync("original", "teams", new[] { day }, CancellationToken.None));
+            Assert.AreEqual(1, delayed.Transactions);
+            Assert.IsTrue(await other.IsDayVerifiedAsync("teams", day));
+        }
+
+        private sealed class InterceptTransactions : TableClient
+        {
+            private readonly Func<int, Task> _beforeSend;
+            private readonly Action<int, IReadOnlyList<TableTransactionAction>> _afterCommit;
+            public int Transactions { get; private set; }
+            public InterceptTransactions(string name, Func<int, Task> beforeSend, Action<int, IReadOnlyList<TableTransactionAction>> afterCommit = null)
+                : base(DevelopmentStorage, name) { _beforeSend = beforeSend; _afterCommit = afterCommit; }
+
+            public override async Task<Response<IReadOnlyList<Response>>> SubmitTransactionAsync(IEnumerable<TableTransactionAction> transactionActions,
+                CancellationToken cancellationToken = default)
+            {
+                var n = ++Transactions;
+                var actions = transactionActions.ToList();
+                await _beforeSend(n);
+                var result = await base.SubmitTransactionAsync(actions, cancellationToken);
+                _afterCommit?.Invoke(n, actions);
+                return result;
+            }
+        }
+
+        [TestMethod]
+        public async Task ScopePurge_AdoptsItsLegacyFenceButNeverAFutureRunOrAnotherJobsFence()
+        {
+            var state = new UserScopePurgeStateStore(NewStore(), true);
+            var ledger = NewStore();
+            var coverage = new UsageReportCoverageStore(ledger, true);
+            var job = await state.CreateAsync("admin@contoso.example", null, 1, 1);
+            job.RunToken = Guid.NewGuid().ToString("N"); // Pre-handoff-format record.
+            await state.SaveAsync(job);
+            Task Check() => Task.CompletedTask;
+            await coverage.StartScopePurgeAsync(job.RunToken, Check);
+            var older = await state.TryClaimAsync(job.Id, Check, CancellationToken.None);
+            var newer = await state.TryClaimAsync(job.Id, Check, CancellationToken.None);
+            await coverage.StartScopePurgeAsync(newer.RunToken, Check, ownsEarlierFence: newer.OwnsEarlierFence);
+            await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() =>
+                coverage.StartScopePurgeAsync(older.RunToken, Check, ownsEarlierFence: older.OwnsEarlierFence));
+            var unrelated = new UserScopePurgeJob();
+            unrelated.ClaimNewRun();
+            unrelated.ClaimNewRun();
+            await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() =>
+                coverage.StartScopePurgeAsync(unrelated.RunToken, Check, ownsEarlierFence: unrelated.OwnsEarlierFence));
+            Assert.AreEqual("active:" + newer.RunToken, await ledger.GetStringAsync("v1:scopePurge"));
+        }
+
+        [TestMethod]
+        public async Task ScopePurge_RecoveryNamespaceIsolatedFromLegacyFenceAndCertificates()
+        {
+            var ledger = NewStore();
+            var legacy = new UsageReportCoverageStore(ledger, true);
+            var day = new DateTime(2020, 1, 1);
+            var legacyToken = Guid.NewGuid().ToString("N");
+            Task Check() => Task.CompletedTask;
+            await legacy.CompleteDayAsync("outlook", day, true, true, true, day.AddDays(5), 3);
+            await legacy.StartScopePurgeAsync(legacyToken, Check);
+            var fenceBefore = await ledger.GetVersionedAsync("v1:scopePurge");
+            var generation = Guid.NewGuid().ToString("N");
+            var recovered = new UsageReportCoverageStore(ledger, true, null, generation);
+            var reopened = new UsageReportCoverageStore(ledger, true, null, generation);
+            var publication = await UsageReportCoverageStore.BeginPublicationAsync(
+                new[] { "outlook" }, day, day, () => reopened);
+            var outcomes = await publication.ReadStableOutcomesAsync(new[] { "outlook" });
+            Assert.AreEqual(UsageReportCoverageStore.Partial, outcomes["outlook"][day], "Missing coverage is not a legacy fallback.");
+
+            await recovered.StartScopePurgeAsync("replacement", Check);
+            await reopened.RevokeScopeDaysAsync("replacement", "teams", new[] { day }, CancellationToken.None);
+            await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() => reopened.StartScopePurgeAsync("unrelated", Check));
+            var ended = DateTime.UtcNow;
+            await recovered.EndScopePurgeAsync("replacement", ended);
+            await reopened.CompleteDayAsync("teams", day, true, true, false, ended, 3);
+            Assert.IsFalse(await reopened.IsDayVerifiedAsync("teams", day));
+            await reopened.CompleteDayAsync("teams", day, true, true, false, ended.AddSeconds(1), 3);
+            Assert.IsTrue(await recovered.IsDayVerifiedAsync("teams", day));
+            Assert.AreEqual(fenceBefore.VersionToken, (await ledger.GetVersionedAsync("v1:scopePurge")).VersionToken);
+
+            // Even a request still addressed to the old namespace cannot change the replacement's days.
+            await legacy.RevokeScopeDaysAsync(legacyToken, "teams", new[] { day }, CancellationToken.None);
+            Assert.IsTrue(await recovered.IsDayVerifiedAsync("teams", day));
+            Assert.AreEqual(fenceBefore.Value, (await ledger.GetVersionedAsync("v1:scopePurge")).Value);
+            Assert.IsTrue(await legacy.IsDayVerifiedAsync("outlook", day));
+            Assert.IsFalse(await recovered.IsDayVerifiedAsync("outlook", day));
+        }
+
+        [TestMethod]
+        public async Task ScopePurge_StaleTerminalWriteCannotReplaceAnotherOwnersState()
+        {
+            var table = _table ?? Skip();
+            var partition = "Purge" + Guid.NewGuid().ToString("N");
+            var state = new UserScopePurgeStateStore(new AzureTableKeyValueStore(table, partition), true);
+            var queued = await state.CreateAsync("admin@contoso.example", null, 1, 1);
+            await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() => state.SaveOwnedAsync(queued, CancellationToken.None));
+            var first = await state.TryClaimAsync(queued.Id, () => Task.CompletedTask, CancellationToken.None);
+            var progress = await state.GetAsync(queued.Id);
+            progress.RowsAffected["audit_events"] = 1;
+            first.State = UserScopePurgeStates.Completed;
+            var calls = 0;
+            var delayed = new UserScopePurgeStateStore(new AzureTableKeyValueStore(async _ =>
+            {
+                if (++calls == 2) // The old terminal write already read its ETag, but has not reached the service.
+                {
+                    var proofs = 0;
+                    var next = await state.TryClaimAsync(queued.Id, async () =>
+                    {
+                        // A valid but delayed old progress write wins the first claim ETag.
+                        if (++proofs == 1) await state.SaveOwnedAsync(progress, CancellationToken.None);
+                    }, CancellationToken.None);
+                    Assert.AreEqual(2, proofs);
+                    next.State = UserScopePurgeStates.Failed;
+                    next.ErrorCode = UserScopePurgeErrorCodes.ScopeMembershipChanged;
+                    await state.SaveOwnedAsync(next, CancellationToken.None);
+                }
+                return table;
+            }, table.Name, partition), true);
+
+            await Assert.ThrowsExceptionAsync<UserScopePurgeLockLostException>(() => delayed.SaveOwnedAsync(first, CancellationToken.None));
+            var saved = await state.GetLatestAsync();
+            Assert.AreEqual(UserScopePurgeStates.Failed, saved.State);
+            Assert.AreEqual(UserScopePurgeErrorCodes.ScopeMembershipChanged, saved.ErrorCode);
+            Assert.AreEqual(1L, saved.RowsAffected["audit_events"]);
+            Assert.AreNotEqual(first.RunToken, saved.RunToken);
+        }
+
+        [TestMethod]
+        public async Task ScopePurge_ReconnectFencesAnUnacknowledgedReplacementClaimBeforeReloadingCandidates()
+        {
+            var table = _table ?? Skip();
+            var partition = "Purge" + Guid.NewGuid().ToString("N");
+            var state = new UserScopePurgeStateStore(new AzureTableKeyValueStore(table, partition), true);
+            var job = await state.CreateAsync("admin@contoso.example", null, 1, 1);
+            using (var db = UserScopePurgeSafetyTests.CreateMigratedDatabase())
+            {
+                db.Execute("INSERT dbo.users(user_name) VALUES ('outside@contoso.example')");
+                var outside = (int)db.Scalar("SELECT id FROM dbo.users WHERE user_name='outside@contoso.example'");
+                UserScopePurgeSafetyTests.SeedTeamsDays(db, 2, "u.user_name='outside@contoso.example'");
+                var database = new UserScopePurgeDatabase(db.ConnectionString);
+                using (var original = await database.TryOpenPurgeSessionAsync(TimeSpan.Zero))
+                {
+                    var engine = new UserScopePurgeEngine(database, state, null, new UsageReportCoverageStore(NewStore(), true))
+                        { CandidatesOverride = new[] { outside }, BatchSizeOverride = 1, StateCheckInterval = TimeSpan.Zero };
+                    var rejected = false;
+                    engine.AfterWindow = async (step, window) =>
+                    {
+                        if (window != 1 || UserScopePurgePlan.Steps[step - 1].Table != "teams_user_activity_log") return;
+                        original.Connection.Close();
+                        using (var replacement = await database.TryOpenPurgeSessionAsync(TimeSpan.Zero))
+                        {
+                            var sendingClaim = false;
+                            var delayed = new UserScopePurgeStateStore(new AzureTableKeyValueStore(async token =>
+                            {
+                                if (sendingClaim)
+                                {
+                                    // The replacement read the job ETag and proved its SQL lock, but lost the SQL
+                                    // session before Table received the claim. The previous owner now reacquires.
+                                    sendingClaim = false;
+                                    replacement.Connection.Close();
+                                    await original.EnsureOpenAsync(token);
+                                }
+                                return table;
+                            }, table.Name, partition), true);
+                            try
+                            {
+                                await delayed.TryClaimAsync(job.Id, async () =>
+                                {
+                                    await replacement.CheckLockAsync(CancellationToken.None);
+                                    sendingClaim = true;
+                                }, CancellationToken.None);
+                            }
+                            catch (UserScopePurgeLockLostException) { rejected = true; }
+                        }
+                    };
+                    Assert.AreEqual(UserScopePurgeRunOutcome.Completed, await engine.RunAsync(job.Id, null, lockedSession: original));
+                    Assert.IsTrue(rejected, "The delayed claim never owned the job, even after its SQL lock became free.");
+                    Assert.AreEqual(engine.Job.RunToken, (await state.GetAsync(job.Id)).RunToken);
+                    Assert.AreEqual(0, db.Scalar($"SELECT COUNT(*) FROM dbo.users WHERE id={outside}"));
+                }
+            }
+        }
+
+        [TestMethod]
+        public async Task ScopePurge_StopSeenWhileOpeningTheCoverageFencePrecedesScopePreflight()
+        {
+            var table = _table ?? Skip();
+            var state = new UserScopePurgeStateStore(NewStore(), true);
+            var job = await state.CreateAsync("admin@contoso.example", null, 1, 1);
+            using (var db = ScratchDatabase.Create("PurgeFenceStop"))
+            {
+                var database = new UserScopePurgeDatabase(db.ConnectionString);
+                using (var session = await database.TryOpenPurgeSessionAsync(TimeSpan.Zero))
+                {
+                    var calls = 0;
+                    var coverage = new UsageReportCoverageStore(new AzureTableKeyValueStore(async _ =>
+                    {
+                        if (++calls == 1)
+                        {
+                            session.Connection.Close();
+                            Assert.IsTrue(await state.RequestCancelAsync(job.Id));
+                        }
+                        return table;
+                    }, table.Name, "Purge" + Guid.NewGuid().ToString("N")), true);
+                    var engine = new UserScopePurgeEngine(database, state, null, coverage);
+                    Assert.AreEqual(UserScopePurgeRunOutcome.Cancelled, await engine.RunAsync(job.Id, null, lockedSession: session));
+                    Assert.IsNull((await state.GetAsync(job.Id)).ErrorCode, "No scope was available, but cancellation was already observed.");
+                }
+            }
+        }
+
         /// <summary>
         /// Several web instances saving the score settings against one version at once: exactly one lands, the rest are
         /// conflicts, and the history holds only the change that was committed.
@@ -413,6 +823,32 @@ namespace Tests.UnitTests
             Assert.AreEqual(created[0].RequestedBy, latest.RequestedBy, "The latest job is the one its requester was told was started.");
             Assert.IsNull(await stores[0].TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin@contoso.com", copilotImportEnabled: true),
                 "A start while that job is queued is refused.");
+        }
+
+        [TestMethod]
+        public async Task CopilotAuditBackfill_PurgeCannotRemoveTheRequestBeforeItsRenewedJob()
+        {
+            var now = new DateTime(2026, 10, 2, 0, 0, 0, DateTimeKind.Utc);
+            var partition = "Test" + Guid.NewGuid().ToString("N");
+            var values = new AzureTableKeyValueStore(_table ?? Skip(), partition, () => now);
+            var state = new CopilotAuditBackfillStateStore(values, true, () => now);
+            var job = await state.TryCreateWhenIdleAsync(now.AddDays(-2), now, "admin@contoso.com", true);
+            Assert.IsTrue(await state.RequestCancelAsync(job.Id));
+            now = now.AddMinutes(1);
+            await state.SaveAsync(job);
+
+            now = now.AddDays(180).AddSeconds(-1);
+            await values.PurgeExpiredAsync();
+            Assert.IsTrue((await state.GetLatestAsync()).CancelRequested);
+            now = now.AddSeconds(1);
+            Assert.IsNull(await state.GetLatestAsync());
+            var next = await state.TryCreateWhenIdleAsync(now.AddDays(-1), now, "admin@contoso.com", true);
+            Assert.IsFalse((await state.GetAsync(next.Id)).CancelRequested);
+
+            now = now.AddDays(180);
+            await values.PurgeExpiredAsync();
+            var retired = await values.GetVersionedAsync("Job:" + job.Id + ":Cancel");
+            Assert.IsNull(retired.VersionToken, "The retired marker should no longer occupy a table row.");
         }
 
         private static AzureTableKeyValueStore NewStore()

@@ -34,7 +34,7 @@ namespace Common.Entities.State
     /// the ones nobody reads again.</description></item>
     /// </list>
     /// </remarks>
-    public sealed class AzureTableKeyValueStore : IConditionalKeyValueStore, IBatchKeyValueStore
+    public sealed class AzureTableKeyValueStore : IExpiringConditionalKeyValueStore, IBatchKeyValueStore, IVersionedKeyRangeReader, IFencedBatchKeyValueStore
     {
         internal const string KeyProperty = "Key";
         internal const string ValueProperty = "Value";
@@ -61,7 +61,7 @@ namespace Common.Entities.State
         internal const string HashedRowKeyPrefix = "%%";
 
         /// <summary>Azure Tables accepts at most 100 operations in one entity-group transaction.</summary>
-        private const int MaxTransactionSize = 100;
+        internal const int MaxTransactionSize = 100;
 
         /// <summary>An entity-group transaction's payload is capped at 4 MiB; this keeps the plain text of a batch far below it.</summary>
         private const int MaxTransactionChars = 400000;
@@ -228,6 +228,37 @@ namespace Common.Entities.State
             }, cancellationToken).ConfigureAwait(false);
         }
 
+        async Task<bool> IFencedBatchKeyValueStore.TrySetFencedBatchAsync(string fenceKey, string fenceValue, string expectedVersion,
+            IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken token)
+        {
+            if (values.Count == 0) return await TrySetStringAsync(fenceKey, fenceValue, expectedVersion, token).ConfigureAwait(false);
+            if (values.Count >= MaxTransactionSize) throw new ArgumentOutOfRangeException(nameof(values));
+            TableEntity Entity(string key, string value)
+            {
+                var entity = new TableEntity(_partitionKey, ToRowKey(key)) { { KeyProperty, key } };
+                EncodeValue(entity, key, value);
+                return entity;
+            }
+            var actions = new List<TableTransactionAction>(values.Count + 1)
+            {
+                new TableTransactionAction(expectedVersion == null ? TableTransactionActionType.Add : TableTransactionActionType.UpdateReplace,
+                    Entity(fenceKey, fenceValue), expectedVersion == null ? default : new ETag(expectedVersion)),
+            };
+            foreach (var pair in values) actions.Add(new TableTransactionAction(TableTransactionActionType.UpsertReplace, Entity(pair.Key, pair.Value)));
+            return await RunAsync(async table =>
+            {
+                try
+                {
+                    await table.SubmitTransactionAsync(actions, token).ConfigureAwait(false);
+                    return true;
+                }
+                catch (RequestFailedException ex) when (ex.Status == 409 || ex.Status == 412 || ex.Status == 404)
+                {
+                    return false;
+                }
+            }, token).ConfigureAwait(false);
+        }
+
         public async Task<bool> DeleteAsync(string key, CancellationToken cancellationToken = default)
         {
             var rowKey = ToRowKey(key);
@@ -240,6 +271,7 @@ namespace Common.Entities.State
                     // The SDK answers a delete of a missing entity with the service's 404 rather than an exception.
                     return response == null || response.Status != 404;
                 }
+
                 catch (RequestFailedException ex) when (ex.Status == 404)
                 {
                     return false;
@@ -275,11 +307,49 @@ namespace Common.Entities.State
                 var entity = response.Value;
                 // An expired row reads as missing but keeps its ETag, so a conditional write replaces it rather than
                 // failing because a row (nobody can see) is in the way.
-                return new VersionedValue(IsExpired(entity) ? null : DecodeValue(entity, key), entity.ETag.ToString());
+                return Versioned(entity, key);
             }, cancellationToken).ConfigureAwait(false);
         }
 
-        public async Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)
+        private VersionedValue Versioned(TableEntity entity, string key) =>
+            new VersionedValue(IsExpired(entity) ? null : DecodeValue(entity, key), entity.ETag.ToString());
+
+        public Task<Dictionary<string, VersionedValue>> ReadVersionedRangeAsync(string firstKey, string lastKey,
+            int maxRows, CancellationToken cancellationToken)
+        {
+            if (ToRowKey(firstKey) != firstKey || ToRowKey(lastKey) != lastKey || string.CompareOrdinal(firstKey, lastKey) > 0)
+                throw new ArgumentException("A range requires ordered literal row keys.");
+            if (maxRows < 1 || maxRows > 1000) throw new ArgumentOutOfRangeException(nameof(maxRows));
+
+            return RunAsync(async table =>
+            {
+                var filter = TableClient.CreateQueryFilter($"PartitionKey eq {_partitionKey} and RowKey ge {firstKey} and RowKey le {lastKey}");
+                var rows = new Dictionary<string, VersionedValue>(StringComparer.Ordinal);
+                var pages = table.QueryAsync<TableEntity>(filter, maxPerPage: 1000, cancellationToken: cancellationToken)
+                    .AsPages().GetAsyncEnumerator(cancellationToken);
+                try
+                {
+                    var pageCount = 0;
+                    while (await pages.MoveNextAsync().ConfigureAwait(false))
+                    {
+                        var page = pages.Current;
+                        // A short date range normally fits one page. Never report truncated pages as confirmed misses.
+                        if (rows.Count + page.Values.Count > maxRows || (++pageCount >= 4 && page.ContinuationToken != null))
+                            throw new InvalidOperationException("The state range exceeded its read limit.");
+                        foreach (var entity in page.Values)
+                            rows.Add(entity.RowKey, Versioned(entity, entity.RowKey));
+                    }
+                }
+                finally { await pages.DisposeAsync().ConfigureAwait(false); }
+                return rows;
+            }, cancellationToken);
+        }
+
+        public Task<bool> TrySetStringAsync(string key, string value, string expectedVersionToken, CancellationToken cancellationToken = default)
+            => TrySetExpiringStringAsync(key, value, expectedVersionToken, null, cancellationToken);
+
+        public async Task<bool> TrySetExpiringStringAsync(string key, string value, string expectedVersionToken, TimeSpan? timeToLive,
+            CancellationToken cancellationToken = default)
         {
             if (value == null) throw new ArgumentNullException(nameof(value));
 
@@ -288,6 +358,7 @@ namespace Common.Entities.State
                 { KeyProperty, key },
             };
             EncodeValue(entity, key, value);
+            if (timeToLive.HasValue) entity[ExpiresProperty] = _utcNow() + timeToLive.Value;
 
             return await RunAsync(async table =>
             {

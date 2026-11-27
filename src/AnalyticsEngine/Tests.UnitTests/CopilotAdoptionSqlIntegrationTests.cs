@@ -30,6 +30,46 @@ namespace Tests.UnitTests
     {
         public TestContext TestContext { get; set; }
 
+        internal static async Task<(CopilotAdoptionAnalysis Positive, CopilotAdoptionAnalysis Empty, CopilotAdoptionAnalysis Failed)>
+            ReadCandidateForecastFixturesAsync()
+        {
+            using (var db = ScratchDatabase.Create("CandidateForecast"))
+            {
+                CreateUserTables(db);
+                CreateCopilotTables(db);
+                CreateM365UsageTables(db);
+                var day = new DateTime(2025, 1, 6, 0, 0, 0, DateTimeKind.Utc);
+                db.Execute(@"INSERT dbo.license_types (id,name,sku_id) VALUES (1,N'Contoso baseline',N'CONTOSO');
+                    INSERT dbo.users (id,user_name,account_enabled) VALUES (1,'candidate@contoso.com',1);
+                    INSERT dbo.outlook_user_activity_log (id,[date],user_id,last_activity_date,email_send_count,email_read_count)
+                    VALUES (1,'20250106',1,'20250106',80,100);");
+                for (int i = 0; i < 3; i++) SeedCopilotInteractionAt(db, 1, day.AddDays(i), "Copilot Chat");
+                var store = new Common.Entities.State.UsageReportCoverageStore(new Common.Entities.State.InMemoryKeyValueStore(), true);
+                foreach (var source in Common.Entities.State.UsageReportCoverageStore.Sources)
+                {
+                    db.Execute($"CREATE INDEX IX_date ON dbo.[{source}_user_activity_log] ([date]);");
+                    for (int i = 0; i < 3; i++)
+                        await store.CompleteDayAsync(source, day.AddDays(i), true, true, source != "outlook" || i != 0,
+                            day.AddDays(10), 3);
+                }
+
+                var options = CopilotAdoptionOptions.Default;
+                options.UsesExplicitDates = true;
+                options.FromUtc = day;
+                options.ToUtc = day.AddDays(2);
+                options.ToExclusiveUtc = day.AddDays(3);
+                var service = new CopilotAdoptionService(options, new AgentInventoryContextFactory(db.ConnectionString),
+                    usageReportCoverage: store);
+                var positive = await service.AnalyseAsync();
+                db.Execute("UPDATE dbo.users SET account_enabled = 0 WHERE id = 1;");
+                var empty = await service.AnalyseAsync();
+                // The candidate projection needs this column. The independent stored-day and audit reads do not.
+                db.Execute("EXEC sp_rename 'dbo.outlook_user_activity_log.email_read_count', 'unavailable_read_count', 'COLUMN';");
+                var failed = await service.AnalyseAsync();
+                return (positive, empty, failed);
+            }
+        }
+
         [DataTestMethod]
         [DataRow(true)]
         [DataRow(false)]

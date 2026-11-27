@@ -3,16 +3,19 @@ import { Sender } from '@microsoft/applicationinsights-channel-js';
 import { AppInsightsCore, DEFAULT_BREEZE_PATH, PageViewDataType, PageViewPerformanceDataType, addPageHideEventListener, addPageUnloadEventListener, parseConnectionString } from '@microsoft/applicationinsights-core-js';
 import type { IConfig, IConfiguration } from '@microsoft/applicationinsights-core-js';
 import { PropertiesPlugin } from '@microsoft/applicationinsights-properties-js';
+import { FirstPageViewDelivery } from './FirstPageViewDelivery';
 
 export type TrackerTelemetry = Pick<AnalyticsPlugin, 'trackPageView' | 'trackEvent'>;
 
-export function createTrackerTelemetry(connectionString: string, userLoginName: string): TrackerTelemetry {
+export function createTrackerTelemetry(connectionString: string, userLoginName: string, beforePageHideFlush?: (persisted: boolean) => void): TrackerTelemetry {
     const { ingestionendpoint, instrumentationkey } = parseConnectionString(connectionString);
     if (!instrumentationkey || !ingestionendpoint) throw new Error('Missing Application Insights instrumentation key or ingestion endpoint.');
 
     const analytics = new AnalyticsPlugin();
     const properties = new PropertiesPlugin();
     const sender = new Sender();
+    const firstViewDelivery = new FirstPageViewDelivery();
+    let firstView = true;
     const config: IConfiguration & IConfig = {
         connectionString,
         instrumentationKey: instrumentationkey,
@@ -47,9 +50,21 @@ export function createTrackerTelemetry(connectionString: string, userLoginName: 
     properties.context.user.setAuthenticatedUserContext(userLoginName);
 
     // The full web SDK wires these itself. Keep short visits and clicks that navigate off the page.
-    const flush = () => {
-        sender.onunloadFlush();
-        properties.context.sessionManager.backup();
+    const flush = (event: Event) => {
+        try {
+            // Replacing the shared exit cookie can enqueue another hit. A tab closed while
+            // already hidden has no later visibilitychange: drain the sender after the handoff.
+            if (event.type === 'pagehide') beforePageHideFlush?.((event as PageTransitionEvent).persisted);
+        } finally {
+            if (event.type === 'pagehide' && event.isTrusted && !(event as PageTransitionEvent).persisted) {
+                firstViewDelivery.flushOnClose(sender);
+            } else if (event.type !== 'beforeunload' || !firstViewDelivery.awaitingResponse || !('onpagehide' in window)) {
+                // A cancellable beforeunload precedes pagehide. Don't drain the queued clicks
+                // separately from their outstanding view before we know the document is going away.
+                sender.onunloadFlush();
+            }
+            properties.context.sessionManager.backup();
+        }
     };
     addPageHideEventListener(flush);
     addPageUnloadEventListener(flush);
@@ -65,7 +80,14 @@ export function createTrackerTelemetry(connectionString: string, userLoginName: 
                     unnamedTrace = null;
                 } catch { /* No usable page address: leave the name neutral. */ }
             }
-            analytics.trackPageView(view, customProperties);
+            const first = firstView;
+            firstView = false;
+            const props = view?.properties;
+            if (first && typeof props?.duration === 'number' && props.duration > 0) {
+                firstViewDelivery.track(sender, () => analytics.trackPageView(view, customProperties));
+            } else {
+                analytics.trackPageView(view, customProperties);
+            }
         }
     };
 }

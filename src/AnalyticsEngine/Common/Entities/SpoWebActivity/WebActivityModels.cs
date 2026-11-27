@@ -1335,7 +1335,7 @@ namespace Common.Entities.SpoWebActivity
         /// <summary>Visits in which at least one search was run.</summary>
         public long SessionsWithSearch { get; set; }
 
-        /// <summary>Visits with a search, as a percentage of all visits in the window.</summary>
+        /// <summary>Of visits with a page view in the window, the percentage that also searched in the window.</summary>
         public double SearchReliancePct { get; set; }
 
         public double SearchesPerSearchingVisit { get; set; }

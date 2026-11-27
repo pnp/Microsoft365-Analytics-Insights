@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
 using System.Threading.Tasks;
+using UnitTests.FakeLoaderClasses;
 using WebJob.Office365ActivityImporter.Engine.Entities.Serialisation.UsageReports;
 using WebJob.Office365ActivityImporter.Engine.Graph.UsageReports;
 
@@ -230,15 +231,16 @@ namespace Tests.UnitTests
                 db.Configuration.LazyLoadingEnabled = false;
 
                 var groupsCache = Common.Entities.UserScope.UserImportScope.Unfiltered;
+                var now = DateTime.UtcNow;
                 var loader = new OutlookUserActivityLoader(null, groupsCache, logger)
                 {
-                    RefreshableRecentDays = 3
+                    RefreshableRecentDays = 3, Clock = new FixedClock(now)
                 };
 
-                var lastSuccessfulImport = DateTime.UtcNow.Date.AddDays(-10);
-                var finalizedDate = DateTime.UtcNow.Date.AddDays(-12); // stored by the completed run -> skippable
-                var partialAfterSuccess = DateTime.UtcNow.Date.AddDays(-6); // could be from a later failed run -> retry
-                var recentDate = DateTime.UtcNow.Date.AddDays(-2);      // stored but within the recent window -> never skipped
+                var lastSuccessfulImport = now.Date.AddDays(-10);
+                var finalizedDate = now.Date.AddDays(-13); // already age three when the previous run completed
+                var partialAfterSuccess = now.Date.AddDays(-6); // could be from a later failed run -> retry
+                var recentDate = now.Date.AddDays(-2);      // stored but within the recent window -> never skipped
 
                 var runId = DateTime.UtcNow.Ticks;
                 var upn = $"skipdates_{runId}@unit.test".ToLower();

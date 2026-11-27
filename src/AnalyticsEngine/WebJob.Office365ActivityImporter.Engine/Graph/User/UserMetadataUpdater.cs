@@ -13,6 +13,7 @@ using System;
 using System.Collections.Generic;
 using System.Data.Entity;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph
@@ -26,8 +27,10 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
         private UserMetadataCache _userMetaCache;
         private readonly IUserMetadataLoader _userLoader;
+        private readonly bool _allowPerUserLicenceFallback;
         private readonly IAnalyticsDbContextFactory _contextFactory;
         private readonly IClock _clock;
+        private readonly CancellationToken _shutdownToken;
         private UserBatchProcessor _batchProcessor;
         private UserInsertProcessor _insertProcessor;
         private UserLicenseProcessor _licenseProcessor;
@@ -70,8 +73,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// </param>
         public UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient, IClock clock = null,
             IUserImportScopeProvider userScopeProvider = null, IImportLastRunStore lastRunStore = null)
+            : this(logger, settings, creds, manualGraphCallClient, clock, userScopeProvider, lastRunStore, CancellationToken.None)
+        {
+        }
+
+        internal UserMetadataUpdater(AnalyticsLogger logger, AppConfig settings, TokenCredential creds, ManualGraphCallClient manualGraphCallClient, IClock clock,
+            IUserImportScopeProvider userScopeProvider, IImportLastRunStore lastRunStore, CancellationToken shutdownToken,
+            GraphServiceClient graphServiceClient = null)
             : base(logger, settings)
         {
+            _shutdownToken = shutdownToken;
             _clock = clock ?? SystemClock.Instance;
             _userScopeProvider = userScopeProvider;
             _lastRunStore = lastRunStore;
@@ -97,9 +108,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             // handling but caps any single stalled HTTP request. /users/delta over a 200k-user
             // tenant can legitimately take longer than the framework default 100s across all pages;
             // the budget is therefore per request, not per full tenant traversal.
-            var graphServiceClient = GraphServiceClientFactory.CreateForUserImport(creds, _logger);
+            graphServiceClient = graphServiceClient ?? GraphServiceClientFactory.CreateForUserImport(creds, _logger);
 
-            _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _logger, graphServiceClient);
+            _userLoader = new GraphUserLoader(manualGraphCallClient, deltaProvider, _logger, graphServiceClient, shutdownToken);
+            // The scheduled identity uses application permissions. /users/{id}/licenseDetails is delegated-only.
+            _allowPerUserLicenceFallback = false;
             _contextFactory = DefaultAnalyticsDbContextFactory.Instance;
             _orgTypeStore = CreateOrgTypeStore(settings, logger);
             _orgAssignmentStore = CreateOrgAssignmentStore(settings, logger);
@@ -128,6 +141,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
             : base(logger, settings)
         {
             _userLoader = userLoader;
+            _allowPerUserLicenceFallback = true;
             _contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
             _clock = clock ?? SystemClock.Instance;
             _orgTypeStore = orgTypeStore ?? CreateOrgTypeStore(settings, logger);
@@ -224,7 +238,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// Main method
         /// </summary>
         /// <returns>
-        /// True when the cycle completed and the new Graph delta token was committed. False when it did not -
+        /// True when the cycle completed and the new Graph delta token was committed. An app-only run with no
+        /// licence inventory may commit the metadata checkpoint but returns false so the licence refresh stays due.
+        /// Also false when the metadata import did not complete -
         /// above all when the <c>/users/delta</c> read stopped before its <c>@odata.deltaLink</c> (issue #664) -
         /// so the import section is not recorded as done and is retried on the next cycle. A failure in any
         /// database phase still throws, exactly as before.
@@ -568,14 +584,22 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
 
                 // Get SKUs from tenant
                 var skus = await _userLoader.LoadTenantSkus();
+                _shutdownToken.ThrowIfCancellationRequested();
+                var readPerUserLicences = skus == null && _allowPerUserLicenceFallback;
+                if (skus == null)
+                {
+                    _logger.LogWarning(readPerUserLicences
+                        ? "User import - tenant licence inventory unavailable; reading licence details per user."
+                        : "User import - licence refresh unavailable: the scheduled app cannot read licence details per user. " +
+                          "Keeping existing assignments and history; continuing with user metadata only.");
+                }
 
                 // Load DB user data without tracking.
-                // Only include license lookups when we'll need per-user license processing
-                // (i.e. tenant-level SKUs unavailable). Including them unconditionally loads
-                // hundreds of thousands of extra entities that are never read in the common
+                // Including license lookups unconditionally loads hundreds of thousands
+                // of extra entities that are never read in the common
                 // path and can cause an out-of-memory crash before the existing-user metadata
                 // update runs.
-                var allDbUsers = skus == null
+                var allDbUsers = readPerUserLicences
                     ? await db.users.AsNoTracking().Include(u => u.LicenseLookups).ToListAsync()
                     : await db.users.AsNoTracking().ToListAsync();
                 _logger.LogInformation($"User import - loaded {allDbUsers.Count.ToString("N0")} users from database");
@@ -672,12 +696,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 var disabledGraphUsersWithRows = disabledGraphUsers.Where(u => dbUsersByUpn.ContainsKey(u.UserPrincipalName)).ToList();
 
                 var graphMentionedExistingDbUsers = _dataMapper.GetDbUsersFromGraphUsers(allActiveGraphUsers, allDbUsers);
-                var fallbackLicenceUserIds = skus == null ? new HashSet<int>() : null;
-                var fallbackDesiredLicences = skus == null ? new HashSet<UserLicenseAssignment>() : null;
+                var fallbackLicenceUserIds = readPerUserLicences ? new HashSet<int>() : null;
+                var fallbackDesiredLicences = readPerUserLicences ? new HashSet<UserLicenseAssignment>() : null;
 
                 // Insert any user we've not seen so far. Their managers are resolved against every user already in the
                 // database: in an incremental read, a newcomer's manager is usually someone Graph did not report as changed.
-                var insertedDbUsers = await InsertMissingUsersFenced(db, allActiveGraphUsers, graphMentionedExistingDbUsers, skus == null, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences, dbUsersByAadId);
+                var insertedDbUsers = await InsertMissingUsersFenced(db, allActiveGraphUsers, graphMentionedExistingDbUsers, readPerUserLicences, importCycleLastUpdatedUtc, fallbackLicenceUserIds, fallbackDesiredLicences, dbUsersByAadId);
                 phaseResults.InsertPhaseSucceeded = true;
                 _logger.LogInformation($"User import - Insert phase completed. {insertedDbUsers.Count.ToString("N0")} new users inserted.");
 
@@ -771,10 +795,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // rows refreshed. With a persisted delta token (the state table) this
                 // causes licence counts to drift downward run after run until
                 // they no longer match the tenant's actual licence assignments.
-                // When SKUs are not available the per-user path inside
-                // UpdateDbUserWithGraphData handles licences as part of the
-                // per-user Graph call, so we can free the list early in that
-                // branch to save memory.
+                // Without tenant SKUs there is no tenant-wide refresh to retain the list for.
                 if (skus == null)
                 {
                     allDbUsers.Clear();
@@ -782,15 +803,12 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
 
                 // Update existing users.
-                // When tenant-level SKUs are available we can use the fast bulk-SQL
-                // path (no per-user Graph calls needed for licenses).
-                // When SKUs are NOT available we must fall back to the EF-per-entity
-                // path because each user needs individual Graph license queries.
+                // Only a supported per-user licence source needs the slower EF-per-entity path.
                 _logger.LogInformation($"User import - Starting metadata update for {notInsertedUpns.Count.ToString("N0")} existing users...");
                 int existingUsersUpdated = 0;
                 try
                 {
-                    if (skus != null)
+                    if (!readPerUserLicences)
                     {
                         existingUsersUpdated = await _batchProcessor.BulkUpdateExistingUsers(
                             db,
@@ -825,7 +843,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     phaseResults.UpdatePhaseSucceeded = true;
                     _logger.LogInformation($"User import - Completed metadata update for {existingUsersUpdated.ToString("N0")} existing users");
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!(ex is OperationCanceledException && _shutdownToken.IsCancellationRequested))
                 {
                     _logger.LogError($"User import - ERROR updating existing users: {ex.Message}");
                     throw;
@@ -884,7 +902,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     _logger.LogInformation($"User import - licence refresh will cover {allDbUsersForLicenseRefresh.Count.ToString("N0")} DB users (entire population, not just delta).");
                 }
 
-                // Can we update SKUs for users on batch (ie Organization.Read.All granted)?
+                // Reconcile against the tenant inventory, independently of the metadata delta.
                 if (skus != null)
                 {
                     // No re-attach loop needed: the licence refresh works in FK IDs
@@ -900,17 +918,18 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 }
                 else
                 {
+                    await EnsureWriterLockHeldAsync("licence capacity update");
                     await UserLicenseProcessor.MarkSubscribedSkuCapacityUnavailableAsync(db, _logger);
-                    await EnsureWriterLockHeldAsync("per-user licence refresh");
-                    await _licenseProcessor.ReconcileCollectedUserLicenses(db, fallbackLicenceUserIds, fallbackDesiredLicences);
-
-                    // No separate licence phase runs at all when tenant SKUs are unavailable:
-                    // ProcessUserLicenses already ran per user inside the update phase above, so
-                    // there is no outstanding licence work that committing the delta could skip.
-                    // Set inside the branch rather than after it so that a catch added around the
-                    // work above would leave the flag false, exactly as it would for the other two
-                    // phases.
-                    phaseResults.LicenceRefreshSucceeded = true;
+                    if (readPerUserLicences)
+                    {
+                        await EnsureWriterLockHeldAsync("per-user licence refresh");
+                        await _licenseProcessor.ReconcileCollectedUserLicenses(db, fallbackLicenceUserIds, fallbackDesiredLicences);
+                        phaseResults.LicenceRefreshSucceeded = true;
+                    }
+                    else
+                    {
+                        phaseResults.AppOnlyLicenceRefreshUnavailable = true;
+                    }
                 }
 
                 // Apply the org values last, once every Graph user is guaranteed to have a dbo.users row
@@ -923,18 +942,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     await ApplyUserOrgValues(allActiveGraphUsers, entraOrgTypes, dbUsersByUpn, phaseResults, importCycleLastUpdatedUtc);
                 }
 
-                _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - complete. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
+                var outcome = phaseResults.AppOnlyLicenceRefreshUnavailable ? "metadata only (licence refresh still due)" : "complete";
+                _logger.LogInformation($"{DateTime.Now.ToShortTimeString()} User import - {outcome}. Inserted {insertedDbUsers.Count.ToString("N0")} new users, updated metadata for {existingUsersUpdated.ToString("N0")} existing users (from {allActiveGraphUsers.Count.ToString("N0")} Graph users)");
 
-                // All insert/metadata/license work succeeded. Now and ONLY now is it
-                // safe to persist the new Graph delta token. If any of the previous
-                // steps had thrown, control would have left this method via the
-                // exception and the previously-persisted delta would still be in
-                // effect, so the failed users will be retried on the next import
-                // cycle instead of being skipped because Graph already considers
-                // them "seen".
-                //
-                // The check is explicit rather than implied by that control flow so the
-                // guarantee survives someone adding a catch: see UserImportCommitPolicy (#372).
+                // A metadata checkpoint must not skip work that needs these users to be re-offered.
+                // The next permitted tenant SKU refresh does not rely on them being in another delta.
                 bool cycleCompleted;
                 var checkpointWouldMove = deltaReadCompleted && UserImportCommitPolicy.ShouldCommitDelta(phaseResults);
                 phaseResults.IdentityQuarantineSaved = await SaveIdentityQuarantineAsync(quarantineLoad, quarantineMerge, reconciliation, profilesByObjectId,
@@ -958,6 +970,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                     // as not done keeps the cadence gate open, so that re-read happens on the next cycle.
                     // Not fenced: every write is done, so losing the lock now protects nothing, and failing here would
                     // only throw away a finished run.
+                    _shutdownToken.ThrowIfCancellationRequested();
                     cycleCompleted = await _userLoader.CommitDeltaTokenAsync();
                 }
                 else
@@ -979,7 +992,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 allDbUsersForLicenseRefresh?.Clear();
                 allDbUsers?.Clear();
 
-                return cycleCompleted;
+                return cycleCompleted && !phaseResults.AppOnlyLicenceRefreshUnavailable;
             }
         }
 

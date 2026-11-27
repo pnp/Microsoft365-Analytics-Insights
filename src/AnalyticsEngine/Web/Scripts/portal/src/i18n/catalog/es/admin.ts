@@ -747,6 +747,7 @@ const admin: Record<keyof typeof en, string> = {
   'admin.userScope.progress.rowsAffected': 'Filas afectadas por tabla o columna',
   'admin.userScope.progress.table': 'Tabla o columna',
   'admin.userScope.progress.rows': 'Filas',
+  'admin.userScope.progress.rowsLowerBound': 'Al menos {count}',
   'admin.userScope.progress.rowsHelp':
     'Un nombre de tabla cuenta las filas eliminadas. Un nombre tabla.columna cuenta las filas que se conservan pero se modifican: la persona se sustituye por el usuario anónimo Unknown User o se borra el vínculo con ella.',
   'admin.userScope.progress.stopHelp':
@@ -784,12 +785,18 @@ const admin: Record<keyof typeof en, string> = {
     'La purga se detuvo porque UserGroupsFilter cambió mientras se ejecutaba. Lo que ya había eliminado permanece eliminado y no se eliminó a nadie más. Compruebe el filtro e inicie la purga de nuevo para ver quién queda fuera ahora.',
   'admin.userScope.jobError.purgeExceedsConfirmed':
     'La purga se detuvo porque hay más personas fuera del ámbito que el número confirmado al iniciarla: los grupos perdieron miembros o llegaron usuarios nuevos. Lo que ya había eliminado permanece eliminado y no se eliminó a nadie más. Compruebe los grupos e inicie la purga de nuevo para confirmar el nuevo número.',
+  'admin.userScope.jobError.userDeleteOutcomeUnknown':
+    'La purga se detuvo porque no pudo confirmar cuántas personas eliminó en el último lote. El recuento mostrado solo incluye las eliminaciones confirmadas. Compruebe quién queda fuera del ámbito y confirme una nueva purga antes de eliminar a nadie más.',
+  'admin.userScope.jobError.usageDeleteOutcomeUnknown':
+    'La purga se detuvo porque SQL no confirmó si el último lote eliminó filas de los informes de uso. El recuento marcado abajo solo incluye las eliminaciones confirmadas. Compruebe quién queda fuera del ámbito antes de iniciar una nueva purga.',
   'admin.userScope.jobError.scopeMembershipChanged':
     'La purga se detuvo al volver a empezar tras un reinicio, porque los miembros de los grupos de UserGroupsFilter habían cambiado desde que se confirmó. Lo que ya había eliminado permanece eliminado y no se eliminó a nadie más. Inicie la purga de nuevo para confirmar quién queda fuera del ámbito ahora.',
   'admin.userScope.jobError.databaseError':
     'La purga se detuvo porque la base de datos de análisis devolvió un error.',
   'admin.userScope.jobError.stateUnavailable':
-    'La purga se detuvo porque no pudo guardar su progreso en Azure Table Storage. Lo que ya eliminó sigue eliminado; iníciela de nuevo para terminarla.',
+    'La purga se detuvo porque no pudo leer o actualizar su estado en Azure Table Storage. Restablezca el acceso de la aplicación web a la cuenta de Storage del importador y vuelva a iniciar la purga. Los datos ya eliminados no se recuperan.',
+  'admin.userScope.jobError.coverageStorageRequired':
+    'No se eliminaron datos en esta ejecución. Algunos usuarios seleccionados tienen un historial de informes de uso, pero Azure Table Storage no está configurado para registrar qué días se ven afectados. Configure la cadena de conexión Storage de la aplicación web para que use la misma cuenta que el importador y vuelva a iniciar la purga.',
   'admin.userScope.jobError.unexpected': 'La purga se detuvo por un error inesperado.',
   'admin.leadershipCohort.title': 'Grupo directivo',
   'admin.leadershipCohort.description': 'Elija el grupo de Entra ID cuya adopción de Copilot compara el informe de adopción de Copilot con la de todo el inquilino. Solo se cuentan los miembros directos del grupo; no se siguen los grupos anidados ni la jerarquía de dependencia.',

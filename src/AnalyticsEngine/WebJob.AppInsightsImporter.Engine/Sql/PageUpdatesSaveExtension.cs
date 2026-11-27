@@ -5,6 +5,7 @@ using DataUtils;
 using Microsoft.Extensions.Logging;
 using System.Data.Entity;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using WebJob.AppInsightsImporter.Engine.APIResponseParsers.CustomEvents;
 
@@ -22,7 +23,11 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
         /// As above, with the context factory supplied (#368/#369). A new overload rather than a trailing
         /// optional parameter, which would be binary-breaking for already-compiled callers.
         /// </summary>
-        public static async Task<int> SavePageUpdatesToSQL(this CustomEventsResultCollection eventList, ILogger logger, AppConfig config, IAnalyticsDbContextFactory contextFactory)
+        public static Task<int> SavePageUpdatesToSQL(this CustomEventsResultCollection eventList, ILogger logger, AppConfig config, IAnalyticsDbContextFactory contextFactory)
+            => eventList.SavePageUpdatesToSQL(logger, config, contextFactory, CancellationToken.None);
+
+        internal static async Task<int> SavePageUpdatesToSQL(this CustomEventsResultCollection eventList, ILogger logger,
+            AppConfig config, IAnalyticsDbContextFactory contextFactory, CancellationToken cancellationToken)
         {
             if (eventList.Rows.Count == 0) return 0;
 
@@ -33,7 +38,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
                 .Where(r => r.GetType() == typeof(PageUpdateEventAppInsightsQueryResult))
                 .Cast<PageUpdateEventAppInsightsQueryResult>();
 
-            var updatedUrls = await updateManager.SaveAll(pageUpdates);
+            var updatedUrls = await updateManager.SaveAll(pageUpdates, cancellationToken);
             return updatedUrls.Count;
         }
     }
@@ -41,10 +46,14 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
     public class UrlMetadataFieldNameCache : ObjectByIdCache<FileMetadataFieldName>
     {
         private readonly AnalyticsEntitiesContext _context;
+        private readonly CancellationToken _cancellationToken;
 
-        public UrlMetadataFieldNameCache(AnalyticsEntitiesContext context)
+        public UrlMetadataFieldNameCache(AnalyticsEntitiesContext context) : this(context, CancellationToken.None) { }
+
+        internal UrlMetadataFieldNameCache(AnalyticsEntitiesContext context, CancellationToken cancellationToken)
         {
             _context = context;
+            _cancellationToken = cancellationToken;
         }
 
         public override async Task<FileMetadataFieldName> Load(string id)
@@ -53,7 +62,7 @@ namespace WebJob.AppInsightsImporter.Engine.Sql
             // String.ToLower() but NOT String.ToLowerInvariant() and throws NotSupportedException
             // at execution time if it appears inside an IQueryable expression tree.
             var lookupName = id?.ToLowerInvariant();
-            return await _context.FileMetadataFields.Where(e => e.Name == lookupName).FirstOrDefaultAsync();
+            return await _context.FileMetadataFields.Where(e => e.Name == lookupName).FirstOrDefaultAsync(_cancellationToken);
         }
     }
 

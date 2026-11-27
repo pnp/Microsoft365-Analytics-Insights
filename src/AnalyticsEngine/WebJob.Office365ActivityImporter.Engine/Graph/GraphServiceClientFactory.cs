@@ -36,6 +36,9 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
         /// deadline covers headers and the body transfer; only bodyless GET/HEAD requests get local
         /// timeout retries. The handler buffers up to 32 MiB per SDK page, with at most 16 fills at a time.
         /// Kiota owns redirects; only the Global Graph HTTPS origin receives the Graph credential.
+        /// Calls marked with <see cref="GraphResponseEvidence.RequireDirect"/> refuse redirects at the wire.
+        /// Their error bodies are checked within the attempt's deadline and a 64 KiB limit; an unusable
+        /// body preserves the HTTP status but supplies no Graph diagnosis.
         /// Bulk usage reports use the separate streaming client.
         /// </summary>
         public static GraphServiceClient CreateForGraphImport(TokenCredential credential, ILogger logger = null)

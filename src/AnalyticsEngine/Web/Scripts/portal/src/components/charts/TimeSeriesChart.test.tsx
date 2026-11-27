@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, within } from '@testing-library/react';
 import { renderWithProvider } from '../../test/renderWithProvider';
 import TimeSeriesChart from './TimeSeriesChart';
 import { CHART_PALETTE, lineSeriesStyle } from './chartCommon';
@@ -50,6 +51,42 @@ describe('TimeSeriesChart many series', () => {
 });
 
 describe('TimeSeriesChart gaps', () => {
+  it('keeps the unit column on an ordinary single-series lower-bound chart', () => {
+    const { getByRole, getByText } = renderWithProvider(<TimeSeriesChart valueLabel="People"
+      series={[{ name: 'Contoso', points: [{ weekStart: '2026-03-02', value: 5, incomplete: true }] }]} />);
+    fireEvent.click(getByText('Weekly values'));
+    expect(within(getByRole('table')).getByRole('columnheader', { name: 'People' })).toBeVisible();
+  });
+
+  it.each([
+    { language: 'en' as const, first: 'at least 12,345.25', second: 'at least 0', negative: '-2.5', missing: 'No data', values: 'Weekly values' },
+    { language: 'es' as const, first: 'al menos 12.345,25', second: 'al menos 0', negative: '-2,5', missing: 'Sin datos', values: 'Valores semanales' },
+  ])('identifies each lower bound in the $language tooltip and weekly table', async ({ language, first, second, negative, missing, values }) => {
+    await loadCatalog(language);
+    const weeks = ['2026-03-02', '2026-03-09', '2026-03-16', '2026-03-23'];
+    const series: ReportSeries[] = [
+      { name: 'Teams', points: weeks.map((weekStart, i) => ({
+        weekStart, value: [12345.25, -2.5, 0, null][i], incomplete: i !== 1,
+      })) },
+      { name: 'Outlook', points: weeks.map((weekStart) => ({ weekStart, value: 0 })) },
+    ];
+    const { getByRole, getByText } = renderWithProvider(<TimeSeriesChart series={series} valueLabel="Users" />, { language });
+    const chart = getByRole('img');
+    vi.spyOn(chart.parentElement!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 960, 300));
+    const plot = chart.querySelector('rect[fill="transparent"]')!;
+    for (const [i, expected] of [first, negative, second, missing].entries()) {
+      fireEvent.mouseMove(plot, { clientX: 52 + (890 * i) / 3 });
+      const tooltip = getByRole('tooltip');
+      expect(within(tooltip).getByText(expected)).toBeVisible();
+      expect(within(tooltip).getByText('0')).toBeVisible();
+    }
+    fireEvent.mouseLeave(plot);
+    fireEvent.click(getByText(values));
+    const rows = within(getByRole('table')).getAllByRole('row').slice(1);
+    expect(rows.map(row => within(row).getAllByRole('cell').map(cell => cell.textContent)))
+      .toEqual([first, negative, second, missing].map(label => [label, '0']));
+  });
+
   it('draws null points as gaps and explains them in the legend', () => {
     const series: ReportSeries[] = [
       {

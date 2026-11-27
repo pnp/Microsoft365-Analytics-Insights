@@ -1,6 +1,7 @@
 using Azure.Core;
 using Azure.Identity;
 using Microsoft.Extensions.Logging;
+using Microsoft.Identity.Client;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -72,10 +73,12 @@ namespace DataUtils.Http
         /// <remarks>
         /// Virtual purely so tests can substitute a canned token. Nothing in production overrides it.
         /// </remarks>
-        public virtual async Task<AccessToken> GetAccessToken()
+        public virtual Task<AccessToken> GetAccessToken() => GetAccessToken(CancellationToken.None);
+
+        public async Task<AccessToken> GetAccessToken(CancellationToken cancellationToken)
         {
             // Threadsafe execution of this instance
-            await _getAccessTokenSemaphoreSlim.WaitAsync();
+            await _getAccessTokenSemaphoreSlim.WaitAsync(cancellationToken);
 
             try
             {
@@ -83,13 +86,14 @@ namespace DataUtils.Http
                 {
                     Console.WriteLine("Generating new OAuth token...");
 
-                    var app = await AuthHelper.GetNewClientApp(_tenantId, _clientId, _clientSecret, _keyVaultUrl, _useClientCertificate, Telemetry);
+                    var app = await CreateClientApplicationAsync(cancellationToken);
                     try
                     {
-                        var r = await app.AcquireTokenForClient(new string[] { ResourceURL }).ExecuteAsync();
+                        var r = await app.AcquireTokenForClient(new string[] { ResourceURL }).ExecuteAsync(cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();
                         _accessToken = new AccessToken(r.AccessToken, r.ExpiresOn);
                     }
-                    catch (Exception ex)
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                     {
                         Telemetry.LogError(ex, ex.Message);
                         throw;
@@ -103,6 +107,9 @@ namespace DataUtils.Http
 
             return _accessToken;
         }
+
+        internal virtual Task<IConfidentialClientApplication> CreateClientApplicationAsync(CancellationToken cancellationToken) =>
+            AuthHelper.GetNewClientApp(_tenantId, _clientId, _clientSecret, _keyVaultUrl, _useClientCertificate, Telemetry, null, cancellationToken);
 
         private ILogger Telemetry { get; set; }
 

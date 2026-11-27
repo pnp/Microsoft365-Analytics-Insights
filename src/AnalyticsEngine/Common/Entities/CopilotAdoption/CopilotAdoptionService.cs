@@ -306,29 +306,6 @@ namespace Common.Entities.CopilotAdoption
             // This is the assessed daily-report window, not a MAX(fact date) completeness claim.
             // The same settlement boundary is used by the queries and the exact per-day outcome reader.
             summary.DataSources.M365UsageReportDate = settled;
-            try
-            {
-                summary.DataSources.WorkloadCoverage = await (_usageReportCoverage ?? UsageReportCoverageStore
-                    .Open(new Config.AppConfig())).ReadAsync(windowStart.Date, settled, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch (Exception)
-            {
-                // Configuration/client construction can fail before the store's bounded reader is reached.
-                // That cannot certify a workload or prevent independent audit-based analysis.
-                summary.DataSources.WorkloadCoverage = UsageReportCoverageStore.Sources.Select(source => new UsageReportCoverage
-                {
-                    Source = source, FromUtc = windowStart.Date, ThroughUtc = settled.Date,
-                    ExpectedDays = Math.Max(0, (settled.Date - windowStart.Date).Days + 1),
-                    Reason = "durableStateUnavailable",
-                }).ToList();
-            }
-            summary.DataSources.M365UsageReportsAvailable =
-                CopilotAdoptionWorkloadEvidence.Complete(summary.DataSources.WorkloadCoverage);
-            if (!summary.DataSources.M365UsageReportsAvailable)
-            {
-                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.WorkloadCoverageUnverified);
-            }
 
             summary.DataSources.CopilotUsageReportObfuscated = await SafeScalarAsync(
                 CopilotAdoptionSql.CopilotReportObfuscatedSql,
@@ -499,6 +476,9 @@ namespace Common.Entities.CopilotAdoption
                     CopilotAdoptionSteps.UnlicensedPopulation, CopilotAdoptionSteps.ResourceTypes,
                     CopilotAdoptionSteps.AgentEstate,
                 } : null);
+            var coverageRead = await UsageReportCoverageStore.BeginPublicationAsync(UsageReportCoverageStore.Sources,
+                windowStart.Date, settled, () => _usageReportCoverage ?? UsageReportCoverageStore.Open(new Config.AppConfig()),
+                cancellationToken).ConfigureAwait(false);
             await RunStepsAsync(analysis, steps, _maxConcurrentSteps, cancellationToken);
 
             var scoringOperation = _telemetry.StepStarted(CopilotAdoptionSteps.Scoring);
@@ -508,6 +488,7 @@ namespace Common.Entities.CopilotAdoption
             CopilotAdoptionFailure scoringFailure = null;
             try
             {
+                await ApplyWorkloadCoverageAsync(analysis, coverageRead, windowStart.Date, settled, cancellationToken).ConfigureAwait(false);
                 FinaliseSummary(analysis);
             }
             catch (Exception ex)
@@ -1780,17 +1761,7 @@ namespace Common.Entities.CopilotAdoption
             // figure built from this list - the licence estimate above all - is a floor rather than a total.
             analysis.OpportunitiesCapped = rows.Count >= _options.MaxOpportunityCandidates;
 
-            analysis.Opportunities = rows
-                .Select(r => CopilotAdoptionWorkloadEvidence.Apply(
-                    CopilotAdoptionScoring.ScoreOpportunity(r, _options), summary.DataSources.WorkloadCoverage))
-                // Proven demand first. The SQL deliberately sorts proven-demand candidates into the
-                // TOP (@maxRows) window ahead of merely busy users so the cap cannot truncate them;
-                // ordering on score alone here would quietly undo that in the list the reader sees,
-                // ranking somebody who has never opened Copilot above somebody already using it.
-                .OrderBy(r => r.QualificationTier == CopilotAdoptionScoring.OpportunityTiers.ProvenDemand ? 0 : 1)
-                .ThenByDescending(r => r.OpportunityScore)
-                .ThenBy(r => r.UserPrincipalName, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            analysis.Opportunities = rows.Select(r => CopilotAdoptionScoring.ScoreOpportunity(r, _options)).ToList();
         }
 
         #endregion
@@ -2221,8 +2192,9 @@ namespace Common.Entities.CopilotAdoption
             // Each department row's own candidate count, from every recommended candidate. The executive league
             // table used to look its departments up in OpportunityByDepartment below - the departments with the
             // MOST candidates - while its rows are the ones with the LOWEST habit rate, so most rows found nothing.
-            AssignRecommendedCandidates(summary.AdoptionByDepartment, recommended, "(no department)", _options.MinSeatsPerSegment, analysis.OpportunitiesCapped);
-            AssignRecommendedCandidates(summary.HabitByDepartment, recommended, "(no department)", _options.MinSeatsPerSegment, analysis.OpportunitiesCapped);
+            var candidateListIncomplete = analysis.OpportunitiesCapped != false;
+            AssignRecommendedCandidates(summary.AdoptionByDepartment, recommended, "(no department)", _options.MinSeatsPerSegment, candidateListIncomplete);
+            AssignRecommendedCandidates(summary.HabitByDepartment, recommended, "(no department)", _options.MinSeatsPerSegment, candidateListIncomplete);
 
             // Like every other department breakdown, a department needs MinSeatsPerSegment people behind its
             // figure: one or two candidates would say which of a small team's few unlicensed people work hardest.
@@ -2244,34 +2216,30 @@ namespace Common.Entities.CopilotAdoption
             // filtered view of it, said nothing about the cap, and a view whose candidates all ranked below
             // the tenant-wide cut-off read as "nobody in this tenant qualifies".
             var volumesObserved = summary.DataSources?.M365UsageReportsAvailable ?? false;
-            summary.LicenceOpportunityEstimate = volumesObserved
-                ? CopilotAdoptionScoring.EstimateLicenceValue(recommended, _options, analysis.OpportunitiesCapped)
-                : new LicenceValueEstimate { CandidatesCapped = analysis.OpportunitiesCapped };
+            var cap = analysis.OpportunitiesCapped;
+            LicenceValueEstimate LicenceEstimate(List<LicenceOpportunityRow> cohort,
+                LicenceEstimateCohort kind = LicenceEstimateCohort.Recommended)
+            {
+                if (!cap.HasValue) return null;
+                return volumesObserved
+                    ? CopilotAdoptionScoring.EstimateLicenceValue(cohort, _options, cap.Value, kind)
+                    : new LicenceValueEstimate { CandidatesCapped = cap.Value };
+            }
+            summary.LicenceOpportunityEstimate = LicenceEstimate(recommended);
 
             // Beside it, the candidates already using Copilot Chat without a licence: the same definition
             // as the list's "Already using Copilot" filter, so a reader can bring up exactly these people.
-            summary.LicenceChatUsersEstimate = volumesObserved
-                ? CopilotAdoptionScoring.EstimateLicenceValue(
-                    recommended.Where(o => o.UnlicensedCopilotInteractions > 0).ToList(),
-                    _options,
-                    analysis.OpportunitiesCapped)
-                : new LicenceValueEstimate { CandidatesCapped = analysis.OpportunitiesCapped };
+            summary.LicenceChatUsersEstimate = LicenceEstimate(recommended.Where(o => o.UnlicensedCopilotInteractions > 0).ToList());
 
             // And every candidate, recommended or not - the portal's "all users" option. Recommended stays
             // the default, but when nobody uses Microsoft 365 heavily enough to be recommended it is empty,
             // and this is then the only figure a purchase can be sized with.
-            summary.LicenceAllCandidatesEstimate = volumesObserved
-                ? CopilotAdoptionScoring.EstimateLicenceValue(
-                    opportunities,
-                    _options,
-                    analysis.OpportunitiesCapped,
-                    LicenceEstimateCohort.AllCandidates)
-                : new LicenceValueEstimate();
+            summary.LicenceAllCandidatesEstimate = LicenceEstimate(opportunities, LicenceEstimateCohort.AllCandidates);
 
             // The same people, through the Cowork model instead: what Cowork could add for everyone without
             // a seat once licensed. Offered on the Cowork tab beside the seat holders; never summed with the
             // licence figure above, which is the time the licence itself would give back.
-            summary.CoworkWithoutLicenceEstimate = volumesObserved
+            summary.CoworkWithoutLicenceEstimate = !cap.HasValue ? null : volumesObserved
                 ? CopilotAdoptionScoring.EstimateCoworkValueWithoutLicence(opportunities, _options)
                 : new CoworkValueEstimate();
 
@@ -3306,8 +3274,8 @@ namespace Common.Entities.CopilotAdoption
             summary.CoworkTiers = BuildCoworkTiers(none, summary.DataSources.M365UsageReportsAvailable);
             summary.CoworkByDepartment = new List<CoworkSegmentRow>();
             summary.CoworkQuadrant = new List<CoworkQuadrantPoint>();
-            summary.CoworkValueEstimate = new CoworkValueEstimate();
-            summary.CoworkFullRolloutEstimate = new CoworkValueEstimate();
+            summary.CoworkValueEstimate = new CoworkValueEstimate { WorkloadAssessed = summary.DataSources.M365UsageReportsAvailable };
+            summary.CoworkFullRolloutEstimate = new CoworkValueEstimate { WorkloadAssessed = summary.DataSources.M365UsageReportsAvailable };
         }
 
         /// <summary>
@@ -3878,6 +3846,24 @@ namespace Common.Entities.CopilotAdoption
         #endregion
 
         #region Query plumbing
+
+        private async Task ApplyWorkloadCoverageAsync(CopilotAdoptionAnalysis analysis, UsageReportCoverageStore.PublicationRead coverageRead,
+            DateTime from, DateTime through, CancellationToken token)
+        {
+            var summary = analysis.Summary;
+            summary.DataSources.WorkloadCoverage = await coverageRead.SummariseAsync(async source =>
+                new HashSet<DateTime>(await QueryAsync<DateTime>(CopilotAdoptionSql.UsageDaysWithStoredRowsSql(source), token,
+                    new SqlParameter("@from", from), new SqlParameter("@through", through)).ConfigureAwait(false)), token).ConfigureAwait(false);
+            var coverage = summary.DataSources.WorkloadCoverage;
+            summary.DataSources.M365UsageReportsAvailable = CopilotAdoptionWorkloadEvidence.Complete(coverage);
+            if (!summary.DataSources.M365UsageReportsAvailable)
+                CopilotAdoptionWarnings.Add(summary, CopilotAdoptionWarningKeys.WorkloadCoverageUnverified);
+            analysis.Opportunities = analysis.Opportunities.Select(row => CopilotAdoptionWorkloadEvidence.Apply(row, coverage))
+                // Match the SQL's proven-demand-first cap even when the workload scores are unknown.
+                .OrderBy(row => row.QualificationTier == CopilotAdoptionScoring.OpportunityTiers.ProvenDemand ? 0 : 1)
+                .ThenByDescending(row => row.OpportunityScore)
+                .ThenBy(row => row.UserPrincipalName, StringComparer.OrdinalIgnoreCase).ToList();
+        }
 
         /// <summary>Runs a query on its own short-lived context, so one slow report cannot hold a context open.</summary>
         protected virtual async Task<List<T>> QueryAsync<T>(

@@ -52,7 +52,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph
                 // Tracked on purpose: callers assign the result to a navigation property.
                 //
                 // LicenseLookups is included deliberately, and it is load-bearing rather than
-                // decoration. In the per-user licence path (no Organization.Read.All) the batch's
+                // decoration. On a supported per-user licence path the batch's
                 // own users are AsNoTracking snapshots loaded WITH their licences, and they are
                 // attached one at a time as the batch is processed. If this query tracks one of
                 // them first - a manager who is also a subject of the same batch -

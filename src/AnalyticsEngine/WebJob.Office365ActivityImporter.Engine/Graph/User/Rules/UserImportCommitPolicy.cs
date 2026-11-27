@@ -4,10 +4,7 @@
     /// Which phases of one Graph user import cycle completed successfully.
     /// </summary>
     /// <remarks>
-    /// A phase is "succeeded" only once it has finished without throwing. A phase that did not run
-    /// at all - the licence refresh when the tenant does not grant <c>Organization.Read.All</c>, so
-    /// licences are handled per user inside the update phase instead - also counts as succeeded,
-    /// because there is no outstanding work it could have skipped.
+    /// A phase is "succeeded" only once its required work has finished without throwing.
     /// </remarks>
     public sealed class UserImportPhaseResults
     {
@@ -18,9 +15,13 @@
         public bool UpdatePhaseSucceeded { get; set; }
 
         /// <summary>
-        /// The tenant-wide licence refresh finished, or no licence refresh was required this cycle.
+        /// The tenant inventory or supported per-user licence reconciliation finished.
         /// </summary>
         public bool LicenceRefreshSucceeded { get; set; }
+
+        /// <summary>The app could not read tenant SKUs. This does not complete a licence refresh, but the next
+        /// permitted inventory covers every in-scope DB user, so moving the metadata delta loses no licence work.</summary>
+        internal bool AppOnlyLicenceRefreshUnavailable { get; set; }
 
         /// <summary>
         /// The user-organisation values were applied, or there was no organisation work to do.
@@ -52,8 +53,9 @@
     }
 
     /// <summary>
-    /// The ordering guarantee that matters most in the Graph user import: the delta token is only
-    /// persisted after the insert, update and licence phases have <b>all</b> succeeded.
+    /// Persist the metadata delta only after every phase that relies on replaying it has succeeded.
+    /// A refused app-only licence inventory is the exception: it stays due and the next permitted refresh
+    /// covers the entire in-scope database population, not just the next metadata delta.
     /// </summary>
     /// <remarks>
     /// Extracted for issues #372 / #381. Graph's <c>/users/delta</c> token is a promise that the
@@ -75,13 +77,13 @@
     public static class UserImportCommitPolicy
     {
         /// <summary>
-        /// True only when every phase of the cycle succeeded.
+        /// True only when all work that depends on this metadata checkpoint succeeded.
         /// </summary>
         public static bool ShouldCommitDelta(UserImportPhaseResults results)
         {
             return results.InsertPhaseSucceeded
                 && results.UpdatePhaseSucceeded
-                && results.LicenceRefreshSucceeded
+                && (results.LicenceRefreshSucceeded || results.AppOnlyLicenceRefreshUnavailable)
                 && results.UserOrgsSucceeded
                 && results.IdentityQuarantineSaved;
         }

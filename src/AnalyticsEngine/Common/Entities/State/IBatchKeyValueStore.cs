@@ -18,4 +18,14 @@ namespace Common.Entities.State
         /// </summary>
         Task SetManyAsync(IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken cancellationToken = default);
     }
+
+    /// <summary>
+    /// Changes a fence and up to 99 small values in one Table transaction (never split). False means the
+    /// fence ETag no longer matches. All writers of that fence use this operation, even with no other values.
+    /// </summary>
+    internal interface IFencedBatchKeyValueStore
+    {
+        Task<bool> TrySetFencedBatchAsync(string fenceKey, string fenceValue, string expectedVersion,
+            IReadOnlyList<KeyValuePair<string, string>> values, CancellationToken token);
+    }
 }

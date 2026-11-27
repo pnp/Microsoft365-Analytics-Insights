@@ -4,6 +4,7 @@ using DataUtils.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -104,30 +105,37 @@ namespace Common.Entities.UserScope
                 return new UserImportScopeProvider(filter, null, logger);
             }
 
-            IGroupMembershipResolver resolver;
             try
             {
                 var auth = new GraphDirectoryOAuthContext(logger ?? NullLogger.Instance, config.ClientID, config.TenantGUID.ToString(),
                     config.ClientSecret, config.KeyVaultUrl, config.UseClientCertificate);
-                var httpClient = new ConfidentialClientApplicationThrottledHttpClient(auth, false, logger ?? NullLogger.Instance);
-                resolver = new GroupMembershipResolver(new GraphGroupDirectoryReader(httpClient, logger), logger);
+                return CreateForGraph(filter, auth, logger, new HttpClientHandler());
             }
             catch (Exception ex)
             {
                 // Bad credentials configuration is reported through the normal failure path, so the imports fail
                 // open (with an error each refresh) instead of the web job crashing at start-up.
-                resolver = new FailedGroupMembershipResolver($"a Graph client could not be created ({ex.GetType().Name}: {ex.Message})");
+                return new UserImportScopeProvider(filter,
+                    new FailedGroupMembershipResolver($"a Graph client could not be created ({ex.GetType().Name}: {ex.Message})"), logger);
             }
+        }
 
+        internal static UserImportScopeProvider CreateForGraph(UserGroupsFilterModel filter, GraphDirectoryOAuthContext auth,
+            ILogger logger, HttpMessageHandler transport, IAutoThrottleHttpClientClock retryClock = null)
+        {
+            var httpClient = new ConfidentialClientApplicationThrottledHttpClient(
+                new ConfidentialClientApplicationHttpHandler(auth.GetAccessToken, transport), logger ?? NullLogger.Instance, retryClock);
+            var resolver = new GroupMembershipResolver(new GraphGroupDirectoryReader(httpClient, logger), logger);
             return new UserImportScopeProvider(filter, resolver, logger);
         }
 
-        public Task<UserImportScopeResolution> GetResolutionAsync() => ResolveAsync(forceRefresh: false);
+        public Task<UserImportScopeResolution> GetResolutionAsync() => ResolveAsync(false, CancellationToken.None);
 
-        public Task<UserImportScopeResolution> RefreshAsync() => ResolveAsync(forceRefresh: true);
+        public Task<UserImportScopeResolution> RefreshAsync() => ResolveAsync(true, CancellationToken.None);
 
-        private async Task<UserImportScopeResolution> ResolveAsync(bool forceRefresh)
+        private async Task<UserImportScopeResolution> ResolveAsync(bool forceRefresh, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!Filter.IsNarrowing)
             {
                 return UserImportScopeResolution.Unfiltered(_clock.UtcNow);
@@ -140,7 +148,7 @@ namespace Common.Entities.UserScope
             }
 
             var requestedUtc = _clock.UtcNow;
-            await _refreshLock.WaitAsync();
+            await _refreshLock.WaitAsync(cancellationToken);
             try
             {
                 current = Volatile.Read(ref _current);
@@ -155,13 +163,19 @@ namespace Common.Entities.UserScope
                 UserImportScopeResolution resolved;
                 try
                 {
-                    resolved = await _resolver.ResolveAsync(Filter);
+                    resolved = _resolver is GroupMembershipResolver groups
+                        ? await groups.ResolveAsync(Filter, cancellationToken)
+                        : await _resolver.ResolveAsync(Filter);
                 }
                 catch (Exception ex)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     resolved = UserImportScopeResolution.Unavailable(null, null, $"{ex.GetType().Name}: {ex.Message}", _clock.UtcNow);
                 }
 
+                // A stop is not a directory failure. Do not cache it (or a partially read membership)
+                // and do not replace the last good scope.
+                cancellationToken.ThrowIfCancellationRequested();
                 if (resolved == null)
                 {
                     resolved = UserImportScopeResolution.Unavailable(null, null, "the resolver returned nothing", _clock.UtcNow);
@@ -193,9 +207,21 @@ namespace Common.Entities.UserScope
         /// the start of each import cycle, so the scope - and in particular a filter that matches no group, or one
         /// that is failing open - is stated every cycle and not only when it is refreshed.
         /// </summary>
-        public async Task<UserImportScope> GetScopeForCycleAsync()
+        public Task<UserImportScope> GetScopeForCycleAsync() => GetScopeForCycleAsync(CancellationToken.None);
+
+        /// <summary>A host stop aborts a Graph refresh before the cycle starts, without caching an incomplete scope.</summary>
+        public async Task<UserImportScope> GetScopeForCycleAsync(CancellationToken shutdownToken)
         {
-            var resolution = await GetResolutionAsync();
+            UserImportScopeResolution resolution;
+            try
+            {
+                resolution = await ResolveAsync(false, shutdownToken);
+                shutdownToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException) when (shutdownToken.IsCancellationRequested)
+            {
+                throw new ShutdownRequestedException();
+            }
             var scope = ToFailOpenScope(resolution);
 
             var message = $"User import scope for this cycle: {scope.Description}.";

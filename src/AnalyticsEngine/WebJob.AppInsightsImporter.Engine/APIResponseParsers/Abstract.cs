@@ -90,8 +90,9 @@ namespace WebJob.AppInsightsImporter.Engine
                 }
                 catch (Exception ex)
                 {
-                    // Log and continue so a single malformed row doesn't drop the whole batch
-                    _logger?.LogWarning($"Failed to deserialise {typeof(T).Name} row: {ex.Message}");
+                    // Conversion errors can quote the rejected telemetry value (including a search's
+                    // malformed request id). Classify the error without writing that value to logs.
+                    _logger?.LogWarning($"Failed to deserialise {typeof(T).Name} row: {ex.GetType().Name}.");
                 }
                 if (record != null)
                 {

@@ -78,11 +78,26 @@ namespace Common.Entities.Calls
         }
 
         /// <summary>
-        /// Graph documents a <b>409 Conflict</b> for a subscription that duplicates an existing one ("already exists for the
-        /// requested combination"). Observed behaviour for call records is to accept the duplicate, which the create-then-
-        /// delete replacement relies on; this is what the importer falls back on if Graph starts enforcing it.
+        /// The conflict must name the duplicate; the caller still has to match its ID to this webhook's inventory.
+        /// Learn documents HTTP 409 and this message, not a duplicate-specific OData code:
+        /// https://learn.microsoft.com/en-us/graph/api/subscription-post-subscriptions?view=graph-rest-1.0#duplicate-subscription-behavior
         /// </summary>
-        public static bool IsDuplicateSubscriptionConflict(int httpStatus) => httpStatus == 409;
+        public static string DuplicateSubscriptionId(int httpStatus, string errorCode, string errorMessage)
+        {
+            if (httpStatus != 409 || !(string.Equals(errorCode, "Conflict", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(errorCode, "ExtensionError", StringComparison.OrdinalIgnoreCase))) return null;
+
+            const string prefix = "Subscription Id ";
+            const string suffix = " already exists for the requested combination";
+            var message = errorMessage?.Trim().TrimEnd('.');
+            if (message == null || message.Length <= prefix.Length + suffix.Length
+                || !message.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                || !message.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return null;
+            var id = message.Substring(prefix.Length, message.Length - prefix.Length - suffix.Length).Trim();
+            if (id.Length >= 2 && (id[0] == '<' && id[id.Length - 1] == '>' || id[0] == '\'' && id[id.Length - 1] == '\''))
+                id = id.Substring(1, id.Length - 2);
+            return string.IsNullOrWhiteSpace(id) ? null : id;
+        }
 
         /// <summary>
         /// Whether a Graph subscription is this deployment's call-records subscription. Both the

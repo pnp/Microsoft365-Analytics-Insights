@@ -3,6 +3,8 @@ using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using System;
 using System.Collections.Generic;
+using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
@@ -19,10 +21,16 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
     public class GraphCallRecordSubscriptionManager : ICallRecordSubscriptionManager
     {
         private readonly GraphServiceClient _client;
+        private readonly CancellationToken _stopping;
+        private readonly string _applicationId;
 
-        public GraphCallRecordSubscriptionManager(GraphServiceClient client)
+        public GraphCallRecordSubscriptionManager(GraphServiceClient client) : this(client, CancellationToken.None) { }
+
+        internal GraphCallRecordSubscriptionManager(GraphServiceClient client, CancellationToken stopping, string applicationId = null)
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
+            _stopping = stopping;
+            _applicationId = applicationId;
         }
 
         /// <summary>
@@ -35,7 +43,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (notificationUrl is null) throw new ArgumentNullException(nameof(notificationUrl));
 
             var matchingSubs = new List<CallRecordSubscription>();
-            var firstPage = await _client.Subscriptions.GetAsync();
+            var firstPage = await _client.Subscriptions.GetAsync(rc => rc.Options.Add(GraphResponseEvidence.RequireCollection), _stopping);
             if (firstPage?.Value == null)
             {
                 // A 200 without the subscriptions list: whether the subscription exists is unknown, so this is a failed read.
@@ -46,17 +54,31 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             var iterator = PageIterator<Subscription, SubscriptionCollectionResponse>.CreatePageIterator(
                 _client,
                 firstPage,
-                sub =>
+                async sub =>
                 {
                     if (CallSubscriptionRules.IsCallRecordsSubscriptionFor(sub.Resource, sub.NotificationUrl, notificationUrl))
                     {
-                        matchingSubs.Add(ToCallRecordSubscription(sub));
+                        if (_applicationId != null && string.IsNullOrWhiteSpace(sub.ApplicationId))
+                        {
+                            var detail = await ReadBackAsync(sub.Id);
+                            if (detail?.Id != sub.Id || string.IsNullOrWhiteSpace(detail?.ApplicationId)
+                                || detail.Resource != sub.Resource || detail.NotificationUrl != sub.NotificationUrl)
+                                throw new InvalidOperationException("Graph did not confirm ownership of a listed call subscription; leaving subscriptions unchanged.");
+                            sub = detail;
+                        }
+                        if (_applicationId == null || string.Equals(sub.ApplicationId, _applicationId, StringComparison.OrdinalIgnoreCase))
+                            matchingSubs.Add(ToCallRecordSubscription(sub));
                     }
 
                     return true;
+                }, next =>
+                {
+                    next.AddRequestOptions(new[] { GraphResponseEvidence.RequireCollection });
+                    return next;
                 });
 
-            await iterator.IterateAsync();
+            await iterator.IterateAsync(_stopping);
+            _stopping.ThrowIfCancellationRequested(); // PageIterator can stop between pages without throwing.
 
             return matchingSubs;
         }
@@ -65,6 +87,7 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
         {
             if (notificationUrl is null) throw new ArgumentNullException(nameof(notificationUrl));
 
+            HttpStatusCode? status = null;
             var result = await _client.Subscriptions.PostAsync(new Subscription()
             {
                 NotificationUrl = notificationUrl.ToString(),
@@ -72,9 +95,58 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 ClientState = clientState,
                 ChangeType = "created",
                 ExpirationDateTime = expiryUtc
-            });
+            }, rc => rc.Options.Add(GraphResponseEvidence.CaptureDirectStatus(code => status = code)), _stopping);
 
+            if (string.IsNullOrWhiteSpace(result?.Id))
+                throw new InvalidOperationException("Graph returned no subscription ID; subscription maintenance cannot continue.");
+            var id = result.Id;
+            CheckCreateFields(result, notificationUrl, clientState);
+            // Only a 201 creation body is definitive; another 2xx can supply an ID to check, not proof.
+            if (status != HttpStatusCode.Created || !HasCreateFields(result))
+            {
+                result = await ReadBackAsync(id);
+                // Without a 201, readback must also prove the subscription uses the requested callback state.
+                if (result?.Id != id || !HasCreateFields(result)
+                    || (status != HttpStatusCode.Created && result.ClientState != clientState))
+                    throw new InvalidOperationException("Graph did not confirm the created call subscription; cleanup is deferred.");
+                CheckCreateFields(result, notificationUrl, clientState);
+            }
+            _stopping.ThrowIfCancellationRequested();
             return ToCallRecordSubscription(result);
+        }
+
+        private bool HasCreateFields(Subscription sub) => sub.Resource != null && sub.NotificationUrl != null
+            && sub.ChangeType != null && sub.ExpirationDateTime.HasValue && (_applicationId == null || sub.ApplicationId != null);
+
+        private void CheckCreateFields(Subscription sub, Uri url, string state)
+        {
+            if (sub.Resource != null && sub.Resource != CallSubscriptionRules.CallRecordsResource
+                || sub.NotificationUrl != null && sub.NotificationUrl != url.ToString()
+                || sub.ChangeType != null && !string.Equals(sub.ChangeType, "created", StringComparison.OrdinalIgnoreCase)
+                || _applicationId != null && sub.ApplicationId != null && !string.Equals(sub.ApplicationId, _applicationId, StringComparison.OrdinalIgnoreCase)
+                || sub.ClientState != null && sub.ClientState != state)
+                throw new InvalidOperationException("Graph returned a different call subscription than requested; cleanup is deferred.");
+        }
+
+        // GET /subscriptions/{id} uses the existing resource permission. A failure here is not a POST
+        // refusal (in particular, not permission to perform the duplicate-conflict delete).
+        // https://learn.microsoft.com/graph/api/subscription-get?view=graph-rest-1.0
+        private async Task<Subscription> ReadBackAsync(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) throw new InvalidOperationException("Graph returned no subscription ID to confirm.");
+            try
+            {
+                HttpStatusCode? status = null;
+                var detail = await _client.Subscriptions[id].GetAsync(rc =>
+                    rc.Options.Add(GraphResponseEvidence.CaptureDirectStatus(code => status = code)), _stopping);
+                _stopping.ThrowIfCancellationRequested();
+                return status == HttpStatusCode.OK ? detail : null;
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException || ex is GraphDecisionRedirectException || ex is TimeoutException))
+            {
+                _stopping.ThrowIfCancellationRequested();
+                throw new InvalidOperationException($"Graph could not confirm the call subscription by ID ({ex.GetType().Name}); cleanup is deferred.");
+            }
         }
 
         public async Task<CallRecordSubscription> RenewSubscription(string subscriptionId, DateTime expiryUtc)
@@ -84,8 +156,11 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
                 new Subscription
                 {
                     ExpirationDateTime = expiryUtc
-                }
-            );
+                }, rc =>
+                {
+                    rc.Options.Add(GraphOverallTimeoutHandler.DistinguishDeadline);
+                    rc.Options.Add(GraphResponseEvidence.RequireDirect);
+                }, _stopping);
 
             return ToCallRecordSubscription(result);
         }
@@ -95,12 +170,13 @@ namespace WebJob.Office365ActivityImporter.Engine.Graph.Calls
             if (string.IsNullOrEmpty(subscriptionId)) throw new ArgumentException("A subscription id is required.", nameof(subscriptionId));
 
             // https://learn.microsoft.com/en-us/graph/api/subscription-delete?view=graph-rest-1.0
-            await _client.Subscriptions[subscriptionId].DeleteAsync();
+            await _client.Subscriptions[subscriptionId].DeleteAsync(rc => rc.Options.Add(GraphResponseEvidence.RequireDirect), _stopping);
         }
 
         private static CallRecordSubscription ToCallRecordSubscription(Subscription sub)
         {
-            if (sub == null) return null;
+            if (string.IsNullOrWhiteSpace(sub?.Id))
+                throw new InvalidOperationException("Graph returned no subscription ID; subscription maintenance cannot continue.");
 
             return new CallRecordSubscription
             {
